@@ -472,9 +472,12 @@ fn delete_insert(
     // governed `SELECT` — before this operation's mutation, or its governor charges,
     // read a single cell of it. `Ok(None)` (no call node in this pattern — every
     // pattern on a host that has not configured the seam) leaves `pattern` as parsed.
-    let planned =
-        crate::property_fn_plan::plan_where_pattern(pattern, cfg.options.property_functions)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    let planned = crate::property_fn_plan::plan_where_pattern(
+        pattern,
+        cfg.options.property_functions,
+        cfg.options.aggregates,
+    )
+    .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
     let ctx = EvalCtx::new(&*snap).with_order_cache(cfg.order_cache);

@@ -54,6 +54,7 @@
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 
+use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::governor::ItemCharge;
 use crate::governor::soundness::{
@@ -81,6 +82,14 @@ pub(crate) struct SafetyRegistries<'a> {
     pub(crate) functions: Option<&'a UserFunctionRegistry>,
     /// The property-function table (`EvalCtx::property_functions`).
     pub(crate) relations: Option<&'a PropertyFunctionRegistry>,
+    /// The custom-aggregate table (`EvalCtx::aggregates`), consulted by
+    /// [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
+    /// expression/pattern walks above — a `Custom` aggregate is not an
+    /// `Expression` node, so it never reaches [`function_is_unsafe`] or
+    /// [`property_function_is_unsafe`]. Carried here anyway so this struct stays
+    /// the ONE place every registry the fork-join safety decision needs is
+    /// paired, per the type's own doc.
+    pub(crate) aggregates: Option<&'a AggregateRegistry>,
 }
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
@@ -457,6 +466,35 @@ fn property_function_is_unsafe(iri: &str, relations: Option<&PropertyFunctionReg
     // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
     // later must be unsafe here until it is deliberately admitted.
     !matches!(relation.volatility(), Volatility::Stable)
+}
+
+/// Whether a `Custom` aggregate call on `iri` is unsafe to fold from a forked
+/// per-GROUP worker — the aggregate twin of [`property_function_is_unsafe`], read
+/// by [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
+/// expression/pattern walks above (an `AggregateFunction` is not an `Expression`
+/// node, so it never reaches [`function_is_unsafe`]).
+///
+/// Safe in exactly one case: the registry is present, it resolves `iri`, and the
+/// resolved aggregate declares [`Volatility::Stable`] — deterministic for the
+/// lifetime of the query, hence identical whichever worker folds the group.
+///
+/// Every other case is UNSAFE, including the two absences — the SAME
+/// conservative treatment [`property_function_is_unsafe`] gives an unresolved
+/// relation, and the DELIBERATE OPPOSITE of [`function_is_unsafe`]'s treatment of
+/// an unresolved scalar `Custom` function IRI: an unresolved scalar function has
+/// a defined deterministic meaning (an XSD cast, or a hard error), so nothing can
+/// diverge, while an unresolved aggregate's volatility is simply unknown, and
+/// guessing `Stable` would be a guess in the one direction that can silently
+/// change an answer. A sequential fallback is always correct, so "when in doubt,
+/// UNSAFE".
+pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: Option<&AggregateRegistry>) -> bool {
+    let Some(registry) = aggregates else {
+        return true;
+    };
+    let Some(aggregate) = registry.resolve(iri) else {
+        return true;
+    };
+    !matches!(aggregate.volatility(), Volatility::Stable)
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
@@ -1035,6 +1073,7 @@ mod tests {
     const NONE: SafetyRegistries<'static> = SafetyRegistries {
         functions: None,
         relations: None,
+        aggregates: None,
     };
 
     /// Only a function table configured.
@@ -1042,6 +1081,7 @@ mod tests {
         SafetyRegistries {
             functions: Some(registry),
             relations: None,
+            aggregates: None,
         }
     }
 
@@ -1050,6 +1090,7 @@ mod tests {
         SafetyRegistries {
             functions: None,
             relations: Some(registry),
+            aggregates: None,
         }
     }
 
@@ -1373,6 +1414,79 @@ mod tests {
         let stable = registry_with(Volatility::Stable);
         assert!(is_parallel_safe_pattern(&union, relations(&stable)));
         assert!(is_parallel_safe(&exists, relations(&stable)));
+    }
+
+    // ---- aggregate_is_unsafe: custom-aggregate fork-gate volatility --------
+
+    const AGG_IRI: &str = "http://example.org/agg#custom";
+
+    /// A no-op accumulator — never actually driven by these gate-classification
+    /// tests, which read only [`crate::agg_fn::CustomAggregate::volatility`].
+    struct NoOpAccumulator;
+    impl crate::agg_fn::AggregateAccumulator for NoOpAccumulator {
+        fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
+            Ok(())
+        }
+        fn combine(&mut self, _other: Box<dyn crate::agg_fn::AggregateAccumulator>) {}
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    /// A custom aggregate whose declared volatility is `volatility`.
+    struct DeclaredAggregate {
+        volatility: Volatility,
+    }
+
+    impl crate::agg_fn::CustomAggregate for DeclaredAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(1)
+        }
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+            Box::new(NoOpAccumulator)
+        }
+    }
+
+    fn agg_registry_with(volatility: Volatility) -> AggregateRegistry {
+        let mut registry = AggregateRegistry::new();
+        registry.register(
+            AGG_IRI,
+            std::sync::Arc::new(DeclaredAggregate { volatility }),
+        );
+        registry
+    }
+
+    #[test]
+    fn stable_custom_aggregate_is_parallel_safe() {
+        let registry = agg_registry_with(Volatility::Stable);
+        assert!(!aggregate_is_unsafe(AGG_IRI, Some(&registry)));
+    }
+
+    #[test]
+    fn volatile_custom_aggregate_is_parallel_unsafe() {
+        let registry = agg_registry_with(Volatility::Volatile);
+        assert!(aggregate_is_unsafe(AGG_IRI, Some(&registry)));
+    }
+
+    #[test]
+    fn custom_aggregate_without_a_registry_is_parallel_unsafe() {
+        // Both absences: no registry at all, and a registry that does not resolve the
+        // IRI. An unknown aggregate's volatility is unknown, so the gate refuses —
+        // the SAME conservative treatment an unresolved property function gets
+        // (`property_function_without_a_registry_is_parallel_unsafe`), never the
+        // scalar-function treatment (`unknown_custom_without_registry_stays_safe`).
+        assert!(aggregate_is_unsafe(AGG_IRI, None));
+        let empty = AggregateRegistry::new();
+        assert!(aggregate_is_unsafe(AGG_IRI, Some(&empty)));
     }
 
     // ---- par_chunk_map ----------------------------------------------------

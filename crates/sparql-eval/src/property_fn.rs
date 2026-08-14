@@ -425,12 +425,14 @@ pub fn declaration_contained<T>(
     what: &str,
     read: impl FnOnce() -> T,
 ) -> Result<T, EvalError> {
-    match catch_unwind(AssertUnwindSafe(read)) {
-        Ok(value) => Ok(value),
-        Err(_) => Err(EvalError::function(format!(
-            "property function <{iri}> panicked while reporting its {what}"
-        ))),
-    }
+    // Delegates to the shared containment helper every extension seam uses
+    // (`crate::contain`) — see that module's docs for why the panic payload is
+    // never interpolated. Kept as a thin `kind = "property function"` wrapper
+    // here rather than inlined at call sites, so this function's public
+    // signature and its message shape (`property function <iri> panicked while
+    // reporting its {what}`) stay exactly what every existing caller and test
+    // already depends on.
+    crate::contain::declaration_contained("property function", iri, what, read)
 }
 
 // ---------------------------------------------------------------------------

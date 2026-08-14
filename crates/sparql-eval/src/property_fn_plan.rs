@@ -36,11 +36,12 @@
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, GraphPattern, NamedNodePattern, OrderExpression,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
+    OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 
 use crate::DetHashSet;
+use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::property_fn::{PfArity, PropertyFunctionRegistry};
 
@@ -53,9 +54,14 @@ use crate::property_fn::{PfArity, PropertyFunctionRegistry};
 ///
 /// [`EvalError::Function`] for an unregistered predicate IRI, an arity mismatch between
 /// the call site and the relation's declaration, or a chain no total order can serve.
+/// The same class of refusal for an `AggregateFunction::Custom(iri)` reached anywhere in
+/// `query`: an unregistered IRI, or a positional-argument count `agg_registry`'s
+/// registered entry does not declare — refused HERE, at prepare time, before any governor
+/// charge (see [`plan_aggregate`]).
 pub(crate) fn plan_query(
     query: &Query,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
 ) -> Result<Option<Query>, EvalError> {
     let pattern = match query {
         Query::Select { pattern, .. }
@@ -63,7 +69,7 @@ pub(crate) fn plan_query(
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern(pattern, relations)? else {
+    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry)? else {
         return Ok(None);
     };
     let mut planned_query = query.clone();
@@ -92,15 +98,23 @@ pub(crate) fn plan_query(
 ///
 /// [`EvalError::Function`] for an unregistered predicate IRI, an arity mismatch
 /// between the call site and the relation's declaration, or a chain no total order
-/// can serve.
+/// can serve. The same class of refusal for a reachable `AggregateFunction::Custom`
+/// — see [`plan_query`]'s doc.
 pub(crate) fn plan_where_pattern(
     pattern: &GraphPattern,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
 ) -> Result<Option<GraphPattern>, EvalError> {
-    if !crate::property_fn_eval::pattern_reaches_property_function(pattern) {
+    // Either hazard alone must still run the walk: a query with a `Custom`
+    // aggregate and no property-function call would otherwise skip this pass
+    // entirely on the property-function-only check, and its admission (below,
+    // via `plan_aggregate`) would never happen.
+    if !crate::property_fn_eval::pattern_reaches_property_function(pattern)
+        && !crate::property_fn_eval::pattern_reaches_custom_aggregate(pattern)
+    {
         return Ok(None);
     }
-    plan_pattern(pattern, relations, &DetHashSet::default()).map(Some)
+    plan_pattern(pattern, relations, agg_registry, &DetHashSet::default()).map(Some)
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +140,7 @@ struct Atom<'a> {
 fn plan_pattern(
     pattern: &GraphPattern,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, EvalError> {
     // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
@@ -134,9 +149,9 @@ fn plan_pattern(
     // structurally.
     let mut atoms = Vec::new();
     if collect_chain(pattern, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
-        return order_chain(atoms, relations, outer);
+        return order_chain(atoms, relations, agg_registry, outer);
     }
-    map_children(pattern, relations, outer)
+    map_children(pattern, relations, agg_registry, outer)
 }
 
 /// Peel the chain spine, pushing its atoms in TEXTUAL order (base first).
@@ -206,6 +221,7 @@ fn push_atom<'a>(
 fn order_chain(
     atoms: Vec<Atom<'_>>,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, EvalError> {
     let mut bound = outer.clone();
@@ -268,7 +284,7 @@ fn order_chain(
     // variables atoms `0..i` bound, matching the set it was chosen against above.
     let mut chain: Option<GraphPattern> = None;
     for ((pattern, call), scope) in ordered.into_iter().zip(is_call).zip(bound_before) {
-        let planned = plan_pattern(pattern, relations, &scope)?;
+        let planned = plan_pattern(pattern, relations, agg_registry, &scope)?;
         chain = Some(match chain {
             None => planned,
             Some(left) => {
@@ -423,10 +439,11 @@ fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), Eva
 fn map_children(
     pattern: &GraphPattern,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, EvalError> {
     let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
-        plan_pattern(child, relations, outer).map(Box::new)
+        plan_pattern(child, relations, agg_registry, outer).map(Box::new)
     };
     Ok(match pattern {
         GraphPattern::Bgp { .. }
@@ -471,7 +488,7 @@ fn map_children(
                 right: recurse(right, &inner)?,
                 expression: expression
                     .as_ref()
-                    .map(|expr| plan_expression(expr, relations, &condition_scope))
+                    .map(|expr| plan_expression(expr, relations, agg_registry, &condition_scope))
                     .transpose()?,
             }
         }
@@ -492,7 +509,7 @@ fn map_children(
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::Filter {
-                expr: plan_expression(expr, relations, &scope)?,
+                expr: plan_expression(expr, relations, agg_registry, &scope)?,
                 inner: recurse(inner, outer)?,
             }
         }
@@ -506,7 +523,7 @@ fn map_children(
             GraphPattern::Extend {
                 inner: recurse(inner, outer)?,
                 variable: variable.clone(),
-                expression: plan_expression(expression, relations, &scope)?,
+                expression: plan_expression(expression, relations, agg_registry, &scope)?,
             }
         }
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
@@ -522,12 +539,18 @@ fn map_children(
                     .iter()
                     .map(|order| {
                         Ok(match order {
-                            OrderExpression::Asc(expr) => {
-                                OrderExpression::Asc(plan_expression(expr, relations, &scope)?)
-                            }
-                            OrderExpression::Desc(expr) => {
-                                OrderExpression::Desc(plan_expression(expr, relations, &scope)?)
-                            }
+                            OrderExpression::Asc(expr) => OrderExpression::Asc(plan_expression(
+                                expr,
+                                relations,
+                                agg_registry,
+                                &scope,
+                            )?),
+                            OrderExpression::Desc(expr) => OrderExpression::Desc(plan_expression(
+                                expr,
+                                relations,
+                                agg_registry,
+                                &scope,
+                            )?),
                         })
                     })
                     .collect::<Result<Vec<_>, EvalError>>()?,
@@ -569,7 +592,7 @@ fn map_children(
                     .map(|(variable, aggregate)| {
                         Ok((
                             variable.clone(),
-                            plan_aggregate(aggregate, relations, &scope)?,
+                            plan_aggregate(aggregate, relations, agg_registry, &scope)?,
                         ))
                     })
                     .collect::<Result<Vec<_>, EvalError>>()?,
@@ -594,18 +617,29 @@ fn map_children(
 fn plan_expression(
     expr: &Expression,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<Expression, EvalError> {
-    if !crate::property_fn_eval::expression_reaches_property_function(expr) {
+    // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
+    // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
+    // has a `Custom` aggregate but no property-function call must still reach
+    // that aggregate's admission below (through the `Expression::Exists` arm).
+    if !crate::property_fn_eval::expression_reaches_property_function(expr)
+        && !crate::property_fn_eval::expression_reaches_custom_aggregate(expr)
+    {
         return Ok(expr.clone());
     }
-    let sub = |expr: &Expression| plan_expression(expr, relations, outer).map(Box::new);
+    let sub =
+        |expr: &Expression| plan_expression(expr, relations, agg_registry, outer).map(Box::new);
     Ok(match expr {
         // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
         // straight in: that is what lets a relation inside one be invoked bound.
-        Expression::Exists(pattern) => {
-            Expression::Exists(Box::new(plan_pattern(pattern, relations, outer)?))
-        }
+        Expression::Exists(pattern) => Expression::Exists(Box::new(plan_pattern(
+            pattern,
+            relations,
+            agg_registry,
+            outer,
+        )?)),
         Expression::Or(a, b) => Expression::Or(sub(a)?, sub(b)?),
         Expression::And(a, b) => Expression::And(sub(a)?, sub(b)?),
         Expression::Equal(a, b) => Expression::Equal(sub(a)?, sub(b)?),
@@ -626,19 +660,19 @@ fn plan_expression(
             sub(needle)?,
             haystack
                 .iter()
-                .map(|item| plan_expression(item, relations, outer))
+                .map(|item| plan_expression(item, relations, agg_registry, outer))
                 .collect::<Result<Vec<_>, EvalError>>()?,
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
-                .map(|item| plan_expression(item, relations, outer))
+                .map(|item| plan_expression(item, relations, agg_registry, outer))
                 .collect::<Result<Vec<_>, EvalError>>()?,
         ),
         Expression::FunctionCall(function, args) => Expression::FunctionCall(
             function.clone(),
             args.iter()
-                .map(|arg| plan_expression(arg, relations, outer))
+                .map(|arg| plan_expression(arg, relations, agg_registry, outer))
                 .collect::<Result<Vec<_>, EvalError>>()?,
         ),
         Expression::NamedNode(_)
@@ -648,18 +682,49 @@ fn plan_expression(
     })
 }
 
-/// Rewrite the expression an aggregate reduces over.
+/// Rewrite the expression an aggregate reduces over, and — for
+/// [`AggregateFunction::Custom`] — ADMIT the call at prepare time: refuse an
+/// unregistered IRI or a positional-argument count `agg_registry`'s registered
+/// entry does not declare, before any governor charge. The built-in-vs-custom
+/// admission asymmetry mirrors `crate::property_fn_plan`'s own for a relation: a
+/// built-in's arity is checked structurally by the parser (`SUM`/`AVG`/…
+/// accept exactly one expression), so only `Custom`'s host-declared arity needs
+/// checking here.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] naming the IRI, for an unregistered
+/// `AggregateFunction::Custom` IRI or a supplied argument count its registered
+/// entry's declared [`crate::user_fn::Arity`] does not accept. Also propagates
+/// [`plan_expression`]'s own errors from rewriting the argument list.
 fn plan_aggregate(
     aggregate: &AggregateExpression,
     relations: Option<&PropertyFunctionRegistry>,
+    agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<AggregateExpression, EvalError> {
+    if let AggregateFunction::Custom(iri) = &aggregate.function {
+        let iri_str = iri.as_str();
+        let Some(custom) = agg_registry.and_then(|registry| registry.resolve(iri_str)) else {
+            return Err(EvalError::function(format!(
+                "no custom aggregate is registered for <{iri_str}>"
+            )));
+        };
+        let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)?;
+        let supplied = aggregate.args.len();
+        if !declared.accepts(supplied) {
+            return Err(EvalError::function(format!(
+                "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call \
+                 site supplies {supplied}"
+            )));
+        }
+    }
     Ok(AggregateExpression {
         function: aggregate.function.clone(),
         args: aggregate
             .args
             .iter()
-            .map(|e| plan_expression(e, relations, outer))
+            .map(|e| plan_expression(e, relations, agg_registry, outer))
             .collect::<Result<Vec<_>, EvalError>>()?,
         scalarvals: aggregate.scalarvals.clone(),
         distinct: aggregate.distinct,

@@ -652,12 +652,14 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 
     // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
     // BNODE/list-mint reachable) for the per-group compute below to run under
-    // the fork-join model; `should_parallelize` (inside `par_chunk_try_map_init`)
-    // still gates on group count. `COUNT(*)`'s empty `args` trivially passes
-    // (nothing to check), exactly as the prior `CountStar { .. } => true` arm did.
+    // the fork-join model, AND every `Custom` aggregate reached must resolve to a
+    // registered, non-`Volatile` accumulator — `ctx.may_fork_aggregate` checks
+    // both; `should_parallelize` (inside `par_chunk_try_map_init`) still gates on
+    // group count. `COUNT(*)`'s empty `args` trivially passes (nothing to check),
+    // exactly as the prior `CountStar { .. } => true` arm did.
     let safe = aggregates
         .iter()
-        .all(|(_, agg)| agg.args.iter().all(|e| ctx.may_fork_row_loop(e)));
+        .all(|(_, agg)| ctx.may_fork_aggregate(agg));
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
@@ -707,7 +709,24 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     }))
 }
 
-/// Compute one aggregate over a group's rows.
+/// Compute one aggregate over a group's rows — streaming: every value is folded
+/// as it is produced, never materialized into a per-group buffer first. A
+/// built-in and a registered [`crate::agg_fn::CustomAggregate`] both instantiate
+/// the same init/step/finish shape ([`BuiltinFold`] for the former,
+/// [`crate::agg_fn`]'s trait pair for the latter); this function is the ONE place
+/// that decides which of the two a given [`AggregateExpression`] folds through.
+///
+/// # Error-row skipping
+///
+/// A row whose argument expression evaluates to unbound (`eval_expr` returns
+/// `Ok(None)`) never reaches a fold's `step` at all — for the single argument a
+/// built-in aggregate other than `COUNT(*)` takes, exactly as for every
+/// positional argument a [`AggregateFunction::Custom`] call takes (a `Custom`
+/// row needs EVERY position bound, mirroring
+/// [`crate::user_fn::eval_native_function`]'s "no per-parameter optionality" for
+/// a native scalar function's arguments). An expression that raises an
+/// evaluation error still aborts the whole query via `?`, exactly as before this
+/// restructuring — only an honestly UNBOUND value is skipped.
 fn eval_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     idxs: &[usize],
@@ -716,8 +735,9 @@ fn eval_aggregate<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     // `COUNT(*)` is the spec's empty exprlist: count rows (or distinct rows),
-    // never evaluating an expression at all.
-    let Some(expression) = agg.args.first() else {
+    // never evaluating an expression at all — the only aggregate an empty
+    // `exprlist` can name (see `AggregateExpression::args`'s docs).
+    let Some(first_arg) = agg.args.first() else {
         let count = if agg.distinct {
             let mut seen: DetHashSet<&Solution<D::Id>> = DetHashSet::default();
             idxs.iter().filter(|&&i| seen.insert(&rows[i])).count()
@@ -726,104 +746,104 @@ fn eval_aggregate<D: DatasetView + Sync>(
         };
         return Ok(Some(integer_term(ctx, count as i64)));
     };
-    // Every built-in aggregate other than `COUNT(*)` is unary; a `Custom`
-    // aggregate's arity may exceed one (`AGG(<iri>, a, b)`), but evaluating one
-    // is not yet implemented (see `apply_aggregate`'s `Custom` arm), so only the
-    // first argument is ever read here.
-    let mut values: Vec<(SolutionTerm<D::Id>, TermValue)> = Vec::new();
+
+    if let AggregateFunction::Custom(iri) = &agg.function {
+        return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
+    }
+
+    // Every built-in aggregate other than `COUNT(*)` is unary — only this one
+    // argument expression is ever evaluated.
+    let mut fold: BuiltinFold<'_, D> = BuiltinFold::init(&agg.function, agg.separator());
+    // DISTINCT dedups by `SolutionTerm` equality, which the scratch interner's
+    // Existing/Computed promotion rule (see `crate::scratch`'s module docs) makes
+    // exactly equivalent to dedup-by-value: two distinct `SolutionTerm`s never
+    // denote the same value. Cheaper than hashing the resolved `TermValue` (an
+    // owned-string clone for a literal/IRI), and byte-identical to the prior
+    // materializing implementation's `seen: DetHashSet<SolutionTerm>` retain.
+    let mut seen: Option<DetHashSet<SolutionTerm<D::Id>>> = agg.distinct.then(DetHashSet::default);
     for &i in idxs {
-        if let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? {
-            let value = ctx.scratch.value_of(ctx.dataset, term);
-            values.push((term, value));
+        let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
+            continue;
+        };
+        if let Some(seen) = seen.as_mut()
+            && !seen.insert(term)
+        {
+            continue;
         }
+        let value = ctx.scratch.value_of(ctx.dataset, term);
+        fold.step(term, &value);
     }
-    if agg.distinct {
-        let mut seen: DetHashSet<SolutionTerm<D::Id>> = DetHashSet::default();
-        values.retain(|(t, _)| seen.insert(*t));
-    }
-    apply_aggregate(agg, &values, ctx)
+    Ok(fold.finish(ctx))
 }
 
-/// Apply a named aggregate to the collected group values.
-fn apply_aggregate<D: DatasetView + Sync>(
+/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`]:
+/// resolve the IRI, meter its declared per-accumulator state bound, then stream
+/// every row's positional argument tuple through
+/// [`crate::agg_fn::step_contained`], deduping on the FULL tuple under
+/// `DISTINCT` (fixing the multi-argument case a single-argument built-in never
+/// exercises; for an arity-1 call this reduces to exactly the same "first
+/// occurrence kept" rule the built-in path applies).
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if `iri` is unregistered (a defense-in-depth repeat of
+/// `crate::property_fn_plan::plan_query`'s prepare-time refusal — reachable here
+/// only when a caller evaluates algebra that bypassed that walk) or if the
+/// resolved aggregate panics anywhere in its contained lifecycle.
+pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
+    iri: &str,
     agg: &AggregateExpression,
-    values: &[(SolutionTerm<D::Id>, TermValue)],
+    idxs: &[usize],
+    rows: &[Solution<D::Id>],
+    schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match &agg.function {
-        AggregateFunction::Count => Ok(Some(integer_term(ctx, values.len() as i64))),
-        AggregateFunction::Sample => Ok(values.first().map(|(t, _)| *t)),
-        AggregateFunction::Min => Ok(extreme(values, Ordering::Less)),
-        AggregateFunction::Max => Ok(extreme(values, Ordering::Greater)),
-        AggregateFunction::GroupConcat => {
-            let sep = agg.separator().unwrap_or(" ");
-            let joined = values
-                .iter()
-                .filter_map(|(_, v)| lexical_of(v))
-                .collect::<Vec<_>>()
-                .join(sep);
-            Ok(Some(string_term(ctx, joined)))
-        }
-        AggregateFunction::Sum => {
-            // Empty group → 0^^xsd:integer (SPARQL §18.5.1).
-            if values.is_empty() {
-                return Ok(Some(integer_term(ctx, 0)));
-            }
-            // Extract numeric XsdValues; any non-numeric → unbound.
-            let mut numerics: Vec<XsdValue> = Vec::with_capacity(values.len());
-            for (_, v) in values {
-                match xsd_of(v) {
-                    Some(xv) if is_numeric_xsd(&xv) => numerics.push(xv),
-                    _ => return Ok(None),
-                }
-            }
-            // Fold left with numeric_add; any error (overflow) → unbound.
-            let mut acc = numerics.remove(0);
-            for xv in numerics {
-                match numeric_add(&acc, &xv) {
-                    Ok(sum) => acc = sum,
-                    Err(_) => return Ok(None),
-                }
-            }
-            Ok(Some(xsd_to_term(ctx, &acc)))
-        }
-        AggregateFunction::Avg => {
-            // Empty group → 0^^xsd:integer.
-            if values.is_empty() {
-                return Ok(Some(integer_term(ctx, 0)));
-            }
-            let n = values.len();
-            // Extract numeric XsdValues; any non-numeric → unbound.
-            let mut numerics: Vec<XsdValue> = Vec::with_capacity(n);
-            for (_, v) in values {
-                match xsd_of(v) {
-                    Some(xv) if is_numeric_xsd(&xv) => numerics.push(xv),
-                    _ => return Ok(None),
-                }
-            }
-            // Sum.
-            let mut acc = numerics.remove(0);
-            for xv in numerics {
-                match numeric_add(&acc, &xv) {
-                    Ok(sum) => acc = sum,
-                    Err(_) => return Ok(None),
-                }
-            }
-            // Divide by count to get average.
-            let count_val = XsdValue::Integer {
-                value: n as i128,
-                datatype: XsdDatatype::Integer,
-            };
-            match numeric_div(&acc, &count_val) {
-                Ok(avg) => Ok(Some(xsd_to_term(ctx, &avg))),
-                Err(_) => Ok(None),
-            }
-        }
-        AggregateFunction::Custom(iri) => Err(EvalError::unsupported(format!(
-            "custom aggregate <{}>",
-            iri.as_str()
-        ))),
+    let custom = ctx
+        .aggregates
+        .and_then(|registry| registry.resolve(iri))
+        .cloned()
+        .ok_or_else(|| {
+            EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
+        })?;
+
+    // Meter the declared per-accumulator state bound against the scratch-arena
+    // ceiling AT ADMISSION (once per group's accumulator), because a custom
+    // accumulator's retained state is opaque host Rust the evaluator cannot
+    // observe mid-fold the way it observes a minted `TermValue` the instant the
+    // scratch interner produces one — see `CustomAggregate::state_bound`'s docs.
+    let state_bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
+    if let Err(tripped) =
+        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
+    {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
     }
+
+    let mut accumulator = crate::agg_fn::init_contained(custom.as_ref(), iri)?;
+    let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
+    let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args.len());
+    for &i in idxs {
+        tuple.clear();
+        let mut every_position_bound = true;
+        for expression in &agg.args {
+            let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? else {
+                every_position_bound = false;
+                break;
+            };
+            tuple.push(ctx.scratch.value_of(ctx.dataset, term));
+        }
+        if !every_position_bound {
+            continue;
+        }
+        if let Some(seen) = seen.as_mut()
+            && !seen.insert(tuple.clone())
+        {
+            continue;
+        }
+        crate::agg_fn::step_contained(accumulator.as_mut(), iri, &tuple)?;
+    }
+    let value = crate::agg_fn::finish_contained(accumulator, iri)?;
+    Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /
@@ -835,22 +855,199 @@ fn is_numeric_xsd(v: &XsdValue) -> bool {
     )
 }
 
-/// The group's extreme value (`Ordering::Less` = MIN, `Greater` = MAX) under SPARQL
-/// term ordering, returning its solution term; `None` for an empty group.
-fn extreme<I: ViewTermId>(
-    values: &[(SolutionTerm<I>, TermValue)],
-    want: Ordering,
-) -> Option<SolutionTerm<I>> {
-    values
-        .iter()
-        .reduce(|acc, cur| {
-            if term_value_order(&cur.1, &acc.1) == want {
-                cur
-            } else {
-                acc
+/// The running numeric fold `SUM`/`AVG` share: a value is folded in with
+/// `numeric_add`, seeded by the FIRST folded value (never `0 + first`, so the
+/// result datatype matches the pre-restructuring "remove the first element,
+/// then fold the rest" implementation exactly). A non-numeric value or an
+/// overflow POISONS the fold permanently — the answer is unbound regardless of
+/// what would have followed — mirroring the materializing implementation's
+/// immediate `return Ok(None)`, just without needing to abort the row loop
+/// early (the poisoned state simply ignores every further `step`).
+#[derive(Debug, Clone)]
+enum NumericFold {
+    /// No value has been folded in yet.
+    Empty,
+    /// A running sum plus the count of values folded so far (only `AVG` reads
+    /// the count).
+    Ok { acc: XsdValue, count: u64 },
+    /// A non-numeric value or an overflow was seen.
+    Poisoned,
+}
+
+impl NumericFold {
+    fn step(&mut self, value: &TermValue) {
+        if matches!(self, Self::Poisoned) {
+            return;
+        }
+        let Some(xv) = xsd_of(value).filter(is_numeric_xsd) else {
+            *self = Self::Poisoned;
+            return;
+        };
+        match self {
+            Self::Empty => *self = Self::Ok { acc: xv, count: 1 },
+            Self::Ok { acc, count } => match numeric_add(acc, &xv) {
+                Ok(sum) => {
+                    *acc = sum;
+                    *count += 1;
+                }
+                Err(_) => *self = Self::Poisoned,
+            },
+            Self::Poisoned => unreachable!("poisoned state returns above"),
+        }
+    }
+
+    /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1); poisoned
+    /// → unbound; otherwise the running total.
+    fn finish_sum<D: DatasetView + Sync>(
+        self,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Option<SolutionTerm<D::Id>> {
+        match self {
+            Self::Empty => Some(integer_term(ctx, 0)),
+            Self::Ok { acc, .. } => Some(xsd_to_term(ctx, &acc)),
+            Self::Poisoned => None,
+        }
+    }
+
+    /// `AVG`'s finish: empty group → `0^^xsd:integer`; poisoned → unbound;
+    /// otherwise the running total divided by the folded count.
+    fn finish_avg<D: DatasetView + Sync>(
+        self,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Option<SolutionTerm<D::Id>> {
+        match self {
+            Self::Empty => Some(integer_term(ctx, 0)),
+            Self::Ok { acc, count } => {
+                let count_val = XsdValue::Integer {
+                    value: i128::from(count),
+                    datatype: XsdDatatype::Integer,
+                };
+                match numeric_div(&acc, &count_val) {
+                    Ok(avg) => Some(xsd_to_term(ctx, &avg)),
+                    Err(_) => None,
+                }
             }
-        })
-        .map(|(t, _)| *t)
+            Self::Poisoned => None,
+        }
+    }
+}
+
+/// The streaming fold state of one built-in aggregate over one group — the
+/// internal, statically-dispatched instance of the same init/step/finish shape
+/// [`crate::agg_fn::CustomAggregate`]/[`crate::agg_fn::AggregateAccumulator`]
+/// give a HOST-registered aggregate. Kept as a plain enum-of-states rather than a
+/// `Box<dyn>` so a built-in's per-row fold costs no allocation and no vtable
+/// dispatch — the trait in `crate::agg_fn` is the seam for a caller-supplied
+/// aggregate; this is the shape every built-in already had before it needed one.
+///
+/// Algebraic class (informational, matching `AlgebraicClass`'s documentation of
+/// the built-ins in `crate::agg_fn`): `Count`/`Sum`/`Avg` are `Commutative`
+/// (row order never changes the answer); `Min`/`Max` are `Commutative` under
+/// SPARQL term ordering (ties keep the earliest occurrence, which does not
+/// change the VALUE, only which term instance is returned — see
+/// [`fold_extreme`]); `Sample`/`GroupConcat` are `OrderDependent` ("first value
+/// wins" / ordered concatenation).
+enum BuiltinFold<'a, D: DatasetView + Sync> {
+    Count(i64),
+    Sample(Option<SolutionTerm<D::Id>>),
+    Min(Option<(SolutionTerm<D::Id>, TermValue)>),
+    Max(Option<(SolutionTerm<D::Id>, TermValue)>),
+    GroupConcat {
+        sep: &'a str,
+        buf: String,
+        started: bool,
+    },
+    Sum(NumericFold),
+    Avg(NumericFold),
+}
+
+impl<'a, D: DatasetView + Sync> BuiltinFold<'a, D> {
+    /// The empty-group answer for `function` is exactly `Self::init(function,
+    /// ..).finish(ctx)` with no `step` ever called — every built-in answers
+    /// explicitly (see the module-level fold-algebra contract): `Count` → `0`,
+    /// `Sum` → `0`, `Avg`/`Min`/`Max`/`Sample` → unbound, `GroupConcat` → `""`.
+    fn init(function: &AggregateFunction, separator: Option<&'a str>) -> Self {
+        match function {
+            AggregateFunction::Count => Self::Count(0),
+            AggregateFunction::Sample => Self::Sample(None),
+            AggregateFunction::Min => Self::Min(None),
+            AggregateFunction::Max => Self::Max(None),
+            AggregateFunction::GroupConcat => Self::GroupConcat {
+                sep: separator.unwrap_or(" "),
+                buf: String::new(),
+                started: false,
+            },
+            AggregateFunction::Sum => Self::Sum(NumericFold::Empty),
+            AggregateFunction::Avg => Self::Avg(NumericFold::Empty),
+            AggregateFunction::Custom(_) => unreachable!(
+                "a Custom aggregate dispatches through eval_custom_aggregate before a \
+                 BuiltinFold is ever constructed"
+            ),
+        }
+    }
+
+    /// Fold one row's already-evaluated `(term, value)` pair in.
+    fn step(&mut self, term: SolutionTerm<D::Id>, value: &TermValue) {
+        match self {
+            Self::Count(n) => *n += 1,
+            Self::Sample(slot) => {
+                if slot.is_none() {
+                    *slot = Some(term);
+                }
+            }
+            Self::Min(slot) => *slot = Some(fold_extreme(slot.take(), term, value, Ordering::Less)),
+            Self::Max(slot) => {
+                *slot = Some(fold_extreme(slot.take(), term, value, Ordering::Greater));
+            }
+            Self::GroupConcat { sep, buf, started } => {
+                if let Some(lexical) = lexical_of(value) {
+                    if *started {
+                        buf.push_str(sep);
+                    } else {
+                        *started = true;
+                    }
+                    buf.push_str(&lexical);
+                }
+            }
+            Self::Sum(state) | Self::Avg(state) => state.step(value),
+        }
+    }
+
+    /// Produce the group's answer, consuming the fold.
+    fn finish(self, ctx: &mut EvalCtx<'_, D>) -> Option<SolutionTerm<D::Id>> {
+        match self {
+            Self::Count(n) => Some(integer_term(ctx, n)),
+            Self::Sample(slot) => slot,
+            Self::Min(slot) | Self::Max(slot) => slot.map(|(t, _)| t),
+            Self::GroupConcat { buf, .. } => Some(string_term(ctx, buf)),
+            Self::Sum(state) => state.finish_sum(ctx),
+            Self::Avg(state) => state.finish_avg(ctx),
+        }
+    }
+}
+
+/// One step of `MIN`/`MAX`'s running extreme: `want` is `Ordering::Less` for
+/// `MIN`, `Greater` for `MAX`. Ties (`term_value_order` returns anything other
+/// than `want`) keep the EARLIER occurrence — the same left-fold tie-break the
+/// prior `values.iter().reduce(..)` implementation had, since `reduce` seeds its
+/// accumulator with the first element and only replaces it when a later element
+/// compares strictly better.
+fn fold_extreme<I: ViewTermId>(
+    current: Option<(SolutionTerm<I>, TermValue)>,
+    term: SolutionTerm<I>,
+    value: &TermValue,
+    want: Ordering,
+) -> (SolutionTerm<I>, TermValue) {
+    match current {
+        None => (term, value.clone()),
+        Some((current_term, current_value)) => {
+            if term_value_order(value, &current_value) == want {
+                (term, value.clone())
+            } else {
+                (current_term, current_value)
+            }
+        }
+    }
 }
 
 /// The lexical string of a term for GROUP_CONCAT (literal lexical / IRI string).

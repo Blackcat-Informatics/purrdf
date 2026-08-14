@@ -82,7 +82,8 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
 use purrdf_sparql_algebra::{
-    GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
+    AggregateFunction, Function, GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern,
+    TriplePattern, Variable,
 };
 
 use crate::DetHashMap;
@@ -716,6 +717,124 @@ pub(crate) fn expression_reaches_property_function(
                 expression_reaches_property_function(inner)
             }
             crate::governor::soundness::ExpressionPart::Call(_) => false,
+        };
+        found
+    });
+    found
+}
+
+/// Whether `pattern` reaches a `GROUP BY` with an [`AggregateFunction::Custom`]
+/// aggregate anywhere — including inside an expression-embedded `EXISTS`.
+///
+/// Shares the soundness-visitor idiom [`pattern_reaches_property_function`]
+/// establishes, but for a different reason at each of its two call sites:
+///
+/// * `crate::property_fn_plan::plan_query`'s prepare-time walk uses it to decide
+///   whether a query needs planning AT ALL when it carries no property-function
+///   call either — without this check, a query with a `Custom` aggregate and NO
+///   property function would skip `plan_query`'s whole walk via its
+///   `pattern_reaches_property_function`-only short-circuit, and the unregistered-
+///   IRI/arity admission [`crate::property_fn_plan::plan_aggregate`] performs
+///   would never run.
+/// * `crate::remote::eval_service` uses it for the SAME reason
+///   [`pattern_reaches_property_function`] exists: a `Custom` aggregate inside a
+///   `SERVICE` body would serialize as an ordinary `AGG`-shaped call the endpoint
+///   cannot know, or worse, an `AGG(<iri>, …)` textual form it silently mishandles
+///   — either way a wrong answer with no local symptom.
+pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
+    if let GraphPattern::Group { aggregates, .. } = pattern
+        && aggregates
+            .iter()
+            .any(|(_, aggregate)| matches!(aggregate.function, AggregateFunction::Custom(_)))
+    {
+        return true;
+    }
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_custom_aggregate(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_custom_aggregate(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_custom_aggregate`] through an expression's embedded patterns
+/// (an `EXISTS`'s inner `GROUP BY`, e.g. `FILTER EXISTS { SELECT (AGG(<iri>,?x)
+/// AS ?v) WHERE {...} GROUP BY ?g }`).
+///
+/// `pub(crate)`: also read directly by `crate::property_fn_plan::plan_expression`'s
+/// own short-circuit, for the identical reason `plan_where_pattern` reads
+/// [`pattern_reaches_custom_aggregate`] — an expression containing an `EXISTS`
+/// whose inner pattern has a `Custom` aggregate but no property-function call
+/// must not skip the walk that reaches that aggregate's prepare-time admission.
+pub(crate) fn expression_reaches_custom_aggregate(
+    expr: &purrdf_sparql_algebra::Expression,
+) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_custom_aggregate(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_custom_aggregate(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Call(_) => false,
+        };
+        found
+    });
+    found
+}
+
+/// Whether `pattern` reaches a [`Function::Custom`] scalar-function call anywhere
+/// — including inside an expression-embedded `EXISTS`.
+///
+/// Used ONLY at the `SERVICE` forwarding boundary
+/// ([`crate::remote::eval_service`]): a `Custom` call serializes as an ordinary
+/// function-call syntax the remote endpoint does not define, so `SILENT` would
+/// launder a request that could never mean what it meant locally into an
+/// endpoint-side syntax error (best case) or a same-spelled-but-different builtin
+/// on the remote engine (worst case, and silent). Unlike
+/// [`pattern_reaches_custom_aggregate`], prepare-time admission has no analogous
+/// need for this walk: an unresolved [`Function::Custom`] IRI already fails
+/// LOUDLY at evaluation time (an XSD-cast attempt or a typed "undefined function"
+/// error — see `crate::expr`), so there is no silent-empty-answer hazard for
+/// `crate::property_fn_plan` to close the way there is for a relation's predicate
+/// or a `Custom` aggregate's registry mismatch.
+pub(crate) fn pattern_reaches_custom_function(pattern: &GraphPattern) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_custom_function(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_custom_function(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_custom_function`] through an expression's embedded patterns.
+fn expression_reaches_custom_function(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_custom_function(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_custom_function(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Call(f) => matches!(f, Function::Custom(_)),
         };
         found
     });

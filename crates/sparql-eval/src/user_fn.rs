@@ -220,7 +220,12 @@ pub enum Arity {
 
 impl Arity {
     /// Whether `count` arguments satisfies this declared arity.
-    fn accepts(self, count: usize) -> bool {
+    ///
+    /// `pub(crate)` rather than private: `crate::property_fn_plan`'s prepare-time
+    /// walk checks a custom aggregate's supplied `AGG(<iri>, args…)` argument
+    /// count against its registered [`CustomAggregate`](crate::agg_fn::CustomAggregate)'s
+    /// declared [`Arity`] the same way this module checks a native function's.
+    pub(crate) fn accepts(self, count: usize) -> bool {
         match self {
             Self::Exact(n) => count == n,
             Self::Range { min, max } => (min..=max).contains(&count),

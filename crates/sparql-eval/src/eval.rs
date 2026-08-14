@@ -396,6 +396,17 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// failure either way. Borrowed for the dataset lifetime like
     /// [`Self::user_functions`], so carrying it is a `Copy` pointer, never a clone.
     pub(crate) property_functions: Option<&'d crate::property_fn::PropertyFunctionRegistry>,
+    /// The caller-injected custom-aggregate table, if any. `None` (the default)
+    /// means no aggregate is registered, which is exactly equivalent to an empty
+    /// registry: an `AggregateFunction::Custom(iri)` call only reaches this table
+    /// at evaluation time after `crate::property_fn_plan::plan_query`'s
+    /// prepare-time walk has already admitted it against the SAME registry (see
+    /// `crate::engine::check_plan_matches_relations`'s aggregate-identity check),
+    /// so an unresolved call here is a defense-in-depth repeat of that refusal,
+    /// never the normal path. Borrowed for the dataset lifetime like
+    /// [`Self::property_functions`], so carrying it is a `Copy` pointer, never a
+    /// clone.
+    pub(crate) aggregates: Option<&'d crate::agg_fn::AggregateRegistry>,
     /// The current SHACL-AF function call depth, incremented by
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
@@ -514,6 +525,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             base_iri: None,
             user_functions: None,
             property_functions: None,
+            aggregates: None,
             udf_depth: 0,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -826,12 +838,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// The caller-injected tables the fork-join safety walk consults — the one place
-    /// this context's two registries are paired, so a call site cannot pass one and
-    /// forget the other.
+    /// this context's three registries are paired, so a call site cannot pass one and
+    /// forget the others.
     pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
         crate::parallel::SafetyRegistries {
             functions: self.user_functions,
             relations: self.property_functions,
+            aggregates: self.aggregates,
         }
     }
 
@@ -858,6 +871,43 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return false;
         }
         !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+    }
+
+    /// Whether one `GROUP BY` group's aggregate compute may be forked across
+    /// parallel workers (`modifier::eval_group`'s per-group fork gate).
+    ///
+    /// Two conditions, both about a forked worker computing this ONE aggregate for
+    /// this ONE group in isolation from every other group:
+    ///
+    /// 1. Every argument expression must pass [`Self::may_fork_row_loop`], exactly
+    ///    as before this aggregate seam existed.
+    /// 2. If `agg` is [`purrdf_sparql_algebra::AggregateFunction::Custom`], the
+    ///    IRI must resolve against [`Self::aggregates`] to an aggregate declaring
+    ///    [`crate::user_fn::Volatility::Stable`] — see
+    ///    [`crate::parallel::aggregate_is_unsafe`] for why an UNRESOLVED custom
+    ///    aggregate is conservatively UNSAFE here (the property-function
+    ///    treatment, not the scalar-function one: an unresolved relation's
+    ///    volatility is unknown, where an unresolved scalar function IRI has a
+    ///    defined deterministic meaning).
+    ///
+    /// This governs only WHICH GROUP runs on which worker — the fold WITHIN one
+    /// group still always runs sequentially, in row order, on whichever worker
+    /// drew that group, so [`crate::agg_fn::AggregateAccumulator::combine`] is not
+    /// consulted here at all (see `crate::agg_fn`'s module docs).
+    pub(crate) fn may_fork_aggregate(
+        &self,
+        agg: &purrdf_sparql_algebra::AggregateExpression,
+    ) -> bool {
+        if !agg.args.iter().all(|e| self.may_fork_row_loop(e)) {
+            return false;
+        }
+        if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = &agg.function {
+            return !crate::parallel::aggregate_is_unsafe(
+                iri.as_str(),
+                self.safety_registries().aggregates,
+            );
+        }
+        true
     }
 
     /// Whether this execution carries a governor that actually enforces something.
@@ -1253,6 +1303,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
             property_functions: self.property_functions,
+            // Read-only shared registry (a `Copy` pointer), for the same reason: a
+            // worker computing one group's fold through a registered custom
+            // aggregate must resolve its IRI against the same table its parent
+            // would.
+            aggregates: self.aggregates,
             udf_depth: self.udf_depth,
             // SHARED, not fresh: one live accounting state across every worker, so the
             // budget is not multiplied by the thread count.
@@ -1299,6 +1354,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         registry: &'d crate::property_fn::PropertyFunctionRegistry,
     ) -> Self {
         self.property_functions = Some(registry);
+        self
+    }
+
+    /// Attach a caller-injected custom-aggregate registry for this evaluation, so
+    /// an `AggregateFunction::Custom(iri)` call resolves to a registered
+    /// aggregate. The borrow shares the dataset lifetime `'d`.
+    ///
+    /// Attaching an EMPTY registry is exactly equivalent to attaching none — the
+    /// resolution path asks the same question of both and gets the same answer,
+    /// the same pin [`Self::with_property_functions`] states for its registry.
+    #[must_use]
+    pub fn with_aggregates(mut self, registry: &'d crate::agg_fn::AggregateRegistry) -> Self {
+        self.aggregates = Some(registry);
         self
     }
 
@@ -1384,6 +1452,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
             property_functions: self.property_functions,
+            // Inherited for the same reason: a function body's own `GROUP BY` (it is
+            // SPARQL like any other) resolves a `Custom` aggregate against the same
+            // registry the calling query sees.
+            aggregates: self.aggregates,
             udf_depth: next_depth,
             // SHARED: a function body's evaluation spends the caller's budget, not a
             // fresh one — otherwise a query could evade its ceiling by calling a
