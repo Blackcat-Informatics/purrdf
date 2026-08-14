@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.org/>
+
+SELECT
+  (COUNT(*) AS ?c0) (COUNT(*) AS ?c1) (COUNT(*) AS ?c2) (COUNT(*) AS ?c3)
+  (COUNT(*) AS ?c4) (COUNT(*) AS ?c5) (COUNT(*) AS ?c6) (COUNT(*) AS ?c7)
+  (COUNT(*) AS ?c8) (COUNT(*) AS ?c9) (COUNT(*) AS ?c10) (COUNT(*) AS ?c11)
+WHERE { ?s ex:missing ?o }

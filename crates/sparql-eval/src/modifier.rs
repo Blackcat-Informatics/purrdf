@@ -23,6 +23,7 @@ use crate::convert::{ground_term_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::{eval_expr, xsd_of, xsd_to_term};
+use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -714,7 +715,9 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 /// built-in and a registered [`crate::agg_fn::CustomAggregate`] both instantiate
 /// the same init/step/finish shape ([`BuiltinFold`] for the former,
 /// [`crate::agg_fn`]'s trait pair for the latter); this function is the ONE place
-/// that decides which of the two a given [`AggregateExpression`] folds through.
+/// that decides which of the two a given [`AggregateExpression`] folds through —
+/// and, because both kinds are dispatched from here, the ONE place that charges
+/// [`ChargePoint::AggregateInvocation`] for either of them.
 ///
 /// # Error-row skipping
 ///
@@ -727,6 +730,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 /// a native scalar function's arguments). An expression that raises an
 /// evaluation error still aborts the whole query via `?`, exactly as before this
 /// restructuring — only an honestly UNBOUND value is skipped.
+///
+/// # Governance
+///
+/// [`ChargePoint::AggregateInvocation`] is charged exactly once here, before any
+/// dispatch, so it prices the fold's init/finish overhead uniformly for
+/// `COUNT(*)`, every other built-in, and every registered custom aggregate. A
+/// refused charge is recorded on [`EvalCtx::expression_barrier`] and answered as
+/// unbound — the same doctrine [`crate::user_fn::eval_native_function`]'s
+/// invocation charge follows — leaving [`eval_group`] to notice the barrier and
+/// withhold the whole grouped output.
 fn eval_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     idxs: &[usize],
@@ -734,17 +747,35 @@ fn eval_aggregate<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
+    }
+
     // `COUNT(*)` is the spec's empty exprlist: count rows (or distinct rows),
     // never evaluating an expression at all — the only aggregate an empty
     // `exprlist` can name (see `AggregateExpression::args`'s docs).
     let Some(first_arg) = agg.args.first() else {
-        let count = if agg.distinct {
-            let mut seen: DetHashSet<&Solution<D::Id>> = DetHashSet::default();
-            idxs.iter().filter(|&&i| seen.insert(&rows[i])).count()
-        } else {
-            idxs.len()
-        };
-        return Ok(Some(integer_term(ctx, count as i64)));
+        // Every row is a value `COUNT(*)` folds, whether or not `DISTINCT` keeps
+        // it — see [`ChargePoint::AggregateAccumulation`]'s doc for why the
+        // charge precedes the dedup check. An explicit loop, rather than
+        // `Iterator::count`, so a refused charge stops the count exactly where
+        // the budget ran out instead of after the whole group was scanned.
+        let mut seen: Option<DetHashSet<&Solution<D::Id>>> = agg.distinct.then(DetHashSet::default);
+        let mut count: i64 = 0;
+        for &i in idxs {
+            if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+                ctx.expression_barrier.record(tripped);
+                return Ok(None);
+            }
+            if let Some(seen) = seen.as_mut()
+                && !seen.insert(&rows[i])
+            {
+                continue;
+            }
+            count += 1;
+        }
+        return Ok(Some(integer_term(ctx, count)));
     };
 
     if let AggregateFunction::Custom(iri) = &agg.function {
@@ -765,6 +796,15 @@ fn eval_aggregate<D: DatasetView + Sync>(
         let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
             continue;
         };
+        // The `aggregate-accumulation` charge point, charged for every value the
+        // argument expression produced — BEFORE the `DISTINCT` check below, per
+        // [`ChargePoint::AggregateAccumulation`]'s documented reading: producing
+        // and inspecting the value is the work this point prices, and that work
+        // already happened by the time a duplicate is discarded.
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
+        }
         if let Some(seen) = seen.as_mut()
             && !seen.insert(term)
         {
@@ -834,6 +874,15 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         }
         if !every_position_bound {
             continue;
+        }
+        // The `aggregate-accumulation` charge point, charged once the row's whole
+        // argument tuple is bound — BEFORE the `DISTINCT` check below, exactly as
+        // the built-in fold path in `eval_aggregate` charges it: producing and
+        // inspecting the tuple is the work this point prices, whether or not
+        // `DISTINCT` goes on to discard it.
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
         }
         if let Some(seen) = seen.as_mut()
             && !seen.insert(tuple.clone())

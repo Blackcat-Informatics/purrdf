@@ -47,7 +47,7 @@ regenerating a digest.
 | `expected/<case>.answer` | the certified rows and their certificate class |
 | `expected/<case>.spend` | what the execution consumed, per dimension |
 | `expected/<case>.metered` | what the same case costs under `QueryGovernors::METERED` |
-| `expected/<case>.charges` | *relation cases only* — the metered fuel decomposed per charge point |
+| `expected/<case>.charges` | *relation and aggregate-isolating cases only* — the metered fuel decomposed per charge point |
 
 A case's data syntax is taken from its **extension**, not from the manifest, so
 a fixture cannot be listed under a syntax it is not written in. Endpoint
@@ -79,25 +79,38 @@ happened to cut in the same place: the answer would be unchanged, the receipt
 would not, and every budget a consumer sized against the old schedule would be
 silently wrong while the corpus stayed green.
 
-### A fourth, for the relation lane
+### A fourth, for the relation lane and the aggregate lane
 
 Fuel is **one** number, and profile v5 put **two** new charge points inside it —
-`property-function-invocation` and `property-function-row`. A band on the
+`property-function-invocation` and `property-function-row` — and v6 put **two**
+more — `aggregate-invocation` and `aggregate-accumulation`. A band on the
 aggregate is satisfied by any schedule whose total happens to land in the same
-place, including one that doubled the invocation cost and halved the row cost.
-So every relation case also carries `expected/<case>.charges`: the metered run's
-fuel decomposed **per charge point**, read off the public per-node ledger
-(`QueryExplanation::ledger`, taken under the same `QueryGovernors::METERED`).
-The harness re-derives it on every run and additionally checks that the eleven
-counts add back up to the `.metered` fuel — a decomposition that did not sum to
-the quantity it claims to decompose would be a decomposition of something else.
+place, including one that doubled one point's cost and halved the other's. So
+every relation case, and the two `aggregate-*-fuel-*` lanes, also carry
+`expected/<case>.charges`: the metered run's fuel decomposed **per charge
+point**, read off the public per-node ledger (`QueryExplanation::ledger`, taken
+under the same `QueryGovernors::METERED` — for a relation case through
+`NativeSparqlEngine::explain_query_with_property_functions`, and for an
+aggregate case through plain `NativeSparqlEngine::explain_query`, since an
+aggregate is ordinary algebra rather than an injected seam). The harness
+re-derives it on every run and additionally checks that the thirteen counts add
+back up to the `.metered` fuel — a decomposition that did not sum to the
+quantity it claims to decompose would be a decomposition of something else.
 
 Note that `.charges` and `relations.tsv` describe **different runs**: the
 `.charges` sidecar decomposes the unconstrained METERED measurement, while the
 `relations.tsv` invocation/pull counts record the banded (ceiling-constrained)
 run. For a zero-fuel band the two legitimately disagree — the METERED
 decomposition shows what the seam spends when it runs, the banded row shows the
-trip firing before any relation resolves (`0/0`).
+trip firing before any relation resolves (`0/0`). The aggregate lane has no
+equivalent side table — an aggregate fold is ordinary algebra, not a scripted
+seam — so its `.charges` and `.answer`/`.spend` pair are read together instead:
+both `aggregate-invocation-fuel-*` and `aggregate-accumulation-fuel-*` fold
+their one group to completion well inside the boundary ceiling, so the
+over-bound member (one fuel unit below it) trips on the trailing
+`committed-output-row` charge for the group's own already-computed output row
+rather than inside the fold — the row is reported, certified as a positional
+prefix of itself, at both boundary and over-bound.
 
 ## The boundary is measured, never guessed
 
@@ -150,9 +163,13 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | `property-function-invocation-fuel-*` | `property-function-miss` | the invocation point **alone** — twelve driving rows against a relation that emits nothing, so the band contains twelve invocation charges and zero row charges |
 | `property-function-row-fuel-*` | `property-function-single` | the row point **alone** — one driving row against a relation that emits twelve, so the band contains one invocation charge and twelve row charges |
 | `property-function-parallel-fuel-*` | `property-function-wide` | the same seam at 1200 driving rows, above the evaluator's fork threshold |
+| `aggregate-invocation-fuel-*` | `aggregate-invocation` | the invocation point **alone** — twelve aggregate expressions folding one implicit group whose input matches nothing, so the band contains twelve invocation charges and zero accumulation charges |
+| `aggregate-accumulation-fuel-*` | `aggregate-accumulation` | the accumulation point **alone** — one aggregate expression (`SUM`) folding one implicit group of twelve rows, so the band contains one invocation charge and twelve accumulation charges |
 
-The three lanes above carry a `boundary` and an `over-bound` member but no
-`zero`; the section on the relation seam says why that is the honest shape.
+The five lanes above carry a `boundary` and an `over-bound` member but no
+`zero`; the section on the relation seam says why that is the honest shape for
+the property-function pair, and the aggregate section below says why the same
+shape holds for the aggregate pair.
 | `answer-rows-*` | `chain` | what the query commits to its answer sequence |
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
@@ -280,6 +297,55 @@ sequential run cost, and the over-bound member — one unit below it — must tr
 Equal totals alone would be a strong statement; the over-bound member makes it
 the sharper one, because a ceiling one below the measurement can only be crossed
 at all if the parallel fold charged the same items in the same order.
+
+### The aggregate fold
+
+`GROUP BY`'s aggregate fold is the evaluator's third producer whose per-group
+work an outside party — the data, not the plan — sizes, alongside the federated
+transport and the property-function relation. Unlike those two it needs no
+injected seam: an aggregate is ordinary algebra, built-in or a registered
+custom aggregate alike, so its two charge points are read straight off
+`explain_query`'s ledger rather than off a scripted side table.
+
+#### Separating the two charge points
+
+| Case | Fixture | Pinned |
+|---|---|---|
+| `aggregate-invocation-fuel-boundary` | `aggregate-invocation` | fuel 53; `.charges`: 12 `aggregate-invocation`, 0 `aggregate-accumulation`; `complete`, 1 row |
+| `aggregate-invocation-fuel-over-bound` | `aggregate-invocation` | fuel 52; `budget-exhausted fuel`, 1 row (the group's one row is already fully computed by the time the trailing `committed-output-row` charge trips) |
+| `aggregate-accumulation-fuel-boundary` | `aggregate-accumulation` | fuel 45; `.charges`: 1 `aggregate-invocation`, 12 `aggregate-accumulation`; `complete`, 1 row |
+| `aggregate-accumulation-fuel-over-bound` | `aggregate-accumulation` | fuel 44; `budget-exhausted fuel`, 1 row |
+
+`aggregate-invocation.rq` names twelve aggregate expressions — `(COUNT(*) AS
+?c0)` through `?c11` — over a `WHERE` clause that matches nothing, so the
+special "no `GROUP BY`, empty input" rule forms exactly one implicit group with
+zero rows: every expression's fold still runs (twelve `aggregate-invocation`
+charges) but never folds a single value in (zero `aggregate-accumulation`
+charges), and `COUNT(*)`'s empty-group answer is `0`, not unbound, so the query
+completes with one row of twelve zeroes.
+
+`aggregate-accumulation.rq` is the mirror image: one `SUM(?val)` over twelve
+matching rows and no `GROUP BY`, so one implicit group folds twelve values
+(twelve `aggregate-accumulation` charges) through exactly one fold (one
+`aggregate-invocation` charge).
+
+A cost change at either point moves exactly one lane's `.charges` decomposition,
+which a single joint fuel number cannot tell you. Neither lane carries a `zero`
+member, for the same reason the property-function lanes do not: a zero fuel
+ceiling trips at the first algebra-node entry, before the `Group` node — let
+alone any aggregate expression — is ever reached.
+
+Both fixtures fold their one group to completion well inside the boundary
+ceiling: the twelve invocation, or twelve accumulation, charges are a small
+fraction of the lane's total cost, which also pays the generic per-node
+accounting every algebra node pays. So the over-bound ceiling lands on the
+TRAILING `committed-output-row` charge for the group's own already-computed
+row rather than inside the fold itself — unlike the property-function
+invocation lane, whose relation emits nothing at all and so has no trailing
+row-commit charge to land on instead. The two lanes' `.answer` records say so
+directly: the same one row, `certain` with `positional-prefix=true`, at both
+boundary and over-bound — a caller paging by exactly one more unit of fuel
+gets the identical row back, now reported as `complete`.
 
 ### Deadlines
 

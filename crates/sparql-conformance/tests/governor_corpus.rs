@@ -71,6 +71,20 @@
 //! row charges) and a *row-isolating* pair driven by a single row (one invocation, many
 //! row charges). A cost change at either point moves exactly one of them.
 //!
+//! # The aggregate lane
+//!
+//! v6 put a second pair of charge points inside the same fuel number —
+//! `aggregate-invocation` and `aggregate-accumulation` — for the evaluator's third
+//! producer whose per-group work an outside party sizes: `GROUP BY`'s aggregate fold,
+//! built-in and custom alike. It owes the same fourth record the relation lane does, taken
+//! the same way but over a plain `explain_query` (no property-function registry needed,
+//! since an aggregate is ordinary algebra rather than an injected seam): `aggregate-invocation-fuel-*`
+//! isolates the invocation point with many aggregate expressions folding an empty group
+//! (many invocation charges, zero accumulation charges), and `aggregate-accumulation-fuel-*`
+//! isolates the accumulation point with one aggregate expression folding many rows (one
+//! invocation charge, many accumulation charges) — the same isolating-pair shape the
+//! relation lane uses, for the same reason.
+//!
 //! # The parallel drive
 //!
 //! One relation pair drives more rows than `parallel::PARALLEL_MIN_ROWS`, so the BGP
@@ -134,8 +148,10 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 /// numeric dimensions (15), an injected deterministic deadline (3), the property-function
 /// charge points' joint fuel lane (3), and the three relation lanes that exist to take that
 /// joint lane apart — invocation-isolating, row-isolating, and the parallel drive, a
-/// boundary and an over-bound each (6).
-const REQUIRED_BAND_CASES: usize = 27;
+/// boundary and an over-bound each (6) — plus the two aggregate lanes that isolate
+/// `aggregate-invocation` and `aggregate-accumulation` from each other, a boundary and an
+/// over-bound each (4).
+const REQUIRED_BAND_CASES: usize = 31;
 
 /// The driving-row count above which the evaluator's chunk drivers fork.
 ///
@@ -1130,6 +1146,39 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
     out
 }
 
+/// [`charge_decomposition`]'s twin for the aggregate lane, which needs no injected seam:
+/// an aggregate is ordinary algebra, not a host relation, so the metered run is taken
+/// through plain [`NativeSparqlEngine::explain_query`] rather than the property-function
+/// variant. Used only for [`wants_dataset_charge_decomposition`] cases — every other case's
+/// `.charges` decomposition would just be its `.metered` fuel restated per point for no
+/// reason a caller could act on.
+fn charge_decomposition_dataset(case: &Case) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let explanation = NativeSparqlEngine::new()
+        .explain_query(&dataset, &query, None)
+        .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    let mut out = String::new();
+    for point in ChargePoint::ALL {
+        let total: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(point))
+            .sum();
+        writeln!(out, "{point}\t{total}").expect("writing to a String cannot fail");
+    }
+    out
+}
+
+/// Whether `name` is one of the two lanes that separate `aggregate-invocation` from
+/// `aggregate-accumulation` — the aggregate lane's counterpart to a relation case's
+/// `relation_spec.is_some()` test, since neither aggregate lane wires an injected seam for
+/// `load_relations`/`load_transport` to key on.
+fn wants_dataset_charge_decomposition(name: &str) -> bool {
+    name.starts_with("aggregate-invocation-fuel-")
+        || name.starts_with("aggregate-accumulation-fuel-")
+}
+
 /// The fuel a rendered decomposition attributes to `point`.
 fn charged_at(record: &str, point: ChargePoint) -> u64 {
     for line in record.lines() {
@@ -1500,6 +1549,8 @@ fn regenerate_case(
             "charges",
             &charge_decomposition(&case, relation_spec),
         );
+    } else if wants_dataset_charge_decomposition(&case.name) {
+        write_expected(&case, "charges", &charge_decomposition_dataset(&case));
     }
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec, relation_spec);
@@ -1777,6 +1828,24 @@ fn every_boundary_is_derived_from_a_metered_run() {
         // nobody can trust.
         if let Some(relation_spec) = relations.get(&case.name).copied() {
             let decomposition = charge_decomposition(case, relation_spec);
+            assert_eq!(
+                decomposition,
+                read_expected(case, "charges"),
+                "{}: the per-charge-point decomposition of the metered fuel moved without \
+                 the corpus being regenerated",
+                case.name
+            );
+            assert_eq!(
+                charged_total(&decomposition),
+                consumed_in(&measured.spend, ResourceDimension::Fuel),
+                "{}: the pinned decomposition does not add up to the fuel it decomposes",
+                case.name
+            );
+        } else if wants_dataset_charge_decomposition(&case.name) {
+            // The aggregate lane's twin of the check above: `aggregate-invocation` and
+            // `aggregate-accumulation` are the same kind of fuel-internal pair, taken
+            // through a plain `explain_query` rather than a scripted relation.
+            let decomposition = charge_decomposition_dataset(case);
             assert_eq!(
                 decomposition,
                 read_expected(case, "charges"),
@@ -2236,6 +2305,129 @@ fn the_two_property_function_charge_points_are_banded_separately() {
              invocation band",
             row.name
         );
+    }
+}
+
+/// [`the_two_property_function_charge_points_are_banded_separately`]'s twin for the
+/// aggregate lane: `aggregate-invocation` and `aggregate-accumulation` both denominate
+/// fuel, so a band on the aggregate alone is satisfied by any schedule whose total lands in
+/// the same place — including one that doubled the invocation cost and halved the
+/// accumulation cost. Two lanes take the pair apart:
+///
+/// - `aggregate-invocation-fuel-*` folds twelve aggregate expressions over one implicit
+///   group whose input matches nothing, so its band carries twelve invocation charges and
+///   provably **zero** accumulation charges — `COUNT(*)`'s empty-group answer is `0`, not
+///   unbound, so the query still completes and commits a row.
+/// - `aggregate-accumulation-fuel-*` folds one aggregate expression (`SUM`) over one
+///   implicit group holding twelve rows, so its band carries exactly **one** invocation
+///   charge and twelve accumulation charges.
+///
+/// Read off the pinned `.charges` decomposition rather than recomputed, so what this
+/// asserts is the published numbers. Neither lane carries a `zero` member, for the same
+/// reason the property-function lanes do not: a zero fuel ceiling trips at the first
+/// algebra-node entry, before the `Group` node — let alone any aggregate expression — is
+/// ever reached.
+#[test]
+fn the_two_aggregate_charge_points_are_banded_separately() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    // `.charges` decomposes the unconstrained METERED measurement (see
+    // `charge_decomposition_dataset`'s docs), exactly as a relation case's does — so a
+    // lane's boundary and over-bound members share the identical record, and what it
+    // shows is the shape of the LANE's full cost, not of whichever ceiling a given case
+    // happens to set. That is what the boundary/over-bound pair's `.spend` and `.answer`
+    // records are for instead: they pin what the ACTUAL banded run did.
+    for band in ["boundary", "over-bound"] {
+        let invocation = case_named(&cases, &format!("aggregate-invocation-fuel-{band}"));
+        let charges = read_expected(invocation, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::AggregateAccumulation),
+            0,
+            "{}: the invocation lane isolates by folding an empty group; a non-empty group \
+             would put accumulation charges back into the band",
+            invocation.name
+        );
+        let invocations = charged_at(&charges, ChargePoint::AggregateInvocation);
+        assert_eq!(
+            invocations, 12,
+            "{}: the lane's full cost must attribute exactly twelve charges to the \
+             invocation point — one per aggregate expression the query names",
+            invocation.name
+        );
+
+        let accumulation = case_named(&cases, &format!("aggregate-accumulation-fuel-{band}"));
+        let charges = read_expected(accumulation, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::AggregateInvocation),
+            1,
+            "{}: the accumulation lane isolates by driving exactly one aggregate expression \
+             over one implicit group",
+            accumulation.name
+        );
+        let accumulated = charged_at(&charges, ChargePoint::AggregateAccumulation);
+        assert_eq!(
+            accumulated, 12,
+            "{}: the lane's full cost must attribute exactly twelve charges to the \
+             accumulation point — one per row the single group folds",
+            accumulation.name
+        );
+
+        // The two lanes' full costs must not be interchangeable, or a schedule that
+        // doubled `aggregate-invocation` and halved `aggregate-accumulation` (say) would
+        // leave both `.charges` records looking the same.
+        assert_ne!(
+            charged_total(&read_expected(invocation, "charges")),
+            charged_total(&read_expected(accumulation, "charges")),
+            "the two lanes drive different query shapes and must not coincidentally cost \
+             the same total fuel"
+        );
+
+        // The banded run itself. Both fixtures fold a SINGLE implicit group to completion
+        // well inside their boundary ceiling — the fold's own charges (the twelve
+        // `aggregate-invocation` or `aggregate-accumulation` units above) are a small
+        // fraction of the lane's total cost, which also pays the generic per-node
+        // accounting every node pays (`algebra-node-entry` on the way in,
+        // `committed-output-row` on the way out for the group's own already-computed
+        // row). So the over-bound ceiling — one unit below the boundary — lands on that
+        // TRAILING generic charge rather than inside the fold itself: the group's one row
+        // is fully computed either way, and what differs is only whether committing it
+        // crosses the ceiling. The certificate says so directly: `Truncation::origin`
+        // reports the node's own complete output as a positional prefix of itself, not an
+        // opaque withholding — a caller paging by raising the ceiling by exactly one gets
+        // the same row back, now as `complete` rather than `budget-exhausted`.
+        for case in [invocation, accumulation] {
+            let expected_outcome = if band == "boundary" {
+                "complete"
+            } else {
+                "budget-exhausted fuel"
+            };
+            assert_eq!(case.outcome, expected_outcome, "{}", case.name);
+            assert_eq!(
+                pinned_row_count(case),
+                1,
+                "{}: the group's one row is computed in full before either ceiling is \
+                 reached, so it is reported at both boundary and over-bound",
+                case.name
+            );
+        }
+    }
+
+    // And the pair really is one fuel unit apart, exactly like every other boundary/
+    // over-bound pair in the corpus — re-checked here rather than assumed, because it is
+    // the fact that makes "over-bound" a meaningful name for the second member.
+    for prefix in ["aggregate-invocation", "aggregate-accumulation"] {
+        let boundary = case_named(&cases, &format!("{prefix}-fuel-boundary"));
+        let over_bound = case_named(&cases, &format!("{prefix}-fuel-over-bound"));
+        let boundary_fuel =
+            consumed_in(&read_expected(boundary, "metered"), ResourceDimension::Fuel);
+        let (dimension, ceiling) = boundary.ceiling.expect("a band case sets a ceiling");
+        assert_eq!(dimension, ResourceDimension::Fuel);
+        assert_eq!(ceiling, boundary_fuel);
+        let (_, over_bound_ceiling) = over_bound.ceiling.expect("a band case sets a ceiling");
+        assert_eq!(over_bound_ceiling, boundary_fuel - 1);
     }
 }
 

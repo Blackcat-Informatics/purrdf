@@ -1,0 +1,14 @@
+@prefix ex: <http://example.org/> .
+
+ex:s0 ex:val 1 .
+ex:s1 ex:val 2 .
+ex:s2 ex:val 3 .
+ex:s3 ex:val 4 .
+ex:s4 ex:val 5 .
+ex:s5 ex:val 6 .
+ex:s6 ex:val 7 .
+ex:s7 ex:val 8 .
+ex:s8 ex:val 9 .
+ex:s9 ex:val 10 .
+ex:s10 ex:val 11 .
+ex:s11 ex:val 12 .

@@ -15,17 +15,21 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use pretty_assertions::assert_eq;
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, ResourceDimension, StopCause, TermId, TrippedGovernor,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, StopCause, TermId, TermValue,
+    TrippedGovernor,
 };
 use purrdf_sparql_algebra::{
-    Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern, TermPattern,
-    TriplePattern, Variable,
+    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal, NamedNode,
+    NamedNodePattern, TermPattern, TriplePattern, Variable,
 };
 
+use crate::agg_fn::{AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate};
+use crate::error::EvalError;
 use crate::eval::{EvalCtx, MAX_UDF_DEPTH, eval_evaluated};
 use crate::governor::lift::Evaluated;
-use crate::governor::{GovernorState, QueryGovernors, StopSignal};
+use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
 use crate::parallel::{force_parallel_for_test, force_sequential_operation};
+use crate::user_fn::{Arity, Volatility};
 
 /// The namespace every fixture in this module uses.
 const EX: &str = "http://example.org/";
@@ -392,7 +396,7 @@ fn scratch_growth_is_charged_so_a_satisfied_row_count_cannot_hide_an_oom() {
     let p = builder.intern_iri(&format!("{EX}p"));
     for index in 0..5 {
         let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_literal(purrdf_core::RdfLiteral {
+        let o = builder.intern_literal(RdfLiteral {
             lexical_form: format!("value-{index}"),
             datatype: None,
             language: None,
@@ -639,11 +643,11 @@ fn a_forked_worker_shares_one_accounting_state() {
     // And spending through a worker is spending the caller's budget.
     for _ in 0..4 {
         worker
-            .charge(crate::governor::ChargePoint::AlgebraNodeEntry)
+            .charge(ChargePoint::AlgebraNodeEntry)
             .expect("inside the ceiling");
     }
     assert_eq!(
-        parent.charge(crate::governor::ChargePoint::AlgebraNodeEntry),
+        parent.charge(ChargePoint::AlgebraNodeEntry),
         Err(TrippedGovernor::Budget {
             dimension: ResourceDimension::Fuel,
             limit: 4,
@@ -815,7 +819,7 @@ impl CountingRelation {
     fn emitting(count: usize) -> Self {
         Self {
             rows: (0..count)
-                .map(|index| vec![purrdf_core::TermValue::iri(format!("{EX}r{index}"))])
+                .map(|index| vec![TermValue::iri(format!("{EX}r{index}"))])
                 .collect(),
             declared: count as u64,
             opens: Arc::new(AtomicU64::new(0)),
@@ -830,8 +834,8 @@ impl CountingRelation {
 }
 
 impl crate::property_fn::PropertyFunction for CountingRelation {
-    fn volatility(&self) -> crate::user_fn::Volatility {
-        crate::user_fn::Volatility::Stable
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
     }
 
     fn arity(&self) -> crate::property_fn::PfArity {
@@ -850,7 +854,7 @@ impl crate::property_fn::PropertyFunction for CountingRelation {
         &self,
         _args: &crate::property_fn::PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::error::EvalError> {
+    ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
         self.opens.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(CountingCursor {
             rows: self.rows.clone(),
@@ -869,7 +873,7 @@ struct CountingCursor {
 }
 
 impl crate::property_fn::PfCursor for CountingCursor {
-    fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, crate::error::EvalError> {
+    fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, EvalError> {
         self.pulls.fetch_add(1, Ordering::Relaxed);
         let row = self.rows.get(self.next).cloned();
         self.next += 1;
@@ -946,10 +950,7 @@ fn run_with_relations(
 }
 
 /// The fuel `point` accounts for across the whole ledger.
-fn ledger_fuel(
-    ledger: &[crate::governor::NodeCharges],
-    point: crate::governor::ChargePoint,
-) -> u64 {
+fn ledger_fuel(ledger: &[crate::governor::NodeCharges], point: ChargePoint) -> u64 {
     ledger.iter().map(|node| node.fuel_at(point)).sum()
 }
 
@@ -974,15 +975,12 @@ fn a_governed_property_function_query_spends_exactly_its_invocation_and_row_fuel
     assert_eq!(relation.opens(), 3, "one invocation per driving row");
 
     assert_eq!(
-        ledger_fuel(
-            &ledger,
-            crate::governor::ChargePoint::PropertyFunctionInvocation
-        ),
+        ledger_fuel(&ledger, ChargePoint::PropertyFunctionInvocation),
         3,
         "the invocation point counts calls into host code, one per driving row"
     );
     assert_eq!(
-        ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow),
+        ledger_fuel(&ledger, ChargePoint::PropertyFunctionRow),
         6,
         "the row point counts rows the relation emitted and this engine accepted"
     );
@@ -1042,7 +1040,7 @@ fn a_budget_below_the_first_emitted_row_truncates_rather_than_failing() {
     let (metered, ledger) =
         run_with_relations(&pattern, &dataset, &registry, &QueryGovernors::METERED);
     assert_eq!(metered.tripped, None);
-    let rows_charged = ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow);
+    let rows_charged = ledger_fuel(&ledger, ChargePoint::PropertyFunctionRow);
     assert!(
         rows_charged > 0,
         "the fixture must charge rows to cut below"
@@ -1060,9 +1058,7 @@ fn a_budget_below_the_first_emitted_row_truncates_rather_than_failing() {
             &registry,
             &QueryGovernors::UNBOUNDED.with_fuel(budget),
         );
-        if run.tripped.is_some()
-            && ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow) == 0
-        {
+        if run.tripped.is_some() && ledger_fuel(&ledger, ChargePoint::PropertyFunctionRow) == 0 {
             cut = Some(run);
             break;
         }
@@ -1123,11 +1119,408 @@ fn a_zero_fuel_ceiling_never_enters_the_relation_at_all() {
          is consulted"
     );
     for point in [
-        crate::governor::ChargePoint::PropertyFunctionInvocation,
-        crate::governor::ChargePoint::PropertyFunctionRow,
+        ChargePoint::PropertyFunctionInvocation,
+        ChargePoint::PropertyFunctionRow,
     ] {
         assert_eq!(ledger_fuel(&ledger, point), 0, "{point} was charged");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate charge points: `aggregate-invocation` and `aggregate-accumulation`
+// ---------------------------------------------------------------------------
+
+/// An integer literal, typed exactly as `RdfDatasetBuilder` mints one from a bare Turtle
+/// integer — the shape [`agg_group_dataset`]'s fixture and `SUM`'s numeric fold both expect.
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+/// `groups × rows_per_group` rows, `ex:catN` grouping `ex:s{i}` into `groups` equal-sized
+/// buckets via `ex:cat`, each row also carrying its own value on `ex:val` — the same shape
+/// `crate::modifier`'s own `group_aggregate_forced_parallel_and_sequential_agree` fixture
+/// uses, so a group's row count and a query's total row count are both exact, known
+/// quantities a test can assert against rather than approximate.
+fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let cat_pred = b.intern_iri(&format!("{EX}cat"));
+    let val_pred = b.intern_iri(&format!("{EX}val"));
+    for g in 0..groups {
+        for r in 0..rows_per_group {
+            let i = g * rows_per_group + r;
+            let subject = b.intern_iri(&format!("{EX}s{i}"));
+            let cat = b.intern_literal(RdfLiteral {
+                lexical_form: format!("cat{g}"),
+                datatype: Some(XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            });
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subject, cat_pred, cat, None);
+            b.push_quad(subject, val_pred, val, None);
+        }
+    }
+    b.freeze().expect("aggregate dataset is positionally valid")
+}
+
+/// `?s ex:cat ?cat . ?s ex:val ?val` — [`agg_group_dataset`]'s driving join.
+fn agg_join_inner() -> GraphPattern {
+    GraphPattern::Join {
+        left: Box::new(bgp(vec![triple(var("s"), "cat", var("cat"))])),
+        right: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+    }
+}
+
+/// `SELECT ?cat (SUM(?val) AS ?total) WHERE { ... } GROUP BY ?cat` over
+/// [`agg_join_inner`] — one built-in aggregate expression per group.
+fn sum_group_pattern() -> GraphPattern {
+    GraphPattern::Group {
+        inner: Box::new(agg_join_inner()),
+        variables: vec![Variable::new("cat")],
+        aggregates: vec![(
+            Variable::new("total"),
+            AggregateExpression {
+                function: AggregateFunction::Sum,
+                args: vec![Expression::Variable(Variable::new("val"))],
+                scalarvals: Vec::new(),
+                distinct: false,
+            },
+        )],
+    }
+}
+
+/// [`sum_group_pattern`] with the aggregate expression naming a registered
+/// [`CustomAggregate`] instead of the built-in `SUM` — same group shape, same argument
+/// variable, so the two patterns' fuel is comparable value for value.
+fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
+    GraphPattern::Group {
+        inner: Box::new(agg_join_inner()),
+        variables: vec![Variable::new("cat")],
+        aggregates: vec![(
+            Variable::new("total"),
+            AggregateExpression {
+                function: AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
+                args: vec![Expression::Variable(Variable::new("val"))],
+                scalarvals: Vec::new(),
+                distinct: false,
+            },
+        )],
+    }
+}
+
+/// `SELECT (COUNT(DISTINCT ?val) AS ?n) WHERE { ... }` — no `GROUP BY`, so the whole input
+/// is one implicit group, and every row shares the SAME `?val` (see
+/// [`duplicate_value_dataset`]) so `DISTINCT` discards all but the first.
+fn count_distinct_group_pattern() -> GraphPattern {
+    GraphPattern::Group {
+        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        variables: Vec::new(),
+        aggregates: vec![(
+            Variable::new("n"),
+            AggregateExpression {
+                function: AggregateFunction::Count,
+                args: vec![Expression::Variable(Variable::new("val"))],
+                scalarvals: Vec::new(),
+                distinct: true,
+            },
+        )],
+    }
+}
+
+/// `rows` triples `ex:sN ex:val "same"`, every one binding `?val` to the SAME literal —
+/// the fixture [`count_distinct_group_pattern`] dedups down to a single kept value while
+/// still touching every row.
+fn duplicate_value_dataset(rows: i64) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let val_pred = b.intern_iri(&format!("{EX}val"));
+    let same = b.intern_literal(RdfLiteral {
+        lexical_form: "same".to_owned(),
+        datatype: None,
+        language: None,
+        direction: None,
+    });
+    for i in 0..rows {
+        let subject = b.intern_iri(&format!("{EX}s{i}"));
+        b.push_quad(subject, val_pred, same, None);
+    }
+    b.freeze()
+        .expect("duplicate-value dataset is positionally valid")
+}
+
+/// [`run_with_relations`]'s twin for the aggregate seam: evaluate `pattern` under
+/// `governors`, with `registry` wired if the pattern names a custom aggregate, reporting
+/// what it kept and spent together with the per-node, per-charge-point ledger.
+fn run_with_aggregates(
+    pattern: &GraphPattern,
+    dataset: &RdfDataset,
+    registry: Option<&AggregateRegistry>,
+    governors: &QueryGovernors,
+) -> (Run, Vec<crate::governor::NodeCharges>) {
+    let state = Arc::new(GovernorState::new(governors));
+    let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
+        pattern,
+        &crate::DetHashMap::default(),
+    ));
+    let mut ctx = EvalCtx::new(dataset)
+        .with_governors(Arc::clone(&state))
+        .with_charge_ledger(Arc::clone(&ledger));
+    if let Some(registry) = registry {
+        ctx = ctx.with_aggregates(registry);
+    }
+    let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    let evidence = state.evidence();
+    (
+        Run {
+            rows: evaluated.rows().len(),
+            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            tripped: evidence.tripped(),
+        },
+        ledger.snapshot(),
+    )
+}
+
+/// A `Commutative` custom `SUM`-alike over a single numeric-lexical argument — the same
+/// shape `crate::agg_fn`'s own test fixture uses, kept local so this module's aggregate
+/// coverage does not reach into another module's `#[cfg(test)]` items.
+struct SumAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for SumAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            XSD_INTEGER,
+        )))
+    }
+}
+
+struct SumAggregate;
+
+impl CustomAggregate for SumAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(SumAccumulator { total: 0 })
+    }
+}
+
+const CUSTOM_SUM_IRI: &str = "http://example.org/agg/customSum";
+
+fn custom_sum_registry() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register(CUSTOM_SUM_IRI, Arc::new(SumAggregate));
+    registry
+}
+
+#[test]
+fn a_governed_group_by_query_spends_exactly_its_aggregate_invocation_and_accumulation_fuel() {
+    // Three groups of four rows each: one aggregate expression per group, so
+    // `aggregate-invocation` must total exactly three (one per group), and every one of
+    // the twelve rows contributes exactly one value to `SUM`, so `aggregate-accumulation`
+    // must total exactly twelve — counted rather than approximated, because the whole
+    // point of a dedicated pair of points is that a fold's per-group and per-value work
+    // stop being invisible inside the generic per-node accounting.
+    let dataset = agg_group_dataset(3, 4);
+    let pattern = sum_group_pattern();
+
+    let (measured, ledger) =
+        run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED);
+    assert_eq!(measured.tripped, None, "the measuring run must complete");
+    assert_eq!(measured.rows, 3, "one output row per group");
+
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::AggregateInvocation),
+        3,
+        "the invocation point counts one fold per group, independent of group size"
+    );
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::AggregateAccumulation),
+        12,
+        "the accumulation point counts one charge per value folded, across every group"
+    );
+
+    let total: u64 = ledger
+        .iter()
+        .map(crate::governor::NodeCharges::fuel_total)
+        .sum();
+    assert_eq!(total, measured.fuel);
+}
+
+#[test]
+fn a_custom_aggregate_spends_the_same_invocation_and_accumulation_fuel_as_a_built_in_over_the_same_group_shape()
+ {
+    // Same group shape (three groups of four rows, one aggregate expression per group)
+    // folded through a registered `CustomAggregate` instead of the built-in `SUM` fold —
+    // the two charge points are dispatched from the ONE call site in
+    // `crate::modifier::eval_aggregate` that decides which kind of fold an expression
+    // names, so a caller's budget must not need to know which one a given aggregate
+    // function happens to be.
+    let dataset = agg_group_dataset(3, 4);
+    let registry = custom_sum_registry();
+
+    let (builtin, builtin_ledger) = run_with_aggregates(
+        &sum_group_pattern(),
+        &dataset,
+        None,
+        &QueryGovernors::METERED,
+    );
+    let (custom, custom_ledger) = run_with_aggregates(
+        &custom_sum_group_pattern(CUSTOM_SUM_IRI),
+        &dataset,
+        Some(&registry),
+        &QueryGovernors::METERED,
+    );
+    assert_eq!(builtin.tripped, None);
+    assert_eq!(custom.tripped, None);
+
+    for point in [
+        ChargePoint::AggregateInvocation,
+        ChargePoint::AggregateAccumulation,
+    ] {
+        assert_eq!(
+            ledger_fuel(&builtin_ledger, point),
+            ledger_fuel(&custom_ledger, point),
+            "{point}: a built-in and a custom aggregate over the same group shape must \
+             cost the same fuel"
+        );
+    }
+}
+
+#[test]
+fn distinct_still_charges_accumulation_for_every_value_it_goes_on_to_discard() {
+    // Twelve rows, every one binding `?val` to the SAME literal: `COUNT(DISTINCT ?val)`
+    // keeps exactly one of them, but the work of producing and inspecting each of the
+    // twelve against the running `DISTINCT` set already happened, so the accumulation
+    // point must still count twelve — the documented reading of
+    // `ChargePoint::AggregateAccumulation`, checked rather than merely asserted in prose.
+    let dataset = duplicate_value_dataset(12);
+    let pattern = count_distinct_group_pattern();
+
+    let (measured, ledger) =
+        run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED);
+    assert_eq!(measured.tripped, None);
+    assert_eq!(measured.rows, 1, "one implicit group, no GROUP BY");
+
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::AggregateInvocation),
+        1,
+        "one aggregate expression over one implicit group"
+    );
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::AggregateAccumulation),
+        12,
+        "every row's value was produced and inspected, even the eleven DISTINCT discarded"
+    );
+}
+
+#[test]
+fn an_aggregate_heavy_query_under_a_tight_budget_stops_with_the_governed_outcome() {
+    // Before `aggregate-accumulation` existed, this query's per-value fold work was
+    // invisible to the schedule: its whole cost rode the generic per-node accounting, so
+    // no fuel ceiling could bind while that fold was still running — the query either
+    // completed or was stopped by some other dimension entirely, never by the cost of the
+    // fold itself. This walks the budget down from the full measured cost, exactly as
+    // `a_budget_below_the_first_emitted_row_truncates_rather_than_failing` does for the
+    // property-function seam, until it finds the highest ceiling at which
+    // `aggregate-accumulation`'s ledgered total is strictly less than the complete run's —
+    // i.e. the ceiling that stops the query WHILE it is mid-fold, having already folded
+    // some values into a group's running state but not all of them.
+    let dataset = agg_group_dataset(5, 8); // 40 rows across 5 groups
+    let pattern = sum_group_pattern();
+
+    let (full, full_ledger) =
+        run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED);
+    assert_eq!(full.tripped, None, "the measuring run must complete");
+    assert_eq!(full.rows, 5);
+    let full_accumulation = ledger_fuel(&full_ledger, ChargePoint::AggregateAccumulation);
+    assert_eq!(
+        full_accumulation, 40,
+        "one accumulation charge per row, every group"
+    );
+
+    let mut budget = full.fuel;
+    let mut mid_fold = None;
+    while budget > 0 {
+        budget -= 1;
+        let (run, ledger) = run_with_aggregates(
+            &pattern,
+            &dataset,
+            None,
+            &QueryGovernors::UNBOUNDED.with_fuel(budget),
+        );
+        let accumulated = ledger_fuel(&ledger, ChargePoint::AggregateAccumulation);
+        if accumulated < full_accumulation {
+            mid_fold = Some((run, accumulated));
+            break;
+        }
+    }
+    let (tight, accumulated) =
+        mid_fold.expect("some budget below the full cost must cut into the accumulation fold");
+    assert!(
+        accumulated > 0,
+        "the ceiling that first cuts the fold must still admit at least one folded value, or \
+         the walk overshot past `aggregate-invocation` into the fold's own admission"
+    );
+    assert!(
+        matches!(
+            tight.tripped,
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                ..
+            })
+        ),
+        "the governed outcome must name the fuel ceiling: {:?}",
+        tight.tripped
+    );
+    // `Group` is an opaque edge under any truncation of its own fold (see
+    // `crate::modifier::eval_group`'s docs): an aggregate over a partial fold is a
+    // different number, never a subset of the true one, so the whole grouped output is
+    // withheld rather than reporting some groups' answers and not others'.
+    assert_eq!(
+        tight.rows, 0,
+        "a trip inside the fold must withhold the whole grouped output, not a subset of it"
+    );
+
+    // Deterministic: the same ceiling cuts in the same place, every time.
+    let again = run_with_aggregates(
+        &pattern,
+        &dataset,
+        None,
+        &QueryGovernors::UNBOUNDED.with_fuel(budget),
+    )
+    .0;
+    assert_eq!(again, tight);
 }
 
 /// The type parameter is spelled out in a couple of places above; this keeps the
