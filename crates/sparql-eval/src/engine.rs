@@ -2839,6 +2839,51 @@ mod tests {
             .expect("query")
     }
 
+    /// `ORDER BY ADJUST(?dt, timezone)` orders by the ADJUSTed *value* (the
+    /// underlying instant), proving `ADJUST` reached `is_builtin_function`'s
+    /// `ORDER BY` lookahead (`order_key_ahead`) and evaluates without hitting
+    /// the `Unsupported` fallback. Three same-local-clock-reading dateTimes at
+    /// three different offsets denote three different UTC instants; ordering
+    /// them normalizes every row to a fixed offset first, so the visible
+    /// order is exactly the instant order, not the lexical order.
+    #[test]
+    fn order_by_adjust_orders_by_the_adjusted_instant() {
+        let mut b = RdfDatasetBuilder::new();
+        let dt = b.intern_iri("http://ex/dt");
+        let a = b.intern_iri("http://ex/a"); // 09:00-05:00 = 14:00Z (latest)
+        let bb = b.intern_iri("http://ex/b"); // 09:00+05:00 = 04:00Z (earliest)
+        let c = b.intern_iri("http://ex/c"); // 09:00Z (middle)
+        let xsd_datetime = "http://www.w3.org/2001/XMLSchema#dateTime";
+        let a_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00-05:00", xsd_datetime));
+        let b_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00+05:00", xsd_datetime));
+        let c_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00Z", xsd_datetime));
+        b.push_quad(a, dt, a_dt, None);
+        b.push_quad(bb, dt, b_dt, None);
+        b.push_quad(c, dt, c_dt, None);
+        let ds = b.freeze().expect("freeze");
+        let query = "SELECT ?s WHERE { ?s <http://ex/dt> ?dt } \
+                     ORDER BY ADJUST(?dt, \"PT0H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>)";
+        let SparqlResult::Solutions { rows, .. } = run_on(&ds, query) else {
+            panic!("expected solutions");
+        };
+        let subjects: Vec<String> = rows
+            .iter()
+            .map(|r| match &r[0] {
+                Some(TermValue::Iri(s)) => s.clone(),
+                other => panic!("expected an IRI, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![
+                "http://ex/b".to_owned(),
+                "http://ex/c".to_owned(),
+                "http://ex/a".to_owned(),
+            ],
+            "earliest-to-latest UTC instant order, not lexical order"
+        );
+    }
+
     /// The first-column values of a solutions result, as sorted debug strings.
     fn col0(result: SparqlResult) -> Vec<String> {
         match result {

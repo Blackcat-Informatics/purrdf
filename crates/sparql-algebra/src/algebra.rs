@@ -895,6 +895,16 @@ pub enum Function {
     Seconds,
     Timezone,
     Tz,
+    /// `ADJUST(value, timezone)` — SPARQL 1.2 timezone adjustment for
+    /// `xsd:dateTime`/`xsd:date`/`xsd:time`, mapping to XPath and XQuery
+    /// Functions and Operators §9.6 `fn:adjust-*-to-timezone` (SEP-0002's
+    /// "Add Support Durations, Dates, and Times" addition to the SPARQL 1.2
+    /// Query specification's Functions on Dates and Times table). `timezone`
+    /// is an `xsd:dayTimeDuration` in `[-PT14H, PT14H]`, or the empty simple
+    /// literal `""` — SPARQL's stand-in for XPath's empty-sequence "remove
+    /// the timezone" case (SPARQL itself has no empty sequence). See the
+    /// eval arm in `purrdf-sparql-eval` for the full domain-error contract.
+    Adjust,
     Now,
     Uuid,
     StrUuid,

@@ -2973,6 +2973,12 @@ impl<'a> Parser<'a, '_> {
                 if let Some(func) = builtin_function(&upper) {
                     self.pos += 1;
                     let args = self.parse_arg_list(aggs)?;
+                    // `builtin_function`'s generic dispatch path does not arity-check;
+                    // ADJUST(value, timezone) is fixed at 2 (SEP-0002's sole documented
+                    // signature — see the `Function::Adjust` rustdoc).
+                    if func == Function::Adjust {
+                        expect_arity(&args, 2, "ADJUST", self.span())?;
+                    }
                     Ok(Expression::FunctionCall(func, args))
                 } else {
                     Err(ParseError::unsupported(format!(
@@ -3541,6 +3547,7 @@ fn builtin_function(upper: &str) -> Option<Function> {
         "SECONDS" => Function::Seconds,
         "TIMEZONE" => Function::Timezone,
         "TZ" => Function::Tz,
+        "ADJUST" => Function::Adjust,
         "NOW" => Function::Now,
         "UUID" => Function::Uuid,
         "STRUUID" => Function::StrUuid,
@@ -5726,5 +5733,46 @@ mod tests {
                 "https://example.org/other/anything".to_owned()
             ]
         );
+    }
+
+    // ---- ADJUST() ----------------------------------------------------------
+
+    #[test]
+    fn adjust_parses_as_a_two_arg_function_call() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . \
+                  BIND(ADJUST(?o, \"PT1H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>) \
+                  AS ?h) }";
+        let Expression::FunctionCall(func, args) = bound_expr(q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Adjust);
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn adjust_with_one_argument_is_a_syntax_error() {
+        // ADJUST has exactly one documented (2-argument) signature (SEP-0002);
+        // the generic builtin-call path does not arity-check on its own, so
+        // this pins the dedicated `expect_arity` gate added for it.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(ADJUST(?o) AS ?h) }";
+        let error = SparqlParser::new()
+            .parse_query(q)
+            .expect_err("ADJUST with one argument must be refused at parse time");
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "expected a typed syntax error, got {error:?}"
+        );
+        assert!(error.to_string().contains("ADJUST"));
+    }
+
+    #[test]
+    fn adjust_with_three_arguments_is_a_syntax_error() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . \
+                  BIND(ADJUST(?o, \"PT1H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>, ?o) \
+                  AS ?h) }";
+        let error = SparqlParser::new()
+            .parse_query(q)
+            .expect_err("ADJUST with three arguments must be refused at parse time");
+        assert!(matches!(error, ParseError::Syntax { .. }));
     }
 }

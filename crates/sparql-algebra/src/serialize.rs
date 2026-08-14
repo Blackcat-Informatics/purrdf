@@ -778,6 +778,7 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         Function::Seconds => "SECONDS",
         Function::Timezone => "TIMEZONE",
         Function::Tz => "TZ",
+        Function::Adjust => "ADJUST",
         Function::Now => "NOW",
         Function::Uuid => "UUID",
         Function::StrUuid => "STRUUID",
@@ -1010,6 +1011,14 @@ mod tests {
     fn roundtrip_service_silent() {
         assert_roundtrip(
             "SELECT * WHERE { SERVICE SILENT <http://ep/sparql> { ?s <http://ex/p> ?o } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_adjust() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?dt \
+             FILTER(ADJUST(?dt, \"PT1H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>) = ?dt) }",
         );
     }
 

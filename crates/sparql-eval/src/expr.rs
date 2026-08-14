@@ -18,7 +18,7 @@
 //! built-ins the corpus uses, **numeric arithmetic** (`+ - * /`, unary sign),
 //! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, and (Gap 4) **`ENCODE_FOR_URI`**,
 //! **`NOW`**, **`YEAR`/`MONTH`/`DAY`/`HOURS`/`MINUTES`/`SECONDS`**,
-//! **`TIMEZONE`/`TZ`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
+//! **`TIMEZONE`/`TZ`/`ADJUST`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
 //! **`RAND`**, and **`UUID`/`STRUUID`**. Unsupported (`Unsupported`):
 //! `SERVICE`, property paths, and `Function::Custom`.
 
@@ -1708,6 +1708,45 @@ fn eval_function<D: DatasetView + Sync>(
             _ => Ok(None),
         },
 
+        // ---- ADJUST(value, timezone) ----------------------------------------
+        // The SPARQL 1.2 Query specification's Functions on Dates and Times
+        // table (SEP-0002 "Add Support Durations, Dates, and Times") maps
+        // ADJUST onto `fn:adjust-dateTime-to-timezone` / `-date-` / `-time-
+        // to-timezone` (XPath and XQuery Functions and Operators §9.6); see
+        // `Function::Adjust`'s rustdoc and [`adjust_timezone_arg`] for the
+        // exact source trail and the SPARQL empty-sequence encoding. Domain
+        // errors from the `purrdf-xsd` call (non-whole-minute or out-of-range
+        // ±14:00 timezone) fold into `Ok(None)`, same as every other SPARQL
+        // expression error.
+        Function::Adjust => {
+            let value = arg(&vals, 0).and_then(xsd_of);
+            let timezone = arg(&vals, 1)
+                .and_then(xsd_of)
+                .and_then(|v| adjust_timezone_arg(&v))
+                .map(AdjustTimezone::into_seconds);
+            match (value, timezone) {
+                (Some(XsdValue::DateTime(dt)), Some(tz)) => {
+                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(&dt, tz) {
+                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::DateTime(result)))),
+                        Err(_) => Ok(None),
+                    }
+                }
+                (Some(XsdValue::Date(d)), Some(tz)) => {
+                    match purrdf_xsd::temporal::adjust_date_to_timezone(&d, tz) {
+                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Date(result)))),
+                        Err(_) => Ok(None),
+                    }
+                }
+                (Some(XsdValue::Time(t)), Some(tz)) => {
+                    match purrdf_xsd::temporal::adjust_time_to_timezone(&t, tz) {
+                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Time(result)))),
+                        Err(_) => Ok(None),
+                    }
+                }
+                _ => Ok(None),
+            }
+        }
+
         // ---- hash functions ------------------------------------------------
         Function::Md5 => match string_arg(&vals, 0) {
             Some((s, _)) => {
@@ -2913,6 +2952,65 @@ fn format_tz_string(offset_minutes: Option<i64>) -> String {
     }
 }
 
+/// A validated `ADJUST` second argument, pre-conversion to the `Option<i64>`
+/// (seconds) shape `purrdf_xsd::temporal::adjust_*_to_timezone` expects. See
+/// [`adjust_timezone_arg`].
+enum AdjustTimezone {
+    /// The empty-simple-literal `""` case: remove the timezone.
+    Remove,
+    /// A `dayTimeDuration`-valued shift/attach offset, in whole seconds.
+    Offset(i64),
+}
+
+impl AdjustTimezone {
+    /// Convert to the `Option<i64>` shape the `purrdf-xsd` adjust functions take.
+    fn into_seconds(self) -> Option<i64> {
+        match self {
+            Self::Remove => None,
+            Self::Offset(secs) => Some(secs),
+        }
+    }
+}
+
+/// Resolve `ADJUST`'s second argument to an [`AdjustTimezone`]. Returns `None`
+/// for anything that is not a valid SPARQL `ADJUST` timezone argument — a type
+/// error the caller folds into `Ok(None)`, same as every other
+/// malformed-argument built-in in this module.
+///
+/// `fn:adjust-*-to-timezone` (XPath and XQuery Functions and Operators §9.6)
+/// types `$timezone` as `xs:dayTimeDuration?`; an *empty sequence* there means
+/// "remove the timezone". SPARQL has no empty-sequence value, so the SEP-0002
+/// `ADJUST()` surface has no literal that types as "absent". Every known
+/// SEP-0002 implementation (Apache Jena's `E_AdjustToTimezone` /
+/// `XSDFuncOp.adjustToTimezone`) resolves this the same way: the empty simple
+/// literal `""` stands in for the empty sequence, since it is the one
+/// zero-information SPARQL value with no other meaning as a timezone. This
+/// function mirrors that resolution.
+///
+/// A non-empty duration must be a **value-level** `dayTimeDuration` — `months()`
+/// must be `0` (an `xsd:duration`/`xsd:yearMonthDuration` operand with a nonzero
+/// month component is a type error) — and `seconds()` must be an exact whole
+/// number of seconds (a fractional-second duration is a type error; the
+/// whole-minute and ±14:00 domain checks happen inside the `purrdf-xsd` call).
+fn adjust_timezone_arg(v: &XsdValue) -> Option<AdjustTimezone> {
+    match v {
+        XsdValue::String(s) if s.is_empty() => Some(AdjustTimezone::Remove),
+        XsdValue::Duration(dur) => {
+            if dur.months() != 0 {
+                return None;
+            }
+            let seconds = dur.seconds();
+            if !seconds.frac_part().is_zero() {
+                return None; // non-integer seconds: not a whole-minute timezone
+            }
+            i64::try_from(seconds.whole_part())
+                .ok()
+                .map(AdjustTimezone::Offset)
+        }
+        _ => None,
+    }
+}
+
 /// Mint a version-4 UUID from the PRNG state and return it as a
 /// lowercase-hyphenated `8-4-4-4-12` string (without any `urn:uuid:` prefix).
 fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 16]) {
@@ -3583,6 +3681,155 @@ mod tests {
         assert_eq!(lex(&ds, &tz_utc), Some("Z".to_owned()));
         assert_eq!(lex(&ds, &tz_off), Some("+05:30".to_owned()));
         assert_eq!(lex(&ds, &tz_none), Some(String::new()));
+    }
+
+    // ---- ADJUST(value, timezone) -------------------------------------------
+    //
+    // The SPARQL 1.2 Query specification's Functions on Dates and Times table
+    // (SEP-0002) maps ADJUST onto `fn:adjust-*-to-timezone` (XPath and XQuery
+    // Functions and Operators §9.6); see `Function::Adjust` and
+    // `adjust_timezone_arg` for the full source trail.
+
+    const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
+    const XSD_TIME: &str = "http://www.w3.org/2001/XMLSchema#time";
+    const XSD_DAYTIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+    const XSD_YEARMONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
+
+    fn adjust(value: Expression, timezone: Expression) -> Expression {
+        Expression::FunctionCall(Function::Adjust, vec![value, timezone])
+    }
+
+    /// The (lexical, datatype) pair of an evaluated constant expression.
+    fn lex_and_dt(ds: &RdfDataset, expr: &Expression) -> Option<(String, String)> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let term = eval_expr(expr, &[], &schema, &mut ctx).expect("eval")?;
+        match value_of(&ctx, term) {
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            } => Some((lexical_form, datatype)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn adjust_datetime_shifts_an_existing_timezone() {
+        let ds = empty_ds();
+        // 10:30+05:30 (UTC 05:00) shifted to +01:00 → local 06:00.
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00+05:30", XSD_DATETIME),
+            typed_lit("PT1H", XSD_DAYTIME_DURATION),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("adjust result");
+        assert_eq!(lex, "2024-03-15T06:00:00+01:00");
+        assert_eq!(dt, XSD_DATETIME);
+    }
+
+    #[test]
+    fn adjust_datetime_attaches_to_a_tzless_value_without_shifting() {
+        let ds = empty_ds();
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00", XSD_DATETIME),
+            typed_lit("PT1H", XSD_DAYTIME_DURATION),
+        );
+        let (lex, _) = lex_and_dt(&ds, &e).expect("adjust result");
+        assert_eq!(lex, "2024-03-15T10:30:00+01:00");
+    }
+
+    #[test]
+    fn adjust_datetime_empty_string_removes_the_timezone() {
+        let ds = empty_ds();
+        // SPARQL has no empty sequence; the empty simple literal is the
+        // ADJUST() stand-in for `fn:adjust-dateTime-to-timezone`'s
+        // empty-`$timezone` "remove" case.
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00+05:30", XSD_DATETIME),
+            lit(""),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("adjust result");
+        assert_eq!(lex, "2024-03-15T10:30:00");
+        assert_eq!(dt, XSD_DATETIME);
+    }
+
+    #[test]
+    fn adjust_date_shifts_and_can_roll_the_day() {
+        let ds = empty_ds();
+        // `$timezone` is the ABSOLUTE target offset (per `fn:adjust-date-to-
+        // timezone`): the date's own midnight is shifted by (target - source),
+        // and any negative delta rolls the date back a day.
+        let e = adjust(
+            typed_lit("2024-03-15+01:00", XSD_DATE),
+            typed_lit("-PT1H", XSD_DAYTIME_DURATION),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("adjust result");
+        assert_eq!(lex, "2024-03-14-01:00");
+        assert_eq!(dt, XSD_DATE);
+    }
+
+    #[test]
+    fn adjust_date_removal() {
+        let ds = empty_ds();
+        let e = adjust(typed_lit("2024-03-15-07:00", XSD_DATE), lit(""));
+        let (lex, _) = lex_and_dt(&ds, &e).expect("adjust result");
+        assert_eq!(lex, "2024-03-15");
+    }
+
+    #[test]
+    fn adjust_time_shifts_and_removes() {
+        let ds = empty_ds();
+        let shift = adjust(
+            typed_lit("10:30:00+05:30", XSD_TIME),
+            typed_lit("PT1H", XSD_DAYTIME_DURATION),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &shift).expect("adjust result");
+        assert_eq!(lex, "06:00:00+01:00");
+        assert_eq!(dt, XSD_TIME);
+
+        let removed = adjust(typed_lit("10:30:00+05:30", XSD_TIME), lit(""));
+        let (lex, _) = lex_and_dt(&ds, &removed).expect("adjust result");
+        assert_eq!(lex, "10:30:00");
+    }
+
+    #[test]
+    fn adjust_out_of_range_timezone_is_a_type_error() {
+        let ds = empty_ds();
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME),
+            typed_lit("PT15H", XSD_DAYTIME_DURATION), // beyond ±14:00
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    #[test]
+    fn adjust_non_whole_minute_timezone_is_a_type_error() {
+        let ds = empty_ds();
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME),
+            typed_lit("PT1H0M30S", XSD_DAYTIME_DURATION),
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    #[test]
+    fn adjust_yearmonth_duration_second_arg_is_a_type_error() {
+        let ds = empty_ds();
+        // A nonzero-month duration can never be a timezone offset, regardless
+        // of its lexical subtype tag — `adjust_timezone_arg` checks `months()`
+        // by value, not the `xsd:yearMonthDuration` tag specifically.
+        let e = adjust(
+            typed_lit("2024-03-15T10:30:00Z", XSD_DATETIME),
+            typed_lit("P1Y", XSD_YEARMONTH_DURATION),
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    #[test]
+    fn adjust_non_temporal_first_arg_is_a_type_error() {
+        let ds = empty_ds();
+        let e = adjust(lit("not a date"), typed_lit("PT1H", XSD_DAYTIME_DURATION));
+        assert_eq!(lex(&ds, &e), None);
     }
 
     // ---- Gap 4: NOW() with fixed ctx.now ----------------------------------

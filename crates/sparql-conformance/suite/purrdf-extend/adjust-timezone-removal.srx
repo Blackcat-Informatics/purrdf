@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="adjusted"/>
+  </head>
+  <results>
+    <result>
+      <binding name="adjusted"><literal datatype="http://www.w3.org/2001/XMLSchema#dateTime">2024-06-15T10:00:00</literal></binding>
+    </result>
+  </results>
+</sparql>

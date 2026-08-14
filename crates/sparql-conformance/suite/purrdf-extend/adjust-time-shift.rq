@@ -1,0 +1,4 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?adjusted WHERE {
+  BIND(ADJUST("10:30:00+05:30"^^xsd:time, "PT1H"^^xsd:dayTimeDuration) AS ?adjusted)
+}
