@@ -510,6 +510,7 @@ fn evaluate_shape_focus_nodes(
     // the ordinary path keeps the established deterministic chunk parallelism.
     if let Some(governors) = crate::sparql::current_governors() {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         let _governor_scope = crate::sparql::enter_governor_scope(governors);
         let mut out = Vec::new();
         for focus in focus_nodes {
@@ -527,13 +528,15 @@ fn evaluate_shape_focus_nodes(
         return Ok(out);
     }
 
-    // Both caller-injected tables travel to the workers together. A thread-local is
-    // invisible from the threads a chunk fork creates, so the property-function
-    // registry is snapshotted HERE, on the orchestrating thread, and re-installed per
-    // chunk beside the function registry — otherwise a `sh:select` body whose predicate
-    // is a property function would resolve on the sequential path and fail to resolve on
-    // the parallel one, which is a scheduling-dependent verdict.
+    // All three caller-injected tables travel to the workers together. A thread-local is
+    // invisible from the threads a chunk fork creates, so the property-function and
+    // custom-aggregate registries are snapshotted HERE, on the orchestrating thread, and
+    // re-installed per chunk beside the function registry — otherwise a `sh:select` body
+    // whose predicate is a property function, or whose `GROUP BY` uses `AGG(<iri>, …)`,
+    // would resolve on the sequential path and fail to resolve on the parallel one, which
+    // is a scheduling-dependent verdict.
     let relations = crate::sparql::current_property_functions();
+    let aggregates = crate::sparql::current_aggregates();
     crate::parallel::try_map_chunks(
         focus_nodes,
         || {
@@ -542,6 +545,7 @@ fn evaluate_shape_focus_nodes(
                 relations
                     .clone()
                     .map(crate::sparql::enter_property_function_scope),
+                aggregates.clone().map(crate::sparql::enter_aggregate_scope),
             )
         },
         |_scopes, out, focus| {
@@ -605,8 +609,10 @@ where
     F: FnMut(&Shape, &Term) -> bool,
 {
     // This orchestration-thread scope covers target resolution; each focus chunk
-    // installs the same SHACL-AF function registry on its worker.
+    // installs the same SHACL-AF function and custom-aggregate registries on its
+    // worker.
     let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+    let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
     for shape in &shapes.node_shapes {
@@ -701,6 +707,7 @@ impl PreparedValidator {
     /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
     pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, String> {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
         let plan = ValidationPlan::for_shapes(data.core(), &shapes);
         let targets = shapes
@@ -2297,6 +2304,252 @@ mod tests {
                 "user-function report drifted with {threads} workers and chunk size {chunk_size}"
             );
         }
+    }
+
+    // ── custom aggregates: installability, correctness, and fork survival ──────
+
+    /// The `AGG(<iri>, …)` IRI the custom-aggregate fixture below registers under.
+    const AGG_IRI: &str = "http://example.org/ns#sum";
+
+    /// A `Commutative` custom `SUM`-alike over a single numeric-lexical argument:
+    /// folds the integer lexical forms it is handed. The SHACL-facing twin of
+    /// `purrdf_sparql_eval::agg_fn::tests::SumAccumulator` (private to that crate,
+    /// so it cannot be reused directly here).
+    #[derive(Debug)]
+    struct AggSumAccumulator {
+        total: i64,
+    }
+
+    impl purrdf_sparql_eval::AggregateAccumulator for AggSumAccumulator {
+        fn step(
+            &mut self,
+            args: &[::purrdf::TermValue],
+        ) -> Result<(), purrdf_sparql_eval::EvalError> {
+            if let Some(::purrdf::TermValue::Literal { lexical_form, .. }) = args.first()
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn combine(&mut self, other: Box<dyn purrdf_sparql_eval::AggregateAccumulator>) {
+            if let Ok(Some(::purrdf::TermValue::Literal { lexical_form, .. })) = other.finish()
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+
+        fn finish(
+            self: Box<Self>,
+        ) -> Result<Option<::purrdf::TermValue>, purrdf_sparql_eval::EvalError> {
+            Ok(Some(::purrdf::TermValue::typed_literal(
+                self.total.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            )))
+        }
+    }
+
+    #[derive(Debug)]
+    struct AggSum;
+
+    impl purrdf_sparql_eval::CustomAggregate for AggSum {
+        fn arity(&self) -> purrdf_sparql_eval::Arity {
+            purrdf_sparql_eval::Arity::Exact(1)
+        }
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+        fn algebraic_class(&self) -> purrdf_sparql_eval::AlgebraicClass {
+            purrdf_sparql_eval::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(&self) -> Box<dyn purrdf_sparql_eval::AggregateAccumulator> {
+            Box::new(AggSumAccumulator { total: 0 })
+        }
+    }
+
+    /// A fresh registry with [`AggSum`] registered under [`AGG_IRI`].
+    fn sum_aggregate_registry() -> purrdf_sparql_eval::AggregateRegistry {
+        let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+        registry.register(AGG_IRI, Arc::new(AggSum));
+        registry
+    }
+
+    /// Shapes carrying a `sh:sparql` constraint whose `HAVING` clause resolves an
+    /// `AGG(<iri>, …)` call: `$this` is grouped alone (SHACL pre-binds `$this` to
+    /// exactly one focus node per call, so `GROUP BY $this` is always a single
+    /// group), and the group is a violation when its `ex:amount` values sum
+    /// negative.
+    fn aggregate_shapes_ttl() -> String {
+        format!(
+            r#"{PREFIXES}
+            ex:AggShape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:AggConstraint .
+            ex:AggConstraint sh:select """
+                SELECT $this WHERE {{ $this <http://example.org/ns#amount> ?v }}
+                GROUP BY $this
+                HAVING (AGG(<{AGG_IRI}>, ?v) < 0)
+            """ .
+            "#
+        )
+    }
+
+    /// `n` `ex:Thing` focus nodes: `ex:v0` carries a NEGATIVE amount (its group's
+    /// sum is negative, so it must violate), every other `ex:v{i}` carries a
+    /// positive amount (must conform). Used to prove the aggregate actually ran —
+    /// a seam that silently no-ops would report zero violations, indistinguishable
+    /// from an intrinsically conforming graph, which is exactly the always-passing
+    /// failure mode these tests exist to forbid.
+    fn aggregate_data_nt(n: usize) -> String {
+        use std::fmt::Write as _;
+        assert!(n >= 1, "at least the violating node is required");
+        let mut nt = String::new();
+        nt.push_str(
+            "<http://example.org/ns#v0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/ns#Thing> .\n\
+             <http://example.org/ns#v0> <http://example.org/ns#amount> \
+             \"-1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+        );
+        for i in 1..n {
+            writeln!(
+                nt,
+                "<http://example.org/ns#v{i}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                 <http://example.org/ns#Thing> .\n\
+                 <http://example.org/ns#v{i}> <http://example.org/ns#amount> \
+                 \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+            )
+            .expect("writing to a String cannot fail");
+        }
+        nt
+    }
+
+    /// A registered custom aggregate installed through the PUBLIC `Shapes::aggregates`
+    /// field resolves inside a `sh:sparql` `HAVING` clause and produces the correct
+    /// verdict — the capability the module's own docs promise, not the refusal every
+    /// SHACL query got before `Shapes` carried a place to install one.
+    ///
+    /// Nothing here calls `crate::sparql::enter_aggregate_scope` directly: the whole
+    /// point is that setting the public field and calling `validate_dataset` is
+    /// enough, exactly as it is for `Shapes::functions`.
+    #[test]
+    fn custom_aggregate_installed_via_shapes_field_resolves_and_verdict_is_correct() {
+        let mut shapes = load_shapes_ttl(&aggregate_shapes_ttl());
+        shapes.aggregates = Arc::new(sum_aggregate_registry());
+        let data = load_data_nt(&aggregate_data_nt(10));
+
+        let report = validate_dataset(data.as_ref(), &shapes).expect("validation must resolve");
+        assert_eq!(
+            report.results.len(),
+            1,
+            "exactly the negative-sum focus node violates: {:?}",
+            report.results
+        );
+        assert_eq!(
+            report.results[0].focus_node,
+            NamedNode::new_unchecked("http://example.org/ns#v0").into_term()
+        );
+        assert!(!report.conforms);
+    }
+
+    /// The scheduling test the missing fork re-install let ship broken: the SAME
+    /// shapes and registry, run once BELOW [`crate::parallel::PARALLEL_MIN_FOCUS_NODES`]
+    /// and once ABOVE it, must reach the IDENTICAL verdict for the shared violating
+    /// focus node. Before the fork fix, crossing the threshold flipped `Ok` into an
+    /// `Err("no custom aggregate is registered …")` because the focus-chunk workers
+    /// never saw the registry the orchestrating thread had installed.
+    ///
+    /// Both runs go through a real, multi-threaded rayon pool (not the crate-internal
+    /// `force_scheduler_for_test` hook) so the large run genuinely forks across
+    /// workers via the production `PARALLEL_MIN_FOCUS_NODES` threshold — driven
+    /// entirely from the public `validate_dataset`/`Shapes::aggregates` surface.
+    #[test]
+    fn custom_aggregate_scope_survives_the_parallel_focus_chunk_fork() {
+        let mut shapes = load_shapes_ttl(&aggregate_shapes_ttl());
+        shapes.aggregates = Arc::new(sum_aggregate_registry());
+
+        let below = load_data_nt(&aggregate_data_nt(10));
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let above = load_data_nt(&aggregate_data_nt(above_n));
+        assert!(above_n > crate::parallel::PARALLEL_MIN_FOCUS_NODES);
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+
+        let below_report = pool
+            .install(|| validate_dataset(below.as_ref(), &shapes))
+            .expect("below-threshold validation must resolve the registered aggregate");
+        let above_report = pool
+            .install(|| validate_dataset(above.as_ref(), &shapes))
+            .expect(
+                "above-threshold (forked) validation must resolve the SAME registered \
+                 aggregate as the sequential path — a scheduling-dependent verdict is the bug",
+            );
+
+        for (label, report) in [("below", &below_report), ("above", &above_report)] {
+            assert_eq!(
+                report.results.len(),
+                1,
+                "{label}-threshold: exactly the negative-sum focus node violates: {:?}",
+                report.results
+            );
+            assert_eq!(
+                report.results[0].focus_node,
+                NamedNode::new_unchecked("http://example.org/ns#v0").into_term(),
+                "{label}-threshold: the violating focus node must match"
+            );
+            assert!(!report.conforms, "{label}-threshold: must not conform");
+        }
+    }
+
+    /// An `AGG(<iri>, …)` call to an UNREGISTERED IRI is a clear typed error, not a
+    /// silent fallback that reads the call as ordinary data — checked on BOTH the
+    /// sequential (below-threshold) and the forked (above-threshold) paths, so a
+    /// future fork omission cannot turn a hard error into a wrong silent verdict on
+    /// just one of the two scheduling branches.
+    #[test]
+    fn unregistered_custom_aggregate_errors_on_both_scheduling_paths() {
+        // `Shapes::default()`'s `aggregates` field is empty — the seam is off,
+        // exactly as it is for every host that never configured one.
+        let shapes = load_shapes_ttl(&aggregate_shapes_ttl());
+        assert!(shapes.aggregates.is_empty());
+
+        let below = load_data_nt(&aggregate_data_nt(10));
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let above = load_data_nt(&aggregate_data_nt(above_n));
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+
+        let below_err = pool
+            .install(|| validate_dataset(below.as_ref(), &shapes))
+            .expect_err("an unregistered aggregate IRI must be a hard error, not a silent skip");
+        assert!(
+            below_err.contains("no custom aggregate is registered"),
+            "below-threshold error must name the refusal: {below_err}"
+        );
+        assert!(below_err.contains(AGG_IRI), "got: {below_err}");
+
+        let above_err = pool
+            .install(|| validate_dataset(above.as_ref(), &shapes))
+            .expect_err("the forked path must refuse identically, not silently pass");
+        assert!(
+            above_err.contains("no custom aggregate is registered"),
+            "above-threshold error must name the refusal: {above_err}"
+        );
+        assert!(above_err.contains(AGG_IRI), "got: {above_err}");
     }
 
     #[test]
