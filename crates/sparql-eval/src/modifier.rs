@@ -524,7 +524,7 @@ fn kind_rank(v: &TermValue) -> u8 {
     }
 }
 
-fn term_value_order(a: &TermValue, b: &TermValue) -> Ordering {
+pub(crate) fn term_value_order(a: &TermValue, b: &TermValue) -> Ordering {
     match (a, b) {
         (
             TermValue::Blank {
@@ -1061,7 +1061,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /
 /// float / double). Boolean, string, temporal, and binary values are NOT numeric.
-fn is_numeric_xsd(v: &XsdValue) -> bool {
+pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
     matches!(
         v,
         XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
@@ -1431,7 +1431,7 @@ fn fold_extreme<I: ViewTermId>(
 /// [`BuiltinFold::step`]'s `GroupConcat` arm poisons the fold on `None` rather
 /// than silently dropping the value — see the module-level "Aggregate
 /// semantics" docs' `GROUP_CONCAT` section for the full reading.
-fn lexical_of(value: &TermValue) -> Option<String> {
+pub(crate) fn lexical_of(value: &TermValue) -> Option<String> {
     match value {
         TermValue::Literal { lexical_form, .. } => Some(lexical_form.clone()),
         TermValue::Iri(iri) => Some(iri.clone()),
@@ -2639,5 +2639,149 @@ mod tests {
             .collect::<Vec<_>>()
             .join(";");
         assert_eq!(sequential, expected);
+    }
+
+    /// `crate::stat_agg::FIRST` (`Volatility::Stable`) over a single implicit
+    /// group large enough to cross the within-group chunk threshold: forced
+    /// parallel and forced sequential must agree byte-for-byte, proving
+    /// `FirstAccumulator::combine`'s "earlier chunk wins" merge is correct
+    /// under `crate::parallel::par_chunk_reduce_init`'s fixed chunk-order
+    /// reduce — the custom-aggregate-set counterpart of
+    /// `within_group_custom_aggregate_chunked_fold_forced_parallel_and_sequential_agree`
+    /// above, using a REAL first-party member instead of a test fixture.
+    #[test]
+    fn stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        const ROWS: i64 = 3000;
+        const NS: &str = "http://example.org/agg/";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral::simple(i.to_string()));
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("g"),
+                AggregateExpression {
+                    function: AggregateFunction::Custom(NamedNode::new_unchecked(format!(
+                        "{NS}FIRST"
+                    ))),
+                    args: vec![Expression::Variable(Variable::new("val"))],
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
+            )],
+        };
+
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(&ds).with_aggregates(&registry);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            agg_lex(&ds, &ctx, &seq, "g")
+        };
+
+        let sequential = run(false, 64);
+        let parallel = run(true, 53);
+        assert_eq!(sequential, parallel);
+        assert_eq!(
+            sequential, "0",
+            "FIRST over row order s0..s2999 is s0's value"
+        );
+    }
+
+    /// `crate::stat_agg::MEDIAN` (`Volatility::Volatile` — see that module's
+    /// docs for why) over the SAME shape of large single group: forcing the
+    /// evaluator's global parallel flag on must NOT change the answer,
+    /// because `Volatility::Volatile` keeps this aggregate on the
+    /// single-accumulator sequential fold regardless of that flag (`stable`
+    /// in `eval_custom_aggregate` is read from the aggregate's OWN
+    /// declaration, not from the global force-parallel test knob) — the
+    /// determinism pin the plan calls for, for a member whose `combine`
+    /// this module's docs establish is architecturally unreachable.
+    #[test]
+    fn stat_agg_median_volatile_gate_holds_under_forced_parallel() {
+        use purrdf_core::RdfLiteral;
+        const ROWS: i64 = 3000;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const NS: &str = "http://example.org/agg/";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("g"),
+                AggregateExpression {
+                    function: AggregateFunction::Custom(NamedNode::new_unchecked(format!(
+                        "{NS}MEDIAN"
+                    ))),
+                    args: vec![Expression::Variable(Variable::new("val"))],
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
+            )],
+        };
+
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(&ds).with_aggregates(&registry);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            agg_lex(&ds, &ctx, &seq, "g")
+        };
+
+        let sequential = run(false, 64);
+        let forced_parallel = run(true, 53);
+        assert_eq!(
+            sequential, forced_parallel,
+            "MEDIAN's Volatility::Volatile declaration must keep it on the \
+             single-accumulator sequential fold even when the evaluator's \
+             global parallel flag is forced on"
+        );
+        assert_eq!(
+            sequential, "1499.5",
+            "median of 0..2999 is the mean of the two middle values 1499 and 1500"
+        );
     }
 }

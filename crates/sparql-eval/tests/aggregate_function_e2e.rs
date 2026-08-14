@@ -462,3 +462,178 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
     let expected_group0: i64 = (0..N as i64).step_by(GROUPS).sum();
     assert_eq!(int_cell(&rows(&first)[0], 1), expected_group0);
 }
+
+// ── the first-party statistical aggregate set (purrdf_sparql_eval::stat_agg) ──
+//
+// Same seam, same public engine entry points — the difference from every test
+// above is that these ten aggregates are never registered by hand: a host
+// calls `AggregateRegistry::register_statistical_aggregates` once, and gets
+// the whole closed set through the string surface.
+
+const STAT_NS: &str = "http://example.org/agg/";
+
+fn statistical_registry() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates(STAT_NS);
+    registry
+}
+
+fn stat_lex(row: &[Option<TermValue>], index: usize) -> String {
+    match row[index].as_ref().expect("bound cell") {
+        TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
+        other => panic!("expected a literal, got {other:?}"),
+    }
+}
+
+/// `ex:g1` has values {1, 2, 3, 4} (four rows across four subjects); `ex:g2`
+/// has values {10, 10, 20} (a repeat, for `MODE`/`DISTINCT`).
+fn stat_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let cat = b.intern_iri(&format!("{EX}cat"));
+    let val = b.intern_iri(&format!("{EX}val"));
+    let g1 = b.intern_iri(&format!("{EX}g1"));
+    let g2 = b.intern_iri(&format!("{EX}g2"));
+
+    for (i, v) in [1, 2, 3, 4].into_iter().enumerate() {
+        let s = b.intern_iri(&format!("{EX}g1s{i}"));
+        b.push_quad(s, cat, g1, None);
+        let vt = int_literal(&mut b, v);
+        b.push_quad(s, val, vt, None);
+    }
+    for (i, v) in [10, 10, 20].into_iter().enumerate() {
+        let s = b.intern_iri(&format!("{EX}g2s{i}"));
+        b.push_quad(s, cat, g2, None);
+        let vt = int_literal(&mut b, v);
+        b.push_quad(s, val, vt, None);
+    }
+    b.freeze().expect("freeze")
+}
+
+#[test]
+fn group_by_query_computes_several_statistical_members_per_group() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    let query = format!(
+        "SELECT ?cat \
+         (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?median) \
+         (AGG(<{STAT_NS}STDDEV_POP>, ?v) AS ?stddevPop) \
+         (AGG(<{STAT_NS}MODE>, ?v) AS ?mode) \
+         (AGG(<{STAT_NS}FIRST>, ?v) AS ?first) \
+         (AGG(<{STAT_NS}LAST>, ?v) AS ?last) \
+         WHERE {{ ?s <{EX}cat> ?cat . ?s <{EX}val> ?v }} GROUP BY ?cat ORDER BY ?cat"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    let result_rows = rows(&result);
+    assert_eq!(result_rows.len(), 2);
+
+    // g1: {1, 2, 3, 4} — median 2.5, population stddev ~1.118, mode/first/last
+    // over an all-distinct group are the smallest / earliest / latest value.
+    assert_eq!(stat_lex(&result_rows[0], 1), "2.5");
+    let g1_stddev_pop: f64 = stat_lex(&result_rows[0], 2).parse().expect("double");
+    assert!((g1_stddev_pop - 1.118_033_988_75).abs() < 1e-9);
+    assert_eq!(
+        stat_lex(&result_rows[0], 3),
+        "1",
+        "MODE tie-break: smallest"
+    );
+    assert_eq!(stat_lex(&result_rows[0], 4), "1", "FIRST row seen");
+    assert_eq!(stat_lex(&result_rows[0], 5), "4", "LAST row seen");
+
+    // g2: {10, 10, 20} — MODE is 10 (the repeated value).
+    assert_eq!(stat_lex(&result_rows[1], 3), "10");
+}
+
+#[test]
+fn percentile_two_argument_form_end_to_end() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v, 0.5) AS ?p) \
+         WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    // p=0.5 over {1,2,3,4} is the same interpolated median as MEDIAN itself.
+    assert_eq!(stat_lex(&rows(&result)[0], 0), "2.5");
+}
+
+#[test]
+fn percentile_out_of_range_p_is_unbound_not_a_hard_error() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v, 1.5) AS ?p) \
+         WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    assert!(
+        rows(&result)[0][0].is_none(),
+        "p outside [0, 1] poisons the fold to unbound, never a query-aborting error"
+    );
+}
+
+#[test]
+fn topk_end_to_end() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}TOPK>, ?v, 2) AS ?top) \
+         WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    assert_eq!(stat_lex(&rows(&result)[0], 0), "4 3");
+}
+
+#[test]
+fn distinct_interacts_with_a_statistical_member() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    // g2 is {10, 10, 20}: DISTINCT sees {10, 20}, so its interpolated median
+    // (the mean of a two-element DISTINCT set) is (10+20)/2 = 15, not the
+    // three-element non-distinct median (10).
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}MEDIAN>, DISTINCT ?v) AS ?median) \
+         WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
+    );
+    let distinct_result = run(&ds, &query, with_aggregates(&reg));
+    assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15");
+
+    let query_plain = format!(
+        "SELECT (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?median) \
+         WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
+    );
+    let plain_result = run(&ds, &query_plain, with_aggregates(&reg));
+    assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10");
+}
+
+#[test]
+fn a_local_name_outside_the_closed_set_is_refused_at_prepare_time() {
+    let reg = statistical_registry();
+    let engine = NativeSparqlEngine::new();
+    let query =
+        format!("SELECT (AGG(<{STAT_NS}NOT_A_MEMBER>, ?v) AS ?x) WHERE {{ ?s <{EX}val> ?v }}");
+    let options = with_aggregates(&reg);
+    let error = engine
+        .prepare_query_with_options(&query, None, options)
+        .expect_err("a local name outside the closed set is simply unregistered");
+    assert!(error.message.contains("NOT_A_MEMBER"));
+}
+
+#[test]
+fn statistical_aggregates_are_deterministic_at_parallel_scale() {
+    const N: usize = 4000;
+    const GROUPS: usize = 2000;
+    let reg = statistical_registry();
+    let ds = scaled_dataset(N, GROUPS);
+    let query = format!(
+        "SELECT ?g (AGG(<{STAT_NS}FIRST>, ?v) AS ?f) (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?m) WHERE {{ \
+         ?s <{EX}group> ?g . ?s <{EX}val> ?v }} GROUP BY ?g ORDER BY ?g"
+    );
+    let first_run = run(&ds, &query, with_aggregates(&reg));
+    let second_run = run(&ds, &query, with_aggregates(&reg));
+    assert_eq!(rows(&first_run).len(), GROUPS);
+    assert_eq!(
+        rows(&first_run),
+        rows(&second_run),
+        "the parallel-eligible path must be deterministic across runs"
+    );
+}
