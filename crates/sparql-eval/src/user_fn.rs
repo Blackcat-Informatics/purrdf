@@ -232,9 +232,34 @@ impl Arity {
             Self::AtLeast(n) => count >= n,
         }
     }
+
+    /// A stable, machine-facing encoding of this arity —
+    /// deliberately INDEPENDENT of [`Display for Arity`](#impl-Display-for-Arity)
+    /// just below, which exists only for human-facing diagnostics and is free to
+    /// change wording (pluralization, punctuation, phrasing) without that being a
+    /// breaking change to anything.
+    ///
+    /// `crate::agg_fn::registry_fingerprint` folds this into a prepared plan's
+    /// identity. A load-bearing `Display` impl would mean a purely cosmetic
+    /// wording edit silently invalidates every previously-prepared plan's cache
+    /// key (or worse, two DIFFERENT arities that happen to render the same
+    /// diagnostic words would collide) — this encoding exists so that can never
+    /// happen: it is a variant tag plus its numeric fields, with no wording to
+    /// drift.
+    pub(crate) fn stable_encoding(self) -> String {
+        match self {
+            Self::Exact(n) => format!("exact:{n}"),
+            Self::Range { min, max } => format!("range:{min}:{max}"),
+            Self::AtLeast(n) => format!("atleast:{n}"),
+        }
+    }
 }
 
 impl core::fmt::Display for Arity {
+    /// Human-facing wording only — NOT part of any stable fingerprint or cache-key
+    /// encoding. See [`Arity::stable_encoding`], which
+    /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
+    /// IS load-bearing; this impl is free to change wording at any time.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Exact(n) => write!(f, "exactly {n}"),

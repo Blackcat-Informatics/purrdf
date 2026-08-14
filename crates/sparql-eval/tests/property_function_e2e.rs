@@ -841,6 +841,74 @@ fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry
     assert_eq!(rows_of(&result).len(), 3);
 }
 
+/// GAP (registry instance identity — the property-function sibling of the
+/// custom-aggregate registry-identity gap): a plan prepared under one relation
+/// registry must not be silently executed under a DIFFERENT registry that
+/// resolves the SAME IRI to a DIFFERENT relation, even when the two registries
+/// declare IDENTICALLY (same arity, volatility, modes, and row bound). Declared
+/// metadata alone cannot prove the two registries answer a call the same way.
+#[test]
+fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_different_one_with_identical_declarations()
+ {
+    let engine = NativeSparqlEngine::new();
+    let registry_a = relations();
+
+    // Registry B: the SAME IRI resolves to a DIFFERENT relation — the SAME row
+    // COUNT (three), so `describe()` reports byte-identically to registry A's
+    // (arity, volatility, modes, and the row-count-derived bound all match), but
+    // entirely different row content.
+    let iri = |local: &str| TermValue::iri(format!("{EX}{local}"));
+    let mut registry_b = PropertyFunctionRegistry::new();
+    registry_b.register(
+        format!("{REL_NS}memberOf"),
+        Arc::new(
+            MemoryRelation::new(
+                1,
+                1,
+                vec![
+                    vec![iri("dan"), iri("gamma")],
+                    vec![iri("erin"), iri("gamma")],
+                    vec![iri("frank"), iri("gamma")],
+                ],
+            )
+            .expect("every row is two values wide"),
+        ),
+    );
+
+    // The reproduction only means what it claims if the two registries' DECLARED
+    // metadata is byte-identical for this IRI — confirm that first.
+    assert_eq!(
+        registry_a.describe().expect("no panic"),
+        registry_b.describe().expect("no panic"),
+        "the two registries must declare identically for this to be a meaningful \
+         reproduction of the declaration-only fingerprint gap"
+    );
+
+    let dataset = dataset();
+    let prepared = engine
+        .prepare_query_with_options(GOVERNED_QUERY, None, with_relations(&registry_a))
+        .expect("registry A admits and lowers the predicate to a call");
+
+    let error = engine
+        .query_prepared(&dataset, &prepared, &[], with_relations(&registry_b))
+        .expect_err(
+            "a plan prepared under registry A must be REFUSED under registry B, never silently \
+             executed against B's different relation",
+        );
+    assert_eq!(
+        error.code, "native-sparql-property-function",
+        "the refusal must be attributable to the property-function registry identity check: \
+         {error:?}"
+    );
+
+    // The non-regression twin: the SAME registry instance at both prepare and
+    // execute must still work.
+    let result = engine
+        .query_prepared(&dataset, &prepared, &[], with_relations(&registry_a))
+        .expect("the SAME registry instance must be accepted at execution");
+    assert_eq!(rows_of(&result).len(), 3);
+}
+
 // ── UPDATE: the same seam, on the mutation surface ─────────────────────────────────
 //
 // A property-function call reaches an UPDATE's `WHERE` exactly the way it reaches a

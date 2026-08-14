@@ -102,6 +102,7 @@ mod path;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
+mod registry_id;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.

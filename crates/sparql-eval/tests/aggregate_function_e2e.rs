@@ -805,3 +805,138 @@ fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_cou
         purrdf_sparql_algebra::AggregateFunction::Custom(iri) if iri.as_str() == ZERO_ARITY_IRI
     ));
 }
+
+// ── registry INSTANCE identity: a plan must not silently cross registries ──
+//
+// `AGG(<iri>, …)` is admitted (arity checked, registration confirmed) at PREPARE
+// time against one registry. A plan's identity must be tied to WHICH registry
+// instance it was admitted against — not merely to what that registry declares —
+// because two independently built registries can register the same IRI to two
+// entirely different accumulators while describing identically.
+
+/// A `PRODUCT`-alike accumulator: multiplies rather than sums. Declares EXACTLY
+/// the same [`Arity`]/[`Volatility`]/[`AlgebraicClass`]/state-bound as
+/// [`SumAggregate`] (`registry()`'s `SUM_IRI` registration) — nothing about its
+/// DECLARATION can distinguish it from a SUM — but its computed answer is
+/// completely different.
+struct ProductAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for ProductAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total *= n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total *= n;
+        }
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            XSD_INTEGER,
+        )))
+    }
+}
+
+struct ProductAggregate;
+
+impl CustomAggregate for ProductAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(ProductAccumulator { total: 1 })
+    }
+}
+
+/// The exact reproduction: registry A binds `SUM_IRI` to a SUM; registry B binds
+/// the SAME IRI to a PRODUCT with identical declared arity, volatility, algebraic
+/// class, and state bound. A query is prepared under A (admitted, arity-checked)
+/// and handed to `query_prepared_view` under B. This must be a typed refusal —
+/// NEVER a silently-computed answer under B's different implementation.
+#[test]
+fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_registry_with_identical_declarations()
+ {
+    let mut registry_a = AggregateRegistry::new();
+    registry_a.register(
+        SUM_IRI,
+        Arc::new(SumAggregate {
+            volatility: Volatility::Stable,
+        }),
+    );
+    let mut registry_b = AggregateRegistry::new();
+    registry_b.register(SUM_IRI, Arc::new(ProductAggregate));
+
+    // The reproduction only means what it claims if the two registries' DECLARED
+    // metadata is byte-identical for this IRI — confirm that first.
+    assert_eq!(
+        registry_a.describe().expect("no panic"),
+        registry_b.describe().expect("no panic"),
+        "the two registries must declare identically for this to be a meaningful \
+         reproduction of the declaration-only fingerprint gap"
+    );
+
+    let ds = dataset();
+    let engine = NativeSparqlEngine::new();
+    // dataset()'s `ex:val` values are {1, 2, 2, 10}: SUM = 15, PRODUCT = 40 — a
+    // PRODUCT answer here could only come from silently running under registry B.
+    let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
+
+    let prepared = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&registry_a))
+        .expect("registry A admits and prepares the call");
+
+    let error = engine
+        .query_prepared_view(&*ds, &prepared, &[], with_aggregates(&registry_b))
+        .expect_err(
+            "a plan prepared under registry A must be REFUSED under registry B, never silently \
+             executed against B's different accumulator",
+        );
+    assert_eq!(
+        error.code, "native-sparql-aggregate-function",
+        "the refusal must be attributable to the aggregate-registry identity check: {error:?}"
+    );
+}
+
+/// The non-regression twin: executing a plan under the SAME registry instance it
+/// was prepared under must still work — the identity check above must not
+/// produce a false refusal for the ordinary case.
+#[test]
+fn a_plan_prepared_and_executed_under_the_same_registry_instance_still_works() {
+    let reg = registry();
+    let ds = dataset();
+    let engine = NativeSparqlEngine::new();
+    let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
+
+    let prepared = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect("the registry admits and prepares the call");
+    let result = engine
+        .query_prepared_view(&*ds, &prepared, &[], with_aggregates(&reg))
+        .expect("the SAME registry instance must be accepted at execution");
+    assert_eq!(int_cell(&rows(&result)[0], 0), 15, "1 + 2 + 2 + 10");
+}

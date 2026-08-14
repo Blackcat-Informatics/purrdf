@@ -480,18 +480,34 @@ pub struct AggDescriptor {
 /// query already spelled one way, with no textual difference between the two
 /// registrations to reveal it. That is a host misconfiguration, caught where it
 /// is committed.
+///
+/// # Instance identity, not just declared contents
+///
+/// `id` is a [`RegistryId`](crate::registry_id::RegistryId) minted fresh by
+/// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
+/// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
+/// exists because DECLARED metadata (arity, volatility, algebraic class, state
+/// bound) cannot distinguish two independently built registries that happen to
+/// register the SAME IRI to two DIFFERENT [`CustomAggregate`] implementations
+/// with identical declarations — `registry_fingerprint` folds this id in ahead
+/// of the declaration digest so those two registries can never be mistaken for
+/// each other by a prepared plan's identity.
 #[derive(Default, Clone)]
 pub struct AggregateRegistry {
+    id: crate::registry_id::RegistryId,
     aggregates: DetHashMap<String, Arc<dyn CustomAggregate>>,
 }
 
 impl core::fmt::Debug for AggregateRegistry {
     /// A `dyn CustomAggregate` has no `Debug` impl, so this lists the registered
-    /// IRIs, sorted for deterministic output, rather than deriving.
+    /// IRIs, sorted for deterministic output, rather than deriving. The instance
+    /// id rides along too, since it is exactly the thing that can make two
+    /// otherwise-identical-looking registries diagnostically distinguishable.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut iris: Vec<&str> = self.aggregates.keys().map(String::as_str).collect();
         iris.sort_unstable();
         f.debug_struct("AggregateRegistry")
+            .field("id", &self.id)
             .field("aggregates", &iris)
             .finish()
     }
@@ -572,16 +588,30 @@ impl AggregateRegistry {
 
 /// A deterministic fingerprint of everything about `aggregates` that can change
 /// either the prepare-time admission of an `AGG(<iri>, …)` call OR the
-/// answer/parallel-safety of the execution that runs it: every registered IRI,
-/// its declared arity, volatility, algebraic class, and state bound, IRI-sorted.
+/// answer/parallel-safety of the execution that runs it: the registry's own
+/// [`RegistryId`](crate::registry_id::RegistryId), followed by every registered
+/// IRI's declared arity, volatility, algebraic class, and state bound, IRI-sorted.
+///
+/// # The instance id comes first, and is load-bearing
+///
+/// Declared metadata alone cannot tell two registries apart when they happen to
+/// agree on every declaration for a shared IRI while resolving it to two
+/// DIFFERENT [`CustomAggregate`] implementations — a SUM and a PRODUCT can both
+/// declare `Arity::Exact(1)`, [`Volatility::Stable`], [`AlgebraicClass::Commutative`],
+/// and `state_bound() == 0`, and compute entirely different answers. The
+/// [`RegistryId`](crate::registry_id::RegistryId) each registry mints at
+/// construction closes that hole: two registries can never share a fingerprint
+/// unless they are the SAME instance (or a [`Clone`] of it, which shares the
+/// identical `Arc<dyn CustomAggregate>` implementations — see that type's docs),
+/// regardless of how identical their declarations read.
 ///
 /// The exact twin of `crate::property_fn_plan::registry_fingerprint`, for the
 /// exact same reason: it belongs in the plan cache's key and in the identity a
 /// prepared plan is validated against before evaluation (see
 /// `crate::engine::check_plan_matches_relations`), because two differently
-/// configured registries can admit — or evaluate — the same query text
-/// differently, and a plan admitted under one must never silently run under
-/// another.
+/// configured — or merely differently CONSTRUCTED — registries can admit, or
+/// evaluate, the same query text differently, and a plan admitted under one must
+/// never silently run under another.
 ///
 /// # Errors
 ///
@@ -595,10 +625,12 @@ pub(crate) fn registry_fingerprint(
         return Ok(String::new());
     };
     let mut out = String::new();
+    out.push_str(&registry.id.stable_encoding().to_string());
+    out.push('\u{5}');
     for descriptor in registry.describe()? {
         out.push_str(&descriptor.iri);
         out.push('\u{2}');
-        out.push_str(&descriptor.arity.to_string());
+        out.push_str(&descriptor.arity.stable_encoding());
         out.push('\u{2}');
         out.push_str(descriptor.volatility.label());
         out.push('\u{2}');
@@ -751,6 +783,52 @@ mod tests {
             "the fingerprint is a pure function of contents"
         );
         assert!(!first.is_empty());
+    }
+
+    /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
+    /// that register the SAME IRI to the SAME declared metadata (arity, volatility,
+    /// algebraic class, state bound) — byte-identical `describe()` output — must
+    /// still produce DIFFERENT fingerprints, because nothing about identical
+    /// declarations proves the two registries resolve the IRI to the same
+    /// implementation. Without the instance id this fingerprint folds in, these two
+    /// registries would be indistinguishable, and a plan prepared under one would
+    /// silently be accepted for evaluation under the other.
+    #[test]
+    fn two_independently_built_registries_with_identical_declarations_still_differ() {
+        let mut a = AggregateRegistry::new();
+        a.register(EX_SUM, Arc::new(SumAggregate));
+        let mut b = AggregateRegistry::new();
+        b.register(EX_SUM, Arc::new(SumAggregate));
+
+        // The declared content is byte-identical...
+        assert_eq!(a.describe().expect("ok"), b.describe().expect("ok"));
+        // ...yet the fingerprint — which is what a prepared plan's identity is
+        // checked against — must still differ, because `a` and `b` are two
+        // different registry instances.
+        assert_ne!(
+            registry_fingerprint(Some(&a)).expect("ok"),
+            registry_fingerprint(Some(&b)).expect("ok"),
+            "two independently constructed registries must never share a fingerprint, \
+             even when every declaration they report is identical"
+        );
+    }
+
+    /// The flip side: a [`Clone`] of a registry shares the SAME `Arc<dyn
+    /// CustomAggregate>` implementations as its source, so it must produce the
+    /// SAME fingerprint — a caller that clones a registry to move it into an
+    /// `Arc`/closure must not have every previously-prepared plan spuriously
+    /// invalidated.
+    #[test]
+    fn a_clone_shares_its_source_registrys_fingerprint() {
+        let mut registry = AggregateRegistry::new();
+        registry.register(EX_SUM, Arc::new(SumAggregate));
+        let cloned = registry.clone();
+        assert_eq!(
+            registry_fingerprint(Some(&registry)).expect("ok"),
+            registry_fingerprint(Some(&cloned)).expect("ok"),
+            "a clone shares the source's actual implementations, so it is the same \
+             registry instance for fingerprint purposes"
+        );
     }
 
     // ---- end-to-end fold ----------------------------------------------------

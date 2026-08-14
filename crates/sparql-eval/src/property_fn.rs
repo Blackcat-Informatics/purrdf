@@ -491,18 +491,34 @@ pub struct PfDescriptor {
 /// rows a graph pattern produces — it is a wrong-answer channel that no query text
 /// can reveal, because both spellings of the call are identical. Two relations under
 /// one IRI is a host misconfiguration, and it is caught where it is committed.
+///
+/// # Instance identity, not just declared contents
+///
+/// `id` is a [`RegistryId`](crate::registry_id::RegistryId) minted fresh by
+/// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
+/// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
+/// exists because DECLARED metadata (arity, volatility, modes and their row
+/// bounds) cannot distinguish two independently built registries that happen to
+/// register the SAME IRI to two DIFFERENT [`PropertyFunction`] implementations
+/// with identical declarations — `crate::property_fn_plan::registry_fingerprint`
+/// folds this id in ahead of the declaration digest so those two registries can
+/// never be mistaken for each other by a prepared plan's identity.
 #[derive(Default, Clone)]
 pub struct PropertyFunctionRegistry {
+    id: crate::registry_id::RegistryId,
     relations: DetHashMap<String, Arc<dyn PropertyFunction>>,
 }
 
 impl core::fmt::Debug for PropertyFunctionRegistry {
     /// A `dyn PropertyFunction` has no `Debug` impl, so this lists the registered
-    /// IRIs, sorted for deterministic output, rather than deriving.
+    /// IRIs, sorted for deterministic output, rather than deriving. The instance
+    /// id rides along too, since it is exactly the thing that can make two
+    /// otherwise-identical-looking registries diagnostically distinguishable.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut iris: Vec<&str> = self.relations.keys().map(String::as_str).collect();
         iris.sort_unstable();
         f.debug_struct("PropertyFunctionRegistry")
+            .field("id", &self.id)
             .field("relations", &iris)
             .finish()
     }
@@ -549,6 +565,15 @@ impl PropertyFunctionRegistry {
     #[must_use]
     pub fn len(&self) -> usize {
         self.relations.len()
+    }
+
+    /// This registry's instance identity — read by
+    /// `crate::property_fn_plan::registry_fingerprint`, which lives in a sibling
+    /// module and so cannot reach the private `id` field directly. See the type's
+    /// docs' "Instance identity" section for why this exists and why `Clone`
+    /// inherits rather than re-mints it.
+    pub(crate) const fn instance_id(&self) -> crate::registry_id::RegistryId {
+        self.id
     }
 
     /// Describe every registered relation, sorted by IRI.

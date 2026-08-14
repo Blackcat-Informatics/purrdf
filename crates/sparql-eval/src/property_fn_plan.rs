@@ -855,26 +855,42 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 
 /// A deterministic fingerprint of everything about `relations` that can change either
 /// the plan this module produces OR the answer/parallel-safety of the execution that
-/// runs it: every registered IRI, its arity, its declared volatility, and its declared
-/// modes with their row bounds, IRI-sorted.
+/// runs it: the registry's own [`RegistryId`](crate::registry_id::RegistryId), followed
+/// by every registered IRI's arity, its declared volatility, and its declared modes with
+/// their row bounds, IRI-sorted.
+///
+/// # The instance id comes first, and is load-bearing
+///
+/// Declared metadata alone cannot tell two registries apart when they happen to agree on
+/// every declaration for a shared IRI while resolving it to two DIFFERENT
+/// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations — two
+/// relations can declare the identical arity, volatility, and modes while returning
+/// entirely different rows. The [`RegistryId`](crate::registry_id::RegistryId) each
+/// registry mints at construction ([`PropertyFunctionRegistry::instance_id`]) closes
+/// that hole: two registries can never share a fingerprint unless they are the SAME
+/// instance (or a [`Clone`] of it, which shares the identical
+/// `Arc<dyn PropertyFunction>` implementations — see that type's docs), regardless of
+/// how identical their declarations read.
 ///
 /// This belongs in the plan cache's key. The rewrite above is a function of the query
-/// text AND the registry's declarations, so two differently-configured registries can
-/// order the same text differently — and a cache keyed on the text alone would hand the
-/// second host the first host's plan. Volatility belongs here for a reason the ORDERING
-/// pass never sees: it is not read while planning, but it IS read at evaluation time to
-/// decide whether a call may run on a fork-join worker (see
-/// [`Volatility`](crate::user_fn::Volatility)), so two registries that agree on every
-/// arity and mode but disagree about which relation is stable must still be treated as
-/// two distinct configurations — sharing a cache entry between them would be silent only
-/// until one relation actually depended on sequential evaluation.
+/// text AND the registry's declarations, so two differently-configured — or merely
+/// differently CONSTRUCTED — registries can order the same text differently, and a cache
+/// keyed on the text alone would hand the second host the first host's plan. Volatility
+/// belongs here for a reason the ORDERING pass never sees: it is not read while
+/// planning, but it IS read at evaluation time to decide whether a call may run on a
+/// fork-join worker (see [`Volatility`](crate::user_fn::Volatility)), so two registries
+/// that agree on every arity and mode but disagree about which relation is stable must
+/// still be treated as two distinct configurations — sharing a cache entry between them
+/// would be silent only until one relation actually depended on sequential evaluation.
 ///
 /// Derived from [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so
-/// the fingerprint is a pure function of the registry's contents rather than of its
-/// construction order. Also the identity a governed receipt carries (see
-/// `RelationIdentity` in `crate::governed`) — the same reason it belongs in the cache
-/// key applies to the receipt: two registries that produce different fingerprints can
-/// produce different answers, so a receipt that cannot tell them apart is not a receipt.
+/// the content half of the fingerprint is a pure function of the registry's contents
+/// rather than of its construction order (the instance id half is, by construction, a
+/// pure function of WHICH construction). Also the identity a governed receipt carries
+/// (see `RelationIdentity` in `crate::governed`) — the same reason it belongs in the
+/// cache key applies to the receipt: two registries that produce different fingerprints
+/// can produce different answers, so a receipt that cannot tell them apart is not a
+/// receipt.
 ///
 /// # Errors
 ///
@@ -889,6 +905,8 @@ pub(crate) fn registry_fingerprint(
         return Ok(String::new());
     };
     let mut out = String::new();
+    out.push_str(&registry.instance_id().stable_encoding().to_string());
+    out.push('\u{5}');
     for descriptor in registry.describe()? {
         out.push_str(&descriptor.iri);
         out.push('\u{2}');
@@ -906,4 +924,94 @@ pub(crate) fn registry_fingerprint(
         out.push('\u{4}');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod registry_fingerprint_tests {
+    use std::sync::Arc;
+
+    use super::registry_fingerprint;
+    use crate::property_fn::{MemoryRelation, PropertyFunctionRegistry};
+
+    const EX_REL: &str = "http://example.org/ns#rel";
+
+    /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
+    /// that register the SAME IRI to relations with byte-identical declared
+    /// metadata (arity, volatility, modes, row bounds) — [`MemoryRelation`]s
+    /// holding the SAME NUMBER of rows, so `describe()` reports identically, but
+    /// different actual row content — must still produce DIFFERENT fingerprints.
+    /// Declared metadata alone cannot prove the two registries answer the same
+    /// way; only the instance id can.
+    #[test]
+    fn two_independently_built_registries_with_identical_declarations_still_differ() {
+        let mut a = PropertyFunctionRegistry::new();
+        a.register(
+            EX_REL,
+            Arc::new(
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        purrdf_core::TermValue::iri("http://example.org/ns#one"),
+                        purrdf_core::TermValue::iri("http://example.org/ns#alpha"),
+                    ]],
+                )
+                .expect("one row, two values wide"),
+            ),
+        );
+        let mut b = PropertyFunctionRegistry::new();
+        b.register(
+            EX_REL,
+            Arc::new(
+                // Same row COUNT (so `describe()` — arity, volatility, modes, and
+                // the row-count-derived bound — is byte-identical to `a`'s), but a
+                // DIFFERENT row, so the two relations answer a query differently.
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        purrdf_core::TermValue::iri("http://example.org/ns#one"),
+                        purrdf_core::TermValue::iri("http://example.org/ns#beta"),
+                    ]],
+                )
+                .expect("one row, two values wide"),
+            ),
+        );
+
+        assert_eq!(a.describe().expect("ok"), b.describe().expect("ok"));
+        assert_ne!(
+            registry_fingerprint(Some(&a)).expect("ok"),
+            registry_fingerprint(Some(&b)).expect("ok"),
+            "two independently constructed registries must never share a fingerprint, \
+             even when every declaration they report is identical"
+        );
+    }
+
+    /// A [`Clone`] shares the source's `Arc<dyn PropertyFunction>` implementations,
+    /// so it must produce the SAME fingerprint as its source.
+    #[test]
+    fn a_clone_shares_its_source_registrys_fingerprint() {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            EX_REL,
+            Arc::new(
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        purrdf_core::TermValue::iri("http://example.org/ns#one"),
+                        purrdf_core::TermValue::iri("http://example.org/ns#alpha"),
+                    ]],
+                )
+                .expect("one row, two values wide"),
+            ),
+        );
+        let cloned = registry.clone();
+        assert_eq!(
+            registry_fingerprint(Some(&registry)).expect("ok"),
+            registry_fingerprint(Some(&cloned)).expect("ok"),
+            "a clone shares the source's actual implementations, so it is the same \
+             registry instance for fingerprint purposes"
+        );
+    }
 }
