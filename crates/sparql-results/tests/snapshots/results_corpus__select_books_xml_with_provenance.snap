@@ -1,6 +1,6 @@
 ---
 source: crates/sparql-results/tests/results_corpus.rs
-expression: "text(&books(), SparqlResultsFormat::Xml, &populated_provenance())"
+expression: "text(&books(), SparqlResultsFormat::Xml, &populated_provenance(),\n        Some(&provenance_namespace()))"
 ---
 <?xml version="1.0"?>
 <sparql xmlns="http://www.w3.org/2005/sparql-results#">
@@ -25,12 +25,12 @@ expression: "text(&books(), SparqlResultsFormat::Xml, &populated_provenance())"
       <binding name="title"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">5</literal></binding>
     </result>
   </results>
-  <purrdf:provenance xmlns:purrdf="https://purrdf.dev/ns/results#">
-    <purrdf:queryForm>select</purrdf:queryForm>
-    <purrdf:queryHash>sha256:cafebabe</purrdf:queryHash>
-    <purrdf:engine>purrdf-sparql-eval</purrdf:engine>
-    <purrdf:solution>
-      <purrdf:source>http://example.org/graph/library</purrdf:source>
-    </purrdf:solution>
-  </purrdf:provenance>
+  <prov:provenance xmlns:prov="http://example.org/ns/prov#">
+    <prov:queryForm>select</prov:queryForm>
+    <prov:queryHash>sha256:cafebabe</prov:queryHash>
+    <prov:engine>purrdf-sparql-eval</prov:engine>
+    <prov:solution>
+      <prov:source>http://example.org/graph/library</prov:source>
+    </prov:solution>
+  </prov:provenance>
 </sparql>

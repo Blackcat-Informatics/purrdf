@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Canonical SPARQL Results JSON (SRJ) serializer plus the additive, provenance
-//! carrying `purrdf` extension.
+//! carrying extension.
 //!
 //! The default (empty-provenance) output is byte-identical to the legacy
 //! `crates/rdf-capi` emitter (`result_to_json`) — the byte-identity oracle tests
@@ -11,24 +11,42 @@
 //! writer (no oxigraph) and therefore additionally carries RDF-1.2-star
 //! reifier/annotation lines (maximal information flow).
 //!
-//! When the supplied [`ResultProvenance`] is non-empty, an additive top-level
-//! `"purrdf"` member is appended to the result object. W3C SRJ parsers ignore the
-//! unknown key, so populated output stays a valid superset of the standard form.
-//! Likewise the per-literal SPARQL 1.2 `"dir"` key is emitted only for
-//! directional literals, so non-directional output is unchanged.
+//! When the supplied [`ResultProvenance`] is non-empty AND the caller supplies a
+//! [`ProvenanceNamespace`], an additive top-level member (keyed by
+//! [`ProvenanceNamespace::prefix`]) is appended to the result object. W3C SRJ
+//! parsers ignore the unknown key, so populated output stays a valid superset of
+//! the standard form. PurRDF mints no vocabulary IRIs of its own, so without a
+//! caller-supplied namespace no such member is ever emitted, however populated
+//! `provenance` is — see [`ProvenanceNamespace`].
+//!
+//! Likewise the per-literal SPARQL 1.2 `"its:dir"` key is emitted only for
+//! directional literals, so non-directional output is unchanged. `its:dir` is
+//! the spelling the SPARQL 1.2 Query Results specification uses for RDF 1.2
+//! base direction (the ITS — Internationalization Tag Set — namespace
+//! `http://www.w3.org/2005/11/its`, the same convention the SPARQL 1.2 Query
+//! Results XML Format spec uses on `<literal its:dir="…">`; see [`crate::xml`]),
+//! and it is fixture-evidenced: the vendored W3C SPARQL 1.2 test suite's
+//! `lang-basedir/langdir-literal.srj`, `strlangdir.srj`, and `concat.srj` all use
+//! `"its:dir"` on directional-literal bindings, and [`crate::json_read`] prefers
+//! that spelling on read.
 
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_ntriples;
-use crate::model::ResultProvenance;
+use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
-/// `purrdf` provenance extension when `provenance` is non-empty.
+/// provenance extension — keyed under `namespace.prefix` — when `provenance` is
+/// non-empty and `namespace` is supplied.
 ///
-/// JSON carries everything that is requested, so the returned
-/// [`SerializeOutcome::provenance_dropped`] is always `false`.
+/// JSON carries everything that is requested PROVIDED a namespace is supplied
+/// to anchor it under (PurRDF mints no vocabulary IRIs of its own — see
+/// [`ProvenanceNamespace`]). [`SerializeOutcome::provenance_dropped`] is `true`
+/// only when `provenance` is non-empty but no `namespace` was given, so a caller
+/// that populates provenance without configuring a namespace can still detect
+/// the drop, exactly as CSV/TSV signal their lack of an extension point.
 ///
 /// # Examples
 ///
@@ -37,7 +55,7 @@ use purrdf_core::{SparqlResult, TermValue};
 /// ```
 /// use purrdf_sparql_results::{ResultProvenance, SparqlResult, from_json_boolean, to_json};
 ///
-/// let outcome = to_json(&SparqlResult::Boolean(true), &ResultProvenance::default())
+/// let outcome = to_json(&SparqlResult::Boolean(true), &ResultProvenance::default(), None)
 ///     .expect("ASK serializes to JSON");
 /// assert!(!outcome.provenance_dropped);
 /// assert!(from_json_boolean(&outcome.bytes).expect("emitted SRJ parses back"));
@@ -51,23 +69,27 @@ use purrdf_core::{SparqlResult, TermValue};
 pub fn to_json(
     result: &SparqlResult,
     provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
 ) -> Result<SerializeOutcome, Error> {
     let mut out = String::new();
-    write_srj(result, provenance, &mut out)?;
+    write_srj(result, provenance, namespace, &mut out)?;
     Ok(SerializeOutcome {
         bytes: out.into_bytes(),
-        provenance_dropped: false,
+        provenance_dropped: !provenance.is_empty() && namespace.is_none(),
     })
 }
 
-/// Write the full SRJ document (base object + optional `purrdf` extension).
+/// Write the full SRJ document (base object + optional provenance extension).
 ///
-/// The base object is written first, then — when provenance is non-empty — the
-/// `purrdf` member is inserted just before the document's final closing `}` so
-/// the resulting object stays valid for all three result kinds.
+/// The base object is written first, then — when `provenance` is non-empty AND
+/// `namespace` is supplied — the `namespace.prefix`-keyed member is inserted
+/// just before the document's final closing `}` so the resulting object stays
+/// valid for all three result kinds. Either condition failing means no
+/// extension is written at all (PurRDF mints no vocabulary IRIs of its own).
 fn write_srj(
     result: &SparqlResult,
     provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
     out: &mut String,
 ) -> Result<(), Error> {
     write_base(result, out)?;
@@ -75,6 +97,9 @@ fn write_srj(
     if provenance.is_empty() {
         return Ok(());
     }
+    let Some(namespace) = namespace else {
+        return Ok(());
+    };
 
     // Remove the trailing `}` of the base object, append the additive member,
     // then re-close. The base writers always end the object with `}`.
@@ -83,15 +108,17 @@ fn write_srj(
             "SRJ base object did not end with a closing brace".to_string(),
         ));
     }
-    out.push_str(",\"purrdf\":");
-    write_purrdf(result, provenance, out);
+    out.push(',');
+    json_string(&namespace.prefix, out);
+    out.push(':');
+    write_provenance_body(result, provenance, out);
     out.push('}');
     Ok(())
 }
 
-/// Write the pure-W3C SRJ object (no `purrdf` extension at the top level). This is
-/// the byte-identity contract with the legacy rdf-capi emitter, save for the
-/// `Graph` branch and the additive per-literal SPARQL 1.2 `"dir"` key.
+/// Write the pure-W3C SRJ object (no provenance extension at the top level). This
+/// is the byte-identity contract with the legacy rdf-capi emitter, save for the
+/// `Graph` branch and the additive per-literal SPARQL 1.2 `"its:dir"` key.
 fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
     match result {
         SparqlResult::Boolean(value) => {
@@ -153,9 +180,10 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
     Ok(())
 }
 
-/// Write the additive `purrdf` extension object (the value of the top-level
-/// `"purrdf"` member). Only present fields are emitted, in a fixed order.
-fn write_purrdf(result: &SparqlResult, provenance: &ResultProvenance, out: &mut String) {
+/// Write the additive provenance extension object (the value of the caller's
+/// namespaced top-level member). Only present fields are emitted, in a fixed
+/// order.
+fn write_provenance_body(result: &SparqlResult, provenance: &ResultProvenance, out: &mut String) {
     out.push_str("{\"queryForm\":");
     json_string(query_form(result), out);
     if let Some(query_hash) = &provenance.query_hash {
@@ -219,7 +247,7 @@ fn json_string(value: &str, out: &mut String) {
 
 /// Append a SPARQL-JSON binding object for a term value (recursive for triples).
 ///
-/// Byte-identical to the rdf-capi emitter except for the SPARQL 1.2 `"dir"`
+/// Byte-identical to the rdf-capi emitter except for the SPARQL 1.2 `"its:dir"`
 /// key, emitted only when the literal carries a base direction.
 ///
 /// # Errors
@@ -262,7 +290,7 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
                 json_string(datatype, out);
             }
             if let Some(direction) = direction {
-                out.push_str(",\"dir\":\"");
+                out.push_str(",\"its:dir\":\"");
                 out.push_str(direction.as_str());
                 out.push('"');
             }
@@ -300,7 +328,16 @@ mod tests {
     const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
     fn json_text(result: &SparqlResult, prov: &ResultProvenance) -> String {
-        let outcome = to_json(result, prov).expect("serialization succeeds");
+        let outcome = to_json(result, prov, None).expect("serialization succeeds");
+        String::from_utf8(outcome.bytes).expect("UTF-8 output")
+    }
+
+    fn json_text_ns(
+        result: &SparqlResult,
+        prov: &ResultProvenance,
+        namespace: &ProvenanceNamespace,
+    ) -> String {
+        let outcome = to_json(result, prov, Some(namespace)).expect("serialization succeeds");
         String::from_utf8(outcome.bytes).expect("UTF-8 output")
     }
 
@@ -415,6 +452,34 @@ mod tests {
         );
     }
 
+    /// BYTE PIN — the FULL document for a single-row, single-variable triple-term
+    /// SELECT result, pinned exactly (not just a substring), so any drift in the
+    /// nested `{"type":"triple","value":{...}}` encoding is caught at the byte
+    /// level.
+    #[test]
+    fn triple_term_document_exact_bytes() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let text = json_text(&result, &ResultProvenance::default());
+        let expected = concat!(
+            "{\"head\":{\"vars\":[\"t\"]},\"results\":{\"bindings\":[",
+            "{\"t\":{\"type\":\"triple\",\"value\":{",
+            "\"subject\":{\"type\":\"uri\",\"value\":\"http://example.org/s\"},",
+            "\"predicate\":{\"type\":\"uri\",\"value\":\"http://example.org/p\"},",
+            "\"object\":{\"type\":\"uri\",\"value\":\"http://example.org/o\"}}}}",
+            "]}}"
+        );
+        assert_eq!(text, expected);
+    }
+
     // 3. NON-IRI PREDICATE — triple-term with a non-IRI predicate must hard-fail.
     #[test]
     fn non_iri_triple_predicate_is_malformed_error() {
@@ -431,7 +496,7 @@ mod tests {
             rows: vec![vec![Some(triple)]],
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
-        let err = to_json(&result, &ResultProvenance::default())
+        let err = to_json(&result, &ResultProvenance::default(), None)
             .expect_err("non-IRI predicate must be rejected");
         assert!(
             matches!(err, Error::MalformedTerm(_)),
@@ -455,7 +520,7 @@ mod tests {
             rows: vec![vec![Some(triple)]],
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
-        let err = to_json(&result, &ResultProvenance::default())
+        let err = to_json(&result, &ResultProvenance::default(), None)
             .expect_err("bnode predicate must be rejected");
         assert!(
             matches!(err, Error::MalformedTerm(_)),
@@ -463,10 +528,11 @@ mod tests {
         );
     }
 
-    // 5. DIRECTION ADDITIVE — directional literal carries the SPARQL 1.2 "dir" key;
-    //    plain literals must not.
+    // 5. DIRECTION ADDITIVE — directional literal carries the SPARQL 1.2
+    //    "its:dir" key (see the module docs for the fixture evidence); plain
+    //    literals must not.
     #[test]
-    fn directional_literal_carries_dir_key() {
+    fn directional_literal_carries_its_dir_key() {
         let result = SparqlResult::Solutions {
             variables: vec!["d".to_string()],
             rows: vec![vec![Some(TermValue::Literal {
@@ -479,8 +545,8 @@ mod tests {
         };
         let text = json_text(&result, &ResultProvenance::default());
         assert!(
-            text.contains("\"dir\":\"ltr\""),
-            "expected SPARQL 1.2 dir key: {text}"
+            text.contains("\"its:dir\":\"ltr\""),
+            "expected SPARQL 1.2 its:dir key: {text}"
         );
     }
 
@@ -493,14 +559,38 @@ mod tests {
         };
         let text = json_text(&result, &ResultProvenance::default());
         assert!(
-            !text.contains("\"dir\""),
-            "plain literal must not carry dir key: {text}"
+            !text.contains("dir"),
+            "plain literal must not carry an its:dir key: {text}"
         );
     }
 
-    // 6. MAXIMAL PATH — populated provenance appears as a valid top-level member.
+    /// BYTE PIN — the exact per-binding shape of a directional literal must
+    /// match the vendored W3C SPARQL 1.2 fixture
+    /// `suite/w3c-sparql12/lang-basedir/langdir-literal.srj`'s `"l"`/`en`/`ltr`
+    /// row: `{"type":"literal","value":"l","xml:lang":"en","its:dir":"ltr"}`.
     #[test]
-    fn populated_provenance_appends_valid_purrdf_member() {
+    fn directional_literal_binding_matches_vendored_fixture_shape() {
+        let mut out = String::new();
+        json_binding(
+            &TermValue::Literal {
+                lexical_form: "l".to_string(),
+                datatype: RDF_LANGSTRING.to_string(),
+                language: Some("en".to_string()),
+                direction: Some(RdfTextDirection::Ltr),
+            },
+            &mut out,
+        )
+        .expect("literal binding serializes");
+        assert_eq!(
+            out,
+            "{\"type\":\"literal\",\"value\":\"l\",\"xml:lang\":\"en\",\"its:dir\":\"ltr\"}"
+        );
+    }
+
+    // 6. MAXIMAL PATH — populated provenance, WITH a caller-supplied namespace,
+    //    appears as a valid top-level member keyed by that namespace's prefix.
+    #[test]
+    fn populated_provenance_with_namespace_appends_valid_member() {
         let result = SparqlResult::Solutions {
             variables: vec!["s".to_string()],
             rows: vec![vec![Some(TermValue::Iri(
@@ -515,12 +605,15 @@ mod tests {
                 sources: vec!["http://example.org/g1".to_string()],
             }],
         };
-        let text = json_text(&result, &provenance);
+        let namespace = ProvenanceNamespace {
+            prefix: "prov".to_string(),
+            iri: "http://example.org/ns/prov#".to_string(),
+        };
+        let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
+        assert!(!outcome.provenance_dropped, "namespace was supplied");
+        let text = String::from_utf8(outcome.bytes).expect("UTF-8");
 
-        assert!(
-            text.contains("\"purrdf\":{"),
-            "missing purrdf member: {text}"
-        );
+        assert!(text.contains("\"prov\":{"), "missing prov member: {text}");
         assert!(
             text.contains("\"queryForm\":\"select\""),
             "missing queryForm: {text}"
@@ -552,7 +645,11 @@ mod tests {
             engine: Some("e".to_string()),
             ..Default::default()
         };
-        let text = json_text(&result, &provenance);
+        let namespace = ProvenanceNamespace {
+            prefix: "prov".to_string(),
+            iri: "http://example.org/ns/prov#".to_string(),
+        };
+        let text = json_text_ns(&result, &provenance, &namespace);
         assert!(
             text.contains("\"queryForm\":\"ask\""),
             "ask queryForm: {text}"
@@ -561,6 +658,28 @@ mod tests {
         assert!(!text.contains("queryHash"), "no queryHash expected: {text}");
         assert!(!text.contains("solutions"), "no solutions expected: {text}");
         assert!(braces_balanced(&text), "unbalanced braces: {text}");
+    }
+
+    /// DE-MINTING — populated provenance with NO namespace supplied emits no
+    /// extension member at all (PurRDF mints no vocabulary IRIs of its own) and
+    /// the drop is signalled, exactly like the CSV/TSV exit gate.
+    #[test]
+    fn populated_provenance_without_namespace_is_dropped_and_signalled() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            engine: Some("e".to_string()),
+            ..Default::default()
+        };
+        let outcome = to_json(&result, &provenance, None).expect("serializes");
+        assert!(
+            outcome.provenance_dropped,
+            "non-empty provenance with no namespace must be signalled as dropped"
+        );
+        let text = String::from_utf8(outcome.bytes).expect("UTF-8");
+        assert_eq!(
+            text, "{\"head\":{},\"boolean\":true}",
+            "base document must stay pure W3C with no fabricated member: {text}"
+        );
     }
 
     // 7. GRAPH — CONSTRUCT result renders `{"graph":"<nt>"}` carrying the triple.

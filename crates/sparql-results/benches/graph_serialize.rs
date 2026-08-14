@@ -92,7 +92,7 @@ fn bench_graph_serialize(c: &mut Criterion) {
     // Sanity pass: the CONSTRUCT branch must actually emit the graph body, so a
     // regression collapsing it to `{"graph":""}` doesn't silently benchmark a
     // no-op.
-    let outcome = to_json(&result, &provenance).expect("serialize sanity pass");
+    let outcome = to_json(&result, &provenance, None).expect("serialize sanity pass");
     assert!(
         outcome.bytes.len() > ROWS * 32,
         "serialized graph is implausibly small ({} bytes for {ROWS} quads)",
@@ -103,7 +103,8 @@ fn bench_graph_serialize(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ROWS as u64));
     group.bench_function("to_json_ntriples_10k_quads", |bencher| {
         bencher.iter(|| {
-            let outcome = to_json(black_box(&result), black_box(&provenance)).expect("serialize");
+            let outcome =
+                to_json(black_box(&result), black_box(&provenance), None).expect("serialize");
             black_box(outcome);
         });
     });

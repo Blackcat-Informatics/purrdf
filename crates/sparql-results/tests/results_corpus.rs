@@ -11,9 +11,10 @@
 //! language-tagged literal, a typed (`xsd:integer`) literal, and a blank node.
 //! Beyond the SELECT corpus this also pins the ASK boolean paths, the maximal
 //! RDF-1.2-star CONSTRUCT graph path (a quad plus a reifier and an annotation),
-//! and the populated-`purrdf`-provenance behaviour across every format — including
-//! the CSV/TSV no-silent-cap exit-gate trim, which is *signalled* via
-//! `provenance_dropped`, never hidden.
+//! and the populated-provenance behaviour across every format — including the
+//! namespace-absent drop (JSON/XML behave like CSV/TSV when no caller-supplied
+//! [`ProvenanceNamespace`] is configured) and the CSV/TSV no-silent-cap
+//! exit-gate trim, all *signalled* via `provenance_dropped`, never hidden.
 //!
 //! These goldens are the cross-format authority: the per-`src` unit tests pin
 //! exact substrings, while these snapshots pin the WHOLE document for each
@@ -24,8 +25,8 @@ use purrdf_core::{
     RdfTextDirection, RdfTriple, TermValue,
 };
 use purrdf_sparql_results::{
-    ResultProvenance, SolutionProvenance, SparqlResult, SparqlResultsFormat, serialize, to_csv,
-    to_tsv,
+    ProvenanceNamespace, ResultProvenance, SolutionProvenance, SparqlResult, SparqlResultsFormat,
+    serialize, to_csv, to_tsv,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -123,8 +124,24 @@ fn populated_provenance() -> ResultProvenance {
     }
 }
 
-fn text(result: &SparqlResult, format: SparqlResultsFormat, prov: &ResultProvenance) -> String {
-    let outcome = serialize(result, format, prov).expect("serialization succeeds");
+/// The caller-supplied namespace the populated-provenance snapshots anchor
+/// their extension tree under — PurRDF mints no vocabulary IRIs of its own, so
+/// every populated-provenance golden must configure one explicitly
+/// (`example.org`-scoped, per repository convention).
+fn provenance_namespace() -> ProvenanceNamespace {
+    ProvenanceNamespace {
+        prefix: "prov".to_string(),
+        iri: "http://example.org/ns/prov#".to_string(),
+    }
+}
+
+fn text(
+    result: &SparqlResult,
+    format: SparqlResultsFormat,
+    prov: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
+) -> String {
+    let outcome = serialize(result, format, prov, namespace).expect("serialization succeeds");
     String::from_utf8(outcome.bytes).expect("UTF-8 output")
 }
 
@@ -137,7 +154,8 @@ fn select_books_json() {
     insta::assert_snapshot!(text(
         &books(),
         SparqlResultsFormat::Json,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -146,7 +164,8 @@ fn select_books_xml() {
     insta::assert_snapshot!(text(
         &books(),
         SparqlResultsFormat::Xml,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -160,6 +179,7 @@ fn select_books_csv() {
         &books(),
         SparqlResultsFormat::Csv,
         &ResultProvenance::default(),
+        None,
     )
     .expect("csv serializes");
     let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
@@ -178,6 +198,7 @@ fn select_books_tsv() {
         &books(),
         SparqlResultsFormat::Tsv,
         &ResultProvenance::default(),
+        None,
     )
     .expect("tsv serializes");
     let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
@@ -200,7 +221,8 @@ fn ask_true_json() {
     insta::assert_snapshot!(text(
         &SparqlResult::Boolean(true),
         SparqlResultsFormat::Json,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -209,7 +231,8 @@ fn ask_true_xml() {
     insta::assert_snapshot!(text(
         &SparqlResult::Boolean(true),
         SparqlResultsFormat::Xml,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -284,7 +307,8 @@ fn construct_starred_graph_json() {
     insta::assert_snapshot!(text(
         &starred_graph(),
         SparqlResultsFormat::Json,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -298,7 +322,8 @@ fn select_books_json_with_provenance() {
     insta::assert_snapshot!(text(
         &books(),
         SparqlResultsFormat::Json,
-        &populated_provenance()
+        &populated_provenance(),
+        Some(&provenance_namespace()),
     ));
 }
 
@@ -307,37 +332,91 @@ fn select_books_xml_with_provenance() {
     insta::assert_snapshot!(text(
         &books(),
         SparqlResultsFormat::Xml,
-        &populated_provenance()
+        &populated_provenance(),
+        Some(&provenance_namespace()),
     ));
 }
 
 #[test]
 fn select_books_csv_drops_provenance_and_stays_pure() {
-    let outcome = serialize(&books(), SparqlResultsFormat::Csv, &populated_provenance())
-        .expect("csv serializes");
+    // CSV has no extension point at all, so it drops populated provenance
+    // regardless of whether a namespace was supplied — proven here by
+    // supplying one anyway.
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Csv,
+        &populated_provenance(),
+        Some(&provenance_namespace()),
+    )
+    .expect("csv serializes");
     assert!(
         outcome.provenance_dropped,
         "CSV must signal the provenance drop"
     );
     let body = String::from_utf8(outcome.bytes).expect("UTF-8");
     assert!(
-        !body.contains("purrdf"),
-        "CSV must stay pure W3C (no purrdf leak): {body}"
+        !body.contains("prov"),
+        "CSV must stay pure W3C (no provenance leak): {body}"
     );
 }
 
 #[test]
 fn select_books_tsv_drops_provenance_and_stays_pure() {
-    let outcome = serialize(&books(), SparqlResultsFormat::Tsv, &populated_provenance())
-        .expect("tsv serializes");
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Tsv,
+        &populated_provenance(),
+        Some(&provenance_namespace()),
+    )
+    .expect("tsv serializes");
     assert!(
         outcome.provenance_dropped,
         "TSV must signal the provenance drop"
     );
     let body = String::from_utf8(outcome.bytes).expect("UTF-8");
     assert!(
-        !body.contains("purrdf"),
-        "TSV must stay pure W3C (no purrdf leak): {body}"
+        !body.contains("prov"),
+        "TSV must stay pure W3C (no provenance leak): {body}"
+    );
+}
+
+/// DE-MINTING — populated provenance with NO namespace supplied is dropped and
+/// signalled for JSON/XML too, exactly like CSV/TSV, because PurRDF mints no
+/// vocabulary IRIs of its own.
+#[test]
+fn select_books_json_and_xml_drop_provenance_without_a_namespace() {
+    let json = serialize(
+        &books(),
+        SparqlResultsFormat::Json,
+        &populated_provenance(),
+        None,
+    )
+    .expect("json serializes");
+    assert!(
+        json.provenance_dropped,
+        "JSON must signal the provenance drop when no namespace is configured"
+    );
+    let json_body = String::from_utf8(json.bytes).expect("UTF-8");
+    assert!(
+        !json_body.contains("queryForm"),
+        "no fabricated provenance member without a namespace: {json_body}"
+    );
+
+    let xml = serialize(
+        &books(),
+        SparqlResultsFormat::Xml,
+        &populated_provenance(),
+        None,
+    )
+    .expect("xml serializes");
+    assert!(
+        xml.provenance_dropped,
+        "XML must signal the provenance drop when no namespace is configured"
+    );
+    let xml_body = String::from_utf8(xml.bytes).expect("UTF-8");
+    assert!(
+        !xml_body.contains("provenance"),
+        "no fabricated provenance element without a namespace: {xml_body}"
     );
 }
 
@@ -376,7 +455,8 @@ fn edge_cases_json() {
     insta::assert_snapshot!(text(
         &edge_cases(),
         SparqlResultsFormat::Json,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -385,7 +465,8 @@ fn edge_cases_xml() {
     insta::assert_snapshot!(text(
         &edge_cases(),
         SparqlResultsFormat::Xml,
-        &ResultProvenance::default()
+        &ResultProvenance::default(),
+        None,
     ));
 }
 
@@ -397,6 +478,7 @@ fn edge_cases_csv() {
         &edge_cases(),
         SparqlResultsFormat::Csv,
         &ResultProvenance::default(),
+        None,
     )
     .expect("csv serializes");
     let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
@@ -415,6 +497,7 @@ fn edge_cases_tsv() {
         &edge_cases(),
         SparqlResultsFormat::Tsv,
         &ResultProvenance::default(),
+        None,
     )
     .expect("tsv serializes");
     let raw = String::from_utf8(outcome.bytes).expect("UTF-8");

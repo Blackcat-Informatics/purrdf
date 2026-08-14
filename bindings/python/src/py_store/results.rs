@@ -109,9 +109,11 @@ pub(crate) fn serialize_sparql_solutions<'py>(
         aux,
     };
     let prov = ResultProvenance::default();
+    // No provenance namespace: the Python binding has no user-facing option to
+    // supply one (PurRDF mints no vocabulary IRIs of its own).
     // The native serialization runs detached (GIL released).
     let outcome = py
-        .detach(|| serialize_results(&result, fmt, &prov))
+        .detach(|| serialize_results(&result, fmt, &prov, None))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;
     Ok(PyBytes::new(py, &outcome.bytes))
 }
@@ -131,7 +133,7 @@ pub(crate) fn serialize_sparql_boolean<'py>(
     let result = SparqlResult::Boolean(value);
     let prov = ResultProvenance::default();
     let outcome = py
-        .detach(|| serialize_results(&result, fmt, &prov))
+        .detach(|| serialize_results(&result, fmt, &prov, None))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;
     Ok(PyBytes::new(py, &outcome.bytes))
 }

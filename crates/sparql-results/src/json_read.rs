@@ -283,8 +283,12 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
             let language = obj_get(obj, "xml:lang").and_then(Json::as_str);
-            // SPARQL 1.2 JSON results carry the base direction under `its:dir`
-            // (the i18n/ITS convention); accept the bare `dir` spelling too.
+            // `its:dir` (the ITS — Internationalization Tag Set — namespace
+            // convention) is the spelling the SPARQL 1.2 Query Results
+            // specification uses for RDF 1.2 base direction — see
+            // [`crate::json`]'s module docs for the fixture evidence. The bare
+            // `dir` spelling is tolerated too, for interop with producers that
+            // predate the SPARQL 1.2 spelling.
             let direction = match obj_get(obj, "its:dir")
                 .or_else(|| obj_get(obj, "dir"))
                 .and_then(Json::as_str)
@@ -951,8 +955,10 @@ mod tests {
 
     #[test]
     fn reads_directional_literal() {
+        // `its:dir` is the SPARQL 1.2 Query Results spec spelling (see
+        // `crate::json`'s module docs for the fixture evidence).
         let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
-          {"x":{"type":"literal","value":"שלום","xml:lang":"he","dir":"rtl"}}]}}"#;
+          {"x":{"type":"literal","value":"שלום","xml:lang":"he","its:dir":"rtl"}}]}}"#;
         let parsed = from_json(srj.as_bytes()).expect("parse");
         assert_eq!(
             parsed.rows[0][0],
@@ -961,6 +967,42 @@ mod tests {
                 datatype: RDF_DIR_LANGSTRING.to_owned(),
                 language: Some("he".to_owned()),
                 direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// The bare `dir` spelling is tolerated for interop with producers that
+    /// predate the SPARQL 1.2 `its:dir` spelling.
+    #[test]
+    fn tolerates_legacy_bare_dir_spelling() {
+        let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
+          {"x":{"type":"literal","value":"hello","xml:lang":"en","dir":"ltr"}}]}}"#;
+        let parsed = from_json(srj.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+        );
+    }
+
+    /// When both spellings are present, `its:dir` — the spec spelling — takes
+    /// priority over the legacy bare `dir`.
+    #[test]
+    fn its_dir_takes_priority_over_bare_dir() {
+        let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
+          {"x":{"type":"literal","value":"hello","xml:lang":"en","its:dir":"ltr","dir":"rtl"}}]}}"#;
+        let parsed = from_json(srj.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
             })
         );
     }

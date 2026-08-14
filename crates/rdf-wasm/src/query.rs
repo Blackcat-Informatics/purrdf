@@ -1483,7 +1483,7 @@ fn serialize_tabular_result(
     result: &SparqlResult,
     format: SparqlResultsFormat,
 ) -> Result<String, JsError> {
-    let outcome = serialize_results(result, format, &ResultProvenance::default())
+    let outcome = serialize_results(result, format, &ResultProvenance::default(), None)
         .map_err(|e| JsError::new(&e.to_string()))?;
     String::from_utf8(outcome.bytes)
         .map_err(|e| JsError::new(&format!("SPARQL result is not valid UTF-8: {e}")))

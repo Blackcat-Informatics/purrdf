@@ -114,8 +114,17 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
         }),
         "literal" => {
             let language = elem.attr("xml:lang").map(str::to_owned);
-            // Our writer emits `purrdf:dir`; tolerate a plain `dir` too.
-            let dir_str = elem.attr("dir").or_else(|| elem.attr("purrdf:dir"));
+            // `its:dir` is the spelling the SPARQL 1.2 Query Results
+            // specification uses for RDF 1.2 base direction (see
+            // [`crate::xml`]'s module docs for the spec quote and the RDF/XML
+            // codec precedent), so it is preferred. The bare `dir` and
+            // `purrdf:dir` spellings are tolerated ONLY because this crate's own
+            // earlier writer emitted them before this de-minting pass — never
+            // because they are spec-sanctioned.
+            let dir_str = elem
+                .attr("its:dir")
+                .or_else(|| elem.attr("dir"))
+                .or_else(|| elem.attr("purrdf:dir"));
             let direction = match dir_str {
                 Some("ltr") => Some(RdfTextDirection::Ltr),
                 Some("rtl") => Some(RdfTextDirection::Rtl),
@@ -537,6 +546,68 @@ mod tests {
                     language: None,
                     direction: None,
                 }),
+            })
+        );
+    }
+
+    /// `its:dir` (the SPARQL 1.2 Query Results spec spelling) is preferred and
+    /// yields `rdf:dirLangString` off the datatype ladder.
+    #[test]
+    fn reads_its_dir_directional_literal() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" xmlns:its="http://www.w3.org/2005/11/its" its:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// The legacy `dir`/`purrdf:dir` spellings this crate's own earlier writer
+    /// emitted are tolerated on read, `its:dir` taking priority when both are
+    /// present.
+    #[test]
+    fn tolerates_legacy_dir_spellings() {
+        let bare_dir = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" dir="ltr">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(bare_dir.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+        );
+
+        let purrdf_dir = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" purrdf:dir="ltr" xmlns:purrdf="https://purrdf.dev/ns/results#">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(purrdf_dir.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
             })
         );
     }

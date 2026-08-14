@@ -45,6 +45,29 @@ pub struct SolutionProvenance {
     pub sources: Vec<String>,
 }
 
+/// Caller-supplied namespace configuration for the additive provenance
+/// extension tree (`queryForm`/`queryHash`/`engine`/`solution`/`source`).
+///
+/// PurRDF mints no vocabulary IRIs of its own (see AGENTS.md's "PurRDF is NOT
+/// an ontology" contract), so the provenance tree has no built-in namespace:
+/// the JSON/XML writers emit it only when a caller supplies one, and under
+/// exactly the identifiers the caller supplies — nothing is fabricated on
+/// their behalf. When `namespace` is `None`, [`crate::to_json`]/[`crate::to_xml`]
+/// emit no provenance element/member at all, however populated a
+/// [`ResultProvenance`] is (and set [`crate::SerializeOutcome::provenance_dropped`]
+/// to signal that the data was present but had nowhere to go, exactly as
+/// CSV/TSV already do for any non-empty provenance).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvenanceNamespace {
+    /// The identifier the provenance tree is anchored under: the bare
+    /// top-level JSON member key, and the XML namespace prefix (bound via
+    /// `xmlns:{prefix}="{iri}"` on the `<{prefix}:provenance>` element).
+    pub prefix: String,
+    /// The XML namespace IRI bound to `prefix`. The JSON writer has no
+    /// namespace mechanism to bind it into and uses only `prefix`.
+    pub iri: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

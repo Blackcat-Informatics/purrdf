@@ -233,7 +233,10 @@ fn emit_result(
             };
             // The results serializer itself rejects the shapes its format cannot carry
             // (CSV/TSV reject a boolean); its `Err` maps cleanly to a runtime failure.
-            let outcome = serialize(result, fmt, &ResultProvenance::default())?;
+            // No provenance namespace: the CLI has no user-facing option to supply one
+            // (PurRDF mints no vocabulary IRIs of its own), so the additive provenance
+            // extension is never emitted here.
+            let outcome = serialize(result, fmt, &ResultProvenance::default(), None)?;
             sink::write_out("-", &outcome.bytes)?;
             // A tabular/boolean result performs no lossy transcode; honor the flag
             // uniformly with an empty ledger.

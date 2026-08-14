@@ -387,6 +387,7 @@ pub unsafe extern "C" fn purrdf_query_json(
             let outcome = purrdf_sparql_results::to_json(
                 &result,
                 &purrdf_sparql_results::ResultProvenance::default(),
+                None,
             )
             .map_err(|e| {
                 PurrdfError::new(
