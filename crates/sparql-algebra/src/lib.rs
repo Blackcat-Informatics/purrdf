@@ -85,7 +85,8 @@ pub mod substitute;
 pub use algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
     GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
-    PropertyPathExpression, PurrdfCall, PurrdfFn, Query, QueryDataset, Update, UsingClause,
+    PropertyPathExpression, PurrdfCall, PurrdfFn, Query, QueryDataset, SparqlVersion, Update,
+    UsingClause,
 };
 pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,

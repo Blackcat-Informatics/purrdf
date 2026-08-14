@@ -49,4 +49,5 @@ Select {
         named: [],
     },
     base_iri: None,
+    version: None,
 }

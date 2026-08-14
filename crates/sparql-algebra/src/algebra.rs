@@ -26,6 +26,78 @@ use crate::ast::{
     Variable,
 };
 
+/// The SPARQL version an in-prologue `VERSION "<string>"` declaration named
+/// (SPARQL 1.2 Query specification §4.4 / grammar production `Version`).
+///
+/// Two spellings are recognized and get their own variant; anything else is
+/// retained verbatim in [`Self::Other`] rather than rejected — the `VERSION`
+/// clause is **syntax-only** (parsing never rejects an unrecognized string; see
+/// vendored W3C `w3c-sparql12` `version-04.rq`, which declares `"1.1"` and is a
+/// `PositiveSyntaxTest`). [`Self::raw`] returns the declared string byte-exactly
+/// for every variant, including the two recognized ones, whose raw spelling is
+/// always identical to their canonical one (recognition is an exact match).
+///
+/// A prologue may repeat the declaration (the grammar's own `Version*`); the
+/// parser records the LAST one when several appear (an owned reading — the
+/// SPARQL 1.2 Query specification does not itself state a tie-breaking rule for
+/// a request that legally re-declares the clause).
+///
+/// # What evaluation does with each
+///
+/// Recognition is enforced at evaluation ADMISSION, not at parse time (see
+/// `purrdf-sparql-eval`'s query-evaluation entry point):
+///
+/// - [`Self::V12`] and [`Self::V12Basic`] evaluate normally on the full engine.
+///   `1.2-basic` is a subset of `1.2` (the SPARQL 1.2 Query specification's
+///   Basic profile drops a handful of full-profile features); this evaluator
+///   does not yet enforce that narrower subset, so a `1.2-basic` query runs
+///   exactly as a `1.2` one would.
+/// - [`Self::Other`] is refused at admission with a typed error naming the
+///   declared version — an unrecognized `VERSION` names a spec this evaluator
+///   does not know how to honor, so admitting it would silently evaluate under
+///   the wrong (or an unknown) semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SparqlVersion {
+    /// `VERSION "1.2"` — the SPARQL 1.2 Query specification, full profile.
+    V12,
+    /// `VERSION "1.2-basic"` — the SPARQL 1.2 Query specification's Basic profile.
+    V12Basic,
+    /// Any other declared string, retained verbatim. Refused at evaluation
+    /// admission (see the type docs); never a parse error.
+    Other(String),
+}
+
+impl SparqlVersion {
+    /// Classify a declared `VERSION` string, recognizing `"1.2"` and
+    /// `"1.2-basic"`; anything else becomes [`Self::Other`] verbatim.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "1.2" => Self::V12,
+            "1.2-basic" => Self::V12Basic,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// The declared version string, byte-exactly as it appeared in the
+    /// `VERSION "<string>"` declaration — including for the two recognized
+    /// variants, whose raw spelling is always their canonical one.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        match self {
+            Self::V12 => "1.2",
+            Self::V12Basic => "1.2-basic",
+            Self::Other(s) => s,
+        }
+    }
+
+    /// Is this a version this evaluator recognizes and evaluates normally?
+    #[must_use]
+    pub fn is_recognized(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
 /// A parsed SPARQL query. The four query forms differ only in their head; the
 /// `WHERE` clause and all solution modifiers live inside `pattern` as algebra.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -38,6 +110,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if the prologue declared one.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `CONSTRUCT` query. `template` is the output triple template.
     Construct {
@@ -49,6 +123,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `DESCRIBE` query.
     Describe {
@@ -60,6 +136,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `ASK` query.
     Ask {
@@ -69,6 +147,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
 }
 
@@ -93,6 +173,17 @@ impl Query {
             | Self::Construct { base_iri, .. }
             | Self::Describe { base_iri, .. }
             | Self::Ask { base_iri, .. } => base_iri.as_ref(),
+        }
+    }
+
+    /// The query's `VERSION` declaration, if the prologue declared one (last-wins
+    /// across repeated declarations; see [`SparqlVersion`]).
+    pub fn version(&self) -> Option<&SparqlVersion> {
+        match self {
+            Self::Select { version, .. }
+            | Self::Construct { version, .. }
+            | Self::Describe { version, .. }
+            | Self::Ask { version, .. } => version.as_ref(),
         }
     }
 }
@@ -131,6 +222,19 @@ pub struct Update {
     pub operations: Vec<GraphUpdateOperation>,
     /// An explicit `BASE` IRI, if the prologue declared one.
     pub base_iri: Option<NamedNode>,
+    /// The prologue's `VERSION` declaration, if any (last-wins across repeated
+    /// declarations, including one that follows a `;` operation separator; see
+    /// [`SparqlVersion`]).
+    pub version: Option<SparqlVersion>,
+}
+
+impl Update {
+    /// The request's `VERSION` declaration, if the prologue declared one
+    /// (last-wins across repeated declarations; see [`SparqlVersion`]).
+    #[must_use]
+    pub fn version(&self) -> Option<&SparqlVersion> {
+        self.version.as_ref()
+    }
 }
 
 /// The target of a graph-management operation
@@ -1286,6 +1390,7 @@ mod tests {
                 },
             ],
             base_iri: None,
+            version: None,
         };
         assert_eq!(
             upd.to_string(),
@@ -1301,6 +1406,7 @@ mod tests {
                 target: GraphTarget::All,
             }],
             base_iri: Some(nn("http://ex/base")),
+            version: None,
         };
         assert_eq!(upd.to_string(), "BASE <http://ex/base> CLEAR ALL");
     }

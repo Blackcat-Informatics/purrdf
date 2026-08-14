@@ -1228,6 +1228,7 @@ mod tests {
                 destination: GraphTarget::All,
             }],
             base_iri: None,
+            version: None,
         };
         let cache = BgpOrderCache::default();
         let cfg = ungoverned(&cache);

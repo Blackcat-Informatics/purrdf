@@ -985,41 +985,49 @@ fn restrict_witness_bindings(query: &Query, surrogates: &BTreeSet<String>) -> Qu
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Select {
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Construct {
             template,
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Construct {
             template: template.clone(),
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Describe {
             pattern,
             targets,
             dataset,
             base_iri,
+            version,
         } => Query::Describe {
             pattern: restrict(pattern),
             targets: targets.clone(),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Ask {
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Ask {
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
     }
 }

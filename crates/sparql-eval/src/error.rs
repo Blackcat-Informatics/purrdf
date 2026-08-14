@@ -44,8 +44,12 @@ pub enum EvalError {
     /// residue: a variable-bound quoted-triple-term component in a BGP or property-path
     /// pattern (structural triple-term matching is out of scope), an unresolved custom
     /// SPARQL function or aggregate IRI, `heldIn` called without a caller-supplied
-    /// standpoint-predicate configuration, and a manually constructed graph pattern
-    /// whose nesting exceeds the parser's safety bound. The string names the
+    /// standpoint-predicate configuration, a manually constructed graph pattern
+    /// whose nesting exceeds the parser's safety bound, and a query declaring an
+    /// unrecognized prologue `VERSION` (SPARQL 1.2 Query specification §4.4;
+    /// [`purrdf_sparql_algebra::SparqlVersion::Other`]) — parsing is syntax-only for
+    /// `VERSION` and accepts any string, so an unrecognized one is refused here, at
+    /// evaluation admission, rather than at parse time. The string names the
     /// unsupported construct. (Property paths are evaluated in-engine — S8 — and
     /// `DESCRIBE` evaluates via the canonical Symmetric CBD, so neither is here
     /// either. A property-function call whose predicate IRI resolves to no registered

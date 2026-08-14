@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
     GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
-    PropertyPathExpression, Query, QueryDataset, Update, UsingClause,
+    PropertyPathExpression, Query, QueryDataset, SparqlVersion, Update, UsingClause,
 };
 use crate::ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
@@ -233,6 +233,7 @@ impl SparqlParser {
             end: text.len(),
             prefixes: HashMap::new(),
             base: self.base_iri.clone(),
+            version: None,
             agg_counter: 0,
             anon_counter: 0,
             group_counter: 0,
@@ -248,6 +249,9 @@ struct Parser<'a, 'o> {
     end: usize,
     prefixes: HashMap<String, String>,
     base: Option<String>,
+    /// The most recently parsed prologue `VERSION` declaration (last-wins across
+    /// repeated declarations — see [`SparqlVersion`]).
+    version: Option<SparqlVersion>,
     agg_counter: usize,
     anon_counter: usize,
     group_counter: usize,
@@ -323,6 +327,7 @@ impl<'a> Parser<'a, '_> {
             end: self.end,
             prefixes: self.prefixes.clone(),
             base: self.base.clone(),
+            version: self.version.clone(),
             agg_counter: self.agg_counter,
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
@@ -430,10 +435,18 @@ impl<'a> Parser<'a, '_> {
                 let iri = self.expect_iriref()?;
                 self.prefixes.insert(prefix, iri);
             } else if self.eat_kw("VERSION") {
-                // SPARQL 1.2 version declaration: `VERSION <string>`. Recorded and
-                // otherwise inert — it declares the query's target spec version.
+                // SPARQL 1.2 version declaration: `VERSION <string>` (SPARQL 1.2 Query
+                // specification §4.4). Retained as `self.version`, last-wins across
+                // repeated declarations (the grammar permits `Version*`); see
+                // `SparqlVersion` for what evaluation does with each spelling. Parsing
+                // itself is syntax-only — ANY string is accepted here (vendored W3C
+                // `w3c-sparql12` `version-04.rq` declares `"1.1"` and is a
+                // `PositiveSyntaxTest`); an unrecognized version is refused only at
+                // evaluation admission, not at parse time.
                 match self.bump() {
-                    Some(Token::StringLit(_)) => {}
+                    Some(Token::StringLit(s)) => {
+                        self.version = Some(SparqlVersion::parse(&s));
+                    }
                     other => {
                         return Err(ParseError::syntax(
                             format!("expected a version string after VERSION, found {other:?}"),
@@ -708,6 +721,7 @@ impl<'a> Parser<'a, '_> {
             pattern: p,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -781,6 +795,7 @@ impl<'a> Parser<'a, '_> {
                 pattern: p,
                 dataset,
                 base_iri,
+                version: self.version.clone(),
             });
         }
         // Long form: CONSTRUCT { template } WHERE { ... }
@@ -815,6 +830,7 @@ impl<'a> Parser<'a, '_> {
             pattern: p,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -834,6 +850,7 @@ impl<'a> Parser<'a, '_> {
             pattern,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -874,6 +891,7 @@ impl<'a> Parser<'a, '_> {
             targets,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -970,6 +988,7 @@ impl<'a> Parser<'a, '_> {
         Ok(Update {
             operations,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -3962,6 +3981,44 @@ mod tests {
     }
 
     #[test]
+    fn version_basic_parses_to_typed_and_byte_exact_raw() {
+        let q = "PREFIX : <http://example/>\nVERSION \"1.2-basic\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        let version = query.version().expect("VERSION declared");
+        assert_eq!(*version, SparqlVersion::V12Basic);
+        assert_eq!(version.raw(), "1.2-basic");
+        assert!(version.is_recognized());
+    }
+
+    #[test]
+    fn version_repeated_declarations_last_wins() {
+        // Mirrors the vendored W3C `w3c-sparql12` `version-06.rq` shape: three
+        // `VERSION` declarations interleaved with `PREFIX`.
+        let q = "VERSION \"1.2\"\nPREFIX : <http://example/>\nVERSION \"1.2-basic\"\nVERSION \"1.2\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        assert_eq!(query.version(), Some(&SparqlVersion::V12));
+    }
+
+    #[test]
+    fn version_arbitrary_string_is_a_syntax_only_accept() {
+        // Mirrors the vendored W3C `w3c-sparql12` `version-04.rq` shape: an
+        // unrecognized version string is a `PositiveSyntaxTest` — parsing accepts
+        // any string; recognition is enforced only at evaluation admission.
+        let q = "PREFIX : <http://example/>\nVERSION \"1.1\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        let version = query.version().expect("VERSION declared");
+        assert_eq!(*version, SparqlVersion::Other("1.1".to_owned()));
+        assert_eq!(version.raw(), "1.1");
+        assert!(!version.is_recognized());
+    }
+
+    #[test]
+    fn version_absent_is_none() {
+        let q = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        assert_eq!(parse(&q).version(), None);
+    }
+
+    #[test]
     fn undeclared_prefix_is_syntax_error() {
         let err = SparqlParser::new()
             .parse_query("SELECT ?a WHERE { ?a a nope:T }")
@@ -4259,6 +4316,24 @@ mod tests {
         SparqlParser::new()
             .parse_update(&format!("{GM}{u}"))
             .expect_err("update should fail")
+    }
+
+    #[test]
+    fn update_retains_version_declaration() {
+        // The prologue-parsing path is shared with queries (`parse_prologue`); an
+        // Update request's own `VERSION` declaration is retained the same way.
+        let u = SparqlParser::new()
+            .parse_update(&format!(
+                "VERSION \"1.2-basic\"\n{GM}INSERT DATA {{ purrdf:s purrdf:p purrdf:o }}"
+            ))
+            .expect("update parse");
+        assert_eq!(u.version(), Some(&SparqlVersion::V12Basic));
+    }
+
+    #[test]
+    fn update_with_no_version_is_none() {
+        let u = parse_update("INSERT DATA { purrdf:s purrdf:p purrdf:o }");
+        assert_eq!(u.version(), None);
     }
 
     #[test]

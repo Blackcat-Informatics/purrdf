@@ -28,7 +28,7 @@ use purrdf_core::{
     ViewTermId,
 };
 use purrdf_sparql_algebra::{
-    GraphPattern, NamedNodePattern, Query, TermPattern, TriplePattern, Variable,
+    GraphPattern, NamedNodePattern, Query, SparqlVersion, TermPattern, TriplePattern, Variable,
 };
 
 use crate::DetHashMap;
@@ -2019,6 +2019,18 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    if let Some(SparqlVersion::Other(raw)) = query.version() {
+        // Parsing is syntax-only for `VERSION` (see `SparqlVersion`): any string
+        // parses. Evaluation is the admission boundary — a version this evaluator
+        // does not recognize names a spec it does not know how to honor, so
+        // admitting it would silently evaluate under the wrong (or unknown)
+        // semantics. `V12`/`V12Basic` fall through and evaluate normally on the
+        // full engine (`1.2-basic` is a subset of `1.2`; this evaluator does not
+        // yet enforce that narrower profile).
+        return Err(EvalError::unsupported(format!(
+            "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
+        )));
+    }
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Criterion and differential tests can hold the operation on the sequential branch;
     // production keeps the ordered parallel fold. The guard is operation-scoped so every
@@ -2235,6 +2247,44 @@ mod tests {
             .with_bnode_mint_prefix("f2d616263-2d_")
             .expect("shapes-style prefix must be accepted");
         assert_eq!(ctx.bnode_mint_prefix.as_deref(), Some("f2d616263-2d_"));
+    }
+
+    #[test]
+    fn unrecognized_version_is_refused_at_evaluation_admission() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query("VERSION \"0.9\"\nSELECT * WHERE { ?s ?p ?o }")
+            .expect("VERSION is syntax-only; any string parses");
+        let mut ctx = EvalCtx::new(&ds);
+        let err = evaluate_query(&query, &mut ctx).expect_err("unrecognized VERSION is refused");
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("0.9"),
+            "error should name the declared version: {err}"
+        );
+    }
+
+    #[test]
+    fn recognized_versions_evaluate_normally() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        for version in ["1.2", "1.2-basic"] {
+            let query = SparqlParser::new()
+                .parse_query(&format!(
+                    "VERSION \"{version}\"\nSELECT * WHERE {{ ?s ?p ?o }}"
+                ))
+                .expect("parse");
+            let mut ctx = EvalCtx::new(&ds);
+            let outcome = evaluate_query(&query, &mut ctx)
+                .unwrap_or_else(|e| panic!("VERSION {version:?} must evaluate: {e}"));
+            assert!(
+                matches!(outcome, Outcome::Solutions(seq) if seq.is_empty()),
+                "empty dataset yields no solutions"
+            );
+        }
     }
 
     #[test]
