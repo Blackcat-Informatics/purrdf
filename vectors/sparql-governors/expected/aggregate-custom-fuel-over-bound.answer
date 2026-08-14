@@ -1,0 +1,5 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=44	consumed=45
+certificate	certain	positional-prefix=true
+variables	total
+row	"78"^^<http://www.w3.org/2001/XMLSchema#integer>

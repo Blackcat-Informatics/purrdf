@@ -112,6 +112,18 @@ over-bound member (one fuel unit below it) trips on the trailing
 rather than inside the fold — the row is reported, certified as a positional
 prefix of itself, at both boundary and over-bound.
 
+The `aggregate-custom-*` lanes name a registered **custom** aggregate instead
+of a built-in, and carry no `.charges` sidecar at all — not by omission, but
+because there is no seam to take one through. `explain_query_with_property_functions`
+exists for the relation lane; there is no `explain_query_with_aggregates`
+counterpart (`NativeSparqlEngine::explain_for` in the evaluator crate takes no
+aggregate registry, so a query naming a custom `AGG(<iri>, …)` is refused at
+its prepare-time admission check exactly as an unregistered one would be). The
+`aggregate-custom-*` cases are therefore ordinary bands — `.answer`/`.spend`/
+`.metered` only — and their fuel is compared against the built-in lane's
+directly, case for case, rather than through a shared per-charge-point
+decomposition.
+
 ## The boundary is measured, never guessed
 
 For a numeric ceiling, `expected/<case>.metered` is the consumption vector of
@@ -165,8 +177,10 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | `property-function-parallel-fuel-*` | `property-function-wide` | the same seam at 1200 driving rows, above the evaluator's fork threshold |
 | `aggregate-invocation-fuel-*` | `aggregate-invocation` | the invocation point **alone** — twelve aggregate expressions folding one implicit group whose input matches nothing, so the band contains twelve invocation charges and zero accumulation charges |
 | `aggregate-accumulation-fuel-*` | `aggregate-accumulation` | the accumulation point **alone** — one aggregate expression (`SUM`) folding one implicit group of twelve rows, so the band contains one invocation charge and twelve accumulation charges |
+| `aggregate-custom-fuel-*` | `aggregate-accumulation` data, `aggregate-custom` query | the SAME group shape as `aggregate-accumulation-fuel-*`, folded through a registered custom aggregate instead of the built-in `SUM` — a direct fuel comparison between the two dispatch paths |
+| `aggregate-custom-scratch-bytes-*` | `aggregate-custom-scratch` data, `aggregate-custom` query | 1200 rows in one implicit group, above the evaluator's within-group chunk threshold — the custom accumulator's declared `ScratchBytes` state bound, charged once per live chunk, exercising the ONE dimension no built-in aggregate ever charges at all |
 
-The five lanes above carry a `boundary` and an `over-bound` member but no
+The seven lanes above carry a `boundary` and an `over-bound` member but no
 `zero`; the section on the relation seam says why that is the honest shape for
 the property-function pair, and the aggregate section below says why the same
 shape holds for the aggregate pair.
@@ -346,6 +360,46 @@ row-commit charge to land on instead. The two lanes' `.answer` records say so
 directly: the same one row, `certain` with `positional-prefix=true`, at both
 boundary and over-bound — a caller paging by exactly one more unit of fuel
 gets the identical row back, now reported as `complete`.
+
+#### The custom-aggregate path
+
+Every case above names the built-in `SUM`. The custom-aggregate seam —
+`AGG(<iri>, …)` resolved against a host-registered `AggregateRegistry`, wired
+through `QueryOptions::aggregates` — is a different dispatch path through the
+SAME evaluator call site, and until this pair existed the corpus pinned no
+case that took it at all.
+
+| Case | Fixture | Pinned |
+|---|---|---|
+| `aggregate-custom-fuel-boundary` | `aggregate-accumulation` data, `aggregate-custom` query | fuel 45 — identical to `aggregate-accumulation-fuel-boundary`'s; `complete`, 1 row |
+| `aggregate-custom-fuel-over-bound` | `aggregate-accumulation` data, `aggregate-custom` query | fuel 44; `budget-exhausted fuel`, 1 row |
+| `aggregate-custom-scratch-bytes-boundary` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 2112; `complete`, 1 row |
+| `aggregate-custom-scratch-bytes-over-bound` | `aggregate-custom-scratch` data, `aggregate-custom` query | scratch-bytes 2111; `budget-exhausted scratch-bytes`, 1 row |
+
+`aggregate-custom-fuel-*` drives the identical twelve-row, no-`GROUP BY` shape
+`aggregate-accumulation-fuel-*` does, through a registered custom aggregate
+instead of `SUM` — `AggregateInvocation`/`AggregateAccumulation` are charged
+from the ONE call site that dispatches either kind, so the two lanes' fuel
+must be, and is, identical: 45 at the boundary, both times.
+`crates/sparql-conformance/tests/governor_corpus.rs`'s
+`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`
+checks this directly against the frozen numbers above, not merely against an
+in-crate unit test that could drift from what the corpus itself pins.
+
+`aggregate-custom-scratch-bytes-*` is the lane no built-in aggregate can ever
+exercise: `ScratchBytes` is charged only against a custom aggregate's declared
+[`CustomAggregate::state_bound`](../../crates/sparql-eval/src/agg_fn.rs), and
+only once the group is large enough to cross the evaluator's within-group
+chunk threshold (1200 rows, one implicit group, well above
+`PARALLEL_MIN_ROWS`). The registered fixture aggregate declares a state bound
+of 64 bytes; the fold plans 33 chunks for 1200 rows, so the pinned charge is
+`64 × 33 = 2112` — the admission charge for the first accumulator plus the
+extra 32 the chunked fold actually allocates. That chunk count, and hence this
+charge, is a pure function of the row count alone: it does not depend on
+`rayon::current_num_threads()`, so the SAME query/data/ceiling triple this
+pair pins is admitted or refused identically on every host, which is exactly
+the property `purrdf_sparql_eval::parallel::aggregate_chunk_size_for`'s own
+doc comment claims and this frozen pair now checks on every run.
 
 ### Deadlines
 

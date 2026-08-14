@@ -1,0 +1,3 @@
+outcome	budget-exhausted
+tripped	budget	scratch-bytes	scratch-exhausted	limit=2111	consumed=2112
+certificate	unknown	barrier=Group

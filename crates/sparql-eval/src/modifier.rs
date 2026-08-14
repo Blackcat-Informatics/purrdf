@@ -1046,12 +1046,15 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // chunk, combined down afterward) — [`CustomAggregate::state_bound`]'s
     // admission charge above metered exactly ONE accumulator's declared bound,
     // so chunking must charge the EXTRA accumulators beyond that first one
-    // before creating them, using [`crate::parallel::planned_chunk_count`] (the
-    // exact count [`crate::parallel::par_chunk_reduce_init`] will create, not
-    // an estimate) so this stays an honest upper bound on peak retained state.
+    // before creating them, using [`crate::parallel::planned_aggregate_chunk_count`]
+    // (the exact count [`crate::parallel::par_chunk_reduce_init`] will create, not
+    // an estimate) so this stays an honest upper bound on peak retained state. That
+    // count is a pure function of `survivors.len()` alone — see
+    // [`crate::parallel::aggregate_chunk_size_for`]'s doc comment — so this charge,
+    // unlike an earlier increment's, cannot vary with the host's thread count.
     let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
     let chunk_count = if stable {
-        crate::parallel::planned_chunk_count(survivors.len())
+        crate::parallel::planned_aggregate_chunk_count(survivors.len())
     } else {
         1
     };
@@ -1176,6 +1179,17 @@ impl NumericFold {
     /// property of bounded arithmetic, not a determinism gap chunking
     /// introduces: whichever grouping trips it, the answer for that execution
     /// is a legitimate "poisoned, hence unbound" `SUM`/`AVG` — not a wrong one.
+    ///
+    /// Crucially, "which grouping" is no longer a question the HOST gets a vote on.
+    /// [`crate::parallel::par_chunk_reduce_init`] chunks through
+    /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
+    /// group's row count — never of `rayon::current_num_threads()` — so for a given
+    /// (query, data) pair there is exactly ONE chunking in production, reproduced
+    /// identically on every host and every run. The caveat above therefore describes a
+    /// fixed, reproducible property of THIS group's fold (does its fixed chunk plan
+    /// happen to sum through an out-of-range intermediate, the same way a fixed row
+    /// order can), not a machine- or schedule-dependent one: two runs of the same query
+    /// over the same data never disagree, on one host or between two.
     fn combine(&mut self, other: Self) {
         match (&mut *self, other) {
             (Self::Poisoned, _) => {}

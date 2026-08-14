@@ -1578,6 +1578,332 @@ fn within_group_chunked_fold_charges_identically_forced_parallel_vs_sequential()
     );
 }
 
+// ---------------------------------------------------------------------------
+// The within-group chunk plan is a pure function of row count, never of the
+// host's thread count (see `crate::parallel::aggregate_chunk_size_for`).
+// ---------------------------------------------------------------------------
+
+/// An accumulator whose finished value is the number of PARTIAL accumulators it was
+/// built by combining — `1` for a partial that was only ever `step`-ed into (never
+/// combined), and the sum of both sides' counts after a `combine`. Folded through
+/// [`crate::parallel::par_chunk_reduce_init`], a group's finished answer is therefore
+/// EXACTLY the chunk count the within-group fold used: the most direct possible probe of
+/// what [`crate::parallel::aggregate_chunk_size_for`] planned, read back through the SAME
+/// custom-aggregate seam a caller would use rather than through a crate-internal function
+/// call.
+struct PartialCounterAccumulator {
+    partials: i64,
+}
+
+impl AggregateAccumulator for PartialCounterAccumulator {
+    fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
+        // A `step` folds one ROW into an already-open partial; it does not open a new
+        // one, so the count stays exactly what `init` set.
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.partials += n;
+        }
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.partials.to_string(),
+            XSD_INTEGER,
+        )))
+    }
+}
+
+struct PartialCounterAggregate {
+    state_bound: u64,
+}
+
+impl CustomAggregate for PartialCounterAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        self.state_bound
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(PartialCounterAccumulator { partials: 1 })
+    }
+}
+
+const PARTIAL_COUNTER_IRI: &str = "http://example.org/agg/partialCounter";
+
+/// `SELECT (AGG(<partial-counter>, ?val) AS ?partials) WHERE { ?s ex:val ?val }` — no
+/// `GROUP BY` at all, so the whole input is ONE implicit group, and the within-group
+/// chunked fold is the only fold this pattern can ever exercise.
+fn partial_counter_pattern() -> GraphPattern {
+    GraphPattern::Group {
+        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        variables: Vec::new(),
+        aggregates: vec![(
+            Variable::new("partials"),
+            AggregateExpression::new(
+                AggregateFunction::Custom(NamedNode::new_unchecked(PARTIAL_COUNTER_IRI)),
+                vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
+                false,
+            )
+            .expect("fixture: valid AggregateExpression"),
+        )],
+    }
+}
+
+/// [`agg_group_dataset`]'s simpler, ungrouped twin: `rows` triples `ex:sN ex:val N`, with
+/// no `ex:cat` at all — the fixture a no-`GROUP BY` pattern like
+/// [`partial_counter_pattern`] needs.
+fn ungrouped_val_dataset(rows: i64) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let val_pred = b.intern_iri(&format!("{EX}val"));
+    for i in 0..rows {
+        let subject = b.intern_iri(&format!("{EX}s{i}"));
+        let val = b.intern_literal(RdfLiteral {
+            lexical_form: i.to_string(),
+            datatype: Some(XSD_INTEGER.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(subject, val_pred, val, None);
+    }
+    b.freeze()
+        .expect("ungrouped aggregate dataset is positionally valid")
+}
+
+/// One governed evaluation of an aggregate `pattern`, reporting what
+/// [`run_with_aggregates`]'s fuel-only `Run` does not: the resolved lexical form of the
+/// sole output row's `var` cell (`None` when governance withheld the row, or the cell is
+/// unbound), and the `ScratchBytes` consumption alongside `Fuel` — exactly what the
+/// within-group chunk-plan reproduction below needs to compare across pools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AggregateAnswer {
+    rows: usize,
+    fuel: u64,
+    scratch_bytes: u64,
+    tripped: Option<TrippedGovernor>,
+    answer: Option<String>,
+}
+
+fn run_aggregate_answer(
+    pattern: &GraphPattern,
+    dataset: &RdfDataset,
+    registry: Option<&AggregateRegistry>,
+    governors: &QueryGovernors,
+    var: &str,
+) -> AggregateAnswer {
+    let state = Arc::new(GovernorState::new(governors));
+    let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
+    if let Some(registry) = registry {
+        ctx = ctx.with_aggregates(registry);
+    }
+    let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    let evidence = state.evidence();
+    let seq = evaluated.rows();
+    let answer = seq.schema.index_of(&Variable::new(var)).and_then(|col| {
+        seq.rows.first().and_then(|row| row[col]).map(|term| {
+            match ctx.scratch.value_of(dataset, term) {
+                TermValue::Literal { lexical_form, .. } => lexical_form,
+                other => format!("{other:?}"),
+            }
+        })
+    });
+    AggregateAnswer {
+        rows: seq.len(),
+        fuel: evidence.consumed_in(ResourceDimension::Fuel),
+        scratch_bytes: evidence.consumed_in(ResourceDimension::ScratchBytes),
+        tripped: evidence.tripped(),
+        answer,
+    }
+}
+
+/// **The exact reported reproduction, as a test.** Before this increment,
+/// `crate::parallel::chunk_size_for` read `rayon::current_num_threads()`, so the SAME
+/// query/data/ceiling triple was admitted on a small pool and refused on a big one — see
+/// [`PartialCounterAccumulator`]'s doc comment for why this aggregate's finished answer IS
+/// the within-group fold's chunk count, which is what makes the divergence directly
+/// observable rather than merely inferred from a charge number.
+///
+/// The boundary ceiling is MEASURED (via an unbounded run), never guessed, exactly like
+/// every band in `vectors/sparql-governors` — so this test does not silently stop meaning
+/// anything if an unrelated change moves the per-accumulator interning cost. What it checks
+/// is that the measurement — and the governed outcome at both the boundary and one unit
+/// below it — is the SAME regardless of which real `rayon` thread pool the fold actually
+/// runs under.
+#[test]
+fn within_group_chunk_plan_and_governed_outcome_are_invariant_under_worker_count() {
+    const ROWS: i64 = 4096;
+    const STATE_BOUND: u64 = 64;
+    let dataset = ungrouped_val_dataset(ROWS);
+    let pattern = partial_counter_pattern();
+    let mut registry = AggregateRegistry::new();
+    registry.register(
+        PARTIAL_COUNTER_IRI,
+        Arc::new(PartialCounterAggregate {
+            state_bound: STATE_BOUND,
+        }),
+    );
+
+    let measured = run_aggregate_answer(
+        &pattern,
+        &dataset,
+        Some(&registry),
+        &QueryGovernors::METERED,
+        "partials",
+    );
+    assert_eq!(measured.tripped, None, "the measuring run must complete");
+    assert_eq!(measured.rows, 1, "one implicit group, no GROUP BY");
+    let chunk_count: usize = measured
+        .answer
+        .as_deref()
+        .expect("the measuring run must produce a bound answer")
+        .parse()
+        .expect("the partial counter's answer is an integer");
+    assert_eq!(
+        chunk_count,
+        crate::parallel::planned_aggregate_chunk_count(usize::try_from(ROWS).unwrap()),
+        "the answer must match the production chunk planner exactly"
+    );
+    assert!(
+        chunk_count > 1,
+        "the parallel fold must still actually run in parallel: a future change that \
+         silently serialized the within-group fold would report a partial count of 1 and \
+         this assertion is what catches it"
+    );
+
+    let boundary = measured.scratch_bytes;
+    assert!(
+        boundary > 0,
+        "the fixture must actually cost scratch bytes, or a boundary of 0 proves nothing"
+    );
+
+    for (ceiling, band) in [(boundary, "boundary"), (boundary - 1, "over-bound")] {
+        let governors = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(ceiling);
+        let mut observed: Vec<(usize, AggregateAnswer)> = Vec::new();
+        for threads in [1_usize, 2, 8, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("building a fixed-size pool");
+            let answer = pool.install(|| {
+                assert_eq!(
+                    rayon::current_num_threads(),
+                    threads,
+                    "the pool must actually be the size this iteration asked for"
+                );
+                run_aggregate_answer(&pattern, &dataset, Some(&registry), &governors, "partials")
+            });
+            observed.push((threads, answer));
+        }
+
+        let (_, first) = &observed[0];
+        if band == "boundary" {
+            assert_eq!(
+                first.tripped, None,
+                "the boundary ceiling must admit the whole fold"
+            );
+            assert_eq!(first.rows, 1);
+            assert_eq!(
+                first.answer.as_deref(),
+                Some(chunk_count.to_string().as_str())
+            );
+        } else {
+            assert!(
+                first.tripped.is_some(),
+                "one unit below the boundary must trip"
+            );
+        }
+        for (threads, answer) in &observed {
+            assert_eq!(
+                answer, first,
+                "{band}: the governed outcome moved at {threads} worker(s) — the within-group \
+                 chunk plan (hence its charge, hence its answer) must be a pure function of \
+                 the group's row count, never of the machine"
+            );
+        }
+    }
+}
+
+/// An `OrderDependent` custom aggregate (SPARQL 1.2's `FIRST`) folded under REAL `rayon`
+/// thread pools pinned at 1, 2, 8 and 32 threads — no `force_parallel_for_test`/
+/// `force_chunk_size_for_test` seam engaged, so this exercises the production chunk
+/// planner exactly as a real deployment would, on a fold whose `combine` is order-sensitive
+/// rather than merely order-insensitive-once-summed like `SUM`. `FIRST`'s answer is the
+/// row-order-first value, and it must be that value regardless of the chunk boundaries any
+/// particular thread pool's plan would have produced under the pre-fix, thread-count-keyed
+/// formula.
+#[test]
+fn order_dependent_custom_aggregate_is_byte_identical_under_worker_count() {
+    const ROWS: i64 = 4096;
+    const NS: &str = "http://example.org/agg/";
+    let dataset = ungrouped_val_dataset(ROWS);
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates(NS);
+
+    let pattern = GraphPattern::Group {
+        inner: Box::new(bgp(vec![triple(var("s"), "val", var("val"))])),
+        variables: Vec::new(),
+        aggregates: vec![(
+            Variable::new("first"),
+            AggregateExpression::new(
+                AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}FIRST"))),
+                vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
+                false,
+            )
+            .expect("fixture: valid AggregateExpression"),
+        )],
+    };
+
+    let mut observed: Vec<(usize, AggregateAnswer)> = Vec::new();
+    for threads in [1_usize, 2, 8, 32] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("building a fixed-size pool");
+        let answer = pool.install(|| {
+            run_aggregate_answer(
+                &pattern,
+                &dataset,
+                Some(&registry),
+                &QueryGovernors::METERED,
+                "first",
+            )
+        });
+        observed.push((threads, answer));
+    }
+
+    let (_, first) = &observed[0];
+    assert_eq!(first.tripped, None);
+    assert_eq!(
+        first.answer.as_deref(),
+        Some("0"),
+        "FIRST over row order s0..s4095 is s0's value"
+    );
+    for (threads, answer) in &observed {
+        assert_eq!(
+            answer, first,
+            "FIRST moved at {threads} worker(s): an OrderDependent fold's answer must not \
+             depend on the machine either"
+        );
+    }
+}
+
 /// The type parameter is spelled out in a couple of places above; this keeps the
 /// production id type named so a change to it is a compile error here rather than a
 /// silent change of what these tests cover.

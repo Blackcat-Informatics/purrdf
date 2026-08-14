@@ -104,15 +104,26 @@ pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 /// the parser's chunk geometry, just in item-count terms.
 const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 
-/// The chunk size for a [`par_chunk_map`]/[`par_chunk_try_map_init`] run over
-/// `len` items: aim for roughly four chunks per rayon worker thread, so
-/// work-stealing has enough slices to balance ragged per-item costs (a BGP
-/// pattern whose candidate count varies row to row, a GROUP BY group whose
-/// size varies group to group) without handing every thread only one
-/// coarse-grained slice. Clamped below by [`PARALLEL_MIN_CHUNK_ITEMS`] so a
-/// small-but-still-parallel input (just over [`PARALLEL_MIN_ROWS`]) on a
-/// many-thread machine never degenerates into chunks of a handful of items
-/// each — mirrors the parser's `len / (threads * 4)` geometry.
+/// The chunk size for a [`par_chunk_map`]/[`par_chunk_map_metered`]/
+/// [`par_chunk_try_map_init`]/[`par_retain`] run over `len` items: aim for
+/// roughly four chunks per rayon worker thread, so work-stealing has enough
+/// slices to balance ragged per-item costs (a BGP pattern whose candidate
+/// count varies row to row, a GROUP BY group whose size varies group to
+/// group) without handing every thread only one coarse-grained slice. Clamped
+/// below by [`PARALLEL_MIN_CHUNK_ITEMS`] so a small-but-still-parallel input
+/// (just over [`PARALLEL_MIN_ROWS`]) on a many-thread machine never
+/// degenerates into chunks of a handful of items each — mirrors the parser's
+/// `len / (threads * 4)` geometry.
+///
+/// **Not** used by [`par_chunk_reduce_init`] — see [`aggregate_chunk_size_for`]
+/// for why the within-group aggregate fold needs a chunk plan that does NOT
+/// track the live thread count. Every caller this function DOES serve is safe
+/// to scale with `rayon::current_num_threads()` because none of them folds
+/// chunk-local state back together: [`par_chunk_map`]/[`par_chunk_try_map_init`]/
+/// [`par_retain`] each emit one independent output row per input item (a chunk
+/// boundary changes scheduling, never the result), and [`par_chunk_map_metered`]
+/// charges its governor **per item**, not per chunk (see that function's docs),
+/// so a chunk boundary never moves where a ceiling trips either.
 fn chunk_size_for(len: usize) -> usize {
     #[cfg(test)]
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
@@ -120,6 +131,63 @@ fn chunk_size_for(len: usize) -> usize {
     }
     let threads = rayon::current_num_threads().max(1);
     (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+}
+
+/// The fixed reference parallelism [`aggregate_chunk_size_for`] assumes in place of
+/// `rayon::current_num_threads()`. Chosen, not measured — any constant makes the plan a
+/// pure function of `len`, and this one keeps the chunk COUNT in the same rough range
+/// [`chunk_size_for`]'s live-thread-count formula already produced on a modestly
+/// parallel host, so admission behaviour for an existing deployment does not jump.
+const AGGREGATE_CHUNK_REFERENCE_THREADS: usize = 8;
+
+/// The chunk size for a [`par_chunk_reduce_init`] within-GROUP aggregate fold over `len`
+/// already-DISTINCT-resolved survivor values.
+///
+/// # Why this is a separate function from [`chunk_size_for`]
+///
+/// [`chunk_size_for`] deliberately tracks the live host's `rayon::current_num_threads()`.
+/// That is harmless for its own callers (see its doc comment) because none of them folds
+/// chunk-local state back together. [`par_chunk_reduce_init`] is exactly that: it reduces
+/// every chunk's partial accumulator into one final accumulator through
+/// [`crate::agg_fn::AggregateAccumulator::combine`]/[`crate::modifier`]'s built-in
+/// `BuiltinFold::combine`, strictly in chunk order. That makes the chunk COUNT part of the
+/// observable computation rather than merely its schedule, in two ways
+/// `crate::modifier::eval_custom_aggregate` and `crate::modifier::NumericFold` both rely
+/// on being fixed:
+///
+/// - a custom accumulator's declared [`crate::agg_fn::CustomAggregate::state_bound`] is
+///   charged once per LIVE chunk accumulator (`chunk_count - 1` beyond the first,
+///   admitted separately) — [`par_chunk_reduce_init`] really does collect every chunk's
+///   finished accumulator into one `Vec` before folding them down (see its own doc
+///   comment), so a bigger chunk count is a bigger real peak allocation, not an
+///   approximation of one;
+/// - a bounded-arithmetic fold (`SUM`/`AVG`, or any other accumulator whose `combine` is
+///   not exactly reassociation-proof) sees a different sequence of intermediate values
+///   depending on exactly where the chunk boundaries fall.
+///
+/// A chunk count that tracked `rayon::current_num_threads()` therefore made both the
+/// governor's CHARGE and, for some accumulators, the query's ANSWER depend on the machine
+/// the query happened to run on — the same (query, data, ceiling) triple could be admitted
+/// on a small box and refused on a big one. That is a portability break `.goals`' MAXIMAL
+/// PORTABILITY forbids, so this planner assumes a FIXED reference parallelism
+/// ([`AGGREGATE_CHUNK_REFERENCE_THREADS`]) instead of reading the live thread count: the
+/// chunk size (hence the chunk count, hence the exact `combine` sequence, hence the
+/// charge) becomes a pure function of `len` alone — identical on a 1-thread host, a
+/// 32-thread host, and wasm32 (which has no threads at all, and so already computed
+/// today's formula's `threads == 1` case every time — this makes every OTHER host match
+/// wasm32's plan instead of the other way around).
+///
+/// Real parallelism is unaffected: [`par_chunk_reduce_init`] still hands the resulting
+/// chunks to `rayon::par_chunks`, which work-steals them across however many threads the
+/// host actually has. A fixed PLAN is a fixed grouping of rows into the partials that
+/// execution folds — it says nothing about how many of those partials run concurrently,
+/// which is exactly what a work-stealing scheduler is for.
+fn aggregate_chunk_size_for(len: usize) -> usize {
+    #[cfg(test)]
+    if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
+        return forced.max(1);
+    }
+    (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
 }
 
 std::thread_local! {
@@ -186,15 +254,18 @@ impl Drop for ForceParallelGuard {
 
 #[cfg(test)]
 std::thread_local! {
-    /// Test-only override for [`chunk_size_for`]'s result, so a test can pin an
-    /// exact chunk size (hence an exact chunk count) regardless of
-    /// `rayon::current_num_threads()`, which varies by machine/CI runner.
-    /// Never consulted outside `cfg(test)`.
+    /// Test-only override for [`chunk_size_for`]'s AND [`aggregate_chunk_size_for`]'s
+    /// result, so a test can pin an exact chunk size (hence an exact chunk count)
+    /// regardless of `rayon::current_num_threads()` (which varies by machine/CI runner)
+    /// or of [`AGGREGATE_CHUNK_REFERENCE_THREADS`]. Shared between the two functions
+    /// rather than given a second cell, because a test that wants an exact chunk count
+    /// never cares which of the two chunked primitives it is pinning. Never consulted
+    /// outside `cfg(test)`.
     static FORCE_CHUNK_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Force [`chunk_size_for`] to always return `size` for the current thread
-/// until the returned guard is dropped (restores the prior override).
+/// Force [`chunk_size_for`] and [`aggregate_chunk_size_for`] to always return `size` for
+/// the current thread until the returned guard is dropped (restores the prior override).
 /// Test-only — lets a test span an exact number of chunks deterministically.
 #[cfg(test)]
 #[must_use]
@@ -216,23 +287,26 @@ impl Drop for ForceChunkSizeGuard {
     }
 }
 
-/// The exact number of chunks a [`par_chunk_try_map_init`]/[`par_chunk_reduce_init`]
-/// call over `len` items will actually create: `1` when [`should_parallelize`]
-/// declines (the sequential fallback — `init` runs exactly once), else
-/// `len.div_ceil(chunk_size_for(len))`.
+/// The exact number of chunks a [`par_chunk_reduce_init`] call over `len` items will
+/// actually create: `1` when [`should_parallelize`] declines (the sequential fallback —
+/// `init` runs exactly once), else `len.div_ceil(aggregate_chunk_size_for(len))`.
 ///
-/// Exposed so a caller that must METER a per-chunk cost BEFORE folding — a
-/// custom aggregate's declared per-accumulator [`crate::agg_fn::CustomAggregate::state_bound`],
-/// charged once per accumulator chunking actually creates — charges the exact
-/// count rather than an estimate that could drift from what
-/// [`par_chunk_reduce_init`] does at runtime (both read the same
-/// [`should_parallelize`]/`chunk_size_for` pair, so there is only one source
-/// of truth for "how many chunks").
-pub(crate) fn planned_chunk_count(len: usize) -> usize {
+/// Exposed so a caller that must METER a per-chunk cost BEFORE folding — a custom
+/// aggregate's declared per-accumulator [`crate::agg_fn::CustomAggregate::state_bound`],
+/// charged once per accumulator chunking actually creates — charges the exact count
+/// rather than an estimate that could drift from what [`par_chunk_reduce_init`] does at
+/// runtime (both read the same [`should_parallelize`]/[`aggregate_chunk_size_for`] pair,
+/// so there is only one source of truth for "how many chunks"). Named for the ONE caller
+/// of [`par_chunk_reduce_init`] this crate has — the within-group aggregate fold — rather
+/// than generically: [`aggregate_chunk_size_for`]'s doc comment is where the reasoning for
+/// a fixed, host-independent plan lives, and this function must never drift onto
+/// [`chunk_size_for`]'s live-thread-count formula, which every OTHER fork-join primitive
+/// still correctly uses.
+pub(crate) fn planned_aggregate_chunk_count(len: usize) -> usize {
     if !should_parallelize(len) {
         return 1;
     }
-    len.div_ceil(chunk_size_for(len))
+    len.div_ceil(aggregate_chunk_size_for(len))
 }
 
 /// Whether a batch of `work_items` (rows, groups, branches) should run in
@@ -917,6 +991,10 @@ where
 /// folds each chunk independently and the results are reduced in chunk order.
 /// `items.is_empty()` is `init()`'s state with no `step` at all, exactly the
 /// same empty-group answer either branch gives.
+///
+/// The chunk size is [`aggregate_chunk_size_for`], NOT [`chunk_size_for`] — see the
+/// former's doc comment for why this one primitive needs a chunk plan that is a pure
+/// function of `items.len()` rather than of the live host's thread count.
 pub(crate) fn par_chunk_reduce_init<T, S>(
     items: &[T],
     init: impl Fn() -> Result<S, EvalError> + Sync,
@@ -937,7 +1015,7 @@ where
 
     use rayon::prelude::*;
 
-    let size = chunk_size_for(items.len());
+    let size = aggregate_chunk_size_for(items.len());
     let per_chunk: Vec<Result<S, EvalError>> = items
         .par_chunks(size)
         .map(|chunk| {

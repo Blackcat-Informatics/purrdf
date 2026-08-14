@@ -85,6 +85,23 @@
 //! invocation charge, many accumulation charges) — the same isolating-pair shape the
 //! relation lane uses, for the same reason.
 //!
+//! Every case above names the built-in `SUM`. `Source::Aggregate` wires a registered
+//! [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead
+//! ([`registered_custom_aggregate`]), through `QueryOptions::aggregates` — the one seam
+//! `explain_query`/`explain_query_with_property_functions` cannot express (there is no
+//! `explain_query_with_aggregates`: see `NativeSparqlEngine::explain_for`'s doc comment in
+//! the evaluator crate), so a `Source::Aggregate` case carries no `.charges` decomposition,
+//! only `.answer`/`.spend`/`.metered` like an ordinary band. `aggregate-custom-fuel-*` folds
+//! the SAME group shape `aggregate-accumulation-*` does through the custom path instead of
+//! the built-in one, so the two lanes' fuel is directly comparable
+//! ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]).
+//! `aggregate-custom-scratch-bytes-*` bands the ONE dimension no built-in aggregate ever
+//! charges at all — [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound)
+//! — over a group large enough to cross the within-group chunk threshold, freezing the claim
+//! that this charge (and the fold's answer) is a pure function of the group's row count,
+//! never of the host's thread count
+//! (see [`the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state`]).
+//!
 //! # The parallel drive
 //!
 //! One relation pair drives more rows than `parallel::PARALLEL_MIN_ROWS`, so the BGP
@@ -124,7 +141,8 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, CancellationFlag, ChargePoint, EvalError, GovernedOutcome,
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
+    CancellationFlag, ChargePoint, CustomAggregate, EvalError, GovernedOutcome,
     HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
     PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
     QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
@@ -150,8 +168,16 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 /// joint lane apart — invocation-isolating, row-isolating, and the parallel drive, a
 /// boundary and an over-bound each (6) — plus the two aggregate lanes that isolate
 /// `aggregate-invocation` and `aggregate-accumulation` from each other, a boundary and an
-/// over-bound each (4).
-const REQUIRED_BAND_CASES: usize = 31;
+/// over-bound each (4) — plus the two `Source::Aggregate` lanes that exercise the CUSTOM
+/// path those four never touch: `aggregate-custom-fuel-*`, the same group shape as
+/// `aggregate-accumulation-*` but folded through a registered
+/// [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead of the built-in `SUM`,
+/// so the two lanes' `.metered` fuel is directly comparable
+/// ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]), and
+/// `aggregate-custom-scratch-bytes-*`, whose 1200-row single implicit group crosses the
+/// within-group chunk threshold and bands the custom accumulator's declared
+/// `ScratchBytes` state bound — a boundary and an over-bound each (4).
+const REQUIRED_BAND_CASES: usize = 35;
 
 /// The driving-row count above which the evaluator's chunk drivers fork.
 ///
@@ -247,9 +273,14 @@ impl StopSpec {
 
 /// Where a case's rows come from, beyond the dataset it loads.
 ///
-/// A third value rather than a second boolean: the two injected seams — a remote endpoint
-/// and a host relation — are the two producers whose bag size an outside party picks, and
-/// a case wires exactly one of them.
+/// A fourth value rather than a third: the injected seams — a remote endpoint, a host
+/// relation, and a host **aggregate** — are the producers whose bag size (or, for the
+/// aggregate, whose per-accumulator retained state) an outside party picks, and a case
+/// wires at most one of them. The aggregate seam needs no per-case sidecar table the way
+/// the transport and relation seams do — see [`registered_custom_aggregate`] — because it
+/// is deterministic by construction (`Volatility::Stable`, a pure fold over its rows'
+/// already-bound argument tuples), so nothing about a run needs to be counted and pinned
+/// beyond what `.answer`/`.spend`/`.metered` already record for every other lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Source {
     /// The dataset and nothing else.
@@ -258,6 +289,9 @@ enum Source {
     Http,
     /// The scripted property-function relation described in `relations.tsv`.
     Relation,
+    /// The registered custom aggregate from [`registered_custom_aggregate`], wired through
+    /// `QueryOptions::aggregates` rather than through an injected graph-pattern seam.
+    Aggregate,
 }
 
 impl Source {
@@ -266,6 +300,7 @@ impl Source {
             "none" => Self::Dataset,
             "http" => Self::Http,
             "relation" => Self::Relation,
+            "aggregate" => Self::Aggregate,
             other => panic!("manifest.tsv line {line}: unknown source {other:?}"),
         }
     }
@@ -274,6 +309,7 @@ impl Source {
         match self {
             Self::Dataset => "none",
             Self::Http => "http",
+            Self::Aggregate => "aggregate",
             Self::Relation => "relation",
         }
     }
@@ -830,6 +866,98 @@ fn responses_for(case: &Case) -> BTreeMap<String, Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
+// The aggregate seam
+// ---------------------------------------------------------------------------
+
+/// The IRI [`registered_custom_aggregate`]'s one entry resolves under.
+///
+/// A fixture IRI under `example.org`, exactly as every other fixture in this corpus is:
+/// the custom-aggregate seam is caller configuration, so the corpus supplies its own
+/// vocabulary rather than depending on one the engine mints.
+const AGGREGATE_IRI: &str = "http://example.org/agg/customSum";
+
+/// [`CorpusSumAggregate`]'s declared per-accumulator [`CustomAggregate::state_bound`].
+///
+/// Nonzero on purpose, unlike every built-in fold (whose `state_bound` is always `0` —
+/// see `crate::modifier::BuiltinFold`'s docs in the evaluator crate): the fold itself is
+/// stateless (a running `i64`), so this is a FICTITIOUS bound standing in for the opaque
+/// host state a real custom accumulator (a running median, a per-value histogram) would
+/// actually retain. It exists so the `aggregate-custom-scratch-bytes-*` lane has a real,
+/// nonzero `ScratchBytes` charge to band.
+const AGGREGATE_STATE_BOUND: u64 = 64;
+
+/// A `Commutative` custom `SUM`-alike over a single `xsd:integer`-lexical argument:
+/// `step` parses and adds, and `combine` merges through `other.finish()` because the
+/// running total already IS this accumulator's whole mergeable state (see
+/// [`AggregateAccumulator::combine`]'s doc comment on when that shortcut is sound, in the
+/// evaluator crate). Registered under [`AGGREGATE_IRI`] by every `Source::Aggregate` case
+/// via [`registered_custom_aggregate`].
+struct CorpusSumAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for CorpusSumAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        )))
+    }
+}
+
+struct CorpusSumAggregate;
+
+impl CustomAggregate for CorpusSumAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        AGGREGATE_STATE_BOUND
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(CorpusSumAccumulator { total: 0 })
+    }
+}
+
+/// The registry every `Source::Aggregate` case wires — one entry, [`AGGREGATE_IRI`].
+///
+/// Freshly built per call rather than shared, mirroring [`ScriptedRelation`]'s own
+/// per-observation construction: a governed run must never carry state left over from a
+/// previous one.
+fn registered_custom_aggregate() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register(AGGREGATE_IRI, Arc::new(CorpusSumAggregate));
+    registry
+}
+
+// ---------------------------------------------------------------------------
 // Running a case
 // ---------------------------------------------------------------------------
 
@@ -1026,6 +1154,20 @@ fn observe(
                 request,
                 QueryOptions {
                     property_functions: Some(&registry),
+                    ..QueryOptions::EMPTY
+                },
+                &configured.governors,
+            )
+        }
+        Source::Aggregate => {
+            let registry = registered_custom_aggregate();
+            // Same shape as the relation lane's own comment: the aggregate lane differs
+            // from `Source::Dataset` in exactly one `QueryOptions` field.
+            engine.query_governed(
+                &dataset,
+                request,
+                QueryOptions {
+                    aggregates: Some(&registry),
                     ..QueryOptions::EMPTY
                 },
                 &configured.governors,
@@ -2429,6 +2571,86 @@ fn the_two_aggregate_charge_points_are_banded_separately() {
         let (_, over_bound_ceiling) = over_bound.ceiling.expect("a band case sets a ceiling");
         assert_eq!(over_bound_ceiling, boundary_fuel - 1);
     }
+}
+
+/// The custom-aggregate path's fuel, compared DIRECTLY against the built-in path's over the
+/// identical group shape.
+///
+/// `aggregate-accumulation-*` and `aggregate-custom-*` share one dataset
+/// (`cases/aggregate-accumulation.ttl`, twelve rows, no `GROUP BY`) and differ only in
+/// whether the aggregate expression names the built-in `SUM` or a registered
+/// [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate)
+/// ([`CorpusSumAggregate`]) — `AggregateInvocation`/`AggregateAccumulation` are charged from
+/// the ONE call site in the evaluator that dispatches either kind (see
+/// `crate::modifier::eval_aggregate`'s docs in the evaluator crate), so this corpus's own
+/// in-crate counterpart
+/// (`a_custom_aggregate_spends_the_same_invocation_and_accumulation_fuel_as_a_built_in_over_the_same_group_shape`
+/// in `purrdf_sparql_eval::governor::charge_points`) is not the only place that claim is
+/// checked — it is checked here too, against the FROZEN corpus, so a regression that moved
+/// only the custom path's cost cannot hide behind a green in-crate unit test alone.
+#[test]
+fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    let built_in = case_named(&cases, "aggregate-accumulation-fuel-boundary");
+    let custom = case_named(&cases, "aggregate-custom-fuel-boundary");
+    assert_eq!(
+        built_in.data, custom.data,
+        "the two lanes must share the identical dataset — the fuel comparison means \
+         nothing if the group shape differs"
+    );
+    let built_in_fuel = consumed_in(&read_expected(built_in, "metered"), ResourceDimension::Fuel);
+    let custom_fuel = consumed_in(&read_expected(custom, "metered"), ResourceDimension::Fuel);
+    assert_eq!(
+        built_in_fuel, custom_fuel,
+        "the built-in and custom aggregate paths must cost the SAME fuel over the same \
+         group shape — a regression here is a regression in the custom-aggregate charge \
+         path this corpus otherwise never exercises at all"
+    );
+}
+
+/// The custom-aggregate path's `ScratchBytes` charge is a pure function of the group's row
+/// count — never of the host's thread count.
+///
+/// `aggregate-custom-scratch-bytes-*` drives 1200 rows into ONE implicit group (no
+/// `GROUP BY`), well above the within-group chunk threshold
+/// ([`PARALLEL_FORK_MIN_ROWS`]), through [`CorpusSumAggregate`]'s declared nonzero
+/// [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound). Before
+/// the within-group chunk planner was made a pure function of row count, this exact charge
+/// scaled with `rayon::current_num_threads()`, so the SAME query/data/ceiling triple this
+/// pair pins would admit on one host and refuse on another — see
+/// `purrdf_sparql_eval::parallel::aggregate_chunk_size_for`'s doc comment. Freezing this
+/// pair's boundary and over-bound `ScratchBytes` ceilings turns that host-invariance claim
+/// into something `python3 scripts/check-corpus-frozen.py` (hence CI, on whatever host it
+/// happens to run on) checks on every run, not merely something an in-crate test asserts on
+/// the host that happened to build it.
+#[test]
+fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    let boundary = case_named(&cases, "aggregate-custom-scratch-bytes-boundary");
+    let over_bound = case_named(&cases, "aggregate-custom-scratch-bytes-over-bound");
+    let boundary_bytes = consumed_in(
+        &read_expected(boundary, "metered"),
+        ResourceDimension::ScratchBytes,
+    );
+    assert!(
+        boundary_bytes > 0,
+        "the lane must actually cost scratch bytes, or it bands nothing"
+    );
+    let (dimension, ceiling) = boundary.ceiling.expect("a band case sets a ceiling");
+    assert_eq!(dimension, ResourceDimension::ScratchBytes);
+    assert_eq!(ceiling, boundary_bytes);
+    let (_, over_bound_ceiling) = over_bound.ceiling.expect("a band case sets a ceiling");
+    assert_eq!(over_bound_ceiling, boundary_bytes - 1);
+    assert_eq!(boundary.outcome, "complete");
+    assert_eq!(over_bound.outcome, "budget-exhausted scratch-bytes");
 }
 
 /// The parallel drive lane is genuinely above the evaluator's fork threshold.
