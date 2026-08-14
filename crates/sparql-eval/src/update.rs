@@ -96,7 +96,9 @@ use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
 use crate::engine::{QueryOptions, apply_query_options};
-use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
+use crate::eval::{
+    AdmittedRequest, BgpOrderCache, EvalCtx, StandpointPredicates, admit_version, eval_evaluated,
+};
 use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
@@ -273,15 +275,30 @@ pub trait GraphResolver {
 /// Apply a parsed [`Update`] to `m` in request order.
 ///
 /// Returns `Ok(())` on success and an [`UpdateAbort`] otherwise: a specific
-/// [`RdfDiagnostic`] code on the boundary conditions (`LOAD` with no resolver, a bad re-key
-/// destination, an internal eval error), or the [`TrippedGovernor`] that stopped the
-/// request. `resolver` supplies the `LOAD` host seam (see [`GraphResolver`]); pass `None`
-/// to make any non-`SILENT` `LOAD` a hard error.
+/// [`RdfDiagnostic`] code on the boundary conditions (an unrecognized `VERSION`, `LOAD`
+/// with no resolver, a bad re-key destination, an internal eval error), or the
+/// [`TrippedGovernor`] that stopped the request. `resolver` supplies the `LOAD` host seam
+/// (see [`GraphResolver`]); pass `None` to make any non-`SILENT` `LOAD` a hard error.
 ///
 /// On **either** abort, `m` is left in whatever state the operations reached and is
 /// expected to be dropped rather than frozen — that discard is the request's rollback, and
 /// the module docs explain why it is the whole of it.
-// The in-crate callers are the engine UPDATE seams (`engine::update` and
+///
+/// # This is the update-side `VERSION` admission chokepoint
+///
+/// [`admit_version`] runs FIRST, before `m` is touched at all (not even the blank-mint
+/// counter is initialized yet) and before the operation loop starts: an update whose
+/// prologue names an unrecognized `VERSION` is refused with no mutation applied, exactly
+/// mirroring [`crate::eval::evaluate_query_evaluated`]'s admission of the same declaration
+/// on the query side. This function is the single place every UPDATE entry point converges
+/// on — [`crate::engine::NativeSparqlEngine::update_with_options`] (the ungoverned seam,
+/// which [`crate::engine::NativeSparqlEngine::update`] and the `SparqlEngine::update` trait
+/// impl delegate to) and
+/// [`crate::engine::NativeSparqlEngine::update_governed`] both call it and nothing else —
+/// so admission cannot be bypassed by choosing a different entry point, including the CLI,
+/// the C ABI, wasm, and the Python bindings, all of which route through one of those two
+/// seams.
+// The in-crate callers are the engine UPDATE seams (`engine::update_with_options` and
 // `NativeSparqlEngine::update_governed`).
 pub(crate) fn eval_update(
     update: &Update,
@@ -289,6 +306,8 @@ pub(crate) fn eval_update(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), UpdateAbort> {
+    admit_version(AdmittedRequest::Update(update))
+        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
     // A single monotonic counter threaded across EVERY operation in this request, so
     // a synthetic blank label minted by operation N can never collide with one minted
     // by operation N+1 — even though each operation's own `_:b` → label map starts
@@ -1240,6 +1259,48 @@ mod tests {
         // The base is untouched (the error aborts before any mutation lands here, and
         // the engine seam's branch/freeze guarantees atomicity at the request level).
         assert_eq!(quad_set(&m).len(), 1);
+    }
+
+    // ── VERSION admission ───────────────────────────────────────────────────
+
+    #[test]
+    fn unrecognized_version_refused_and_leaves_dataset_unchanged() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let code = failure_code(
+            eval_update(
+                &parse("VERSION \"9.9\" INSERT DATA { ex:x ex:y ex:z }"),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-update-eval");
+        // The chokepoint runs before the blank-mint counter is even initialized, let
+        // alone before any operation applies — the store must be exactly what it was.
+        assert_eq!(quad_set(&m), before, "no mutation applied");
+    }
+
+    #[test]
+    fn recognized_versions_still_apply() {
+        for version in ["1.2", "1.2-basic"] {
+            let mut m = mut_with(&[]);
+            let cache = BgpOrderCache::default();
+            let cfg = ungoverned(&cache);
+            eval_update(
+                &parse(&format!(
+                    "VERSION \"{version}\" INSERT DATA {{ ex:x ex:y ex:z }}"
+                )),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_or_else(|_| panic!("VERSION {version:?} must apply"));
+            assert_eq!(quad_set(&m).len(), 1);
+        }
     }
 
     // ── LOAD ─────────────────────────────────────────────────────────────────

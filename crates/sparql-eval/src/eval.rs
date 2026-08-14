@@ -28,7 +28,8 @@ use purrdf_core::{
     ViewTermId,
 };
 use purrdf_sparql_algebra::{
-    GraphPattern, NamedNodePattern, Query, SparqlVersion, TermPattern, TriplePattern, Variable,
+    GraphPattern, NamedNodePattern, Query, SparqlVersion, TermPattern, TriplePattern, Update,
+    Variable,
 };
 
 use crate::DetHashMap;
@@ -2083,6 +2084,59 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut E
     }
 }
 
+/// What is being admitted at the `VERSION` boundary: a full query or an update
+/// request. Both [`Query`] and [`Update`] carry an optional [`SparqlVersion`]
+/// declared by their prologue (last-wins across repeated declarations); this is the
+/// one type [`admit_version`] reads, so there is one admission function rather than
+/// a query-shaped copy and an update-shaped copy of the same check.
+///
+/// Carrying the parsed request itself — not merely its declared version string — is
+/// deliberate: a future SPARQL 1.2 Basic-profile admission check must inspect the
+/// *algebra* a `VERSION "1.2-basic"` request declared over (a query pattern or an
+/// update's operations), and this seam already hands `admit_version` that algebra
+/// for both request shapes, so the profile check can land inside `admit_version`
+/// once and apply to queries and updates alike instead of being wired twice.
+#[derive(Clone, Copy)]
+pub(crate) enum AdmittedRequest<'a> {
+    /// A parsed query, admitted before [`evaluate_query_evaluated`] walks it.
+    Query(&'a Query),
+    /// A parsed update request, admitted before `crate::update::eval_update`
+    /// applies it.
+    Update(&'a Update),
+}
+
+impl AdmittedRequest<'_> {
+    /// The request's `VERSION` declaration, if its prologue declared one.
+    fn version(&self) -> Option<&SparqlVersion> {
+        match self {
+            Self::Query(query) => query.version(),
+            Self::Update(update) => update.version(),
+        }
+    }
+}
+
+/// Admit a parsed request's `VERSION` declaration (SPARQL 1.2 Query specification
+/// §4.4) — the SOLE enforcement site for both the query evaluator
+/// ([`evaluate_query_evaluated`]) and the update evaluator
+/// (`crate::update::eval_update`), so a request that names an unrecognized version
+/// is refused identically regardless of which evaluator would otherwise run it.
+///
+/// Parsing is syntax-only for `VERSION` (see [`SparqlVersion`]): any string parses.
+/// Evaluation is the admission boundary — a version this evaluator does not
+/// recognize names a spec it does not know how to honor, so admitting it would
+/// silently evaluate (or, for an update, silently *mutate*) under the wrong (or
+/// unknown) semantics. [`SparqlVersion::V12`]/[`SparqlVersion::V12Basic`] fall
+/// through and evaluate normally on the full engine (`1.2-basic` is a subset of
+/// `1.2`; this evaluator does not yet enforce that narrower profile).
+pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalError> {
+    if let Some(SparqlVersion::Other(raw)) = request.version() {
+        return Err(EvalError::unsupported(format!(
+            "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
+        )));
+    }
+    Ok(())
+}
+
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
@@ -2100,18 +2154,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    if let Some(SparqlVersion::Other(raw)) = query.version() {
-        // Parsing is syntax-only for `VERSION` (see `SparqlVersion`): any string
-        // parses. Evaluation is the admission boundary — a version this evaluator
-        // does not recognize names a spec it does not know how to honor, so
-        // admitting it would silently evaluate under the wrong (or unknown)
-        // semantics. `V12`/`V12Basic` fall through and evaluate normally on the
-        // full engine (`1.2-basic` is a subset of `1.2`; this evaluator does not
-        // yet enforce that narrower profile).
-        return Err(EvalError::unsupported(format!(
-            "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
-        )));
-    }
+    admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Criterion and differential tests can hold the operation on the sequential branch;
     // production keeps the ordered parallel fold. The guard is operation-scoped so every

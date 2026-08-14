@@ -44,18 +44,21 @@ use crate::ast::{
 ///
 /// # What evaluation does with each
 ///
-/// Recognition is enforced at evaluation ADMISSION, not at parse time (see
-/// `purrdf-sparql-eval`'s query-evaluation entry point):
+/// Recognition is enforced at evaluation ADMISSION, not at parse time — by
+/// `purrdf-sparql-eval`'s `admit_version`, the ONE function both the query-evaluation
+/// entry point and the update-evaluation entry point call, so a query and an UPDATE
+/// declaring the same unrecognized version are refused identically (an UPDATE's
+/// refusal, in particular, applies no mutation):
 ///
 /// - [`Self::V12`] and [`Self::V12Basic`] evaluate normally on the full engine.
 ///   `1.2-basic` is a subset of `1.2` (the SPARQL 1.2 Query specification's
 ///   Basic profile drops a handful of full-profile features); this evaluator
-///   does not yet enforce that narrower subset, so a `1.2-basic` query runs
+///   does not yet enforce that narrower subset, so a `1.2-basic` request runs
 ///   exactly as a `1.2` one would.
 /// - [`Self::Other`] is refused at admission with a typed error naming the
 ///   declared version — an unrecognized `VERSION` names a spec this evaluator
-///   does not know how to honor, so admitting it would silently evaluate under
-///   the wrong (or an unknown) semantics.
+///   does not know how to honor, so admitting it would silently evaluate (or,
+///   for an UPDATE, silently mutate) under the wrong (or an unknown) semantics.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SparqlVersion {
     /// `VERSION "1.2"` — the SPARQL 1.2 Query specification, full profile.

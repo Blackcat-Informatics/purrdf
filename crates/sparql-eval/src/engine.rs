@@ -3463,6 +3463,91 @@ mod tests {
     }
 
     #[test]
+    fn update_unrecognized_version_refused_and_applies_nothing() {
+        // The mutating counterpart of the query-side admission refusal
+        // (`crate::eval::tests`, or the query test just above): an UPDATE whose
+        // prologue declares a `VERSION` this evaluator does not recognize must be
+        // refused through the SAME `native-sparql-update-eval` diagnostic code the
+        // WHERE-eval failure tests above use, and — the load-bearing half — must
+        // leave the dataset byte-for-byte unchanged. `Arc::ptr_eq` proves the handle
+        // was never even re-frozen to an equal value.
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        let before = Arc::clone(&ds);
+        let before_quads = quad_set(&ds);
+        let err = engine
+            .update(
+                &mut ds,
+                SparqlRequest {
+                    query: "VERSION \"9.9\" INSERT DATA { <http://ex/x> <http://ex/y> <http://ex/z> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(err.message.contains("VERSION \"9.9\""));
+        assert!(
+            Arc::ptr_eq(&before, &ds),
+            "an unrecognized VERSION must not even re-freeze the dataset"
+        );
+        assert_eq!(quad_set(&ds), before_quads, "no mutation applied");
+    }
+
+    #[test]
+    fn update_governed_unrecognized_version_refused_and_applies_nothing() {
+        // The governed sibling: `update_governed` reports the SAME admission
+        // refusal as an `Err`, not as a `GovernedUpdateOutcome::BudgetExhausted` —
+        // an unrecognized `VERSION` is a request the evaluator does not know how to
+        // honor at all, never a resource ceiling.
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        let before = Arc::clone(&ds);
+        let before_quads = quad_set(&ds);
+        let err = engine
+            .update_governed(
+                &mut ds,
+                SparqlRequest {
+                    query: "VERSION \"9.9\" INSERT DATA { <http://ex/x> <http://ex/y> <http://ex/z> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(err.message.contains("VERSION \"9.9\""));
+        assert!(
+            Arc::ptr_eq(&before, &ds),
+            "an unrecognized VERSION must not even re-freeze the dataset"
+        );
+        assert_eq!(quad_set(&ds), before_quads, "no mutation applied");
+    }
+
+    #[test]
+    fn update_recognized_versions_still_execute() {
+        // Both spellings this evaluator recognizes must run exactly as an
+        // undeclared-version UPDATE would — admission only refuses `Other`.
+        for version in ["1.2", "1.2-basic"] {
+            let engine = NativeSparqlEngine::new();
+            let mut ds = empty();
+            update(
+                &engine,
+                &mut ds,
+                &format!(
+                    "VERSION \"{version}\" INSERT DATA {{ <http://ex/x> <http://ex/y> <http://ex/z> }}"
+                ),
+            );
+            assert_eq!(
+                ds.quad_count(),
+                1,
+                "VERSION {version:?} must evaluate the update normally"
+            );
+        }
+    }
+
+    #[test]
     fn engine_has_no_resolver_by_default() {
         assert!(NativeSparqlEngine::new().resolver.is_none());
         assert!(NativeSparqlEngine::default().resolver.is_none());
