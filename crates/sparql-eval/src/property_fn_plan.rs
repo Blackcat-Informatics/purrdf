@@ -711,7 +711,7 @@ fn plan_aggregate(
             )));
         };
         let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)?;
-        let supplied = aggregate.args.len();
+        let supplied = aggregate.args().len();
         if !declared.accepts(supplied) {
             return Err(EvalError::function(format!(
                 "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call \
@@ -719,16 +719,21 @@ fn plan_aggregate(
             )));
         }
     }
-    Ok(AggregateExpression {
-        function: aggregate.function.clone(),
-        args: aggregate
-            .args
-            .iter()
-            .map(|e| plan_expression(e, relations, agg_registry, outer))
-            .collect::<Result<Vec<_>, EvalError>>()?,
-        scalarvals: aggregate.scalarvals.clone(),
-        distinct: aggregate.distinct,
-    })
+    let args = aggregate
+        .args()
+        .iter()
+        .map(|e| plan_expression(e, relations, agg_registry, outer))
+        .collect::<Result<Vec<_>, EvalError>>()?;
+    // `plan_expression` rewrites each argument in place and never changes the
+    // argument COUNT, so this can never turn a valid `aggregate` into an
+    // invalid one — the `AggregateExpression::new` call below cannot fail.
+    Ok(AggregateExpression::new(
+        aggregate.function.clone(),
+        args,
+        aggregate.scalarvals.clone(),
+        aggregate.distinct,
+    )
+    .expect("plan_expression preserves argument count, so arity stays valid"))
 }
 
 // ---------------------------------------------------------------------------

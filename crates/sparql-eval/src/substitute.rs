@@ -449,16 +449,16 @@ fn substitute_in_aggregate(
     agg: AggregateExpression,
     expr_subs: &HashMap<String, Option<Expression>>,
 ) -> AggregateExpression {
-    AggregateExpression {
-        function: agg.function,
-        args: agg
-            .args
-            .into_iter()
-            .map(|e| substitute_in_expression(e, expr_subs))
-            .collect(),
-        scalarvals: agg.scalarvals,
-        distinct: agg.distinct,
-    }
+    let (function, args, scalarvals, distinct) = agg.into_parts();
+    let args = args
+        .into_iter()
+        .map(|e| substitute_in_expression(e, expr_subs))
+        .collect();
+    // `substitute_in_expression` rewrites each argument in place and never
+    // changes the argument COUNT, so this can never turn a valid `agg` into
+    // an invalid one.
+    AggregateExpression::new(function, args, scalarvals, distinct)
+        .expect("substitution preserves argument count, so arity stays valid")
 }
 
 /// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).

@@ -845,10 +845,16 @@ fn eval_aggregate<D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    // `COUNT(*)` is the spec's empty exprlist: count rows (or distinct rows),
-    // never evaluating an expression at all — the only aggregate an empty
-    // `exprlist` can name (see `AggregateExpression::args`'s docs).
-    let Some(first_arg) = agg.args.first() else {
+    // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
+    // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
+    // that can ever carry one — so dispatch reads `agg.function` itself
+    // rather than asking whether `args` is empty. A zero-arity custom
+    // aggregate cannot reach this arm by accident and fall through to a row
+    // count: it cannot be constructed at all, and even if some future
+    // registry made one legal, matching on the function name here (not on
+    // `args.is_empty()`) means it would hit the `Custom` dispatch below, not
+    // this one.
+    if matches!(agg.function, AggregateFunction::Count) && agg.args().is_empty() {
         // Every row is a value `COUNT(*)` folds, whether or not `DISTINCT` keeps
         // it — see [`ChargePoint::AggregateAccumulation`]'s doc for why the
         // charge precedes the dedup check. An explicit loop, rather than
@@ -869,15 +875,26 @@ fn eval_aggregate<D: DatasetView + Sync>(
             count += 1;
         }
         return Ok(Some(integer_term(ctx, count)));
-    };
+    }
 
     if let AggregateFunction::Custom(iri) = &agg.function {
         return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
     }
 
-    // Every built-in aggregate other than `COUNT(*)` is unary — only this one
-    // argument expression is ever evaluated.
-    //
+    // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
+    // `MAX`/`SAMPLE`/`GROUP_CONCAT`, every one of them unary — only this one
+    // argument expression is ever evaluated. The `COUNT`+empty-`args` case
+    // returned above already, and `AggregateExpression::new` forbids empty
+    // `args` for anything else, so `first()` never actually returns `None`
+    // here — this is a genuinely unreachable state, not a defensive
+    // fallback.
+    let Some(first_arg) = agg.args().first() else {
+        unreachable!(
+            "AggregateExpression::new forbids an empty `args` for every function other than \
+             COUNT, and the COUNT-with-empty-args case is handled above"
+        )
+    };
+
     // Phase 1 (sequential, UNCHANGED from before within-group chunking):
     // evaluate every row's argument expression against `ctx`, charge
     // `AggregateAccumulation` for each one, and apply `DISTINCT`. This is
@@ -985,12 +1002,12 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // phase-1 comment for why this keeps charge spend a pure function of
     // `idxs`/`ctx` regardless of what phase 2 below does.
     let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
-    let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args.len());
+    let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args().len());
     let mut survivors: Vec<Vec<TermValue>> = Vec::new();
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
-        for expression in &agg.args {
+        for expression in agg.args() {
             let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
@@ -1708,12 +1725,8 @@ mod tests {
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: Vec::new(),
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
+                    .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -1758,12 +1771,13 @@ mod tests {
             variables: vec![Variable::new("t")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: true,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    true,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -1814,12 +1828,8 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: Vec::new(),
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
+                    .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -1842,12 +1852,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
-                AggregateExpression {
-                    function: AggregateFunction::Min,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Min,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group_min, &mut ctx).expect("min");
@@ -1883,12 +1894,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression {
-                    function: AggregateFunction::Sum,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum");
@@ -1926,12 +1938,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression {
-                    function: AggregateFunction::Sum,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum decimal");
@@ -1959,12 +1972,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression {
-                    function: AggregateFunction::Sum,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum empty");
@@ -1994,12 +2008,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
-                AggregateExpression {
-                    function: AggregateFunction::Sum,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum non-numeric");
@@ -2042,12 +2057,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
-                AggregateExpression {
-                    function: AggregateFunction::Avg,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Avg,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("avg");
@@ -2074,12 +2090,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
-                AggregateExpression {
-                    function: AggregateFunction::Avg,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Avg,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("avg empty");
@@ -2119,12 +2136,13 @@ mod tests {
             variables: vec![Variable::new("who")],
             aggregates: vec![(
                 Variable::new("total"),
-                AggregateExpression {
-                    function: AggregateFunction::Sum,
-                    args: vec![Expression::Variable(Variable::new("n"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group sum");
@@ -2285,30 +2303,33 @@ mod tests {
             aggregates: vec![
                 (
                     Variable::new("cnt"),
-                    AggregateExpression {
-                        function: AggregateFunction::Count,
-                        args: Vec::new(),
-                        scalarvals: Vec::new(),
-                        distinct: false,
-                    },
+                    AggregateExpression::new(
+                        AggregateFunction::Count,
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("fixture: valid AggregateExpression"),
                 ),
                 (
                     Variable::new("avg"),
-                    AggregateExpression {
-                        function: AggregateFunction::Avg,
-                        args: vec![Expression::Variable(Variable::new("val"))],
-                        scalarvals: Vec::new(),
-                        distinct: false,
-                    },
+                    AggregateExpression::new(
+                        AggregateFunction::Avg,
+                        vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("fixture: valid AggregateExpression"),
                 ),
                 (
                     Variable::new("mx"),
-                    AggregateExpression {
-                        function: AggregateFunction::Max,
-                        args: vec![Expression::Variable(Variable::new("val"))],
-                        scalarvals: Vec::new(),
-                        distinct: false,
-                    },
+                    AggregateExpression::new(
+                        AggregateFunction::Max,
+                        vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("fixture: valid AggregateExpression"),
                 ),
             ],
         };
@@ -2378,24 +2399,26 @@ mod tests {
             aggregates: vec![
                 (
                     Variable::new("g"),
-                    AggregateExpression {
-                        function: AggregateFunction::GroupConcat,
-                        args: vec![Expression::Variable(Variable::new("val"))],
-                        scalarvals: vec![(
+                    AggregateExpression::new(
+                        AggregateFunction::GroupConcat,
+                        vec![Expression::Variable(Variable::new("val"))],
+                        vec![(
                             "separator".to_owned(),
                             purrdf_sparql_algebra::Literal::new_simple(","),
                         )],
-                        distinct: false,
-                    },
+                        false,
+                    )
+                    .expect("fixture: valid AggregateExpression"),
                 ),
                 (
                     Variable::new("mx"),
-                    AggregateExpression {
-                        function: AggregateFunction::Max,
-                        args: vec![Expression::Variable(Variable::new("val"))],
-                        scalarvals: Vec::new(),
-                        distinct: false,
-                    },
+                    AggregateExpression::new(
+                        AggregateFunction::Max,
+                        vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("fixture: valid AggregateExpression"),
                 ),
             ],
         };
@@ -2477,15 +2500,16 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
-                AggregateExpression {
-                    function: AggregateFunction::GroupConcat,
-                    args: vec![Expression::Variable(Variable::new("val"))],
-                    scalarvals: vec![(
+                AggregateExpression::new(
+                    AggregateFunction::GroupConcat,
+                    vec![Expression::Variable(Variable::new("val"))],
+                    vec![(
                         "separator".to_owned(),
                         purrdf_sparql_algebra::Literal::new_simple(","),
                     )],
-                    distinct: true,
-                },
+                    true,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
 
@@ -2615,14 +2639,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
-                AggregateExpression {
-                    function: AggregateFunction::Custom(NamedNode::new_unchecked(
-                        LIST_COLLECTOR_IRI,
-                    )),
-                    args: vec![Expression::Variable(Variable::new("val"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Custom(NamedNode::new_unchecked(LIST_COLLECTOR_IRI)),
+                    vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
 
@@ -2682,14 +2705,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
-                AggregateExpression {
-                    function: AggregateFunction::Custom(NamedNode::new_unchecked(format!(
-                        "{NS}FIRST"
-                    ))),
-                    args: vec![Expression::Variable(Variable::new("val"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}FIRST"))),
+                    vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
 
@@ -2755,12 +2777,13 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
-                AggregateExpression {
-                    function: AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
-                    args: vec![Expression::Variable(Variable::new("val"))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
+                    vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let run = |forced: bool, chunk: usize| {
@@ -2932,20 +2955,19 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
-                AggregateExpression {
-                    function: AggregateFunction::Custom(NamedNode::new_unchecked(format!(
-                        "{NS}TOPK"
-                    ))),
-                    args: vec![
+                AggregateExpression::new(
+                    AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}TOPK"))),
+                    vec![
                         Expression::Variable(Variable::new("val")),
                         Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
                             "3",
                             NamedNode::new_unchecked(XINT),
                         )),
                     ],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
 

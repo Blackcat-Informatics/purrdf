@@ -753,13 +753,15 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
         } => {
             names.extend(variables.iter().map(|v| v.as_str().to_owned()));
             for (_, aggregate) in aggregates {
-                if aggregate.args.is_empty() {
-                    // `COUNT(*)` — the spec's empty exprlist. It names no variable and
-                    // returns row MULTIPLICITY, which every variable of the grouped
-                    // pattern contributes to — so all of them are observable through it.
+                if aggregate.args().is_empty() {
+                    // `COUNT(*)` — the spec's empty exprlist, and (per
+                    // `AggregateExpression::new`'s invariant) the ONLY aggregate that
+                    // can ever have an empty `args`. It names no variable and returns
+                    // row MULTIPLICITY, which every variable of the grouped pattern
+                    // contributes to — so all of them are observable through it.
                     collect_all_variables(inner, names);
                 } else {
-                    for arg in &aggregate.args {
+                    for arg in aggregate.args() {
                         collect_expression_variables(arg, names);
                     }
                 }

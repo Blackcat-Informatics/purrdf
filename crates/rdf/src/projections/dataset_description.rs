@@ -361,7 +361,7 @@ fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
             pattern_reaches_non_reproducible_builtin(inner)
                 || aggregates.iter().any(|(_, aggregate)| {
                     aggregate
-                        .args
+                        .args()
                         .iter()
                         .any(expression_reaches_non_reproducible_builtin)
                 })

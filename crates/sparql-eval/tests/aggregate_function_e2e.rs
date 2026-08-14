@@ -698,3 +698,110 @@ fn statistical_aggregates_are_deterministic_at_parallel_scale() {
         "the parallel-eligible path must be deterministic across runs"
     );
 }
+
+// ── zero-arity custom aggregate: unrepresentable, so it can never row-count ────
+
+/// A `CustomAggregate` whose declared [`Arity`] admits ZERO arguments and whose
+/// `finish` returns a sentinel utterly unlike a row count (`-999`), so if this
+/// accumulator's `init`/`step`/`finish` ever ran in place of a row count, this
+/// value — not the group's cardinality — would come back.
+///
+/// It never gets the chance: `AGG(<iri>)` (zero positional args) is refused at
+/// PARSE time (`parse_agg_call`'s "one or more" rule), and even a caller who
+/// skips the SPARQL parser entirely and builds the algebra by hand cannot
+/// construct the `AggregateExpression` this accumulator would need —
+/// [`purrdf_sparql_algebra::AggregateExpression::new`] refuses an empty `args`
+/// for anything but `COUNT`. A registry is free to declare `Arity::Exact(0)`
+/// (checked below), but that declaration can never be exercised: the call site
+/// that would supply zero arguments cannot exist as a value.
+struct ZeroArityAggregate;
+
+impl AggregateAccumulator for ZeroArityAggregate {
+    fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
+        panic!("a zero-arity custom aggregate can never be constructed, so `step` can never run");
+    }
+
+    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
+        panic!(
+            "a zero-arity custom aggregate can never be constructed, so `combine` can never run"
+        );
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal("-999", XSD_INTEGER)))
+    }
+}
+
+impl CustomAggregate for ZeroArityAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(0)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(Self)
+    }
+}
+
+/// The gap the shipped CLI actually hit: `SUM(*)`/`AVG(*)`/… silently
+/// answered a GROUP's ROW COUNT instead of erroring or running the named
+/// function, because the evaluator used to decide "this is `COUNT(*)`" by
+/// asking whether `args` was empty rather than by reading `function`. The same
+/// shape applied to a registered zero-arity [`CustomAggregate`]: nothing kept
+/// `AggregateFunction::Custom` with an empty `args` from existing, so it too
+/// would have hit the row-count branch and silently bypassed the registry
+/// (and its state-bound metering) entirely.
+///
+/// This proves that hole is closed at the type level, not merely patched at
+/// the one call site the regression was found in: a registry that declares a
+/// custom aggregate's arity as `Arity::Exact(0)` — legal on its own terms —
+/// still cannot be reached, because no `AggregateExpression` naming it with an
+/// empty `args` can ever be built, from inside `purrdf-sparql-eval` or out.
+#[test]
+fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_counts() {
+    const ZERO_ARITY_IRI: &str = "http://example.org/agg#zeroArity";
+    let mut reg = registry();
+    reg.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
+    // The registry itself is untroubled by the zero-arity declaration.
+    assert!(reg.resolve(ZERO_ARITY_IRI).is_some());
+
+    // The SPARQL surface refuses `AGG(<iri>)` with no positional arguments —
+    // this is `crates/sparql-algebra`'s own `agg_call_requires_at_least_one_argument`
+    // pinned again here, from the public evaluator entry point, against a
+    // registry that WOULD happily run the call if it were ever handed one.
+    let engine = NativeSparqlEngine::new();
+    let query = format!("SELECT (AGG(<{ZERO_ARITY_IRI}>) AS ?x) WHERE {{ ?s <{EX}val> ?v }}");
+    engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect_err("AGG(<iri>) with zero positional args is a hard parse-time syntax error");
+
+    // And even bypassing the SPARQL parser entirely — building the algebra node
+    // directly, as an embedder driving `purrdf-sparql-eval` as a library would —
+    // the checked constructor refuses the same shape: there is no way, anywhere
+    // in this crate's public surface, to build an `AggregateExpression` naming
+    // `AggregateFunction::Custom` with an empty `args`.
+    let err = purrdf_sparql_algebra::AggregateExpression::new(
+        purrdf_sparql_algebra::AggregateFunction::Custom(
+            purrdf_sparql_algebra::NamedNode::new_unchecked(ZERO_ARITY_IRI),
+        ),
+        Vec::new(),
+        Vec::new(),
+        false,
+    )
+    .expect_err("a zero-arity Custom aggregate must be unrepresentable, registry or not");
+    assert!(matches!(
+        err.function(),
+        purrdf_sparql_algebra::AggregateFunction::Custom(iri) if iri.as_str() == ZERO_ARITY_IRI
+    ));
+}

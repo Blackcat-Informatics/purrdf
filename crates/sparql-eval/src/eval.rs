@@ -907,7 +907,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         &self,
         agg: &purrdf_sparql_algebra::AggregateExpression,
     ) -> bool {
-        if !agg.args.iter().all(|e| self.may_fork_row_loop(e)) {
+        if !agg.args().iter().all(|e| self.may_fork_row_loop(e)) {
             return false;
         }
         if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = &agg.function {

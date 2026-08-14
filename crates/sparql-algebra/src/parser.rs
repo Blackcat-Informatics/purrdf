@@ -2940,7 +2940,7 @@ impl<'a> Parser<'a, '_> {
         let upper = name.to_ascii_uppercase();
         // Aggregates lift to a synthetic Group variable.
         if let Some(func) = aggregate_function(&upper) {
-            return self.parse_aggregate(func, aggs);
+            return self.parse_aggregate(func, &upper, aggs);
         }
         // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate surface;
         // also lifts to a synthetic Group variable, exactly like a named built-in
@@ -3019,6 +3019,7 @@ impl<'a> Parser<'a, '_> {
     fn parse_aggregate(
         &mut self,
         func: AggregateFunction,
+        name: &str,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
         self.pos += 1; // function name
@@ -3029,13 +3030,22 @@ impl<'a> Parser<'a, '_> {
         // unreachable).
         let distinct = self.eat_kw("DISTINCT");
         let agg = if self.eat(&Token::Star) {
-            // COUNT(*) / COUNT(DISTINCT *): the spec's empty exprlist.
-            AggregateExpression {
-                function: func,
-                args: Vec::new(),
-                scalarvals: Vec::new(),
-                distinct,
+            // `*` is the spec's empty exprlist, and the grammar admits it in
+            // exactly one production: `Count` (SPARQL 1.1 §18.5.1 / SPARQL 1.2
+            // §19.8). `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/
+            // `GROUP_CONCAT(*)` — and, symmetrically, a zero-arity custom
+            // aggregate — are hard syntax errors, never a silent row count.
+            if func != AggregateFunction::Count {
+                return Err(ParseError::syntax(
+                    format!(
+                        "`*` is only valid inside COUNT(...); {name} does not accept an empty \
+                         exprlist"
+                    ),
+                    self.span(),
+                ));
             }
+            AggregateExpression::new(func, Vec::new(), Vec::new(), distinct)
+                .expect("COUNT accepts an empty exprlist")
         } else {
             let inner = self.parse_expression()?;
             let mut scalarvals = Vec::new();
@@ -3044,12 +3054,8 @@ impl<'a> Parser<'a, '_> {
             {
                 scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
             }
-            AggregateExpression {
-                function: func,
-                args: vec![inner],
-                scalarvals,
-                distinct,
-            }
+            AggregateExpression::new(func, vec![inner], scalarvals, distinct)
+                .expect("a one-element args list is always a valid AggregateExpression")
         };
         self.expect(&Token::RParen)?;
         let synth = self.fresh_agg_var();
@@ -3082,12 +3088,9 @@ impl<'a> Parser<'a, '_> {
             }
         }
         self.expect(&Token::RParen)?;
-        let agg = AggregateExpression {
-            function: AggregateFunction::Custom(iri),
-            args,
-            scalarvals: Vec::new(),
-            distinct,
-        };
+        let agg =
+            AggregateExpression::new(AggregateFunction::Custom(iri), args, Vec::new(), distinct)
+                .expect("the `args.push` loop above always runs at least once");
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
@@ -4243,6 +4246,41 @@ mod tests {
             "COUNT(*) must have the spec's empty exprlist, got {:?}",
             aggregates[0].1.args
         );
+        assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
+    }
+
+    /// `'*'` is the spec's empty exprlist, and the grammar admits it in exactly one
+    /// production: `Count` (SPARQL 1.1 §18.5.1 / SPARQL 1.2 §19.8). Every other
+    /// built-in aggregate is fixed-arity one, so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/
+    /// `SAMPLE(*)`/`GROUP_CONCAT(*)` must all be hard syntax errors — never a silent
+    /// row count (the shipped-CLI regression this guards against).
+    #[test]
+    fn star_is_rejected_for_every_non_count_aggregate() {
+        for name in ["SUM", "AVG", "MIN", "MAX", "SAMPLE", "GROUP_CONCAT"] {
+            let q = format!("{GM}SELECT ?t ({name}(*) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+            let err = SparqlParser::new().parse_query(&q).unwrap_err();
+            assert!(
+                matches!(err, ParseError::Syntax { .. }),
+                "{name}(*) must be a syntax error, got {err:?}"
+            );
+        }
+    }
+
+    /// `COUNT(DISTINCT *)` is the star form; `COUNT(*)` is covered by
+    /// `count_star_has_empty_args`.
+    #[test]
+    fn count_distinct_star_still_parses() {
+        let q = format!("{GM}SELECT ?t (COUNT(DISTINCT *) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        assert!(aggregates[0].1.args.is_empty());
+        assert!(aggregates[0].1.distinct);
         assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
     }
 

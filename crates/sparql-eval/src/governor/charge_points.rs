@@ -1182,12 +1182,13 @@ fn sum_group_pattern() -> GraphPattern {
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
-            AggregateExpression {
-                function: AggregateFunction::Sum,
-                args: vec![Expression::Variable(Variable::new("val"))],
-                scalarvals: Vec::new(),
-                distinct: false,
-            },
+            AggregateExpression::new(
+                AggregateFunction::Sum,
+                vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
+                false,
+            )
+            .expect("fixture: valid AggregateExpression"),
         )],
     }
 }
@@ -1201,12 +1202,13 @@ fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
         variables: vec![Variable::new("cat")],
         aggregates: vec![(
             Variable::new("total"),
-            AggregateExpression {
-                function: AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
-                args: vec![Expression::Variable(Variable::new("val"))],
-                scalarvals: Vec::new(),
-                distinct: false,
-            },
+            AggregateExpression::new(
+                AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
+                vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
+                false,
+            )
+            .expect("fixture: valid AggregateExpression"),
         )],
     }
 }
@@ -1220,12 +1222,13 @@ fn count_distinct_group_pattern() -> GraphPattern {
         variables: Vec::new(),
         aggregates: vec![(
             Variable::new("n"),
-            AggregateExpression {
-                function: AggregateFunction::Count,
-                args: vec![Expression::Variable(Variable::new("val"))],
-                scalarvals: Vec::new(),
-                distinct: true,
-            },
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
+                true,
+            )
+            .expect("fixture: valid AggregateExpression"),
         )],
     }
 }

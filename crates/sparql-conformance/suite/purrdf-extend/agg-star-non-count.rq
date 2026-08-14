@@ -1,0 +1,3 @@
+SELECT (SUM(*) AS ?s) WHERE {
+  ?s2 ?p ?o
+}

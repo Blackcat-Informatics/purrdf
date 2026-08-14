@@ -906,7 +906,7 @@ fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
             aggregates,
         } => {
             for (_, agg) in aggregates {
-                for arg in &agg.args {
+                for arg in agg.args() {
                     expr_vars(arg, out);
                 }
             }
@@ -1217,16 +1217,21 @@ pub(crate) fn substitute_pattern(
             aggregates: aggregates
                 .iter()
                 .map(|(v, agg)| {
-                    let new_agg = purrdf_sparql_algebra::AggregateExpression {
-                        function: agg.function.clone(),
-                        args: agg
-                            .args
-                            .iter()
-                            .map(|e| substitute_expr(e, bindings))
-                            .collect(),
-                        scalarvals: agg.scalarvals.clone(),
-                        distinct: agg.distinct,
-                    };
+                    let args = agg
+                        .args()
+                        .iter()
+                        .map(|e| substitute_expr(e, bindings))
+                        .collect();
+                    // `substitute_expr` rewrites each argument in place and never
+                    // changes the argument COUNT, so this can never turn a valid
+                    // `agg` into an invalid one.
+                    let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
+                        agg.function.clone(),
+                        args,
+                        agg.scalarvals.clone(),
+                        agg.distinct,
+                    )
+                    .expect("substitution preserves argument count, so arity stays valid");
                     (v.clone(), new_agg)
                 })
                 .collect(),

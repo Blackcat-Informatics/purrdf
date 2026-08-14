@@ -37,7 +37,11 @@
 #     can and does prove is the SYNTAX: a positive case for the one-or-more-
 #     args call shape, and a negative case for the zero-args form (a genuine
 #     parse-time arity rule — SPARQL 1.2's "positional args only, one-or-more"
-#     — not a registry-dependent admission check).
+#     — not a registry-dependent admission check). A third negative case,
+#     `:aggStarNonCount`, pins the sibling rule for the OTHER aggregate
+#     surface: `'*'` is the spec's empty exprlist, and the grammar admits it
+#     in exactly one production (`Count`) — `SUM(*)` and friends are hard
+#     syntax errors, not a silent row count.
 #   * GROUP_CONCAT determinism — an exact-string pin of the row-order-dependent
 #     concatenation (see `purrdf_sparql_eval::modifier`'s "Aggregate
 #     semantics" docs), exercised through this harness's own
@@ -76,6 +80,7 @@
         :versionEval
         :aggCallSyntax
         :aggCallNoArgs
+        :aggStarNonCount
         :groupConcatOrder
     ) .
 
@@ -166,6 +171,10 @@
 :aggCallNoArgs a mf:NegativeSyntaxTest ;
     mf:name "AGG(<iri>) with zero positional args is a hard syntax error (one-or-more, not zero-or-more)" ;
     mf:action <agg-call-no-args.rq> .
+
+:aggStarNonCount a mf:NegativeSyntaxTest ;
+    mf:name "SUM(*) is a hard syntax error: '*' is COUNT-only (COUNT(*)/COUNT(DISTINCT *)), never another aggregate's empty exprlist" ;
+    mf:action <agg-star-non-count.rq> .
 
 :groupConcatOrder a mf:QueryEvaluationTest ;
     mf:name "GROUP_CONCAT concatenates in input row order — an exact-string pin through this harness's own load/evaluate path" ;

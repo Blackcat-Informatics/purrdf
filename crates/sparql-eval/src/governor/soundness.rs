@@ -607,7 +607,7 @@ where
             }
             aggregates.iter().any(|(_, aggregate)| {
                 aggregate
-                    .args
+                    .args()
                     .iter()
                     .any(|e| visit(PatternPart::Expression(e)))
             })
@@ -1445,12 +1445,8 @@ mod tests {
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: Vec::new(),
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
+                    .expect("fixture: valid AggregateExpression"),
             )],
         };
         let inner = context_at(&plan, &[0]);
@@ -1581,12 +1577,13 @@ mod tests {
             variables: Vec::new(),
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: vec![Expression::Exists(boxed(other_bgp()))],
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    vec![Expression::Exists(boxed(other_bgp()))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         assert_eq!(context_at(&grouped, &[1]).class(), SpineClass::Unknown);
@@ -1818,12 +1815,8 @@ mod tests {
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression {
-                    function: AggregateFunction::Count,
-                    args: Vec::new(),
-                    scalarvals: Vec::new(),
-                    distinct: false,
-                },
+                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
+                    .expect("fixture: valid AggregateExpression"),
             )],
         };
         let ordered = GraphPattern::OrderBy {

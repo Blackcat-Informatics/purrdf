@@ -1239,12 +1239,13 @@ mod tests {
 
     #[test]
     fn aggregate_renders_group_concat_separator() {
-        let agg = AggregateExpression {
-            function: AggregateFunction::GroupConcat,
-            args: vec![Expression::Variable(Variable::new("x"))],
-            scalarvals: vec![("separator".to_owned(), Literal::new_simple("|"))],
-            distinct: false,
-        };
+        let agg = AggregateExpression::new(
+            AggregateFunction::GroupConcat,
+            vec![Expression::Variable(Variable::new("x"))],
+            vec![("separator".to_owned(), Literal::new_simple("|"))],
+            false,
+        )
+        .unwrap();
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "GROUP_CONCAT(?x; SEPARATOR=\"|\")");
@@ -1252,12 +1253,8 @@ mod tests {
 
     #[test]
     fn aggregate_renders_count_star() {
-        let agg = AggregateExpression {
-            function: AggregateFunction::Count,
-            args: Vec::new(),
-            scalarvals: Vec::new(),
-            distinct: true,
-        };
+        let agg = AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), true)
+            .unwrap();
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "COUNT(DISTINCT *)");
@@ -1265,20 +1262,43 @@ mod tests {
 
     #[test]
     fn aggregate_renders_custom_agg_call() {
-        let agg = AggregateExpression {
-            function: AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked(
-                "http://ex/myAgg",
-            )),
-            args: vec![
+        let agg = AggregateExpression::new(
+            AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
+            vec![
                 Expression::Variable(Variable::new("a")),
                 Expression::Variable(Variable::new("b")),
             ],
-            scalarvals: Vec::new(),
-            distinct: true,
-        };
+            Vec::new(),
+            true,
+        )
+        .unwrap();
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "AGG(<http://ex/myAgg>, DISTINCT ?a, ?b)");
+    }
+
+    #[test]
+    fn aggregate_expression_new_rejects_empty_args_for_non_count() {
+        // Defense in depth for the type-level invariant this module's
+        // `fmt_aggregate` (and `sparql-eval`'s dispatch) both rely on: only
+        // `COUNT` may ever carry an empty `args`.
+        for function in [
+            AggregateFunction::Sum,
+            AggregateFunction::Avg,
+            AggregateFunction::Min,
+            AggregateFunction::Max,
+            AggregateFunction::Sample,
+            AggregateFunction::GroupConcat,
+            AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
+        ] {
+            let err = AggregateExpression::new(function.clone(), Vec::new(), Vec::new(), false)
+                .unwrap_err();
+            assert_eq!(err.function(), &function);
+        }
+        assert!(
+            AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
+                .is_ok()
+        );
     }
 
     // ── property functions ────────────────────────────────────────────────────

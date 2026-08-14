@@ -1203,13 +1203,33 @@ pub enum OrderExpression {
 ///   (`COUNT(DISTINCT *)` / `COUNT(DISTINCT ?x)` / `AGG(<iri>, DISTINCT ?a,
 ///   ?b)` / …); recorded verbatim regardless of whether the function gives it
 ///   meaning.
+///
+/// # Constructing one
+///
+/// [`Self::new`] is the ONLY way to build a value from scratch: it rejects an
+/// empty `args` for any `function` other than [`AggregateFunction::Count`],
+/// so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/`GROUP_CONCAT(*)` — and a
+/// zero-arity [`AggregateFunction::Custom`] — cannot be built at all, from
+/// inside this crate or out. The `args` field is therefore private outside
+/// this crate; [`Self::args`] (the accessor method) gives read access without
+/// opening a second, unchecked write path. `function`, `scalarvals` and
+/// `distinct` stay `pub`: none of the three, alone or together, can put the
+/// arity invariant at risk, so hiding them would only add call-site friction
+/// with no matching safety gain. The field itself is `pub(crate)` rather than
+/// fully private: `serialize.rs`'s formatter and `parser.rs`'s own tests read
+/// (and, in tests, construct) it directly elsewhere in this crate, and this
+/// crate is small and disciplined enough that a `pub(crate)` seam is an
+/// honest tradeoff — the invariant only needs to hold at the crate's public
+/// boundary, which `new` alone already guarantees for every external caller
+/// (embedders included).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AggregateExpression {
     /// Which aggregate function.
     pub function: AggregateFunction,
     /// The aggregate's expression list (the spec's `exprlist`). Empty only for
-    /// `COUNT(*)`; see the struct docs.
-    pub args: Vec<Expression>,
+    /// `COUNT(*)`; see the struct docs. Private outside this crate — go
+    /// through [`Self::new`] to build one, [`Self::args`] to read it back.
+    pub(crate) args: Vec<Expression>,
     /// The spec's scalar-values map — an ordered, deterministic
     /// `(key, value)` list; see the struct docs.
     pub scalarvals: Vec<(String, Literal)>,
@@ -1218,6 +1238,66 @@ pub struct AggregateExpression {
 }
 
 impl AggregateExpression {
+    /// The checked constructor: the ONLY way to build an [`AggregateExpression`]
+    /// from its parts.
+    ///
+    /// # Errors
+    ///
+    /// [`AggregateArityError`] if `args` is empty and `function` is anything
+    /// other than [`AggregateFunction::Count`] — SPARQL's `'*'` exprlist
+    /// shorthand names only `COUNT(*)`/`COUNT(DISTINCT *)`; every other
+    /// built-in is fixed-arity one, and every [`AggregateFunction::Custom`]
+    /// call is positional-only, one-or-more (see that variant's docs). This
+    /// is what makes a re-founded "empty exprlist" bug like the one this
+    /// constructor replaces unrepresentable: the shape that used to be read
+    /// off `args.is_empty()` — with the reader trusting an un-enforced
+    /// comment — is now enforced once, here, at the only place a value comes
+    /// into existence.
+    pub fn new(
+        function: AggregateFunction,
+        args: Vec<Expression>,
+        scalarvals: Vec<(String, Literal)>,
+        distinct: bool,
+    ) -> Result<Self, AggregateArityError> {
+        if args.is_empty() && !matches!(function, AggregateFunction::Count) {
+            return Err(AggregateArityError { function });
+        }
+        Ok(Self {
+            function,
+            args,
+            scalarvals,
+            distinct,
+        })
+    }
+
+    /// The aggregate's expression list (the spec's `exprlist`); see the
+    /// struct docs. Empty iff [`Self::function`] is
+    /// [`AggregateFunction::Count`] (`COUNT(*)`/`COUNT(DISTINCT *)`) —
+    /// [`Self::new`] enforces that for every value that exists.
+    #[must_use]
+    pub fn args(&self) -> &[Expression] {
+        &self.args
+    }
+
+    /// Decompose into `(function, args, scalarvals, distinct)`, consuming
+    /// `self`. The inverse of [`Self::new`] minus its arity check — for a
+    /// caller (an expression-substitution or query-planning rewrite) that
+    /// only ever replaces `args` with a same-length transform of itself, so
+    /// the arity invariant this type protects cannot be disturbed by the
+    /// round trip: feed the tuple back through [`Self::new`] and the call
+    /// cannot fail.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        AggregateFunction,
+        Vec<Expression>,
+        Vec<(String, Literal)>,
+        bool,
+    ) {
+        (self.function, self.args, self.scalarvals, self.distinct)
+    }
+
     /// `GROUP_CONCAT`'s `SEPARATOR` scalarval, if present (looked up by key in
     /// [`Self::scalarvals`]). `None` for a bare `GROUP_CONCAT(?x)` with no
     /// `; SEPARATOR="…"`, or for any other aggregate.
@@ -1229,6 +1309,36 @@ impl AggregateExpression {
             .map(|(_, v)| v.value())
     }
 }
+
+/// Why [`AggregateExpression::new`] refused to build a value: `args` was
+/// empty for a `function` other than [`AggregateFunction::Count`]. SPARQL's
+/// `'*'` exprlist shorthand is defined only in the `Count` production
+/// (SPARQL 1.1/1.2 §18.5.1/§19.8); every other aggregate — built-in or
+/// [`AggregateFunction::Custom`] — requires at least one expression argument.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AggregateArityError {
+    function: AggregateFunction,
+}
+
+impl AggregateArityError {
+    /// The function that was refused an empty `args`.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+}
+
+impl core::fmt::Display for AggregateArityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "only COUNT accepts an empty exprlist ('*'); {:?} requires at least one argument",
+            self.function
+        )
+    }
+}
+
+impl std::error::Error for AggregateArityError {}
 
 /// The named SPARQL aggregate functions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

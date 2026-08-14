@@ -1045,7 +1045,7 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
                 if let AF::Custom(n) = &agg_expr.function {
                     insert_oxiri(n, out);
                 }
-                for arg in &agg_expr.args {
+                for arg in agg_expr.args() {
                     walk_expression(arg, out);
                 }
             }
