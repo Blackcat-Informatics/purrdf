@@ -504,7 +504,7 @@ fn int_binop(
 /// Product `< 10^18 × 10^18 = 10^36 < i128::MAX (≈ 1.70×10^38)`. No overflow.
 /// However, the mantissa of an *add/sub result* can be up to `2 × 10^36` which still
 /// fits in i128; the caller must not further scale without checking.
-fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
+pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
     if a.scale() == b.scale() {
         return (a.mantissa(), b.mantissa(), a.scale());
     }
@@ -687,6 +687,13 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
+    decimal_mul_raw(a, b).map(XsdValue::Decimal)
+}
+
+/// The exact-decimal-multiplication math behind [`decimal_mul`], returning the raw
+/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ×
+/// numeric, XPath F&O `op:multiply-yearMonthDuration`/`op:multiply-dayTimeDuration`).
+pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
     let new_mantissa =
         a.mantissa()
             .checked_mul(b.mantissa())
@@ -697,24 +704,18 @@ fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
             })?;
     let raw_scale = u32::from(a.scale()) + u32::from(b.scale());
     if raw_scale <= u32::from(MAX_DECIMAL_SCALE) {
-        Ok(XsdValue::Decimal(Decimal::from_parts(
-            new_mantissa,
-            raw_scale as u8,
-        )))
+        Ok(Decimal::from_parts(new_mantissa, raw_scale as u8))
     } else {
         // Truncate toward zero to MAX_DECIMAL_SCALE fractional digits.
-        let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
         // SAFETY: excess ≤ 36 (max raw_scale is 36); 10^excess ≤ 10^36 < i128::MAX.
         // But we cannot represent 10^36 in i128 (i128::MAX ≈ 1.70×10^38 > 10^36),
         // however 10^38 > i128::MAX, so we need to be careful.
         // excess ≤ raw_scale - 0 ≤ 18 + 18 = 36; 10^36 ≈ 1×10^36 < 1.70×10^38 = i128::MAX.
         // So 10i128.pow(excess) does not overflow for excess ≤ 36.
+        let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
         let divisor = 10i128.pow(excess);
         let truncated = new_mantissa / divisor;
-        Ok(XsdValue::Decimal(Decimal::from_parts(
-            truncated,
-            MAX_DECIMAL_SCALE,
-        )))
+        Ok(Decimal::from_parts(truncated, MAX_DECIMAL_SCALE))
     }
 }
 
@@ -815,6 +816,21 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// The shift factor is chosen as `MAX_DECIMAL_SCALE + divisor.scale()` minus the
 /// dividend scale so that the final result lands at exactly scale `MAX_DECIMAL_SCALE`.
 fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
+    decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
+}
+
+/// The exact-decimal-division math behind [`decimal_div`], returning the raw
+/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ÷
+/// numeric and `dayTimeDuration` ÷ `dayTimeDuration`, XPath F&O
+/// `op:divide-dayTimeDuration`/`op:divide-dayTimeDuration-by-dayTimeDuration`).
+///
+/// Precondition: `divisor` is non-zero (callers must check; a zero divisor is a
+/// spec-level `DivisionByZero` error, not a representable-range error).
+pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<Decimal, XsdError> {
+    debug_assert!(
+        !divisor.is_zero(),
+        "decimal_div_raw requires a non-zero divisor"
+    );
     // We want: result = dividend / divisor at scale MAX_DECIMAL_SCALE.
     // dividend = dm × 10^(-ds), divisor = vm × 10^(-vs).
     // result mantissa at scale S = dm × 10^(S + vs - ds) / vm
@@ -847,10 +863,7 @@ fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdErr
         let factor = 10i128.pow((-shift_exp) as u32);
         dm / factor
     };
-    Ok(XsdValue::Decimal(Decimal::from_parts(
-        scaled_dm / vm,
-        target_scale,
-    )))
+    Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
 }
 
 /// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.

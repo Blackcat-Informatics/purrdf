@@ -15,7 +15,7 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
-use crate::numeric::{Decimal, parse_decimal};
+use crate::numeric::{Decimal, align_decimals, decimal_div_raw, decimal_mul_raw, parse_decimal};
 use crate::value::XsdError;
 
 /// Maximum timezone offset magnitude in minutes (±14:00).
@@ -71,6 +71,19 @@ impl Duration {
     pub fn datatype(&self) -> XsdDatatype {
         self.datatype
     }
+
+    /// The months component of the (months, seconds) value pair.
+    #[must_use]
+    pub fn months(&self) -> i64 {
+        self.months
+    }
+
+    /// The seconds component (exact, may carry a fractional part) of the (months,
+    /// seconds) value pair.
+    #[must_use]
+    pub fn seconds(&self) -> Decimal {
+        self.seconds
+    }
 }
 
 /// `xsd:gYear`, `xsd:gMonth`, `xsd:gDay`, `xsd:gYearMonth`, `xsd:gMonthDay`.
@@ -108,22 +121,13 @@ fn days_from_civil(y: i64, m: u8, d: u8) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Convert Unix epoch seconds (UTC) to an xsd:dateTime value using Howard Hinnant's
-/// civil-from-days algorithm. Pure math — no clock access, wasm-safe.
-/// The result always carries timezone offset 0 (UTC / "Z").
+/// Howard Hinnant's `civil_from_days`: the inverse of [`days_from_civil`]. `days` is
+/// the day count relative to 1970-01-01 (may be negative). Shared by
+/// [`datetime_from_unix_seconds`] and the duration/timezone arithmetic below, which
+/// all need to turn an exact day count back into a proleptic-Gregorian date.
 ///
 /// Algorithm reference: <https://howardhinnant.github.io/date_algorithms.html>
-pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
-    const SECS_PER_DAY_I64: i64 = 86_400;
-    // Split into day offset + time-of-day.
-    let days = if secs >= 0 {
-        secs / SECS_PER_DAY_I64
-    } else {
-        (secs - SECS_PER_DAY_I64 + 1) / SECS_PER_DAY_I64
-    };
-    let tod = secs - days * SECS_PER_DAY_I64; // 0 .. 86399
-
-    // Howard Hinnant's civil_from_days
+fn civil_from_days(days: i64) -> (i64, u8, u8) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -138,6 +142,23 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
         (mp - 9) as u8
     };
     let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Convert Unix epoch seconds (UTC) to an xsd:dateTime value using Howard Hinnant's
+/// civil-from-days algorithm. Pure math — no clock access, wasm-safe.
+/// The result always carries timezone offset 0 (UTC / "Z").
+pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
+    const SECS_PER_DAY_I64: i64 = 86_400;
+    // Split into day offset + time-of-day.
+    let days = if secs >= 0 {
+        secs / SECS_PER_DAY_I64
+    } else {
+        (secs - SECS_PER_DAY_I64 + 1) / SECS_PER_DAY_I64
+    };
+    let tod = secs - days * SECS_PER_DAY_I64; // 0 .. 86399
+
+    let (y, m, d) = civil_from_days(days);
 
     let hour = (tod / 3600) as u8;
     let minute = ((tod % 3600) / 60) as u8;
@@ -800,6 +821,848 @@ pub fn cmp_gregorian(a: &Gregorian, b: &Gregorian) -> Option<Ordering> {
     cmp_timeline(an, &zero, a.tz, bn, &zero, b.tz)
 }
 
+// ── Shared exact-arithmetic helpers ───────────────────────────────────────────────
+
+/// Build an `OutOfRange` error for an arithmetic overflow with no offending lexical
+/// (the operands are values, not lexicals, at this layer).
+fn arith_overflow(datatype: XsdDatatype, reason: &'static str) -> XsdError {
+    XsdError::OutOfRange {
+        datatype,
+        lexical: String::new(),
+        reason,
+    }
+}
+
+/// Exact `a + b` for two seconds-shaped decimals of possibly different scales.
+fn decimal_add_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
+    let (am, bm, scale) = align_decimals(a, b);
+    let sum = am
+        .checked_add(bm)
+        .ok_or_else(|| arith_overflow(datatype, "decimal addition overflow"))?;
+    Ok(Decimal::from_parts(sum, scale))
+}
+
+/// Exact `-a`. Fails only for the unrepresentable `i128::MIN` mantissa.
+fn decimal_negate(datatype: XsdDatatype, a: &Decimal) -> Result<Decimal, XsdError> {
+    a.mantissa()
+        .checked_neg()
+        .map(|m| Decimal::from_parts(m, a.scale()))
+        .ok_or_else(|| {
+            arith_overflow(
+                datatype,
+                "decimal negation overflow (mantissa is i128::MIN)",
+            )
+        })
+}
+
+/// Exact `a - b`, built from [`decimal_add_exact`] + [`decimal_negate`].
+fn decimal_sub_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
+    decimal_add_exact(datatype, a, &decimal_negate(datatype, b)?)
+}
+
+/// Round a `Decimal` to the nearest `i64`, ties toward positive infinity — the same
+/// rule `numeric::numeric_round` applies to `fn:round` (XPath §4.4.5), reused here for
+/// `xs:yearMonthDuration` multiply/divide, whose result must be an integer number of
+/// months. Errors if the rounded value does not fit `i64`.
+fn round_decimal_to_i64(datatype: XsdDatatype, d: &Decimal) -> Result<i64, XsdError> {
+    let whole = d.whole_part();
+    let rounded = if d.scale() == 0 {
+        whole
+    } else {
+        let frac_m = d.frac_part().mantissa();
+        let threshold = 5i128 * 10i128.pow(u32::from(d.scale()) - 1);
+        if frac_m >= threshold {
+            whole + 1
+        } else if frac_m < -threshold {
+            whole - 1
+        } else {
+            whole
+        }
+    };
+    i64::try_from(rounded).map_err(|_| arith_overflow(datatype, "duration months overflow"))
+}
+
+/// Add a `months_delta` to a (year, month) pair, per proleptic-Gregorian month
+/// arithmetic (no day component — the caller clamps the day separately, XML Schema
+/// Appendix E). Exact; errors only on genuine `i64` year overflow.
+fn shift_year_month(
+    datatype: XsdDatatype,
+    year: i64,
+    month: u8,
+    months_delta: i64,
+) -> Result<(i64, u8), XsdError> {
+    let total = i128::from(year)
+        .checked_mul(12)
+        .and_then(|v| v.checked_add(i128::from(month) - 1))
+        .and_then(|v| v.checked_add(i128::from(months_delta)))
+        .ok_or_else(|| arith_overflow(datatype, "year-month arithmetic overflow"))?;
+    let new_year = total.div_euclid(12);
+    let new_month = (total.rem_euclid(12) + 1) as u8;
+    let new_year =
+        i64::try_from(new_year).map_err(|_| arith_overflow(datatype, "year overflow"))?;
+    Ok((new_year, new_month))
+}
+
+/// A calendar date/time's naive local fields, grouped into one value so the
+/// arithmetic helpers below stay within clippy's `too_many_arguments` budget.
+struct CalendarPoint {
+    year: i64,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: Decimal,
+}
+
+impl CalendarPoint {
+    /// A date at midnight (for date-only arithmetic, whose time-of-day fields are
+    /// discarded by the caller after [`add_seconds_decimal`] returns).
+    fn midnight(year: i64, month: u8, day: u8) -> Self {
+        Self {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: Decimal::from_parts(0, 0),
+        }
+    }
+
+    /// A time-of-day paired with an arbitrary reference date (for time-only
+    /// arithmetic, whose date fields are discarded by the caller).
+    fn on_reference_date(hour: u8, minute: u8, second: Decimal) -> Self {
+        Self {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour,
+            minute,
+            second,
+        }
+    }
+}
+
+/// Add an exact seconds-shaped `delta` (a `Decimal`, e.g. a `dayTimeDuration`'s
+/// seconds component, or a whole-minute timezone shift) to a calendar date/time,
+/// returning the resulting `(year, month, day, hour, minute, second)`. The delta may
+/// be negative and of any magnitude representable within the `Decimal`/`i64` domain;
+/// day/month/year all roll over correctly. Exact — no float rounding, and no panics:
+/// every intermediate step is `checked_*` and overflow maps to `OutOfRange`.
+fn add_seconds_decimal(
+    datatype: XsdDatatype,
+    point: &CalendarPoint,
+    delta: &Decimal,
+) -> Result<(i64, u8, u8, u8, u8, Decimal), XsdError> {
+    let CalendarPoint {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    } = *point;
+    let second = &second;
+    let scale = second.scale().max(delta.scale());
+    let unit = 10i128.pow(u32::from(scale));
+    let scale_up = |d: &Decimal| -> Result<i128, XsdError> {
+        let diff = scale - d.scale();
+        if diff == 0 {
+            Ok(d.mantissa())
+        } else {
+            d.mantissa()
+                .checked_mul(10i128.pow(u32::from(diff)))
+                .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))
+        }
+    };
+
+    let second_scaled = scale_up(second)?;
+    let base_secs = i128::from(hour) * 3600 + i128::from(minute) * 60;
+    let base_scaled = base_secs
+        .checked_mul(unit)
+        .and_then(|v| v.checked_add(second_scaled))
+        .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
+    let delta_scaled = scale_up(delta)?;
+    let sum_scaled = base_scaled
+        .checked_add(delta_scaled)
+        .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
+
+    let day_unit = unit
+        .checked_mul(SECS_PER_DAY)
+        .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
+    let day_delta = sum_scaled.div_euclid(day_unit);
+    let remainder = sum_scaled.rem_euclid(day_unit);
+
+    let tod_secs = remainder / unit; // whole seconds of day, in [0, 86400)
+    let hour_new = (tod_secs / 3600) as u8;
+    let minute_new = ((tod_secs % 3600) / 60) as u8;
+    let sec_of_minute_scaled = remainder % (unit * 60);
+    let second_new = Decimal::from_parts(sec_of_minute_scaled, scale);
+
+    let base_days = i128::from(days_from_civil(year, month, day));
+    let total_days = base_days
+        .checked_add(day_delta)
+        .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
+    let total_days =
+        i64::try_from(total_days).map_err(|_| arith_overflow(datatype, "date overflow"))?;
+    let (y, m, d) = civil_from_days(total_days);
+
+    Ok((y, m, d, hour_new, minute_new, second_new))
+}
+
+/// One side of an [`instant_diff`] subtraction: days-since-epoch, time-of-day, and
+/// timezone.
+struct Instant {
+    days: i64,
+    hour: u8,
+    minute: u8,
+    second: Decimal,
+    tz: Option<i32>,
+}
+
+/// The exact instant difference `a - b` as a `dayTimeDuration` `Duration`. Mirrors
+/// the XSD partial order's tz-indeterminacy rule (see [`cmp_timeline`]): mixing a
+/// timezoned and an untimezoned operand has no well-defined instant difference, so —
+/// rather than guessing an implicit timezone this crate has no execution context to
+/// supply — that case is a hard `TypeMismatch`, not a best-effort answer.
+/// Both-timezoned and both-untimezoned pairs are always determinate.
+fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Duration, XsdError> {
+    if a.tz.is_some() != b.tz.is_some() {
+        return Err(XsdError::TypeMismatch {
+            reason: "subtract: indeterminate timezone mix (one operand has a timezone, the other does not)",
+        });
+    }
+    let scale = a.second.scale().max(b.second.scale());
+    let unit = 10i128.pow(u32::from(scale));
+    let scale_up = |d: &Decimal| -> Result<i128, XsdError> {
+        let diff = scale - d.scale();
+        if diff == 0 {
+            Ok(d.mantissa())
+        } else {
+            d.mantissa()
+                .checked_mul(10i128.pow(u32::from(diff)))
+                .ok_or_else(|| arith_overflow(datatype, "instant subtraction overflow"))
+        }
+    };
+    let overflow = || arith_overflow(datatype, "instant subtraction overflow");
+
+    let a_second_scaled = scale_up(&a.second)?;
+    let b_second_scaled = scale_up(&b.second)?;
+    let a_tz_secs = i128::from(a.tz.unwrap_or(0)) * 60;
+    let b_tz_secs = i128::from(b.tz.unwrap_or(0)) * 60;
+    let a_naive =
+        i128::from(a.days) * SECS_PER_DAY + i128::from(a.hour) * 3600 + i128::from(a.minute) * 60
+            - a_tz_secs;
+    let b_naive =
+        i128::from(b.days) * SECS_PER_DAY + i128::from(b.hour) * 3600 + i128::from(b.minute) * 60
+            - b_tz_secs;
+    let a_total = a_naive
+        .checked_mul(unit)
+        .and_then(|v| v.checked_add(a_second_scaled))
+        .ok_or_else(overflow)?;
+    let b_total = b_naive
+        .checked_mul(unit)
+        .and_then(|v| v.checked_add(b_second_scaled))
+        .ok_or_else(overflow)?;
+    let diff = a_total.checked_sub(b_total).ok_or_else(overflow)?;
+
+    Ok(Duration {
+        months: 0,
+        seconds: Decimal::from_parts(diff, scale),
+        datatype: XsdDatatype::DayTimeDuration,
+    })
+}
+
+/// Require `dur` to be declared `xsd:yearMonthDuration` (not the general
+/// `xsd:duration`, whose seconds component is not statically known to be zero).
+fn require_year_month_duration(dur: &Duration) -> Result<(), XsdError> {
+    if dur.datatype == XsdDatatype::YearMonthDuration {
+        Ok(())
+    } else {
+        Err(XsdError::TypeMismatch {
+            reason: "operation requires a yearMonthDuration operand",
+        })
+    }
+}
+
+/// Require `dur` to be declared `xsd:dayTimeDuration` (not the general
+/// `xsd:duration`, whose months component is not statically known to be zero).
+fn require_day_time_duration(dur: &Duration) -> Result<(), XsdError> {
+    if dur.datatype == XsdDatatype::DayTimeDuration {
+        Ok(())
+    } else {
+        Err(XsdError::TypeMismatch {
+            reason: "operation requires a dayTimeDuration operand",
+        })
+    }
+}
+
+// ── Timezone adjustment (XPath F&O §9.5) ──────────────────────────────────────────
+
+/// Validate and normalize an `fn:adjust-*-to-timezone` `$timezone` argument, given in
+/// seconds (the natural unit of a `dayTimeDuration`, which is what F&O types this
+/// parameter as). `None` means "remove the timezone". A `Some` value must be an exact
+/// whole number of minutes with magnitude `<= 14:00`, matching the lexical timezone
+/// grammar this crate already enforces in `split_tz`.
+fn validate_timezone_seconds(
+    datatype: XsdDatatype,
+    secs: Option<i64>,
+) -> Result<Option<i32>, XsdError> {
+    let Some(secs) = secs else {
+        return Ok(None);
+    };
+    if secs % 60 != 0 {
+        return Err(XsdError::InvalidLexical {
+            datatype,
+            lexical: secs.to_string(),
+            reason: "timezone must be a whole number of minutes",
+        });
+    }
+    let minutes = secs / 60;
+    if minutes.abs() > i64::from(MAX_TZ_MIN) {
+        return Err(XsdError::InvalidLexical {
+            datatype,
+            lexical: secs.to_string(),
+            reason: "timezone exceeds ±14:00",
+        });
+    }
+    // SAFETY: |minutes| <= MAX_TZ_MIN (840), well within i32.
+    Ok(Some(minutes as i32))
+}
+
+/// `fn:adjust-dateTime-to-timezone($input, $timezone)` (XPath F&O §9.5.2). `timezone`
+/// is given in seconds (a `dayTimeDuration` magnitude); `None` removes the timezone.
+/// If `dt` already has a timezone and `timezone` is `Some`, the local fields are
+/// shifted so the result denotes the **same instant**, expressed in the new offset
+/// (day/month/year may roll over). If `dt` has no timezone, `timezone` is attached
+/// with no shift — the local fields are left as-is.
+pub fn adjust_datetime_to_timezone(
+    dt: &DateTime,
+    timezone: Option<i64>,
+) -> Result<DateTime, XsdError> {
+    let new_tz = validate_timezone_seconds(XsdDatatype::DateTime, timezone)?;
+    let retagged = |tz| DateTime {
+        year: dt.year,
+        month: dt.month,
+        day: dt.day,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+        tz,
+    };
+    match (dt.tz, new_tz) {
+        (_, None) => Ok(retagged(None)),
+        (None, Some(tz)) => Ok(retagged(Some(tz))),
+        (Some(old), Some(new)) => {
+            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let point = CalendarPoint {
+                year: dt.year,
+                month: dt.month,
+                day: dt.day,
+                hour: dt.hour,
+                minute: dt.minute,
+                second: dt.second,
+            };
+            let (y, m, d, h, mi, s) = add_seconds_decimal(XsdDatatype::DateTime, &point, &delta)?;
+            Ok(DateTime {
+                year: y,
+                month: m,
+                day: d,
+                hour: h,
+                minute: mi,
+                second: s,
+                tz: Some(new),
+            })
+        }
+    }
+}
+
+/// `fn:adjust-date-to-timezone($input, $timezone)` (XPath F&O §9.5.3). Same rule as
+/// [`adjust_datetime_to_timezone`], applied to a date: when both sides have a
+/// timezone, the date is treated as midnight in its own offset, shifted to the new
+/// offset (which may roll the date to the previous or next day), and only the
+/// resulting date is kept.
+pub fn adjust_date_to_timezone(d: &Date, timezone: Option<i64>) -> Result<Date, XsdError> {
+    let new_tz = validate_timezone_seconds(XsdDatatype::Date, timezone)?;
+    let retagged = |tz| Date {
+        year: d.year,
+        month: d.month,
+        day: d.day,
+        tz,
+    };
+    match (d.tz, new_tz) {
+        (_, None) => Ok(retagged(None)),
+        (None, Some(tz)) => Ok(retagged(Some(tz))),
+        (Some(old), Some(new)) => {
+            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let point = CalendarPoint::midnight(d.year, d.month, d.day);
+            let (y, m, dd, _h, _mi, _s) = add_seconds_decimal(XsdDatatype::Date, &point, &delta)?;
+            Ok(Date {
+                year: y,
+                month: m,
+                day: dd,
+                tz: Some(new),
+            })
+        }
+    }
+}
+
+/// `fn:adjust-time-to-timezone($input, $timezone)` (XPath F&O §9.5.4). Same rule as
+/// [`adjust_datetime_to_timezone`], applied to a time: when both sides have a
+/// timezone, the time is combined with an arbitrary reference date (F&O's own
+/// worked example uses 1972-12-31; the date is discarded afterward, so any valid
+/// date gives the same time-of-day result) and shifted; only the resulting
+/// time-of-day is kept.
+pub fn adjust_time_to_timezone(t: &Time, timezone: Option<i64>) -> Result<Time, XsdError> {
+    let new_tz = validate_timezone_seconds(XsdDatatype::Time, timezone)?;
+    let retagged = |tz| Time {
+        hour: t.hour,
+        minute: t.minute,
+        second: t.second,
+        tz,
+    };
+    match (t.tz, new_tz) {
+        (_, None) => Ok(retagged(None)),
+        (None, Some(tz)) => Ok(retagged(Some(tz))),
+        (Some(old), Some(new)) => {
+            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let point = CalendarPoint {
+                year: 1972,
+                month: 12,
+                day: 31,
+                hour: t.hour,
+                minute: t.minute,
+                second: t.second,
+            };
+            let (_y, _m, _d, h, mi, s) = add_seconds_decimal(XsdDatatype::Time, &point, &delta)?;
+            Ok(Time {
+                hour: h,
+                minute: mi,
+                second: s,
+                tz: Some(new),
+            })
+        }
+    }
+}
+
+// ── Duration ↔ calendar arithmetic (XPath F&O §10.6; XML Schema Appendix E) ───────
+
+/// `op:add-yearMonthDuration-to-dateTime`. The day-of-month is clamped to the target
+/// month's last day when the original day does not exist there (XML Schema Appendix
+/// E, e.g. 2024-01-31 + P1M = 2024-02-29).
+pub fn add_year_month_duration_to_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    require_year_month_duration(dur)?;
+    let (y, m) = shift_year_month(XsdDatatype::DateTime, dt.year, dt.month, dur.months)?;
+    let d = dt.day.min(days_in_month(y, m));
+    Ok(DateTime {
+        year: y,
+        month: m,
+        day: d,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+        tz: dt.tz,
+    })
+}
+
+/// `op:subtract-yearMonthDuration-from-dateTime`.
+pub fn subtract_year_month_duration_from_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    require_year_month_duration(dur)?;
+    let months = dur
+        .months
+        .checked_neg()
+        .ok_or_else(|| arith_overflow(XsdDatatype::Duration, "duration negation overflow"))?;
+    let (y, m) = shift_year_month(XsdDatatype::DateTime, dt.year, dt.month, months)?;
+    let d = dt.day.min(days_in_month(y, m));
+    Ok(DateTime {
+        year: y,
+        month: m,
+        day: d,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+        tz: dt.tz,
+    })
+}
+
+/// `op:add-dayTimeDuration-to-dateTime`.
+pub fn add_day_time_duration_to_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    require_day_time_duration(dur)?;
+    let point = CalendarPoint {
+        year: dt.year,
+        month: dt.month,
+        day: dt.day,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+    };
+    let (y, m, d, h, mi, s) = add_seconds_decimal(XsdDatatype::DateTime, &point, &dur.seconds)?;
+    Ok(DateTime {
+        year: y,
+        month: m,
+        day: d,
+        hour: h,
+        minute: mi,
+        second: s,
+        tz: dt.tz,
+    })
+}
+
+/// `op:subtract-dayTimeDuration-from-dateTime`.
+pub fn subtract_day_time_duration_from_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    require_day_time_duration(dur)?;
+    let delta = decimal_negate(XsdDatatype::Duration, &dur.seconds)?;
+    let point = CalendarPoint {
+        year: dt.year,
+        month: dt.month,
+        day: dt.day,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+    };
+    let (y, m, d, h, mi, s) = add_seconds_decimal(XsdDatatype::DateTime, &point, &delta)?;
+    Ok(DateTime {
+        year: y,
+        month: m,
+        day: d,
+        hour: h,
+        minute: mi,
+        second: s,
+        tz: dt.tz,
+    })
+}
+
+/// `op:add-yearMonthDuration-to-date`. Same Appendix E day-clamping rule as
+/// [`add_year_month_duration_to_datetime`].
+pub fn add_year_month_duration_to_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    require_year_month_duration(dur)?;
+    let (y, m) = shift_year_month(XsdDatatype::Date, d.year, d.month, dur.months)?;
+    let dd = d.day.min(days_in_month(y, m));
+    Ok(Date {
+        year: y,
+        month: m,
+        day: dd,
+        tz: d.tz,
+    })
+}
+
+/// `op:subtract-yearMonthDuration-from-date`.
+pub fn subtract_year_month_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    require_year_month_duration(dur)?;
+    let months = dur
+        .months
+        .checked_neg()
+        .ok_or_else(|| arith_overflow(XsdDatatype::Duration, "duration negation overflow"))?;
+    let (y, m) = shift_year_month(XsdDatatype::Date, d.year, d.month, months)?;
+    let dd = d.day.min(days_in_month(y, m));
+    Ok(Date {
+        year: y,
+        month: m,
+        day: dd,
+        tz: d.tz,
+    })
+}
+
+/// `op:add-dayTimeDuration-to-date`. The duration is applied at midnight and only the
+/// resulting date is kept (per F&O; a `dayTimeDuration` may still roll the date
+/// forward or backward by whole days).
+pub fn add_day_time_duration_to_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    require_day_time_duration(dur)?;
+    let point = CalendarPoint::midnight(d.year, d.month, d.day);
+    let (y, m, dd, _h, _mi, _s) = add_seconds_decimal(XsdDatatype::Date, &point, &dur.seconds)?;
+    Ok(Date {
+        year: y,
+        month: m,
+        day: dd,
+        tz: d.tz,
+    })
+}
+
+/// `op:subtract-dayTimeDuration-from-date`.
+pub fn subtract_day_time_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    require_day_time_duration(dur)?;
+    let delta = decimal_negate(XsdDatatype::Duration, &dur.seconds)?;
+    let point = CalendarPoint::midnight(d.year, d.month, d.day);
+    let (y, m, dd, _h, _mi, _s) = add_seconds_decimal(XsdDatatype::Date, &point, &delta)?;
+    Ok(Date {
+        year: y,
+        month: m,
+        day: dd,
+        tz: d.tz,
+    })
+}
+
+/// `op:add-dayTimeDuration-to-time`. Applied against an arbitrary reference date
+/// (the date is discarded, so wrap-around across midnight is invisible in the
+/// result — only the time-of-day is returned).
+pub fn add_day_time_duration_to_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    require_day_time_duration(dur)?;
+    let point = CalendarPoint::on_reference_date(t.hour, t.minute, t.second);
+    let (_y, _m, _d, h, mi, s) = add_seconds_decimal(XsdDatatype::Time, &point, &dur.seconds)?;
+    Ok(Time {
+        hour: h,
+        minute: mi,
+        second: s,
+        tz: t.tz,
+    })
+}
+
+/// `op:subtract-dayTimeDuration-from-time`.
+pub fn subtract_day_time_duration_from_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    require_day_time_duration(dur)?;
+    let delta = decimal_negate(XsdDatatype::Duration, &dur.seconds)?;
+    let point = CalendarPoint::on_reference_date(t.hour, t.minute, t.second);
+    let (_y, _m, _d, h, mi, s) = add_seconds_decimal(XsdDatatype::Time, &point, &delta)?;
+    Ok(Time {
+        hour: h,
+        minute: mi,
+        second: s,
+        tz: t.tz,
+    })
+}
+
+// ── Instant subtraction → dayTimeDuration (XPath F&O §10.5) ──────────────────────
+
+/// `op:subtract-dateTimes`. Both operands must agree on whether they carry a
+/// timezone (both, or neither) — see [`instant_diff`].
+pub fn subtract_datetimes(a: &DateTime, b: &DateTime) -> Result<Duration, XsdError> {
+    let a_inst = Instant {
+        days: days_from_civil(a.year, a.month, a.day),
+        hour: a.hour,
+        minute: a.minute,
+        second: a.second,
+        tz: a.tz,
+    };
+    let b_inst = Instant {
+        days: days_from_civil(b.year, b.month, b.day),
+        hour: b.hour,
+        minute: b.minute,
+        second: b.second,
+        tz: b.tz,
+    };
+    instant_diff(XsdDatatype::DateTime, &a_inst, &b_inst)
+}
+
+/// `op:subtract-dates`. Each date is treated as midnight in its own timezone before
+/// subtracting (per F&O); see [`instant_diff`] for the timezone-mixing rule.
+pub fn subtract_dates(a: &Date, b: &Date) -> Result<Duration, XsdError> {
+    let zero = Decimal::from_parts(0, 0);
+    let a_inst = Instant {
+        days: days_from_civil(a.year, a.month, a.day),
+        hour: 0,
+        minute: 0,
+        second: zero,
+        tz: a.tz,
+    };
+    let b_inst = Instant {
+        days: days_from_civil(b.year, b.month, b.day),
+        hour: 0,
+        minute: 0,
+        second: zero,
+        tz: b.tz,
+    };
+    instant_diff(XsdDatatype::Date, &a_inst, &b_inst)
+}
+
+/// `op:subtract-times`. Both times are referred to the same (arbitrary, cancelling)
+/// reference date; see [`instant_diff`] for the timezone-mixing rule.
+pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
+    let a_inst = Instant {
+        days: 0,
+        hour: a.hour,
+        minute: a.minute,
+        second: a.second,
+        tz: a.tz,
+    };
+    let b_inst = Instant {
+        days: 0,
+        hour: b.hour,
+        minute: b.minute,
+        second: b.second,
+        tz: b.tz,
+    };
+    instant_diff(XsdDatatype::Time, &a_inst, &b_inst)
+}
+
+// ── Duration arithmetic (XPath F&O §10.4) ─────────────────────────────────────────
+
+/// The two duration values must be the *same declared* `yearMonthDuration`/
+/// `dayTimeDuration` subtype. F&O defines `+`/`-`/`*`//` only for those two
+/// subtypes (not the general `xsd:duration`, whose (months, seconds) pair mixes
+/// units that cannot be added component-wise without loss); mixing subtypes, or
+/// using the general `xsd:duration`, is a type error.
+fn require_same_duration_subtype(a: &Duration, b: &Duration) -> Result<XsdDatatype, XsdError> {
+    if a.datatype != b.datatype {
+        return Err(XsdError::TypeMismatch {
+            reason: "duration arithmetic requires matching yearMonthDuration/dayTimeDuration subtypes",
+        });
+    }
+    match a.datatype {
+        XsdDatatype::YearMonthDuration | XsdDatatype::DayTimeDuration => Ok(a.datatype),
+        _ => Err(XsdError::TypeMismatch {
+            reason: "duration arithmetic requires a yearMonthDuration or dayTimeDuration operand",
+        }),
+    }
+}
+
+/// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`.
+pub fn add_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
+    let datatype = require_same_duration_subtype(a, b)?;
+    match datatype {
+        XsdDatatype::YearMonthDuration => {
+            let months = a
+                .months
+                .checked_add(b.months)
+                .ok_or_else(|| arith_overflow(datatype, "yearMonthDuration addition overflow"))?;
+            Ok(Duration {
+                months,
+                seconds: Decimal::from_parts(0, 0),
+                datatype,
+            })
+        }
+        _ => {
+            let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
+            Ok(Duration {
+                months: 0,
+                seconds,
+                datatype,
+            })
+        }
+    }
+}
+
+/// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`.
+pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
+    let datatype = require_same_duration_subtype(a, b)?;
+    match datatype {
+        XsdDatatype::YearMonthDuration => {
+            let months = a.months.checked_sub(b.months).ok_or_else(|| {
+                arith_overflow(datatype, "yearMonthDuration subtraction overflow")
+            })?;
+            Ok(Duration {
+                months,
+                seconds: Decimal::from_parts(0, 0),
+                datatype,
+            })
+        }
+        _ => {
+            let seconds = decimal_sub_exact(datatype, &a.seconds, &b.seconds)?;
+            Ok(Duration {
+                months: 0,
+                seconds,
+                datatype,
+            })
+        }
+    }
+}
+
+/// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`. `factor` is a
+/// `Decimal` rather than F&O's `xs:double`: this crate keeps its stored values exact
+/// (no floats), so the multiplication stays exact too. `yearMonthDuration` results
+/// are rounded to the nearest whole month, ties toward positive infinity (matching
+/// `fn:round`, since months cannot be fractional).
+pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, XsdError> {
+    match dur.datatype {
+        XsdDatatype::YearMonthDuration => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let product = decimal_mul_raw(&months_dec, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "yearMonthDuration multiplication overflow")
+            })?;
+            let months = round_decimal_to_i64(dur.datatype, &product)?;
+            Ok(Duration {
+                months,
+                seconds: Decimal::from_parts(0, 0),
+                datatype: dur.datatype,
+            })
+        }
+        XsdDatatype::DayTimeDuration => {
+            let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "dayTimeDuration multiplication overflow")
+            })?;
+            Ok(Duration {
+                months: 0,
+                seconds,
+                datatype: dur.datatype,
+            })
+        }
+        _ => Err(XsdError::TypeMismatch {
+            reason: "multiply requires a yearMonthDuration or dayTimeDuration operand",
+        }),
+    }
+}
+
+/// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`. `divisor` is a
+/// `Decimal` for the same exactness reason as [`multiply_duration`]; a zero divisor
+/// is `Err(DivisionByZero)`.
+pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, XsdError> {
+    if divisor.is_zero() {
+        return Err(XsdError::DivisionByZero {
+            datatype: dur.datatype,
+        });
+    }
+    match dur.datatype {
+        XsdDatatype::YearMonthDuration => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let quotient = decimal_div_raw(&months_dec, divisor)?;
+            let months = round_decimal_to_i64(dur.datatype, &quotient)?;
+            Ok(Duration {
+                months,
+                seconds: Decimal::from_parts(0, 0),
+                datatype: dur.datatype,
+            })
+        }
+        XsdDatatype::DayTimeDuration => {
+            let seconds = decimal_div_raw(&dur.seconds, divisor)?;
+            Ok(Duration {
+                months: 0,
+                seconds,
+                datatype: dur.datatype,
+            })
+        }
+        _ => Err(XsdError::TypeMismatch {
+            reason: "divide requires a yearMonthDuration or dayTimeDuration operand",
+        }),
+    }
+}
+
+/// `op:divide-yearMonthDuration-by-yearMonthDuration` → `xs:decimal`.
+pub fn divide_year_month_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+    require_year_month_duration(a)?;
+    require_year_month_duration(b)?;
+    if b.months == 0 {
+        return Err(XsdError::DivisionByZero {
+            datatype: XsdDatatype::YearMonthDuration,
+        });
+    }
+    decimal_div_raw(
+        &Decimal::from_parts(i128::from(a.months), 0),
+        &Decimal::from_parts(i128::from(b.months), 0),
+    )
+}
+
+/// `op:divide-dayTimeDuration-by-dayTimeDuration` → `xs:decimal`.
+pub fn divide_day_time_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+    require_day_time_duration(a)?;
+    require_day_time_duration(b)?;
+    if b.seconds.is_zero() {
+        return Err(XsdError::DivisionByZero {
+            datatype: XsdDatatype::DayTimeDuration,
+        });
+    }
+    decimal_div_raw(&a.seconds, &b.seconds)
+}
+
 // ── Canonical lexical mapping ────────────────────────────────────────────────────
 
 fn fmt_year(year: i64) -> String {
@@ -1202,5 +2065,347 @@ mod tests {
         assert_eq!(dt.hour(), 10);
         assert_eq!(dt.minute(), 30);
         assert_eq!(dt.timezone_minutes(), Some(0));
+    }
+
+    // ── fn:adjust-*-to-timezone (XPath F&O §9.5) ──────────────────────────────────
+
+    #[test]
+    fn adjust_datetime_shifts_same_instant() {
+        // F&O worked example: 2002-03-07T10:00:00-07:00 adjusted to +10:00 becomes
+        // 2002-03-08T03:00:00+10:00 — the same instant, re-expressed.
+        let dt = parse_datetime("2002-03-07T10:00:00-07:00").unwrap();
+        let adjusted = adjust_datetime_to_timezone(&dt, Some(10 * 3600)).unwrap();
+        assert_eq!(adjusted.canonical_lexical(), "2002-03-08T03:00:00+10:00");
+        // Same instant: comparing original and adjusted must be exactly Equal.
+        assert_eq!(cmp_datetime(&dt, &adjusted), Some(Ordering::Equal));
+
+        let a = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let b = adjust_datetime_to_timezone(&a, Some(3600)).unwrap();
+        assert_eq!(b.canonical_lexical(), "2024-01-01T01:00:00+01:00");
+        assert_eq!(cmp_datetime(&a, &b), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn adjust_datetime_without_timezone_attaches_no_shift() {
+        let dt = parse_datetime("2024-01-01T12:00:00").unwrap();
+        let adjusted = adjust_datetime_to_timezone(&dt, Some(3600)).unwrap();
+        // Local fields unchanged; only the timezone is attached.
+        assert_eq!(adjusted.canonical_lexical(), "2024-01-01T12:00:00+01:00");
+    }
+
+    #[test]
+    fn adjust_datetime_removes_timezone() {
+        let dt = parse_datetime("2024-01-01T12:00:00Z").unwrap();
+        let adjusted = adjust_datetime_to_timezone(&dt, None).unwrap();
+        assert_eq!(adjusted.canonical_lexical(), "2024-01-01T12:00:00");
+        assert_eq!(adjusted.timezone_minutes(), None);
+    }
+
+    #[test]
+    fn adjust_datetime_timezone_boundary() {
+        let dt = parse_datetime("2024-01-01T12:00:00Z").unwrap();
+        // ±14:00 is accepted.
+        assert!(adjust_datetime_to_timezone(&dt, Some(14 * 3600)).is_ok());
+        assert!(adjust_datetime_to_timezone(&dt, Some(-14 * 3600)).is_ok());
+        // Beyond ±14:00 is rejected.
+        assert!(adjust_datetime_to_timezone(&dt, Some(14 * 3600 + 60)).is_err());
+        assert!(adjust_datetime_to_timezone(&dt, Some(-14 * 3600 - 60)).is_err());
+        // Non-whole-minute offsets are rejected.
+        assert!(adjust_datetime_to_timezone(&dt, Some(90)).is_err());
+        assert!(adjust_datetime_to_timezone(&dt, Some(3661)).is_err());
+    }
+
+    #[test]
+    fn adjust_date_rolls_over_and_removes() {
+        // Midnight in +10:00 shifted to -07:00: local = 00:00 - 17h, which rolls
+        // back to the previous day (2002-03-06T07:00, date truncated to the date).
+        let d = parse_date("2002-03-07+10:00").unwrap();
+        let adjusted = adjust_date_to_timezone(&d, Some(-7 * 3600)).unwrap();
+        assert_eq!(adjusted.canonical_lexical(), "2002-03-06-07:00");
+
+        let no_tz = parse_date("2024-06-15").unwrap();
+        let attached = adjust_date_to_timezone(&no_tz, Some(0)).unwrap();
+        assert_eq!(attached.canonical_lexical(), "2024-06-15Z");
+
+        let removed = adjust_date_to_timezone(&d, None).unwrap();
+        assert_eq!(removed.canonical_lexical(), "2002-03-07");
+    }
+
+    #[test]
+    fn adjust_time_wraps_and_removes() {
+        let t = parse_time("10:00:00-07:00").unwrap();
+        let adjusted = adjust_time_to_timezone(&t, Some(10 * 3600)).unwrap();
+        assert_eq!(adjusted.canonical_lexical(), "03:00:00+10:00");
+
+        let removed = adjust_time_to_timezone(&t, None).unwrap();
+        assert_eq!(removed.canonical_lexical(), "10:00:00");
+
+        let no_tz = parse_time("08:30:00").unwrap();
+        let attached = adjust_time_to_timezone(&no_tz, Some(-5 * 3600)).unwrap();
+        assert_eq!(attached.canonical_lexical(), "08:30:00-05:00");
+    }
+
+    // ── Duration ↔ calendar arithmetic: Appendix E month-end clamping ────────────
+
+    fn ymd(dt: XsdDatatype, s: &str) -> Duration {
+        parse_duration(dt, s).unwrap()
+    }
+
+    #[test]
+    fn add_year_month_duration_clamps_to_month_end() {
+        // Jan 31 + P1M: Feb 29 in a leap year, Feb 28 otherwise.
+        let leap = parse_date("2024-01-31").unwrap();
+        let p1m = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        assert_eq!(
+            add_year_month_duration_to_date(&leap, &p1m)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-02-29"
+        );
+        let non_leap = parse_date("2023-01-31").unwrap();
+        assert_eq!(
+            add_year_month_duration_to_date(&non_leap, &p1m)
+                .unwrap()
+                .canonical_lexical(),
+            "2023-02-28"
+        );
+        // Aug 31 + P1M = Sep 30 (Sep has 30 days).
+        let aug31 = parse_date("2024-08-31").unwrap();
+        assert_eq!(
+            add_year_month_duration_to_date(&aug31, &p1m)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-09-30"
+        );
+        // Same clamping rule applies to dateTime.
+        let leap_dt = parse_datetime("2024-01-31T10:15:00").unwrap();
+        assert_eq!(
+            add_year_month_duration_to_datetime(&leap_dt, &p1m)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-02-29T10:15:00"
+        );
+    }
+
+    #[test]
+    fn subtract_year_month_duration_clamps_to_month_end() {
+        // Mar 31 - P1M = Feb 29 (2024 is a leap year).
+        let d = parse_date("2024-03-31").unwrap();
+        let p1m = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        assert_eq!(
+            subtract_year_month_duration_from_date(&d, &p1m)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-02-29"
+        );
+    }
+
+    #[test]
+    fn day_time_duration_add_subtract_datetime() {
+        let dt = parse_datetime("2024-01-01T23:00:00Z").unwrap();
+        let p2h = ymd(XsdDatatype::DayTimeDuration, "PT2H");
+        // Crosses midnight into the next day.
+        assert_eq!(
+            add_day_time_duration_to_datetime(&dt, &p2h)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-01-02T01:00:00Z"
+        );
+        assert_eq!(
+            subtract_day_time_duration_from_datetime(&dt, &p2h)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-01-01T21:00:00Z"
+        );
+    }
+
+    #[test]
+    fn day_time_duration_add_to_date_rolls_over() {
+        let d = parse_date("2024-01-31").unwrap();
+        let p2d = ymd(XsdDatatype::DayTimeDuration, "P2D");
+        assert_eq!(
+            add_day_time_duration_to_date(&d, &p2d)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-02-02"
+        );
+        assert_eq!(
+            subtract_day_time_duration_from_date(&d, &p2d)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-01-29"
+        );
+    }
+
+    #[test]
+    fn day_time_duration_add_to_time_wraps() {
+        let t = parse_time("23:30:00").unwrap();
+        let p1h = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        // Wraps past midnight; only the time-of-day survives.
+        assert_eq!(
+            add_day_time_duration_to_time(&t, &p1h)
+                .unwrap()
+                .canonical_lexical(),
+            "00:30:00"
+        );
+        assert_eq!(
+            subtract_day_time_duration_from_time(&t, &p1h)
+                .unwrap()
+                .canonical_lexical(),
+            "22:30:00"
+        );
+    }
+
+    #[test]
+    fn duration_to_calendar_arithmetic_rejects_wrong_subtype() {
+        let dt = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let general = ymd(XsdDatatype::Duration, "P1Y1D");
+        assert!(add_year_month_duration_to_datetime(&dt, &general).is_err());
+        assert!(add_day_time_duration_to_datetime(&dt, &general).is_err());
+    }
+
+    // ── subtract-{dateTimes,dates,times} → dayTimeDuration ────────────────────────
+
+    #[test]
+    fn subtract_datetimes_across_timezones() {
+        let a = parse_datetime("2000-10-30T06:12:00-05:00").unwrap();
+        let b = parse_datetime("1999-11-28T09:00:00-13:00").unwrap();
+        let d = subtract_datetimes(&a, &b).unwrap();
+        assert_eq!(d.datatype(), XsdDatatype::DayTimeDuration);
+        // Sanity: the difference should be a large positive dayTimeDuration
+        // (a is about a year after b).
+        assert!(d.seconds().mantissa() > 0);
+
+        // Same instant, expressed in different offsets → zero difference.
+        let x = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let y = parse_datetime("2024-01-01T01:00:00+01:00").unwrap();
+        let zero = subtract_datetimes(&x, &y).unwrap();
+        assert!(zero.seconds().is_zero());
+    }
+
+    #[test]
+    fn subtract_datetimes_indeterminate_mix_is_error() {
+        let with_tz = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let without_tz = parse_datetime("2024-01-01T00:00:00").unwrap();
+        assert!(subtract_datetimes(&with_tz, &without_tz).is_err());
+        assert!(subtract_datetimes(&without_tz, &with_tz).is_err());
+        // Both untimezoned is fine (naive difference).
+        let a = parse_datetime("2024-01-02T00:00:00").unwrap();
+        let b = parse_datetime("2024-01-01T00:00:00").unwrap();
+        let d = subtract_datetimes(&a, &b).unwrap();
+        assert_eq!(d.seconds().canonical_lexical(), "86400");
+    }
+
+    #[test]
+    fn subtract_dates_and_times() {
+        let a = parse_date("2024-01-03").unwrap();
+        let b = parse_date("2024-01-01").unwrap();
+        let d = subtract_dates(&a, &b).unwrap();
+        assert_eq!(d.seconds().canonical_lexical(), "172800"); // 2 days
+
+        let t1 = parse_time("10:00:00").unwrap();
+        let t2 = parse_time("08:30:00").unwrap();
+        let dt = subtract_times(&t1, &t2).unwrap();
+        assert_eq!(dt.seconds().canonical_lexical(), "5400"); // 1.5 hours
+    }
+
+    // ── Duration arithmetic (XPath F&O §10.4) ─────────────────────────────────────
+
+    #[test]
+    fn duration_add_subtract_same_subtype() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let b = ymd(XsdDatatype::YearMonthDuration, "P6M");
+        assert_eq!(add_durations(&a, &b).unwrap().canonical_lexical(), "P1Y6M");
+        assert_eq!(
+            subtract_durations(&a, &b).unwrap().canonical_lexical(),
+            "P6M"
+        );
+
+        let x = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        let y = ymd(XsdDatatype::DayTimeDuration, "PT30M");
+        assert_eq!(
+            add_durations(&x, &y).unwrap().canonical_lexical(),
+            "PT1H30M"
+        );
+        assert_eq!(
+            subtract_durations(&x, &y).unwrap().canonical_lexical(),
+            "PT30M"
+        );
+    }
+
+    #[test]
+    fn duration_add_rejects_mixed_subtype() {
+        let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let dt = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        assert!(add_durations(&ym, &dt).is_err());
+        // The general xsd:duration is also rejected — F&O defines +/-/*// only for
+        // the two named subtypes.
+        let general_a = ymd(XsdDatatype::Duration, "P1Y1D");
+        let general_b = ymd(XsdDatatype::Duration, "P1D");
+        assert!(add_durations(&general_a, &general_b).is_err());
+    }
+
+    #[test]
+    fn duration_multiply_and_divide() {
+        let d = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        let two = Decimal::from_parts(2, 0);
+        assert_eq!(
+            multiply_duration(&d, &two).unwrap().canonical_lexical(),
+            "PT2H"
+        );
+        assert_eq!(
+            divide_duration(&d, &two).unwrap().canonical_lexical(),
+            "PT30M"
+        );
+
+        // yearMonthDuration multiply rounds to the nearest whole month.
+        let ym = ymd(XsdDatatype::YearMonthDuration, "P1M"); // 1 month
+        let three = Decimal::from_parts(3, 0);
+        assert_eq!(multiply_duration(&ym, &three).unwrap().months(), 3);
+        let half = parse_decimal("0.5").unwrap();
+        // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity).
+        assert_eq!(multiply_duration(&ym, &half).unwrap().months(), 1);
+    }
+
+    #[test]
+    fn duration_divide_by_zero_is_error() {
+        let d = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        let zero = Decimal::from_parts(0, 0);
+        assert!(matches!(
+            divide_duration(&d, &zero),
+            Err(XsdError::DivisionByZero { .. })
+        ));
+    }
+
+    #[test]
+    fn day_time_duration_divided_by_day_time_duration() {
+        let a = ymd(XsdDatatype::DayTimeDuration, "PT1H");
+        let b = ymd(XsdDatatype::DayTimeDuration, "PT30M");
+        let q = divide_day_time_durations(&a, &b).unwrap();
+        assert_eq!(q.canonical_lexical(), "2");
+
+        let zero = ymd(XsdDatatype::DayTimeDuration, "PT0S");
+        assert!(matches!(
+            divide_day_time_durations(&a, &zero),
+            Err(XsdError::DivisionByZero { .. })
+        ));
+    }
+
+    #[test]
+    fn year_month_duration_divided_by_year_month_duration() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let b = ymd(XsdDatatype::YearMonthDuration, "P6M");
+        let q = divide_year_month_durations(&a, &b).unwrap();
+        assert_eq!(q.canonical_lexical(), "2");
+    }
+
+    // ── Component accessors ────────────────────────────────────────────────────────
+
+    #[test]
+    fn duration_component_accessors() {
+        let d = parse_duration(XsdDatatype::Duration, "P1Y2M3DT4H5M6S").unwrap();
+        assert_eq!(d.months(), 14); // 1*12 + 2
+        // 3 days + 4h + 5m + 6s = 259200 + 14400 + 300 + 6 = 273906
+        assert_eq!(d.seconds().canonical_lexical(), "273906");
     }
 }
