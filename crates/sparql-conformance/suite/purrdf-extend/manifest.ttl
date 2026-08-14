@@ -20,6 +20,29 @@
 #                               inclusive +-PT14H boundary, and an out-of-range
 #                               offset left unbound (a SPARQL expression error)
 #
+# Beyond the seven capabilities above, this manifest also carries a handful of
+# admission/surface proofs for other branch work that a vendored suite cannot
+# exercise:
+#
+#   * VERSION "1.2" — a positive EVALUATION case (not merely syntax): proves
+#     the version prologue is not just parsed but actually ADMITTED, letting
+#     the query run to completion.
+#   * AGG(<iri>, args…) — the custom-aggregate call surface. This harness has
+#     no per-case mechanism to configure an `AggregateRegistry` (see
+#     `crate::run::run`'s `QueryOptions` construction, which never sets
+#     `aggregates`, and `SparqlTestCase`, which carries no such field) — so
+#     evaluating a *registered* custom aggregate is out of reach here and is
+#     instead covered end-to-end in
+#     `crates/sparql-eval/tests/aggregate_function_e2e.rs`. What THIS harness
+#     can and does prove is the SYNTAX: a positive case for the one-or-more-
+#     args call shape, and a negative case for the zero-args form (a genuine
+#     parse-time arity rule — SPARQL 1.2's "positional args only, one-or-more"
+#     — not a registry-dependent admission check).
+#   * GROUP_CONCAT determinism — an exact-string pin of the row-order-dependent
+#     concatenation (see `purrdf_sparql_eval::modifier`'s "Aggregate
+#     semantics" docs), exercised through this harness's own
+#     Turtle-load/evaluate path rather than only the in-process engine tests.
+#
 
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
 # graph dimension — reifier_quads always yields g: None (default graph). Reifiers
@@ -50,6 +73,10 @@
         :adjustTimeShift
         :adjustTimeRemoval
         :adjustBoundaryPt14h
+        :versionEval
+        :aggCallSyntax
+        :aggCallNoArgs
+        :groupConcatOrder
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -126,3 +153,21 @@
     mf:name "ADJUST() accepts the inclusive +-PT14H timezone boundary" ;
     mf:action [ qt:query <adjust-boundary-pt14h.rq> ] ;
     mf:result <adjust-boundary-pt14h.srx> .
+
+:versionEval a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2\" is admitted, not merely parsed: the prologue-carrying query evaluates" ;
+    mf:action [ qt:query <version-eval.rq> ] ;
+    mf:result <version-eval.srx> .
+
+:aggCallSyntax a mf:PositiveSyntaxTest ;
+    mf:name "AGG(<iri>, args…) parses: the custom-aggregate call surface, one-or-more positional args" ;
+    mf:action <agg-call-syntax.rq> .
+
+:aggCallNoArgs a mf:NegativeSyntaxTest ;
+    mf:name "AGG(<iri>) with zero positional args is a hard syntax error (one-or-more, not zero-or-more)" ;
+    mf:action <agg-call-no-args.rq> .
+
+:groupConcatOrder a mf:QueryEvaluationTest ;
+    mf:name "GROUP_CONCAT concatenates in input row order — an exact-string pin through this harness's own load/evaluate path" ;
+    mf:action [ qt:query <group-concat-order.rq> ; qt:data <group-concat-order.ttl> ] ;
+    mf:result <group-concat-order.srx> .

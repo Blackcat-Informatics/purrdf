@@ -1,0 +1,4 @@
+PREFIX : <https://example.org/agg-call#>
+SELECT ?s (AGG(<https://example.org/agg#custom>, ?v) AS ?result) WHERE {
+  ?s :value ?v
+} GROUP BY ?s

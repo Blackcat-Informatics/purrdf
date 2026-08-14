@@ -613,6 +613,59 @@ fn distinct_interacts_with_a_statistical_member() {
     assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10");
 }
 
+/// `ex:mval` over five subjects: values {1, 2, 3, 4, 5} — chosen (rather than
+/// reusing `stat_dataset`'s g1={1,2,3,4}) so BOTH the population and sample
+/// moments land on an exact, clean decimal: `Σx=15`, `Σx²=55`, numerator
+/// `Σx² − (Σx)²/n = 55 − 45 = 10`, population denom 5 → `VAR_POP = 2`, sample
+/// denom 4 → `VARIANCE = 2.5`.
+fn moments_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let mval = b.intern_iri(&format!("{EX}mval"));
+    for (i, v) in [1, 2, 3, 4, 5].into_iter().enumerate() {
+        let s = b.intern_iri(&format!("{EX}m{i}"));
+        let vt = int_literal(&mut b, v);
+        b.push_quad(s, mval, vt, None);
+    }
+    b.freeze().expect("freeze")
+}
+
+/// The three moment-based members `STDDEV`/`VARIANCE`/`VAR_POP` had no
+/// string-surface (`AGG(<iri>, …)`) coverage in this file — only
+/// `STDDEV_POP` did (see `group_by_query_computes_several_statistical_members_per_group`).
+/// `VARIANCE`/`VAR_POP` are exact decimal division (see `crate::stat_agg`'s
+/// `MomentsAccumulator::finish`), so their answers are pinned as exact
+/// strings; `STDDEV`'s final `sqrt` step is inexact `f64`, so it is compared
+/// with a tolerance exactly like `STDDEV_POP` is elsewhere in this file.
+#[test]
+fn moments_stddev_variance_and_var_pop_end_to_end() {
+    let reg = statistical_registry();
+    let ds = moments_dataset();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}VARIANCE>, ?v) AS ?variance) \
+         (AGG(<{STAT_NS}VAR_POP>, ?v) AS ?varPop) \
+         (AGG(<{STAT_NS}STDDEV>, ?v) AS ?stddev) \
+         WHERE {{ ?s <{EX}mval> ?v }}"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    let result_rows = rows(&result);
+    assert_eq!(result_rows.len(), 1);
+    assert_eq!(
+        stat_lex(&result_rows[0], 0),
+        "2.5",
+        "sample variance over {{1,2,3,4,5}}: 10/4"
+    );
+    assert_eq!(
+        stat_lex(&result_rows[0], 1),
+        "2",
+        "population variance over {{1,2,3,4,5}}: 10/5, integer-valued decimal has no point"
+    );
+    let stddev: f64 = stat_lex(&result_rows[0], 2).parse().expect("double");
+    assert!(
+        (stddev - 2.5_f64.sqrt()).abs() < 1e-9,
+        "sample stddev = sqrt(sample variance) = sqrt(2.5), got {stddev}"
+    );
+}
+
 #[test]
 fn a_local_name_outside_the_closed_set_is_refused_at_prepare_time() {
     let reg = statistical_registry();

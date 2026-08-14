@@ -1,0 +1,2 @@
+VERSION "1.2"
+SELECT (2 + 2 AS ?doubled) WHERE {}

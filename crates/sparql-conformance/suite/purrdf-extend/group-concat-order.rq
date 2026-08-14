@@ -1,0 +1,4 @@
+PREFIX : <https://example.org/gc#>
+SELECT (GROUP_CONCAT(?v; SEPARATOR="-") AS ?g) WHERE {
+  ?s :item ?v
+}
