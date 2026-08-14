@@ -2942,6 +2942,14 @@ impl<'a> Parser<'a, '_> {
         if let Some(func) = aggregate_function(&upper) {
             return self.parse_aggregate(func, aggs);
         }
+        // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate surface;
+        // also lifts to a synthetic Group variable, exactly like a named built-in
+        // aggregate. Checked here (rather than added to `aggregate_function`)
+        // because it does not follow the `NAME(...)` dispatch table shape: its
+        // first token inside the parens is an IRI, not an expression.
+        if upper == "AGG" {
+            return self.parse_agg_call(aggs);
+        }
         match upper.as_str() {
             "BOUND" => {
                 self.pos += 1;
@@ -3016,32 +3024,70 @@ impl<'a> Parser<'a, '_> {
         self.pos += 1; // function name
         self.expect(&Token::LParen)?;
         // DISTINCT precedes `*` in `COUNT(DISTINCT *)`; consume it first so the
-        // star form carries the flag (the `*` arm previously hid the DISTINCT,
-        // making CountStar { distinct: true } unreachable).
+        // star form carries the flag (an earlier shape hid the DISTINCT behind a
+        // separate CountStar variant, making `distinct: true` on the star form
+        // unreachable).
         let distinct = self.eat_kw("DISTINCT");
         let agg = if self.eat(&Token::Star) {
-            // COUNT(*) / COUNT(DISTINCT *)
-            AggregateExpression::CountStar { distinct }
+            // COUNT(*) / COUNT(DISTINCT *): the spec's empty exprlist.
+            AggregateExpression {
+                function: func,
+                args: Vec::new(),
+                scalarvals: Vec::new(),
+                distinct,
+            }
         } else {
             let inner = self.parse_expression()?;
-            let separator = if let AggregateFunction::GroupConcat { .. } = func {
-                self.parse_optional_separator()?
-            } else {
-                None
-            };
-            let function = match func {
-                AggregateFunction::GroupConcat { .. } => {
-                    AggregateFunction::GroupConcat { separator }
-                }
-                other => other,
-            };
-            AggregateExpression::FunctionCall {
-                function,
-                expression: Box::new(inner),
+            let mut scalarvals = Vec::new();
+            if matches!(func, AggregateFunction::GroupConcat)
+                && let Some(sep) = self.parse_optional_separator()?
+            {
+                scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
+            }
+            AggregateExpression {
+                function: func,
+                args: vec![inner],
+                scalarvals,
                 distinct,
             }
         };
         self.expect(&Token::RParen)?;
+        let synth = self.fresh_agg_var();
+        aggs.push((synth.clone(), agg));
+        Ok(Expression::Variable(synth))
+    }
+
+    /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, …)` custom-aggregate surface
+    /// (issue-normative spelling — no `ParserOptions` gate, since it introduces no
+    /// ambiguity with any other production). `<iri>` may be any IRI, including a
+    /// prefixed name, resolved and retained byte-exact via
+    /// [`Self::expect_iri_node`]. `DISTINCT`, if present, precedes the first
+    /// positional argument. At least one argument is required — an empty argument
+    /// list is a hard syntax error, matching the issue's "positional args only,
+    /// one-or-more" surface (there is no `AGG(<iri>)` zero-arity form).
+    fn parse_agg_call(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Expression> {
+        self.pos += 1; // `AGG`
+        self.expect(&Token::LParen)?;
+        let iri = self.expect_iri_node()?;
+        self.expect(&Token::Comma)?;
+        let distinct = self.eat_kw("DISTINCT");
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_expression()?);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RParen)?;
+        let agg = AggregateExpression {
+            function: AggregateFunction::Custom(iri),
+            args,
+            scalarvals: Vec::new(),
+            distinct,
+        };
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
@@ -3519,7 +3565,7 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
         "MIN" => AggregateFunction::Min,
         "MAX" => AggregateFunction::Max,
         "SAMPLE" => AggregateFunction::Sample,
-        "GROUP_CONCAT" => AggregateFunction::GroupConcat { separator: None },
+        "GROUP_CONCAT" => AggregateFunction::GroupConcat,
         _ => return None,
     })
 }
@@ -3840,7 +3886,7 @@ mod tests {
         assert_eq!(aggregates.len(), 1);
         assert!(matches!(
             aggregates[0].1,
-            AggregateExpression::FunctionCall {
+            AggregateExpression {
                 function: AggregateFunction::Count,
                 ..
             }
@@ -3897,7 +3943,7 @@ mod tests {
         );
         assert!(aggregates.iter().any(|(_, ae)| matches!(
             ae,
-            AggregateExpression::FunctionCall {
+            AggregateExpression {
                 function: AggregateFunction::Count,
                 ..
             }
@@ -4086,7 +4132,7 @@ mod tests {
         assert!(
             matches!(
                 &aggregates[0].1,
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Count,
                     ..
                 }
@@ -4105,6 +4151,114 @@ mod tests {
             matches!(err, ParseError::Unsupported(_)),
             "expected Unsupported for aggregate in filter position, got {err:?}"
         );
+    }
+
+    // ── AGG(<iri>, …) custom-aggregate surface ──────────────────────────────
+
+    #[test]
+    fn agg_call_single_arg_parses_to_custom_aggregate() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?x) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert!(
+            matches!(&agg.function, AggregateFunction::Custom(n) if n.as_str() == "http://ex/myAgg"),
+            "expected Custom(<http://ex/myAgg>), got {:?}",
+            agg.function
+        );
+        assert_eq!(agg.args.len(), 1);
+        assert!(!agg.distinct);
+        assert!(agg.scalarvals.is_empty());
+    }
+
+    #[test]
+    fn agg_call_distinct_multi_arg_parses() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, DISTINCT ?x, ?y) AS ?a) \
+             WHERE {{ ?x a ?t . ?x purrdf:vantage ?y }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert!(
+            matches!(&agg.function, AggregateFunction::Custom(n) if n.as_str() == "http://ex/myAgg")
+        );
+        assert_eq!(agg.args.len(), 2);
+        assert!(agg.distinct);
+    }
+
+    #[test]
+    fn agg_call_accepts_a_prefixed_name_iri() {
+        // `<iri>` may be any IRI, including a prefixed name resolved against the
+        // query's prologue, retained byte-exact via `expect_iri_node`.
+        let q =
+            format!("{GM}SELECT ?t (AGG(purrdf:myAgg, ?x) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert!(matches!(
+            &aggregates[0].1.function,
+            AggregateFunction::Custom(n) if n.as_str() == "https://x/myAgg"
+        ));
+    }
+
+    #[test]
+    fn agg_call_requires_at_least_one_argument() {
+        let q =
+            format!("{GM}SELECT ?t (AGG(<http://ex/myAgg>) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        assert!(SparqlParser::new().parse_query(&q).is_err());
+    }
+
+    #[test]
+    fn count_star_has_empty_args() {
+        let q = format!("{GM}SELECT ?t (COUNT(*) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        assert!(
+            aggregates[0].1.args.is_empty(),
+            "COUNT(*) must have the spec's empty exprlist, got {:?}",
+            aggregates[0].1.args
+        );
+        assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
+    }
+
+    #[test]
+    fn group_concat_separator_is_a_scalarval() {
+        let q = format!(
+            "{GM}SELECT ?t (GROUP_CONCAT(?x; SEPARATOR=\"|\") AS ?g) WHERE {{ ?x a ?t }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates[0].1.separator(), Some("|"));
     }
 
     // ── Bounded repetition {n,m} + predicate wildcard (PurRDF extensions) ──

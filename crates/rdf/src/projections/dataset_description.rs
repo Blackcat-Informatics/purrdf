@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
-    PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
+    Expression, Function, GraphPattern, OrderExpression, ParserOptions, PurrdfFn, Query,
+    SparqlParser, TermPattern, TriplePattern,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -359,11 +359,11 @@ fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
             inner, aggregates, ..
         } => {
             pattern_reaches_non_reproducible_builtin(inner)
-                || aggregates.iter().any(|(_, aggregate)| match aggregate {
-                    AggregateExpression::CountStar { .. } => false,
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        expression_reaches_non_reproducible_builtin(expression)
-                    }
+                || aggregates.iter().any(|(_, aggregate)| {
+                    aggregate
+                        .args
+                        .iter()
+                        .any(expression_reaches_non_reproducible_builtin)
                 })
         }
         // A property-function call invokes a HOST-supplied relation, and whether that

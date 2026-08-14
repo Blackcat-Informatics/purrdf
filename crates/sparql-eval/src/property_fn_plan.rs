@@ -654,19 +654,15 @@ fn plan_aggregate(
     relations: Option<&PropertyFunctionRegistry>,
     outer: &DetHashSet<Variable>,
 ) -> Result<AggregateExpression, EvalError> {
-    Ok(match aggregate {
-        AggregateExpression::CountStar { distinct } => AggregateExpression::CountStar {
-            distinct: *distinct,
-        },
-        AggregateExpression::FunctionCall {
-            function,
-            expression,
-            distinct,
-        } => AggregateExpression::FunctionCall {
-            function: function.clone(),
-            expression: Box::new(plan_expression(expression, relations, outer)?),
-            distinct: *distinct,
-        },
+    Ok(AggregateExpression {
+        function: aggregate.function.clone(),
+        args: aggregate
+            .args
+            .iter()
+            .map(|e| plan_expression(e, relations, outer))
+            .collect::<Result<Vec<_>, EvalError>>()?,
+        scalarvals: aggregate.scalarvals.clone(),
+        distinct: aggregate.distinct,
     })
 }
 

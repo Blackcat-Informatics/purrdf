@@ -17,8 +17,8 @@ use purrdf_rdf::{
     SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::{
-    AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal,
-    NamedNodePattern, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
+    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors,
@@ -753,15 +753,14 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
         } => {
             names.extend(variables.iter().map(|v| v.as_str().to_owned()));
             for (_, aggregate) in aggregates {
-                match aggregate {
-                    // `COUNT(*)` names no variable and returns row MULTIPLICITY, which every
-                    // variable of the grouped pattern contributes to — so all of them are
-                    // observable through it.
-                    AggregateExpression::CountStar { .. } => {
-                        collect_all_variables(inner, names);
-                    }
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        collect_expression_variables(expression, names);
+                if aggregate.args.is_empty() {
+                    // `COUNT(*)` — the spec's empty exprlist. It names no variable and
+                    // returns row MULTIPLICITY, which every variable of the grouped
+                    // pattern contributes to — so all of them are observable through it.
+                    collect_all_variables(inner, names);
+                } else {
+                    for arg in &aggregate.args {
+                        collect_expression_variables(arg, names);
                     }
                 }
             }

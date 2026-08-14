@@ -1169,23 +1169,65 @@ pub enum OrderExpression {
     Desc(Expression),
 }
 
-/// A `GROUP BY` aggregate.
+/// A `GROUP BY` aggregate — SPARQL 1.1 §18.5.1's algebra node
+/// `Aggregation(exprlist, func, scalarvals, G)`, carried 1:1 rather than as the
+/// ad hoc `CountStar`/`FunctionCall` split this replaces.
+///
+/// * [`Self::function`] — the aggregate operator: one of the SPARQL 1.1
+///   built-ins, or [`AggregateFunction::Custom`] for an extension aggregate
+///   parsed from the `AGG(<iri>, …)` surface.
+/// * [`Self::args`] — the spec's `exprlist`. Every built-in aggregate except
+///   `COUNT` is fixed-arity ONE (`SUM(?x)`, `GROUP_CONCAT(?x)`, `AVG(?x)`, …).
+///   `COUNT` is the one variable-shape built-in: `COUNT(?x)` has
+///   `args == [?x]`; `COUNT(*)` has the spec's EMPTY exprlist —
+///   `args == []` — with NO separate "count-star" variant, exactly mirroring
+///   §18.5.1's algebra (a bare `function: Count` with an empty `args` IS
+///   `COUNT(*)`; a non-empty `args` is `COUNT(expr)`). A
+///   [`AggregateFunction::Custom`] aggregate's arity is whatever the query
+///   supplied via the positional `AGG(<iri>, arg, arg, …)` surface — one or
+///   more expressions; there is no fixed arity to check structurally, only the
+///   parser's "at least one" rule.
+/// * [`Self::scalarvals`] — the spec's scalar-values map. An ORDERED
+///   `Vec<(key, value)>` — deliberately never a hash map, so serialization and
+///   any diagnostic built from it stay byte-deterministic. Only the built-ins
+///   populate it, and only with the keys the SPARQL grammar itself defines:
+///   today, `"separator"` for `GROUP_CONCAT`'s optional `SEPARATOR="…"`
+///   (absent — `scalarvals` empty — when no `SEPARATOR` was written). Every
+///   other built-in's `scalarvals` is empty. A [`AggregateFunction::Custom`]
+///   aggregate's `scalarvals` is ALWAYS empty: the issue-normative
+///   `AGG(<iri>, …)` surface is positional-only (see that variant's docs) —
+///   PurRDF invents no `key = value` scalar syntax for it. A future parse form
+///   that needs named scalars is a new surface decision, not a silent reuse of
+///   this field.
+/// * [`Self::distinct`] — whether `DISTINCT` preceded the arguments
+///   (`COUNT(DISTINCT *)` / `COUNT(DISTINCT ?x)` / `AGG(<iri>, DISTINCT ?a,
+///   ?b)` / …); recorded verbatim regardless of whether the function gives it
+///   meaning.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum AggregateExpression {
-    /// `COUNT(*)`.
-    CountStar {
-        /// Whether `DISTINCT` was present.
-        distinct: bool,
-    },
-    /// An aggregate over an expression, e.g. `SUM(?x)` or `COUNT(DISTINCT ?x)`.
-    FunctionCall {
-        /// Which aggregate function.
-        function: AggregateFunction,
-        /// The aggregated expression.
-        expression: Box<Expression>,
-        /// Whether `DISTINCT` was present.
-        distinct: bool,
-    },
+pub struct AggregateExpression {
+    /// Which aggregate function.
+    pub function: AggregateFunction,
+    /// The aggregate's expression list (the spec's `exprlist`). Empty only for
+    /// `COUNT(*)`; see the struct docs.
+    pub args: Vec<Expression>,
+    /// The spec's scalar-values map — an ordered, deterministic
+    /// `(key, value)` list; see the struct docs.
+    pub scalarvals: Vec<(String, Literal)>,
+    /// Whether `DISTINCT` was present.
+    pub distinct: bool,
+}
+
+impl AggregateExpression {
+    /// `GROUP_CONCAT`'s `SEPARATOR` scalarval, if present (looked up by key in
+    /// [`Self::scalarvals`]). `None` for a bare `GROUP_CONCAT(?x)` with no
+    /// `; SEPARATOR="…"`, or for any other aggregate.
+    #[must_use]
+    pub fn separator(&self) -> Option<&str> {
+        self.scalarvals
+            .iter()
+            .find(|(k, _)| k == "separator")
+            .map(|(_, v)| v.value())
+    }
 }
 
 /// The named SPARQL aggregate functions.
@@ -1203,12 +1245,27 @@ pub enum AggregateFunction {
     Max,
     /// `SAMPLE`.
     Sample,
-    /// `GROUP_CONCAT`, with an optional `SEPARATOR`.
-    GroupConcat {
-        /// The `SEPARATOR` string, if given.
-        separator: Option<String>,
-    },
-    /// A custom aggregate identified by IRI.
+    /// `GROUP_CONCAT`. The optional `SEPARATOR` lives on the owning
+    /// [`AggregateExpression::scalarvals`] (key `"separator"`), not here — the
+    /// spec's scalar-values map is a property of the aggregation node, not of
+    /// the function name.
+    GroupConcat,
+    /// A custom aggregate identified by an arbitrary IRI, parsed from
+    /// `AGG(<iri>, [DISTINCT] arg, arg, …)` — the issue-normative spelling:
+    /// positional expression arguments only, no `key = value` scalars. `<iri>`
+    /// may be any IRI, including a prefixed name resolved against the query's
+    /// prologue; it is retained byte-exact so serialization re-emits exactly
+    /// what the query author wrote (PurRDF fabricates no vocabulary IRI of its
+    /// own on output).
+    ///
+    /// This is a deliberate divergence from Jena's ARQ, which spells a custom
+    /// aggregate as `AGG <iri>(args)` (the IRI directly prefixing the call,
+    /// not as the first positional argument); PurRDF's surface follows the
+    /// issue's own `AGG(<iri>, …)` spelling instead.
+    ///
+    /// Evaluating a `Custom` aggregate is not yet implemented — `sparql-eval`
+    /// currently returns a typed "unsupported" error for it; only its parse
+    /// and re-serialization shape is covered here.
     Custom(NamedNode),
 }
 

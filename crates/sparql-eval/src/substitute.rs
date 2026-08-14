@@ -449,17 +449,15 @@ fn substitute_in_aggregate(
     agg: AggregateExpression,
     expr_subs: &HashMap<String, Option<Expression>>,
 ) -> AggregateExpression {
-    match agg {
-        AggregateExpression::CountStar { distinct } => AggregateExpression::CountStar { distinct },
-        AggregateExpression::FunctionCall {
-            function,
-            expression,
-            distinct,
-        } => AggregateExpression::FunctionCall {
-            function,
-            expression: Box::new(substitute_in_expression(*expression, expr_subs)),
-            distinct,
-        },
+    AggregateExpression {
+        function: agg.function,
+        args: agg
+            .args
+            .into_iter()
+            .map(|e| substitute_in_expression(e, expr_subs))
+            .collect(),
+        scalarvals: agg.scalarvals,
+        distinct: agg.distinct,
     }
 }
 

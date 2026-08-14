@@ -653,11 +653,11 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
     // BNODE/list-mint reachable) for the per-group compute below to run under
     // the fork-join model; `should_parallelize` (inside `par_chunk_try_map_init`)
-    // still gates on group count.
-    let safe = aggregates.iter().all(|(_, agg)| match agg {
-        AggregateExpression::CountStar { .. } => true,
-        AggregateExpression::FunctionCall { expression, .. } => ctx.may_fork_row_loop(expression),
-    });
+    // still gates on group count. `COUNT(*)`'s empty `args` trivially passes
+    // (nothing to check), exactly as the prior `CountStar { .. } => true` arm did.
+    let safe = aggregates
+        .iter()
+        .all(|(_, agg)| agg.args.iter().all(|e| ctx.may_fork_row_loop(e)));
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
@@ -715,51 +715,48 @@ fn eval_aggregate<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match agg {
-        AggregateExpression::CountStar { distinct } => {
-            let count = if *distinct {
-                let mut seen: DetHashSet<&Solution<D::Id>> = DetHashSet::default();
-                idxs.iter().filter(|&&i| seen.insert(&rows[i])).count()
-            } else {
-                idxs.len()
-            };
-            Ok(Some(integer_term(ctx, count as i64)))
-        }
-        AggregateExpression::FunctionCall {
-            function,
-            expression,
-            distinct,
-        } => {
-            // Collect the bound values of the expression over the group.
-            let mut values: Vec<(SolutionTerm<D::Id>, TermValue)> = Vec::new();
-            for &i in idxs {
-                if let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? {
-                    let value = ctx.scratch.value_of(ctx.dataset, term);
-                    values.push((term, value));
-                }
-            }
-            if *distinct {
-                let mut seen: DetHashSet<SolutionTerm<D::Id>> = DetHashSet::default();
-                values.retain(|(t, _)| seen.insert(*t));
-            }
-            apply_aggregate(function, &values, ctx)
+    // `COUNT(*)` is the spec's empty exprlist: count rows (or distinct rows),
+    // never evaluating an expression at all.
+    let Some(expression) = agg.args.first() else {
+        let count = if agg.distinct {
+            let mut seen: DetHashSet<&Solution<D::Id>> = DetHashSet::default();
+            idxs.iter().filter(|&&i| seen.insert(&rows[i])).count()
+        } else {
+            idxs.len()
+        };
+        return Ok(Some(integer_term(ctx, count as i64)));
+    };
+    // Every built-in aggregate other than `COUNT(*)` is unary; a `Custom`
+    // aggregate's arity may exceed one (`AGG(<iri>, a, b)`), but evaluating one
+    // is not yet implemented (see `apply_aggregate`'s `Custom` arm), so only the
+    // first argument is ever read here.
+    let mut values: Vec<(SolutionTerm<D::Id>, TermValue)> = Vec::new();
+    for &i in idxs {
+        if let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? {
+            let value = ctx.scratch.value_of(ctx.dataset, term);
+            values.push((term, value));
         }
     }
+    if agg.distinct {
+        let mut seen: DetHashSet<SolutionTerm<D::Id>> = DetHashSet::default();
+        values.retain(|(t, _)| seen.insert(*t));
+    }
+    apply_aggregate(agg, &values, ctx)
 }
 
 /// Apply a named aggregate to the collected group values.
 fn apply_aggregate<D: DatasetView + Sync>(
-    function: &AggregateFunction,
+    agg: &AggregateExpression,
     values: &[(SolutionTerm<D::Id>, TermValue)],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match function {
+    match &agg.function {
         AggregateFunction::Count => Ok(Some(integer_term(ctx, values.len() as i64))),
         AggregateFunction::Sample => Ok(values.first().map(|(t, _)| *t)),
         AggregateFunction::Min => Ok(extreme(values, Ordering::Less)),
         AggregateFunction::Max => Ok(extreme(values, Ordering::Greater)),
-        AggregateFunction::GroupConcat { separator } => {
-            let sep = separator.as_deref().unwrap_or(" ");
+        AggregateFunction::GroupConcat => {
+            let sep = agg.separator().unwrap_or(" ");
             let joined = values
                 .iter()
                 .filter_map(|(_, v)| lexical_of(v))
@@ -1134,7 +1131,12 @@ mod tests {
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::CountStar { distinct: false },
+                AggregateExpression {
+                    function: AggregateFunction::Count,
+                    args: Vec::new(),
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -1179,9 +1181,10 @@ mod tests {
             variables: vec![Variable::new("t")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Count,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: true,
                 },
             )],
@@ -1234,7 +1237,12 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::CountStar { distinct: false },
+                AggregateExpression {
+                    function: AggregateFunction::Count,
+                    args: Vec::new(),
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -1257,9 +1265,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Min,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1297,9 +1306,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Sum,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1339,9 +1349,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Sum,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1371,9 +1382,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Sum,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1405,9 +1417,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Sum,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1452,9 +1465,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Avg,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1483,9 +1497,10 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Avg,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1527,9 +1542,10 @@ mod tests {
             variables: vec![Variable::new("who")],
             aggregates: vec![(
                 Variable::new("total"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Sum,
-                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    args: vec![Expression::Variable(Variable::new("n"))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1692,21 +1708,28 @@ mod tests {
             aggregates: vec![
                 (
                     Variable::new("cnt"),
-                    AggregateExpression::CountStar { distinct: false },
+                    AggregateExpression {
+                        function: AggregateFunction::Count,
+                        args: Vec::new(),
+                        scalarvals: Vec::new(),
+                        distinct: false,
+                    },
                 ),
                 (
                     Variable::new("avg"),
-                    AggregateExpression::FunctionCall {
+                    AggregateExpression {
                         function: AggregateFunction::Avg,
-                        expression: Box::new(Expression::Variable(Variable::new("val"))),
+                        args: vec![Expression::Variable(Variable::new("val"))],
+                        scalarvals: Vec::new(),
                         distinct: false,
                     },
                 ),
                 (
                     Variable::new("mx"),
-                    AggregateExpression::FunctionCall {
+                    AggregateExpression {
                         function: AggregateFunction::Max,
-                        expression: Box::new(Expression::Variable(Variable::new("val"))),
+                        args: vec![Expression::Variable(Variable::new("val"))],
+                        scalarvals: Vec::new(),
                         distinct: false,
                     },
                 ),

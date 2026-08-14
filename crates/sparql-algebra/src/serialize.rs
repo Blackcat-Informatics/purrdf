@@ -30,7 +30,8 @@
 use core::fmt::Write as _;
 
 use crate::algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PropertyFunctionCall,
+    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
+    PropertyFunctionCall,
 };
 use crate::ast::{
     BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
@@ -40,10 +41,6 @@ use crate::ast::{
 /// A `GROUP BY` key + its `(output var, aggregate)` pairs, borrowed from a
 /// [`GraphPattern::Group`] node during sub-`SELECT` reconstruction.
 type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
-
-// `AggregateFunction` is referenced only by the test-only aggregate renderer.
-#[cfg(test)]
-use crate::algebra::AggregateFunction;
 
 /// Render `inner` as a complete `SELECT * WHERE { … }` query string.
 ///
@@ -438,12 +435,17 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
             vars.iter().any(|v| !as_targets.contains(v))
         }
     };
+    // Every select-expression/`HAVING`/`ORDER BY` render below sits ABOVE the
+    // `Group` in the modifier chain, so each resolves an aggregate's synthetic
+    // output variable to its rendered call form via `group` — see
+    // `fmt_expr_agg`'s docs for why this is required for correctness, not just
+    // cosmetics.
     for (i, (var, expr)) in select_exprs.iter().enumerate() {
         if plain_emitted || i > 0 {
             s.push(' ');
         }
         s.push('(');
-        fmt_expr(s, expr);
+        fmt_expr_agg(s, expr, group);
         let _ = write!(s, " AS {})", VarRef(var));
     }
 
@@ -465,7 +467,7 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
         s.push_str(" HAVING");
         for expr in &having {
             s.push('(');
-            fmt_expr(s, expr);
+            fmt_expr_agg(s, expr, group);
             s.push(')');
         }
     }
@@ -475,12 +477,12 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
             match oe {
                 OrderExpression::Asc(e) => {
                     s.push_str(" ASC(");
-                    fmt_expr(s, e);
+                    fmt_expr_agg(s, e, group);
                     s.push(')');
                 }
                 OrderExpression::Desc(e) => {
                     s.push_str(" DESC(");
-                    fmt_expr(s, e);
+                    fmt_expr_agg(s, e, group);
                     s.push(')');
                 }
             }
@@ -644,7 +646,54 @@ impl core::fmt::Display for VarRef<'_> {
 
 /// Emit an expression. Binary and unary operators are conservatively
 /// parenthesized so re-parse never depends on reproducing exact precedence.
+///
+/// This is a thin wrapper over [`fmt_expr_agg`] with no enclosing `Group` in
+/// scope; every call site outside [`fmt_subselect`]'s SELECT-expression/
+/// `HAVING`/`ORDER BY` rendering reaches only WHERE-body expressions, which can
+/// never reference an aggregate's synthetic output variable (see
+/// [`fmt_expr_agg`]'s docs).
 fn fmt_expr(s: &mut String, e: &Expression) {
+    fmt_expr_agg(s, e, None);
+}
+
+/// As [`fmt_expr`], but resolving any bare reference to a `Group` aggregate's
+/// synthetic output variable — recursively, wherever it appears in the
+/// expression tree — to that aggregate's rendered call form instead of the
+/// bare variable name.
+///
+/// # Why this exists
+///
+/// The WHERE body [`fmt_subselect`] emits never binds an aggregate's synthetic
+/// output variable (`__purrdf_agg_N`, minted by the parser's aggregate-lifting;
+/// see `Parser::fresh_agg_var`) — the aggregate FUNCTION CALL is what binds it,
+/// and that call has no surface-syntax home inside the WHERE clause itself
+/// (§18.2.4's algebra evaluates `Group` strictly after the WHERE body). So a
+/// projection `(expr AS ?v)`, a `HAVING(expr)`, or an `ORDER BY` key that
+/// mentions one of these synthetic variables — which is exactly how the parser
+/// represents `(COUNT(?x) AS ?c)`, `HAVING(COUNT(?x) > 5)`, or
+/// `ORDER BY DESC(COUNT(?x))` — must have that reference resolved back to the
+/// aggregate call on the way out, or the serialized query would be
+/// syntactically valid but reference a variable nothing binds (the exact
+/// "aggregates dropped" class of bug this module fixes, generalized to every
+/// expression position an aggregate can reach, not just a bare `(AGG AS ?v)`
+/// projection item).
+///
+/// `group` is `None` everywhere else in this module (plain `fmt_expr`) because
+/// an aggregate's synthetic variable cannot escape into the WHERE body: it is
+/// introduced by `Group`'s OWN aggregate list and consumed only by the
+/// SELECT-expression/`HAVING`/`ORDER BY` layer sitting directly above that
+/// `Group` in the modifier chain — never by a `FILTER`/`BIND` inside the body,
+/// and never by a nested `EXISTS` pattern (a fresh, self-contained WHERE scope
+/// reached via `fmt_group_body`, which is why the `Exists` arm below does not
+/// thread `group` through).
+fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
+    if let Expression::Variable(v) = e
+        && let Some((_, aggs)) = group
+        && let Some((_, agg)) = aggs.iter().find(|(ov, _)| ov == v)
+    {
+        fmt_aggregate(s, agg);
+        return;
+    }
     match e {
         Expression::NamedNode(n) => {
             let _ = write!(s, "<{}>", n.as_str());
@@ -656,64 +705,64 @@ fn fmt_expr(s: &mut String, e: &Expression) {
         Expression::Bound(v) => {
             let _ = write!(s, "BOUND({})", VarRef(v));
         }
-        Expression::Or(a, b) => fmt_binop(s, a, "||", b),
-        Expression::And(a, b) => fmt_binop(s, a, "&&", b),
-        Expression::Equal(a, b) => fmt_binop(s, a, "=", b),
+        Expression::Or(a, b) => fmt_binop(s, a, "||", b, group),
+        Expression::And(a, b) => fmt_binop(s, a, "&&", b, group),
+        Expression::Equal(a, b) => fmt_binop(s, a, "=", b, group),
         Expression::SameTerm(a, b) => {
             s.push_str("sameTerm(");
-            fmt_expr(s, a);
+            fmt_expr_agg(s, a, group);
             s.push_str(", ");
-            fmt_expr(s, b);
+            fmt_expr_agg(s, b, group);
             s.push(')');
         }
-        Expression::Greater(a, b) => fmt_binop(s, a, ">", b),
-        Expression::GreaterOrEqual(a, b) => fmt_binop(s, a, ">=", b),
-        Expression::Less(a, b) => fmt_binop(s, a, "<", b),
-        Expression::LessOrEqual(a, b) => fmt_binop(s, a, "<=", b),
-        Expression::Add(a, b) => fmt_binop(s, a, "+", b),
-        Expression::Subtract(a, b) => fmt_binop(s, a, "-", b),
-        Expression::Multiply(a, b) => fmt_binop(s, a, "*", b),
-        Expression::Divide(a, b) => fmt_binop(s, a, "/", b),
+        Expression::Greater(a, b) => fmt_binop(s, a, ">", b, group),
+        Expression::GreaterOrEqual(a, b) => fmt_binop(s, a, ">=", b, group),
+        Expression::Less(a, b) => fmt_binop(s, a, "<", b, group),
+        Expression::LessOrEqual(a, b) => fmt_binop(s, a, "<=", b, group),
+        Expression::Add(a, b) => fmt_binop(s, a, "+", b, group),
+        Expression::Subtract(a, b) => fmt_binop(s, a, "-", b, group),
+        Expression::Multiply(a, b) => fmt_binop(s, a, "*", b, group),
+        Expression::Divide(a, b) => fmt_binop(s, a, "/", b, group),
         Expression::UnaryPlus(a) => {
             s.push_str("(+");
-            fmt_expr(s, a);
+            fmt_expr_agg(s, a, group);
             s.push(')');
         }
         Expression::UnaryMinus(a) => {
             s.push_str("(-");
-            fmt_expr(s, a);
+            fmt_expr_agg(s, a, group);
             s.push(')');
         }
         Expression::Not(a) => {
             s.push_str("(!");
-            fmt_expr(s, a);
+            fmt_expr_agg(s, a, group);
             s.push(')');
         }
         Expression::In(a, list) => {
             s.push('(');
-            fmt_expr(s, a);
+            fmt_expr_agg(s, a, group);
             s.push_str(" IN (");
-            fmt_expr_list(s, list);
+            fmt_expr_list_agg(s, list, group);
             s.push_str("))");
         }
         Expression::If(c, t, e2) => {
             s.push_str("IF(");
-            fmt_expr(s, c);
+            fmt_expr_agg(s, c, group);
             s.push_str(", ");
-            fmt_expr(s, t);
+            fmt_expr_agg(s, t, group);
             s.push_str(", ");
-            fmt_expr(s, e2);
+            fmt_expr_agg(s, e2, group);
             s.push(')');
         }
         Expression::Coalesce(list) => {
             s.push_str("COALESCE(");
-            fmt_expr_list(s, list);
+            fmt_expr_list_agg(s, list, group);
             s.push(')');
         }
         Expression::FunctionCall(func, args) => {
             fmt_function_name(s, func);
             s.push('(');
-            fmt_expr_list(s, args);
+            fmt_expr_list_agg(s, args, group);
             s.push(')');
         }
         Expression::Exists(p) => {
@@ -725,21 +774,33 @@ fn fmt_expr(s: &mut String, e: &Expression) {
 }
 
 /// Emit `(a OP b)` with conservative parentheses.
-fn fmt_binop(s: &mut String, a: &Expression, op: &str, b: &Expression) {
+fn fmt_binop(
+    s: &mut String,
+    a: &Expression,
+    op: &str,
+    b: &Expression,
+    group: Option<GroupSpec<'_>>,
+) {
     s.push('(');
-    fmt_expr(s, a);
+    fmt_expr_agg(s, a, group);
     let _ = write!(s, " {op} ");
-    fmt_expr(s, b);
+    fmt_expr_agg(s, b, group);
     s.push(')');
 }
 
 /// Emit a comma-separated expression list.
 fn fmt_expr_list(s: &mut String, list: &[Expression]) {
+    fmt_expr_list_agg(s, list, None);
+}
+
+/// As [`fmt_expr_list`], but resolving aggregate synthetic variables; see
+/// [`fmt_expr_agg`].
+fn fmt_expr_list_agg(s: &mut String, list: &[Expression], group: Option<GroupSpec<'_>>) {
     for (i, e) in list.iter().enumerate() {
         if i > 0 {
             s.push_str(", ");
         }
-        fmt_expr(s, e);
+        fmt_expr_agg(s, e, group);
     }
 }
 
@@ -820,60 +881,61 @@ fn fmt_function_name(s: &mut String, f: &Function) {
     s.push_str(name);
 }
 
-/// Emit a SPARQL aggregate expression `FUNC([DISTINCT] expr [; SEPARATOR="…"])`.
+/// Emit a SPARQL aggregate expression: `COUNT(*)`, `FUNC([DISTINCT] expr
+/// [; SEPARATOR="…"])`, or `AGG(<iri>, [DISTINCT] arg, arg, …)` for a
+/// [`AggregateFunction::Custom`] aggregate.
 ///
-/// Used by [`fmt_subselect`] only when an aggregate appears explicitly; the
-/// hoisted synthetic-variable form is handled structurally. Exposed for tests.
-#[cfg(test)]
+/// Used by [`fmt_subselect`] (via [`fmt_expr_agg`]) wherever an aggregate's
+/// synthetic output variable is referenced in the SELECT projection, `HAVING`,
+/// or `ORDER BY` — the production SERVICE-federation path this module exists
+/// for. An aggregate's own `args` are plain WHERE-body expressions (nested
+/// aggregates are not legal SPARQL), so they render through the group-free
+/// [`fmt_expr`].
 fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
-    match agg {
-        AggregateExpression::CountStar { distinct } => {
-            s.push_str("COUNT(");
+    let AggregateExpression {
+        function,
+        args,
+        distinct,
+        ..
+    } = agg;
+    let name = match function {
+        AggregateFunction::Count => "COUNT",
+        AggregateFunction::Sum => "SUM",
+        AggregateFunction::Avg => "AVG",
+        AggregateFunction::Min => "MIN",
+        AggregateFunction::Max => "MAX",
+        AggregateFunction::Sample => "SAMPLE",
+        AggregateFunction::GroupConcat => "GROUP_CONCAT",
+        AggregateFunction::Custom(n) => {
+            // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the issue-normative
+            // custom-aggregate surface (see `AggregateFunction::Custom`'s docs);
+            // the IRI is the FIRST positional argument, not a call prefix.
+            let _ = write!(s, "AGG(<{}>, ", n.as_str());
             if *distinct {
                 s.push_str("DISTINCT ");
             }
-            s.push_str("*)");
-        }
-        AggregateExpression::FunctionCall {
-            function,
-            expression,
-            distinct,
-        } => {
-            let name = match function {
-                AggregateFunction::Count => "COUNT",
-                AggregateFunction::Sum => "SUM",
-                AggregateFunction::Avg => "AVG",
-                AggregateFunction::Min => "MIN",
-                AggregateFunction::Max => "MAX",
-                AggregateFunction::Sample => "SAMPLE",
-                AggregateFunction::GroupConcat { .. } => "GROUP_CONCAT",
-                AggregateFunction::Custom(n) => {
-                    let _ = write!(s, "<{}>(", n.as_str());
-                    if *distinct {
-                        s.push_str("DISTINCT ");
-                    }
-                    fmt_expr(s, expression);
-                    s.push(')');
-                    return;
-                }
-            };
-            s.push_str(name);
-            s.push('(');
-            if *distinct {
-                s.push_str("DISTINCT ");
-            }
-            fmt_expr(s, expression);
-            if let AggregateFunction::GroupConcat {
-                separator: Some(sep),
-            } = function
-            {
-                s.push_str("; SEPARATOR=\"");
-                push_escaped(s, sep);
-                s.push('"');
-            }
+            fmt_expr_list(s, args);
             s.push(')');
+            return;
         }
+    };
+    s.push_str(name);
+    s.push('(');
+    if *distinct {
+        s.push_str("DISTINCT ");
     }
+    if args.is_empty() {
+        // The spec's empty exprlist: COUNT(*) / COUNT(DISTINCT *).
+        s.push('*');
+    } else {
+        fmt_expr_list(s, args);
+    }
+    if let Some(sep) = agg.separator() {
+        s.push_str("; SEPARATOR=\"");
+        push_escaped(s, sep);
+        s.push('"');
+    }
+    s.push(')');
 }
 
 #[cfg(test)]
@@ -1029,6 +1091,110 @@ mod tests {
         );
     }
 
+    // ── aggregate round-trip pins (the production SERVICE-federation path) ───
+    //
+    // `pattern_to_select_query` is called in production ONLY on a `SERVICE`
+    // node's `inner` pattern (`sparql-eval`'s `remote.rs`), and a `SERVICE`
+    // body that contains `GROUP BY`/an aggregate can only get there by being a
+    // nested `{ SELECT ... }` sub-select (the SPARQL grammar has no way to write
+    // `GROUP BY` directly inside a bare `{ GroupGraphPatternSub }`) — so each
+    // aggregate form here is pinned the same way `roundtrip_service_grouped_
+    // aggregate` below pins the production path itself: wrapped as a nested
+    // sub-select, exactly mirroring `roundtrip_subselect_distinct_limit`'s
+    // existing convention for non-aggregate solution modifiers. Each parses,
+    // renders through `pattern_to_select_query`, re-parses, and asserts the
+    // re-parsed algebra equals the original — proving the aggregate survives
+    // the production serializer rather than being silently dropped.
+    fn assert_subselect_roundtrip(inner_select_query: &str) {
+        assert_roundtrip(&format!("SELECT * WHERE {{ {{ {inner_select_query} }} }}"));
+    }
+
+    #[test]
+    fn roundtrip_count_star() {
+        assert_subselect_roundtrip("SELECT ?t (COUNT(*) AS ?c) WHERE { ?x a ?t } GROUP BY ?t");
+    }
+
+    #[test]
+    fn roundtrip_count_distinct() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (COUNT(DISTINCT ?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_sum() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (SUM(?n) AS ?s) WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_min_max_avg_sample() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (MIN(?n) AS ?mn) (MAX(?n) AS ?mx) (AVG(?n) AS ?a) (SAMPLE(?n) AS ?sm) \
+             WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_group_concat_no_separator() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (GROUP_CONCAT(?n) AS ?g) WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_group_concat_with_separator() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (GROUP_CONCAT(?n; SEPARATOR=\"|\") AS ?g) WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_agg_custom_single_arg() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (AGG(<http://ex/myAgg>, ?n) AS ?a) WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_agg_custom_distinct_multi_arg() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (AGG(<http://ex/myAgg>, DISTINCT ?n, ?m) AS ?a) \
+             WHERE { ?x a ?t ; <http://ex/n> ?n ; <http://ex/m> ?m } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_having_referencing_aggregate() {
+        // The HAVING clause references the aggregate's synthetic output variable
+        // (COUNT(?x)), not just the SELECT projection — exercising the same
+        // resolve-on-the-way-out fix for a second expression position.
+        assert_subselect_roundtrip(
+            "SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t HAVING(COUNT(?x) > 1)",
+        );
+    }
+
+    #[test]
+    fn roundtrip_order_by_referencing_aggregate() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t ORDER BY DESC(COUNT(?x))",
+        );
+    }
+
+    #[test]
+    fn roundtrip_service_grouped_aggregate() {
+        // The exact hole this module's `fmt_subselect` fix closes: a grouped +
+        // aggregated pattern forwarded to a federated SPARQL endpoint via SERVICE.
+        // Before the fix, the aggregate function itself was dropped, leaving a
+        // `(?__purrdf_agg_N AS ?c)` reference to a variable nothing in the
+        // forwarded query text binds.
+        assert_roundtrip(
+            "SELECT * WHERE { SERVICE <http://ep/sparql> { \
+             SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t } }",
+        );
+    }
+
     #[test]
     fn produces_complete_select() {
         let p = pattern_of("SELECT * WHERE { ?s <http://ex/p> ?o }");
@@ -1073,16 +1239,46 @@ mod tests {
 
     #[test]
     fn aggregate_renders_group_concat_separator() {
-        let agg = AggregateExpression::FunctionCall {
-            function: AggregateFunction::GroupConcat {
-                separator: Some("|".to_owned()),
-            },
-            expression: Box::new(Expression::Variable(Variable::new("x"))),
+        let agg = AggregateExpression {
+            function: AggregateFunction::GroupConcat,
+            args: vec![Expression::Variable(Variable::new("x"))],
+            scalarvals: vec![("separator".to_owned(), Literal::new_simple("|"))],
             distinct: false,
         };
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "GROUP_CONCAT(?x; SEPARATOR=\"|\")");
+    }
+
+    #[test]
+    fn aggregate_renders_count_star() {
+        let agg = AggregateExpression {
+            function: AggregateFunction::Count,
+            args: Vec::new(),
+            scalarvals: Vec::new(),
+            distinct: true,
+        };
+        let mut s = String::new();
+        fmt_aggregate(&mut s, &agg);
+        assert_eq!(s, "COUNT(DISTINCT *)");
+    }
+
+    #[test]
+    fn aggregate_renders_custom_agg_call() {
+        let agg = AggregateExpression {
+            function: AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked(
+                "http://ex/myAgg",
+            )),
+            args: vec![
+                Expression::Variable(Variable::new("a")),
+                Expression::Variable(Variable::new("b")),
+            ],
+            scalarvals: Vec::new(),
+            distinct: true,
+        };
+        let mut s = String::new();
+        fmt_aggregate(&mut s, &agg);
+        assert_eq!(s, "AGG(<http://ex/myAgg>, DISTINCT ?a, ?b)");
     }
 
     // ── property functions ────────────────────────────────────────────────────

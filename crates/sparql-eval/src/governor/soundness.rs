@@ -90,24 +90,27 @@
 //!
 //! # Enforcement
 //!
-//! **Every `match` over [`GraphPattern`], [`Expression`], [`OrderExpression`], and
-//! [`AggregateExpression`] in this module is wildcard-free — no `_ =>` arm, and every
-//! field of every variant is named.** A new algebra variant, or a new field on an
-//! existing one, must therefore be a compile error (E0004) here rather than silently
-//! inheriting the most permissive classification, which is
-//! [`SpineClass::Certain`] — i.e. rather than silently licensing partial rows to cross as
-//! answers. This mirrors the enforcement idiom `purrdf_sparql_conformance`'s OWL-RL
+//! **Every `match` over [`GraphPattern`], [`Expression`], and [`OrderExpression`] in
+//! this module is wildcard-free — no `_ =>` arm, and every field of every variant is
+//! named.** A new algebra variant, or a new field on an existing one, must therefore
+//! be a compile error (E0004) here rather than silently inheriting the most
+//! permissive classification, which is [`SpineClass::Certain`] — i.e. rather than
+//! silently licensing partial rows to cross as answers. This mirrors the enforcement
+//! idiom `purrdf_sparql_conformance`'s OWL-RL
 //! scoreboard uses for the same reason: an unclassified case counted as a neighbour
 //! prints a figure that is not what it says it is.
+//!
+//! (`purrdf_sparql_algebra::AggregateExpression` is a struct, not an enum, so it has
+//! no variants to match over; its `args` exprlist is walked directly by field access
+//! instead — see the `GraphPattern::Group` arm below — so the same "no silent
+//! fallthrough" property holds without needing a match at all.)
 
 // The certificate is a pure function of the algebra and holds no evaluator types, which
 // is what lets it be exercised against hand-built plans (see this module's tests) rather
 // than only through whole-query evaluation — a certificate that can only be observed
 // through the thing it licenses is a certificate nobody can falsify.
 
-use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
-};
+use purrdf_sparql_algebra::{Expression, Function, GraphPattern, OrderExpression};
 
 // ---------------------------------------------------------------------------
 // Per-child transfer functions
@@ -602,13 +605,11 @@ where
             if visit(PatternPart::Child(inner, ChildEdge::OPAQUE)) {
                 return true;
             }
-            aggregates.iter().any(|(_, aggregate)| match aggregate {
-                AggregateExpression::CountStar { distinct: _ } => false,
-                AggregateExpression::FunctionCall {
-                    function: _,
-                    expression,
-                    distinct: _,
-                } => visit(PatternPart::Expression(expression)),
+            aggregates.iter().any(|(_, aggregate)| {
+                aggregate
+                    .args
+                    .iter()
+                    .any(|e| visit(PatternPart::Expression(e)))
             })
         }
     }
@@ -1115,7 +1116,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use purrdf_sparql_algebra::{
-        AggregateFunction, GroundTerm, Literal, NamedNode, NamedNodePattern,
+        AggregateExpression, AggregateFunction, GroundTerm, Literal, NamedNode, NamedNodePattern,
         PropertyPathExpression, TermPattern, TriplePattern, Variable,
     };
 
@@ -1444,7 +1445,12 @@ mod tests {
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression::CountStar { distinct: false },
+                AggregateExpression {
+                    function: AggregateFunction::Count,
+                    args: Vec::new(),
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
             )],
         };
         let inner = context_at(&plan, &[0]);
@@ -1575,9 +1581,10 @@ mod tests {
             variables: Vec::new(),
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Count,
-                    expression: Box::new(Expression::Exists(boxed(other_bgp()))),
+                    args: vec![Expression::Exists(boxed(other_bgp()))],
+                    scalarvals: Vec::new(),
                     distinct: false,
                 },
             )],
@@ -1811,7 +1818,12 @@ mod tests {
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression::CountStar { distinct: false },
+                AggregateExpression {
+                    function: AggregateFunction::Count,
+                    args: Vec::new(),
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
             )],
         };
         let ordered = GraphPattern::OrderBy {

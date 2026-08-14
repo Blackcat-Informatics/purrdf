@@ -906,11 +906,8 @@ fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
             aggregates,
         } => {
             for (_, agg) in aggregates {
-                match agg {
-                    purrdf_sparql_algebra::AggregateExpression::CountStar { .. } => {}
-                    purrdf_sparql_algebra::AggregateExpression::FunctionCall {
-                        expression, ..
-                    } => expr_vars(expression, out),
+                for arg in &agg.args {
+                    expr_vars(arg, out);
                 }
             }
             pattern_expr_vars(inner, out);
@@ -1220,21 +1217,15 @@ pub(crate) fn substitute_pattern(
             aggregates: aggregates
                 .iter()
                 .map(|(v, agg)| {
-                    let new_agg = match agg {
-                        purrdf_sparql_algebra::AggregateExpression::CountStar { distinct } => {
-                            purrdf_sparql_algebra::AggregateExpression::CountStar {
-                                distinct: *distinct,
-                            }
-                        }
-                        purrdf_sparql_algebra::AggregateExpression::FunctionCall {
-                            function,
-                            expression,
-                            distinct,
-                        } => purrdf_sparql_algebra::AggregateExpression::FunctionCall {
-                            function: function.clone(),
-                            expression: Box::new(substitute_expr(expression, bindings)),
-                            distinct: *distinct,
-                        },
+                    let new_agg = purrdf_sparql_algebra::AggregateExpression {
+                        function: agg.function.clone(),
+                        args: agg
+                            .args
+                            .iter()
+                            .map(|e| substitute_expr(e, bindings))
+                            .collect(),
+                        scalarvals: agg.scalarvals.clone(),
+                        distinct: agg.distinct,
                     };
                     (v.clone(), new_agg)
                 })
