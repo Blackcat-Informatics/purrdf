@@ -907,9 +907,9 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         AggregateFunction::Sample => "SAMPLE",
         AggregateFunction::GroupConcat => "GROUP_CONCAT",
         AggregateFunction::Custom(n) => {
-            // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the issue-normative
-            // custom-aggregate surface (see `AggregateFunction::Custom`'s docs);
-            // the IRI is the FIRST positional argument, not a call prefix.
+            // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate
+            // surface (see `AggregateFunction::Custom`'s docs); the IRI is the
+            // FIRST positional argument, not a call prefix.
             let _ = write!(s, "AGG(<{}>, ", n.as_str());
             if *distinct {
                 s.push_str("DISTINCT ");

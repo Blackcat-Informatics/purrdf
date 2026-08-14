@@ -3063,8 +3063,8 @@ impl<'a> Parser<'a, '_> {
     /// prefixed name, resolved and retained byte-exact via
     /// [`Self::expect_iri_node`]. `DISTINCT`, if present, precedes the first
     /// positional argument. At least one argument is required — an empty argument
-    /// list is a hard syntax error, matching the issue's "positional args only,
-    /// one-or-more" surface (there is no `AGG(<iri>)` zero-arity form).
+    /// list is a hard syntax error: the surface is positional-only, one or more
+    /// arguments (there is no `AGG(<iri>)` zero-arity form).
     fn parse_agg_call(
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,

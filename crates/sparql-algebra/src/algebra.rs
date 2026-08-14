@@ -1194,7 +1194,7 @@ pub enum OrderExpression {
 ///   today, `"separator"` for `GROUP_CONCAT`'s optional `SEPARATOR="…"`
 ///   (absent — `scalarvals` empty — when no `SEPARATOR` was written). Every
 ///   other built-in's `scalarvals` is empty. A [`AggregateFunction::Custom`]
-///   aggregate's `scalarvals` is ALWAYS empty: the issue-normative
+///   aggregate's `scalarvals` is ALWAYS empty: the
 ///   `AGG(<iri>, …)` surface is positional-only (see that variant's docs) —
 ///   PurRDF invents no `key = value` scalar syntax for it. A future parse form
 ///   that needs named scalars is a new surface decision, not a silent reuse of
@@ -1251,7 +1251,7 @@ pub enum AggregateFunction {
     /// the function name.
     GroupConcat,
     /// A custom aggregate identified by an arbitrary IRI, parsed from
-    /// `AGG(<iri>, [DISTINCT] arg, arg, …)` — the issue-normative spelling:
+    /// `AGG(<iri>, [DISTINCT] arg, arg, …)`:
     /// positional expression arguments only, no `key = value` scalars. `<iri>`
     /// may be any IRI, including a prefixed name resolved against the query's
     /// prologue; it is retained byte-exact so serialization re-emits exactly
@@ -1260,12 +1260,13 @@ pub enum AggregateFunction {
     ///
     /// This is a deliberate divergence from Jena's ARQ, which spells a custom
     /// aggregate as `AGG <iri>(args)` (the IRI directly prefixing the call,
-    /// not as the first positional argument); PurRDF's surface follows the
-    /// issue's own `AGG(<iri>, …)` spelling instead.
+    /// not as the first positional argument); PurRDF places the IRI as the
+    /// first positional argument so the call form needs no grammar beyond an
+    /// ordinary argument list.
     ///
-    /// Evaluating a `Custom` aggregate is not yet implemented — `sparql-eval`
-    /// currently returns a typed "unsupported" error for it; only its parse
-    /// and re-serialization shape is covered here.
+    /// Evaluation resolves the IRI against a caller-supplied aggregate
+    /// registry in `sparql-eval`; an unregistered IRI is refused with a typed
+    /// error when the query is prepared, before any evaluation work is spent.
     Custom(NamedNode),
 }
 
