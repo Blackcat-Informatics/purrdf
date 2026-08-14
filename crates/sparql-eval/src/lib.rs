@@ -32,7 +32,12 @@
 //! - **Hard-fail, no degraded fallback.** `SERVICE` federation ([`remote`],
 //!   [`remote_http`]), `LATERAL` (`binop`), host-injected **property-function**
 //!   relations ([`property_fn`], `property_fn_plan`, `property_fn_eval`) and
-//!   **custom aggregates** ([`agg_fn`]), and SPARQL `UPDATE` ([`update`]) are all
+//!   **custom aggregates** ([`agg_fn`], including the closed, ten-member
+//!   first-party statistical set in [`stat_agg`] — `MEDIAN`/`PERCENTILE`/
+//!   `STDDEV`/`VARIANCE`-family/`MODE`/`FIRST`/`LAST`/`TOPK`, reachable under a
+//!   caller-supplied namespace via one
+//!   [`agg_fn::AggregateRegistry::register_statistical_aggregates`] call), and
+//!   SPARQL `UPDATE` ([`update`]) are all
 //!   evaluated in-engine — none of them is out of scope. What remains a typed
 //!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
 //!   quoted-triple-term component in a BGP or property-path pattern (`convert`), an

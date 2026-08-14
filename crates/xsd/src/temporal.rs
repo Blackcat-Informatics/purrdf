@@ -1435,7 +1435,7 @@ pub fn subtract_day_time_duration_from_time(t: &Time, dur: &Duration) -> Result<
 // ── Instant subtraction → dayTimeDuration (XPath F&O §10.5) ──────────────────────
 
 /// `op:subtract-dateTimes`. Both operands must agree on whether they carry a
-/// timezone (both, or neither) — see [`instant_diff`].
+/// timezone (both, or neither) — see `instant_diff`.
 pub fn subtract_datetimes(a: &DateTime, b: &DateTime) -> Result<Duration, XsdError> {
     let a_inst = Instant {
         days: days_from_civil(a.year, a.month, a.day),
@@ -1455,7 +1455,7 @@ pub fn subtract_datetimes(a: &DateTime, b: &DateTime) -> Result<Duration, XsdErr
 }
 
 /// `op:subtract-dates`. Each date is treated as midnight in its own timezone before
-/// subtracting (per F&O); see [`instant_diff`] for the timezone-mixing rule.
+/// subtracting (per F&O); see `instant_diff` for the timezone-mixing rule.
 pub fn subtract_dates(a: &Date, b: &Date) -> Result<Duration, XsdError> {
     let zero = Decimal::from_parts(0, 0);
     let a_inst = Instant {
@@ -1476,7 +1476,7 @@ pub fn subtract_dates(a: &Date, b: &Date) -> Result<Duration, XsdError> {
 }
 
 /// `op:subtract-times`. Both times are referred to the same (arbitrary, cancelling)
-/// reference date; see [`instant_diff`] for the timezone-mixing rule.
+/// reference date; see `instant_diff` for the timezone-mixing rule.
 pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
     let a_inst = Instant {
         days: 0,

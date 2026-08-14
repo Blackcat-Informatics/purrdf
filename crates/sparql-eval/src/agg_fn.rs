@@ -79,9 +79,9 @@
 //! merges was created by the SAME [`CustomAggregate::init`] factory
 //! (`crate::parallel::par_chunk_reduce_init` never mixes accumulators from two
 //! different registrations) — so a mismatch can only mean a host bug, never a
-//! state this crate's own evaluator can produce; [`downcast_combine_partial`]
+//! state this crate's own evaluator can produce; `downcast_combine_partial`
 //! is the standard, panic-contained way to consume it (the panic a mismatched
-//! downcast raises is caught by [`combine_contained`] exactly like any other
+//! downcast raises is caught by `combine_contained` exactly like any other
 //! host panic from this seam — never a raw unwind escaping it).
 //! `crate::stat_agg`'s `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK`
 //! members are this crate's first-party example of the pattern.
@@ -210,7 +210,7 @@ pub trait AggregateAccumulator: Send + 'static {
     /// more than `finish()`'s single answer (see the module docs' "Merging
     /// structural state" section). `self: Box<Self>` (consuming, not `&mut
     /// self`) because `combine` always consumes `other` too, and
-    /// [`downcast_combine_partial`] is the standard way to consume the result.
+    /// `downcast_combine_partial` is the standard way to consume the result.
     ///
     /// No default body: a default here would need to type-check against a
     /// fully generic, possibly-unsized `Self`, which the `Box<Self> -> Box<dyn

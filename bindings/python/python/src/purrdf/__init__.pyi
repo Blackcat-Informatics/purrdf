@@ -455,6 +455,26 @@ class Store:
     # reading, in which an UNREGISTERED IRI under the namespace is a hard error
     # instead of a triple pattern that matches nothing. A duplicate IRI, a ragged
     # table, or a torn `rdf:List` raises `ValueError`.
+    #
+    # SPARQL 1.2's ADJUST(value, timezone) and the VERSION prologue declaration
+    # need no kwarg here: both are ordinary grammar the parser and evaluator
+    # handle unconditionally, unlike the extension seams above.
+    #
+    # There is no Python surface for the CUSTOM-AGGREGATE seam
+    # (`AGG(<iri>, args…)`, `purrdf_sparql_eval::agg_fn`), including the
+    # ten-member statistical set (`AggregateRegistry::register_statistical_aggregates`,
+    # `MEDIAN`/`PERCENTILE`/`STDDEV`/…). Like the property-function registry
+    # above, a registered aggregate is arbitrary host Rust — `init`/`step`/
+    # `combine`/`finish` closures, never Python callables — so registration is
+    # Rust-host-only. The property-function seam's `relations` kwarg exists
+    # because a RELATION reduces to pure data (a frozen row table); a fold has
+    # no equivalent data-only reduction, so this binding exposes no `aggregates`
+    # kwarg, not even a namespace-only one (contrast `property_fn_namespaces`,
+    # which needs no Python code either but is still absent above the
+    # data-relation surface it enables). A host embedding the Rust engine
+    # directly reaches the statistical set with one `register_statistical_aggregates`
+    # call and a `QueryOptions.aggregates` registry; through this binding, it is
+    # not reachable at all today.
     def query(
         self,
         query: str,

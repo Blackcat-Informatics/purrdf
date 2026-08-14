@@ -4,6 +4,28 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **BREAKING** **results:** ITS base-direction keys and a caller-named provenance extension
+- **sparql:** Let aggregate partial states merge by their concrete type
+
+### Features
+
+- **sparql:** Add the ADJUST builtin over dateTime, date, and time
+- **BREAKING** **sparql:** Retain the VERSION declaration as a typed value
+- **BREAKING** **sparql:** Re-found the aggregate algebra on the spec's shape
+- **sparql:** Evaluate custom aggregates through a fold-algebra registry
+- **BREAKING** **sparql:** Price the aggregate fold in the governor profile
+- **BREAKING** **sparql:** Fold single large groups in parallel, and say what GROUP_CONCAT means
+- **sparql:** Ship a statistical aggregate set under caller configuration
+
+### Testing
+
+- **results:** Pin its:dir precedence over legacy spellings in SRX
+- **sparql,conformance:** Pin the branch surface in the conformance corpus
+
 ## [0.12.0] - 2026-08-02
 
 ### Bug Fixes

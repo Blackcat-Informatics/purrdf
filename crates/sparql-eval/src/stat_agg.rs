@@ -25,11 +25,11 @@
 //! Every numeric member works over [`purrdf_xsd::XsdValue`]'s promotion tower
 //! (`integer ⊂ decimal ⊂ float ⊂ double`), through the SAME `numeric_add`/
 //! `numeric_sub`/`numeric_mul`/`numeric_div`/`numeric_floor` primitives
-//! [`crate::modifier`]'s built-in `SUM`/`AVG` fold uses — a mixed integer/decimal
+//! `crate::modifier`'s built-in `SUM`/`AVG` fold uses — a mixed integer/decimal
 //! group promotes to decimal exactly the way `AVG(1, 0.5)` already does, and
 //! division rounds at the same 18-fractional-digit ceiling `AVG` already accepts.
 //! A non-numeric input to a numeric member **poisons** the fold to unbound —
-//! `SUM`'s own discipline (see [`crate::modifier`]'s "Aggregate error handling"
+//! `SUM`'s own discipline (see `crate::modifier`'s "Aggregate error handling"
 //! docs) — rather than raising a hard error, so one malformed row does not abort
 //! the whole query over an otherwise-honest aggregate.
 //!
@@ -74,7 +74,7 @@
 //! counted as two DIFFERENT terms, exactly as `DISTINCT`'s own dedup treats
 //! them). A tie among several terms with the same maximum count is broken by
 //! the smallest term under the SAME total order `MIN`/`ORDER BY` use
-//! ([`crate::modifier::term_value_order`]); a further tie (distinct terms
+//! (`crate::modifier::term_value_order`); a further tie (distinct terms
 //! that compare value-equal under that order, e.g. `"5"`/`"05"`) falls back to
 //! [`purrdf_core::TermValue`]'s own canonical structural order, so the choice
 //! is fully deterministic regardless of scan order.
@@ -82,7 +82,7 @@
 //! # `FIRST`/`LAST`
 //!
 //! Work over any term kind, in **input row order** (the same row order
-//! `GROUP_CONCAT`/`SAMPLE` fold over — see [`crate::modifier`]'s module docs):
+//! `GROUP_CONCAT`/`SAMPLE` fold over — see `crate::modifier`'s module docs):
 //! `FIRST` is the earliest row's value, `LAST` the latest.
 //!
 //! # `TOPK`'s two-argument form and its "one term" contract
@@ -96,7 +96,7 @@
 //! multi-valued question: the top `k` values, in DESCENDING order under the
 //! SAME total value order `MIN`/`MAX`/`MODE` use, with their **lexical forms**
 //! joined by a single fixed space separator (mirroring
-//! [`crate::modifier`]'s `GROUP_CONCAT`, whose default separator is likewise
+//! `crate::modifier`'s `GROUP_CONCAT`, whose default separator is likewise
 //! `" "` per SPARQL §18.6.1.7). A configurable separator would need a THIRD
 //! positional argument; two-argument `TOPK(value, k)` keeps the arity
 //! contract as simple as `PERCENTILE`'s, so the separator is fixed by design,
@@ -128,7 +128,7 @@
 //! type BY CONSTRUCTION, since every partial accumulator a `combine` chain
 //! ever merges was created by the SAME [`crate::agg_fn::CustomAggregate::init`]
 //! factory — so `combine` can merge the SAME structural state `step` builds,
-//! through [`crate::agg_fn::downcast_combine_partial`], rather than a lossy
+//! through `crate::agg_fn::downcast_combine_partial`, rather than a lossy
 //! re-derivation from `finish()`. Each member below uses it:
 //!
 //! * `MEDIAN`/`PERCENTILE` merge their (unsorted-until-`finish`) value lists by

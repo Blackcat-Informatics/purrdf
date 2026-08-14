@@ -87,6 +87,246 @@ Anything outside this surface — and every malformed query — is a typed
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## SPARQL 1.2 temporal adjustment: `ADJUST`
+
+`ADJUST(value, timezone)` shifts an `xsd:dateTime`/`xsd:date`/`xsd:time` value to a
+given timezone offset, or attaches one to an untimezoned value. The SPARQL 1.2
+Query specification's own text carries no `ADJUST` section; the function's one
+documented definition is [SEP-0002](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0002/sep-0002.md)'s
+two-argument signature, which maps onto XPath and XQuery Functions and Operators
+§9.6's `fn:adjust-*-to-timezone` family (the same table `purrdf-xsd` implements
+for every other SPARQL 1.2 temporal builtin).
+
+```sparql
+SELECT ?adjusted WHERE {
+  BIND(ADJUST("2011-01-10T14:45:13Z"^^xsd:dateTime,
+              "-PT05H"^^xsd:dayTimeDuration) AS ?adjusted)
+}
+```
+
+`timezone` is an `xsd:dayTimeDuration` in `[-PT14H, PT14H]` (whole minutes only),
+or the empty simple literal `""` — SPARQL's stand-in for XPath's empty-sequence
+"remove the timezone" argument, since SPARQL itself has no empty sequence; this is
+the same resolution every other known SEP-0002 implementation (e.g. Apache Jena's
+`E_AdjustToTimezone`) reaches. Arity is fixed at two and enforced at parse time —
+`ADJUST(?x)` and `ADJUST(?x, ?tz, ?extra)` are both refused before evaluation.
+Every domain or type violation (a non-whole-minute offset, an out-of-range offset,
+a non-temporal first argument) is a SPARQL type error, which — inside `BIND`,
+`FILTER`, or an aggregate argument — poisons to unbound rather than aborting the
+query, per the engine's ordinary type-error discipline.
+
+## The `VERSION` declaration
+
+A query or update prologue may declare `VERSION "<string>"` (SPARQL 1.2 Query
+specification §4.4). Parsing is syntax-only — any string is accepted, and when the
+prologue repeats the declaration the last one wins — but the declared value is no
+longer discarded: `Query::version()` / `Update::version()` expose it as a typed
+`SparqlVersion`, alongside the existing `dataset()`/`base_iri()` accessors.
+
+Evaluation is the admission boundary. `VERSION "1.2"` and `VERSION "1.2-basic"`
+are recognized and evaluate normally on the full engine (`1.2-basic` is a subset
+of `1.2`; this evaluator does not yet enforce that narrower profile, so a
+`1.2-basic` query runs exactly as a `1.2` one would). Any other declared string —
+`VERSION "1.1"`, a typo, a future version this build predates — is refused at
+evaluation admission with a typed error naming the declared string, before any
+work is spent.
+
+## Extending the evaluator: custom aggregates
+
+Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/
+`SAMPLE`/`GROUP_CONCAT`), a Rust host may register additional `GROUP BY`
+reductions and reach them from query text as `AGG(<iri>, [DISTINCT] arg, arg, …)`
+— the issue-normative positional spelling (a deliberate divergence from Jena
+ARQ's `AGG <iri>(args)`). Where `purrdf_sparql_eval::property_fn` injects a
+*relation* (a row source in graph-pattern position) and `user_fn` injects a
+*scalar function* (one value per call), `agg_fn` injects a **fold**: a group's
+rows reduce to one value through a caller-supplied accumulator, exactly as a
+built-in aggregate does.
+
+A registered aggregate implements two traits — `CustomAggregate` (the
+per-IRI factory: declared arity, `Volatility`, `AlgebraicClass`, and a
+declared state bound) and `AggregateAccumulator` (the per-invocation fold:
+`step` one already-evaluated argument tuple at a time, `combine` two partial
+folds in source order, `finish` to the group's answer) — and is registered
+into an `AggregateRegistry` under an IRI of the caller's choosing:
+
+```rust,ignore
+use std::sync::Arc;
+use purrdf_core::{SparqlRequest, TermValue};
+use purrdf_sparql_eval::{
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
+    NativeSparqlEngine, QueryOptions, Volatility,
+};
+
+/// A running total over one numeric argument — `example.org`'s own
+/// `AGG(<https://example.org/agg#total>, ?x)`.
+struct TotalAccumulator {
+    sum: i64,
+}
+
+impl AggregateAccumulator for TotalAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.sum += n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.sum += n;
+        }
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self // a running total IS its own sufficient merge state
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.sum.to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        )))
+    }
+}
+
+struct TotalAggregate;
+
+impl CustomAggregate for TotalAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable // eligible for the within-group parallel fold
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0 // stateless besides the running total
+    }
+    fn init(&self) -> Box<dyn AggregateAccumulator> {
+        Box::new(TotalAccumulator { sum: 0 })
+    }
+}
+
+let mut registry = AggregateRegistry::new();
+registry.register(
+    "https://example.org/agg#total",
+    Arc::new(TotalAggregate),
+);
+
+let engine = NativeSparqlEngine::new();
+let result = engine.query_with_options_view(
+    &ds,
+    SparqlRequest {
+        query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s <https://example.org/n> ?x }",
+        base_iri: None,
+        substitutions: &[],
+    },
+    QueryOptions {
+        aggregates: Some(&registry),
+        ..QueryOptions::EMPTY
+    },
+)?;
+```
+
+An `AGG(<iri>, …)` call to an unregistered IRI, or with the wrong argument
+count, is refused when the query is **prepared** — before any budget unit is
+spent — and the prepared plan carries the registry's fingerprint, so a plan
+admitted under one registry can never silently run under another (see
+`purrdf-sparql-eval`'s `agg_fn` module docs for the full trust-boundary and
+determinism contract, including `into_any`'s role in merging structural state
+a fold's finished answer alone cannot reconstruct).
+
+`AGG(<iri>, …)` execution is governed like any other fold: profile v6 adds two
+charge points — `aggregate-invocation` (once per group per aggregate
+expression) and `aggregate-accumulation` (once per value inspected) — shared
+by built-in and custom aggregates alike, so a registered aggregate over a
+given group shape spends identical fuel to a built-in one. See
+[`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
+
+## The statistical aggregate set
+
+`purrdf-sparql-eval` ships ten exact statistical aggregates — `MEDIAN`,
+`PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+`LAST`, `TOPK` — as first-party `CustomAggregate` instances behind the same
+`agg_fn` seam, closed (no caller extension point) and reached through **one**
+call: `AggregateRegistry::register_statistical_aggregates`:
+
+```rust,ignore
+let mut registry = AggregateRegistry::new();
+registry.register_statistical_aggregates("https://example.org/agg#");
+// Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…
+```
+
+As with every vocabulary PurRDF touches, `namespace` is caller-supplied
+configuration with no fabricated default — a host that never calls this method
+gets none of the ten IRIs registered, exactly as a host that never configures
+`ParserOptions::extension_fn_namespaces` gets none of the built-in scalar
+extension functions.
+
+Per-member semantics:
+
+- **Numeric members** (`STDDEV*`/`VARIANCE*`, `MEDIAN`, `PERCENTILE`) follow
+  the same `integer ⊂ decimal ⊂ float ⊂ double` promotion tower the built-in
+  `SUM`/`AVG` fold uses; a non-numeric input **poisons** the fold to unbound
+  rather than raising a hard error, matching `SUM`'s own discipline. Only
+  `STDDEV`/`STDDEV_POP`'s final square root leaves the exact decimal tower;
+  `VARIANCE`/`VAR_POP` never do.
+- **`STDDEV`/`VARIANCE`** are the sample statistics (`n - 1` denominator,
+  unbound under two values); **`STDDEV_POP`/`VAR_POP`** are the population
+  statistics (`n` denominator, defined at one value) — SQL's own naming
+  convention.
+- **`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between
+  the two closest ranks — for an even-sized group this is exactly the mean of
+  the two middle values.
+- **`PERCENTILE`** takes a second argument, `AGG(<ns>PERCENTILE, ?x, ?p)`: `p`
+  is evaluated per row like any other aggregate argument, but must be the SAME
+  value on every row the group folds (and within `[0, 1]`) — a group that
+  disagrees on `p` poisons to unbound, the same "poison, don't abort"
+  discipline every numeric member uses.
+- **`MODE`** works over any term kind, counted by RDF term identity (not value
+  equality — `"5"^^xsd:integer` and `"05"^^xsd:integer` count as two different
+  terms). A tie is broken toward the smallest term under the same total order
+  `MIN`/`ORDER BY` use.
+- **`FIRST`/`LAST`** work over any term kind, in input row order.
+- **`TOPK`** takes a second argument, `AGG(<ns>TOPK, ?x, ?k)`: `k` is a
+  positive `xsd:integer`, constant across the group. Since every SPARQL
+  aggregate yields exactly one RDF term, `TOPK` answers the same way
+  `GROUP_CONCAT` answers a multi-valued question — the top `k` values, in
+  descending order, with their lexical forms joined by a single fixed space
+  separator.
+
+All ten declare `Volatility::Stable` and merge partial folds through real,
+type-recovered structural state (`AggregateAccumulator::into_any`) rather than
+a lossy re-derivation from a finished answer — so a large single group folds
+in parallel chunks (see `crate::modifier::eval_custom_aggregate`) with a
+result byte-identical to the sequential fold.
+
+## Reaching extensions from other hosts
+
+The property-function registry, the SHACL-AF function registry, and the
+custom-aggregate registry described above are all **Rust-closure seams**: a
+registered relation, function, or aggregate is arbitrary host Rust, so
+registering one is a Rust-host-only operation. The Python binding exposes a
+narrower, data-only reachable subset of the property-function seam
+(`property_fn_namespaces` for recognition, plus `relations`/
+`relations_from_graph` for wholly data-shaped relations — see the `Store`
+class in the `purrdf` Python package); it exposes no equivalent for the
+custom-aggregate seam today, and neither WebAssembly, the C ABI, nor the CLI
+expose either registry at all. `AggregateRegistry::register_statistical_aggregates`
+needs no per-call marshaling — unlike a general custom aggregate, it takes
+only a namespace string and wires ten pre-built Rust instances — so any host
+that already threads `QueryOptions` through to `purrdf-sparql-eval` can
+reach the whole statistical set with a one-line change, without inventing a
+cross-language callback protocol; until a binding wires that call, the set is
+reachable only by embedding the Rust engine directly.
+
 ## Entailment regimes
 
 SPARQL queries can be answered under an entailment regime by materializing the

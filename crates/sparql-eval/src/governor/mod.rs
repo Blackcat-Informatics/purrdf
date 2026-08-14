@@ -1220,7 +1220,7 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// # v6
 ///
 /// [`CHARGE_SCHEDULE`] gains two more points, because an aggregate — `COUNT`, `SUM`,
-/// `GROUP_CONCAT`, every other built-in in [`crate::modifier`]'s fold, and every registered
+/// `GROUP_CONCAT`, every other built-in in `crate::modifier`'s fold, and every registered
 /// [`crate::agg_fn::CustomAggregate`] alike — is a **third** producer whose per-group work an
 /// outside party (the data, not the plan) sizes, and until v6 that work was as invisible to
 /// the schedule as a property-function relation's was before v5: a `GROUP_CONCAT` folding a
@@ -1229,7 +1229,7 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///
 /// - [`ChargePoint::AggregateInvocation`] is charged once per `(group, aggregate expression)`
 ///   pair — the fold's init/finish overhead, charged uniformly whether the expression folds
-///   through the built-in [`crate::modifier`] path or dispatches to a registered
+///   through the built-in `crate::modifier` path or dispatches to a registered
 ///   [`crate::agg_fn::CustomAggregate`], because both instantiate the same init/step/finish
 ///   shape and a caller's budget should not need to know which one a given aggregate function
 ///   happens to be.
@@ -1240,8 +1240,8 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///   the time the dedup check runs, so the charge is placed before that check rather than
 ///   after it.
 ///
-/// Both points are charged from the one dispatch path [`crate::modifier::eval_aggregate`] and
-/// [`crate::modifier::eval_custom_aggregate`] share, so a built-in and a custom aggregate over
+/// Both points are charged from the one dispatch path `crate::modifier::eval_aggregate` and
+/// `crate::modifier::eval_custom_aggregate` share, so a built-in and a custom aggregate over
 /// the same shape of group cost the same fuel. No query without an aggregate charges either
 /// point, so a budget sized against v5 for such a query buys exactly the same execution under
 /// v6. The number moves anyway, because the schedule moved and the schedule is what the
@@ -1349,8 +1349,8 @@ pub enum ChargePoint {
     PropertyFunctionRow,
     /// One `(group, aggregate expression)` pair folded — the fold's init/finish overhead.
     ///
-    /// Charged once per call into [`crate::modifier::eval_aggregate`], before it dispatches
-    /// on which kind of fold the expression names — a built-in's [`crate::modifier`]-local
+    /// Charged once per call into `crate::modifier::eval_aggregate`, before it dispatches
+    /// on which kind of fold the expression names — a built-in's `crate::modifier`-local
     /// fold state or a registered [`crate::agg_fn::CustomAggregate`]'s accumulator — so a
     /// built-in and a custom aggregate over the same group cost the same invocation fuel. A
     /// `SELECT` with `N` aggregate expressions over `G` groups charges this point `N × G`
