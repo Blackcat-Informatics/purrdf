@@ -27,6 +27,7 @@ use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::user_fn::Volatility;
 use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
@@ -584,6 +585,98 @@ fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<Strin
 // ---------------------------------------------------------------------------
 // GROUP BY + aggregates
 // ---------------------------------------------------------------------------
+//
+// # Aggregate semantics: the deterministic reading this crate ships
+//
+// SPARQL 1.1/1.2 leave several corners of aggregate evaluation intentionally
+// underspecified — a conforming engine may pick any answer within the spec's
+// envelope. This crate picks ONE deterministic answer for each and documents
+// it here, so "what does GROUP_CONCAT return" has a single, testable meaning
+// rather than "any order the engine happened to produce."
+//
+// ## Row and group order (§18.6.1 "Aggregate Algebra")
+//
+// `Group` partitions the inner solution sequence into groups; this crate keeps
+// groups in **first-seen order** (the order their key first appears in the
+// inner sequence — see `eval_group`'s `groups` map, ordinal-assigned on first
+// insert) and keeps each group's own rows in **inner-operator order** (the
+// order `eval_group`'s row scan visits them, i.e. the order the ungrouped
+// input produced them). Every order-sensitive fold — `GROUP_CONCAT`'s
+// concatenation, `SAMPLE`'s "first value wins", a custom `OrderDependent`
+// aggregate — folds over rows in exactly that order, and `DISTINCT` (see
+// below) keeps the FIRST occurrence in that same order, never an arbitrary
+// one.
+//
+// ## `DISTINCT`
+//
+// Per §18.6.1's `Aggregation` definition, `DISTINCT` folds `Dedup(M(Ψ))`
+// rather than `M(Ψ)` — an order-preserving, duplicate-free view whose relative
+// order of first occurrences is preserved. This crate's dedup is exactly that:
+// the first occurrence (in row order, per the paragraph above) of an
+// equal-by-value tuple is kept, every later occurrence is discarded before it
+// ever reaches `step` — see `eval_aggregate`'s and `eval_custom_aggregate`'s
+// `seen` sets.
+//
+// ## `GROUP_CONCAT`'s result
+//
+// §18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements
+// with `sep` between them — but leaves the sequence's own order unspecified
+// ("The order of the strings is not specified"), which is exactly the freedom
+// the paragraph above pins down: THIS crate concatenates in the row order
+// stated above (groups first-seen, rows inner-operator order, `DISTINCT`
+// keeping the first occurrence), producing a plain `xsd:string` of the
+// **lexical forms** joined by `sep` (default `" "` per §18.6.1.7, absent an
+// explicit `SEPARATOR`). See [`BuiltinFold::GroupConcat`] and [`lexical_of`]
+// for which terms contribute a lexical form and which poison the fold.
+//
+// ## Aggregate error handling (§18.6.1's `ListEval`, and where this crate's
+// reading diverges)
+//
+// The spec's `ListEval` unifies two causes into one value: an expression that
+// raises a type error, and an expression that evaluates over an unbound
+// variable, BOTH become the single value `error` in the flattened list — and
+// `error` elements are then dropped before any set function runs (`Count`
+// counts "a bound, non-error value"; every other set function's `Flatten`
+// implicitly works over the error-free list the note under `ListEval` states:
+// "solutions containing error values are removed at the end of evaluating the
+// group and any aggregation functions").
+//
+// This crate's `eval_expr` cannot express that: its signature is
+// `Result<Option<SolutionTerm>, EvalError>`, which has only three states — a
+// bound value, an honestly UNBOUND variable (`Ok(None)`), or a HARD evaluation
+// failure (`Err`, e.g. an XPath-function type error) — not the spec's single
+// unified `error`. `eval_aggregate`/`eval_custom_aggregate` map the spec's
+// "error → remove from the list" reading onto exactly ONE of those three: an
+// honestly unbound argument (`Ok(None)`) skips the row, matching the spec's
+// removal for THAT cause. A hard evaluation failure (`Err`) is propagated via
+// `?` and aborts the whole query, NOT removed-and-continued — diverging from
+// the spec's literal reading for that cause, but consistent with this crate's
+// hard-fail doctrine every other expression-evaluation seam already follows
+// (a raised type error is a defect to surface, never a solution to silently
+// vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
+// non-numeric or overflowing running total *poisons the fold* (see
+// [`NumericFold::Poisoned`]) rather than raising `Err` — the SPARQL 1.1/1.2
+// aggregate algebra has no notion of a "poisoned" set-function result, but an
+// unbound aggregate OUTPUT is exactly the shape the spec already uses for
+// `MinList`/`MaxList`/`Sample`'s empty-group `error` (see below), so this
+// crate reuses that shape for a mid-fold numeric failure instead of aborting
+// the query over one bad group.
+//
+// ## `MIN`/`MAX` comparison order (§18.6.1.5 Min, §18.6.1.6 Max)
+//
+// Both are defined via the SPARQL `ORDER BY` total order (§15.1): `Min(S)` is
+// the first element of `Flatten(S)` ordered `ASC`; `Max(S)` is the first
+// element ordered `DESC`. This crate's [`fold_extreme`] mirrors that order
+// exactly — the same `term_value_order`/[`compare_sort_keys`] total order
+// `ORDER BY` itself uses (unbound < blank < IRI < literal < triple; literals
+// compared in value space where comparable, else a deterministic lexical
+// fallback) — so a tie (two terms neither strictly less-than the other under
+// that order) keeps the EARLIER occurrence, exactly as `MinList`/`MaxList`'s
+// "first element of the ordered list" reading demands when the ordering does
+// not distinguish them. An empty group's spec answer is `error`
+// (`Card(L) = 0 ⇒ MinList(L) = error`); this crate reports that as unbound
+// (`None`), the same unbound-for-error reading `AVG`/`SAMPLE` already use for
+// their own empty-group `error` case.
 
 /// `GROUP BY ... ` with aggregates: partition the inner solutions by the grouping
 /// key (term identity), then compute each aggregate per group. One output row per
@@ -784,7 +877,16 @@ fn eval_aggregate<D: DatasetView + Sync>(
 
     // Every built-in aggregate other than `COUNT(*)` is unary — only this one
     // argument expression is ever evaluated.
-    let mut fold: BuiltinFold<'_, D> = BuiltinFold::init(&agg.function, agg.separator());
+    //
+    // Phase 1 (sequential, UNCHANGED from before within-group chunking):
+    // evaluate every row's argument expression against `ctx`, charge
+    // `AggregateAccumulation` for each one, and apply `DISTINCT`. This is
+    // exactly the loop that ran here before — nothing about expression
+    // evaluation, error handling, or charge order changes — so charge
+    // spend is a pure function of `idxs`/`ctx`, identical whether or not
+    // phase 2 below ends up chunking. See [`ChargePoint::AggregateAccumulation`]'s
+    // doc for why the charge precedes the `DISTINCT` check.
+    //
     // DISTINCT dedups by `SolutionTerm` equality, which the scratch interner's
     // Existing/Computed promotion rule (see `crate::scratch`'s module docs) makes
     // exactly equivalent to dedup-by-value: two distinct `SolutionTerm`s never
@@ -792,15 +894,11 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // owned-string clone for a literal/IRI), and byte-identical to the prior
     // materializing implementation's `seen: DetHashSet<SolutionTerm>` retain.
     let mut seen: Option<DetHashSet<SolutionTerm<D::Id>>> = agg.distinct.then(DetHashSet::default);
+    let mut survivors: Vec<(SolutionTerm<D::Id>, TermValue)> = Vec::new();
     for &i in idxs {
         let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
             continue;
         };
-        // The `aggregate-accumulation` charge point, charged for every value the
-        // argument expression produced — BEFORE the `DISTINCT` check below, per
-        // [`ChargePoint::AggregateAccumulation`]'s documented reading: producing
-        // and inspecting the value is the work this point prices, and that work
-        // already happened by the time a duplicate is discarded.
         if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
             ctx.expression_barrier.record(tripped);
             return Ok(None);
@@ -811,8 +909,29 @@ fn eval_aggregate<D: DatasetView + Sync>(
             continue;
         }
         let value = ctx.scratch.value_of(ctx.dataset, term);
-        fold.step(term, &value);
+        survivors.push((term, value));
     }
+
+    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
+    // survivor list — chunked in parallel for a large enough group, strictly
+    // sequential for a small one — see `crate::parallel::par_chunk_reduce_init`'s
+    // docs for why this phase needs no `EvalCtx`/governor access at all (every
+    // charge already happened in phase 1 above) and is therefore always safe to
+    // chunk regardless of any volatility concern: nothing here can reach
+    // `RAND`/`BNODE`/an `EXISTS` re-entry, because nothing here evaluates an
+    // expression.
+    let fold = crate::parallel::par_chunk_reduce_init(
+        &survivors,
+        || Ok(BuiltinFold::init(&agg.function, agg.separator())),
+        |fold: &mut BuiltinFold<'_, D>, (term, value)| {
+            fold.step(*term, value);
+            Ok(())
+        },
+        |acc: &mut BuiltinFold<'_, D>, other| {
+            acc.combine(other);
+            Ok(())
+        },
+    )?;
     Ok(fold.finish(ctx))
 }
 
@@ -859,9 +978,15 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    let mut accumulator = crate::agg_fn::init_contained(custom.as_ref(), iri)?;
+    // Phase 1 (sequential, unchanged): evaluate every row's positional argument
+    // tuple against `ctx`, charge `AggregateAccumulation` for each one, and
+    // apply `DISTINCT` on the full tuple. Exactly the loop that ran here
+    // before within-group chunking existed — see `eval_aggregate`'s matching
+    // phase-1 comment for why this keeps charge spend a pure function of
+    // `idxs`/`ctx` regardless of what phase 2 below does.
     let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
     let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args.len());
+    let mut survivors: Vec<Vec<TermValue>> = Vec::new();
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
@@ -889,8 +1014,47 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         {
             continue;
         }
-        crate::agg_fn::step_contained(accumulator.as_mut(), iri, &tuple)?;
+        survivors.push(tuple.clone());
     }
+
+    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
+    // survivor tuples — chunked in parallel for a large enough group, but ONLY
+    // when `custom` declares `Volatility::Stable` (mirrors
+    // `EvalCtx::may_fork_aggregate`'s own per-group gate at the finer,
+    // within-group grain: a `Volatile` aggregate's `step`/`combine` may depend
+    // on state this evaluator does not control, so it stays on ONE
+    // accumulator, sequentially, exactly as before this increment existed).
+    //
+    // A chunked fold creates MORE than one live accumulator at once (one per
+    // chunk, combined down afterward) — [`CustomAggregate::state_bound`]'s
+    // admission charge above metered exactly ONE accumulator's declared bound,
+    // so chunking must charge the EXTRA accumulators beyond that first one
+    // before creating them, using [`crate::parallel::planned_chunk_count`] (the
+    // exact count [`crate::parallel::par_chunk_reduce_init`] will create, not
+    // an estimate) so this stays an honest upper bound on peak retained state.
+    let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
+    let chunk_count = if stable {
+        crate::parallel::planned_chunk_count(survivors.len())
+    } else {
+        1
+    };
+    if chunk_count > 1 {
+        let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
+        if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
+        {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
+        }
+    }
+    let force_sequential = (!stable).then(crate::parallel::force_sequential_operation);
+    let accumulator = crate::parallel::par_chunk_reduce_init(
+        &survivors,
+        || crate::agg_fn::init_contained(custom.as_ref(), iri),
+        |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
+        |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
+    )?;
+    drop(force_sequential);
+
     let value = crate::agg_fn::finish_contained(accumulator, iri)?;
     Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
@@ -979,6 +1143,43 @@ impl NumericFold {
             Self::Poisoned => None,
         }
     }
+
+    /// Merge `other` — a LATER (in source/chunk order) partial fold — into
+    /// `self`, the earlier one. `Commutative` per [`crate::agg_fn::AlgebraicClass`]:
+    /// `numeric_add` and running-count addition are both associative and
+    /// commutative in the real-number sense, so combining chunk partials in
+    /// chunk order produces the same total `op:numeric-add` would folding the
+    /// whole group sequentially — modulo one inherent-to-fixed-width-arithmetic
+    /// caveat also true of the plain sequential fold: an intermediate overflow
+    /// depends on which PARTIAL sums are added in which order, so a group whose
+    /// true total fits but whose rows sum to an out-of-range value under SOME
+    /// grouping can poison under one chunking and not another — exactly as it
+    /// can already poison under one ROW order and not another today, since the
+    /// sequential fold is itself a left-to-right `numeric_add` chain. This is a
+    /// property of bounded arithmetic, not a determinism gap chunking
+    /// introduces: whichever grouping trips it, the answer for that execution
+    /// is a legitimate "poisoned, hence unbound" `SUM`/`AVG` — not a wrong one.
+    fn combine(&mut self, other: Self) {
+        match (&mut *self, other) {
+            (Self::Poisoned, _) => {}
+            (_, Self::Poisoned) => *self = Self::Poisoned,
+            (_, Self::Empty) => {}
+            (Self::Empty, other) => *self = other,
+            (
+                Self::Ok { acc, count },
+                Self::Ok {
+                    acc: oacc,
+                    count: ocount,
+                },
+            ) => match numeric_add(acc, &oacc) {
+                Ok(sum) => {
+                    *acc = sum;
+                    *count += ocount;
+                }
+                Err(_) => *self = Self::Poisoned,
+            },
+        }
+    }
 }
 
 /// The streaming fold state of one built-in aggregate over one group — the
@@ -1005,6 +1206,14 @@ enum BuiltinFold<'a, D: DatasetView + Sync> {
         sep: &'a str,
         buf: String,
         started: bool,
+        /// Set once a folded value has no lexical form ([`lexical_of`] returns
+        /// `None` — a blank node or a triple term; `STR()` of either is a
+        /// SPARQL type error). Poisons the fold exactly as [`NumericFold`]
+        /// poisons `SUM`/`AVG` on a non-numeric value: the group's answer
+        /// becomes unbound regardless of what would have followed, and no
+        /// further value is appended to `buf` (which is discarded, not
+        /// returned) once poisoned.
+        poisoned: bool,
     },
     Sum(NumericFold),
     Avg(NumericFold),
@@ -1025,6 +1234,7 @@ impl<'a, D: DatasetView + Sync> BuiltinFold<'a, D> {
                 sep: separator.unwrap_or(" "),
                 buf: String::new(),
                 started: false,
+                poisoned: false,
             },
             AggregateFunction::Sum => Self::Sum(NumericFold::Empty),
             AggregateFunction::Avg => Self::Avg(NumericFold::Empty),
@@ -1048,17 +1258,126 @@ impl<'a, D: DatasetView + Sync> BuiltinFold<'a, D> {
             Self::Max(slot) => {
                 *slot = Some(fold_extreme(slot.take(), term, value, Ordering::Greater));
             }
-            Self::GroupConcat { sep, buf, started } => {
-                if let Some(lexical) = lexical_of(value) {
-                    if *started {
-                        buf.push_str(sep);
-                    } else {
-                        *started = true;
+            Self::GroupConcat {
+                sep,
+                buf,
+                started,
+                poisoned,
+            } => {
+                if *poisoned {
+                    return;
+                }
+                match lexical_of(value) {
+                    Some(lexical) => {
+                        if *started {
+                            buf.push_str(sep);
+                        } else {
+                            *started = true;
+                        }
+                        buf.push_str(&lexical);
                     }
-                    buf.push_str(&lexical);
+                    // A blank node or a triple term has no lexical form — `STR()`
+                    // of either is a SPARQL type error (§17.4.2.2/§21 of the
+                    // relevant Query spec), so GROUP_CONCAT poisons rather than
+                    // silently dropping the value, mirroring how SUM/AVG poison
+                    // on a non-numeric value (see `NumericFold::step`).
+                    None => {
+                        *poisoned = true;
+                        buf.clear();
+                    }
                 }
             }
             Self::Sum(state) | Self::Avg(state) => state.step(value),
+        }
+    }
+
+    /// A stable diagnostic label for this fold's variant — used only by
+    /// [`Self::combine`]'s defensive `unreachable!` (no [`Debug`] derive:
+    /// deriving one would spuriously require `D: Debug`, which nothing about
+    /// this type actually needs — see the `Ord`-key erasure this crate applies
+    /// elsewhere for the same reason).
+    const fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Count(_) => "Count",
+            Self::Sample(_) => "Sample",
+            Self::Min(_) => "Min",
+            Self::Max(_) => "Max",
+            Self::GroupConcat { .. } => "GroupConcat",
+            Self::Sum(_) => "Sum",
+            Self::Avg(_) => "Avg",
+        }
+    }
+
+    /// Merge `other` — a LATER (in chunk-index order) partial fold over the
+    /// SAME group — into `self`, the earlier one. This is the
+    /// [`crate::agg_fn::AggregateAccumulator::combine`] counterpart for a
+    /// built-in: called by [`crate::parallel::par_chunk_reduce_init`]'s
+    /// reduce, strictly in chunk order, so `Sample`/`GroupConcat`'s row-order
+    /// dependence and `Min`/`Max`'s tie-break-keeps-earlier rule stay exactly
+    /// what a plain sequential fold over the same rows would produce — see
+    /// [`BuiltinFold`]'s own docs for why every variant's `combine` is safe
+    /// under that fixed order regardless of its [`crate::agg_fn::AlgebraicClass`].
+    ///
+    /// # Panics
+    ///
+    /// If `self` and `other` are different variants — never true in practice,
+    /// since every accumulator [`par_chunk_reduce_init`](crate::parallel::par_chunk_reduce_init)
+    /// combines was `init`-ed from the SAME `AggregateFunction`.
+    fn combine(&mut self, other: Self) {
+        match (self, other) {
+            (Self::Count(n), Self::Count(on)) => *n += on,
+            (Self::Sample(slot), Self::Sample(oslot)) => {
+                if slot.is_none() {
+                    *slot = oslot;
+                }
+            }
+            (Self::Min(slot), Self::Min(oslot)) => {
+                if let Some((oterm, ovalue)) = oslot {
+                    *slot = Some(fold_extreme(slot.take(), oterm, &ovalue, Ordering::Less));
+                }
+            }
+            (Self::Max(slot), Self::Max(oslot)) => {
+                if let Some((oterm, ovalue)) = oslot {
+                    *slot = Some(fold_extreme(slot.take(), oterm, &ovalue, Ordering::Greater));
+                }
+            }
+            (
+                Self::GroupConcat {
+                    buf,
+                    started,
+                    poisoned,
+                    ..
+                },
+                Self::GroupConcat {
+                    sep: osep,
+                    buf: obuf,
+                    started: ostarted,
+                    poisoned: opoisoned,
+                },
+            ) => {
+                if *poisoned {
+                    // Already poisoned: nothing `other` holds can un-poison it.
+                } else if opoisoned {
+                    *poisoned = true;
+                    buf.clear();
+                } else if ostarted {
+                    if *started {
+                        buf.push_str(osep);
+                    }
+                    buf.push_str(&obuf);
+                    *started = true;
+                }
+            }
+            (Self::Sum(state), Self::Sum(ostate)) | (Self::Avg(state), Self::Avg(ostate)) => {
+                state.combine(ostate);
+            }
+            (this, other) => unreachable!(
+                "BuiltinFold::combine called on mismatched variants (self: {}, other: {}) — \
+                 every accumulator par_chunk_reduce_init combines is init-ed from the same \
+                 AggregateFunction",
+                this.variant_name(),
+                other.variant_name(),
+            ),
         }
     }
 
@@ -1068,7 +1387,13 @@ impl<'a, D: DatasetView + Sync> BuiltinFold<'a, D> {
             Self::Count(n) => Some(integer_term(ctx, n)),
             Self::Sample(slot) => slot,
             Self::Min(slot) | Self::Max(slot) => slot.map(|(t, _)| t),
-            Self::GroupConcat { buf, .. } => Some(string_term(ctx, buf)),
+            Self::GroupConcat { buf, poisoned, .. } => {
+                if poisoned {
+                    None
+                } else {
+                    Some(string_term(ctx, buf))
+                }
+            }
             Self::Sum(state) => state.finish_sum(ctx),
             Self::Avg(state) => state.finish_avg(ctx),
         }
@@ -1099,12 +1424,18 @@ fn fold_extreme<I: ViewTermId>(
     }
 }
 
-/// The lexical string of a term for GROUP_CONCAT (literal lexical / IRI string).
+/// The lexical string of a term for GROUP_CONCAT: a literal's lexical form, or
+/// an IRI's string — the same two kinds `STR()` accepts without error (an IRI's
+/// "lexical form" here is its IRI string, `STR`-consistent). `None` for a blank
+/// node or a triple term: `STR()` of either is a SPARQL type error, and
+/// [`BuiltinFold::step`]'s `GroupConcat` arm poisons the fold on `None` rather
+/// than silently dropping the value — see the module-level "Aggregate
+/// semantics" docs' `GROUP_CONCAT` section for the full reading.
 fn lexical_of(value: &TermValue) -> Option<String> {
     match value {
         TermValue::Literal { lexical_form, .. } => Some(lexical_form.clone()),
         TermValue::Iri(iri) => Some(iri.clone()),
-        _ => None,
+        TermValue::Blank { .. } | TermValue::Triple { .. } => None,
     }
 }
 
@@ -2001,5 +2332,312 @@ mod tests {
             "parallel and sequential per-group aggregate paths must produce byte-identical rows"
         );
         assert_eq!(rows_seq.len() as i64, GROUPS);
+    }
+
+    /// Within-group chunked partial aggregation (this increment): a SINGLE huge
+    /// group — no `GROUP BY` at all, so `eval_group`'s single-implicit-group rule
+    /// applies — whose row count crosses `PARALLEL_MIN_ROWS`, aggregated by
+    /// `GROUP_CONCAT` (`OrderDependent`: string concatenation, the case an
+    /// across-groups-only fork could never parallelize since there is only ONE
+    /// group here) and `MAX`. Forced-parallel (with a small forced chunk size, so
+    /// the fold actually spans MANY chunks and `combine` runs many times) and
+    /// forced-sequential must agree byte-for-byte — proving
+    /// `crate::parallel::par_chunk_reduce_init`'s chunk-order `combine` contract
+    /// holds for a non-commutative fold, not just the commutative ones a weaker
+    /// test could pass by accident.
+    #[test]
+    fn within_group_chunked_fold_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const ROWS: i64 = 3000;
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![
+                (
+                    Variable::new("g"),
+                    AggregateExpression {
+                        function: AggregateFunction::GroupConcat,
+                        args: vec![Expression::Variable(Variable::new("val"))],
+                        scalarvals: vec![(
+                            "separator".to_owned(),
+                            purrdf_sparql_algebra::Literal::new_simple(","),
+                        )],
+                        distinct: false,
+                    },
+                ),
+                (
+                    Variable::new("mx"),
+                    AggregateExpression {
+                        function: AggregateFunction::Max,
+                        args: vec![Expression::Variable(Variable::new("val"))],
+                        scalarvals: Vec::new(),
+                        distinct: false,
+                    },
+                ),
+            ],
+        };
+
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            let g = agg_lex(&ds, &ctx, &seq, "g");
+            let mx = agg_lex(&ds, &ctx, &seq, "mx");
+            (seq.schema.vars().to_vec(), g, mx)
+        };
+
+        let sequential = run(false, 64);
+        let parallel = run(true, 37); // a deliberately ragged chunk size
+
+        assert_eq!(
+            sequential, parallel,
+            "within-group chunked fold must be byte-identical"
+        );
+        // And pin the actual value: input row order is s0..s2999, so GROUP_CONCAT
+        // is exactly "0,1,2,...,2999", never re-ordered by chunking.
+        let expected = (0..ROWS)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(sequential.1, expected);
+        assert_eq!(sequential.2, (ROWS - 1).to_string());
+    }
+
+    /// `DISTINCT` correctness under within-group chunking: a duplicate value whose
+    /// two occurrences straddle where chunk boundaries fall must still resolve to
+    /// its INPUT-ORDER-FIRST occurrence — proven by [`crate::modifier`]'s "dedup
+    /// pre-chunking" design (`eval_aggregate`'s phase 1 dedups sequentially,
+    /// BEFORE phase 2 ever chunks anything), so no chunk can ever see a value its
+    /// group already resolved as a duplicate. A small forced chunk size (so the
+    /// large row count spans many chunks) plus forced-parallel vs forced-
+    /// sequential agreement is the proof: if chunking could reintroduce a
+    /// duplicate, this is exactly the shape that would expose it.
+    #[test]
+    fn within_group_distinct_dedup_survives_chunking_keeping_input_order_first_occurrence() {
+        use purrdf_core::RdfLiteral;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const ROWS: i64 = 3000;
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            // Row 5 and row 2900 (far apart — different chunks under any
+            // reasonable chunk size) share the SAME value "5"; every other row
+            // is unique. The DISTINCT-kept representative must be row 5's
+            // occurrence (position 5 in row order), not row 2900's.
+            let lex = if i == 2900 {
+                "5".to_owned()
+            } else {
+                i.to_string()
+            };
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: lex,
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("g"),
+                AggregateExpression {
+                    function: AggregateFunction::GroupConcat,
+                    args: vec![Expression::Variable(Variable::new("val"))],
+                    scalarvals: vec![(
+                        "separator".to_owned(),
+                        purrdf_sparql_algebra::Literal::new_simple(","),
+                    )],
+                    distinct: true,
+                },
+            )],
+        };
+
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            agg_lex(&ds, &ctx, &seq, "g")
+        };
+
+        let sequential = run(false, 64);
+        let parallel = run(true, 41);
+        assert_eq!(sequential, parallel);
+
+        // Expected: every i in 0..3000 in order EXCEPT row 2900 — its duplicate
+        // "5" is dropped, keeping row 5's earlier occurrence exactly where it
+        // already was.
+        let expected: String = (0..ROWS)
+            .filter(|&i| i != 2900)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(sequential, expected);
+    }
+
+    /// A minimal `OrderDependent` custom aggregate: collects each row's single
+    /// argument's lexical form into an ordered `Vec<String>`, `combine` appending
+    /// the LATER partial's list after the earlier one's (never sorted, never
+    /// deduped) — a "list collector", exactly the shape
+    /// `crate::agg_fn`'s module docs use as the running example of a fold whose
+    /// answer depends on row order. `finish` joins with `;` so the test can
+    /// compare a single string.
+    struct ListCollector {
+        items: Vec<String>,
+    }
+
+    impl crate::agg_fn::AggregateAccumulator for ListCollector {
+        fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = args.first() {
+                self.items.push(lexical_form.clone());
+            }
+            Ok(())
+        }
+        fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
+            // No downcasting seam is required of the trait (see the module docs'
+            // "trust boundary" note), so — exactly like `agg_fn`'s own
+            // `SumAccumulator` test fixture — this finishes the other partial
+            // through the same public surface a caller has and re-derives its
+            // item list from that, rather than reaching into `other`'s private
+            // state.
+            if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+                && !lexical_form.is_empty()
+            {
+                self.items
+                    .extend(lexical_form.split(';').map(str::to_owned));
+            }
+        }
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(Some(TermValue::typed_literal(
+                self.items.join(";"),
+                "http://www.w3.org/2001/XMLSchema#string",
+            )))
+        }
+    }
+
+    struct ListCollectorAggregate;
+
+    impl crate::agg_fn::CustomAggregate for ListCollectorAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(1)
+        }
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::OrderDependent
+        }
+        fn state_bound(&self) -> u64 {
+            256
+        }
+        fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+            Box::new(ListCollector { items: Vec::new() })
+        }
+    }
+
+    const LIST_COLLECTOR_IRI: &str = "http://example.org/agg#listCollector";
+
+    /// A large single-group `OrderDependent` CUSTOM aggregate, folded via
+    /// `eval_custom_aggregate`'s within-group chunked path
+    /// ([`crate::agg_fn::AggregateAccumulator::combine`], driven by
+    /// `crate::parallel::par_chunk_reduce_init`), must agree byte-for-byte
+    /// between forced-parallel and forced-sequential — the custom-aggregate
+    /// counterpart of [`within_group_chunked_fold_forced_parallel_and_sequential_agree`]
+    /// above, proving `combine_contained`'s chunk-order contract holds through
+    /// the FULL host-extension seam (panic containment included), not just the
+    /// crate's own built-in fold.
+    #[test]
+    fn within_group_custom_aggregate_chunked_fold_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        const ROWS: i64 = 3000;
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral::simple(i.to_string()));
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register(LIST_COLLECTOR_IRI, Arc::new(ListCollectorAggregate));
+
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("g"),
+                AggregateExpression {
+                    function: AggregateFunction::Custom(NamedNode::new_unchecked(
+                        LIST_COLLECTOR_IRI,
+                    )),
+                    args: vec![Expression::Variable(Variable::new("val"))],
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
+            )],
+        };
+
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(&ds).with_aggregates(&registry);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            agg_lex(&ds, &ctx, &seq, "g")
+        };
+
+        let sequential = run(false, 64);
+        let parallel = run(true, 53);
+        assert_eq!(sequential, parallel);
+        let expected = (0..ROWS)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+        assert_eq!(sequential, expected);
     }
 }

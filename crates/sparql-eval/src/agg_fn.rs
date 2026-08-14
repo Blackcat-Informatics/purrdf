@@ -47,10 +47,16 @@
 //! folded by more than one worker: the merge order is fixed by source order, not by
 //! which worker finished first. [`CustomAggregate::algebraic_class`] documents which
 //! algebraic law a given aggregate satisfies, for a caller that wants to reason
-//! about it; the evaluator itself does not need the classification to fold a single
-//! group sequentially, which is the only shape this crate's evaluation currently
-//! drives (parallel WITHIN one group's fold is a later increment — see
-//! `crate::parallel`'s per-GROUP, not per-ROW, fork gate for aggregates).
+//! about it; the evaluator itself does not need the classification to fold correctly,
+//! since `combine`'s fixed chunk-order contract already makes the fixed-order reduce
+//! safe for every class. `crate::modifier::eval_custom_aggregate` is the caller that
+//! actually drives this: for a large enough group whose aggregate declares
+//! [`Volatility::Stable`], it folds the group's rows in chunks (one accumulator per
+//! chunk, via `crate::parallel::par_chunk_reduce_init`) and reduces the partial
+//! accumulators through `combine`, strictly in chunk-index order — a `Volatile`
+//! aggregate stays on the single-accumulator sequential fold this module always
+//! supported, exactly as `crate::eval::EvalCtx::may_fork_aggregate`'s per-GROUP fork
+//! gate excludes it there too.
 //!
 //! # wasm32 note
 //!
@@ -152,10 +158,12 @@ pub trait AggregateAccumulator: Send {
     /// on [`AlgebraicClass`] for why this fixed order is what keeps a
     /// non-commutative fold deterministic under a parallel partial-fold split.
     ///
-    /// Not exercised by this crate's evaluation yet — folding one `GROUP BY`
-    /// group's rows across more than one worker is a later increment — but part
-    /// of the algebra from the start, so an aggregate registered today is already
-    /// correct under it rather than needing a later, breaking addition.
+    /// Called by `crate::modifier::eval_custom_aggregate`'s within-group chunked
+    /// fold whenever the aggregate declares [`Volatility::Stable`] and the group
+    /// is large enough to chunk (see `crate::parallel::par_chunk_reduce_init`) —
+    /// part of the algebra from the start, so an aggregate registered before
+    /// that caller existed was already correct under it, needing no later,
+    /// breaking addition.
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>);
 
     /// Produce this group's answer and consume the accumulator.
@@ -265,15 +273,6 @@ pub(crate) fn step_contained(
 /// # Errors
 ///
 /// [`EvalError::Function`] on a caught panic.
-#[allow(
-    dead_code,
-    reason = "the fourth member of the init/step/combine/finish algebra — part of this \
-              module's trust boundary from the start, exercised directly by this module's own \
-              tests, and the entry point within-group parallel partial folds (a later \
-              increment) will call; not yet invoked by `crate::modifier`, which currently \
-              folds each group sequentially on a single worker (see `crate::agg_fn`'s module \
-              docs)"
-)]
 pub(crate) fn combine_contained(
     accumulator: &mut dyn AggregateAccumulator,
     iri: &str,

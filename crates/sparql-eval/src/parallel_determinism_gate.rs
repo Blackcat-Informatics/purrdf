@@ -289,6 +289,24 @@ WHERE {
   ?p ex:name ?n2 .
 } GROUP BY ?d",
     ),
+    // -- a SINGLE huge group (within-group chunked partial aggregation) -----------
+    (
+        "group_concat_single_huge_group",
+        // No `GROUP BY` at all: the whole 5000-person input is ONE implicit
+        // group (`crate::modifier::eval_group`'s single-implicit-group rule),
+        // comfortably over `PARALLEL_MIN_ROWS` — the shape a per-group-only
+        // fork could never parallelize (there is only one group), and
+        // `GROUP_CONCAT` is `OrderDependent`, so this is the corpus case that
+        // actually exercises `crate::parallel::par_chunk_reduce_init`'s
+        // combine-in-chunk-order contract through the FULL engine (parse,
+        // plan, evaluate), not just the direct `eval()` unit coverage in
+        // `crate::modifier`'s own tests.
+        "PREFIX ex: <https://example.org/>
+SELECT (GROUP_CONCAT(?n; separator=\",\") AS ?names) (MAX(?a) AS ?maxAge) WHERE {
+  ?p ex:name ?n .
+  ?p ex:age ?a .
+}",
+    ),
     // -- ORDER BY + LIMIT ---------------------------------------------------------
     (
         "order_by_desc_limit",
@@ -698,4 +716,137 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
              relation produced"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Within-group chunked partial aggregation: a large single-group CUSTOM
+// aggregate, through the FULL engine (not the direct `eval()` unit coverage
+// in `crate::modifier`'s own tests).
+// ---------------------------------------------------------------------------
+
+/// A minimal `OrderDependent` custom aggregate: collects each row's argument
+/// lexical form into an ordered list, joined by `;` at `finish`. `combine`
+/// appends the LATER partial's items after the earlier one's, never
+/// reordered — the exact shape `crate::agg_fn`'s own module docs use as the
+/// canonical example of a fold whose answer depends on row order, so this is
+/// the sharpest possible probe of
+/// [`crate::parallel::par_chunk_reduce_init`]'s chunk-order `combine`
+/// contract: a commutative custom aggregate could pass this gate by
+/// accident (any merge order gives the same answer); this one cannot.
+#[derive(Debug)]
+struct ListCollectorAggregate;
+
+struct ListCollectorAccumulator {
+    items: Vec<String>,
+}
+
+impl crate::agg_fn::AggregateAccumulator for ListCollectorAccumulator {
+    fn step(&mut self, args: &[purrdf_core::TermValue]) -> Result<(), crate::error::EvalError> {
+        if let Some(purrdf_core::TermValue::Literal { lexical_form, .. }) = args.first() {
+            self.items.push(lexical_form.clone());
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
+        // No downcasting seam is required of the trait: finish the other
+        // partial through the same public surface a caller has, and re-derive
+        // its item list from that — the same pattern `crate::agg_fn`'s and
+        // `crate::modifier`'s own test fixtures use.
+        if let Ok(Some(purrdf_core::TermValue::Literal { lexical_form, .. })) = other.finish()
+            && !lexical_form.is_empty()
+        {
+            self.items
+                .extend(lexical_form.split(';').map(str::to_owned));
+        }
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<purrdf_core::TermValue>, crate::error::EvalError> {
+        Ok(Some(purrdf_core::TermValue::typed_literal(
+            self.items.join(";"),
+            "http://www.w3.org/2001/XMLSchema#string",
+        )))
+    }
+}
+
+impl crate::agg_fn::CustomAggregate for ListCollectorAggregate {
+    fn arity(&self) -> crate::user_fn::Arity {
+        crate::user_fn::Arity::Exact(1)
+    }
+    fn volatility(&self) -> crate::user_fn::Volatility {
+        crate::user_fn::Volatility::Stable
+    }
+    fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+        crate::agg_fn::AlgebraicClass::OrderDependent
+    }
+    fn state_bound(&self) -> u64 {
+        256
+    }
+    fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+        Box::new(ListCollectorAccumulator { items: Vec::new() })
+    }
+}
+
+/// A large single-group (no `GROUP BY`, 5000-row implicit group — well over
+/// [`PARALLEL_MIN_ROWS`]) `OrderDependent` CUSTOM aggregate, run through the
+/// full engine (`query_with_options_view`, exercising parse + plan-time
+/// admission + evaluation, not just the direct `eval()` call
+/// `crate::modifier`'s own within-group tests use), must agree byte-for-byte
+/// between forced-parallel and forced-sequential.
+#[test]
+fn custom_aggregate_single_huge_group_parallel_and_sequential_agree() {
+    let ds = people_dataset();
+    let engine = NativeSparqlEngine::new();
+    let mut registry = crate::agg_fn::AggregateRegistry::new();
+    registry.register(
+        "https://example.org/agg/listCollector",
+        Arc::new(ListCollectorAggregate),
+    );
+
+    let query = "PREFIX ex: <https://example.org/>
+SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
+  ?p ex:name ?n .
+}";
+
+    let run = |force: bool| {
+        let _guard = force_parallel_for_test(force);
+        engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                crate::engine::QueryOptions {
+                    aggregates: Some(&registry),
+                    ..crate::engine::QueryOptions::EMPTY
+                },
+            )
+            .unwrap_or_else(|e| panic!("custom-aggregate query failed: {e:?}\n{query}"))
+    };
+
+    let parallel = run(true);
+    let sequential = run(false);
+    assert_eq!(
+        comparable(&parallel),
+        comparable(&sequential),
+        "custom aggregate diverged between forced-parallel and forced-sequential evaluation"
+    );
+
+    let SparqlResult::Solutions { rows, .. } = &parallel else {
+        panic!("expected solutions");
+    };
+    assert_eq!(rows.len(), 1, "one implicit group, no GROUP BY");
+    let Some(Some(purrdf_core::TermValue::Literal { lexical_form, .. })) = rows[0].first() else {
+        panic!(
+            "expected a literal in the single result row, got {:?}",
+            rows[0]
+        );
+    };
+    assert_eq!(
+        lexical_form.split(';').count(),
+        PEOPLE,
+        "every person's name must have been collected exactly once, in row order"
+    );
 }

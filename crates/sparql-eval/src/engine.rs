@@ -3913,6 +3913,11 @@ mod tests {
         assert_eq!(sorted_rows(r), vec![vec!["1"], vec!["2"]]);
     }
 
+    /// GROUP_CONCAT's deterministic reading (see `crate::modifier`'s "Aggregate
+    /// semantics" docs): concatenation follows INPUT ROW ORDER, not "some
+    /// order" — `numbers()` pushes `r1`(?a=1), `r2`(?a=1), `r3`(?a=2), in that
+    /// order, and a single-pattern BGP scan visits them in insertion order, so
+    /// the exact result is pinned to `"1|1|2"`.
     #[test]
     fn group_concat_with_separator() {
         let r = run_on(
@@ -3920,16 +3925,191 @@ mod tests {
             "SELECT (GROUP_CONCAT(?a; SEPARATOR=\"|\") AS ?g) \
              WHERE { ?r <http://ex/a> ?a }",
         );
-        // Implicit single group; lexical values of ?a joined by '|', some order.
         match r {
             SparqlResult::Solutions { rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][0] else {
                     panic!("expected a literal");
                 };
-                let mut parts: Vec<&str> = lexical_form.split('|').collect();
-                parts.sort_unstable();
-                assert_eq!(parts, vec!["1", "1", "2"]);
+                assert_eq!(lexical_form, "1|1|2", "input-row-order concatenation");
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// `DISTINCT` keeps the FIRST occurrence in row order (§18.6.1's `Dedup`):
+    /// `numbers()`'s ?a sequence is `1, 1, 2` — the duplicate second `1` is
+    /// dropped, leaving `"1|2"`, never `"2|1"`.
+    #[test]
+    fn group_concat_distinct_keeps_first_occurrence_in_row_order() {
+        let r = run_on(
+            &numbers(),
+            "SELECT (GROUP_CONCAT(DISTINCT ?a; SEPARATOR=\"|\") AS ?g) \
+             WHERE { ?r <http://ex/a> ?a }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][0] else {
+                    panic!("expected a literal");
+                };
+                assert_eq!(lexical_form, "1|2", "first occurrence per distinct value");
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// Multi-group exact-string pin: two categories, each with its own row
+    /// order, each group's GROUP_CONCAT concatenates ONLY its own rows in
+    /// THEIR first-seen/inner-operator order — groups themselves in
+    /// first-seen order (`cat/A` before `cat/B`, since `A`'s first row
+    /// precedes `B`'s first row in the insertion order below).
+    #[test]
+    fn group_concat_multi_group_exact_order() {
+        use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("http://ex/cat");
+        let item = b.intern_iri("http://ex/item");
+        let a = b.intern_iri("http://ex/A");
+        let bb = b.intern_iri("http://ex/B");
+        // Row order: (A,"x"),(B,"p"),(A,"y"),(B,"q"),(A,"z").
+        for (subj, catv, val) in [
+            ("s1", a, "x"),
+            ("s2", bb, "p"),
+            ("s3", a, "y"),
+            ("s4", bb, "q"),
+            ("s5", a, "z"),
+        ] {
+            let s = b.intern_iri(&format!("http://ex/{subj}"));
+            b.push_quad(s, cat, catv, None);
+            let v = b.intern_literal(RdfLiteral::simple(val));
+            b.push_quad(s, item, v, None);
+        }
+        let ds = b.freeze().expect("freeze");
+        let r = run_on(
+            &ds,
+            "SELECT ?c (GROUP_CONCAT(?v; SEPARATOR=\",\") AS ?g) \
+             WHERE { ?s <http://ex/cat> ?c . ?s <http://ex/item> ?v } \
+             GROUP BY ?c",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+                let render = |cell: &Option<TermValue>| match cell {
+                    Some(TermValue::Iri(iri)) => iri.clone(),
+                    Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
+                    other => format!("{other:?}"),
+                };
+                let mut got: Vec<(String, String)> = rows
+                    .iter()
+                    .map(|r| (render(&r[0]), render(&r[1])))
+                    .collect();
+                got.sort();
+                assert_eq!(
+                    got,
+                    vec![
+                        ("http://ex/A".to_owned(), "x,y,z".to_owned()),
+                        ("http://ex/B".to_owned(), "p,q".to_owned()),
+                    ]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// A group containing a blank node poisons GROUP_CONCAT to unbound — a
+    /// blank node has no lexical form, and `STR()` of one is a SPARQL type
+    /// error, so this crate's owned reading treats it like SUM/AVG's poison-
+    /// on-non-numeric rather than silently dropping the value (see
+    /// `crate::modifier::lexical_of`'s docs). No W3C conformance case exercises
+    /// GROUP_CONCAT over a blank node (verified against the frozen corpus), so
+    /// this decision has no upstream evidence to reconcile against.
+    #[test]
+    fn group_concat_over_blank_node_poisons_to_unbound() {
+        use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+        let mut b = RdfDatasetBuilder::new();
+        let item = b.intern_iri("http://ex/item");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple("lit1"));
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
+        b.push_quad(s, item, lit, None);
+        b.push_quad(s, item, bn, None);
+        let ds = b.freeze().expect("freeze");
+        let r = run_on(
+            &ds,
+            "SELECT (GROUP_CONCAT(?v; SEPARATOR=\"|\") AS ?g) WHERE { <http://ex/s> <http://ex/item> ?v }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert!(
+                    rows[0][0].is_none(),
+                    "GROUP_CONCAT over a blank node must be unbound, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// A group containing an RDF-star triple term likewise poisons
+    /// GROUP_CONCAT to unbound — same reasoning as the blank-node case above.
+    #[test]
+    fn group_concat_over_triple_term_poisons_to_unbound() {
+        let ds = numbers();
+        let r = run_on(
+            &ds,
+            "PREFIX ex: <http://ex/> \
+             SELECT (GROUP_CONCAT(?v; SEPARATOR=\"|\") AS ?g) WHERE { \
+               VALUES ?v { \"lit1\" <<ex:s ex:p ex:o>> } \
+             }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert!(
+                    rows[0][0].is_none(),
+                    "GROUP_CONCAT over a triple term must be unbound, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// `MIN`/`MAX` over a group mixing every term kind — a plain literal, an
+    /// `xsd:integer`, an IRI, and an RDF-star triple term — order per the
+    /// SPARQL `ORDER BY` total order (§15.1), exactly as SPARQL 1.2 §18.6.1.5
+    /// (`Min`) / §18.6.1.6 (`Max`) define them ("ordered as per the ORDER BY
+    /// ASC/DESC clause" then take the first element): kind rank blank < IRI <
+    /// literal < triple, so `MIN` (ascending) picks the IRI (the lowest-ranked
+    /// bound kind present) and `MAX` (descending) picks the triple term (the
+    /// highest-ranked). See `crate::modifier`'s "Aggregate semantics" docs,
+    /// `MIN`/`MAX` section, for the spec citation and why this crate's
+    /// `term_value_order` needs no change to match it.
+    #[test]
+    fn min_max_over_mixed_kind_group_follow_order_by_total_order() {
+        let ds = numbers();
+        let r = run_on(
+            &ds,
+            "PREFIX ex: <http://ex/> \
+             SELECT (MIN(?v) AS ?mn) (MAX(?v) AS ?mx) WHERE { \
+               VALUES ?v { \"plain\" 5 ex:iri <<ex:s ex:p ex:o>> } \
+             }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                match &rows[0][0] {
+                    Some(TermValue::Iri(iri)) => assert_eq!(iri, "http://ex/iri"),
+                    other => panic!("MIN over a mixed-kind group must be the IRI, got {other:?}"),
+                }
+                match &rows[0][1] {
+                    Some(TermValue::Triple { .. }) => {}
+                    other => {
+                        panic!("MAX over a mixed-kind group must be the triple term, got {other:?}")
+                    }
+                }
             }
             other => panic!("expected solutions, got {other:?}"),
         }

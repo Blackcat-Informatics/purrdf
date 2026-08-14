@@ -216,6 +216,25 @@ impl Drop for ForceChunkSizeGuard {
     }
 }
 
+/// The exact number of chunks a [`par_chunk_try_map_init`]/[`par_chunk_reduce_init`]
+/// call over `len` items will actually create: `1` when [`should_parallelize`]
+/// declines (the sequential fallback — `init` runs exactly once), else
+/// `len.div_ceil(chunk_size_for(len))`.
+///
+/// Exposed so a caller that must METER a per-chunk cost BEFORE folding — a
+/// custom aggregate's declared per-accumulator [`crate::agg_fn::CustomAggregate::state_bound`],
+/// charged once per accumulator chunking actually creates — charges the exact
+/// count rather than an estimate that could drift from what
+/// [`par_chunk_reduce_init`] does at runtime (both read the same
+/// [`should_parallelize`]/`chunk_size_for` pair, so there is only one source
+/// of truth for "how many chunks").
+pub(crate) fn planned_chunk_count(len: usize) -> usize {
+    if !should_parallelize(len) {
+        return 1;
+    }
+    len.div_ceil(chunk_size_for(len))
+}
+
 /// Whether a batch of `work_items` (rows, groups, branches) should run in
 /// parallel rather than sequentially. Small inputs stay sequential because
 /// rayon thread hand-off cost would dominate the actual work.
@@ -857,6 +876,91 @@ where
         out.extend(chunk_result?);
     }
     Ok(out)
+}
+
+/// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
+/// every chunk's pushed items into one `Vec<R>`, each chunk folds down to
+/// exactly ONE accumulator `S` (`init` once per chunk, `step` once per item),
+/// and the per-chunk accumulators are then **reduced left-to-right, strictly
+/// in chunk-index order**, via `combine` — never reassociated, never merged
+/// out of order. That fixed order is what makes this primitive safe for a
+/// NON-commutative fold (string concatenation, "first value wins", a running
+/// extreme under a non-total order): the result is byte-identical to a plain
+/// sequential `init(); for item in items { step(&mut s, item); }` fold over
+/// the same `items` in source order, for every accumulator regardless of its
+/// algebraic class — see `crate::agg_fn::AlgebraicClass`'s module docs, whose
+/// `combine`-in-chunk-order contract this primitive is the evaluator-side
+/// counterpart of.
+///
+/// Used by `modifier::eval_aggregate`/`eval_custom_aggregate` to fold ONE
+/// `GROUP BY` group's (already-evaluated, already-`DISTINCT`-deduped) values
+/// in parallel when the group itself is large — the fork [`par_chunk_try_map_init`]
+/// drives in `modifier::eval_group` parallelizes ACROSS groups; this
+/// primitive parallelizes WITHIN one group's fold, the case a single huge
+/// group (one `GROUP BY` key, millions of rows) never benefits from the
+/// across-groups fork at all. Deliberately given NO [`crate::eval::EvalCtx`]
+/// access: every item this primitive folds is already a plain, dataset-
+/// independent value (a [`crate::scratch::SolutionTerm`] minted by the
+/// UNCHANGED sequential row-evaluation loop that runs before chunking even
+/// begins), so `step`/`combine` here touch no governor, no scratch interner,
+/// no `EXISTS` re-entrancy — none of [`par_chunk_try_map_init`]'s fork-per-
+/// chunk `EvalCtx` machinery is needed, because nothing here evaluates an
+/// expression or charges a fuel point. That is also why charging stays
+/// byte-identical between the sequential and chunked fold: every charge this
+/// aggregate's row loop makes happens in that unchanged pre-chunking pass,
+/// never in here.
+///
+/// Internally gated on [`should_parallelize`], mirroring [`par_chunk_try_map_init`]
+/// exactly: at or below [`PARALLEL_MIN_ROWS`], `init` runs once and every item
+/// folds directly into that one state (`combine` is never called) — bit-
+/// identical to a hand-written sequential loop; above it, `items.par_chunks(..)`
+/// folds each chunk independently and the results are reduced in chunk order.
+/// `items.is_empty()` is `init()`'s state with no `step` at all, exactly the
+/// same empty-group answer either branch gives.
+pub(crate) fn par_chunk_reduce_init<T, S>(
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    step: impl Fn(&mut S, &T) -> Result<(), EvalError> + Sync,
+    combine: impl Fn(&mut S, S) -> Result<(), EvalError>,
+) -> Result<S, EvalError>
+where
+    T: Sync,
+    S: Send,
+{
+    if !should_parallelize(items.len()) {
+        let mut state = init()?;
+        for item in items {
+            step(&mut state, item)?;
+        }
+        return Ok(state);
+    }
+
+    use rayon::prelude::*;
+
+    let size = chunk_size_for(items.len());
+    let per_chunk: Vec<Result<S, EvalError>> = items
+        .par_chunks(size)
+        .map(|chunk| {
+            let mut state = init()?;
+            for item in chunk {
+                step(&mut state, item)?;
+            }
+            Ok(state)
+        })
+        .collect();
+
+    // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
+    // wins (via `?` on the sequential `for` below), regardless of which worker
+    // finished first — mirrors `par_chunk_try_map_init`'s reduce exactly.
+    let mut iter = per_chunk.into_iter();
+    let mut acc = match iter.next() {
+        Some(first) => first?,
+        None => init()?,
+    };
+    for chunk_result in iter {
+        combine(&mut acc, chunk_result?)?;
+    }
+    Ok(acc)
 }
 
 /// An order-stable, internally-gated parallel filter-clone: keep every item of

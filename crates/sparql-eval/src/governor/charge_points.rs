@@ -1523,6 +1523,54 @@ fn an_aggregate_heavy_query_under_a_tight_budget_stops_with_the_governed_outcome
     assert_eq!(again, tight);
 }
 
+#[test]
+fn within_group_chunked_fold_charges_identically_forced_parallel_vs_sequential() {
+    // One huge group — `agg_group_dataset(1, rows)` puts every row under the SAME
+    // `?cat` key — large enough to cross `PARALLEL_MIN_ROWS` and actually chunk the
+    // fold (see `crate::parallel::par_chunk_reduce_init`, wired in by
+    // `crate::modifier::eval_aggregate`'s phase 2). Every charge this aggregate makes
+    // happens in phase 1 — the row-evaluation loop, UNCHANGED by whether phase 2 goes
+    // on to chunk the fold — so forced-parallel and forced-sequential must spend
+    // EXACTLY the same fuel at both aggregate charge points, automatically, with no
+    // charge site needing to special-case chunking at all.
+    const ROWS: i64 = 3000;
+    let dataset = agg_group_dataset(1, ROWS);
+    let pattern = sum_group_pattern();
+
+    let (parallel_run, parallel_ledger) = {
+        let _guard = force_parallel_for_test(true);
+        run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
+    };
+    let (sequential_run, sequential_ledger) = {
+        let _guard = force_sequential_operation();
+        run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
+    };
+
+    assert_eq!(parallel_run.tripped, None);
+    assert_eq!(sequential_run.tripped, None);
+    assert_eq!(parallel_run.rows, 1, "one huge group");
+    assert_eq!(sequential_run.rows, 1);
+    assert_eq!(
+        parallel_run.fuel, sequential_run.fuel,
+        "total fuel spend must not depend on whether the within-group fold chunked"
+    );
+    for point in [
+        ChargePoint::AggregateInvocation,
+        ChargePoint::AggregateAccumulation,
+    ] {
+        assert_eq!(
+            ledger_fuel(&parallel_ledger, point),
+            ledger_fuel(&sequential_ledger, point),
+            "{point}: within-group chunking must not change per-point spend"
+        );
+    }
+    assert_eq!(
+        ledger_fuel(&parallel_ledger, ChargePoint::AggregateAccumulation),
+        u64::try_from(ROWS).unwrap(),
+        "one accumulation charge per row in the single huge group"
+    );
+}
+
 /// The type parameter is spelled out in a couple of places above; this keeps the
 /// production id type named so a change to it is a compile error here rather than a
 /// silent change of what these tests cover.

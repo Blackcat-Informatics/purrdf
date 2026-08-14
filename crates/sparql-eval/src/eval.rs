@@ -890,10 +890,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///    volatility is unknown, where an unresolved scalar function IRI has a
     ///    defined deterministic meaning).
     ///
-    /// This governs only WHICH GROUP runs on which worker — the fold WITHIN one
-    /// group still always runs sequentially, in row order, on whichever worker
-    /// drew that group, so [`crate::agg_fn::AggregateAccumulator::combine`] is not
-    /// consulted here at all (see `crate::agg_fn`'s module docs).
+    /// This governs WHICH GROUP runs on which worker, gating [`crate::modifier::eval_group`]'s
+    /// across-groups fork. It does NOT gate whether the fold WITHIN one group
+    /// chunks: `eval_aggregate`/`eval_custom_aggregate` decide that separately —
+    /// a built-in's within-group chunked fold never touches `EvalCtx` (see
+    /// `crate::parallel::par_chunk_reduce_init`'s docs) so it needs no
+    /// volatility check at all, and a custom aggregate's within-group chunking
+    /// re-reads [`crate::agg_fn::CustomAggregate::volatility`] itself at that
+    /// finer grain rather than reusing this method's answer, because a query
+    /// with SEVERAL aggregates in one `GROUP BY` list — one `Custom` and
+    /// `Volatile`, one built-in — must let the built-in chunk within its own
+    /// group even on a query where [`Self::may_fork_aggregate`] returns `false`
+    /// for the `Volatile` one (which only blocks that aggregate's own
+    /// ACROSS-groups fork, not the built-in's within-group one).
     pub(crate) fn may_fork_aggregate(
         &self,
         agg: &purrdf_sparql_algebra::AggregateExpression,
