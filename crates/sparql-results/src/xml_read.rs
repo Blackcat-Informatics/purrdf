@@ -612,6 +612,28 @@ mod tests {
         );
     }
 
+    /// When `its:dir` and a legacy spelling disagree on one literal, the spec
+    /// spelling wins.
+    #[test]
+    fn its_dir_takes_priority_over_legacy_spellings() {
+        let both = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" xmlns:its="http://www.w3.org/2005/11/its" its:dir="rtl" dir="ltr" purrdf:dir="ltr" xmlns:purrdf="https://purrdf.dev/ns/results#">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(both.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
     #[test]
     fn unescapes_entities() {
         let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
