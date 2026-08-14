@@ -1532,6 +1532,9 @@ mod tests {
             Ok(())
         }
         fn combine(&mut self, _other: Box<dyn crate::agg_fn::AggregateAccumulator>) {}
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
         fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
             Ok(None)
         }

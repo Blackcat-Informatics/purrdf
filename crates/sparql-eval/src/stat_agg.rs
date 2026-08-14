@@ -105,49 +105,65 @@
 //! Fewer than `k` distinct rows in the group → every value the group has.
 //! Empty group → unbound, like every other member here.
 //!
-//! # Why these are `Volatility::Volatile` (all except `FIRST`/`LAST`)
+//! # Real merges via `AggregateAccumulator::into_any` (all ten are `Volatility::Stable`)
 //!
-//! [`crate::agg_fn::AggregateAccumulator::combine`] takes `other:
-//! Box<dyn AggregateAccumulator>` — a fully TYPE-ERASED accumulator whose only
-//! observable surface is `combine`'s own caller calling `other.finish()` (the
-//! pattern this crate's own fixtures use — see `crate::agg_fn`'s
-//! `SumAccumulator` test and `crate::modifier`'s `ListCollector` test). That
-//! pattern is sound EXACTLY when a fold's `finish()` output is *itself*
-//! sufficient mergeable state — true for `SUM` (a running total IS the raw
-//! state) and `GROUP_CONCAT`/list-collection (a joined string IS the raw
-//! state, losslessly re-splittable). It is NOT true for a statistic whose
-//! finished, single-term answer throws away the information a correct merge
-//! needs: two partial standard deviations cannot be combined into the whole
-//! group's standard deviation without each side's count and mean too; two
-//! partial medians cannot be combined into the whole group's median at all
-//! (median is not a composable reduction); two partial modes cannot be
-//! combined without each side's per-value counts, which a single winning term
-//! does not carry.
+//! [`crate::agg_fn::AggregateAccumulator::combine`] receives `other` as a fully
+//! TYPE-ERASED `Box<dyn AggregateAccumulator>`. Naively, the only observable
+//! surface through it is `other.finish()` (the pattern this crate's own
+//! fixtures use for `SUM`/list-collection — see `crate::agg_fn`'s
+//! `SumAccumulator` test and `crate::modifier`'s `ListCollector` test), which
+//! is sound EXACTLY when a fold's `finish()` output is *itself* sufficient
+//! mergeable state — true for `SUM` (a running total IS the raw state) and
+//! `GROUP_CONCAT`/list-collection (a joined string IS the raw state, losslessly
+//! re-splittable). It is NOT true for a statistic whose finished, single-term
+//! answer throws away the information a correct merge needs: two partial
+//! standard deviations cannot be combined into the whole group's standard
+//! deviation without each side's count and sum-of-squares too; two partial
+//! modes cannot be combined without each side's raw value multiset, which a
+//! single winning term does not carry; two partial medians/percentiles/top-`k`
+//! sets cannot be combined from their single finished answer at all.
 //!
-//! Given that constraint, declaring `Volatility::Stable` for any of these
-//! seven and implementing `combine` via `other.finish()` would either be
-//! silently WRONG under within-group chunking (the exact failure the
-//! `CustomAggregate::volatility` docs warn a misdeclaration causes) or would
-//! require inventing a lossy re-serialization that corrupts the group's TRUE
-//! final answer (since `finish()` has exactly one behaviour regardless of
-//! whether the evaluator or this module's own `combine` is the caller — see
-//! the long-form reasoning kept in this crate's development history for the
-//! full argument). `Volatility::Volatile` is therefore the HONEST declaration
-//! for `MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`,
-//! `MODE`, and `TOPK`: it pins each to the single-accumulator sequential fold
-//! this crate has always supported (see `crate::agg_fn`'s module docs), which
-//! is what makes their answer exact and — trivially, since no chunking ever
-//! happens — byte-identical between a "parallel" and a "sequential" run.
-//! `combine` is still implemented for each (the trait requires it), as a
-//! documented, panic-contained `unreachable!()`: the evaluator's chunked fold
-//! never calls it for a `Volatile` aggregate, so firing it anyway is a defect
-//! in the evaluator, not a state this module needs to handle.
+//! [`crate::agg_fn::AggregateAccumulator::into_any`] is the trait's escape
+//! hatch for exactly this: it recovers `other`'s original concrete type — same
+//! type BY CONSTRUCTION, since every partial accumulator a `combine` chain
+//! ever merges was created by the SAME [`crate::agg_fn::CustomAggregate::init`]
+//! factory — so `combine` can merge the SAME structural state `step` builds,
+//! through [`crate::agg_fn::downcast_combine_partial`], rather than a lossy
+//! re-derivation from `finish()`. Each member below uses it:
+//!
+//! * `MEDIAN`/`PERCENTILE` merge their (unsorted-until-`finish`) value lists by
+//!   concatenation — merge order does not matter, since `finish` sorts before
+//!   computing a rank either way; `PERCENTILE` additionally poisons the merge
+//!   if the two sides disagree on `p`, exactly as `step` poisons on a
+//!   within-accumulator mismatch.
+//! * `MODE` merges its raw value multiset the same way (concatenation):
+//!   `finish`'s sort + run-length scan recovers each value's count from
+//!   whatever multiset it is handed, so concatenating two partials' lists IS
+//!   "sum the counts per value" — no explicit count map is needed to get that
+//!   effect.
+//! * `STDDEV`/`STDDEV_POP`/`VARIANCE`/`VAR_POP` merge their `(n, Σx, Σx²)`
+//!   moments componentwise (`n + n'`, `Σx + Σx'`, `Σx² + Σx'²`) — exact, no
+//!   precision loss, for the same reason the running fold itself is exact (see
+//!   this family's own doc comment below).
+//! * `TOPK` merges by inserting one side's values into the other's bounded
+//!   top-`k` set and truncating (`insert_bounded`, the same primitive `step`
+//!   itself uses) — a bounded-structure merge, never `O(group size)`.
+//!
+//! Every one of these merges is a genuinely deterministic fold with no
+//! dependency on WHICH worker produced which partial or in what order two
+//! partials of equal size are combined (see each member's [`AlgebraicClass`]
+//! for the precise law) — these eight were never actually nondeterministic,
+//! only architecturally unable to merge through the finish-only path. All ten
+//! members (these eight plus `FIRST`/`LAST`) therefore declare
+//! `Volatility::Stable`, the honest classification for a fully deterministic
+//! fold, and are eligible for `crate::modifier::eval_custom_aggregate`'s
+//! within-group chunked fold exactly like any other `Stable` custom aggregate.
 //!
 //! `FIRST`/`LAST` are the two members whose `finish()` output (the earliest
-//! or latest value seen SO FAR) genuinely is sufficient state — an earlier
-//! chunk's first value stays the group's first value no matter what a later
-//! chunk saw, and symmetrically for `LAST` — so both stay
-//! `Volatility::Stable` with a correct, real `combine`.
+//! or latest value seen SO FAR) genuinely is sufficient state on its own — an
+//! earlier chunk's first value stays the group's first value no matter what a
+//! later chunk saw, and symmetrically for `LAST` — so both merge through
+//! `finish()`, needing no downcast.
 //!
 //! # `state_bound` honesty
 //!
@@ -177,6 +193,7 @@
 //! — nothing in this module special-cases it.
 
 use std::cmp::Ordering;
+use std::mem;
 use std::sync::Arc;
 
 use purrdf_core::TermValue;
@@ -185,7 +202,10 @@ use purrdf_xsd::{
     XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
 };
 
-use crate::agg_fn::{AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate};
+use crate::agg_fn::{
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
+    downcast_combine_partial,
+};
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::{is_numeric_xsd, lexical_of, term_value_order};
@@ -222,18 +242,6 @@ const TOPK_STATE_BOUND: u64 = 512;
 /// `FIRST`/`LAST`'s declared [`CustomAggregate::state_bound`]: one retained
 /// [`TermValue`] clone.
 const SCALAR_STATE_BOUND: u64 = 64;
-
-/// The panic message every `Volatile` member's unreachable `combine` shares —
-/// see the module docs' "Why these are `Volatility::Volatile`" section.
-fn volatile_combine_unreachable(local_name: &str) -> ! {
-    unreachable!(
-        "AGG <…>{local_name} declares Volatility::Volatile, so \
-         crate::modifier::eval_custom_aggregate's chunked fold never invokes combine \
-         for it (chunk_count is forced to 1) — see purrdf_sparql_eval::stat_agg's module \
-         docs for why a real combine is not implementable through the erased \
-         AggregateAccumulator seam for this member"
-    )
-}
 
 /// The exact decimal `0.5`, used as `MEDIAN`'s fixed percentile parameter so its
 /// whole computation stays in the exact tower (see the module docs).
@@ -343,8 +351,28 @@ impl AggregateAccumulator for MedianAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
-        volatile_combine_unreachable(MEDIAN)
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        // Concatenate the two (still-unsorted) value lists: merge order never
+        // matters, because `finish` sorts the whole multiset before computing
+        // a rank — see the module docs' "Real merges" section.
+        let other = downcast_combine_partial::<Self>(other);
+        self.state = match (
+            mem::replace(&mut self.state, NumericSeries::Empty),
+            other.state,
+        ) {
+            (NumericSeries::Poisoned, _) | (_, NumericSeries::Poisoned) => NumericSeries::Poisoned,
+            (NumericSeries::Empty, s) | (s, NumericSeries::Empty) => s,
+            (NumericSeries::Ok(mut values), NumericSeries::Ok(other_values)) => {
+                values.extend(other_values);
+                NumericSeries::Ok(values)
+            }
+        };
+    }
+
+    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
+    /// body is this same one line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -368,7 +396,7 @@ impl CustomAggregate for MedianAggregate {
         Arity::Exact(1)
     }
     fn volatility(&self) -> Volatility {
-        Volatility::Volatile
+        Volatility::Stable
     }
     fn algebraic_class(&self) -> AlgebraicClass {
         AlgebraicClass::Associative
@@ -430,8 +458,40 @@ impl AggregateAccumulator for PercentileAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
-        volatile_combine_unreachable(PERCENTILE)
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        // Same shape as `MedianAccumulator::combine`, plus the same `p`-mismatch
+        // poison `step` applies within one accumulator: two partials that
+        // disagree on `p` have no single percentile to report either.
+        let other = downcast_combine_partial::<Self>(other);
+        self.state = match (
+            mem::replace(&mut self.state, PercentileSeries::Empty),
+            other.state,
+        ) {
+            (PercentileSeries::Poisoned, _) | (_, PercentileSeries::Poisoned) => {
+                PercentileSeries::Poisoned
+            }
+            (PercentileSeries::Empty, s) | (s, PercentileSeries::Empty) => s,
+            (
+                PercentileSeries::Ok { p, mut values },
+                PercentileSeries::Ok {
+                    p: other_p,
+                    values: other_values,
+                },
+            ) => {
+                if numeric_eq(&p, &other_p) {
+                    values.extend(other_values);
+                    PercentileSeries::Ok { p, values }
+                } else {
+                    PercentileSeries::Poisoned
+                }
+            }
+        };
+    }
+
+    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
+    /// body is this same one line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -453,7 +513,7 @@ impl CustomAggregate for PercentileAggregate {
         Arity::Exact(2)
     }
     fn volatility(&self) -> Volatility {
-        Volatility::Volatile
+        Volatility::Stable
     }
     fn algebraic_class(&self) -> AlgebraicClass {
         AlgebraicClass::Associative
@@ -476,23 +536,31 @@ impl CustomAggregate for PercentileAggregate {
 // incremental `(n, mean, M2)` recurrence — and the variance is recovered at
 // `finish` via the identity `Var = (Σx² − (Σx)²/n) / denom`. This is a
 // deliberate refinement of the plan's "Welford-style" starting point: Welford
-// exists to solve TWO problems neither of which applies here. First, it
-// avoids catastrophic cancellation under FLOATING-POINT re-association —
-// irrelevant to this crate's EXACT decimal/integer tower, where `Σx²` and
-// `(Σx)²` are exact integers/decimals with no cancellation error to avoid.
-// Second, it is INCREMENTALLY mergeable across parallel partial folds — moot
-// here because every member in this family is `Volatility::Volatile` (see the
-// module docs' "Why these are `Volatility::Volatile`" section), so exactly
-// ONE accumulator ever folds a group, sequentially. What Welford's per-row
-// division WOULD cost here, with neither benefit realized, is precision:
-// `mean = mean + delta/n` rounds once PER ROW at this crate's 18-fractional-
-// digit decimal-division ceiling (`purrdf_xsd::numeric::MAX_DECIMAL_SCALE`),
-// so an all-integer group's population variance can drift off its exact
-// integer answer by a few units in the 18th digit. The sum/sum-of-squares
-// form divides exactly ONCE (twice, for the final `Σx²ᵢ − (Σx)²/n` and once
-// more for `/ denom`), so an all-integer or all-decimal group's variance
-// stays EXACTLY the textbook answer — see this module's `var_pop_matches_the_
-// known_dataset` test, which pins the exact `"4"` this form produces.
+// exists to solve TWO problems, and this representation gets BOTH without
+// Welford's cost. First, avoiding catastrophic cancellation under
+// FLOATING-POINT re-association — irrelevant to this crate's EXACT
+// decimal/integer tower, where `Σx²` and `(Σx)²` are exact integers/decimals
+// with no cancellation error to avoid. Second, being incrementally mergeable
+// across parallel partial folds — needed, since this family IS
+// `Volatility::Stable` and folds across `crate::parallel::par_chunk_reduce_init`
+// chunks (see the module docs' "Real merges" section) — but `(n, Σx, Σx²)`
+// merges through PLAIN componentwise addition (`MomentsAccumulator::combine`),
+// simpler and cheaper than Welford's own pairwise-merge formula, and exactly
+// as exact as the sequential fold. What Welford's per-row division WOULD cost
+// here, with no benefit over the sum/sum-of-squares form's simpler merge, is
+// precision: `mean = mean + delta/n` rounds once PER ROW at this crate's
+// 18-fractional-digit decimal-division ceiling
+// (`purrdf_xsd::numeric::MAX_DECIMAL_SCALE`), so an all-integer group's
+// population variance can drift off its exact integer answer by a few units
+// in the 18th digit. The sum/sum-of-squares form divides exactly ONCE (twice,
+// for the final `Σx²ᵢ − (Σx)²/n` and once more for `/ denom`), so an
+// all-integer or all-decimal group's variance stays EXACTLY the textbook
+// answer regardless of how many chunks it was folded across — see this
+// module's `var_pop_matches_the_known_dataset` test, which pins the exact
+// `"4"` this form produces, and
+// `stat_agg_moments_chunked_fold_forced_parallel_and_sequential_agree` in
+// `crate::modifier`'s tests, which pins that a chunked fold reproduces it
+// exactly.
 
 #[derive(Clone, Copy)]
 enum MomentsKind {
@@ -500,17 +568,6 @@ enum MomentsKind {
     StddevPop,
     Variance,
     VarPop,
-}
-
-impl MomentsKind {
-    const fn local_name(self) -> &'static str {
-        match self {
-            Self::Stddev => STDDEV,
-            Self::StddevPop => STDDEV_POP,
-            Self::Variance => VARIANCE,
-            Self::VarPop => VAR_POP,
-        }
-    }
 }
 
 enum MomentsState {
@@ -568,8 +625,44 @@ impl AggregateAccumulator for MomentsAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
-        volatile_combine_unreachable(self.kind.local_name())
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        // Componentwise moment merge: `(n, Σx, Σx²) + (n', Σx', Σx'²)` —
+        // exact, no precision loss, for the same reason the running fold
+        // itself is exact (see this family's own doc comment above). `other`'s
+        // `kind` is discarded: it is the SAME variant as `self.kind` by
+        // construction (one `MomentsAggregate::init` per accumulator).
+        let other = downcast_combine_partial::<Self>(other);
+        self.state = match (
+            mem::replace(&mut self.state, MomentsState::Empty),
+            other.state,
+        ) {
+            (MomentsState::Poisoned, _) | (_, MomentsState::Poisoned) => MomentsState::Poisoned,
+            (MomentsState::Empty, s) | (s, MomentsState::Empty) => s,
+            (
+                MomentsState::Ok { n, sum, sumsq },
+                MomentsState::Ok {
+                    n: other_n,
+                    sum: other_sum,
+                    sumsq: other_sumsq,
+                },
+            ) => {
+                let merged = n.checked_add(other_n).and_then(|n| {
+                    let sum = numeric_add(&sum, &other_sum).ok()?;
+                    let sumsq = numeric_add(&sumsq, &other_sumsq).ok()?;
+                    Some((n, sum, sumsq))
+                });
+                match merged {
+                    Some((n, sum, sumsq)) => MomentsState::Ok { n, sum, sumsq },
+                    None => MomentsState::Poisoned,
+                }
+            }
+        };
+    }
+
+    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
+    /// body is this same one line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -631,7 +724,7 @@ impl CustomAggregate for MomentsAggregate {
         Arity::Exact(1)
     }
     fn volatility(&self) -> Volatility {
-        Volatility::Volatile
+        Volatility::Stable
     }
     fn algebraic_class(&self) -> AlgebraicClass {
         AlgebraicClass::Commutative
@@ -663,8 +756,20 @@ impl AggregateAccumulator for ModeAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
-        volatile_combine_unreachable(MODE)
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        // A count-map merge specialized to this accumulator's own
+        // representation: `finish` recovers each value's count via a sort +
+        // run-length scan over the WHOLE multiset, so appending the two
+        // partials' raw value lists is exactly "sum the counts per value" —
+        // no separate map is needed to get that effect.
+        let mut other = downcast_combine_partial::<Self>(other);
+        self.values.append(&mut other.values);
+    }
+
+    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
+    /// body is this same one line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -713,7 +818,7 @@ impl CustomAggregate for ModeAggregate {
         Arity::Exact(1)
     }
     fn volatility(&self) -> Volatility {
-        Volatility::Volatile
+        Volatility::Stable
     }
     fn algebraic_class(&self) -> AlgebraicClass {
         AlgebraicClass::Associative
@@ -751,6 +856,13 @@ impl AggregateAccumulator for FirstAccumulator {
         {
             self.value = Some(v);
         }
+    }
+
+    /// Unused (this accumulator merges through `finish()`, which is already
+    /// sufficient state) — see [`AggregateAccumulator::into_any`]'s trait docs
+    /// for why every implementor still supplies the one-line body.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -794,6 +906,13 @@ impl AggregateAccumulator for LastAccumulator {
         if let Ok(Some(v)) = other.finish() {
             self.value = Some(v);
         }
+    }
+
+    /// Unused (this accumulator merges through `finish()`, which is already
+    /// sufficient state) — see [`AggregateAccumulator::into_any`]'s trait docs
+    /// for why every implementor still supplies the one-line body.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -888,8 +1007,40 @@ impl AggregateAccumulator for TopKAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
-        volatile_combine_unreachable(TOPK)
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        // A bounded-structure merge: insert every one of `other`'s retained
+        // values into `self`'s top-`k` set via the SAME `insert_bounded`
+        // primitive `step` uses, truncating back down to `k` as it goes — the
+        // merged state never exceeds `O(k)` elements, matching `step`'s own
+        // bound.
+        let other = downcast_combine_partial::<Self>(other);
+        self.state = match (mem::replace(&mut self.state, TopKState::Empty), other.state) {
+            (TopKState::Poisoned, _) | (_, TopKState::Poisoned) => TopKState::Poisoned,
+            (TopKState::Empty, s) | (s, TopKState::Empty) => s,
+            (
+                TopKState::Ok { k, mut values },
+                TopKState::Ok {
+                    k: other_k,
+                    values: other_values,
+                },
+            ) => {
+                if k != other_k {
+                    TopKState::Poisoned
+                } else {
+                    let k_usize = usize::try_from(k).unwrap_or(usize::MAX);
+                    for value in other_values {
+                        insert_bounded(&mut values, k_usize, value);
+                    }
+                    TopKState::Ok { k, values }
+                }
+            }
+        };
+    }
+
+    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
+    /// body is this same one line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -923,7 +1074,7 @@ impl CustomAggregate for TopKAggregate {
         Arity::Exact(2)
     }
     fn volatility(&self) -> Volatility {
-        Volatility::Volatile
+        Volatility::Stable
     }
     fn algebraic_class(&self) -> AlgebraicClass {
         AlgebraicClass::Associative

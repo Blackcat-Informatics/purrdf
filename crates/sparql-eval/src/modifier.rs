@@ -2531,18 +2531,21 @@ mod tests {
             Ok(())
         }
         fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-            // No downcasting seam is required of the trait (see the module docs'
-            // "trust boundary" note), so — exactly like `agg_fn`'s own
-            // `SumAccumulator` test fixture — this finishes the other partial
-            // through the same public surface a caller has and re-derives its
-            // item list from that, rather than reaching into `other`'s private
-            // state.
+            // An ordered list join IS its own sufficient merge state (see
+            // `crate::agg_fn`'s "Merging structural state" module docs), so —
+            // exactly like `agg_fn`'s own `SumAccumulator` test fixture — this
+            // finishes the other partial through the same public surface a
+            // caller has and re-derives its item list from that, rather than
+            // reaching for `into_any`'s downcast escape hatch.
             if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
                 && !lexical_form.is_empty()
             {
                 self.items
                     .extend(lexical_form.split(';').map(str::to_owned));
             }
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
         }
         fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
             Ok(Some(TermValue::typed_literal(
@@ -2707,25 +2710,17 @@ mod tests {
         );
     }
 
-    /// `crate::stat_agg::MEDIAN` (`Volatility::Volatile` — see that module's
-    /// docs for why) over the SAME shape of large single group: forcing the
-    /// evaluator's global parallel flag on must NOT change the answer,
-    /// because `Volatility::Volatile` keeps this aggregate on the
-    /// single-accumulator sequential fold regardless of that flag (`stable`
-    /// in `eval_custom_aggregate` is read from the aggregate's OWN
-    /// declaration, not from the global force-parallel test knob) — the
-    /// determinism pin the plan calls for, for a member whose `combine`
-    /// this module's docs establish is architecturally unreachable.
-    #[test]
-    fn stat_agg_median_volatile_gate_holds_under_forced_parallel() {
+    /// Build a large single-implicit-group dataset of `ROWS` `xsd:integer`
+    /// `ex:val` values (`?s0 ex:val 0`, …, `?s{ROWS-1} ex:val (ROWS-1)`) — the
+    /// common fixture shape every `stat_agg` within-group chunked-fold
+    /// determinism pin below shares with [`stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`].
+    fn stat_agg_integer_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const ROWS: i64 = 3000;
         const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
         let val_pred = b.intern_iri("http://ex/val");
-        for i in 0..ROWS {
+        for i in 0..rows {
             let subj = b.intern_iri(&format!("http://ex/s{i}"));
             let val = b.intern_literal(RdfLiteral {
                 lexical_form: i.to_string(),
@@ -2735,8 +2730,193 @@ mod tests {
             });
             b.push_quad(subj, val_pred, val, None);
         }
+        b.freeze().expect("freeze")
+    }
+
+    /// Evaluate a single-argument `AGG(<{NS}{local}>, ?val)` over `ds`'s implicit
+    /// group, once forced sequential and once forced parallel with a small chunk
+    /// size, returning `(sequential, forced_parallel)` — the shared driver every
+    /// `stat_agg_*_chunked_fold_forced_parallel_and_sequential_agree` test below
+    /// uses.
+    fn stat_agg_run_single_arg(
+        ds: &Arc<RdfDataset>,
+        registry: &crate::agg_fn::AggregateRegistry,
+        iri: &str,
+    ) -> (String, String) {
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/val")),
+                object: TermPattern::Variable(Variable::new("val")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("g"),
+                AggregateExpression {
+                    function: AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
+                    args: vec![Expression::Variable(Variable::new("val"))],
+                    scalarvals: Vec::new(),
+                    distinct: false,
+                },
+            )],
+        };
+        let run = |forced: bool, chunk: usize| {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(forced);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(chunk);
+            let mut ctx = EvalCtx::new(ds).with_aggregates(registry);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            agg_lex(ds, &ctx, &seq, "g")
+        };
+        (run(false, 64), run(true, 53))
+    }
+
+    /// `crate::stat_agg::MEDIAN` — now `Volatility::Stable` (see that module's
+    /// "Real merges via `AggregateAccumulator::into_any`" docs) — over a large
+    /// single group must agree byte-for-byte between forced-parallel and
+    /// forced-sequential: the determinism pin that a finish-only `combine`
+    /// could never support, now exercising `MedianAccumulator::combine`'s real
+    /// value-list merge through the within-group chunked fold.
+    #[test]
+    fn stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree() {
+        const ROWS: i64 = 3000;
+        const NS: &str = "http://example.org/agg/";
+
+        let ds = stat_agg_integer_sequence_dataset(ROWS);
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (sequential, forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}MEDIAN"));
+        assert_eq!(
+            sequential, forced_parallel,
+            "MEDIAN's chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            sequential, "1499.5",
+            "median of 0..2999 is the mean of the two middle values 1499 and 1500"
+        );
+    }
+
+    /// `crate::stat_agg::MODE` over a large single group where 1000 of the 3000
+    /// rows share one value (`7`) and the rest are each unique: no matter how
+    /// the group is chunked, `ModeAccumulator::combine`'s count-map-by-
+    /// concatenation merge must recover the SAME winning value with the SAME
+    /// count, so forced-parallel and forced-sequential must agree.
+    #[test]
+    fn stat_agg_mode_chunked_fold_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        const ROWS: i64 = 3000;
+        const REPEATED_UP_TO: i64 = 1000;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const NS: &str = "http://example.org/agg/";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let v = if i < REPEATED_UP_TO { 7 } else { i };
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: v.to_string(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
         let ds = b.freeze().expect("freeze");
 
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (sequential, forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}MODE"));
+        assert_eq!(
+            sequential, forced_parallel,
+            "MODE's chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            sequential, "7",
+            "7 occurs 1000 times, every other value exactly once"
+        );
+    }
+
+    /// `crate::stat_agg::VAR_POP`/`STDDEV_POP` over a large single group built
+    /// by repeating the module's own known 8-value dataset (population variance
+    /// exactly `4`, population stddev exactly `2`) 400 times: repetition does
+    /// not change either statistic, so this pins BOTH that
+    /// `MomentsAccumulator::combine`'s `(n, Σx, Σx²)` merge agrees between
+    /// forced-parallel and forced-sequential AND that it stays byte-exact —
+    /// the moments family's own chunked-fold counterpart to `stat_agg.rs`'s
+    /// `var_pop_matches_the_known_dataset` test.
+    #[test]
+    fn stat_agg_moments_chunked_fold_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        const KNOWN: [i64; 8] = [2, 4, 4, 4, 5, 5, 7, 9];
+        const REPEATS: i64 = 400;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const NS: &str = "http://example.org/agg/";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        let mut i = 0i64;
+        for _ in 0..REPEATS {
+            for &v in &KNOWN {
+                let subj = b.intern_iri(&format!("http://ex/s{i}"));
+                let val = b.intern_literal(RdfLiteral {
+                    lexical_form: v.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                });
+                b.push_quad(subj, val_pred, val, None);
+                i += 1;
+            }
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (var_sequential, var_forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}VAR_POP"));
+        assert_eq!(
+            var_sequential, var_forced_parallel,
+            "VAR_POP's chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            var_sequential, "4",
+            "population variance of REPEATS copies of the known dataset is still exactly 4"
+        );
+
+        let (stddev_sequential, stddev_forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}STDDEV_POP"));
+        assert_eq!(
+            stddev_sequential, stddev_forced_parallel,
+            "STDDEV_POP's chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            stddev_sequential, "2.0E0",
+            "population stddev of REPEATS copies of the known dataset is still exactly 2"
+        );
+    }
+
+    /// `crate::stat_agg::TOPK` over the same 3000-row unique-value sequence
+    /// [`stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree`]
+    /// uses, asking for the top 3: the true top-3 values (`2999`, `2998`,
+    /// `2997`) may fall in different chunks depending on the (forced) chunk
+    /// size, so this specifically exercises `TopKAccumulator::combine`'s
+    /// bounded-structure merge (`insert_bounded` applied across chunk
+    /// boundaries, not just within one chunk's `step` sequence).
+    #[test]
+    fn stat_agg_topk_chunked_fold_forced_parallel_and_sequential_agree() {
+        const ROWS: i64 = 3000;
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const NS: &str = "http://example.org/agg/";
+
+        let ds = stat_agg_integer_sequence_dataset(ROWS);
         let mut registry = crate::agg_fn::AggregateRegistry::new();
         registry.register_statistical_aggregates(NS);
 
@@ -2754,9 +2934,15 @@ mod tests {
                 Variable::new("g"),
                 AggregateExpression {
                     function: AggregateFunction::Custom(NamedNode::new_unchecked(format!(
-                        "{NS}MEDIAN"
+                        "{NS}TOPK"
                     ))),
-                    args: vec![Expression::Variable(Variable::new("val"))],
+                    args: vec![
+                        Expression::Variable(Variable::new("val")),
+                        Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                            "3",
+                            NamedNode::new_unchecked(XINT),
+                        )),
+                    ],
                     scalarvals: Vec::new(),
                     distinct: false,
                 },
@@ -2775,13 +2961,11 @@ mod tests {
         let forced_parallel = run(true, 53);
         assert_eq!(
             sequential, forced_parallel,
-            "MEDIAN's Volatility::Volatile declaration must keep it on the \
-             single-accumulator sequential fold even when the evaluator's \
-             global parallel flag is forced on"
+            "TOPK's chunked within-group fold must agree with the sequential one"
         );
         assert_eq!(
-            sequential, "1499.5",
-            "median of 0..2999 is the mean of the two middle values 1499 and 1500"
+            sequential, "2999 2998 2997",
+            "the true top 3 of 0..2999, descending"
         );
     }
 }

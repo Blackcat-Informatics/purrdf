@@ -58,6 +58,34 @@
 //! supported, exactly as `crate::eval::EvalCtx::may_fork_aggregate`'s per-GROUP fork
 //! gate excludes it there too.
 //!
+//! # Merging structural state through `into_any`
+//!
+//! `combine` receives `other` as a fully type-erased `Box<dyn
+//! AggregateAccumulator>` — reachable, naively, through only the trait's own
+//! object-safe surface. For an aggregate whose finished, single-term answer IS
+//! sufficient mergeable state (`SUM`'s running total, `GROUP_CONCAT`'s joined
+//! string), `other.finish()` is all `combine` ever needs — the shape this
+//! module's own `SumAccumulator` test fixture and `crate::modifier`'s
+//! `ListCollector` use. For an aggregate whose finished answer throws away
+//! information a correct merge needs — a running median's whole value list, a
+//! running mode's per-value counts, a running variance's `(n, Σx, Σx²)` — the
+//! finish-only path is not merely inconvenient, it is WRONG, because it would
+//! fold the finished, already-reduced answer back in as if it were one more
+//! row rather than merging the aggregate's actual state.
+//! [`AggregateAccumulator::into_any`] is the escape hatch for exactly this
+//! case: it recovers `other`'s original concrete type, so `combine` can merge
+//! the SAME structural state `step` builds. The downcast is same-type BY
+//! CONSTRUCTION — every partial accumulator a single `combine` chain ever
+//! merges was created by the SAME [`CustomAggregate::init`] factory
+//! (`crate::parallel::par_chunk_reduce_init` never mixes accumulators from two
+//! different registrations) — so a mismatch can only mean a host bug, never a
+//! state this crate's own evaluator can produce; [`downcast_combine_partial`]
+//! is the standard, panic-contained way to consume it (the panic a mismatched
+//! downcast raises is caught by [`combine_contained`] exactly like any other
+//! host panic from this seam — never a raw unwind escaping it).
+//! `crate::stat_agg`'s `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK`
+//! members are this crate's first-party example of the pattern.
+//!
 //! # wasm32 note
 //!
 //! See `crate::contain`'s module docs: `catch_unwind` requires
@@ -131,7 +159,12 @@ impl AlgebraicClass {
 /// ANOTHER thread's partial fold requires the type to be movable across threads —
 /// `Send` is what that requires, without also claiming (falsely) that two threads
 /// may drive the SAME accumulator concurrently.
-pub trait AggregateAccumulator: Send {
+///
+/// `'static`: required for [`into_any`](Self::into_any)'s downcast —
+/// [`std::any::Any`] requires it — and not a new restriction in practice: every
+/// accumulator this crate has ever boxed holds only owned data, never a borrow,
+/// so every existing and future implementor already satisfies it.
+pub trait AggregateAccumulator: Send + 'static {
     /// Fold one row's already-evaluated, positional argument tuple into this
     /// accumulator's state.
     ///
@@ -158,6 +191,12 @@ pub trait AggregateAccumulator: Send {
     /// on [`AlgebraicClass`] for why this fixed order is what keeps a
     /// non-commutative fold deterministic under a parallel partial-fold split.
     ///
+    /// `other.finish()` is enough to merge correctly when the aggregate's
+    /// finished answer IS its whole mergeable state; when it is not, recover
+    /// `other`'s concrete type via [`into_any`](Self::into_any) (see the module
+    /// docs' "Merging structural state" section) and merge the real state
+    /// `step` built instead.
+    ///
     /// Called by `crate::modifier::eval_custom_aggregate`'s within-group chunked
     /// fold whenever the aggregate declares [`Volatility::Stable`] and the group
     /// is large enough to chunk (see `crate::parallel::par_chunk_reduce_init`) —
@@ -165,6 +204,23 @@ pub trait AggregateAccumulator: Send {
     /// that caller existed was already correct under it, needing no later,
     /// breaking addition.
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>);
+
+    /// Recover this accumulator's original concrete type from behind the trait
+    /// object — [`combine`](Self::combine)'s escape hatch for a merge that needs
+    /// more than `finish()`'s single answer (see the module docs' "Merging
+    /// structural state" section). `self: Box<Self>` (consuming, not `&mut
+    /// self`) because `combine` always consumes `other` too, and
+    /// [`downcast_combine_partial`] is the standard way to consume the result.
+    ///
+    /// No default body: a default here would need to type-check against a
+    /// fully generic, possibly-unsized `Self`, which the `Box<Self> -> Box<dyn
+    /// Any + Send>` unsizing coercion cannot do (it needs a concretely `Sized`
+    /// `Self`, known only inside each `impl` block, not inside the trait
+    /// definition). Every implementor's body is therefore the same one line —
+    /// `self` — [`std::any::Any`]'s ordinary upcast; an aggregate that always
+    /// merges through `finish()` (a `SUM`-alike, a list collector) never calls
+    /// it but must still supply the line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send>;
 
     /// Produce this group's answer and consume the accumulator.
     ///
@@ -281,6 +337,33 @@ pub(crate) fn combine_contained(
     crate::contain::call_contained(KIND, iri, "combining partial state", || {
         accumulator.combine(other);
         Ok(())
+    })
+}
+
+/// Recover `other`'s original concrete type — the standard way for an
+/// [`AggregateAccumulator::combine`] implementation to consume
+/// [`AggregateAccumulator::into_any`]'s escape hatch. See the module docs'
+/// "Merging structural state" section for why the downcast is same-type by
+/// construction, and [`combine_contained`] for why a mismatch's panic never
+/// escapes this seam.
+///
+/// # Panics
+///
+/// If `other`'s concrete type is not `T` — never true when `other` was
+/// created by the SAME [`CustomAggregate::init`] factory as the accumulator
+/// calling this, which is the only way `crate::modifier::eval_custom_aggregate`'s
+/// chunked fold ever calls `combine`. This panic is caught by
+/// [`combine_contained`]'s containment exactly like any other host panic from
+/// this seam — a host mixing accumulator types is a bug, but not one that can
+/// escape the seam as a raw unwind.
+pub(crate) fn downcast_combine_partial<T: 'static>(other: Box<dyn AggregateAccumulator>) -> T {
+    *other.into_any().downcast::<T>().unwrap_or_else(|_| {
+        panic!(
+            "AggregateAccumulator::combine received a partial accumulator of a different \
+             concrete type than Self — every partial combine merges was created by the SAME \
+             CustomAggregate::init factory, so a mismatch here is a host bug in how partial \
+             accumulators were constructed, not a state this crate's own evaluator can produce"
+        )
     })
 }
 
@@ -553,14 +636,22 @@ mod tests {
         }
 
         fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-            // No downcasting seam is required of the trait, so a test/host
-            // combine merges through the same public surface a caller has:
-            // finish the other partial and fold its value back in.
+            // A running total IS its own sufficient merge state, so this
+            // fixture does not need `into_any`'s downcast escape hatch: merge
+            // through the same public surface a caller has — finish the other
+            // partial and fold its value back in.
             if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
                 && let Ok(n) = lexical_form.parse::<i64>()
             {
                 self.total += n;
             }
+        }
+
+        /// Unused (this fixture merges through `finish()`) — see
+        /// [`AggregateAccumulator::into_any`]'s trait docs for why every
+        /// implementor still supplies the one-line body.
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
         }
 
         fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
@@ -710,6 +801,9 @@ mod tests {
         }
         fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
             panic!("accumulator exploded in combine")
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
         }
         fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
             assert!(!self.panic_on_finish, "accumulator exploded in finish");

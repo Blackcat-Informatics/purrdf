@@ -51,6 +51,10 @@ impl AggregateAccumulator for SumAccumulator {
         }
     }
 
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         Ok(Some(TermValue::typed_literal(
             self.total.to_string(),
@@ -117,6 +121,10 @@ impl AggregateAccumulator for WeightedSumAccumulator {
         {
             self.total += n;
         }
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
