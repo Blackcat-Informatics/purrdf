@@ -14,7 +14,9 @@ use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
     OrderExpression, Variable,
 };
-use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_cmp};
+use purrdf_xsd::{
+    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_cmp,
+};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -1088,22 +1090,51 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
     )
 }
 
-/// The running numeric fold `SUM`/`AVG` share: a value is folded in with
-/// `numeric_add`, seeded by the FIRST folded value (never `0 + first`, so the
-/// result datatype matches the pre-restructuring "remove the first element,
-/// then fold the rest" implementation exactly). A non-numeric value or an
-/// overflow POISONS the fold permanently — the answer is unbound regardless of
-/// what would have followed — mirroring the materializing implementation's
-/// immediate `return Ok(None)`, just without needing to abort the row loop
-/// early (the poisoned state simply ignores every further `step`).
+/// The running numeric fold `SUM`/`AVG` share.
+///
+/// A **pure-integer** running group ([`Self::Int`]) accumulates through
+/// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
+/// large the true total gets; only a genuinely non-numeric value poisons it.
+/// The moment a `decimal`/`float`/`double` value joins the group, the fold
+/// promotes to [`Self::Ok`] and continues through `numeric_add`'s ordinary
+/// (bounded, spec-defined) promotion tower exactly as before — see
+/// [`int_sum_promote_base`] for the promotion step and why it is exact for
+/// `decimal` whenever `decimal`'s own `i128`-bounded mantissa could hold the
+/// value at all, and lossy-but-never-poisoning for `float`/`double` (IEEE,
+/// never exact anyway). [`Self::Ok`]'s own arithmetic is untouched by this
+/// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
+/// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
+///
+/// A non-numeric value POISONS the fold permanently — the answer is unbound
+/// regardless of what would have followed — mirroring the materializing
+/// implementation's immediate `return Ok(None)`, just without needing to abort
+/// the row loop early (the poisoned state simply ignores every further `step`).
 #[derive(Debug, Clone)]
 enum NumericFold {
     /// No value has been folded in yet.
     Empty,
+    /// Every value folded in so far has been `xsd:integer` (or a derived
+    /// integer facet): an exact, unbounded running total, plus the count of
+    /// values folded (only `AVG` reads it) and the datatype to report if the
+    /// fold never grows past this single value (see [`BuiltinFold`]'s docs on
+    /// why a singleton group preserves its one literal's exact subtype, e.g.
+    /// `xsd:byte`, while two or more folded values normalize to plain
+    /// `xsd:integer` — `datatype` here mirrors that: it starts as the first
+    /// value's own datatype and is stamped to [`XsdDatatype::Integer`] the
+    /// instant a second value (via `step` OR `combine`) is actually folded in).
+    Int {
+        sum: BigInt,
+        count: u64,
+        datatype: XsdDatatype,
+    },
     /// A running sum plus the count of values folded so far (only `AVG` reads
-    /// the count).
+    /// the count) — at `decimal`/`float`/`double` tier or higher; promotion is
+    /// monotonic (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold
+    /// never returns to [`Self::Int`].
     Ok { acc: XsdValue, count: u64 },
-    /// A non-numeric value or an overflow was seen.
+    /// A non-numeric value was seen, or a `decimal`-tier running total
+    /// genuinely exceeded `decimal`'s `i128`-bounded mantissa (see
+    /// [`int_sum_promote_base`]).
     Poisoned,
 }
 
@@ -1117,7 +1148,42 @@ impl NumericFold {
             return;
         };
         match self {
-            Self::Empty => *self = Self::Ok { acc: xv, count: 1 },
+            Self::Empty => {
+                *self = match xv {
+                    XsdValue::Integer { value, datatype } => Self::Int {
+                        sum: BigInt::from_i128(value),
+                        count: 1,
+                        datatype,
+                    },
+                    other => Self::Ok {
+                        acc: other,
+                        count: 1,
+                    },
+                };
+            }
+            Self::Int {
+                sum,
+                count,
+                datatype,
+            } => match &xv {
+                XsdValue::Integer { value, .. } => {
+                    sum.add_i128(*value);
+                    *count += 1;
+                    *datatype = XsdDatatype::Integer;
+                }
+                other => match int_sum_promote_base(sum, other) {
+                    Some(base) => match numeric_add(&base, other) {
+                        Ok(result) => {
+                            *self = Self::Ok {
+                                acc: result,
+                                count: *count + 1,
+                            };
+                        }
+                        Err(_) => *self = Self::Poisoned,
+                    },
+                    None => *self = Self::Poisoned,
+                },
+            },
             Self::Ok { acc, count } => match numeric_add(acc, &xv) {
                 Ok(sum) => {
                     *acc = sum;
@@ -1130,13 +1196,17 @@ impl NumericFold {
     }
 
     /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1); poisoned
-    /// → unbound; otherwise the running total.
+    /// → unbound; otherwise the running total — exact for a pure-integer group
+    /// (whatever its magnitude, via [`BigInt::to_decimal_string`] when it no
+    /// longer fits `i128`), or the `decimal`/`float`/`double`-tower total
+    /// otherwise.
     fn finish_sum<D: DatasetView + Sync>(
         self,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Option<SolutionTerm<D::Id>> {
         match self {
             Self::Empty => Some(integer_term(ctx, 0)),
+            Self::Int { sum, datatype, .. } => Some(int_sum_term(ctx, &sum, datatype)),
             Self::Ok { acc, .. } => Some(xsd_to_term(ctx, &acc)),
             Self::Poisoned => None,
         }
@@ -1144,12 +1214,33 @@ impl NumericFold {
 
     /// `AVG`'s finish: empty group → `0^^xsd:integer`; poisoned → unbound;
     /// otherwise the running total divided by the folded count.
+    ///
+    /// A pure-integer running total that still fits `i128` divides exactly as
+    /// before (unchanged `numeric_div` call, unchanged truncated-decimal
+    /// result). One that no longer fits `i128` divides through
+    /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
+    /// division by the (always-small) folded row count, mirroring
+    /// `numeric_div`'s own truncated-to-18-fractional-digit `Decimal` result
+    /// bit for bit — so a `SUM` that escaped `i128` does not have to poison
+    /// `AVG` when the QUOTIENT is perfectly ordinary (e.g. `(i128::MAX +
+    /// i128::MAX) / 2 == i128::MAX`, exactly representable even though the sum
+    /// it divides is not). That helper answers `None` only when the resulting
+    /// MANTISSA still does not fit `i128` either — `xsd:decimal`'s own
+    /// `i128`-mantissa bound (this crate's documented design, unmoved by this
+    /// fold), which really is "genuinely unrepresentable in the result type":
+    /// no `AVG` this poisons was ever answerable before this change either,
+    /// since it poisoned earlier still, on the first bounded-arithmetic
+    /// overflow.
     fn finish_avg<D: DatasetView + Sync>(
         self,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Option<SolutionTerm<D::Id>> {
         match self {
             Self::Empty => Some(integer_term(ctx, 0)),
+            Self::Int { sum, count, .. } => {
+                let avg = purrdf_xsd::bigint_avg_decimal(&sum, count)?;
+                Some(xsd_to_term(ctx, &avg))
+            }
             Self::Ok { acc, count } => {
                 let count_val = XsdValue::Integer {
                     value: i128::from(count),
@@ -1166,50 +1257,161 @@ impl NumericFold {
 
     /// Merge `other` — a LATER (in source/chunk order) partial fold — into
     /// `self`, the earlier one. `Commutative` per [`crate::agg_fn::AlgebraicClass`]:
-    /// `numeric_add` and running-count addition are both associative and
-    /// commutative in the real-number sense, so combining chunk partials in
-    /// chunk order produces the same total `op:numeric-add` would folding the
-    /// whole group sequentially — modulo one inherent-to-fixed-width-arithmetic
-    /// caveat also true of the plain sequential fold: an intermediate overflow
-    /// depends on which PARTIAL sums are added in which order, so a group whose
-    /// true total fits but whose rows sum to an out-of-range value under SOME
-    /// grouping can poison under one chunking and not another — exactly as it
-    /// can already poison under one ROW order and not another today, since the
-    /// sequential fold is itself a left-to-right `numeric_add` chain. This is a
-    /// property of bounded arithmetic, not a determinism gap chunking
-    /// introduces: whichever grouping trips it, the answer for that execution
-    /// is a legitimate "poisoned, hence unbound" `SUM`/`AVG` — not a wrong one.
+    /// `BigInt` addition is exact and associative/commutative with no caveat at
+    /// all — a pure-integer group's chunked total agrees with its sequential
+    /// total, and with every OTHER chunking of the same group, byte for byte,
+    /// because [`BigInt`] cannot overflow. `numeric_add` (once the fold is at
+    /// `decimal`/`float`/`double` tier) is likewise associative/commutative in
+    /// the real-number sense, so combining chunk partials in chunk order
+    /// produces the same total `op:numeric-add` would folding the whole group
+    /// sequentially — modulo `decimal`'s own documented `i128`-mantissa bound
+    /// and `float`/`double`'s IEEE rounding, neither of which this module
+    /// changes.
     ///
-    /// Crucially, "which grouping" is no longer a question the HOST gets a vote on.
+    /// Before this fold gained [`Self::Int`], a bounded-arithmetic overflow
+    /// could poison one chunking of a group (whose true total fit) and not
+    /// another, or one row order and not another — a property of fixed-width
+    /// arithmetic the fold's docs used to concede as a known, reproducible (not
+    /// machine-dependent, see [`crate::parallel::aggregate_chunk_size_for`])
+    /// hazard. That hazard is now closed for every pure-integer group: a
+    /// representable `xsd:integer` total is exact, unconditionally, regardless
+    /// of chunking or row order, because the accumulator that can overflow was
+    /// removed rather than merely reproduced consistently. The residual
+    /// non-associativity is `decimal`/`float`/`double`'s own, pre-existing and
+    /// unchanged (a genuinely `decimal`-mantissa-exceeding or IEEE-overflowing
+    /// total was never exact and is not claimed to be here either).
+    ///
     /// [`crate::parallel::par_chunk_reduce_init`] chunks through
     /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
     /// group's row count — never of `rayon::current_num_threads()` — so for a given
     /// (query, data) pair there is exactly ONE chunking in production, reproduced
-    /// identically on every host and every run. The caveat above therefore describes a
-    /// fixed, reproducible property of THIS group's fold (does its fixed chunk plan
-    /// happen to sum through an out-of-range intermediate, the same way a fixed row
-    /// order can), not a machine- or schedule-dependent one: two runs of the same query
-    /// over the same data never disagree, on one host or between two.
+    /// identically on every host and every run, on top of the exactness above.
     fn combine(&mut self, other: Self) {
-        match (&mut *self, other) {
-            (Self::Poisoned, _) => {}
-            (_, Self::Poisoned) => *self = Self::Poisoned,
-            (_, Self::Empty) => {}
-            (Self::Empty, other) => *self = other,
+        let this = std::mem::replace(self, Self::Poisoned);
+        *self = Self::combine_owned(this, other);
+    }
+
+    /// The owned-value half of [`Self::combine`] — takes both partials by value
+    /// so the `Int`/`Ok` cross-tier promotion arm can move `sum`/`acc` out
+    /// without fighting borrowck over a `&mut Self` still holding the other one.
+    fn combine_owned(a: Self, b: Self) -> Self {
+        match (a, b) {
+            (Self::Poisoned, _) | (_, Self::Poisoned) => Self::Poisoned,
+            (Self::Empty, other) | (other, Self::Empty) => other,
             (
-                Self::Ok { acc, count },
-                Self::Ok {
-                    acc: oacc,
-                    count: ocount,
+                Self::Int {
+                    sum: mut sum1,
+                    count: count1,
+                    ..
                 },
-            ) => match numeric_add(acc, &oacc) {
-                Ok(sum) => {
-                    *acc = sum;
-                    *count += ocount;
+                Self::Int {
+                    sum: sum2,
+                    count: count2,
+                    ..
+                },
+            ) => {
+                sum1.add_assign(&sum2);
+                Self::Int {
+                    sum: sum1,
+                    count: count1 + count2,
+                    datatype: XsdDatatype::Integer,
                 }
-                Err(_) => *self = Self::Poisoned,
+            }
+            (
+                Self::Ok {
+                    acc: acc1,
+                    count: count1,
+                },
+                Self::Ok {
+                    acc: acc2,
+                    count: count2,
+                },
+            ) => match numeric_add(&acc1, &acc2) {
+                Ok(sum) => Self::Ok {
+                    acc: sum,
+                    count: count1 + count2,
+                },
+                Err(_) => Self::Poisoned,
+            },
+            (
+                Self::Int {
+                    sum, count: count1, ..
+                },
+                Self::Ok { acc, count: count2 },
+            )
+            | (
+                Self::Ok { acc, count: count2 },
+                Self::Int {
+                    sum, count: count1, ..
+                },
+            ) => match int_sum_promote_base(&sum, &acc) {
+                Some(base) => match numeric_add(&base, &acc) {
+                    Ok(result) => Self::Ok {
+                        acc: result,
+                        count: count1 + count2,
+                    },
+                    Err(_) => Self::Poisoned,
+                },
+                None => Self::Poisoned,
             },
         }
+    }
+}
+
+/// Convert a pure-integer running sum into the `XsdValue` `numeric_add` needs
+/// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
+/// of [`NumericFold::Int`].
+///
+/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` —
+/// the overwhelmingly common case, and identical to what the fold already did
+/// before it could exceed `i128` at all. Beyond that: `decimal`'s own mantissa
+/// is `i128`-bounded too (see `crates/xsd`'s module docs), so a `joining`
+/// decimal cannot be represented as a `Decimal` either — `None` (the caller
+/// poisons), exactly as today's overflow behavior already would have, just
+/// reached later. A `joining` float/double, however, is IEEE and never exact
+/// regardless of magnitude, so the sum can be cast (lossily, precisely as the
+/// existing `i128 → f64`/`f32` promotion already is — see `purrdf_xsd::numeric`)
+/// with no representability question at all: this is the one case where a
+/// running total that has escaped `i128` still avoids poisoning.
+fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
+    if let Some(value) = sum.to_i128() {
+        return Some(XsdValue::Integer {
+            value,
+            datatype: XsdDatatype::Integer,
+        });
+    }
+    match joining {
+        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f64() as f32)),
+        XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
+        _ => None,
+    }
+}
+
+/// Render a [`NumericFold::Int`]'s running sum as a `SolutionTerm`: the exact
+/// canonical lexical form either way — [`xsd_to_term`]'s usual
+/// `XsdValue::Integer` path when `sum` still fits `i128` (preserving `datatype`,
+/// e.g. a singleton `xsd:byte` group — see [`NumericFold::Int`]'s docs), or a
+/// directly-interned `xsd:integer` literal from [`BigInt::to_decimal_string`]
+/// when it does not: `XsdValue::Integer`'s `i128` field cannot hold that
+/// magnitude, but `xsd:integer`'s LEXICAL space is unbounded, so the term is
+/// built straight from the exact decimal string rather than forced through a
+/// value representation that would have to lose precision to accept it.
+fn int_sum_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    sum: &BigInt,
+    datatype: XsdDatatype,
+) -> SolutionTerm<D::Id> {
+    match sum.to_i128() {
+        Some(value) => xsd_to_term(ctx, &XsdValue::Integer { value, datatype }),
+        None => ctx.scratch.intern(
+            ctx.dataset,
+            TermValue::Literal {
+                lexical_form: sum.to_decimal_string(),
+                datatype: XSD_INTEGER.to_owned(),
+                language: None,
+                direction: None,
+            },
+        ),
     }
 }
 
@@ -2187,6 +2389,266 @@ mod tests {
                 ("bob".to_owned(), "20".to_owned()),
             ]
         );
+    }
+
+    /// Build a single-group `SUM(?n)`/`AVG(?n)` dataset from `(subject-suffix,
+    /// lexical, datatype-iri)` triples on `ex:v`, in the given ROW order (insertion
+    /// order — the BGP scan visits rows in exactly this order, so callers proving
+    /// row-order independence pass the SAME multiset in different orders).
+    fn numeric_fold_dataset(values: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/v");
+        for (s, lex, dt) in values {
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: (*lex).to_owned(),
+                datatype: Some((*dt).to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, p, val, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Evaluate a bare (no `GROUP BY`) `function(?n)` over `ex:v` and return the
+    /// result variable's lexical form, or `None` if unbound.
+    fn eval_numeric_fold(ds: &Arc<RdfDataset>, function: AggregateFunction) -> Option<String> {
+        let mut ctx = EvalCtx::new(ds);
+        let bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
+                object: TermPattern::Variable(Variable::new("n")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(bgp),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("agg"),
+                AggregateExpression::new(
+                    function,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
+            )],
+        };
+        let seq = eval(&group, &mut ctx).expect("eval");
+        let col = seq.schema.index_of(&Variable::new("agg")).unwrap();
+        seq.rows[0][col].map(|t| match ctx.scratch.value_of(ds, t) {
+            TermValue::Literal { lexical_form, .. } => lexical_form,
+            o => format!("{o:?}"),
+        })
+    }
+
+    /// The exact reproduction from the reported gap: `SUM` over
+    /// `{i128::MAX, 1, -i128::MAX}` must answer `"1"^^xsd:integer`, not unbound —
+    /// the running total visits `i128::MAX` (fits) then `i128::MAX + 1` (does NOT
+    /// fit `i128`) along the way, but the true mathematical total is a perfectly
+    /// ordinary, representable `xsd:integer`. Checked in three different row
+    /// orders (the multiset is identical; only insertion order — hence fold
+    /// order — differs), proving the fix is not an artifact of one particular
+    /// order visiting the overflow at a convenient moment.
+    #[test]
+    fn sum_overflow_cancelling_values_answers_exact_total() {
+        let max = i128::MAX.to_string();
+        let neg_max = format!("-{max}");
+        let orders: [[(&str, &str, &str); 3]; 3] = [
+            [("a", &max, XINT), ("b", "1", XINT), ("c", &neg_max, XINT)],
+            [("c", &neg_max, XINT), ("a", &max, XINT), ("b", "1", XINT)],
+            [("b", "1", XINT), ("c", &neg_max, XINT), ("a", &max, XINT)],
+        ];
+        for order in &orders {
+            let ds = numeric_fold_dataset(order);
+            let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+            assert_eq!(
+                result.as_deref(),
+                Some("1"),
+                "SUM over {{i128::MAX, 1, -i128::MAX}} must be exact regardless of row \
+                 order, got {result:?} for order {order:?}"
+            );
+        }
+    }
+
+    /// `AVG` over the same reproduction data as
+    /// [`sum_overflow_cancelling_values_answers_exact_total`] must be exact too:
+    /// the running SUM no longer poisons on the intermediate overflow, so `AVG`
+    /// reaches its ordinary `numeric_div(sum, count)` finish exactly as it would
+    /// for any other 3-row group. The expected value is computed through the
+    /// SAME `numeric_div` the fold itself calls, so this pins "AVG uses the exact
+    /// sum" rather than hand-duplicating `numeric_div`'s truncation behavior.
+    #[test]
+    fn avg_overflow_cancelling_values_is_exact() {
+        let max = i128::MAX.to_string();
+        let neg_max = format!("-{max}");
+        let ds =
+            numeric_fold_dataset(&[("a", &max, XINT), ("b", "1", XINT), ("c", &neg_max, XINT)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
+        let one = XsdValue::Integer {
+            value: 1,
+            datatype: XsdDatatype::Integer,
+        };
+        let three = XsdValue::Integer {
+            value: 3,
+            datatype: XsdDatatype::Integer,
+        };
+        let expected = numeric_div(&one, &three).expect("1/3").canonical_lexical();
+        assert_eq!(result.as_deref(), Some(expected.as_str()));
+    }
+
+    /// A total that genuinely exceeds `i128` (not merely visits an out-of-range
+    /// INTERMEDIATE, but is truly wider than `i128` itself) must still answer
+    /// exactly: `SUM({i128::MAX, i128::MAX})` = `2 × i128::MAX`, an entirely
+    /// ordinary `xsd:integer` no `i128` field can hold, rendered from
+    /// [`BigInt::to_decimal_string`] directly.
+    #[test]
+    fn sum_overflow_exceeding_i128_answers_exact_total() {
+        let max = i128::MAX.to_string();
+        let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(
+            result.as_deref(),
+            Some("340282366920938463463374607431768211454"),
+            "2 * i128::MAX must answer exactly, not unbound"
+        );
+    }
+
+    /// Once a pure-integer running sum has escaped `i128` (see
+    /// [`sum_overflow_exceeding_i128_answers_exact_total`]), a `float`/`double`
+    /// value joining the group must still promote the fold rather than poison
+    /// it — `float`/`double` are IEEE and never exact regardless of magnitude, so
+    /// there is no representability question the way there is for `decimal`
+    /// (see the next test). The result is `xsd:double` (Double is the higher
+    /// promotion tier once it appears), finite (`2 × i128::MAX ≈ 3.4e38` is far
+    /// below `f64::MAX ≈ 1.8e308`).
+    #[test]
+    fn sum_overflow_then_double_promotes_without_poisoning() {
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        let max = i128::MAX.to_string();
+        let ds =
+            numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.0", XDOUBLE)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        let value = result
+            .expect("must not be poisoned")
+            .parse::<f64>()
+            .expect("a double lexical");
+        assert!(value.is_finite());
+        let expected = 2.0_f64 * (i128::MAX as f64);
+        assert!((value - expected).abs() / expected < 1e-9);
+    }
+
+    /// Once a pure-integer running sum has escaped `i128`, a `decimal` value
+    /// joining the group DOES poison — `xsd:decimal`'s mantissa is `i128`-bounded
+    /// by this crate's own documented design (`crates/xsd`'s module docs), so an
+    /// out-of-`i128`-range integer sum cannot be represented as a `Decimal`
+    /// either. This is the "genuinely unrepresentable in the result type" case
+    /// the fix explicitly does not claim to have closed, and it is no worse than
+    /// before: this exact group already poisoned prior to this change (on the
+    /// very first `i128` overflow), just for a different proximate reason.
+    #[test]
+    fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
+        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        let max = i128::MAX.to_string();
+        let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(
+            result, None,
+            "decimal cannot hold an out-of-i128 integer sum"
+        );
+    }
+
+    /// `xsd:double`'s IEEE semantics are untouched by the integer-accumulator
+    /// fix: an overflowing double `SUM` still saturates to IEEE infinity — the
+    /// spec-correct IEEE answer — rather than becoming exact the way the integer
+    /// tower now is. Mirrors `f64::MAX + f64::MAX == f64::INFINITY`.
+    #[test]
+    fn sum_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        let huge = format!("{:e}", f64::MAX);
+        let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(result.as_deref(), Some("INF"));
+    }
+
+    /// `NaN` still propagates through a `double` `SUM`, per IEEE 754 — a `NaN`
+    /// operand poisons every subsequent IEEE add, and `NaN`'s canonical
+    /// `xsd:double` lexical form is `"NaN"`, never unbound.
+    #[test]
+    fn sum_double_nan_propagates() {
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(result.as_deref(), Some("NaN"));
+    }
+
+    /// Mixed-type promotion is unchanged by the integer-accumulator fix: an
+    /// `xsd:integer` `SUM`'d with an `xsd:float` still promotes to `xsd:float`
+    /// (the same tier `numeric_add` always promoted mixed integer/float pairs
+    /// to), whether or not the integer running total ever left `i128` along the
+    /// way.
+    #[test]
+    fn sum_mixed_integer_and_float_promotes_to_float_as_before() {
+        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        let ds = numeric_fold_dataset(&[("a", "40", XINT), ("b", "2.5", XFLOAT)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        assert_eq!(result.as_deref(), Some("4.25E1"));
+    }
+
+    /// The same overflow-cancelling total from
+    /// [`sum_overflow_cancelling_values_answers_exact_total`], but folded across
+    /// a genuinely large group (well above `crate::parallel::PARALLEL_MIN_ROWS`)
+    /// on rayon pools of 1, 2, 8, and 32 workers — the multi-thread-pool harness
+    /// pattern from `tests/governor_correctness.rs`'s
+    /// `filter_exists_fuel_is_invariant_under_worker_count`. Chunk PLANNING is
+    /// already a pure function of row count, never of `rayon::current_num_threads()`
+    /// (see `crate::parallel::aggregate_chunk_size_for`), so this does not probe a
+    /// different chunk boundary per pool; it proves the `BigInt` accumulation
+    /// itself is race-free and produces the identical exact answer however many
+    /// OS threads actually execute the (fixed) chunk plan concurrently.
+    #[test]
+    fn sum_overflow_agrees_across_thread_pool_sizes() {
+        const ROWS: usize = 2000;
+        let max = i128::MAX.to_string();
+        let neg_max = format!("-{max}");
+        let mut values: Vec<(String, String, &str)> = Vec::with_capacity(ROWS);
+        values.push(("r0".to_owned(), max, XINT));
+        values.push(("r1".to_owned(), neg_max, XINT));
+        for i in 2..ROWS {
+            values.push((format!("r{i}"), "1".to_owned(), XINT));
+        }
+        let borrowed: Vec<(&str, &str, &str)> = values
+            .iter()
+            .map(|(s, lex, dt)| (s.as_str(), lex.as_str(), *dt))
+            .collect();
+        let ds = numeric_fold_dataset(&borrowed);
+        // 1998 rows of `1` plus the cancelling MAX/-MAX pair.
+        let expected = (ROWS - 2).to_string();
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(sequential.as_deref(), Some(expected.as_str()));
+
+        for threads in [1_usize, 2, 8, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("building a fixed-size pool");
+            let observed = pool.install(|| {
+                assert_eq!(rayon::current_num_threads(), threads);
+                let _guard = crate::parallel::force_parallel_for_test(true);
+                eval_numeric_fold(&ds, AggregateFunction::Sum)
+            });
+            assert_eq!(
+                observed, sequential,
+                "SUM disagreed at {threads} worker(s): expected {sequential:?}, got {observed:?}"
+            );
+        }
     }
 
     #[test]

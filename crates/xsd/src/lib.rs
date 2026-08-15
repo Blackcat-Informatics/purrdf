@@ -71,7 +71,13 @@
 //! The derived-integer facets and the binary types are **not** modelled by
 //! `oxsdatatypes`; the gregorian family matches it. Integer and decimal are
 //! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
-//! range rather than promoting to arbitrary precision.
+//! range rather than promoting to arbitrary precision. [`bigint::BigInt`] is the
+//! one deliberate exception: not a literal value space at all, it exists purely
+//! so a caller ACCUMULATING many `i128`-bounded integers (SPARQL `SUM`/`AVG`
+//! over a group) can keep the exact running total even where the total itself
+//! would overflow `i128`, since `xsd:integer`'s value space has no such bound —
+//! see its module docs for why a running total can need one when no individual
+//! value ever does.
 //!
 //! # Datatype-range satisfiability
 //!
@@ -140,6 +146,7 @@
 )]
 #![forbid(unsafe_code)]
 
+pub mod bigint;
 pub mod binary;
 pub mod datatype;
 pub mod numeric;
@@ -150,12 +157,13 @@ pub mod simple;
 pub mod temporal;
 pub mod value;
 
+pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
 pub use numeric::{
-    Decimal, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor, numeric_mul,
-    numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
-    parse_float_xsd10,
+    Decimal, bigint_avg_decimal, numeric_abs, numeric_add, numeric_ceil, numeric_div,
+    numeric_floor, numeric_mul, numeric_round, numeric_sub, numeric_unary_minus,
+    numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
 };
 pub use ops::{effective_boolean_value, value_cmp, value_eq};
 pub use range::{

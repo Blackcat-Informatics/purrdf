@@ -866,6 +866,43 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
 }
 
+/// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
+/// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
+/// for why that can happen), divided by the folded row `count`. This is
+/// `AVG`'s finish for exactly that case — mirrors [`decimal_div_raw`]'s
+/// scale-to-[`MAX_DECIMAL_SCALE`]-then-divide shape exactly (same target
+/// scale, same truncate-toward-zero), just computed over an
+/// arbitrary-precision dividend instead of an `i128` one, so a total that
+/// overflowed `i128` does not have to poison `AVG` when the QUOTIENT is
+/// perfectly ordinary (e.g. `(i128::MAX + i128::MAX) / 2 == i128::MAX`, exactly
+/// representable, even though the sum it divides is not).
+///
+/// `None` only when the resulting MANTISSA does not fit `i128` either —
+/// `xsd:decimal`'s own `i128`-mantissa bound (this crate's documented design,
+/// unchanged by this function), not a limitation `BigInt` introduces. `count`
+/// must be nonzero; `AVG`'s one caller only reaches this with a folded row
+/// count, which is never zero for a non-empty group.
+///
+/// # Panics
+///
+/// If `count == 0` — the caller's contract, not a runtime input.
+#[must_use]
+pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
+    assert!(
+        count != 0,
+        "AVG's divisor is a folded row count, never zero"
+    );
+    let scaled = dividend.mul_pow10(u32::from(MAX_DECIMAL_SCALE));
+    let (quotient, _remainder) = scaled
+        .div_rem_u64(count)
+        .expect("count != 0 was just asserted");
+    let mantissa = quotient.to_i128()?;
+    Some(XsdValue::Decimal(Decimal::from_parts(
+        mantissa,
+        MAX_DECIMAL_SCALE,
+    )))
+}
+
 /// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.
 ///
 /// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →
@@ -1546,6 +1583,59 @@ mod tests {
             18,
             "should have 18 fractional digits, got {frac}"
         );
+    }
+
+    // -- `bigint_avg_decimal`: AVG's finish once a running SUM has escaped `i128` --
+
+    #[test]
+    fn bigint_avg_matches_numeric_div_within_i128_range() {
+        // A dividend still small enough to fit `i128` must agree byte-for-byte with
+        // the ordinary `numeric_div` path — `bigint_avg_decimal` is a strict
+        // generalization, not a different algorithm.
+        let dividend = crate::bigint::BigInt::from_i128(1);
+        let via_bigint = bigint_avg_decimal(&dividend, 3).expect("1/3 fits");
+        let via_numeric_div = numeric_div(&int_val(1), &int_val(3)).unwrap();
+        assert_eq!(
+            as_decimal(&via_bigint).cmp_exact(&as_decimal(&via_numeric_div)),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not() {
+        // dividend = 2 * i128::MAX (exceeds i128; only representable as a BigInt),
+        // divided by a count large enough that the QUOTIENT'S 18-fractional-digit
+        // mantissa still fits i128 — proving the escaped-i128 SUM does not have to
+        // poison AVG when the answer itself is ordinary.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        assert_eq!(
+            dividend.to_i128(),
+            None,
+            "fixture must genuinely exceed i128"
+        );
+        let avg = bigint_avg_decimal(&dividend, 10_000_000_000_000_000_000)
+            .expect("quotient magnitude is well under i128::MAX");
+        let d = as_decimal(&avg);
+        // (2 * i128::MAX) / 1e19, truncated toward zero at 18 fractional digits.
+        assert_eq!(
+            d.canonical_lexical(),
+            "34028236692093846346.337460743176821145"
+        );
+    }
+
+    #[test]
+    fn bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128() {
+        // dividend = 2 * i128::MAX, divided by 2: the mathematically exact quotient
+        // (i128::MAX) is an ordinary integer, but `AVG`'s result type is `decimal`,
+        // and `decimal`'s mantissa must hold BOTH the integer part AND 18
+        // fractional digits — `i128::MAX` scaled to 18 fractional digits does not
+        // fit `i128` either. This is `xsd:decimal`'s own documented bound, not a
+        // limitation `BigInt` introduces, and it already applied — for the same
+        // reason — to sufficiently large in-range `AVG`s before this module existed.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        assert!(bigint_avg_decimal(&dividend, 2).is_none());
     }
 
     // -- decimal exactness: 0.1 + 0.2 == 0.3 (the classic float failure) --
