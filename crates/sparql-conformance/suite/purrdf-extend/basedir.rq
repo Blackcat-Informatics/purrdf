@@ -1,0 +1,1 @@
+SELECT (STRLANGDIR("قطة", "ar", "rtl") AS ?animal) WHERE {}

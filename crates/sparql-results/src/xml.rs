@@ -14,28 +14,58 @@
 //!
 //! # RDF 1.2 base direction — the `its:dir` spelling
 //!
-//! A directional literal's base direction is carried on `<literal its:dir="…">`
-//! using the ITS (Internationalization Tag Set) namespace
-//! `http://www.w3.org/2005/11/its`, matching the in-repo RDF/XML codec
-//! precedent (`crates/rdf/src/native_codecs/rdfxml.rs`, which writes
-//! `xmlns:its="…" its:dir="…"` inline on the literal element it serializes).
-//! This is the spelling the SPARQL 1.2 Query Results specification itself
-//! specifies: it gives the worked example
-//! `<literal xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0"
-//! xml:lang="ar" its:dir="rtl">قطة</literal>` and the encoding template
-//! `<binding><literal xml:lang="L" its:dir="B">S</literal></binding>` for a
-//! literal `S` with language `L` and base direction `B`. No vendored `.srx`
-//! fixture under `crates/sparql-conformance/suite/` happens to carry a
-//! directional literal (the base-direction W3C cases in
-//! `w3c-sparql12/lang-basedir/` are `.srj`-only), so the spec quote above —
-//! plus the RDF/XML codec precedent — is the evidence trail for this spelling,
-//! recorded here per the "no draft/provisional" contract: this is the SPARQL
-//! 1.2 Query Results specification, not a working draft.
+//! A directional literal's base direction is carried as `its:dir="…"` on
+//! `<literal>`, using the ITS (Internationalization Tag Set) namespace
+//! `http://www.w3.org/2005/11/its`. This is the spelling the SPARQL 1.2 Query
+//! Results XML Format specification itself specifies
+//! (<https://www.w3.org/TR/sparql12-results-xml/#example>, §2.3.1): its
+//! "Variable Binding Results" encoding-template table gives, for "RDF Literal
+//! *S* with language *L* with base direction *B*":
+//! `<binding><literal xml:lang="L" its:dir="B">S</literal></binding>`.
+//! No vendored `.srx` fixture under `crates/sparql-conformance/suite/` happens
+//! to carry a directional literal (the base-direction W3C cases in
+//! `w3c-sparql12/lang-basedir/` are `.srj`-only, per upstream
+//! `w3c/rdf-tests`'s own manifest), so the spec quote above is the evidence
+//! trail for the attribute name/namespace, recorded here per the "no
+//! draft/provisional" contract: this is the SPARQL 1.2 Query Results
+//! specification, not a working draft. `crates/sparql-conformance/suite/
+//! purrdf-extend/basedir.{rq,srx}` closes the fixture gap: a
+//! `STRLANGDIR(...)`-producing query, constructed directly from this same
+//! spec section's own worked example content (the قطة/`ar`/`rtl` literal),
+//! whose expected `.srx` pins this writer's exact spelling end to end.
 //!
-//! `its:dir` is emitted inline (the same per-element declaration style the
-//! RDF/XML codec and this writer's provenance extension both use) rather than
-//! once on the document root, so a document with no directional literals never
-//! carries an unused namespace declaration.
+//! ## Where the `xmlns:its` declaration lives — the root, not the literal
+//!
+//! Every full-document example in §2.1 ("Document Element"), §2.2 ("Header"),
+//! and the bulk of §2.3.1 ("Variable Binding Results") declares
+//! `xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0"` on the
+//! **root** `<sparql>` element — repeated verbatim across seven separate
+//! worked examples in that document. The spec's §2.1 also gives the inverse
+//! rule explicitly: "If no literals with base direction appear in the
+//! results, the `sparql` document element may be simplified" to drop the
+//! `xmlns:its`/`its:version` attributes entirely. Only ONE example in §2.3.1 —
+//! introduced by the spec's own words "As an alternative to including the
+//! `xml:its` declaration in every result set, the namespace can be declared on
+//! specific elements as needed" — shows the namespace declared inline on
+//! individual `<literal>` elements instead; the spec frames this as a
+//! secondary option, not the default.
+//!
+//! This writer follows the spec's DEFAULT (root-declared) style, which is also
+//! the repo's only other vendored precedent for this attribute pair:
+//! `suite/w3c-sparql12/eval-triple-terms/results-reifiedtriples-1.srx:2`
+//! declares `xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0"` on
+//! its root `<sparql>` element (that particular fixture happens to carry no
+//! directional literal at all, so the upstream W3C test generator clearly
+//! treats the root declaration as the unconditional default style, not
+//! something added only when needed). Concretely: `write_srx` scans the whole
+//! result for any directional literal up front and, only when at least one is
+//! present, emits `xmlns:its="…" its:version="2.0"` on `<sparql>` — the spec's
+//! own "simplified" root form applies whenever none is present, so a document
+//! with no directional literals never carries an unused namespace
+//! declaration. `its:version="2.0"` is emitted alongside `xmlns:its` because
+//! every one of the spec's worked examples pairs the two (ITS 2.0's own
+//! `its:version` convention for host formats, like SRX, that are not
+//! themselves ITS-aware).
 //!
 //! # The additive provenance extension
 //!
@@ -58,6 +88,35 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the `dir` attribute — see the module docs.
 const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+
+/// Whether `result` carries at least one directional literal anywhere in its
+/// bound terms (recursing into triple-term components). Determines whether
+/// the SRX root `<sparql>` element needs the ITS namespace declaration — see
+/// the module docs' "Where the `xmlns:its` declaration lives" section.
+fn result_has_directional_literal(result: &SparqlResult) -> bool {
+    match result {
+        SparqlResult::Solutions { rows, .. } => rows
+            .iter()
+            .flatten()
+            .flatten()
+            .any(term_has_directional_literal),
+        SparqlResult::Boolean(_) | SparqlResult::Graph(_) => false,
+    }
+}
+
+/// Whether `value` is, or recursively contains (as a triple-term component),
+/// a directional literal.
+fn term_has_directional_literal(value: &TermValue) -> bool {
+    match value {
+        TermValue::Literal { direction, .. } => direction.is_some(),
+        TermValue::Triple { s, p, o } => {
+            term_has_directional_literal(s)
+                || term_has_directional_literal(p)
+                || term_has_directional_literal(o)
+        }
+        TermValue::Iri(_) | TermValue::Blank { .. } => false,
+    }
+}
 
 /// Serialize a [`SparqlResult`] to SPARQL Results XML, appending the additive
 /// provenance extension — under `namespace`'s prefix/IRI — when `provenance` is
@@ -98,7 +157,16 @@ fn write_srx(
     out: &mut String,
 ) -> Result<(), Error> {
     out.push_str("<?xml version=\"1.0\"?>\n");
-    out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n");
+    if result_has_directional_literal(result) {
+        // The spec's DEFAULT (root-declared) style — see the module docs.
+        out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"");
+        out.push_str(ITS_NS);
+        out.push_str("\" its:version=\"2.0\">\n");
+    } else {
+        // The spec's own "simplified" root form when no directional literal
+        // appears anywhere in the result.
+        out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n");
+    }
 
     match result {
         SparqlResult::Solutions {
@@ -215,12 +283,10 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
                 out.push('"');
             }
             if let Some(direction) = direction {
-                // Attribute order matches the RDF/XML codec precedent
-                // (`crates/rdf/src/native_codecs/rdfxml.rs`): the `xmlns:its`
-                // declaration precedes `its:dir`.
-                out.push_str(" xmlns:its=\"");
-                out.push_str(ITS_NS);
-                out.push_str("\" its:dir=\"");
+                // No inline `xmlns:its` declaration here — it is declared
+                // once on the document root when needed (see the module
+                // docs' "Where the `xmlns:its` declaration lives" section).
+                out.push_str(" its:dir=\"");
                 out.push_str(direction.as_str());
                 out.push('"');
             }
@@ -638,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn directional_literal_carries_its_dir_and_ns() {
+    fn directional_literal_carries_its_dir_and_root_ns() {
         let result = SparqlResult::Solutions {
             variables: vec!["d".to_string()],
             rows: vec![vec![Some(TermValue::Literal {
@@ -651,18 +717,22 @@ mod tests {
         };
         let text = xml_text(&result, &ResultProvenance::default());
         assert!(text.contains("its:dir=\"ltr\""), "missing dir: {text}");
-        assert!(
-            text.contains("xmlns:its=\"http://www.w3.org/2005/11/its\""),
-            "missing inline ns: {text}"
-        );
-        // BYTE PIN — exact attribute + declaration, matching the RDF/XML codec
-        // precedent's order (`xmlns:its` before `its:dir`); xml:lang precedes
-        // both on the literal element.
+        // BYTE PIN — the ITS namespace + its:version are declared ONCE on the
+        // document root (the spec's default style — see the module docs),
+        // NOT inline on the literal.
         assert!(
             text.contains(
-                "<literal xml:lang=\"en\" xmlns:its=\"http://www.w3.org/2005/11/its\" its:dir=\"ltr\">hello</literal>"
+                "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"http://www.w3.org/2005/11/its\" its:version=\"2.0\">"
             ),
+            "missing root ns decl: {text}"
+        );
+        assert!(
+            text.contains("<literal xml:lang=\"en\" its:dir=\"ltr\">hello</literal>"),
             "unexpected directional literal: {text}"
+        );
+        assert!(
+            !text.contains("<literal xml:lang=\"en\" xmlns:its"),
+            "must not redeclare xmlns:its inline on the literal: {text}"
         );
     }
 

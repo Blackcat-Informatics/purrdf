@@ -4,12 +4,24 @@
 //! Canonical SPARQL Results JSON (SRJ) serializer plus the additive, provenance
 //! carrying extension.
 //!
-//! The default (empty-provenance) output is byte-identical to the legacy
-//! `crates/rdf-capi` emitter (`result_to_json`) — the byte-identity oracle tests
-//! pin that contract so subsuming that emitter stays safe — **except** the CONSTRUCT
-//! (`Graph`) branch, which here uses the wasm-clean [`crate::graph`] N-Triples
-//! writer (no oxigraph) and therefore additionally carries RDF-1.2-star
-//! reifier/annotation lines (maximal information flow).
+//! The default (empty-provenance) `SELECT`/`ASK` output matches the SPARQL 1.2
+//! Query Results JSON Format specification's own binding-encoding table
+//! (<https://www.w3.org/TR/sparql12-results-json/>, §3.2.2 "Encoding RDF
+//! terms"). In particular: **a simple literal (no language tag, `xsd:string`
+//! datatype) serializes BARE** — the spec's table gives "Literal *S*" as
+//! `{"type": "literal","value": "S"}`, with NO `"datatype"` member at all;
+//! only "Literal *S* with datatype IRI *D*" carries one, as `{ "type":
+//! "literal", "value": "S", "datatype": "D"}`. The vendored W3C corpus
+//! confirms this spelling directly: `suite/w3c-sparql12/lang-basedir/
+//! langdir-literal.srj`'s `"langdir"` bindings are bare
+//! (`{ "type": "literal" , "value": "" }`, no `"datatype"` key). This writer
+//! previously emitted an explicit
+//! `"datatype":"http://www.w3.org/2001/XMLSchema#string"` on every simple
+//! literal — a genuine spelling divergence from the spec, now fixed (see
+//! `simple_literal_serializes_bare_per_spec` below for the pin). The
+//! CONSTRUCT (`Graph`) branch, meanwhile, uses the wasm-clean [`crate::graph`]
+//! N-Triples writer (no oxigraph) and therefore additionally carries
+//! RDF-1.2-star reifier/annotation lines (maximal information flow).
 //!
 //! When the supplied [`ResultProvenance`] is non-empty AND the caller supplies a
 //! [`ProvenanceNamespace`], an additive top-level member (keyed by
@@ -36,6 +48,11 @@ use crate::graph::dataset_to_ntriples;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
+
+/// The `xsd:string` IRI; a literal carrying it (with no language) serializes
+/// BARE — no `"datatype"` member — per the SPARQL 1.2 Query Results JSON
+/// Format spec's own encoding table (see the module docs).
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
 /// provenance extension — keyed under `namespace.prefix` — when `provenance` is
@@ -285,7 +302,10 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
             if let Some(language) = language {
                 out.push_str(",\"xml:lang\":");
                 json_string(language, out);
-            } else {
+            } else if datatype != XSD_STRING {
+                // A simple literal (no language, `xsd:string` datatype)
+                // serializes BARE per the spec's own encoding table — see the
+                // module docs.
                 out.push_str(",\"datatype\":");
                 json_string(datatype, out);
             }
@@ -323,7 +343,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
@@ -350,10 +369,10 @@ mod tests {
         }
     }
 
-    // 1. BYTE-IDENTITY ORACLE — SELECT covering IRI, bnode, xsd:string, typed,
+    // 1. BYTE PIN — SELECT covering IRI, bnode, xsd:string, typed,
     //    lang, an unbound cell, and a multi-row case.
     #[test]
-    fn select_empty_provenance_is_byte_identical_to_rdf_capi() {
+    fn select_empty_provenance_matches_spec_encoding() {
         let variables = vec![
             "s".to_string(),
             "b".to_string(),
@@ -398,15 +417,40 @@ mod tests {
             "\"results\":{\"bindings\":[",
             "{\"s\":{\"type\":\"uri\",\"value\":\"http://example.org/s\"},",
             "\"b\":{\"type\":\"bnode\",\"value\":\"b0\"},",
-            "\"name\":{\"type\":\"literal\",\"value\":\"Ada\",\"datatype\":\"http://www.w3.org/2001/XMLSchema#string\"},",
+            "\"name\":{\"type\":\"literal\",\"value\":\"Ada\"},",
             "\"age\":{\"type\":\"literal\",\"value\":\"42\",\"datatype\":\"http://www.w3.org/2001/XMLSchema#integer\"},",
             "\"label\":{\"type\":\"literal\",\"value\":\"bonjour\",\"xml:lang\":\"fr\"}},",
             "{\"s\":{\"type\":\"uri\",\"value\":\"http://example.org/s2\"},",
-            "\"name\":{\"type\":\"literal\",\"value\":\"Bob\",\"datatype\":\"http://www.w3.org/2001/XMLSchema#string\"},",
-            "\"label\":{\"type\":\"literal\",\"value\":\"Grace\",\"datatype\":\"http://www.w3.org/2001/XMLSchema#string\"}}",
+            "\"name\":{\"type\":\"literal\",\"value\":\"Bob\"},",
+            "\"label\":{\"type\":\"literal\",\"value\":\"Grace\"}}",
             "]}}"
         );
         assert_eq!(json_text(&result, &ResultProvenance::default()), expected);
+    }
+
+    /// BYTE PIN — a simple (`xsd:string`, no language) literal serializes
+    /// BARE: `{"type":"literal","value":"S"}`, no `"datatype"` member — the
+    /// SPARQL 1.2 Query Results JSON Format spec's own encoding table (see
+    /// the module docs), matching the vendored W3C fixture
+    /// `suite/w3c-sparql12/lang-basedir/langdir-literal.srj`'s `"langdir"`
+    /// bindings, which are bare in exactly the same way.
+    #[test]
+    fn simple_literal_serializes_bare_per_spec() {
+        let mut out = String::new();
+        json_binding(&lit("hello", XSD_STRING), &mut out).expect("literal binding serializes");
+        assert_eq!(out, "{\"type\":\"literal\",\"value\":\"hello\"}");
+    }
+
+    /// A literal with a NON-`xsd:string` datatype still carries an explicit
+    /// `"datatype"` member — only the `xsd:string` abbreviation is bare.
+    #[test]
+    fn non_string_datatype_still_carries_explicit_datatype_member() {
+        let mut out = String::new();
+        json_binding(&lit("42", XSD_INTEGER), &mut out).expect("literal binding serializes");
+        assert_eq!(
+            out,
+            "{\"type\":\"literal\",\"value\":\"42\",\"datatype\":\"http://www.w3.org/2001/XMLSchema#integer\"}"
+        );
     }
 
     #[test]

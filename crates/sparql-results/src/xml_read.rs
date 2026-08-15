@@ -22,6 +22,11 @@ use crate::json_read::ParsedSolutions;
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+/// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
+/// Results specification uses for the base-direction attribute — see
+/// [`crate::xml`]'s module docs for the spec quote. Matched by namespace URI,
+/// not by the literal `its:` prefix spelling — see [`Element::attr_ns`].
+const ITS_NS: &str = "http://www.w3.org/2005/11/its";
 
 /// Parse a SPARQL Results XML `SELECT` document into [`ParsedSolutions`].
 ///
@@ -114,15 +119,20 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
         }),
         "literal" => {
             let language = elem.attr("xml:lang").map(str::to_owned);
-            // `its:dir` is the spelling the SPARQL 1.2 Query Results
-            // specification uses for RDF 1.2 base direction (see
-            // [`crate::xml`]'s module docs for the spec quote and the RDF/XML
-            // codec precedent), so it is preferred. The bare `dir` and
-            // `purrdf:dir` spellings are tolerated ONLY because this crate's own
-            // earlier writer emitted them before this de-minting pass — never
-            // because they are spec-sanctioned.
+            // `its:dir` — resolved by NAMESPACE URI (`ITS_NS`) plus local name
+            // `dir`, not by the literal QName spelling — is the spelling the
+            // SPARQL 1.2 Query Results specification uses for RDF 1.2 base
+            // direction (see [`crate::xml`]'s module docs for the spec
+            // quote), so it is preferred. Matching by namespace URI means a
+            // document that binds the ITS namespace to a non-`its` prefix (or
+            // declares it on an ancestor element, e.g. the document root —
+            // this crate's own writer's default style) is read correctly:
+            // XML namespace semantics are defined by URI, not prefix spelling.
+            // The bare `dir` and `purrdf:dir` spellings are tolerated ONLY
+            // because this crate's own earlier writer emitted them before
+            // this de-minting pass — never because they are spec-sanctioned.
             let dir_str = elem
-                .attr("its:dir")
+                .attr_ns(ITS_NS, "dir")
                 .or_else(|| elem.attr("dir"))
                 .or_else(|| elem.attr("purrdf:dir"));
             let direction = match dir_str {
@@ -176,11 +186,20 @@ fn fmt(msg: &str) -> Error {
     Error::Format(format!("SPARQL-XML: {msg}"))
 }
 
-/// A minimal parsed XML element: name, attributes, and ordered child nodes.
+/// A minimal parsed XML element: name, attributes (raw QName spelling plus a
+/// namespace-resolved view), and ordered child nodes.
 #[derive(Debug)]
 struct Element {
     name: String,
     attrs: Vec<(String, String)>,
+    /// Every attribute resolved to `(namespace URI, local name, value)` using
+    /// the `xmlns:*` bindings in scope at this element (its own declarations
+    /// plus every ancestor's — XML namespace scope is inherited downward).
+    /// `namespace` is `None` for an unprefixed attribute (XML Namespaces never
+    /// puts an unprefixed ATTRIBUTE in a namespace, unlike elements, which
+    /// inherit a default `xmlns`) or a prefix with no in-scope binding. See
+    /// [`Self::attr_ns`].
+    ns_attrs: Vec<(Option<String>, String, String)>,
     children: Vec<Node>,
 }
 
@@ -191,12 +210,30 @@ enum Node {
 }
 
 impl Element {
-    /// The value of an attribute, if present.
+    /// The value of an attribute, if present, matched by its RAW QName
+    /// (literal prefix spelling). Used for attributes this reader matches
+    /// positionally (`name`, `xml:lang`, `datatype`) or for legacy fallback
+    /// spellings that were never namespace-qualified in the first place. For
+    /// an attribute whose correctness depends on XML namespace semantics
+    /// (defined by URI, not prefix), use [`Self::attr_ns`] instead.
     fn attr(&self, key: &str) -> Option<&str> {
         self.attrs
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// The value of the attribute whose namespace URI is `ns` and local name
+    /// is `local`, resolved via the `xmlns:*` bindings in scope at this
+    /// element — matching by namespace URI rather than by the literal QName
+    /// prefix, exactly as XML Namespaces (<https://www.w3.org/TR/xml-names/>)
+    /// defines attribute identity. A document that binds `ns` to a different
+    /// prefix than the writer's own convention, or declares the binding on an
+    /// ancestor element rather than this one, still resolves correctly.
+    fn attr_ns(&self, ns: &str, local: &str) -> Option<&str> {
+        self.ns_attrs.iter().find_map(|(uri, name, value)| {
+            (uri.as_deref() == Some(ns) && name == local).then_some(value.as_str())
+        })
     }
 
     /// The first direct child element named `name`.
@@ -253,7 +290,7 @@ impl<'a> XmlParser<'a> {
         if self.peek() != Some(b'<') {
             return Err(fmt("expected root element"));
         }
-        self.parse_element()
+        self.parse_element(&[])
     }
 
     fn peek(&self) -> Option<u8> {
@@ -299,8 +336,12 @@ impl<'a> XmlParser<'a> {
         }
     }
 
-    /// Parse an element starting at `<`.
-    fn parse_element(&mut self) -> Result<Element, Error> {
+    /// Parse an element starting at `<`. `parent_scope` is the `(prefix,
+    /// namespace URI)` bindings in scope from ancestor elements; this
+    /// element's own `xmlns:*` declarations extend it (see
+    /// [`extend_ns_scope`]) both for resolving its own attributes and for
+    /// every descendant this call parses.
+    fn parse_element(&mut self, parent_scope: &[(String, String)]) -> Result<Element, Error> {
         self.pos += 1; // consume '<'
         let name = self.parse_name()?;
         let mut attrs = Vec::new();
@@ -311,9 +352,11 @@ impl<'a> XmlParser<'a> {
                     // Self-closing element.
                     self.pos += 1;
                     self.expect(b'>')?;
+                    let ns_attrs = resolve_ns_attrs(&attrs, parent_scope);
                     return Ok(Element {
                         name,
                         attrs,
+                        ns_attrs,
                         children: Vec::new(),
                     });
                 }
@@ -328,6 +371,8 @@ impl<'a> XmlParser<'a> {
                 None => return Err(fmt("unterminated start tag")),
             }
         }
+        let scope = extend_ns_scope(parent_scope, &attrs);
+        let ns_attrs = resolve_ns_attrs(&attrs, &scope);
         // Parse children until the matching end tag.
         let mut children = Vec::new();
         loop {
@@ -355,7 +400,7 @@ impl<'a> XmlParser<'a> {
                         children.push(Node::Text(self.src[start..start + rel].to_owned()));
                         self.pos = start + rel + "]]>".len();
                     } else {
-                        children.push(Node::Element(self.parse_element()?));
+                        children.push(Node::Element(self.parse_element(&scope)?));
                     }
                 }
                 Some(_) => {
@@ -369,6 +414,7 @@ impl<'a> XmlParser<'a> {
         Ok(Element {
             name,
             attrs,
+            ns_attrs,
             children,
         })
     }
@@ -431,6 +477,48 @@ impl<'a> XmlParser<'a> {
             Err(fmt(&format!("expected `{}`", c as char)))
         }
     }
+}
+
+/// Extend `parent_scope` with any `xmlns:prefix="uri"` declarations found
+/// among `attrs` (this element's own start tag) — the namespace scope every
+/// descendant, and this element's own attributes, resolve against.
+fn extend_ns_scope(
+    parent_scope: &[(String, String)],
+    attrs: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut scope = parent_scope.to_vec();
+    for (k, v) in attrs {
+        if let Some(prefix) = k.strip_prefix("xmlns:") {
+            scope.push((prefix.to_owned(), v.clone()));
+        }
+    }
+    scope
+}
+
+/// Resolve every attribute in `attrs` to `(namespace URI, local name, value)`
+/// using `scope` (the nearest — i.e. last-pushed — binding for a prefix
+/// wins, matching XML's "nearest declaration in scope" resolution rule).
+/// `xmlns`/`xmlns:*` declaration attributes themselves are namespace
+/// machinery, not ordinary content attributes, so they are excluded here.
+fn resolve_ns_attrs(
+    attrs: &[(String, String)],
+    scope: &[(String, String)],
+) -> Vec<(Option<String>, String, String)> {
+    attrs
+        .iter()
+        .filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:"))
+        .map(|(k, v)| match k.split_once(':') {
+            Some((prefix, local)) => {
+                let ns = scope
+                    .iter()
+                    .rev()
+                    .find(|(p, _)| p == prefix)
+                    .map(|(_, uri)| uri.clone());
+                (ns, local.to_owned(), v.clone())
+            }
+            None => (None, k.clone(), v.clone()),
+        })
+        .collect()
 }
 
 /// Unescape the five predefined XML entities plus numeric character references.
@@ -630,6 +718,78 @@ mod tests {
                 datatype: RDF_DIR_LANGSTRING.to_owned(),
                 language: Some("en".to_owned()),
                 direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// H9 fix pin: the ITS namespace declared on the ROOT `<sparql>` element
+    /// — this crate's own writer's default style (see [`crate::xml`]'s module
+    /// docs) — must still resolve for a `<literal its:dir="…">` several
+    /// elements deeper, since XML namespace scope is inherited downward.
+    #[test]
+    fn reads_its_dir_declared_on_root() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" its:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// H9 fix pin: XML namespace semantics are defined by URI, not prefix
+    /// spelling (<https://www.w3.org/TR/xml-names/>). A document that binds
+    /// the ITS namespace to a NON-`its` prefix (here `i`) must still be read
+    /// correctly — matching by `(namespace URI, local name)` rather than the
+    /// raw QName `its:dir`.
+    #[test]
+    fn reads_its_dir_bound_to_non_its_prefix() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" xmlns:i="http://www.w3.org/2005/11/its" i:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// H9 fix pin, combined: the ITS namespace bound to a non-`its` prefix
+    /// AND declared on the root element rather than inline on the literal —
+    /// the fully general case a raw-QName match cannot handle at all.
+    #[test]
+    fn reads_its_dir_non_its_prefix_declared_on_root() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:ns7="http://www.w3.org/2005/11/its" ns7:version="2.0">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" ns7:dir="ltr">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
             })
         );
     }

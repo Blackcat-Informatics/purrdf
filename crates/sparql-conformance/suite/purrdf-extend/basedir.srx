@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0">
+  <head>
+    <variable name="animal"/>
+  </head>
+  <results>
+    <result>
+      <binding name="animal"><literal xml:lang="ar" its:dir="rtl">قطة</literal></binding>
+    </result>
+  </results>
+</sparql>

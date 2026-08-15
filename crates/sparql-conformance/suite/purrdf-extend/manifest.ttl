@@ -54,6 +54,16 @@
 #     concatenation (see `purrdf_sparql_eval::modifier`'s "Aggregate
 #     semantics" docs), exercised through this harness's own
 #     Turtle-load/evaluate path rather than only the in-process engine tests.
+#   * RDF 1.2 base direction in SRX (:baseDirection) — a `STRLANGDIR(...)`
+#     query whose expected `.srx` is constructed directly from the SPARQL 1.2
+#     Query Results XML Format spec's own §2.3.1 worked example (the قطة/`ar`/
+#     `rtl` literal, and the spec's DEFAULT root-declared `xmlns:its`/
+#     `its:version` style — see `crates/sparql-results/src/xml.rs`'s module
+#     docs). No vendored W3C `.srx` fixture carries a directional literal at
+#     all (upstream `w3c/rdf-tests` only exercises base direction via `.srj`),
+#     so this closes that fixture gap end to end: engine → writer → this
+#     spec-derived expected file, byte-pinned further in
+#     `crates/sparql-conformance/tests/results_spec_byte_pins.rs`.
 #
 
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
@@ -95,6 +105,7 @@
         :aggCallNoArgs
         :aggStarNonCount
         :groupConcatOrder
+        :baseDirection
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -218,3 +229,8 @@
     mf:name "GROUP_CONCAT concatenates in input row order — an exact-string pin through this harness's own load/evaluate path" ;
     mf:action [ qt:query <group-concat-order.rq> ; qt:data <group-concat-order.ttl> ] ;
     mf:result <group-concat-order.srx> .
+
+:baseDirection a mf:QueryEvaluationTest ;
+    mf:name "STRLANGDIR() produces an RDF 1.2 directional literal, serialized per the SPARQL 1.2 Query Results XML Format spec's own example" ;
+    mf:action [ qt:query <basedir.rq> ] ;
+    mf:result <basedir.srx> .
