@@ -1046,7 +1046,7 @@ impl QueryEngine {
                 &frozen,
                 sparql_request(sparql, base.as_deref()),
                 QueryOptions {
-                    aggregates: aggregates.as_ref(),
+                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                     ..QueryOptions::EMPTY
                 },
                 &governors,
@@ -1173,7 +1173,7 @@ impl QueryEngine {
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
                 QueryOptions {
-                    aggregates: aggregates.as_ref(),
+                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                     ..QueryOptions::EMPTY
                 },
                 &governors,

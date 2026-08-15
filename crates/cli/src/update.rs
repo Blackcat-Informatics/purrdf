@@ -51,8 +51,13 @@ pub(crate) fn run(
     let aggregates = build_aggregate_registry(options.aggregate_namespace);
     // `QueryOptions::EMPTY` for every axis but `aggregates`: the CLI wires no SHACL-AF
     // function table and no property-function registry.
+    // `static`, not a bare `&AggregateRegistry::EMPTY` temporary: `query_options` below
+    // outlives this statement, and a `HashMap`-backed registry's drop glue blocks Rust's
+    // rvalue static promotion for a reference that must live that long.
+    static EMPTY_AGGREGATES: purrdf_sparql_eval::AggregateRegistry =
+        purrdf_sparql_eval::AggregateRegistry::EMPTY;
     let query_options = QueryOptions {
-        aggregates: aggregates.as_ref(),
+        aggregates: aggregates.as_ref().unwrap_or(&EMPTY_AGGREGATES),
         ..QueryOptions::EMPTY
     };
 

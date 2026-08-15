@@ -128,8 +128,8 @@ impl core::fmt::Display for PlanError {
 /// charge (see [`plan_aggregate`]).
 pub(crate) fn plan_query(
     query: &Query,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
 ) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
         Query::Select { pattern, .. }
@@ -171,8 +171,8 @@ pub(crate) fn plan_query(
 /// [`plan_query`]'s doc.
 pub(crate) fn plan_where_pattern(
     pattern: &GraphPattern,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
 ) -> Result<Option<GraphPattern>, PlanError> {
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
@@ -208,8 +208,8 @@ struct Atom<'a> {
 /// [`collect_certainly_bound`] for what earns a variable a place in it.
 fn plan_pattern(
     pattern: &GraphPattern,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
     // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
@@ -289,8 +289,8 @@ fn push_atom<'a>(
 /// nothing, because a chain member is evaluated once regardless of where it sits.
 fn order_chain(
     atoms: Vec<Atom<'_>>,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
     let mut bound = outer.clone();
@@ -420,7 +420,7 @@ fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
 /// atoms, the positions they cannot fill, and the modes they declare.
 fn stuck(
     remaining: &[Atom<'_>],
-    relations: Option<&PropertyFunctionRegistry>,
+    relations: &PropertyFunctionRegistry,
     bound: &DetHashSet<Variable>,
 ) -> PlanError {
     let mut described: Vec<String> = Vec::new();
@@ -439,7 +439,7 @@ fn stuck(
         // relation whose `modes` ALSO panics degrades the diagnostic to an empty
         // declared-modes list rather than losing the admission failure itself.
         let declared: Vec<String> = relations
-            .and_then(|registry| registry.resolve(&call.iri))
+            .resolve(&call.iri)
             .and_then(|relation| {
                 crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
                     relation
@@ -472,21 +472,19 @@ fn stuck(
 
 /// Resolve a call's IRI, or report the admission failure that an unregistered IRI is.
 ///
-/// An absent registry is the same failure: the parser mints a call node only under a
+/// An EMPTY registry is the same failure: the parser mints a call node only under a
 /// caller-configured namespace, so a call with nothing to resolve against is a host
 /// configuration that names a relation it never supplied — never a silently empty one.
 fn resolve<'r>(
     call: &PropertyFunctionCall,
-    relations: Option<&'r PropertyFunctionRegistry>,
+    relations: &'r PropertyFunctionRegistry,
 ) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
-    relations
-        .and_then(|registry| registry.resolve(&call.iri))
-        .ok_or_else(|| {
-            PlanError::property_function(EvalError::function(format!(
-                "no property function is registered for <{}>",
-                call.iri
-            )))
-        })
+    relations.resolve(&call.iri).ok_or_else(|| {
+        PlanError::property_function(EvalError::function(format!(
+            "no property function is registered for <{}>",
+            call.iri
+        )))
+    })
 }
 
 /// Check a call site's argument counts against the relation's declaration.
@@ -510,8 +508,8 @@ fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), Pla
 /// siblings certainly bind.
 fn map_children(
     pattern: &GraphPattern,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
     let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
@@ -688,8 +686,8 @@ fn map_children(
 /// Rewrite the patterns embedded in an expression (an `EXISTS`, recursively).
 fn plan_expression(
     expr: &Expression,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<Expression, PlanError> {
     // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
@@ -773,13 +771,13 @@ fn plan_expression(
 /// [`plan_expression`]'s own errors from rewriting the argument list.
 fn plan_aggregate(
     aggregate: &AggregateExpression,
-    relations: Option<&PropertyFunctionRegistry>,
-    agg_registry: Option<&AggregateRegistry>,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<AggregateExpression, PlanError> {
     if let AggregateFunction::Custom(iri) = &aggregate.function {
         let iri_str = iri.as_str();
-        let Some(custom) = agg_registry.and_then(|registry| registry.resolve(iri_str)) else {
+        let Some(custom) = agg_registry.resolve(iri_str) else {
             return Err(PlanError::aggregate(EvalError::function(format!(
                 "no custom aggregate is registered for <{iri_str}>"
             ))));
@@ -1051,14 +1049,16 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 ///
 /// [`EvalError::Function`] if a registered relation's declaration methods panic —
 /// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged. Never
-/// raised when `relations` is `None` or empty: that case returns before any relation's
-/// declaration is read at all.
+/// raised when `relations` is empty (which [`PropertyFunctionRegistry::EMPTY`] — the
+/// canonical "no registry" value — always is): that case returns before any
+/// relation's declaration is read at all.
 pub(crate) fn registry_fingerprint(
-    relations: Option<&PropertyFunctionRegistry>,
+    relations: &PropertyFunctionRegistry,
 ) -> Result<String, EvalError> {
-    let Some(registry) = relations.filter(|registry| !registry.is_empty()) else {
+    if relations.is_empty() {
         return Ok(String::new());
-    };
+    }
+    let registry = relations;
     let mut out = String::new();
     out.push_str(&registry.instance_id().stable_encoding().to_string());
     out.push('\u{5}');
@@ -1089,6 +1089,27 @@ mod registry_fingerprint_tests {
     use crate::property_fn::{MemoryRelation, PropertyFunctionRegistry};
 
     const EX_REL: &str = "http://example.org/ns#rel";
+
+    /// H12: [`PropertyFunctionRegistry::EMPTY`] (the canonical "no registry" value
+    /// [`crate::engine::QueryOptions::property_functions`]/[`crate::eval::EvalCtx::property_functions`]/[`crate::parallel::SafetyRegistries::relations`]
+    /// now carry in place of `Option::None`) and a freshly built, still-empty
+    /// [`PropertyFunctionRegistry::new`] are two DIFFERENT instances (different
+    /// underlying maps, different constructions) yet must fingerprint IDENTICALLY:
+    /// both resolve every IRI to `None`, so no plan's admitted behavior can ever
+    /// depend on which one it was prepared against — see
+    /// [`crate::registry_id::RegistryId::EMPTY`]'s docs for why sharing one fixed
+    /// instance id is the deliberately correct semantics here, not a weakening of
+    /// the plan-identity guard the test right below this one (over two
+    /// DIFFERENT, non-empty registries) continues to pin.
+    #[test]
+    fn empty_const_and_a_freshly_built_empty_registry_share_the_same_fingerprint() {
+        assert_eq!(
+            registry_fingerprint(&PropertyFunctionRegistry::EMPTY).expect("ok"),
+            ""
+        );
+        let fresh = PropertyFunctionRegistry::new();
+        assert_eq!(registry_fingerprint(&fresh).expect("ok"), "");
+    }
 
     /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
     /// that register the SAME IRI to relations with byte-identical declared
@@ -1135,8 +1156,8 @@ mod registry_fingerprint_tests {
 
         assert_eq!(a.describe().expect("ok"), b.describe().expect("ok"));
         assert_ne!(
-            registry_fingerprint(Some(&a)).expect("ok"),
-            registry_fingerprint(Some(&b)).expect("ok"),
+            registry_fingerprint(&a).expect("ok"),
+            registry_fingerprint(&b).expect("ok"),
             "two independently constructed registries must never share a fingerprint, \
              even when every declaration they report is identical"
         );
@@ -1163,8 +1184,8 @@ mod registry_fingerprint_tests {
         );
         let cloned = registry.clone();
         assert_eq!(
-            registry_fingerprint(Some(&registry)).expect("ok"),
-            registry_fingerprint(Some(&cloned)).expect("ok"),
+            registry_fingerprint(&registry).expect("ok"),
+            registry_fingerprint(&cloned).expect("ok"),
             "a clone shares the source's actual implementations, so it is the same \
              registry instance for fingerprint purposes"
         );

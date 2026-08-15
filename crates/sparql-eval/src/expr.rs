@@ -1823,10 +1823,9 @@ fn eval_function<D: DatasetView + Sync>(
             // set. `ctx.user_functions` is a `Copy` borrow tied to the dataset
             // lifetime, so reading it out does not borrow `ctx`, leaving `&mut ctx`
             // free for the executor. Checked before the XSD-cast path so a function
-            // IRI never collides with a datatype IRI.
-            if let Some(registry) = ctx.user_functions
-                && let Some(func) = registry.resolve(iri.as_str())
-            {
+            // IRI never collides with a datatype IRI. An EMPTY registry resolves
+            // nothing, so this falls through exactly as an absent registry used to.
+            if let Some(func) = ctx.user_functions.resolve(iri.as_str()) {
                 let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }
@@ -1836,9 +1835,7 @@ fn eval_function<D: DatasetView + Sync>(
             // registry's collision guard already makes that unrepresentable) and
             // before the XSD-cast fallback, so a function IRI never collides with a
             // datatype IRI.
-            if let Some(registry) = ctx.user_functions
-                && let Some(native) = registry.resolve_native(iri.as_str())
-            {
+            if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }

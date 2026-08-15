@@ -388,11 +388,11 @@ impl AggregateAccumulator for MedianAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // Concatenate the two (still-unsorted) value lists: merge order never
         // matters, because `finish` sorts the whole multiset before computing
         // a rank — see the module docs' "Real merges" section.
-        let other = downcast_combine_partial::<Self>(other);
+        let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
             mem::replace(&mut self.state, NumericSeries::Empty),
             other.state,
@@ -404,6 +404,7 @@ impl AggregateAccumulator for MedianAccumulator {
                 NumericSeries::Ok(values)
             }
         };
+        Ok(())
     }
 
     /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
@@ -484,7 +485,7 @@ impl AggregateAccumulator for PercentileAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // `p` is identical on both sides BY CONSTRUCTION — every partial
         // accumulator a single `combine` chain merges was created by the SAME
         // `CustomAggregate::init` factory call, with the SAME resolved
@@ -494,7 +495,7 @@ impl AggregateAccumulator for PercentileAccumulator {
         // `p`-mismatch to detect here: concatenating the (still-unsorted)
         // value lists is always correct, since `finish` sorts the whole
         // multiset before computing a rank either way.
-        let other = downcast_combine_partial::<Self>(other);
+        let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
             mem::replace(&mut self.state, NumericSeries::Empty),
             other.state,
@@ -506,6 +507,7 @@ impl AggregateAccumulator for PercentileAccumulator {
                 NumericSeries::Ok(values)
             }
         };
+        Ok(())
     }
 
     /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
@@ -648,13 +650,13 @@ impl AggregateAccumulator for MomentsAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // Componentwise moment merge: `(n, Σx, Σx²) + (n', Σx', Σx'²)` —
         // exact, no precision loss, for the same reason the running fold
         // itself is exact (see this family's own doc comment above). `other`'s
         // `kind` is discarded: it is the SAME variant as `self.kind` by
         // construction (one `MomentsAggregate::init` per accumulator).
-        let other = downcast_combine_partial::<Self>(other);
+        let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
             mem::replace(&mut self.state, MomentsState::Empty),
             other.state,
@@ -680,6 +682,7 @@ impl AggregateAccumulator for MomentsAccumulator {
                 }
             }
         };
+        Ok(())
     }
 
     /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
@@ -779,14 +782,15 @@ impl AggregateAccumulator for ModeAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // A count-map merge specialized to this accumulator's own
         // representation: `finish` recovers each value's count via a sort +
         // run-length scan over the WHOLE multiset, so appending the two
         // partials' raw value lists is exactly "sum the counts per value" —
         // no separate map is needed to get that effect.
-        let mut other = downcast_combine_partial::<Self>(other);
+        let mut other = downcast_combine_partial::<Self>(other)?;
         self.values.append(&mut other.values);
+        Ok(())
     }
 
     /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
@@ -870,15 +874,16 @@ impl AggregateAccumulator for FirstAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // `self` is the earlier chunk: if it already saw a row, its value IS the
         // group's first value regardless of what a later chunk holds. Only an
         // empty earlier chunk defers to the later one.
         if self.value.is_none()
-            && let Ok(Some(v)) = other.finish()
+            && let Some(v) = other.finish()?
         {
             self.value = Some(v);
         }
+        Ok(())
     }
 
     /// Unused (this accumulator merges through `finish()`, which is already
@@ -923,12 +928,13 @@ impl AggregateAccumulator for LastAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // `other` is the later chunk: whatever it holds is later in row order
         // than anything `self` holds, so it always wins when present.
-        if let Ok(Some(v)) = other.finish() {
+        if let Some(v) = other.finish()? {
             self.value = Some(v);
         }
+        Ok(())
     }
 
     /// Unused (this accumulator merges through `finish()`, which is already
@@ -1016,7 +1022,7 @@ impl AggregateAccumulator for TopKAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // A bounded-structure merge: insert every one of `other`'s retained
         // values into `self`'s top-`k` set via the SAME `insert_bounded`
         // primitive `step` uses, truncating back down to `k` as it goes — the
@@ -1025,7 +1031,7 @@ impl AggregateAccumulator for TopKAccumulator {
         // `PercentileAccumulator::combine`'s identical note on `p`), so there
         // is no cross-chunk `k`-mismatch left to detect, unlike the old
         // per-row positional-argument design.
-        let other = downcast_combine_partial::<Self>(other);
+        let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
             mem::replace(&mut self.state, TopKState::Poisoned),
             other.state,
@@ -1044,6 +1050,7 @@ impl AggregateAccumulator for TopKAccumulator {
                 TopKState::Valid { k, values }
             }
         };
+        Ok(())
     }
 
     /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
@@ -1447,7 +1454,7 @@ mod tests {
         a.step(&[int(1)]).expect("step");
         let mut b = agg.init(&[]);
         b.step(&[int(2)]).expect("step");
-        a.combine(b);
+        a.combine(b).expect("combine");
         assert_eq!(lex(&a.finish().expect("finish").expect("bound")), "1");
     }
 
@@ -1459,7 +1466,7 @@ mod tests {
         a.step(&[int(1)]).expect("step");
         let mut b = agg.init(&[]);
         b.step(&[int(2)]).expect("step");
-        a.combine(b);
+        a.combine(b).expect("combine");
         assert_eq!(lex(&a.finish().expect("finish").expect("bound")), "2");
     }
 

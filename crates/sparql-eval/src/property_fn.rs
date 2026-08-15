@@ -531,6 +531,23 @@ impl PropertyFunctionRegistry {
         Self::default()
     }
 
+    /// The canonical empty registry — the non-optional "no relations
+    /// registered" value every registry-carrying seam
+    /// ([`crate::engine::QueryOptions::property_functions`],
+    /// [`crate::eval::EvalCtx::property_functions`](crate::eval::EvalCtx),
+    /// [`crate::parallel::SafetyRegistries::relations`]) now uses in place of the
+    /// old `Option::None` spelling. See
+    /// [`crate::agg_fn::AggregateRegistry::EMPTY`]'s docs for why a single shared
+    /// `'static` value, with a fixed reserved
+    /// [`RegistryId`](crate::registry_id::RegistryId), is the correct (not merely
+    /// convenient) choice here: an empty registry resolves no IRI regardless of
+    /// which `EMPTY` value is asked, so no plan's admitted behavior can depend on
+    /// which one it was prepared against.
+    pub const EMPTY: Self = Self {
+        id: crate::registry_id::RegistryId::EMPTY,
+        relations: DetHashMap::with_hasher(crate::DetHasher::new()),
+    };
+
     /// Register `relation` under `iri`.
     ///
     /// # Panics
@@ -1488,7 +1505,7 @@ mod tests {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(EX_SPLIT, Arc::new(PanickingArityRelation));
         let error = without_panic_output(|| {
-            crate::property_fn_plan::registry_fingerprint(Some(&registry))
+            crate::property_fn_plan::registry_fingerprint(&registry)
                 .expect_err("a panicking declaration must not escape the fingerprint")
         });
         assert!(

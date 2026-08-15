@@ -1302,12 +1302,13 @@ impl AggregateAccumulator for SumAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
             && let Ok(n) = lexical_form.parse::<i64>()
         {
             self.total += n;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1602,12 +1603,13 @@ impl AggregateAccumulator for PartialCounterAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
             && let Ok(n) = lexical_form.parse::<i64>()
         {
             self.partials += n;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {

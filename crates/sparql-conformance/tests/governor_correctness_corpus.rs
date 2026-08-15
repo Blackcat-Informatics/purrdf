@@ -141,7 +141,7 @@ fn ungoverned(
             request(query),
             source,
             QueryOptions {
-                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                property_functions: purrdf_sparql_conformance::run::harness_relations(),
                 ..QueryOptions::EMPTY
             },
         ),
@@ -227,9 +227,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     QueryOptions {
-                        property_functions: Some(
-                            purrdf_sparql_conformance::run::harness_relations(),
-                        ),
+                        property_functions: purrdf_sparql_conformance::run::harness_relations(),
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::UNBOUNDED,

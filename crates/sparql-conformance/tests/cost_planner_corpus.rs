@@ -65,7 +65,7 @@ fn eval_case(
             request,
             source,
             QueryOptions {
-                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                property_functions: purrdf_sparql_conformance::run::harness_relations(),
                 ..QueryOptions::EMPTY
             },
         ),

@@ -499,7 +499,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         substitutions: &[],
                     },
                     QueryOptions {
-                        aggregates: aggregates.as_ref(),
+                        aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                         ..QueryOptions::EMPTY
                     },
                     &governors,
@@ -704,7 +704,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         substitutions: &[],
                     },
                     QueryOptions {
-                        aggregates: aggregates.as_ref(),
+                        aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                         ..QueryOptions::EMPTY
                     },
                     &governors,

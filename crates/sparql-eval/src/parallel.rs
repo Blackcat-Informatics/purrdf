@@ -71,17 +71,19 @@ use crate::user_fn::{UserFunctionRegistry, Volatility};
 ///
 /// Carried as one `Copy` value rather than as two arguments so a future third table is
 /// threaded through the recursion once instead of at every call site — and so a call
-/// site cannot pass the two in the wrong order. `None` in either slot means "no such
-/// table was configured", which the two classifications read DIFFERENTLY and
-/// deliberately: an unresolvable function IRI is a deterministic XSD cast or a hard
-/// error (safe), while an unresolvable relation is a callee whose volatility is
-/// unknown (unsafe). See [`function_is_unsafe`] and [`property_function_is_unsafe`].
-#[derive(Debug, Clone, Copy, Default)]
+/// site cannot pass the two in the wrong order. Every field is non-optional
+/// (`Registry::EMPTY` — the canonical "no such table" value — stands in for the old
+/// `None` spelling); the two classifications below still read an EMPTY function table
+/// and an EMPTY relation table DIFFERENTLY, and deliberately: an unresolvable function
+/// IRI is a deterministic XSD cast or a hard error (safe), while an unresolvable
+/// relation is a callee whose volatility is unknown (unsafe). See
+/// [`function_is_unsafe`] and [`property_function_is_unsafe`].
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyRegistries<'a> {
     /// The SHACL-AF / native function table (`EvalCtx::user_functions`).
-    pub(crate) functions: Option<&'a UserFunctionRegistry>,
+    pub(crate) functions: &'a UserFunctionRegistry,
     /// The property-function table (`EvalCtx::property_functions`).
-    pub(crate) relations: Option<&'a PropertyFunctionRegistry>,
+    pub(crate) relations: &'a PropertyFunctionRegistry,
     /// The custom-aggregate table (`EvalCtx::aggregates`), consulted by
     /// [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
     /// expression/pattern walks above — a `Custom` aggregate is not an
@@ -89,7 +91,7 @@ pub(crate) struct SafetyRegistries<'a> {
     /// [`property_function_is_unsafe`]. Carried here anyway so this struct stays
     /// the ONE place every registry the fork-join safety decision needs is
     /// paired, per the type's own doc.
-    pub(crate) aggregates: Option<&'a AggregateRegistry>,
+    pub(crate) aggregates: &'a AggregateRegistry,
 }
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
@@ -472,7 +474,7 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
 ///   `crate::user_fn::eval_user_function`'s state merge-back) rather than the
 ///   real `ctx` — silently diverging from the sequential stream exactly like
 ///   the builtins above. A sequential fallback is always correct.
-fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> bool {
+fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
     match f {
         Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
         Function::Purrdf(call) => matches!(
@@ -481,8 +483,11 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
                 | purrdf_sparql_algebra::PurrdfFn::ListConcat
         ),
         Function::Custom(iri) => {
-            let Some(reg) = registry else { return false };
-            if let Some(native) = reg.resolve_native(iri.as_str()) {
+            // An EMPTY registry resolves neither kind, naturally falling through to
+            // `false` below — exactly the old "no registry configured" fallback,
+            // with no separate absent-registry branch needed now that there is only
+            // one spelling of "nothing registered".
+            if let Some(native) = registry.resolve_native(iri.as_str()) {
                 // Native fn: unsafe iff declared Volatile; Stable is
                 // deterministic-within-query, hence fork-join safe. (Wildcard
                 // arm — Volatility is `#[non_exhaustive]`.)
@@ -494,7 +499,7 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
             // Classify it UNSAFE (conservative + correct; sequential is always
             // right). An IRI resolving to neither custom kind is an XSD cast or
             // a hard error — both deterministic — so it stays safe.
-            reg.resolve(iri.as_str()).is_some()
+            registry.resolve(iri.as_str()).is_some()
         }
         _ => false,
     }
@@ -550,11 +555,8 @@ fn pattern_reaches_unsafe_builtin(
 /// meaning yet, and classifying an unknown callee's volatility as `Stable` would be a
 /// guess in the one direction that can silently change an answer. A sequential fallback
 /// is always correct, so "when in doubt, UNSAFE".
-fn property_function_is_unsafe(iri: &str, relations: Option<&PropertyFunctionRegistry>) -> bool {
-    let Some(registry) = relations else {
-        return true;
-    };
-    let Some(relation) = registry.resolve(iri) else {
+fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) -> bool {
+    let Some(relation) = relations.resolve(iri) else {
         return true;
     };
     // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
@@ -568,24 +570,22 @@ fn property_function_is_unsafe(iri: &str, relations: Option<&PropertyFunctionReg
 /// expression/pattern walks above (an `AggregateFunction` is not an `Expression`
 /// node, so it never reaches [`function_is_unsafe`]).
 ///
-/// Safe in exactly one case: the registry is present, it resolves `iri`, and the
-/// resolved aggregate declares [`Volatility::Stable`] — deterministic for the
-/// lifetime of the query, hence identical whichever worker folds the group.
+/// Safe in exactly one case: `aggregates` resolves `iri`, and the resolved
+/// aggregate declares [`Volatility::Stable`] — deterministic for the lifetime of
+/// the query, hence identical whichever worker folds the group.
 ///
-/// Every other case is UNSAFE, including the two absences — the SAME
-/// conservative treatment [`property_function_is_unsafe`] gives an unresolved
-/// relation, and the DELIBERATE OPPOSITE of [`function_is_unsafe`]'s treatment of
+/// Every other case is UNSAFE, including an EMPTY registry (which resolves
+/// nothing) — the SAME conservative treatment [`property_function_is_unsafe`]
+/// gives an unresolved relation, and the DELIBERATE OPPOSITE of
+/// [`function_is_unsafe`]'s treatment of
 /// an unresolved scalar `Custom` function IRI: an unresolved scalar function has
 /// a defined deterministic meaning (an XSD cast, or a hard error), so nothing can
 /// diverge, while an unresolved aggregate's volatility is simply unknown, and
 /// guessing `Stable` would be a guess in the one direction that can silently
 /// change an answer. A sequential fallback is always correct, so "when in doubt,
 /// UNSAFE".
-pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: Option<&AggregateRegistry>) -> bool {
-    let Some(registry) = aggregates else {
-        return true;
-    };
-    let Some(aggregate) = registry.resolve(iri) else {
+pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> bool {
+    let Some(aggregate) = aggregates.resolve(iri) else {
         return true;
     };
     !matches!(aggregate.volatility(), Volatility::Stable)
@@ -1252,28 +1252,30 @@ mod tests {
 
     // ---- is_parallel_safe ----------------------------------------------------
 
-    /// No caller-injected table of either kind.
+    /// No caller-injected table of either kind — every registry the canonical
+    /// `EMPTY` value, exactly what [`crate::eval::EvalCtx::new`] carries before any
+    /// `with_*` setter runs.
     const NONE: SafetyRegistries<'static> = SafetyRegistries {
-        functions: None,
-        relations: None,
-        aggregates: None,
+        functions: &UserFunctionRegistry::EMPTY,
+        relations: &PropertyFunctionRegistry::EMPTY,
+        aggregates: &AggregateRegistry::EMPTY,
     };
 
     /// Only a function table configured.
     fn fns(registry: &UserFunctionRegistry) -> SafetyRegistries<'_> {
         SafetyRegistries {
-            functions: Some(registry),
-            relations: None,
-            aggregates: None,
+            functions: registry,
+            relations: NONE.relations,
+            aggregates: NONE.aggregates,
         }
     }
 
     /// Only a relation table configured.
     fn relations(registry: &PropertyFunctionRegistry) -> SafetyRegistries<'_> {
         SafetyRegistries {
-            functions: None,
-            relations: Some(registry),
-            aggregates: None,
+            functions: NONE.functions,
+            relations: registry,
+            aggregates: NONE.aggregates,
         }
     }
 
@@ -1610,7 +1612,12 @@ mod tests {
         fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
             Ok(())
         }
-        fn combine(&mut self, _other: Box<dyn crate::agg_fn::AggregateAccumulator>) {}
+        fn combine(
+            &mut self,
+            _other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        ) -> Result<(), EvalError> {
+            Ok(())
+        }
         fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
             self
         }
@@ -1657,25 +1664,31 @@ mod tests {
     #[test]
     fn stable_custom_aggregate_is_parallel_safe() {
         let registry = agg_registry_with(Volatility::Stable);
-        assert!(!aggregate_is_unsafe(AGG_IRI, Some(&registry)));
+        assert!(!aggregate_is_unsafe(AGG_IRI, &registry));
     }
 
     #[test]
     fn volatile_custom_aggregate_is_parallel_unsafe() {
         let registry = agg_registry_with(Volatility::Volatile);
-        assert!(aggregate_is_unsafe(AGG_IRI, Some(&registry)));
+        assert!(aggregate_is_unsafe(AGG_IRI, &registry));
     }
 
+    /// H12: `aggregate_is_unsafe` takes `&AggregateRegistry`, never
+    /// `Option<&AggregateRegistry>` — there is no longer an "absent registry" call
+    /// this could exercise as a case DISTINCT from an empty one, which is what
+    /// makes the old pre-H12 expectation (that `None` and `Some(&AggregateRegistry::new())`
+    /// behave identically) structurally impossible now rather than merely tested:
+    /// the type system admits only the one spelling. [`AggregateRegistry::EMPTY`]
+    /// and a freshly built, still-empty [`AggregateRegistry::new`] both resolve
+    /// `AGG_IRI` to nothing, so the gate refuses under either — the SAME
+    /// conservative treatment an unresolved property function gets
+    /// (`property_function_without_a_registry_is_parallel_unsafe`), never the
+    /// scalar-function treatment (`unknown_custom_without_registry_stays_safe`).
     #[test]
     fn custom_aggregate_without_a_registry_is_parallel_unsafe() {
-        // Both absences: no registry at all, and a registry that does not resolve the
-        // IRI. An unknown aggregate's volatility is unknown, so the gate refuses —
-        // the SAME conservative treatment an unresolved property function gets
-        // (`property_function_without_a_registry_is_parallel_unsafe`), never the
-        // scalar-function treatment (`unknown_custom_without_registry_stays_safe`).
-        assert!(aggregate_is_unsafe(AGG_IRI, None));
+        assert!(aggregate_is_unsafe(AGG_IRI, &AggregateRegistry::EMPTY));
         let empty = AggregateRegistry::new();
-        assert!(aggregate_is_unsafe(AGG_IRI, Some(&empty)));
+        assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
     // ---- par_chunk_map ----------------------------------------------------

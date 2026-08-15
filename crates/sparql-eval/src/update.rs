@@ -668,7 +668,7 @@ fn admit_where(
     snap: &RdfDataset,
     active_dataset: &ActiveDataset<purrdf_core::TermId>,
     governors: Option<&Arc<GovernorState>>,
-    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
 ) -> Result<(), UpdateAbort> {
     let Some(state) = governors else {
         return Ok(());
@@ -688,7 +688,8 @@ fn admit_where(
         // `pattern` against this same registry through `plan_where_pattern` before
         // this survey runs), so the survey must price the call the same way a
         // governed `SELECT`'s admission does — `relations` is `cfg.options
-        // .property_functions`, `None` on a request that configured no registry.
+        // .property_functions`, [`PropertyFunctionRegistry::EMPTY`] on a request
+        // that configured no registry.
         relations,
         &mut survey,
     )
@@ -1595,7 +1596,7 @@ mod tests {
         // for the query-path twin this mirrors.
         let registry = crate::property_fn::PropertyFunctionRegistry::new();
         let options = QueryOptions {
-            property_functions: Some(&registry),
+            property_functions: &registry,
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {
@@ -1630,7 +1631,7 @@ mod tests {
         let mut registry = crate::agg_fn::AggregateRegistry::new();
         registry.register_statistical_aggregates("http://ex/agg#");
         let options = QueryOptions {
-            aggregates: Some(&registry),
+            aggregates: &registry,
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {

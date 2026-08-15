@@ -555,7 +555,7 @@ fn eval_call_over<D: DatasetView + Sync>(
 
 /// Resolve a call's predicate IRI to its registered relation.
 ///
-/// An unregistered IRI is a hard [`EvalError::Function`], and an absent registry is the
+/// An unregistered IRI is a hard [`EvalError::Function`], and an EMPTY registry is the
 /// same failure spelled differently: the parser only ever mints this node under a
 /// caller-configured namespace, so reaching it with nothing to resolve against is a
 /// host misconfiguration, never an empty relation. The engine's prepare step raises
@@ -566,7 +566,7 @@ fn resolve<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Result<Arc<dyn PropertyFunction>, EvalError> {
     ctx.property_functions
-        .and_then(|registry| registry.resolve(&call.iri))
+        .resolve(&call.iri)
         .map(Arc::clone)
         .ok_or_else(|| {
             EvalError::function(format!(
@@ -1932,7 +1932,7 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::QueryOptions {
-                    property_functions: Some(registry),
+                    property_functions: registry,
                     ..crate::QueryOptions::EMPTY
                 },
                 &state,

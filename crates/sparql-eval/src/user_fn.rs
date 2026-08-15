@@ -327,6 +327,23 @@ impl UserFunctionRegistry {
         Self::default()
     }
 
+    /// The canonical empty registry — the non-optional "no scalar functions
+    /// registered" value every registry-carrying seam
+    /// ([`crate::engine::QueryOptions::functions`],
+    /// [`crate::eval::EvalCtx::user_functions`](crate::eval::EvalCtx),
+    /// [`crate::parallel::SafetyRegistries::functions`]) now uses in place of the
+    /// old `Option::None` spelling. Unlike
+    /// [`crate::agg_fn::AggregateRegistry::EMPTY`]/[`crate::property_fn::PropertyFunctionRegistry::EMPTY`],
+    /// this type carries no [`RegistryId`](crate::registry_id::RegistryId) — a
+    /// SHACL-AF/native function registry is never checked for plan identity (see
+    /// `crate::engine`'s note on why `QueryOptions::functions` is deliberately
+    /// excluded from `check_plan_matches_relations`) — so there is no identity
+    /// question for this constant to answer either way.
+    pub const EMPTY: Self = Self {
+        fns: DetHashMap::with_hasher(crate::DetHasher::new()),
+        native: DetHashMap::with_hasher(crate::DetHasher::new()),
+    };
+
     /// Register `func` under its `iri`. A later registration of the same IRI
     /// replaces the earlier one.
     ///
@@ -1146,7 +1163,7 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::QueryOptions {
-                    functions: Some(&registry),
+                    functions: &registry,
                     ..crate::QueryOptions::EMPTY
                 },
                 &state,

@@ -2333,12 +2333,16 @@ mod tests {
             Ok(())
         }
 
-        fn combine(&mut self, other: Box<dyn purrdf_sparql_eval::AggregateAccumulator>) {
-            if let Ok(Some(::purrdf::TermValue::Literal { lexical_form, .. })) = other.finish()
+        fn combine(
+            &mut self,
+            other: Box<dyn purrdf_sparql_eval::AggregateAccumulator>,
+        ) -> Result<(), purrdf_sparql_eval::EvalError> {
+            if let Some(::purrdf::TermValue::Literal { lexical_form, .. }) = other.finish()?
                 && let Ok(n) = lexical_form.parse::<i64>()
             {
                 self.total += n;
             }
+            Ok(())
         }
 
         fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {

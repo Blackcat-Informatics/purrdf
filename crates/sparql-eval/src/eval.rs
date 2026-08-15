@@ -381,33 +381,35 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
     /// relative argument cannot be resolved and the call is a type error.
     pub(crate) base_iri: Option<String>,
-    /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`), if any.
-    /// `None` (the default) means no user functions are declared: a call-position
-    /// IRI unknown to the closed `PurrdfFn` set then falls through to the XSD-cast /
-    /// unsupported path exactly as before. Borrowed for the dataset lifetime (like
+    /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`).
+    /// [`crate::user_fn::UserFunctionRegistry::EMPTY`] (the default) means no user
+    /// functions are declared: a call-position IRI unknown to the closed `PurrdfFn`
+    /// set then falls through to the XSD-cast / unsupported path exactly as before.
+    /// Borrowed for the dataset lifetime (like
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
-    pub(crate) user_functions: Option<&'d crate::user_fn::UserFunctionRegistry>,
-    /// The caller-injected property-function table, if any. `None` (the default)
-    /// means no relation is registered, which is exactly equivalent to an empty
-    /// registry: a predicate IRI only reaches this table when the parser already
-    /// lowered it to a
+    pub(crate) user_functions: &'d crate::user_fn::UserFunctionRegistry,
+    /// The caller-injected property-function table.
+    /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
+    /// no relation is registered: a predicate IRI only reaches this table when the
+    /// parser already lowered it to a
     /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
     /// under a caller-configured namespace, and an unresolved call is the same
-    /// failure either way. Borrowed for the dataset lifetime like
-    /// [`Self::user_functions`], so carrying it is a `Copy` pointer, never a clone.
-    pub(crate) property_functions: Option<&'d crate::property_fn::PropertyFunctionRegistry>,
-    /// The caller-injected custom-aggregate table, if any. `None` (the default)
-    /// means no aggregate is registered, which is exactly equivalent to an empty
-    /// registry: an `AggregateFunction::Custom(iri)` call only reaches this table
-    /// at evaluation time after `crate::property_fn_plan::plan_query`'s
+    /// failure regardless of whether the empty table was ever explicitly attached.
+    /// Borrowed for the dataset lifetime like [`Self::user_functions`], so carrying
+    /// it is a `Copy` pointer, never a clone.
+    pub(crate) property_functions: &'d crate::property_fn::PropertyFunctionRegistry,
+    /// The caller-injected custom-aggregate table.
+    /// [`crate::agg_fn::AggregateRegistry::EMPTY`] (the default) means no aggregate
+    /// is registered: an `AggregateFunction::Custom(iri)` call only reaches this
+    /// table at evaluation time after `crate::property_fn_plan::plan_query`'s
     /// prepare-time walk has already admitted it against the SAME registry (see
     /// `crate::engine::check_plan_matches_relations`'s aggregate-identity check),
     /// so an unresolved call here is a defense-in-depth repeat of that refusal,
     /// never the normal path. Borrowed for the dataset lifetime like
     /// [`Self::property_functions`], so carrying it is a `Copy` pointer, never a
     /// clone.
-    pub(crate) aggregates: Option<&'d crate::agg_fn::AggregateRegistry>,
+    pub(crate) aggregates: &'d crate::agg_fn::AggregateRegistry,
     /// The current SHACL-AF function call depth, incremented by
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
@@ -499,6 +501,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         let now_val = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
         let rng_seed: u64 = crate::clock::entropy_seed();
 
+        // `static`, not a bare `&Registry::EMPTY` temporary: the returned `Self` must
+        // outlive this function body, and a `HashMap`-backed registry's drop glue
+        // blocks Rust's rvalue static promotion for a reference that has to live that
+        // long (see `crate::agg_fn::AggregateRegistry::EMPTY`'s docs for why sharing
+        // this one instance is the correct, not merely convenient, choice).
+        static EMPTY_FUNCTIONS: crate::user_fn::UserFunctionRegistry =
+            crate::user_fn::UserFunctionRegistry::EMPTY;
+        static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry =
+            crate::property_fn::PropertyFunctionRegistry::EMPTY;
+        static EMPTY_AGGREGATES: crate::agg_fn::AggregateRegistry =
+            crate::agg_fn::AggregateRegistry::EMPTY;
+
         Self {
             dataset,
             scratch: ScratchInterner::new(),
@@ -524,9 +538,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             constructed: Vec::new(),
             in_substituted_exists: false,
             base_iri: None,
-            user_functions: None,
-            property_functions: None,
-            aggregates: None,
+            user_functions: &EMPTY_FUNCTIONS,
+            property_functions: &EMPTY_RELATIONS,
+            aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -1346,7 +1360,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Self {
-        self.user_functions = Some(registry);
+        self.user_functions = registry;
         self
     }
 
@@ -1363,7 +1377,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         registry: &'d crate::property_fn::PropertyFunctionRegistry,
     ) -> Self {
-        self.property_functions = Some(registry);
+        self.property_functions = registry;
         self
     }
 
@@ -1376,7 +1390,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// the same pin [`Self::with_property_functions`] states for its registry.
     #[must_use]
     pub fn with_aggregates(mut self, registry: &'d crate::agg_fn::AggregateRegistry) -> Self {
-        self.aggregates = Some(registry);
+        self.aggregates = registry;
         self
     }
 

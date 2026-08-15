@@ -68,6 +68,27 @@ impl RegistryId {
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The identity every canonical `EMPTY` registry constant shares —
+    /// [`AggregateRegistry::EMPTY`](crate::agg_fn::AggregateRegistry::EMPTY) and
+    /// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY).
+    ///
+    /// Reserved: [`fresh`](Self::fresh) starts its counter at `1` and only ever
+    /// increments, so `0` is never minted by it and can never collide with a real,
+    /// constructed registry's id.
+    ///
+    /// Sharing this one fixed id across every `EMPTY` constant, rather than each
+    /// minting its own, is deliberate, not a shortcut: an empty registry's
+    /// `resolve` always returns `None` for every IRI regardless of which `EMPTY`
+    /// value asks, so no plan's admitted behavior can ever depend on WHICH empty
+    /// registry it was prepared against — the two are observably interchangeable,
+    /// and `registry_fingerprint`'s own `is_empty` short-circuit (in both
+    /// `crate::agg_fn` and `crate::property_fn_plan`) already collapses every
+    /// empty registry to the identical empty-string fingerprint, independent of
+    /// its id, which predates this constant. Giving `EMPTY` a distinguishing id
+    /// of its own would claim a distinction the rest of this crate does not
+    /// honor anywhere.
+    pub(crate) const EMPTY: Self = Self(0);
+
     /// This identity's fingerprint encoding — an explicit, `Display`-independent
     /// rendering (a bare decimal `u64`) folded into a registry's content
     /// fingerprint ahead of its declaration digest.

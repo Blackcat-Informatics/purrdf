@@ -748,18 +748,22 @@ impl crate::agg_fn::AggregateAccumulator for ListCollectorAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), crate::error::EvalError> {
         // An ordered list join IS its own sufficient merge state, so this
         // finishes the other partial through the same public surface a caller
         // has and re-derives its item list from that — the same pattern
         // `crate::agg_fn`'s and `crate::modifier`'s own test fixtures use,
         // rather than reaching for `into_any`'s downcast escape hatch.
-        if let Ok(Some(purrdf_core::TermValue::Literal { lexical_form, .. })) = other.finish()
+        if let Some(purrdf_core::TermValue::Literal { lexical_form, .. }) = other.finish()?
             && !lexical_form.is_empty()
         {
             self.items
                 .extend(lexical_form.split(';').map(str::to_owned));
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -827,7 +831,7 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
                     substitutions: &[],
                 },
                 crate::engine::QueryOptions {
-                    aggregates: Some(&registry),
+                    aggregates: &registry,
                     ..crate::engine::QueryOptions::EMPTY
                 },
             )

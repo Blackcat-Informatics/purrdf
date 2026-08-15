@@ -91,17 +91,25 @@
 //! (`crate::parallel::par_chunk_reduce_init` never mixes accumulators from two
 //! different registrations) — so a mismatch can only mean a host bug, never a
 //! state this crate's own evaluator can produce; `downcast_combine_partial`
-//! is the standard, panic-contained way to consume it (the panic a mismatched
-//! downcast raises is caught by `combine_contained` exactly like any other
-//! host panic from this seam — never a raw unwind escaping it).
-//! `crate::stat_agg`'s `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK`
-//! members are this crate's first-party example of the pattern.
+//! is the standard way to consume it, returning `Err(EvalError::Function)`
+//! rather than panicking on a mismatch — `combine`'s own `Result` return type
+//! (not `()`) is what makes that a plain propagated error instead of a panic
+//! `combine_contained`'s [`crate::contain`] containment would otherwise have to
+//! catch, which matters because that containment cannot run at all under
+//! `panic = "abort"` (see the wasm32 note below). `crate::stat_agg`'s
+//! `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK` members are this crate's
+//! first-party example of the pattern.
 //!
 //! # wasm32 note
 //!
-//! See `crate::contain`'s module docs: `catch_unwind` requires
-//! `panic = "unwind"`, and this seam's containment is unavailable under
-//! `panic = "abort"` exactly as every other extension seam's is.
+//! `combine_contained` still wraps every `combine` call in [`crate::contain`]'s
+//! `catch_unwind`-based containment, for an implementation that panics for a
+//! reason of its own outside the downcast — that containment still requires
+//! `panic = "unwind"` and is unavailable under `panic = "abort"` exactly as every
+//! other extension seam's is (see `crate::contain`'s module docs). The
+//! `downcast_combine_partial` mismatch case above no longer depends on it: it is
+//! a typed `Err`, not a panic, so it degrades cleanly on every target regardless
+//! of panic strategy.
 
 use std::sync::Arc;
 
@@ -269,7 +277,22 @@ pub trait AggregateAccumulator: Send + 'static {
     /// part of the algebra from the start, so an aggregate registered before
     /// that caller existed was already correct under it, needing no later,
     /// breaking addition.
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>);
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvalError`] the aggregate raises to refuse a merge — in particular,
+    /// the typed refusal [`downcast_combine_partial`] returns when `other`'s
+    /// concrete type does not match `Self`, which an implementation reaching for
+    /// [`into_any`](Self::into_any)'s escape hatch should propagate with `?`
+    /// rather than discard. `Result` here (not `()`) is what lets that mismatch —
+    /// a host contract violation this crate cannot rule out at compile time, only
+    /// by construction (see [`into_any`](Self::into_any)'s docs) — surface as an
+    /// ordinary refusal on every target, including `wasm32-unknown-unknown` under
+    /// `panic = "abort"`, where [`crate::contain`]'s panic containment cannot run
+    /// at all: a `Result` return needs no unwind to report the violation, so this
+    /// seam degrades to a clean error instead of aborting the whole module on
+    /// that target.
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError>;
 
     /// Recover this accumulator's original concrete type from behind the trait
     /// object — [`combine`](Self::combine)'s escape hatch for a merge that needs
@@ -432,8 +455,7 @@ pub(crate) fn combine_contained(
     other: Box<dyn AggregateAccumulator>,
 ) -> Result<(), EvalError> {
     crate::contain::call_contained(KIND, iri, "combining partial state", || {
-        accumulator.combine(other);
-        Ok(())
+        accumulator.combine(other)
     })
 }
 
@@ -441,27 +463,36 @@ pub(crate) fn combine_contained(
 /// [`AggregateAccumulator::combine`] implementation to consume
 /// [`AggregateAccumulator::into_any`]'s escape hatch. See the module docs'
 /// "Merging structural state" section for why the downcast is same-type by
-/// construction, and [`combine_contained`] for why a mismatch's panic never
-/// escapes this seam.
+/// construction; the `Err` this returns on a mismatch is a defense-in-depth
+/// refusal for a case that should never arise, not an expected outcome.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `other`'s concrete type is not `T` — never true when `other` was
-/// created by the SAME [`CustomAggregate::init`] factory as the accumulator
-/// calling this, which is the only way `crate::modifier::eval_custom_aggregate`'s
-/// chunked fold ever calls `combine`. This panic is caught by
-/// [`combine_contained`]'s containment exactly like any other host panic from
-/// this seam — a host mixing accumulator types is a bug, but not one that can
-/// escape the seam as a raw unwind.
-pub(crate) fn downcast_combine_partial<T: 'static>(other: Box<dyn AggregateAccumulator>) -> T {
-    *other.into_any().downcast::<T>().unwrap_or_else(|_| {
-        panic!(
-            "AggregateAccumulator::combine received a partial accumulator of a different \
+/// [`EvalError::Function`] if `other`'s concrete type is not `T` — never true
+/// when `other` was created by the SAME [`CustomAggregate::init`] factory as the
+/// accumulator calling this, which is the only way
+/// `crate::modifier::eval_custom_aggregate`'s chunked fold ever calls `combine`.
+/// A host mixing accumulator types is a bug, but — unlike the panic this used to
+/// raise — reporting it is now a plain typed refusal an implementation propagates
+/// with `?`, needing no [`catch_unwind`](std::panic::catch_unwind)-based
+/// containment to keep it from aborting the call: the seam degrades the same way
+/// on every target, `wasm32-unknown-unknown` under `panic = "abort"` included,
+/// where [`crate::contain`]'s containment cannot run at all.
+pub(crate) fn downcast_combine_partial<T: 'static>(
+    other: Box<dyn AggregateAccumulator>,
+) -> Result<T, EvalError> {
+    other
+        .into_any()
+        .downcast::<T>()
+        .map(|boxed| *boxed)
+        .map_err(|_| {
+            EvalError::function(
+                "AggregateAccumulator::combine received a partial accumulator of a different \
              concrete type than Self — every partial combine merges was created by the SAME \
              CustomAggregate::init factory, so a mismatch here is a host bug in how partial \
-             accumulators were constructed, not a state this crate's own evaluator can produce"
-        )
-    })
+             accumulators were constructed, not a state this crate's own evaluator can produce",
+            )
+        })
 }
 
 /// Consume `accumulator` and produce its group's answer with the host call
@@ -635,6 +666,26 @@ impl AggregateRegistry {
         Self::default()
     }
 
+    /// The canonical empty registry — the non-optional "no aggregates
+    /// registered" value every registry-carrying seam
+    /// ([`crate::engine::QueryOptions::aggregates`],
+    /// [`crate::eval::EvalCtx::aggregates`](crate::eval::EvalCtx),
+    /// [`crate::parallel::SafetyRegistries::aggregates`]) now uses in place of the
+    /// old `Option::None` spelling, so "no registry" and "an empty registry" are
+    /// the same value rather than two spellings of one state.
+    ///
+    /// A `const`, not merely a fresh [`Self::new`] call per use: every one of
+    /// those seams can borrow the SAME `'static` value, and — see
+    /// [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s docs —
+    /// sharing one fixed instance id across every `EMPTY` reference is the
+    /// correct semantics here, not a weakening of the plan-identity guard: an
+    /// empty registry can never resolve any IRI, so no plan's admitted behavior
+    /// can depend on WHICH empty registry it was prepared against.
+    pub const EMPTY: Self = Self {
+        id: crate::registry_id::RegistryId::EMPTY,
+        aggregates: DetHashMap::with_hasher(crate::DetHasher::new()),
+    };
+
     /// Register `aggregate` under `iri`.
     ///
     /// # Panics
@@ -733,13 +784,13 @@ impl AggregateRegistry {
 ///
 /// [`EvalError::Function`] if a registered aggregate's declaration methods panic
 /// — [`AggregateRegistry::describe`]'s own failure, propagated unchanged. Never
-/// raised when `aggregates` is `None` or empty.
-pub(crate) fn registry_fingerprint(
-    aggregates: Option<&AggregateRegistry>,
-) -> Result<String, EvalError> {
-    let Some(registry) = aggregates.filter(|registry| !registry.is_empty()) else {
+/// raised when `aggregates` is empty (which [`AggregateRegistry::EMPTY`] — the
+/// canonical "no registry" value — always is).
+pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<String, EvalError> {
+    if aggregates.is_empty() {
         return Ok(String::new());
-    };
+    }
+    let registry = aggregates;
     let mut out = String::new();
     out.push_str(&registry.id.stable_encoding().to_string());
     out.push('\u{5}');
@@ -796,16 +847,17 @@ mod tests {
             Ok(())
         }
 
-        fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
+        fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
             // A running total IS its own sufficient merge state, so this
             // fixture does not need `into_any`'s downcast escape hatch: merge
             // through the same public surface a caller has — finish the other
             // partial and fold its value back in.
-            if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
                 && let Ok(n) = lexical_form.parse::<i64>()
             {
                 self.total += n;
             }
+            Ok(())
         }
 
         /// Unused (this fixture merges through `finish()`) — see
@@ -897,16 +949,30 @@ mod tests {
         assert!(other_at < sum_at, "Debug output is IRI-sorted: {rendered}");
     }
 
+    /// H12: [`AggregateRegistry::EMPTY`] (the canonical "no registry" value every
+    /// registry-carrying seam now uses) and a freshly constructed, still-empty
+    /// [`AggregateRegistry::new`] must produce the IDENTICAL "" fingerprint —
+    /// they are two different registry INSTANCES (different underlying maps),
+    /// yet both resolve every IRI to `None`, so a plan's admitted behavior can
+    /// never depend on which one it was prepared against. This is what makes the
+    /// old two-spellings-of-one-state gap (`None` vs. `Some(&AggregateRegistry::new())`)
+    /// structurally impossible now rather than merely tested: there is no `Option`
+    /// left to spell two ways in the first place — see [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s
+    /// docs for the full reasoning on why this is the CORRECT identity behavior,
+    /// not a weakening of the plan-identity guard the two later tests below pin.
     #[test]
-    fn registry_fingerprint_is_empty_for_no_registry_and_stable_for_one() {
-        assert_eq!(registry_fingerprint(None).expect("ok"), "");
+    fn empty_const_and_a_freshly_built_empty_registry_share_the_same_fingerprint() {
+        assert_eq!(
+            registry_fingerprint(&AggregateRegistry::EMPTY).expect("ok"),
+            ""
+        );
         let empty = AggregateRegistry::new();
-        assert_eq!(registry_fingerprint(Some(&empty)).expect("ok"), "");
+        assert_eq!(registry_fingerprint(&empty).expect("ok"), "");
 
         let mut registry = AggregateRegistry::new();
         registry.register(EX_SUM, Arc::new(SumAggregate));
-        let first = registry_fingerprint(Some(&registry)).expect("ok");
-        let second = registry_fingerprint(Some(&registry)).expect("ok");
+        let first = registry_fingerprint(&registry).expect("ok");
+        let second = registry_fingerprint(&registry).expect("ok");
         assert_eq!(
             first, second,
             "the fingerprint is a pure function of contents"
@@ -935,8 +1001,8 @@ mod tests {
         // checked against — must still differ, because `a` and `b` are two
         // different registry instances.
         assert_ne!(
-            registry_fingerprint(Some(&a)).expect("ok"),
-            registry_fingerprint(Some(&b)).expect("ok"),
+            registry_fingerprint(&a).expect("ok"),
+            registry_fingerprint(&b).expect("ok"),
             "two independently constructed registries must never share a fingerprint, \
              even when every declaration they report is identical"
         );
@@ -953,8 +1019,8 @@ mod tests {
         registry.register(EX_SUM, Arc::new(SumAggregate));
         let cloned = registry.clone();
         assert_eq!(
-            registry_fingerprint(Some(&registry)).expect("ok"),
-            registry_fingerprint(Some(&cloned)).expect("ok"),
+            registry_fingerprint(&registry).expect("ok"),
+            registry_fingerprint(&cloned).expect("ok"),
             "a clone shares the source's actual implementations, so it is the same \
              registry instance for fingerprint purposes"
         );
@@ -994,6 +1060,90 @@ mod tests {
         assert_eq!(value, Some(int(42)));
     }
 
+    // ---- H11: a mismatched `into_any` downcast is a typed refusal, never a panic --
+
+    /// An accumulator that merges through [`AggregateAccumulator::into_any`]'s
+    /// downcast escape hatch — deliberately, unlike [`SumAccumulator`] above,
+    /// which merges through `finish()` instead — so that handing its `combine` a
+    /// partial of some OTHER concrete type exercises `downcast_combine_partial`'s
+    /// mismatch path exactly as `crate::stat_agg`'s real members would.
+    struct DowncastingAccumulator {
+        total: i64,
+    }
+
+    impl AggregateAccumulator for DowncastingAccumulator {
+        fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+            let other = downcast_combine_partial::<Self>(other)?;
+            self.total += other.total;
+            Ok(())
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(Some(int(self.total)))
+        }
+    }
+
+    /// H11 regression: `combine` receiving a partial built by a DIFFERENT
+    /// `CustomAggregate::init` factory than `self` — a host contract violation
+    /// (see [`downcast_combine_partial`]'s docs for why this cannot arise from
+    /// this crate's own evaluator) — must produce a typed [`EvalError`], not a
+    /// panic. Before H11, [`downcast_combine_partial`] could only report this by
+    /// panicking, relying on [`combine_contained`]'s `catch_unwind` containment;
+    /// containment is unavailable under `panic = "abort"`
+    /// (`wasm32-unknown-unknown`), so a `Result`-returning `combine` is what
+    /// makes this refusal reach every target, not just the ones where unwinding
+    /// works. `without_panic_output` is kept around this call as a belt-and-braces
+    /// check: if this ever regresses back to a panic, the test would still pass
+    /// via `combine_contained`'s containment, but the panic-hook assertion below
+    /// would fail, catching the regression either way.
+    #[test]
+    fn a_mismatched_downcast_in_combine_is_a_typed_error_not_a_panic() {
+        let mut a: Box<dyn AggregateAccumulator> = Box::new(DowncastingAccumulator { total: 0 });
+        step_contained(a.as_mut(), EX_SUM, &[int(41)]).expect("step");
+
+        // `b` is a DIFFERENT concrete accumulator type than `a` — the mismatch
+        // `downcast_combine_partial::<DowncastingAccumulator>` inside `a.combine`
+        // must refuse.
+        let aggregate = SumAggregate;
+        let b = init_contained(&aggregate, EX_SUM, &[]).expect("init");
+
+        let error = without_panic_output(|| {
+            combine_contained(a.as_mut(), EX_SUM, b)
+                .expect_err("a mismatched downcast must be a typed refusal, not a silent merge")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("partial accumulator of a different concrete type"),
+            "got {error}"
+        );
+        // Distinguishes the typed refusal from `combine_contained`'s own
+        // catch_unwind-containment message — this must be `downcast_combine_partial`'s
+        // OWN `Err`, reached without ever unwinding.
+        assert!(
+            !error.to_string().contains("panicked while combining"),
+            "the mismatch must be reported as an ordinary Err, not a caught panic: got {error}"
+        );
+
+        // The accumulator's own state is left untouched by the failed combine —
+        // a refused merge does not silently apply a partial mutation.
+        let value = finish_contained(a, EX_SUM).expect("finish");
+        assert_eq!(value, Some(int(41)));
+    }
+
     // ---- panic containment ---------------------------------------------------
 
     struct PanickingAccumulator {
@@ -1006,7 +1156,7 @@ mod tests {
             assert!(!self.panic_on_step, "accumulator exploded in step");
             Ok(())
         }
-        fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
+        fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
             panic!("accumulator exploded in combine")
         }
         fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {

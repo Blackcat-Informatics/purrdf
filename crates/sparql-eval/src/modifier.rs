@@ -1048,10 +1048,7 @@ fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
         survivors,
         || Ok(init()),
         step,
-        |acc: &mut A, other: A| {
-            acc.combine(Box::new(other));
-            Ok(())
-        },
+        |acc: &mut A, other: A| acc.combine(Box::new(other)),
     )?;
     Box::new(fold).finish()
 }
@@ -1078,13 +1075,9 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let custom = ctx
-        .aggregates
-        .and_then(|registry| registry.resolve(iri))
-        .cloned()
-        .ok_or_else(|| {
-            EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
-        })?;
+    let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
+        EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
+    })?;
 
     // Meter the declared per-accumulator state bound against the scratch-arena
     // ceiling AT ADMISSION (once per group's accumulator), because a custom
@@ -1517,18 +1510,19 @@ fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
 // Each type below is its OWN concrete Rust type (not one enum-of-variants covering
 // every built-in) specifically so a [`crate::agg_fn::AggregateAccumulator::combine`]
 // mismatch is a COMPILE-TIME impossibility for the within-crate fold in
-// [`fold_builtin`], not a runtime state to detect and panic on: `combine`'s trait
-// signature takes `Box<dyn AggregateAccumulator>`, so the ONLY way to recover a typed
-// value is [`crate::agg_fn::downcast_combine_partial`]'s `downcast::<Self>()` — for
-// `SumAccumulator`, say, that can only ever produce a `SumAccumulator`, because no
-// OTHER built-in type is ever boxed and handed to `SumAccumulator::combine`
-// (`fold_builtin`'s `combine` closure boxes the SAME concrete `A` its own `init`
-// just produced, one line above, every time — see that function's doc comment).
-// A single enum, by contrast, would still need a runtime "same variant?" check
-// `combine`'s infallible `fn combine(&mut self, ..)` signature (inherited from the
-// trait, needed so a host's dynamically dispatched `combine` stays uncomplicated)
-// cannot express as a typed error — the old `BuiltinFold::combine`'s
-// mismatched-variant `unreachable!()` this design removes.
+// [`fold_builtin`], never a runtime `Err` this crate's own built-in fold has to
+// handle: `combine`'s trait signature takes `Box<dyn AggregateAccumulator>`, so the
+// ONLY way to recover a typed value is [`crate::agg_fn::downcast_combine_partial`]'s
+// `downcast::<Self>()` — for `SumAccumulator`, say, that can only ever produce a
+// `SumAccumulator`, because no OTHER built-in type is ever boxed and handed to
+// `SumAccumulator::combine` (`fold_builtin`'s `combine` closure boxes the SAME
+// concrete `A` its own `init` just produced, one line above, every time — see that
+// function's doc comment) — so every `?` below on `downcast_combine_partial`'s
+// `Result` is unreachable in practice for a built-in, exactly as unreachable as the
+// old `BuiltinFold::combine`'s mismatched-variant `unreachable!()` this design
+// replaced, just expressed as a typed `Err` a HOST-registered aggregate's own
+// mismatch can actually hit (see [`crate::agg_fn::AggregateAccumulator::combine`]'s
+// trait docs) instead of as a panic no target could safely rely on containing.
 
 /// `COUNT` (and, via [`eval_aggregate`], `COUNT(*)`) — folds a survivor count.
 /// `step` ignores its argument entirely, which is exactly why `COUNT(*)` (whose
@@ -1543,9 +1537,13 @@ impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         self.0 += other.0;
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1585,12 +1583,16 @@ impl crate::agg_fn::AggregateAccumulator for SumAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         self.0 = match (self.0.take(), other.0) {
             (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
             _ => None,
         };
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1627,12 +1629,16 @@ impl crate::agg_fn::AggregateAccumulator for AvgAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         self.0 = match (self.0.take(), other.0) {
             (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
             _ => None,
         };
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1677,11 +1683,15 @@ impl crate::agg_fn::AggregateAccumulator for MinAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if let Some(value) = other.0 {
             self.0 = Some(fold_extreme(self.0.take(), value, Ordering::Less));
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1709,11 +1719,15 @@ impl crate::agg_fn::AggregateAccumulator for MaxAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if let Some(value) = other.0 {
             self.0 = Some(fold_extreme(self.0.take(), value, Ordering::Greater));
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1741,11 +1755,15 @@ impl crate::agg_fn::AggregateAccumulator for SampleAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if self.0.is_none() {
             self.0 = other.0;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -1815,8 +1833,11 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other);
+    fn combine(
+        &mut self,
+        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    ) -> Result<(), EvalError> {
+        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if self.poisoned {
             // Already poisoned: nothing `other` holds can un-poison it.
         } else if other.poisoned {
@@ -1829,6 +1850,7 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
             self.buf.push_str(&other.buf);
             self.started = true;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -3615,19 +3637,23 @@ mod tests {
             }
             Ok(())
         }
-        fn combine(&mut self, other: Box<dyn crate::agg_fn::AggregateAccumulator>) {
+        fn combine(
+            &mut self,
+            other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        ) -> Result<(), EvalError> {
             // An ordered list join IS its own sufficient merge state (see
             // `crate::agg_fn`'s "Merging structural state" module docs), so —
             // exactly like `agg_fn`'s own `SumAccumulator` test fixture — this
             // finishes the other partial through the same public surface a
             // caller has and re-derives its item list from that, rather than
             // reaching for `into_any`'s downcast escape hatch.
-            if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+            if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
                 && !lexical_form.is_empty()
             {
                 self.items
                     .extend(lexical_form.split(';').map(str::to_owned));
             }
+            Ok(())
         }
         fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
             self

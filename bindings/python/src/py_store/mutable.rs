@@ -269,8 +269,12 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry.as_ref(),
-                        aggregates: aggregates.as_ref(),
+                        property_functions: registry
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
+                        aggregates: aggregates
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -358,8 +362,12 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry.as_ref(),
-                        aggregates: aggregates.as_ref(),
+                        property_functions: registry
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
+                        aggregates: aggregates
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -518,8 +526,12 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry.as_ref(),
-                        aggregates: aggregates.as_ref(),
+                        property_functions: registry
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
+                        aggregates: aggregates
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -589,8 +601,12 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry.as_ref(),
-                        aggregates: aggregates.as_ref(),
+                        property_functions: registry
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
+                        aggregates: aggregates
+                            .as_ref()
+                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )

@@ -569,11 +569,24 @@ fn run_query_view<D: DatasetView + Sync>(
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let governors = current_governors();
-    let registry = functions.as_deref().filter(|reg| !reg.is_empty());
-    // An empty table is indistinguishable from no table at the resolution point, so it
-    // is dropped here rather than carried — the same treatment `registry` gets above.
-    let property_functions = relations.as_deref().filter(|reg| !reg.is_empty());
-    let agg_registry = aggregates.as_deref().filter(|reg| !reg.is_empty());
+    // The ambient thread-local scope is genuinely optional (no `sh:sparql` body has
+    // ever installed one); an absent scope and the canonical `EMPTY` registry are the
+    // SAME value for every purpose `QueryOptions` cares about (see
+    // `AggregateRegistry::EMPTY`'s docs), so there is no longer a separate
+    // "empty but present" case to normalize away here — the old `.filter(|reg|
+    // !reg.is_empty())` step this replaced existed only to collapse that redundant
+    // second spelling, which the non-optional field no longer has.
+    //
+    // `static`, not a bare `&Registry::EMPTY` temporary: a `HashMap`-backed registry
+    // carries drop glue, which blocks Rust's rvalue static promotion for a reference
+    // that must outlive this one statement (it is read again below, once per branch),
+    // so it needs a genuine `'static` place to borrow from.
+    static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
+    static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+    static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
+    let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
+    let property_functions = relations.as_deref().unwrap_or(&EMPTY_RELATIONS);
+    let agg_registry = aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES);
     let request = SparqlRequest {
         query,
         base_iri: None,

@@ -146,7 +146,7 @@ impl ViewOp for QueryOp<'_> {
             self.prepared,
             &[],
             EngineQueryOptions {
-                aggregates: self.aggregates,
+                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
                 ..EngineQueryOptions::EMPTY
             },
         )?)
@@ -208,7 +208,7 @@ impl ViewOp for GovernedQueryOp<'_> {
             self.prepared,
             &[],
             purrdf_sparql_eval::QueryOptions {
-                aggregates: self.aggregates,
+                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
                 ..purrdf_sparql_eval::QueryOptions::EMPTY
             },
             &governors,
@@ -465,7 +465,7 @@ pub(crate) fn run(
         options.query,
         options.base,
         EngineQueryOptions {
-            aggregates: aggregates.as_ref(),
+            aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
             ..EngineQueryOptions::EMPTY
         },
     )?;

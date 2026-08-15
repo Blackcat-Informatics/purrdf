@@ -43,12 +43,13 @@ impl AggregateAccumulator for SumAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
             && let Ok(n) = lexical_form.parse::<i64>()
         {
             self.total += n;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -115,12 +116,13 @@ impl AggregateAccumulator for WeightedSumAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
             && let Ok(n) = lexical_form.parse::<i64>()
         {
             self.total += n;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
@@ -175,7 +177,7 @@ fn registry() -> AggregateRegistry {
 
 fn with_aggregates(registry: &AggregateRegistry) -> QueryOptions<'_> {
     QueryOptions {
-        aggregates: Some(registry),
+        aggregates: registry,
         ..QueryOptions::EMPTY
     }
 }
@@ -442,21 +444,33 @@ fn unregistered_property_function_still_reports_the_property_function_code() {
     );
 }
 
-// ── None ≡ Some(empty) ───────────────────────────────────────────────────────
+// ── H12: EMPTY ≡ any other empty registry ───────────────────────────────────
 
+/// H12: `QueryOptions::aggregates` is `&AggregateRegistry`, never
+/// `Option<&AggregateRegistry>` — there is no longer a separate "no registry
+/// configured" spelling for a query to distinguish from "an empty registry was
+/// configured". The old expectation this test pinned (`aggregates: None` and
+/// `aggregates: Some(&AggregateRegistry::new())` must answer identically) is
+/// therefore structurally impossible to even state now: `None` does not
+/// type-check as a `QueryOptions::aggregates` value at all. What remains
+/// meaningful, and is what this test now pins, is the weaker but still real
+/// property that motivated `AggregateRegistry::EMPTY` being one canonical
+/// shared constant rather than every call site minting its own empty registry:
+/// [`QueryOptions::EMPTY`] (which carries `&AggregateRegistry::EMPTY`) and an
+/// explicitly supplied, freshly built, still-empty [`AggregateRegistry::new`]
+/// must answer identically, because both resolve every `AGG(<iri>, …)` IRI to
+/// nothing.
 #[test]
-fn none_and_some_empty_registry_behave_identically() {
+fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identically() {
     let ds = dataset();
-    // A query with no custom aggregate at all: `aggregates: None` and
-    // `aggregates: Some(&AggregateRegistry::new())` must answer identically.
     let query = format!("SELECT ?s WHERE {{ ?s <{EX}val> ?v }} ORDER BY ?s");
-    let none_options = QueryOptions::EMPTY;
-    let empty_registry = AggregateRegistry::new();
-    let empty_options = with_aggregates(&empty_registry);
+    let canonical_empty_options = QueryOptions::EMPTY;
+    let fresh_empty_registry = AggregateRegistry::new();
+    let fresh_empty_options = with_aggregates(&fresh_empty_registry);
 
-    let via_none = run(&ds, &query, none_options);
-    let via_empty = run(&ds, &query, empty_options);
-    assert_eq!(rows(&via_none), rows(&via_empty));
+    let via_canonical = run(&ds, &query, canonical_empty_options);
+    let via_fresh = run(&ds, &query, fresh_empty_options);
+    assert_eq!(rows(&via_canonical), rows(&via_fresh));
 }
 
 // ── fork-gate determinism at scale ──────────────────────────────────────────
@@ -841,7 +855,7 @@ impl AggregateAccumulator for ZeroArityAggregate {
         panic!("a zero-arity custom aggregate can never be constructed, so `step` can never run");
     }
 
-    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) {
+    fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         panic!(
             "a zero-arity custom aggregate can never be constructed, so `combine` can never run"
         );
@@ -953,12 +967,13 @@ impl AggregateAccumulator for ProductAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
             && let Ok(n) = lexical_form.parse::<i64>()
         {
             self.total *= n;
         }
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {

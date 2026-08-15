@@ -432,7 +432,7 @@ pub fn run(
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
             let options = QueryOptions {
-                property_functions: Some(harness_relations()),
+                property_functions: harness_relations(),
                 ..QueryOptions::EMPTY
             };
             let result = match remote {

@@ -824,13 +824,25 @@ fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdErr
 /// numeric and `dayTimeDuration` ÷ `dayTimeDuration`, XPath F&O
 /// `op:divide-dayTimeDuration`/`op:divide-dayTimeDuration-by-dayTimeDuration`).
 ///
-/// Precondition: `divisor` is non-zero (callers must check; a zero divisor is a
-/// spec-level `DivisionByZero` error, not a representable-range error).
+/// Every current caller (in this module and in `temporal.rs`) already checks its own
+/// divisor and returns a datatype-specific `Err(DivisionByZero)` before ever reaching
+/// here, so this function's own zero check normally never fires. It is not, however,
+/// a `debug_assert!`: this is `pub(crate)` and reachable from more than one call
+/// site, so a caller added later that forgets its own check must still get a typed
+/// `Err`, in every build profile, rather than the `i128` division below panicking —
+/// on `wasm32-unknown-unknown` with `panic = "abort"` an integer-division panic tears
+/// down the whole module, not just the one call, so this is not merely a debug-time
+/// convenience. The datatype this reports is always [`XsdDatatype::Decimal`]
+/// (the type this raw function itself operates over) rather than whatever
+/// caller-specific datatype (`Integer`, `YearMonthDuration`, …) a pre-check would
+/// have reported — irrelevant in practice, since every real caller's own check
+/// already reports the right datatype and never lets a zero divisor reach here.
 pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<Decimal, XsdError> {
-    debug_assert!(
-        !divisor.is_zero(),
-        "decimal_div_raw requires a non-zero divisor"
-    );
+    if divisor.is_zero() {
+        return Err(XsdError::DivisionByZero {
+            datatype: XsdDatatype::Decimal,
+        });
+    }
     // We want: result = dividend / divisor at scale MAX_DECIMAL_SCALE.
     // dividend = dm × 10^(-ds), divisor = vm × 10^(-vs).
     // result mantissa at scale S = dm × 10^(S + vs - ds) / vm
@@ -1739,6 +1751,29 @@ mod tests {
         let result = numeric_div(&double_val(0.0), &double_val(0.0)).unwrap();
         let d = as_double(&result);
         assert!(d.is_nan(), "0.0 / 0.0 must be NaN");
+    }
+
+    /// H10 regression: `decimal_div_raw` must return `Err(DivisionByZero)` for a
+    /// zero divisor on its OWN, not merely rely on a caller's pre-check — this
+    /// calls it DIRECTLY (bypassing every one of `numeric_div`'s/`temporal.rs`'s own
+    /// zero checks) with a zero divisor, so this test only passes if the function's
+    /// own check fires. Deliberately not a `debug_assert!`-detecting test (this
+    /// crate does not build with debug assertions disabled in `cargo test`, so a
+    /// `#[should_panic]` on a `debug_assert!` would pass in either build profile);
+    /// instead it asserts the typed `Err` shape directly, which is what actually
+    /// changed: before this fix, this exact call would panic on an integer division
+    /// by zero in a release build (where `debug_assert!` compiles out), which on
+    /// `wasm32-unknown-unknown` (`panic = "abort"`) tears down the whole module.
+    #[test]
+    fn decimal_div_raw_rejects_a_zero_divisor_without_a_callers_precheck() {
+        let zero = Decimal::from_parts(0, 0);
+        let five = dec("5.0");
+        assert!(matches!(
+            decimal_div_raw(&five, &zero),
+            Err(XsdError::DivisionByZero {
+                datatype: XsdDatatype::Decimal
+            })
+        ));
     }
 
     // -- unary minus --

@@ -444,7 +444,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 /// The options a host with relations in scope hands a governed entry.
 fn with_relations(registry: &PropertyFunctionRegistry) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: Some(registry),
+        property_functions: registry,
         ..QueryOptions::EMPTY
     }
 }
