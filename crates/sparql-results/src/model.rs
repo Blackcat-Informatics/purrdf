@@ -60,8 +60,8 @@ pub struct SolutionProvenance {
 ///
 /// # Why this is validated at construction, not at write time
 ///
-/// `prefix` is spliced VERBATIM into XML element and attribute names by
-/// [`crate::xml`] (`<{prefix}:provenance>`, `xmlns:{prefix}="…"`,
+/// `prefix` is spliced VERBATIM into XML element and attribute names by this
+/// crate's `xml` writer (`<{prefix}:provenance>`, `xmlns:{prefix}="…"`,
 /// `<{prefix}:queryForm>`, …) — it is markup syntax, not text content, so it
 /// cannot be entity-escaped the way `iri` and every other dynamic string in
 /// this crate are. The only way to keep the XML writer from ever being asked
@@ -165,7 +165,7 @@ impl ProvenanceNamespace {
     /// Returns [`crate::error::Error::InvalidNamespace`] when:
     ///
     /// - `prefix` is not a valid XML Namespaces `NCName` (see
-    ///   [`is_valid_ncname`]) — this is the exact grammar the XML writer's
+    ///   `is_valid_ncname`) — this is the exact grammar the XML writer's
     ///   `xmlns:{prefix}="…"` declaration and `<{prefix}:…>` element/attribute
     ///   names require in order to be well-formed XML. This is also what makes
     ///   markup injection via `prefix` (e.g. a value containing `"`, `<`, `>`,
@@ -174,7 +174,7 @@ impl ProvenanceNamespace {
     ///   escaped — `prefix` is markup syntax, not text content, so there is no
     ///   escaping transform that would make an arbitrary string safe there;
     /// - `prefix` case-insensitively equals `xml` or `xmlns` (see
-    ///   [`is_reserved_prefix`]) — names the XML Namespaces specification
+    ///   `is_reserved_prefix`) — names the XML Namespaces specification
     ///   forbids a document from (re)declaring;
     /// - `iri` does not parse as a syntactically valid, ABSOLUTE RFC-3987 IRI
     ///   (validated via [`purrdf_iri::parse`], the repo's one IRI-syntax

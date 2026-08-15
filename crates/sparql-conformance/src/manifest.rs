@@ -214,6 +214,35 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         }
     }
 
+    // Completeness check: the row-grouping SELECT above requires ?type, ?name, AND
+    // ?act to all bind (none are OPTIONAL), so an `mf:entries` member missing any one
+    // of `rdf:type`/`mf:name`/`mf:action` produces NO row at all and would otherwise
+    // vanish from `by_test` with no trace — a silent skip, not a modeled failure. List
+    // every `mf:entries` member directly (no mandatory triple beyond list membership)
+    // and fail loudly on any member that did not turn into a loaded case, naming it,
+    // rather than letting the manifest quietly advertise fewer cases than it declares.
+    let declared_list = list_entry_iris(&dataset)?;
+    let declared: std::collections::BTreeSet<String> = declared_list.into_iter().collect();
+    let missing: Vec<&String> = declared
+        .iter()
+        .filter(|t| !by_test.contains_key(*t))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{}: {} of {} declared mf:entries member(s) produced no loaded test case \
+             (missing rdf:type, mf:name, and/or mf:action — a silent-skip hole, not a \
+             modeled result): {}",
+            manifest_path.display(),
+            missing.len(),
+            declared.len(),
+            missing
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
     let mut cases: Vec<SparqlTestCase> = by_test.into_values().collect();
     // Update tests carry their pre-state, request, and post-state under the `ut:`
     // vocabulary, which the query SELECT above does not read. Fill those fields in
@@ -225,7 +254,48 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
     // Entailment tests declare an `sd:entailmentRegime` list; select the regime
     // the native reasoner should materialize before the query runs.
     load_entailment_regimes(&dataset, &mut cases)?;
+
+    // Belt-and-braces: the count that will actually be EXECUTED (`cases.len()`) must
+    // equal what the manifest declares. This is the same fact the `missing` check
+    // above already establishes (each declared IRI maps 1:1 into `by_test`, which
+    // `cases` is built from), stated as an executed-count assertion so a future
+    // refactor of the loader that changes the loading strategy — not just this
+    // query's OPTIONAL/mandatory shape — still cannot silently drop a case without
+    // this function failing.
+    debug_assert_eq!(
+        cases.len(),
+        declared.len(),
+        "loaded case count must equal declared mf:entries count"
+    );
+    if cases.len() != declared.len() {
+        return Err(format!(
+            "{}: loaded {} test case(s) but the manifest declares {} mf:entries member(s)",
+            manifest_path.display(),
+            cases.len(),
+            declared.len()
+        ));
+    }
+
     Ok(cases)
+}
+
+/// Every `mf:entries` list member's test IRI, with NO further requirement beyond
+/// list membership — used only to detect a member the main loading query silently
+/// dropped (see the completeness check in [`load`]).
+fn list_entry_iris(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+) -> Result<Vec<String>, String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?test WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+    rows.iter()
+        .map(|row| iri_of(row, "test").ok_or_else(|| "mf:entries member is not an IRI".to_string()))
+        .collect()
 }
 
 /// Set `regime` for each test that declares an `sd:entailmentRegime` list,

@@ -226,7 +226,7 @@
     mf:action <agg-star-non-count.rq> .
 
 :groupConcatOrder a mf:QueryEvaluationTest ;
-    mf:name "GROUP_CONCAT concatenates in input row order — an exact-string pin through this harness's own load/evaluate path" ;
+    mf:name "GROUP_CONCAT concatenates in inner-operator row order, proved via a spec-guaranteed ORDER BY DESC subquery rather than incidental store scan order — an exact-string pin through this harness's own load/evaluate path" ;
     mf:action [ qt:query <group-concat-order.rq> ; qt:data <group-concat-order.ttl> ] ;
     mf:result <group-concat-order.srx> .
 

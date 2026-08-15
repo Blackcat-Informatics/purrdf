@@ -94,7 +94,7 @@
 //! is the standard way to consume it, returning `Err(EvalError::Function)`
 //! rather than panicking on a mismatch — `combine`'s own `Result` return type
 //! (not `()`) is what makes that a plain propagated error instead of a panic
-//! `combine_contained`'s [`crate::contain`] containment would otherwise have to
+//! `combine_contained`'s `crate::contain` containment would otherwise have to
 //! catch, which matters because that containment cannot run at all under
 //! `panic = "abort"` (see the wasm32 note below). `crate::stat_agg`'s
 //! `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK` members are this crate's
@@ -102,7 +102,7 @@
 //!
 //! # wasm32 note
 //!
-//! `combine_contained` still wraps every `combine` call in [`crate::contain`]'s
+//! `combine_contained` still wraps every `combine` call in `crate::contain`'s
 //! `catch_unwind`-based containment, for an implementation that panics for a
 //! reason of its own outside the downcast — that containment still requires
 //! `panic = "unwind"` and is unavailable under `panic = "abort"` exactly as every
@@ -281,14 +281,14 @@ pub trait AggregateAccumulator: Send + 'static {
     /// # Errors
     ///
     /// Any [`EvalError`] the aggregate raises to refuse a merge — in particular,
-    /// the typed refusal [`downcast_combine_partial`] returns when `other`'s
+    /// the typed refusal `downcast_combine_partial` returns when `other`'s
     /// concrete type does not match `Self`, which an implementation reaching for
     /// [`into_any`](Self::into_any)'s escape hatch should propagate with `?`
     /// rather than discard. `Result` here (not `()`) is what lets that mismatch —
     /// a host contract violation this crate cannot rule out at compile time, only
     /// by construction (see [`into_any`](Self::into_any)'s docs) — surface as an
     /// ordinary refusal on every target, including `wasm32-unknown-unknown` under
-    /// `panic = "abort"`, where [`crate::contain`]'s panic containment cannot run
+    /// `panic = "abort"`, where `crate::contain`'s panic containment cannot run
     /// at all: a `Result` return needs no unwind to report the violation, so this
     /// seam degrades to a clean error instead of aborting the whole module on
     /// that target.
@@ -629,7 +629,7 @@ pub struct AggDescriptor {
 ///
 /// # Instance identity, not just declared contents
 ///
-/// `id` is a [`RegistryId`](crate::registry_id::RegistryId) minted fresh by
+/// `id` is a `RegistryId` (`crate::registry_id::RegistryId`) minted fresh by
 /// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
 /// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
 /// exists because DECLARED metadata (arity, volatility, algebraic class, state
@@ -670,13 +670,13 @@ impl AggregateRegistry {
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::aggregates`],
     /// [`crate::eval::EvalCtx::aggregates`](crate::eval::EvalCtx),
-    /// [`crate::parallel::SafetyRegistries::aggregates`]) now uses in place of the
+    /// `crate::parallel::SafetyRegistries::aggregates`) now uses in place of the
     /// old `Option::None` spelling, so "no registry" and "an empty registry" are
     /// the same value rather than two spellings of one state.
     ///
     /// A `const`, not merely a fresh [`Self::new`] call per use: every one of
     /// those seams can borrow the SAME `'static` value, and — see
-    /// [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s docs —
+    /// `RegistryId::EMPTY`'s (`crate::registry_id::RegistryId::EMPTY`) docs —
     /// sharing one fixed instance id across every `EMPTY` reference is the
     /// correct semantics here, not a weakening of the plan-identity guard: an
     /// empty registry can never resolve any IRI, so no plan's admitted behavior

@@ -881,8 +881,8 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
 /// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
 /// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
 /// for why that can happen), divided by the folded row `count`. This is
-/// `AVG`'s finish for exactly that case — mirrors [`decimal_div_raw`]'s
-/// scale-to-[`MAX_DECIMAL_SCALE`]-then-divide shape exactly (same target
+/// `AVG`'s finish for exactly that case — mirrors `decimal_div_raw`'s
+/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape exactly (same target
 /// scale, same truncate-toward-zero), just computed over an
 /// arbitrary-precision dividend instead of an `i128` one, so a total that
 /// overflowed `i128` does not have to poison `AVG` when the QUOTIENT is

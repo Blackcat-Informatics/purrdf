@@ -5,7 +5,7 @@
   </head>
   <results>
     <result>
-      <binding name="g"><literal>a-b-c</literal></binding>
+      <binding name="g"><literal>c-b-a</literal></binding>
     </result>
   </results>
 </sparql>

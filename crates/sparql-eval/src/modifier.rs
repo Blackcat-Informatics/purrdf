@@ -4,6 +4,99 @@
 //! Solution modifiers and the `VALUES` / `GRAPH` graph-pattern nodes:
 //! `Project`, `Distinct`, `Reduced`, `OrderBy`, `Slice`, plus inline `VALUES` data
 //! and named-graph scoping.
+//!
+//! # Aggregate semantics: the deterministic reading this crate ships
+//!
+//! SPARQL 1.1/1.2 leave several corners of aggregate evaluation intentionally
+//! underspecified — a conforming engine may pick any answer within the spec's
+//! envelope. This crate picks ONE deterministic answer for each and documents
+//! it here, so "what does GROUP_CONCAT return" has a single, testable meaning
+//! rather than "any order the engine happened to produce."
+//!
+//! ## Row and group order (§18.6.1 "Aggregate Algebra")
+//!
+//! `Group` partitions the inner solution sequence into groups; this crate keeps
+//! groups in **first-seen order** (the order their key first appears in the
+//! inner sequence — see `eval_group`'s `groups` map, ordinal-assigned on first
+//! insert) and keeps each group's own rows in **inner-operator order** (the
+//! order `eval_group`'s row scan visits them, i.e. the order the ungrouped
+//! input produced them). Every order-sensitive fold — `GROUP_CONCAT`'s
+//! concatenation, `SAMPLE`'s "first value wins", a custom `OrderDependent`
+//! aggregate — folds over rows in exactly that order, and `DISTINCT` (see
+//! below) keeps the FIRST occurrence in that same order, never an arbitrary
+//! one.
+//!
+//! ## `DISTINCT`
+//!
+//! Per §18.6.1's `Aggregation` definition, `DISTINCT` folds `Dedup(M(Ψ))`
+//! rather than `M(Ψ)` — an order-preserving, duplicate-free view whose relative
+//! order of first occurrences is preserved. This crate's dedup is exactly that:
+//! the first occurrence (in row order, per the paragraph above) of an
+//! equal-by-value tuple is kept, every later occurrence is discarded before it
+//! ever reaches `step` — see `eval_aggregate`'s and `eval_custom_aggregate`'s
+//! `seen` sets.
+//!
+//! ## `GROUP_CONCAT`'s result
+//!
+//! §18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements
+//! with `sep` between them — but leaves the sequence's own order unspecified
+//! ("The order of the strings is not specified"), which is exactly the freedom
+//! the paragraph above pins down: THIS crate concatenates in the row order
+//! stated above (groups first-seen, rows inner-operator order, `DISTINCT`
+//! keeping the first occurrence), producing a plain `xsd:string` of the
+//! **lexical forms** joined by `sep` (default `" "` per §18.6.1.7, absent an
+//! explicit `SEPARATOR`). See [`GroupConcatAccumulator`] and [`lexical_of`]
+//! for which terms contribute a lexical form and which poison the fold.
+//!
+//! ## Aggregate error handling (§18.6.1's `ListEval`, and where this crate's
+//! reading diverges)
+//!
+//! The spec's `ListEval` unifies two causes into one value: an expression that
+//! raises a type error, and an expression that evaluates over an unbound
+//! variable, BOTH become the single value `error` in the flattened list — and
+//! `error` elements are then dropped before any set function runs (`Count`
+//! counts "a bound, non-error value"; every other set function's `Flatten`
+//! implicitly works over the error-free list the note under `ListEval` states:
+//! "solutions containing error values are removed at the end of evaluating the
+//! group and any aggregation functions").
+//!
+//! This crate's `eval_expr` cannot express that: its signature is
+//! `Result<Option<SolutionTerm>, EvalError>`, which has only three states — a
+//! bound value, an honestly UNBOUND variable (`Ok(None)`), or a HARD evaluation
+//! failure (`Err`, e.g. an XPath-function type error) — not the spec's single
+//! unified `error`. `eval_aggregate`/`eval_custom_aggregate` map the spec's
+//! "error → remove from the list" reading onto exactly ONE of those three: an
+//! honestly unbound argument (`Ok(None)`) skips the row, matching the spec's
+//! removal for THAT cause. A hard evaluation failure (`Err`) is propagated via
+//! `?` and aborts the whole query, NOT removed-and-continued — diverging from
+//! the spec's literal reading for that cause, but consistent with this crate's
+//! hard-fail doctrine every other expression-evaluation seam already follows
+//! (a raised type error is a defect to surface, never a solution to silently
+//! vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
+//! non-numeric or overflowing running total *poisons the fold* — represented
+//! as [`NumericFold`] going from `Some` to `None` inside [`SumAccumulator`]/
+//! [`AvgAccumulator`] (see their docs) — rather than raising `Err` — the SPARQL 1.1/1.2
+//! aggregate algebra has no notion of a "poisoned" set-function result, but an
+//! unbound aggregate OUTPUT is exactly the shape the spec already uses for
+//! `MinList`/`MaxList`/`Sample`'s empty-group `error` (see below), so this
+//! crate reuses that shape for a mid-fold numeric failure instead of aborting
+//! the query over one bad group.
+//!
+//! ## `MIN`/`MAX` comparison order (§18.6.1.5 Min, §18.6.1.6 Max)
+//!
+//! Both are defined via the SPARQL `ORDER BY` total order (§15.1): `Min(S)` is
+//! the first element of `Flatten(S)` ordered `ASC`; `Max(S)` is the first
+//! element ordered `DESC`. This crate's [`fold_extreme`] mirrors that order
+//! exactly — the same `term_value_order`/[`compare_sort_keys`] total order
+//! `ORDER BY` itself uses (unbound < blank < IRI < literal < triple; literals
+//! compared in value space where comparable, else a deterministic lexical
+//! fallback) — so a tie (two terms neither strictly less-than the other under
+//! that order) keeps the EARLIER occurrence, exactly as `MinList`/`MaxList`'s
+//! "first element of the ordered list" reading demands when the ordering does
+//! not distinguish them. An empty group's spec answer is `error`
+//! (`Card(L) = 0 ⇒ MinList(L) = error`); this crate reports that as unbound
+//! (`None`), the same unbound-for-error reading `AVG`/`SAMPLE` already use for
+//! their own empty-group `error` case.
 
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
@@ -588,99 +681,6 @@ fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<Strin
 // ---------------------------------------------------------------------------
 // GROUP BY + aggregates
 // ---------------------------------------------------------------------------
-//
-// # Aggregate semantics: the deterministic reading this crate ships
-//
-// SPARQL 1.1/1.2 leave several corners of aggregate evaluation intentionally
-// underspecified — a conforming engine may pick any answer within the spec's
-// envelope. This crate picks ONE deterministic answer for each and documents
-// it here, so "what does GROUP_CONCAT return" has a single, testable meaning
-// rather than "any order the engine happened to produce."
-//
-// ## Row and group order (§18.6.1 "Aggregate Algebra")
-//
-// `Group` partitions the inner solution sequence into groups; this crate keeps
-// groups in **first-seen order** (the order their key first appears in the
-// inner sequence — see `eval_group`'s `groups` map, ordinal-assigned on first
-// insert) and keeps each group's own rows in **inner-operator order** (the
-// order `eval_group`'s row scan visits them, i.e. the order the ungrouped
-// input produced them). Every order-sensitive fold — `GROUP_CONCAT`'s
-// concatenation, `SAMPLE`'s "first value wins", a custom `OrderDependent`
-// aggregate — folds over rows in exactly that order, and `DISTINCT` (see
-// below) keeps the FIRST occurrence in that same order, never an arbitrary
-// one.
-//
-// ## `DISTINCT`
-//
-// Per §18.6.1's `Aggregation` definition, `DISTINCT` folds `Dedup(M(Ψ))`
-// rather than `M(Ψ)` — an order-preserving, duplicate-free view whose relative
-// order of first occurrences is preserved. This crate's dedup is exactly that:
-// the first occurrence (in row order, per the paragraph above) of an
-// equal-by-value tuple is kept, every later occurrence is discarded before it
-// ever reaches `step` — see `eval_aggregate`'s and `eval_custom_aggregate`'s
-// `seen` sets.
-//
-// ## `GROUP_CONCAT`'s result
-//
-// §18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements
-// with `sep` between them — but leaves the sequence's own order unspecified
-// ("The order of the strings is not specified"), which is exactly the freedom
-// the paragraph above pins down: THIS crate concatenates in the row order
-// stated above (groups first-seen, rows inner-operator order, `DISTINCT`
-// keeping the first occurrence), producing a plain `xsd:string` of the
-// **lexical forms** joined by `sep` (default `" "` per §18.6.1.7, absent an
-// explicit `SEPARATOR`). See [`GroupConcatAccumulator`] and [`lexical_of`]
-// for which terms contribute a lexical form and which poison the fold.
-//
-// ## Aggregate error handling (§18.6.1's `ListEval`, and where this crate's
-// reading diverges)
-//
-// The spec's `ListEval` unifies two causes into one value: an expression that
-// raises a type error, and an expression that evaluates over an unbound
-// variable, BOTH become the single value `error` in the flattened list — and
-// `error` elements are then dropped before any set function runs (`Count`
-// counts "a bound, non-error value"; every other set function's `Flatten`
-// implicitly works over the error-free list the note under `ListEval` states:
-// "solutions containing error values are removed at the end of evaluating the
-// group and any aggregation functions").
-//
-// This crate's `eval_expr` cannot express that: its signature is
-// `Result<Option<SolutionTerm>, EvalError>`, which has only three states — a
-// bound value, an honestly UNBOUND variable (`Ok(None)`), or a HARD evaluation
-// failure (`Err`, e.g. an XPath-function type error) — not the spec's single
-// unified `error`. `eval_aggregate`/`eval_custom_aggregate` map the spec's
-// "error → remove from the list" reading onto exactly ONE of those three: an
-// honestly unbound argument (`Ok(None)`) skips the row, matching the spec's
-// removal for THAT cause. A hard evaluation failure (`Err`) is propagated via
-// `?` and aborts the whole query, NOT removed-and-continued — diverging from
-// the spec's literal reading for that cause, but consistent with this crate's
-// hard-fail doctrine every other expression-evaluation seam already follows
-// (a raised type error is a defect to surface, never a solution to silently
-// vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
-// non-numeric or overflowing running total *poisons the fold* — represented
-// as [`NumericFold`] going from `Some` to `None` inside [`SumAccumulator`]/
-// [`AvgAccumulator`] (see their docs) — rather than raising `Err` — the SPARQL 1.1/1.2
-// aggregate algebra has no notion of a "poisoned" set-function result, but an
-// unbound aggregate OUTPUT is exactly the shape the spec already uses for
-// `MinList`/`MaxList`/`Sample`'s empty-group `error` (see below), so this
-// crate reuses that shape for a mid-fold numeric failure instead of aborting
-// the query over one bad group.
-//
-// ## `MIN`/`MAX` comparison order (§18.6.1.5 Min, §18.6.1.6 Max)
-//
-// Both are defined via the SPARQL `ORDER BY` total order (§15.1): `Min(S)` is
-// the first element of `Flatten(S)` ordered `ASC`; `Max(S)` is the first
-// element ordered `DESC`. This crate's [`fold_extreme`] mirrors that order
-// exactly — the same `term_value_order`/[`compare_sort_keys`] total order
-// `ORDER BY` itself uses (unbound < blank < IRI < literal < triple; literals
-// compared in value space where comparable, else a deterministic lexical
-// fallback) — so a tie (two terms neither strictly less-than the other under
-// that order) keeps the EARLIER occurrence, exactly as `MinList`/`MaxList`'s
-// "first element of the ordered list" reading demands when the ordering does
-// not distinguish them. An empty group's spec answer is `error`
-// (`Card(L) = 0 ⇒ MinList(L) = error`); this crate reports that as unbound
-// (`None`), the same unbound-for-error reading `AVG`/`SAMPLE` already use for
-// their own empty-group `error` case.
 
 /// `GROUP BY ... ` with aggregates: partition the inner solutions by the grouping
 /// key (term identity), then compute each aggregate per group. One output row per

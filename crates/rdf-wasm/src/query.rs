@@ -1001,7 +1001,7 @@ impl QueryEngine {
     /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
     /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     /// `FIRST`, `LAST`, `TOPK`) under that IRI namespace, so the query text can call
-    /// `AGG(<namespace><NAME>, args…)` (see [`build_aggregates`]). `None` (the default)
+    /// `AGG(<namespace><NAME>, args…)` (see `build_aggregates`). `None` (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
     /// # Errors

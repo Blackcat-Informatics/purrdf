@@ -257,7 +257,7 @@ impl Arity {
 
 impl core::fmt::Display for Arity {
     /// Human-facing wording only — NOT part of any stable fingerprint or cache-key
-    /// encoding. See [`Arity::stable_encoding`], which
+    /// encoding. See `Arity::stable_encoding`, which
     /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
     /// IS load-bearing; this impl is free to change wording at any time.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -331,10 +331,10 @@ impl UserFunctionRegistry {
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],
     /// [`crate::eval::EvalCtx::user_functions`](crate::eval::EvalCtx),
-    /// [`crate::parallel::SafetyRegistries::functions`]) now uses in place of the
+    /// `crate::parallel::SafetyRegistries::functions`) now uses in place of the
     /// old `Option::None` spelling. Unlike
     /// [`crate::agg_fn::AggregateRegistry::EMPTY`]/[`crate::property_fn::PropertyFunctionRegistry::EMPTY`],
-    /// this type carries no [`RegistryId`](crate::registry_id::RegistryId) — a
+    /// this type carries no `RegistryId` (`crate::registry_id::RegistryId`) — a
     /// SHACL-AF/native function registry is never checked for plan identity (see
     /// `crate::engine`'s note on why `QueryOptions::functions` is deliberately
     /// excluded from `check_plan_matches_relations`) — so there is no identity

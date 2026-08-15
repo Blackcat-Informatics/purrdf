@@ -196,7 +196,7 @@ impl BigInt {
     }
 
     /// `self × 10^exp`, exactly — used by `AVG`'s finish to scale a running sum
-    /// up to [`crate::numeric::MAX_DECIMAL_SCALE`] fractional digits BEFORE
+    /// up to `purrdf_xsd::numeric`'s `MAX_DECIMAL_SCALE` fractional digits BEFORE
     /// dividing by the folded row count (see [`Self::div_rem_u64`]), mirroring
     /// `decimal_div_raw`'s own scale-then-divide shape but over an
     /// arbitrary-precision dividend.

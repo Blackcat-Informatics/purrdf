@@ -494,7 +494,7 @@ pub struct PfDescriptor {
 ///
 /// # Instance identity, not just declared contents
 ///
-/// `id` is a [`RegistryId`](crate::registry_id::RegistryId) minted fresh by
+/// `id` is a `RegistryId` (`crate::registry_id::RegistryId`) minted fresh by
 /// `Default`/[`new`](Self::new) — see that type's docs for why a counter, why a
 /// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
 /// exists because DECLARED metadata (arity, volatility, modes and their row
@@ -535,11 +535,11 @@ impl PropertyFunctionRegistry {
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::property_functions`],
     /// [`crate::eval::EvalCtx::property_functions`](crate::eval::EvalCtx),
-    /// [`crate::parallel::SafetyRegistries::relations`]) now uses in place of the
+    /// `crate::parallel::SafetyRegistries::relations`) now uses in place of the
     /// old `Option::None` spelling. See
     /// [`crate::agg_fn::AggregateRegistry::EMPTY`]'s docs for why a single shared
     /// `'static` value, with a fixed reserved
-    /// [`RegistryId`](crate::registry_id::RegistryId), is the correct (not merely
+    /// `RegistryId` (`crate::registry_id::RegistryId`), is the correct (not merely
     /// convenient) choice here: an empty registry resolves no IRI regardless of
     /// which `EMPTY` value is asked, so no plan's admitted behavior can depend on
     /// which one it was prepared against.

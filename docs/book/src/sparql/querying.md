@@ -141,6 +141,70 @@ with a typed error naming the offending construct — for an update, with no
 mutation applied. A `1.2-basic` request that uses none of those constructs
 evaluates exactly as a `1.2` one would.
 
+## Aggregate determinism: row order, `DISTINCT`, and `GROUP_CONCAT`
+
+SPARQL 1.1/1.2 leave several corners of `GROUP BY`/aggregate evaluation
+intentionally underspecified — a conforming engine may pick any answer within
+the spec's envelope. `purrdf-sparql-eval` picks ONE deterministic answer for
+each and documents it here (mirrored in `purrdf_sparql_eval::modifier`'s crate
+docs), so "what does `GROUP_CONCAT` return" has a single, testable meaning
+rather than "any order the engine happened to produce."
+
+**Row and group order (§18.6.1 "Aggregate Algebra").** `GROUP BY` partitions
+the inner solution sequence into groups; this crate keeps groups in
+**first-seen order** (the order each group's key first appears in the inner
+solution sequence) and keeps each group's own rows in **inner-operator
+order** (the order the ungrouped input produced them). Every order-sensitive
+fold — `GROUP_CONCAT`'s concatenation, `SAMPLE`'s "first value wins", a
+custom aggregate's `OrderDependent` fold — folds over rows in exactly that
+order.
+
+"Inner-operator order" is REPRODUCIBLE (the same query against the same
+dataset yields the same order every time) but is not, by itself, a
+documented invariant a query text can rely on for a plain triple-pattern
+scan: a bare BGP's solution order follows this store's internal index
+layout (currently sorted by interned term id along the index the planner
+picks), which is an implementation detail, not a promise. The one row order
+a query CAN rely on is an explicit `ORDER BY`: when the aggregate's
+immediate input is (or is fed by) an `ORDER BY`-sorted solution sequence —
+for example a subquery `{ SELECT ?v WHERE { ... } ORDER BY ?key }` feeding
+an outer aggregate — "inner-operator order" is exactly that `ORDER BY`'s
+SPARQL total order (§15.1), which the specification itself fixes.
+
+**`DISTINCT` (inside an aggregate call).** Per §18.6.1's `Aggregation`
+definition, `DISTINCT` folds `Dedup(M(Ψ))` rather than `M(Ψ)` — an
+order-preserving, duplicate-free view whose relative order of first
+occurrences is preserved. This crate's dedup keeps the FIRST occurrence (in
+the row order above) of an equal-by-value tuple; every later occurrence never
+reaches the fold's `step`.
+
+### `GROUP_CONCAT` ordering
+
+§18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements with
+`sep` between them, but explicitly leaves the sequence's own order
+unspecified ("The order of the strings is not specified") — exactly the
+freedom the paragraphs above pin down. This crate concatenates in the row
+order stated above: **groups first-seen, rows in inner-operator order,
+`DISTINCT` keeping the first occurrence** — producing a plain `xsd:string` of
+the lexical forms joined by `sep` (default `" "` per §18.6.1.7, absent an
+explicit `SEPARATOR`). A term with no lexical form (a blank node or a triple
+term) poisons the fold to unbound, the same reading `SUM`/`AVG` use for a
+non-numeric running total.
+
+Because a plain BGP's own scan order is an implementation detail rather than
+a documented guarantee (see above), a `GROUP_CONCAT` fixture that wants to
+demonstrate the determinism reading with an exact-string pin cannot rest the
+proof on scanning a triple pattern directly — that would pin an incidental
+property of the current index layout, not the specification-backed ordering
+this section documents. This project's own conformance fixture,
+`crates/sparql-conformance/suite/purrdf-extend/group-concat-order.rq`, drives
+its row order from an `ORDER BY DESC(?s)` subquery feeding the outer
+`GROUP_CONCAT` — anchoring the pin to SPARQL's own `ORDER BY` total order
+(§15.1) over distinct IRIs, and using `DESC` rather than `ASC` so a
+regression that silently ignored the subquery's `ORDER BY` (and fell back to
+the store's incidental scan order) would produce a detectably different,
+wrong string instead of coincidentally passing.
+
 ## Extending the evaluator: custom aggregates
 
 Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/
