@@ -117,8 +117,11 @@
 //! the scalarval contract as simple as `PERCENTILE`'s, so the separator is
 //! fixed by design, not by oversight. A term with no lexical form (a blank
 //! node or a triple term — the same case `GROUP_CONCAT` itself poisons on)
-//! poisons `TOPK` too. Fewer than `k` distinct rows in the group → every
-//! value the group has. Empty group → unbound, like every other member here.
+//! poisons `TOPK` too. `TOPK` retains DUPLICATES — it counts rows, not
+//! distinct values, the same multiset reading `insert_bounded` folds under —
+//! so fewer than `k` rows in the group (whether or not any repeat) → every
+//! value the group has, in row-multiplicity. Empty group → unbound, like
+//! every other member here.
 //!
 //! # Real merges via `AggregateAccumulator::into_any` (all ten are `Volatility::Stable`)
 //!
@@ -266,8 +269,10 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
         .filter(is_numeric_xsd)
 }
 
-/// The Welford moment accumulators' declared [`CustomAggregate::state_bound`]:
-/// genuinely `O(1)` — see the module docs.
+/// The running-moments (`(n, Σx, Σx²)`, deliberately NOT Welford — see the
+/// module docs and this family's own section comment below for why) accumulators'
+/// declared [`CustomAggregate::state_bound`]: genuinely `O(1)` — see the module
+/// docs.
 const MOMENTS_STATE_BOUND: u64 = 64;
 /// `MEDIAN`/`PERCENTILE`/`MODE`'s declared [`CustomAggregate::state_bound`]: a
 /// nominal, documented estimate — see the module docs' "`state_bound` honesty"
@@ -878,6 +883,22 @@ impl AggregateAccumulator for FirstAccumulator {
         // `self` is the earlier chunk: if it already saw a row, its value IS the
         // group's first value regardless of what a later chunk holds. Only an
         // empty earlier chunk defers to the later one.
+        //
+        // This relies on [`AggregateAccumulator::combine`]'s documented contract
+        // ("`self` holds the earlier ... partial fold and `other` the later
+        // one"), which `crate::parallel::par_chunk_reduce_init` upholds by
+        // construction: it reduces `items.par_chunks(..)`'s per-chunk results
+        // with a strictly sequential `for chunk_result in iter { combine(&mut
+        // acc, chunk_result?)?; }` in CHUNK-INDEX order — never a tree/pairwise
+        // reduction, and never reordered by which worker finishes first — so
+        // `acc` (this `self`) is always chunk `i` and `chunk_result` (`other`)
+        // is always chunk `i+1`, regardless of thread count or scheduling. A
+        // flip of that order, or a switch to a non-sequential reduction shape,
+        // would silently return the WRONG row's value with no local symptom —
+        // see the module docs' "FIRST/LAST" section — which is why
+        // `crate::modifier`'s `stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`
+        // pins the exact answer (not just sequential/parallel agreement) over a
+        // many-chunk forced-parallel fold.
         if self.value.is_none()
             && let Some(v) = other.finish()?
         {
@@ -931,6 +952,16 @@ impl AggregateAccumulator for LastAccumulator {
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // `other` is the later chunk: whatever it holds is later in row order
         // than anything `self` holds, so it always wins when present.
+        //
+        // Same reliance as [`FirstAccumulator::combine`] on
+        // [`AggregateAccumulator::combine`]'s documented earlier-`self`/later-
+        // `other` contract, upheld by `crate::parallel::par_chunk_reduce_init`'s
+        // fixed, strictly sequential chunk-index-order reduce (see that
+        // `combine`'s comment for the exact mechanism) — pinned by
+        // `crate::modifier`'s
+        // `stat_agg_last_chunked_fold_forced_parallel_and_sequential_agree`,
+        // which would fail on the group's FIRST value instead of its last if
+        // that order ever flipped.
         if let Some(v) = other.finish()? {
             self.value = Some(v);
         }
@@ -1514,5 +1545,174 @@ mod tests {
     #[test]
     fn topk_of_empty_group_is_unbound() {
         assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, int(3)), &[]), None);
+    }
+
+    // ---- combine (parallel-reducer merge) coverage ----------------------------
+    //
+    // `MEDIAN`, `PERCENTILE`, `MODE`, and `TOPK` merge through `into_any`'s
+    // type-erased downcast escape hatch (see the module docs' "Real merges via
+    // `AggregateAccumulator::into_any`" section) rather than through `finish()` —
+    // the module's own docs call this the subtle part of the design, and a defect
+    // here produces a wrong value only under a parallel/chunked fold, never under
+    // a sequential one. Each test below builds two partial accumulators by hand
+    // (exactly what `crate::parallel::par_chunk_reduce_init` produces per chunk),
+    // `combine`s them, and checks the merged answer against a direct,
+    // single-accumulator fold over the concatenated dataset — the same oracle
+    // `first_combine_keeps_the_earlier_chunks_value`/
+    // `last_combine_keeps_the_later_chunks_value` already use for `FIRST`/`LAST`.
+
+    #[test]
+    fn median_combine_merges_two_partial_value_lists() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(MEDIAN)).expect("registered");
+
+        let mut a = agg.init(&[]);
+        a.step(&[int(1)]).expect("step");
+        a.step(&[int(3)]).expect("step");
+        let mut b = agg.init(&[]);
+        b.step(&[int(2)]).expect("step");
+        b.step(&[int(4)]).expect("step");
+        a.combine(b).expect("combine");
+        let merged = a.finish().expect("finish").expect("bound");
+
+        let direct = fold(
+            MEDIAN,
+            &[vec![int(1)], vec![int(3)], vec![int(2)], vec![int(4)]],
+        )
+        .expect("bound");
+        assert_eq!(lex(&merged), lex(&direct));
+        assert_eq!(lex(&merged), "2.5");
+    }
+
+    #[test]
+    fn median_combine_poisons_if_either_side_is_poisoned() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(MEDIAN)).expect("registered");
+
+        let mut a = agg.init(&[]);
+        a.step(&[int(1)]).expect("step");
+        let mut poisoned = agg.init(&[]);
+        poisoned
+            .step(&[TermValue::simple_literal("oops")])
+            .expect("step");
+
+        a.combine(poisoned).expect("combine");
+        assert_eq!(a.finish().expect("finish"), None);
+    }
+
+    #[test]
+    fn percentile_combine_merges_two_partial_value_lists() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(PERCENTILE)).expect("registered");
+        let scalars = scalarval(PERCENTILE_P, dec("1"));
+
+        let mut a = agg.init(&scalars);
+        a.step(&[int(1)]).expect("step");
+        let mut b = agg.init(&scalars);
+        b.step(&[int(3)]).expect("step");
+        b.step(&[int(2)]).expect("step");
+        a.combine(b).expect("combine");
+        let merged = a.finish().expect("finish").expect("bound");
+
+        let direct = fold_with(
+            PERCENTILE,
+            &scalars,
+            &[vec![int(1)], vec![int(3)], vec![int(2)]],
+        )
+        .expect("bound");
+        assert_eq!(lex(&merged), lex(&direct));
+        assert_eq!(lex(&merged), "3"); // p=1 is the maximum of {1, 2, 3}
+    }
+
+    #[test]
+    fn percentile_combine_poisons_if_either_side_is_poisoned() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(PERCENTILE)).expect("registered");
+
+        let mut a = agg.init(&scalarval(PERCENTILE_P, dec("0.5")));
+        a.step(&[int(1)]).expect("step");
+        // A missing `P` poisons at `init` time (see `percentile_missing_p_poisons`).
+        let mut poisoned = agg.init(&[]);
+        poisoned.step(&[int(2)]).expect("step");
+
+        a.combine(poisoned).expect("combine");
+        assert_eq!(a.finish().expect("finish"), None);
+    }
+
+    #[test]
+    fn mode_combine_merges_two_partial_value_multisets() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(MODE)).expect("registered");
+
+        // Neither partial has a majority for `2` alone (2-vs-1 in `a`, 1-vs-1 in
+        // `b`): only merging the RAW multisets — not either side's `finish()`
+        // winner — recovers that `2` occurs three times overall.
+        let mut a = agg.init(&[]);
+        a.step(&[int(1)]).expect("step");
+        a.step(&[int(2)]).expect("step");
+        a.step(&[int(2)]).expect("step");
+        let mut b = agg.init(&[]);
+        b.step(&[int(2)]).expect("step");
+        b.step(&[int(3)]).expect("step");
+        a.combine(b).expect("combine");
+        let merged = a.finish().expect("finish").expect("bound");
+
+        let direct = fold(
+            MODE,
+            &[
+                vec![int(1)],
+                vec![int(2)],
+                vec![int(2)],
+                vec![int(2)],
+                vec![int(3)],
+            ],
+        )
+        .expect("bound");
+        assert_eq!(lex(&merged), lex(&direct));
+        assert_eq!(lex(&merged), "2");
+    }
+
+    #[test]
+    fn topk_combine_merges_two_partial_bounded_sets() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(TOPK)).expect("registered");
+        let scalars = scalarval(TOPK_K, int(3));
+
+        let mut a = agg.init(&scalars);
+        for v in [3, 1, 4] {
+            a.step(&[int(v)]).expect("step");
+        }
+        let mut b = agg.init(&scalars);
+        for v in [1, 5, 9, 2, 6] {
+            b.step(&[int(v)]).expect("step");
+        }
+        a.combine(b).expect("combine");
+        let merged = a.finish().expect("finish").expect("bound");
+
+        // Must match a single-accumulator fold over the whole dataset — the merge
+        // must recover the true top 3 across BOTH partials, not just keep
+        // whichever side's own top-3 happened to be computed first.
+        let rows = [3, 1, 4, 1, 5, 9, 2, 6]
+            .into_iter()
+            .map(|n| vec![int(n)])
+            .collect::<Vec<_>>();
+        let direct = fold_with(TOPK, &scalars, &rows).expect("bound");
+        assert_eq!(lex(&merged), lex(&direct));
+        assert_eq!(lex(&merged), "9 6 5");
+    }
+
+    #[test]
+    fn topk_combine_poisons_if_either_side_is_poisoned() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(TOPK)).expect("registered");
+
+        let mut a = agg.init(&scalarval(TOPK_K, int(3)));
+        a.step(&[int(1)]).expect("step");
+        // A non-positive `K` poisons at `init` time (see `topk_non_positive_k_poisons`).
+        let mut poisoned = agg.init(&scalarval(TOPK_K, int(0)));
+        poisoned.step(&[int(2)]).expect("step");
+
+        a.combine(poisoned).expect("combine");
+        assert_eq!(a.finish().expect("finish"), None);
     }
 }

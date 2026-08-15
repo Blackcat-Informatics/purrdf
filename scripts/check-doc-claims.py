@@ -133,6 +133,9 @@ _MAKEFILE = _REPO / "Makefile"
 _AGENTS = _REPO / "AGENTS.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
+_GOVERNOR_PROFILE = _REPO / "docs" / "SPARQL-GOVERNOR-PROFILE.md"
+_GOVERNOR_MANIFEST = _REPO / "vectors" / "sparql-governors" / "manifest.tsv"
+
 _INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
 _RL_SUITE = _REPO / "crates" / "sparql-conformance" / "entailment-suite" / "w3c-owl2-rl"
 _CENSUS = _RL_SUITE / "census.tsv"
@@ -2933,6 +2936,125 @@ def load_matrix() -> dict[str, tuple[int, int]]:
     return suites
 
 
+def load_governor_corpus_counts() -> dict[str, int]:
+    """Case counts derived from the frozen governor-corpus manifest.
+
+    ``manifest.tsv`` is byte-frozen (``scripts/check-corpus-frozen.py``), and its
+    ``band`` column already distinguishes a zero/boundary/over-bound case from a
+    seam case (``n/a`` — see the corpus's own README). Deriving the counts from
+    here, rather than restating them a third and fourth time, is what lets
+    CONFORMANCE.md's hand-written scoreboard prose and SPARQL-GOVERNOR-PROFILE.md
+    §11 disagree LOUDLY the moment a lane is added, instead of just going stale:
+    `--write-doc` regenerates CONFORMANCE.md's matrix block but touches neither of
+    those prose sites.
+    """
+    lines = [
+        line
+        for line in _read(_GOVERNOR_MANIFEST).splitlines()
+        if line and not line.startswith("#")
+    ]
+    if not lines:
+        raise SystemExit(
+            f"check-doc-claims: no case rows in "
+            f"{_GOVERNOR_MANIFEST.relative_to(_REPO)}"
+        )
+    total = len(lines)
+    band = sum(
+        1
+        for line in lines
+        if line.split("\t")[5] in {"zero", "boundary", "over-bound"}
+    )
+    return {"total": total, "band": band, "seam": total - band}
+
+
+def governor_corpus_count_claim(matrix: dict[str, tuple[int, int]]) -> list[str]:
+    """The governor-corpus case count, restated by hand in two documents.
+
+    CONFORMANCE.md's per-engine scoreboard row and SPARQL-GOVERNOR-PROFILE.md §11
+    each restate the corpus's total case count and its zero/boundary/over-bound
+    (band) vs. seam split in prose that `conformance-matrix.py --write-doc` never
+    touches — it only rewrites CONFORMANCE.md's generated matrix block. This claim
+    checks the generated block's own governor-suite pass count AND both prose
+    restatements against the one source that cannot drift on its own: the frozen
+    manifest itself.
+    """
+    counts = load_governor_corpus_counts()
+    problems: list[str] = []
+
+    matrix_pass, _ = matrix["SPARQL execution governors"]
+    if matrix_pass != counts["total"]:
+        problems.append(
+            f"{_CONFORMANCE.relative_to(_REPO)}: the generated matrix block "
+            f"reports {matrix_pass} governor cases, but "
+            f"{_GOVERNOR_MANIFEST.relative_to(_REPO)} has {counts['total']}"
+        )
+
+    total_band_sites: list[tuple[Path, str]] = [
+        (
+            _CONFORMANCE,
+            _flow(
+                r"\*\*(?P<total>\d+) / (?P<total2>\d+)\*\* pinned cases · 0 ledgered\. "
+                r"\*\*(?P<band>\d+) of them are band cases\*\*"
+            ),
+        ),
+        (
+            _GOVERNOR_PROFILE,
+            _flow(
+                r"Across the corpus there are (?P<total>\d+) cases total, of which "
+                r"(?P<band>\d+) form zero, boundary, or over-bound lanes"
+            ),
+        ),
+    ]
+    for path, pattern in total_band_sites:
+        rel = path.relative_to(_REPO)
+        matches = list(re.finditer(pattern, _read(path)))
+        if len(matches) != 1:
+            problems.append(
+                f"{rel}: expected exactly one governor-corpus case-count claim "
+                f"matching the pattern, found {len(matches)}.\n    pattern: {pattern}"
+            )
+            continue
+        found = matches[0].groupdict()
+        for group in ("total", "total2"):
+            if group in found and _int(found[group]) != counts["total"]:
+                problems.append(
+                    f"{rel}: documented {found[group]} governor cases, "
+                    f"{_GOVERNOR_MANIFEST.relative_to(_REPO)} has {counts['total']}"
+                )
+        if _int(found["band"]) != counts["band"]:
+            problems.append(
+                f"{rel}: documented {found['band']} governor band cases, "
+                f"{_GOVERNOR_MANIFEST.relative_to(_REPO)} has {counts['band']}"
+            )
+
+    seam_sites: list[tuple[Path, str]] = [
+        (_CONFORMANCE, _flow(r"The remaining (?P<seam>\d+) cases name seams")),
+        (
+            _GOVERNOR_PROFILE,
+            _flow(
+                r"the\s+remaining (?P<seam>\d+) are transport, relation, "
+                r"charge-seam, and wall-clock cases"
+            ),
+        ),
+    ]
+    for path, pattern in seam_sites:
+        rel = path.relative_to(_REPO)
+        matches = list(re.finditer(pattern, _read(path)))
+        if len(matches) != 1:
+            problems.append(
+                f"{rel}: expected exactly one governor-corpus seam-count claim "
+                f"matching the pattern, found {len(matches)}.\n    pattern: {pattern}"
+            )
+            continue
+        got = _int(matches[0].group("seam"))
+        if got != counts["seam"]:
+            problems.append(
+                f"{rel}: documented {got} seam cases, "
+                f"{_GOVERNOR_MANIFEST.relative_to(_REPO)} has {counts['seam']}"
+            )
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Source 3 — the frozen upstream OWL 2 census
 # ---------------------------------------------------------------------------
@@ -4332,6 +4454,8 @@ def main(argv: list[str]) -> int:
     problems.extend(program_regime_dts_claim())
     checked += 1
     problems.extend(reasoning_session_hosts_claim())
+    checked += 1
+    problems.extend(governor_corpus_count_claim(matrix))
     checked += 1
     # The ban walk reports how many files it scanned, which is COVERAGE, not a claim
     # count — folding ~1,900 scanned files into the "documented claims" headline would

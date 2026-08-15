@@ -807,8 +807,15 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     }))
 }
 
-/// Compute one aggregate over a group's rows — streaming: every value is folded
-/// as it is produced, never materialized into a per-group buffer first. A
+/// Compute one aggregate over a group's rows in two phases: phase 1 evaluates
+/// every surviving row's argument(s) and materializes them into a per-group
+/// buffer (`survivors`, already `DISTINCT`-resolved and in row order); phase 2
+/// folds that buffer through an accumulator, sequentially or in parallel
+/// chunks. This is NOT streaming — the whole group's resolved values are held
+/// at once before folding starts — which is what lets phase 2 chunk the fold
+/// without touching [`EvalCtx`]/the governor at all (every charge already
+/// happened in phase 1) and is why phase 2 is safe to parallelize regardless
+/// of volatility (see phase 2's own comment below). A
 /// built-in accumulator (this module: [`CountAccumulator`], [`SumAccumulator`],
 /// [`AvgAccumulator`], [`MinAccumulator`], [`MaxAccumulator`],
 /// [`SampleAccumulator`], [`GroupConcatAccumulator`]) and a registered
@@ -920,14 +927,14 @@ fn eval_aggregate<D: DatasetView + Sync>(
     let mut seen: Option<DetHashSet<SolutionTerm<D::Id>>> = agg.distinct.then(DetHashSet::default);
     let mut survivors: Vec<TermValue> = Vec::new();
     if let Some(first_arg) = agg.args().first() {
-        // Phase 1 (sequential, UNCHANGED from before within-group chunking):
-        // evaluate every row's argument expression against `ctx`, charge
-        // `AggregateAccumulation` for each one, and apply `DISTINCT`. This is
-        // exactly the loop that ran here before — nothing about expression
-        // evaluation, error handling, or charge order changes — so charge
-        // spend is a pure function of `idxs`/`ctx`, identical whether or not
-        // phase 2 below ends up chunking. See [`ChargePoint::AggregateAccumulation`]'s
-        // doc for why the charge precedes the `DISTINCT` check.
+        // Phase 1: evaluate every row's argument expression against `ctx`, charge
+        // `AggregateAccumulation` for each one, apply `DISTINCT`, and charge
+        // `ScratchBytes` for each value actually retained into `survivors` (see
+        // below) — otherwise unchanged from before within-group chunking existed,
+        // so the REST of what this phase spends is a pure function of `idxs`/`ctx`,
+        // identical whether or not phase 2 below ends up chunking. See
+        // [`ChargePoint::AggregateAccumulation`]'s doc for why that charge
+        // precedes the `DISTINCT` check.
         //
         // DISTINCT dedups by `SolutionTerm` equality, which the scratch interner's
         // Existing/Computed promotion rule (see `crate::scratch`'s module docs) makes
@@ -935,6 +942,19 @@ fn eval_aggregate<D: DatasetView + Sync>(
         // denote the same value. Cheaper than hashing the resolved `TermValue` (an
         // owned-string clone for a literal/IRI), and byte-identical to the prior
         // materializing implementation's `seen: DetHashSet<SolutionTerm>` retain.
+        //
+        // `ScratchBytes`: `ctx.scratch.value_of` below does not mint anything —
+        // it reads an already-interned or already-dataset-resident value back out
+        // as an OWNED clone (see [`crate::scratch::ScratchInterner::value_of`]),
+        // so [`EvalCtx::charge_scratch_growth`]'s automatic per-node charge, which
+        // meters only what [`crate::scratch::ScratchInterner::intern`] mints,
+        // never sees this buffer. Retaining `O(survivors)` owned `TermValue`
+        // clones for the rest of this group's fold is real, otherwise-uncharged
+        // memory — proportional to group cardinality and unbounded by any other
+        // dimension — so it is charged here explicitly, the same way a custom
+        // aggregate's own accumulator state is (see `eval_custom_aggregate`'s
+        // matching charge), through the SAME deterministic per-value proxy
+        // [`crate::scratch::value_bytes`] the arena's own automatic charge uses.
         for &i in idxs {
             let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
                 continue;
@@ -948,7 +968,15 @@ fn eval_aggregate<D: DatasetView + Sync>(
             {
                 continue;
             }
-            survivors.push(ctx.scratch.value_of(ctx.dataset, term));
+            let value = ctx.scratch.value_of(ctx.dataset, term);
+            if let Err(tripped) = ctx.charge_amount(
+                purrdf_core::ResourceDimension::ScratchBytes,
+                crate::scratch::value_bytes(&value),
+            ) {
+                ctx.expression_barrier.record(tripped);
+                return Ok(None);
+            }
+            survivors.push(value);
         }
     }
 
@@ -1092,12 +1120,17 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    // Phase 1 (sequential, unchanged): evaluate every row's positional argument
-    // tuple against `ctx`, charge `AggregateAccumulation` for each one, and
-    // apply `DISTINCT` on the full tuple. Exactly the loop that ran here
-    // before within-group chunking existed — see `eval_aggregate`'s matching
-    // phase-1 comment for why this keeps charge spend a pure function of
-    // `idxs`/`ctx` regardless of what phase 2 below does.
+    // Phase 1: evaluate every row's positional argument tuple against `ctx`,
+    // charge `AggregateAccumulation` for each one, apply `DISTINCT` on the full
+    // tuple, and charge `ScratchBytes` for each tuple actually retained into
+    // `survivors` — otherwise unchanged from before within-group chunking
+    // existed. See `eval_aggregate`'s matching phase-1 comment for why the REST
+    // of this phase's spend stays a pure function of `idxs`/`ctx` regardless of
+    // what phase 2 below does, and for why `survivors`' retained `TermValue`
+    // clones need their own `ScratchBytes` charge: `ctx.scratch.value_of` mints
+    // nothing, so [`EvalCtx::charge_scratch_growth`]'s automatic arena charge
+    // never sees them, and this per-group buffer is otherwise-uncharged memory
+    // proportional to the group's cardinality.
     let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
     let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args().len());
     let mut survivors: Vec<Vec<TermValue>> = Vec::new();
@@ -1127,6 +1160,16 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
             && !seen.insert(tuple.clone())
         {
             continue;
+        }
+        let tuple_bytes: u64 = tuple
+            .iter()
+            .map(crate::scratch::value_bytes)
+            .fold(0u64, u64::saturating_add);
+        if let Err(tripped) =
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
+        {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
         }
         survivors.push(tuple.clone());
     }
@@ -3910,6 +3953,36 @@ mod tests {
         assert_eq!(
             sequential, "1499.5",
             "median of 0..2999 is the mean of the two middle values 1499 and 1500"
+        );
+    }
+
+    /// `crate::stat_agg::LAST`'s counterpart of
+    /// [`stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`]: over a
+    /// large single group, forced-parallel and forced-sequential must agree, AND
+    /// the answer must be the group's LAST row, not its first — the one outcome
+    /// that would be silently wrong (with no local symptom — see
+    /// `crate::stat_agg`'s "FIRST/LAST" doc section) if
+    /// `crate::parallel::par_chunk_reduce_init`'s chunk-index-order reduce were
+    /// ever reversed, or if `LastAccumulator::combine`'s "`other` is always the
+    /// later chunk" assumption stopped holding.
+    #[test]
+    fn stat_agg_last_chunked_fold_forced_parallel_and_sequential_agree() {
+        const ROWS: i64 = 3000;
+        const NS: &str = "http://example.org/agg/";
+
+        let ds = stat_agg_integer_sequence_dataset(ROWS);
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (sequential, forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}LAST"));
+        assert_eq!(
+            sequential, forced_parallel,
+            "LAST's chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            sequential, "2999",
+            "LAST over row order s0..s2999 is s2999's value"
         );
     }
 

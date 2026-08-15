@@ -179,16 +179,20 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | `aggregate-accumulation-fuel-*` | `aggregate-accumulation` | the accumulation point **alone** — one aggregate expression (`SUM`) folding one implicit group of twelve rows, so the band contains one invocation charge and twelve accumulation charges |
 | `aggregate-custom-fuel-*` | `aggregate-accumulation` data, `aggregate-custom` query | the SAME group shape as `aggregate-accumulation-fuel-*`, folded through a registered custom aggregate instead of the built-in `SUM` — a direct fuel comparison between the two dispatch paths |
 | `aggregate-custom-scratch-bytes-*` | `aggregate-custom-scratch` data, `aggregate-custom` query | 1200 rows in one implicit group, above the evaluator's within-group chunk threshold — the custom accumulator's declared `ScratchBytes` state bound, charged once per live chunk, exercising the ONE dimension no built-in aggregate ever charges at all |
-
-The seven lanes above carry a `boundary` and an `over-bound` member but no
-`zero`; the section on the relation seam says why that is the honest shape for
-the property-function pair, and the aggregate section below says why the same
-shape holds for the aggregate pair.
 | `answer-rows-*` | `chain` | what the query commits to its answer sequence |
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
 | `remote-requests-*` | `federated` | requests issued to a federated endpoint |
 | `deadline-injected-*` | `chain` | deterministic stop-signal polling, independent of wall time |
+
+`property-function-invocation-fuel-*`, `property-function-row-fuel-*`,
+`property-function-parallel-fuel-*`, `aggregate-invocation-fuel-*`,
+`aggregate-accumulation-fuel-*`, `aggregate-custom-fuel-*` and
+`aggregate-custom-scratch-bytes-*` — seven lanes in the table above — carry a
+`boundary` and an `over-bound` member but no `zero`; the section on the
+relation seam says why that is the honest shape for the property-function
+lanes, and the aggregate section below says why the same shape holds for the
+aggregate lanes.
 
 ### RDF 1.2 — the statement layer is inside the perimeter
 

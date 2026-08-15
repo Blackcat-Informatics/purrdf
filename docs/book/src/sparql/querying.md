@@ -248,12 +248,22 @@ impl AggregateAccumulator for TotalAccumulator {
         Ok(())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        if let Ok(Some(TermValue::Literal { lexical_form, .. })) = other.finish()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.sum += n;
-        }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        // Recover `other`'s real state through `into_any` rather than
+        // re-deriving it from `finish()`'s lexical form: `finish()` is a
+        // lossy, string-typed answer, and re-parsing it is exactly the
+        // pattern this crate's own `agg_fn`/`stat_agg` merges avoid (see
+        // their "Real merges via `into_any`" docs). A running total happens
+        // to survive that round trip losslessly, but the type-recovered
+        // merge below is the pattern to copy for a fold whose finished
+        // answer is NOT itself sufficient mergeable state.
+        let other = other.into_any().downcast::<Self>().map_err(|_| {
+            EvalError::function(
+                "combine received a partial accumulator of a different concrete type",
+            )
+        })?;
+        self.sum += other.sum;
+        Ok(())
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {

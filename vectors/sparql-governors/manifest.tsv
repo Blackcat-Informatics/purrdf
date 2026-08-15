@@ -69,5 +69,5 @@ aggregate-accumulation-fuel-boundary	cases/aggregate-accumulation.ttl	cases/aggr
 aggregate-accumulation-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregate-accumulation.rq	none	fuel=44	over-bound	budget-exhausted fuel
 aggregate-custom-fuel-boundary	cases/aggregate-accumulation.ttl	cases/aggregate-custom.rq	aggregate	fuel=45	boundary	complete
 aggregate-custom-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregate-custom.rq	aggregate	fuel=44	over-bound	budget-exhausted fuel
-aggregate-custom-scratch-bytes-boundary	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=2112	boundary	complete
-aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=2111	over-bound	budget-exhausted scratch-bytes
+aggregate-custom-scratch-bytes-boundary	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92202	boundary	complete
+aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92201	over-bound	budget-exhausted scratch-bytes

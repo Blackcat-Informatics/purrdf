@@ -1096,7 +1096,7 @@ fn require_day_time_duration(dur: &Duration) -> Result<(), XsdError> {
     }
 }
 
-// ── Timezone adjustment (XPath F&O §9.5) ──────────────────────────────────────────
+// ── Timezone adjustment (XPath F&O §9.6) ──────────────────────────────────────────
 
 /// Validate and normalize an `fn:adjust-*-to-timezone` `$timezone` argument, given in
 /// seconds (the natural unit of a `dayTimeDuration`, which is what F&O types this
@@ -1129,7 +1129,7 @@ fn validate_timezone_seconds(
     Ok(Some(minutes as i32))
 }
 
-/// `fn:adjust-dateTime-to-timezone($input, $timezone)` (XPath F&O §9.5.2). `timezone`
+/// `fn:adjust-dateTime-to-timezone($input, $timezone)` (XPath F&O §9.6.1). `timezone`
 /// is given in seconds (a `dayTimeDuration` magnitude); `None` removes the timezone.
 /// If `dt` already has a timezone and `timezone` is `Some`, the local fields are
 /// shifted so the result denotes the **same instant**, expressed in the new offset
@@ -1176,7 +1176,7 @@ pub fn adjust_datetime_to_timezone(
     }
 }
 
-/// `fn:adjust-date-to-timezone($input, $timezone)` (XPath F&O §9.5.3). Same rule as
+/// `fn:adjust-date-to-timezone($input, $timezone)` (XPath F&O §9.6.2). Same rule as
 /// [`adjust_datetime_to_timezone`], applied to a date: when both sides have a
 /// timezone, the date is treated as midnight in its own offset, shifted to the new
 /// offset (which may roll the date to the previous or next day), and only the
@@ -1206,7 +1206,7 @@ pub fn adjust_date_to_timezone(d: &Date, timezone: Option<i64>) -> Result<Date, 
     }
 }
 
-/// `fn:adjust-time-to-timezone($input, $timezone)` (XPath F&O §9.5.4). Same rule as
+/// `fn:adjust-time-to-timezone($input, $timezone)` (XPath F&O §9.6.3). Same rule as
 /// [`adjust_datetime_to_timezone`], applied to a time: when both sides have a
 /// timezone, the time is combined with an arbitrary reference date (F&O's own
 /// worked example uses 1972-12-31; the date is discarded afterward, so any valid
@@ -1244,7 +1244,7 @@ pub fn adjust_time_to_timezone(t: &Time, timezone: Option<i64>) -> Result<Time, 
     }
 }
 
-// ── Duration ↔ calendar arithmetic (XPath F&O §10.6; XML Schema Appendix E) ───────
+// ── Duration ↔ calendar arithmetic (XPath F&O §9.7.5–9.7.14; XML Schema Appendix E) ─
 
 /// `op:add-yearMonthDuration-to-dateTime`. The day-of-month is clamped to the target
 /// month's last day when the original day does not exist there (XML Schema Appendix
@@ -1432,7 +1432,7 @@ pub fn subtract_day_time_duration_from_time(t: &Time, dur: &Duration) -> Result<
     })
 }
 
-// ── Instant subtraction → dayTimeDuration (XPath F&O §10.5) ──────────────────────
+// ── Instant subtraction → dayTimeDuration (XPath F&O §9.7.2–9.7.4) ───────────────
 
 /// `op:subtract-dateTimes`. Both operands must agree on whether they carry a
 /// timezone (both, or neither) — see `instant_diff`.
@@ -1495,7 +1495,7 @@ pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
     instant_diff(XsdDatatype::Time, &a_inst, &b_inst)
 }
 
-// ── Duration arithmetic (XPath F&O §10.4) ─────────────────────────────────────────
+// ── Duration arithmetic (XPath F&O §8.4) ─────────────────────────────────────────
 
 /// The two duration values must be the *same declared* `yearMonthDuration`/
 /// `dayTimeDuration` subtype. F&O defines `+`/`-`/`*`//` only for those two
@@ -2067,7 +2067,7 @@ mod tests {
         assert_eq!(dt.timezone_minutes(), Some(0));
     }
 
-    // ── fn:adjust-*-to-timezone (XPath F&O §9.5) ──────────────────────────────────
+    // ── fn:adjust-*-to-timezone (XPath F&O §9.6) ──────────────────────────────────
 
     #[test]
     fn adjust_datetime_shifts_same_instant() {
@@ -2257,6 +2257,44 @@ mod tests {
     }
 
     #[test]
+    fn day_time_duration_add_with_fractional_seconds() {
+        // `dt`'s seconds field and the duration's seconds component start at
+        // DIFFERENT scales (2 fractional digits vs. 3) — `add_seconds_decimal`
+        // must align them to the higher scale before adding rather than silently
+        // truncating either side, which would be a silent precision loss.
+        let dt = parse_datetime("2024-01-01T00:00:00.25Z").unwrap();
+        let delta = ymd(XsdDatatype::DayTimeDuration, "PT0.125S");
+        assert_eq!(
+            add_day_time_duration_to_datetime(&dt, &delta)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-01-01T00:00:00.375Z"
+        );
+        assert_eq!(
+            subtract_day_time_duration_from_datetime(&dt, &delta)
+                .unwrap()
+                .canonical_lexical(),
+            "2024-01-01T00:00:00.125Z"
+        );
+    }
+
+    #[test]
+    fn day_time_duration_add_to_time_with_fractional_seconds() {
+        // Same scale-alignment concern as
+        // `day_time_duration_add_with_fractional_seconds`, exercised through the
+        // time-only entry point (an independent call site of the same shared
+        // `add_seconds_decimal` helper).
+        let t = parse_time("00:00:00.5").unwrap();
+        let delta = ymd(XsdDatatype::DayTimeDuration, "PT0.125S");
+        assert_eq!(
+            add_day_time_duration_to_time(&t, &delta)
+                .unwrap()
+                .canonical_lexical(),
+            "00:00:00.625"
+        );
+    }
+
+    #[test]
     fn duration_to_calendar_arithmetic_rejects_wrong_subtype() {
         let dt = parse_datetime("2024-01-01T00:00:00Z").unwrap();
         let general = ymd(XsdDatatype::Duration, "P1Y1D");
@@ -2309,7 +2347,62 @@ mod tests {
         assert_eq!(dt.seconds().canonical_lexical(), "5400"); // 1.5 hours
     }
 
-    // ── Duration arithmetic (XPath F&O §10.4) ─────────────────────────────────────
+    /// `instant_diff` (shared by `subtract_datetimes`/`subtract_dates`/
+    /// `subtract_times`) must align mismatched fractional-second scales before
+    /// subtracting, exactly as `add_seconds_decimal` must — see
+    /// `day_time_duration_add_with_fractional_seconds`'s identical concern on the
+    /// addition side.
+    #[test]
+    fn subtract_datetimes_with_fractional_seconds() {
+        let a = parse_datetime("2024-01-01T00:00:00.5Z").unwrap();
+        let b = parse_datetime("2024-01-01T00:00:00.125Z").unwrap();
+        let d = subtract_datetimes(&a, &b).unwrap();
+        assert_eq!(d.seconds().canonical_lexical(), "0.375");
+
+        // Reversed operands: the sign flips, magnitude unchanged.
+        let d = subtract_datetimes(&b, &a).unwrap();
+        assert_eq!(d.seconds().canonical_lexical(), "-0.375");
+    }
+
+    #[test]
+    fn subtract_times_with_fractional_seconds() {
+        let a = parse_time("00:00:01.75").unwrap();
+        let b = parse_time("00:00:00.25").unwrap();
+        let d = subtract_times(&a, &b).unwrap();
+        assert_eq!(d.seconds().canonical_lexical(), "1.5");
+    }
+
+    /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `TypeMismatch`
+    /// when exactly one side carries a timezone — see `instant_diff`'s docs), pinned
+    /// independently of `subtract_datetimes_indeterminate_mix_is_error`: the dateTime
+    /// form is not the only caller of the shared `instant_diff` helper, and a defect
+    /// specific to the date-only zeroed-time-of-day path would have no other test to
+    /// catch it.
+    #[test]
+    fn subtract_dates_indeterminate_mix_is_error() {
+        let with_tz = parse_date("2024-01-01Z").unwrap();
+        let without_tz = parse_date("2024-01-01").unwrap();
+        assert!(subtract_dates(&with_tz, &without_tz).is_err());
+        assert!(subtract_dates(&without_tz, &with_tz).is_err());
+        // Both timezoned, and both untimezoned, are fine.
+        assert!(subtract_dates(&with_tz, &with_tz).is_ok());
+        assert!(subtract_dates(&without_tz, &without_tz).is_ok());
+    }
+
+    /// `op:subtract-times`'s twin of `subtract_dates_indeterminate_mix_is_error` —
+    /// see that test's doc comment for why the dateTime coverage alone does not
+    /// pin this.
+    #[test]
+    fn subtract_times_indeterminate_mix_is_error() {
+        let with_tz = parse_time("10:00:00Z").unwrap();
+        let without_tz = parse_time("10:00:00").unwrap();
+        assert!(subtract_times(&with_tz, &without_tz).is_err());
+        assert!(subtract_times(&without_tz, &with_tz).is_err());
+        assert!(subtract_times(&with_tz, &with_tz).is_ok());
+        assert!(subtract_times(&without_tz, &without_tz).is_ok());
+    }
+
+    // ── Duration arithmetic (XPath F&O §8.4) ─────────────────────────────────────
 
     #[test]
     fn duration_add_subtract_same_subtype() {
@@ -2365,6 +2458,42 @@ mod tests {
         let half = parse_decimal("0.5").unwrap();
         // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity).
         assert_eq!(multiply_duration(&ym, &half).unwrap().months(), 1);
+    }
+
+    /// `round_decimal_to_i64`'s "ties toward positive infinity" rule (mirroring
+    /// `fn:round`, XPath F&O §4.4.5 — see that function's doc comment), pinned on
+    /// the NEGATIVE side: `duration_multiply_and_divide` above only exercises a
+    /// positive tie (`0.5 → 1`), which cannot distinguish "round half away from
+    /// zero" from "round half toward positive infinity" — the two rules agree for
+    /// every positive tie and disagree for every negative one. `-0.5`/`-1.5`/`-2.5`
+    /// round to `0`/`-1`/`-2` (toward +infinity, i.e. AWAY from what "round half
+    /// away from zero" would give: `-1`/`-2`/`-3`).
+    #[test]
+    fn year_month_duration_multiply_rounds_negative_ties_toward_positive_infinity() {
+        let half = parse_decimal("0.5").unwrap();
+
+        let neg1 = ymd(XsdDatatype::YearMonthDuration, "-P1M");
+        assert_eq!(multiply_duration(&neg1, &half).unwrap().months(), 0);
+
+        let neg3 = ymd(XsdDatatype::YearMonthDuration, "-P3M");
+        assert_eq!(multiply_duration(&neg3, &half).unwrap().months(), -1);
+
+        let neg5 = ymd(XsdDatatype::YearMonthDuration, "-P5M");
+        assert_eq!(multiply_duration(&neg5, &half).unwrap().months(), -2);
+    }
+
+    /// Same negative-tie rule, reached through `divide_duration` rather than
+    /// `multiply_duration` — a different call site of the same
+    /// `round_decimal_to_i64` helper.
+    #[test]
+    fn year_month_duration_divide_rounds_negative_ties_toward_positive_infinity() {
+        let two = Decimal::from_parts(2, 0);
+        // -1 month / 2 = -0.5 → 0, not -1.
+        let neg1 = ymd(XsdDatatype::YearMonthDuration, "-P1M");
+        assert_eq!(divide_duration(&neg1, &two).unwrap().months(), 0);
+        // -3 months / 2 = -1.5 → -1, not -2.
+        let neg3 = ymd(XsdDatatype::YearMonthDuration, "-P3M");
+        assert_eq!(divide_duration(&neg3, &two).unwrap().months(), -1);
     }
 
     #[test]

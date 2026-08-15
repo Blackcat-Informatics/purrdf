@@ -136,7 +136,15 @@ pub struct ScratchInterner {
 /// so a ceiling compared against them would trip at a different point on a different
 /// allocator — which is not a governor. This function is a pure function of the value,
 /// so the same query over the same data mints the same number of bytes on every target.
-fn value_bytes(value: &TermValue) -> u64 {
+///
+/// `pub(crate)` (not private): [`crate::modifier`]'s aggregate phase-1 buffer
+/// reuses this exact proxy to charge its own retained [`TermValue`] clones
+/// against [`purrdf_core::ResourceDimension::ScratchBytes`] — those clones
+/// never pass through [`ScratchInterner::intern`] (they come back out through
+/// [`ScratchInterner::value_of`], which mints nothing), so `minted_bytes`
+/// alone would never see them; see `crate::modifier::eval_aggregate`'s doc
+/// comment for why that retained buffer needs its own charge.
+pub(crate) fn value_bytes(value: &TermValue) -> u64 {
     /// The per-term constant: the `ScratchId`, the index slot, and the enum
     /// discriminant, none of which vary with the value's payload.
     const TERM_OVERHEAD: u64 = 32;

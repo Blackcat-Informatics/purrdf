@@ -70,7 +70,8 @@ purrdf-minted one (PurRDF mints no vocabulary IRIs of its own; see
 [AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/AGENTS.md)'s
 "NOT an ontology" contract). Supply a `ProvenanceNamespace` — a `prefix` (the
 bare top-level JSON member key, and the XML namespace prefix) plus the XML
-namespace `iri` — as `serialize`/`to_json`/`to_xml`'s fourth argument.
+namespace `iri` — as `serialize`'s fourth argument (`to_json`/`to_xml` take it as
+their third: those two have no `format` parameter to pick).
 `ProvenanceNamespace::new` validates `prefix` as an XML Namespaces `NCName`
 (rejecting, among other things, `:`, whitespace, and the reserved `xml`/
 `xmlns` names) and `iri` as an absolute IRI, since `prefix` is spliced

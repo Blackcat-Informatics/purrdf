@@ -563,8 +563,8 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 45 cases total, of which 38 form zero, boundary, or over-bound lanes and the
-remaining seven are transport, relation, charge-seam, and wall-clock cases.
+are 49 cases total, of which 42 form zero, boundary, or over-bound lanes and the
+remaining 7 are transport, relation, charge-seam, and wall-clock cases.
 
 Boundaries are **measured, never authored**. For each caller-settable dimension the
 corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost (must
@@ -646,13 +646,15 @@ increment it. That restraint is what makes the number worth pinning.
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `6` — the version
+   this section describes, and the one every other step below re-verifies against —
+   then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3) or may now do (v4, v5). Do not scale
-   the old number.
+   against work this build may no longer do (v3) or may now do (v4, v5, v6). Do not
+   scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
    short.
