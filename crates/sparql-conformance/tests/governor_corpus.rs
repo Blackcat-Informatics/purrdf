@@ -1278,16 +1278,7 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
     let explanation = NativeSparqlEngine::new()
         .explain_query_with_property_functions(&dataset, &query, None, &registry)
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
-    let mut out = String::new();
-    for point in ChargePoint::ALL {
-        let total: u64 = explanation
-            .ledger()
-            .iter()
-            .map(|node| node.fuel_at(point))
-            .sum();
-        writeln!(out, "{point}\t{total}").expect("writing to a String cannot fail");
-    }
-    out
+    render_charge_decomposition(explanation.ledger())
 }
 
 /// [`charge_decomposition`]'s twin for the aggregate lane, which needs no injected seam:
@@ -1302,13 +1293,18 @@ fn charge_decomposition_dataset(case: &Case) -> String {
     let explanation = NativeSparqlEngine::new()
         .explain_query(&dataset, &query, None)
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    render_charge_decomposition(explanation.ledger())
+}
+
+/// The one place that sums a per-node ledger into a `.charges` record: both
+/// [`charge_decomposition`] and [`charge_decomposition_dataset`] differ only in how they
+/// obtain the ledger (through a property-function-wired explain call or a plain one), and
+/// share this render so a `.charges` format change cannot update one path and miss the
+/// other.
+fn render_charge_decomposition(ledger: &[purrdf_sparql_eval::governor::NodeCharges]) -> String {
     let mut out = String::new();
     for point in ChargePoint::ALL {
-        let total: u64 = explanation
-            .ledger()
-            .iter()
-            .map(|node| node.fuel_at(point))
-            .sum();
+        let total: u64 = ledger.iter().map(|node| node.fuel_at(point)).sum();
         writeln!(out, "{point}\t{total}").expect("writing to a String cannot fail");
     }
     out

@@ -854,6 +854,34 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_function_nested_inside_another_calls_arguments_still_trips_the_silent_guard() {
+        // The regression this pins: `visit_expression_parts`'s `FunctionCall` arm visits
+        // each argument as `ExpressionPart::Sub`, and `expression_reaches_custom_function`
+        // recurses into every `Sub`, so a `Function::Custom` call need not be the
+        // OUTERMOST call in the expression tree to be found — it can be buried inside
+        // another call's argument list. `CONCAT(<http://ex/customFn>(?n), "a")` nests the
+        // custom call one level down; if the walk only inspected an expression's own
+        // `Call` part and never descended into `FunctionCall` arguments, this query would
+        // slip the guard and forward under `SILENT`.
+        let source = LocalRemoteQuerySource::new();
+        let err = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
+             ?s <http://ex/name> ?n . \
+             FILTER(CONCAT(<http://ex/customFn>(?n), \"a\") = \"Xa\") } }",
+        )
+        .unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("custom scalar-function call inside a SERVICE SILENT body"),
+            "a custom call nested inside CONCAT's argument list must trip the same guard a \
+             top-level custom call does: {err}"
+        );
+    }
+
+    #[test]
     fn custom_aggregate_refusal_precedes_the_no_source_check() {
         // No remote source configured at all: the forwarding refusal must still win —
         // it is checked before the endpoint/source resolution, exactly like the

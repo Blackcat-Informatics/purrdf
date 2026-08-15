@@ -1131,7 +1131,8 @@ fn a_zero_fuel_ceiling_never_enters_the_relation_at_all() {
 // ---------------------------------------------------------------------------
 
 /// An integer literal, typed exactly as `RdfDatasetBuilder` mints one from a bare Turtle
-/// integer — the shape [`agg_group_dataset`]'s fixture and `SUM`'s numeric fold both expect.
+/// integer — the shape [`agg_group_dataset`]'s `ex:val` and `SUM`'s numeric fold both
+/// expect.
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 /// `groups × rows_per_group` rows, `ex:catN` grouping `ex:s{i}` into `groups` equal-sized
@@ -1139,6 +1140,11 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// `crate::modifier`'s own `group_aggregate_forced_parallel_and_sequential_agree` fixture
 /// uses, so a group's row count and a query's total row count are both exact, known
 /// quantities a test can assert against rather than approximate.
+///
+/// `ex:cat` is a plain (`xsd:string`) literal: it is a `GROUP BY` key only, never folded
+/// numerically, and `"catN"` is not a valid `xsd:integer` lexical form, so tagging it with
+/// that datatype would mint an ill-typed literal for no reason. `ex:val` is the one that
+/// feeds `SUM`, and it alone carries [`XSD_INTEGER`].
 fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let cat_pred = b.intern_iri(&format!("{EX}cat"));
@@ -1149,7 +1155,7 @@ fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
             let subject = b.intern_iri(&format!("{EX}s{i}"));
             let cat = b.intern_literal(RdfLiteral {
                 lexical_form: format!("cat{g}"),
-                datatype: Some(XSD_INTEGER.to_owned()),
+                datatype: None,
                 language: None,
                 direction: None,
             });

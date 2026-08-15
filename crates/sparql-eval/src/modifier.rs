@@ -1171,7 +1171,16 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
             ctx.expression_barrier.record(tripped);
             return Ok(None);
         }
-        survivors.push(tuple.clone());
+        // Move the tuple into `survivors` rather than cloning it a second time: the
+        // `seen` clone above (when `DISTINCT` is engaged) is the one genuinely
+        // unavoidable copy, because that set and this buffer are two independent
+        // owners of the same content. `tuple` is replaced with a fresh, correctly
+        // sized buffer so the next iteration's `tuple.clear()` still has the
+        // capacity this loop already paid for.
+        survivors.push(std::mem::replace(
+            &mut tuple,
+            Vec::with_capacity(agg.args().len()),
+        ));
     }
 
     // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)

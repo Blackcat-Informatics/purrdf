@@ -107,9 +107,7 @@ mod tests {
     fn declaration_contained_catches_a_panic_cleanly() {
         let error = without_panic_output(|| {
             declaration_contained("custom aggregate", "http://ex/agg", "arity", || {
-                panic!("payload");
-                #[allow(unreachable_code)]
-                0
+                panic!("payload")
             })
             .expect_err("a panicking read must not escape")
         });
@@ -140,11 +138,12 @@ mod tests {
     #[test]
     fn call_contained_catches_a_panic_cleanly() {
         let error = without_panic_output(|| {
-            call_contained("custom aggregate", "http://ex/agg", "finishing", || {
-                panic!("payload");
-                #[allow(unreachable_code)]
-                Ok::<i32, EvalError>(0)
-            })
+            call_contained(
+                "custom aggregate",
+                "http://ex/agg",
+                "finishing",
+                || -> Result<i32, EvalError> { panic!("payload") },
+            )
             .expect_err("a panicking call must not escape")
         });
         let message = error.to_string();
