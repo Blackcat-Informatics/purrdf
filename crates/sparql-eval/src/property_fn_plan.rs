@@ -45,6 +45,70 @@ use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::property_fn::{PfArity, PropertyFunctionRegistry};
 
+/// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
+///
+/// The planner admits two independent hazards in the same walk — a property-function
+/// call and a custom-aggregate call — and they are reported under two different
+/// diagnostic codes. A caller that reduced both to one opaque error (as this module
+/// used to) could only guess which contract to check a failure against; this is what a
+/// planner failure carries instead, so `crate::engine` and `crate::update`'s two
+/// admission call sites read it rather than hard-coding the property-function code for
+/// every failure this module can raise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanSeam {
+    /// A property-function call could not be admitted: an unregistered predicate IRI,
+    /// an arity mismatch between the call site and the relation's declaration, or a
+    /// chain no relation's declared modes can serve.
+    PropertyFunction,
+    /// A custom-aggregate call could not be admitted: an unregistered
+    /// `AggregateFunction::Custom` IRI, or a positional-argument count its registered
+    /// entry does not declare.
+    Aggregate,
+}
+
+/// A [`plan_query`]/[`plan_where_pattern`] admission failure, tagged with the
+/// [`PlanSeam`] that raised it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlanError {
+    pub(crate) seam: PlanSeam,
+    pub(crate) error: EvalError,
+}
+
+impl PlanError {
+    /// Tag `error` as a property-function admission failure.
+    fn property_function(error: EvalError) -> Self {
+        Self {
+            seam: PlanSeam::PropertyFunction,
+            error,
+        }
+    }
+
+    /// Tag `error` as a custom-aggregate admission failure.
+    fn aggregate(error: EvalError) -> Self {
+        Self {
+            seam: PlanSeam::Aggregate,
+            error,
+        }
+    }
+
+    /// The diagnostic code this failure must be reported under. The single chokepoint
+    /// both `crate::engine::PlanCache::prepare_with_relations` and
+    /// `crate::update::delete_insert` read, so the two admission call sites can never
+    /// again drift into hard-coding the wrong seam's code.
+    pub(crate) const fn diagnostic_code(&self) -> &'static str {
+        match self.seam {
+            PlanSeam::PropertyFunction => "native-sparql-property-function",
+            PlanSeam::Aggregate => "native-sparql-aggregate-function",
+        }
+    }
+}
+
+impl core::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.error, f)
+    }
+}
+
 /// Rewrite every property-function chain in `query` into a feasible order.
 ///
 /// The query is returned unchanged — and no work is done at all — when it carries no
@@ -52,9 +116,10 @@ use crate::property_fn::{PfArity, PropertyFunctionRegistry};
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] for an unregistered predicate IRI, an arity mismatch between
-/// the call site and the relation's declaration, or a chain no total order can serve.
-/// The same class of refusal for an `AggregateFunction::Custom(iri)` reached anywhere in
+/// A [`PlanError`] tagged [`PlanSeam::PropertyFunction`] for an unregistered predicate
+/// IRI, an arity mismatch between the call site and the relation's declaration, or a
+/// chain no total order can serve. The same class of refusal, tagged
+/// [`PlanSeam::Aggregate`], for an `AggregateFunction::Custom(iri)` reached anywhere in
 /// `query`: an unregistered IRI, or a positional-argument count `agg_registry`'s
 /// registered entry does not declare — refused HERE, at prepare time, before any governor
 /// charge (see [`plan_aggregate`]).
@@ -62,7 +127,7 @@ pub(crate) fn plan_query(
     query: &Query,
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
-) -> Result<Option<Query>, EvalError> {
+) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Ask { pattern, .. }
@@ -96,15 +161,16 @@ pub(crate) fn plan_query(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] for an unregistered predicate IRI, an arity mismatch
-/// between the call site and the relation's declaration, or a chain no total order
-/// can serve. The same class of refusal for a reachable `AggregateFunction::Custom`
-/// — see [`plan_query`]'s doc.
+/// A [`PlanError`] tagged [`PlanSeam::PropertyFunction`] for an unregistered predicate
+/// IRI, an arity mismatch between the call site and the relation's declaration, or a
+/// chain no total order can serve. The same class of refusal, tagged
+/// [`PlanSeam::Aggregate`], for a reachable `AggregateFunction::Custom` — see
+/// [`plan_query`]'s doc.
 pub(crate) fn plan_where_pattern(
     pattern: &GraphPattern,
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
-) -> Result<Option<GraphPattern>, EvalError> {
+) -> Result<Option<GraphPattern>, PlanError> {
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
     // entirely on the property-function-only check, and its admission (below,
@@ -142,7 +208,7 @@ fn plan_pattern(
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
-) -> Result<GraphPattern, EvalError> {
+) -> Result<GraphPattern, PlanError> {
     // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
     // residual data written between two calls), which is exactly the shape the parser
     // assembles a triples block containing calls into. Anything else recurses
@@ -223,7 +289,7 @@ fn order_chain(
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
-) -> Result<GraphPattern, EvalError> {
+) -> Result<GraphPattern, PlanError> {
     let mut bound = outer.clone();
     let mut remaining: Vec<Atom<'_>> = atoms;
     let mut ordered: Vec<&GraphPattern> = Vec::with_capacity(remaining.len());
@@ -248,20 +314,23 @@ fn order_chain(
             };
             let relation = resolve(call, relations)?;
             let declared_arity =
-                crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
+                crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())
+                    .map_err(PlanError::property_function)?;
             check_arity(call, declared_arity)?;
             let mode = invocation_mode(call, &bound);
             let modes =
                 crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
                     relation.modes().to_vec()
-                })?;
+                })
+                .map_err(PlanError::property_function)?;
             if !modes.iter().any(|declared| declared.subsumes(mode)) {
                 continue;
             }
             let rows_bound =
                 crate::property_fn::declaration_contained(&call.iri, "row bound", || {
                     relation.rows_per_invocation(mode)
-                })?;
+                })
+                .map_err(PlanError::property_function)?;
             let key = (rows_bound, call.iri.as_str(), atom.position);
             if best.is_none_or(|(_, current)| key < current) {
                 best = Some((index, key));
@@ -350,7 +419,7 @@ fn stuck(
     remaining: &[Atom<'_>],
     relations: Option<&PropertyFunctionRegistry>,
     bound: &DetHashSet<Variable>,
-) -> EvalError {
+) -> PlanError {
     let mut described: Vec<String> = Vec::new();
     for atom in remaining {
         let Some(call) = atom.call else {
@@ -392,10 +461,10 @@ fn stuck(
             declared.join(", ")
         ));
     }
-    EvalError::function(format!(
+    PlanError::property_function(EvalError::function(format!(
         "no feasible evaluation order exists for this group's property-function call(s): {}",
         described.join("; ")
-    ))
+    )))
 }
 
 /// Resolve a call's IRI, or report the admission failure that an unregistered IRI is.
@@ -406,28 +475,28 @@ fn stuck(
 fn resolve<'r>(
     call: &PropertyFunctionCall,
     relations: Option<&'r PropertyFunctionRegistry>,
-) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, EvalError> {
+) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
     relations
         .and_then(|registry| registry.resolve(&call.iri))
         .ok_or_else(|| {
-            EvalError::function(format!(
+            PlanError::property_function(EvalError::function(format!(
                 "no property function is registered for <{}>",
                 call.iri
-            ))
+            )))
         })
 }
 
 /// Check a call site's argument counts against the relation's declaration.
-fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), EvalError> {
+fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), PlanError> {
     let supplied = PfArity::new(call.subject_args.len(), call.object_args.len());
     if declared == supplied {
         return Ok(());
     }
-    Err(EvalError::function(format!(
+    Err(PlanError::property_function(EvalError::function(format!(
         "property function <{}> is declared with {declared} argument(s); the call site supplies \
          {supplied}",
         call.iri
-    )))
+    ))))
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +510,7 @@ fn map_children(
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
-) -> Result<GraphPattern, EvalError> {
+) -> Result<GraphPattern, PlanError> {
     let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
         plan_pattern(child, relations, agg_registry, outer).map(Box::new)
     };
@@ -553,7 +622,7 @@ fn map_children(
                             )?),
                         })
                     })
-                    .collect::<Result<Vec<_>, EvalError>>()?,
+                    .collect::<Result<Vec<_>, PlanError>>()?,
             }
         }
         // A sub-`SELECT` is its own scope: a variable bound outside it is not visible
@@ -595,7 +664,7 @@ fn map_children(
                             plan_aggregate(aggregate, relations, agg_registry, &scope)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, EvalError>>()?,
+                    .collect::<Result<Vec<_>, PlanError>>()?,
             }
         }
         // A `SERVICE` body is forwarded to a remote endpoint rather than evaluated
@@ -619,7 +688,7 @@ fn plan_expression(
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
-) -> Result<Expression, EvalError> {
+) -> Result<Expression, PlanError> {
     // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
     // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
     // has a `Custom` aggregate but no property-function call must still reach
@@ -661,19 +730,19 @@ fn plan_expression(
             haystack
                 .iter()
                 .map(|item| plan_expression(item, relations, agg_registry, outer))
-                .collect::<Result<Vec<_>, EvalError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
                 .map(|item| plan_expression(item, relations, agg_registry, outer))
-                .collect::<Result<Vec<_>, EvalError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::FunctionCall(function, args) => Expression::FunctionCall(
             function.clone(),
             args.iter()
                 .map(|arg| plan_expression(arg, relations, agg_registry, outer))
-                .collect::<Result<Vec<_>, EvalError>>()?,
+                .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::NamedNode(_)
         | Expression::Literal(_)
@@ -693,37 +762,38 @@ fn plan_expression(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] naming the IRI, for an unregistered
-/// `AggregateFunction::Custom` IRI or a supplied argument count its registered
-/// entry's declared [`crate::user_fn::Arity`] does not accept. Also propagates
+/// A [`PlanError`] tagged [`PlanSeam::Aggregate`] naming the IRI, for an unregistered
+/// `AggregateFunction::Custom` IRI or a supplied argument count its registered entry's
+/// declared [`crate::user_fn::Arity`] does not accept. Also propagates
 /// [`plan_expression`]'s own errors from rewriting the argument list.
 fn plan_aggregate(
     aggregate: &AggregateExpression,
     relations: Option<&PropertyFunctionRegistry>,
     agg_registry: Option<&AggregateRegistry>,
     outer: &DetHashSet<Variable>,
-) -> Result<AggregateExpression, EvalError> {
+) -> Result<AggregateExpression, PlanError> {
     if let AggregateFunction::Custom(iri) = &aggregate.function {
         let iri_str = iri.as_str();
         let Some(custom) = agg_registry.and_then(|registry| registry.resolve(iri_str)) else {
-            return Err(EvalError::function(format!(
+            return Err(PlanError::aggregate(EvalError::function(format!(
                 "no custom aggregate is registered for <{iri_str}>"
-            )));
+            ))));
         };
-        let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)?;
+        let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)
+            .map_err(PlanError::aggregate)?;
         let supplied = aggregate.args().len();
         if !declared.accepts(supplied) {
-            return Err(EvalError::function(format!(
+            return Err(PlanError::aggregate(EvalError::function(format!(
                 "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call \
                  site supplies {supplied}"
-            )));
+            ))));
         }
     }
     let args = aggregate
         .args()
         .iter()
         .map(|e| plan_expression(e, relations, agg_registry, outer))
-        .collect::<Result<Vec<_>, EvalError>>()?;
+        .collect::<Result<Vec<_>, PlanError>>()?;
     // `plan_expression` rewrites each argument in place and never changes the
     // argument COUNT, so this can never turn a valid `aggregate` into an
     // invalid one — the `AggregateExpression::new` call below cannot fail.

@@ -378,6 +378,68 @@ fn unregistered_custom_aggregate_iri_is_refused_at_prepare_time_naming_the_iri()
         "the refusal must name the IRI: {}",
         error.message
     );
+    // The planner admits BOTH a property-function call and a custom-aggregate call
+    // in the same walk (`crate::property_fn_plan::plan_query`); this failure must
+    // be attributed to the AGGREGATE seam, never reported under the
+    // property-function code a caller matching on the documented contract would
+    // otherwise be unable to see it under.
+    assert_eq!(
+        error.code, "native-sparql-aggregate-function",
+        "an unregistered custom aggregate must report the aggregate code, not the \
+         property-function code: {error:?}"
+    );
+}
+
+/// The arity-mismatch twin of the unregistered-IRI refusal above: a REGISTERED
+/// custom aggregate, called with the wrong positional-argument count, must also be
+/// refused at prepare time under the aggregate code — not merely the unregistered
+/// case.
+#[test]
+fn custom_aggregate_arity_mismatch_is_refused_at_prepare_time_under_the_aggregate_code() {
+    let reg = registry();
+    let engine = NativeSparqlEngine::new();
+    // SUM_IRI is declared `Arity::Exact(1)`; two positional arguments is a mismatch.
+    let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
+    let options = with_aggregates(&reg);
+    let error = engine
+        .prepare_query_with_options(&query, None, options)
+        .expect_err("an arity mismatch must be refused at prepare time");
+    assert_eq!(
+        error.code, "native-sparql-aggregate-function",
+        "an arity mismatch on a registered custom aggregate must still report the \
+         aggregate code: {error:?}"
+    );
+    assert!(
+        error.message.contains(SUM_IRI),
+        "the refusal must name the IRI: {}",
+        error.message
+    );
+}
+
+/// The regression control for both tests above: an unregistered PROPERTY-FUNCTION
+/// call must still report the property-function code, never the aggregate code —
+/// the fix that routes an aggregate failure to its own code must not have
+/// widened to swallow the property-function seam too.
+#[test]
+fn unregistered_property_function_still_reports_the_property_function_code() {
+    let engine = NativeSparqlEngine::new().with_parser_options(purrdf_sparql_eval::ParserOptions {
+        extension_fn_namespaces: vec![],
+        property_fn_namespaces: vec![format!("{EX}pf/")],
+        property_fn_iris: Vec::new(),
+    });
+    let ds = dataset();
+    let error = engine
+        .query_with_options_view(
+            &*ds,
+            request(&format!("SELECT ?s WHERE {{ ?s <{EX}pf/nope> ?v }}")),
+            QueryOptions::EMPTY,
+        )
+        .expect_err("nothing is registered under the configured namespace");
+    assert_eq!(
+        error.code, "native-sparql-property-function",
+        "an unregistered property function must still report the property-function \
+         code: {error:?}"
+    );
 }
 
 // ── None ≡ Some(empty) ───────────────────────────────────────────────────────

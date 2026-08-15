@@ -215,7 +215,7 @@ impl PlanCache {
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
         let planned = crate::property_fn_plan::plan_query(&parsed, relations, aggregates)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+            .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
         let prepared = Arc::new(PreparedQuery {
             query: planned.unwrap_or(parsed),
             relations: fingerprint,

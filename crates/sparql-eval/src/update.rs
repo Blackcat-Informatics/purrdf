@@ -496,7 +496,7 @@ fn delete_insert(
         cfg.options.property_functions,
         cfg.options.aggregates,
     )
-    .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
     let ctx = EvalCtx::new(&*snap).with_order_cache(cfg.order_cache);
@@ -1525,5 +1525,129 @@ mod tests {
             quad_set(&m).is_empty(),
             "the second op saw the first's insert"
         );
+    }
+
+    // ── property-function / custom-aggregate admission (an UPDATE's WHERE is a
+    //    triple-pattern context exactly like a query's — see `delete_insert`'s
+    //    `plan_where_pattern` call) ────────────────────────────────────────────
+
+    /// An unregistered `AGG(<iri>, …)` reached through an UPDATE's `WHERE` (nested
+    /// inside a sub-`SELECT`'s `GROUP BY`, exactly as the H4 reproduction shape
+    /// reads) must be refused at PREPARE time — before `m.freeze()`'s snapshot is
+    /// even evaluated — under the AGGREGATE diagnostic code, and it must spend
+    /// EXACTLY ZERO of a governed request's budget: every dimension `QueryGovernors
+    /// ::METERED` engages is asserted at zero, not merely "the request failed",
+    /// because a coarse assertion would not catch an admission failure that ran
+    /// after a charge had already landed.
+    #[test]
+    fn unregistered_aggregate_in_update_where_is_refused_with_the_aggregate_code_and_zero_charge() {
+        let mut m = mut_with(&[]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let state = Arc::new(GovernorState::new(
+            &crate::governor::QueryGovernors::METERED,
+        ));
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: Some(&state),
+            options: QueryOptions::EMPTY,
+        };
+        let upd = parse(
+            "INSERT { ex:x ex:p ?a } WHERE { \
+                 SELECT (AGG(<http://example.org/agg#nope>, ?v) AS ?a) \
+                 WHERE { ex:s ex:val ?v } GROUP BY ?v \
+             }",
+        );
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-aggregate-function");
+        // Nothing applied.
+        assert_eq!(
+            quad_set(&m),
+            before,
+            "an admission refusal must apply nothing"
+        );
+        // And nothing was CHARGED: a refusal that ran after any charge point would
+        // still leave the store untouched (mutation is applied only at the very
+        // end), so the zero-mutation assertion above cannot by itself distinguish
+        // "refused before evaluation" from "refused after the WHERE was fully
+        // evaluated, metered, and then discarded". The governor ledger can.
+        for dimension in ResourceDimension::ALL {
+            assert_eq!(
+                state.consumed_in(dimension),
+                0,
+                "an admission refusal consumed {dimension:?}, so evaluation ran after all"
+            );
+        }
+    }
+
+    /// The regression control for the test above: an unregistered PROPERTY-FUNCTION
+    /// call reached through the identical UPDATE `WHERE` position must still report
+    /// the property-function code, not the aggregate code the fix above introduces.
+    #[test]
+    fn unregistered_property_function_in_update_where_still_reports_the_property_function_code() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        // A namespace-declared relation with NOTHING registered under it: the
+        // specific IRI still parses as a call node (the namespace claims it), and
+        // is refused as unregistered — see
+        // `property_fn_eval::an_unregistered_iri_under_a_configured_namespace_is_refused_before_evaluation`
+        // for the query-path twin this mirrors.
+        let registry = crate::property_fn::PropertyFunctionRegistry::new();
+        let options = QueryOptions {
+            property_functions: Some(&registry),
+            ..QueryOptions::EMPTY
+        };
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: None,
+            options,
+        };
+        let parser_options = purrdf_sparql_algebra::ParserOptions {
+            extension_fn_namespaces: vec![],
+            property_fn_namespaces: vec!["http://ex/pf/".to_owned()],
+            property_fn_iris: Vec::new(),
+        };
+        let upd = SparqlParser::new()
+            .parse_update_with(
+                "PREFIX ex: <http://ex/>\n\
+                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://ex/pf/split> ?a }",
+                &parser_options,
+            )
+            .expect("update parses: the namespace claims the predicate as a call node");
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-property-function");
+    }
+
+    /// A custom aggregate that IS registered, called with the wrong argument count,
+    /// through an UPDATE's `WHERE` — the arity-mismatch admission failure must
+    /// carry the aggregate code too, not just the unregistered-IRI case.
+    #[test]
+    fn custom_aggregate_arity_mismatch_in_update_where_carries_the_aggregate_code() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates("http://ex/agg#");
+        let options = QueryOptions {
+            aggregates: Some(&registry),
+            ..QueryOptions::EMPTY
+        };
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: None,
+            options,
+        };
+        // MEDIAN is declared `Arity::Exact(1)`; supplying two positional arguments
+        // is an arity mismatch, not an unregistered IRI.
+        let upd = parse(
+            "INSERT { ex:x ex:p ?a } WHERE { \
+                 SELECT (AGG(<http://ex/agg#MEDIAN>, ?v, ?w) AS ?a) \
+                 WHERE { ex:s ex:val ?v . ex:s ex:val2 ?w } GROUP BY ?v ?w \
+             }",
+        );
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-aggregate-function");
     }
 }
