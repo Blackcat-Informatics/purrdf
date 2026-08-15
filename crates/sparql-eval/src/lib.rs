@@ -124,6 +124,7 @@ pub mod user_fn;
 // re-export block.
 pub use agg_fn::{
     AggDescriptor, AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
+    ScalarvalKind, ScalarvalSpec,
 };
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
 pub use error::EvalError;

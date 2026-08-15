@@ -83,7 +83,7 @@ impl CustomAggregate for SumAggregate {
     fn state_bound(&self) -> u64 {
         0
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(SumAccumulator { total: 0 })
     }
 }
@@ -150,7 +150,7 @@ impl CustomAggregate for WeightedSumAggregate {
     fn state_bound(&self) -> u64 {
         0
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(WeightedSumAccumulator { total: 0 })
     }
 }
@@ -614,15 +614,15 @@ fn group_by_query_computes_several_statistical_members_per_group() {
 }
 
 #[test]
-fn percentile_two_argument_form_end_to_end() {
+fn percentile_named_scalarval_form_end_to_end() {
     let reg = statistical_registry();
     let ds = stat_dataset();
     let query = format!(
-        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v, 0.5) AS ?p) \
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.5) AS ?p) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
     let result = run(&ds, &query, with_aggregates(&reg));
-    // p=0.5 over {1,2,3,4} is the same interpolated median as MEDIAN itself.
+    // P=0.5 over {1,2,3,4} is the same interpolated median as MEDIAN itself.
     assert_eq!(stat_lex(&rows(&result)[0], 0), "2.5");
 }
 
@@ -631,14 +631,72 @@ fn percentile_out_of_range_p_is_unbound_not_a_hard_error() {
     let reg = statistical_registry();
     let ds = stat_dataset();
     let query = format!(
-        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v, 1.5) AS ?p) \
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=1.5) AS ?p) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
     let result = run(&ds, &query, with_aggregates(&reg));
     assert!(
         rows(&result)[0][0].is_none(),
-        "p outside [0, 1] poisons the fold to unbound, never a query-aborting error"
+        "P outside [0, 1] poisons the fold to unbound, never a query-aborting error"
     );
+}
+
+/// A missing required scalarval (`PERCENTILE` declares `P`) is refused at
+/// PREPARE time, under the aggregate diagnostic code — never a runtime poison.
+#[test]
+fn percentile_missing_p_is_refused_at_prepare_time() {
+    let reg = statistical_registry();
+    let engine = NativeSparqlEngine::new();
+    let query =
+        format!("SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v) AS ?p) WHERE {{ ?s <{EX}val> ?v }}");
+    let error = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect_err("a missing required scalarval must be refused at prepare time");
+    assert_eq!(error.code, "native-sparql-aggregate-function");
+    assert!(error.message.contains('P'), "{}", error.message);
+}
+
+/// An unrecognized scalarval name is refused at prepare time too, naming the
+/// aggregate — the sibling refusal to a missing one.
+#[test]
+fn percentile_unknown_scalarval_name_is_refused_at_prepare_time() {
+    let reg = statistical_registry();
+    let engine = NativeSparqlEngine::new();
+    let query =
+        format!("SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; Q=0.5) AS ?p) WHERE {{ ?s <{EX}val> ?v }}");
+    let error = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect_err("an unrecognized scalarval name must be refused at prepare time");
+    assert_eq!(error.code, "native-sparql-aggregate-function");
+}
+
+/// A duplicate scalarval name is refused at prepare time.
+#[test]
+fn percentile_duplicate_scalarval_is_refused_at_prepare_time() {
+    let reg = statistical_registry();
+    let engine = NativeSparqlEngine::new();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.5; P=0.9) AS ?p) WHERE {{ ?s <{EX}val> ?v }}"
+    );
+    let error = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect_err("a duplicate scalarval name must be refused at prepare time");
+    assert_eq!(error.code, "native-sparql-aggregate-function");
+}
+
+/// A wrong-typed scalarval value (a string where `PERCENTILE`'s `P` declares
+/// `Numeric`) is refused at prepare time.
+#[test]
+fn percentile_wrong_typed_scalarval_is_refused_at_prepare_time() {
+    let reg = statistical_registry();
+    let engine = NativeSparqlEngine::new();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=\"high\") AS ?p) WHERE {{ ?s <{EX}val> ?v }}"
+    );
+    let error = engine
+        .prepare_query_with_options(&query, None, with_aggregates(&reg))
+        .expect_err("a wrong-typed scalarval value must be refused at prepare time");
+    assert_eq!(error.code, "native-sparql-aggregate-function");
 }
 
 #[test]
@@ -646,7 +704,7 @@ fn topk_end_to_end() {
     let reg = statistical_registry();
     let ds = stat_dataset();
     let query = format!(
-        "SELECT (AGG(<{STAT_NS}TOPK>, ?v, 2) AS ?top) \
+        "SELECT (AGG(<{STAT_NS}TOPK>, ?v; K=2) AS ?top) \
          WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
     );
     let result = run(&ds, &query, with_aggregates(&reg));
@@ -811,7 +869,7 @@ impl CustomAggregate for ZeroArityAggregate {
     fn state_bound(&self) -> u64 {
         0
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(Self)
     }
 }
@@ -930,7 +988,7 @@ impl CustomAggregate for ProductAggregate {
     fn state_bound(&self) -> u64 {
         0
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(ProductAccumulator { total: 1 })
     }
 }

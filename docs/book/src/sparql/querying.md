@@ -219,7 +219,7 @@ impl CustomAggregate for TotalAggregate {
     fn state_bound(&self) -> u64 {
         0 // stateless besides the running total
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(TotalAccumulator { sum: 0 })
     }
 }
@@ -245,13 +245,38 @@ let result = engine.query_with_options_view(
 )?;
 ```
 
-An `AGG(<iri>, …)` call to an unregistered IRI, or with the wrong argument
-count, is refused when the query is **prepared** — before any budget unit is
+An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument
+count, or with an invalid `; NAME=value` scalarval clause (an unrecognized
+name, a duplicate name, a missing required name, or a wrong-typed value — see
+below), is refused when the query is **prepared** — before any budget unit is
 spent — and the prepared plan carries the registry's fingerprint, so a plan
 admitted under one registry can never silently run under another (see
 `purrdf-sparql-eval`'s `agg_fn` module docs for the full trust-boundary and
 determinism contract, including `into_any`'s role in merging structural state
 a fold's finished answer alone cannot reconstruct).
+
+### Named scalar-value parameters
+
+Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing
+`; NAME=value` clauses — a named, per-aggregation scalar parameter, generalizing
+`GROUP_CONCAT`'s own `; SEPARATOR="…"` (SPARQL's existing precedent for a named
+scalar aggregate parameter) to any custom aggregate: `AGG(<ns>PERCENTILE, ?x;
+P=0.95)`, `AGG(<ns>TOPK, ?x; K=3)`. `NAME` is matched case-insensitively and
+stored upper-cased; `value` is any SPARQL literal, so a numeric scalarval keeps
+its natural datatype. Unlike a positional argument, a scalarval is evaluated
+**once for the whole aggregation**, never per row — the correct semantics for
+a parameter like a percentile rank or a "top k" count, which must be one fixed
+value across the group, not a per-row expression the query author merely
+intends to hold constant.
+
+A registered aggregate declares which names it accepts via
+`CustomAggregate::scalarvals`, returning a slice of `ScalarvalSpec { name,
+kind }` (`kind` is `ScalarvalKind::Numeric` or `ScalarvalKind::String`); every
+declared name is required. `CustomAggregate::init` receives the call site's
+scalarvals already resolved to `TermValue` and already validated against that
+declaration, so an accumulator can read them back by name
+(`scalarvals.iter().find(|(k, _)| k == "P")`) without re-checking type or
+presence.
 
 `AGG(<iri>, …)` execution is governed like any other fold: profile v6 adds two
 charge points — `aggregate-invocation` (once per group per aggregate
@@ -295,22 +320,23 @@ Per-member semantics:
 - **`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between
   the two closest ranks — for an even-sized group this is exactly the mean of
   the two middle values.
-- **`PERCENTILE`** takes a second argument, `AGG(<ns>PERCENTILE, ?x, ?p)`: `p`
-  is evaluated per row like any other aggregate argument, but must be the SAME
-  value on every row the group folds (and within `[0, 1]`) — a group that
-  disagrees on `p` poisons to unbound, the same "poison, don't abort"
-  discipline every numeric member uses.
+- **`PERCENTILE`** takes a named scalarval, `AGG(<ns>PERCENTILE, ?x; P=0.95)`:
+  `P` is resolved once for the whole aggregation (never per row — see "Named
+  scalar-value parameters" above); a `P` outside `[0, 1]` poisons to unbound,
+  the same "poison, don't abort" discipline every numeric member uses. A
+  missing or non-numeric `P` is refused at prepare time.
 - **`MODE`** works over any term kind, counted by RDF term identity (not value
   equality — `"5"^^xsd:integer` and `"05"^^xsd:integer` count as two different
   terms). A tie is broken toward the smallest term under the same total order
   `MIN`/`ORDER BY` use.
 - **`FIRST`/`LAST`** work over any term kind, in input row order.
-- **`TOPK`** takes a second argument, `AGG(<ns>TOPK, ?x, ?k)`: `k` is a
-  positive `xsd:integer`, constant across the group. Since every SPARQL
-  aggregate yields exactly one RDF term, `TOPK` answers the same way
-  `GROUP_CONCAT` answers a multi-valued question — the top `k` values, in
-  descending order, with their lexical forms joined by a single fixed space
-  separator.
+- **`TOPK`** takes a named scalarval, `AGG(<ns>TOPK, ?x; K=3)`: `K` must be a
+  positive `xsd:integer`, resolved once for the whole aggregation (a `K ≤ 0`
+  poisons to unbound; a missing or non-integer `K` is refused at prepare
+  time). Since every SPARQL aggregate yields exactly one RDF term, `TOPK`
+  answers the same way `GROUP_CONCAT` answers a multi-valued question — the
+  top `k` values, in descending order, with their lexical forms joined by a
+  single fixed space separator.
 
 All ten declare `Volatility::Stable` and merge partial folds through real,
 type-recovered structural state (`AggregateAccumulator::into_any`) rather than

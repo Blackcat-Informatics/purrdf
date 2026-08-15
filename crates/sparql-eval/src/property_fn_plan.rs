@@ -36,13 +36,16 @@
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
+    AggregateExpression, AggregateFunction, Expression, GraphPattern, Literal, NamedNodePattern,
     OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 
 use crate::DetHashSet;
-use crate::agg_fn::AggregateRegistry;
+use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
+use crate::convert::literal_to_value;
 use crate::error::EvalError;
+use crate::expr::xsd_of;
+use crate::modifier::is_numeric_xsd;
 use crate::property_fn::{PfArity, PropertyFunctionRegistry};
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
@@ -753,18 +756,20 @@ fn plan_expression(
 
 /// Rewrite the expression an aggregate reduces over, and — for
 /// [`AggregateFunction::Custom`] — ADMIT the call at prepare time: refuse an
-/// unregistered IRI or a positional-argument count `agg_registry`'s registered
-/// entry does not declare, before any governor charge. The built-in-vs-custom
+/// unregistered IRI, a positional-argument count `agg_registry`'s registered
+/// entry does not declare, or an invalid `; NAME=value` scalarval clause (see
+/// [`validate_scalarvals`]), before any governor charge. The built-in-vs-custom
 /// admission asymmetry mirrors `crate::property_fn_plan`'s own for a relation: a
 /// built-in's arity is checked structurally by the parser (`SUM`/`AVG`/…
-/// accept exactly one expression), so only `Custom`'s host-declared arity needs
-/// checking here.
+/// accept exactly one expression), so only `Custom`'s host-declared arity and
+/// scalarvals need checking here.
 ///
 /// # Errors
 ///
 /// A [`PlanError`] tagged [`PlanSeam::Aggregate`] naming the IRI, for an unregistered
-/// `AggregateFunction::Custom` IRI or a supplied argument count its registered entry's
-/// declared [`crate::user_fn::Arity`] does not accept. Also propagates
+/// `AggregateFunction::Custom` IRI, a supplied argument count its registered entry's
+/// declared [`crate::user_fn::Arity`] does not accept, or an invalid scalarval (see
+/// [`validate_scalarvals`]'s docs for the four ways one is refused). Also propagates
 /// [`plan_expression`]'s own errors from rewriting the argument list.
 fn plan_aggregate(
     aggregate: &AggregateExpression,
@@ -788,6 +793,10 @@ fn plan_aggregate(
                  site supplies {supplied}"
             ))));
         }
+        let declared_scalarvals = crate::agg_fn::scalarvals_contained(custom.as_ref(), iri_str)
+            .map_err(PlanError::aggregate)?;
+        validate_scalarvals(iri_str, &aggregate.scalarvals, &declared_scalarvals)
+            .map_err(PlanError::aggregate)?;
     }
     let args = aggregate
         .args()
@@ -804,6 +813,82 @@ fn plan_aggregate(
         aggregate.distinct,
     )
     .expect("plan_expression preserves argument count, so arity stays valid"))
+}
+
+/// Validate a [`AggregateFunction::Custom`] call's `; NAME=value` scalarval
+/// clauses (`supplied`) against `<iri>`'s registered
+/// [`crate::agg_fn::CustomAggregate::scalarvals`] declaration (`declared`), at
+/// PREPARE time — called from [`plan_aggregate`], before any governor charge.
+///
+/// Four ways a call is refused, checked in this order:
+/// 1. **Duplicate name** — the same upper-cased `NAME` supplied twice.
+/// 2. **Unknown name** — a supplied name `declared` does not list.
+/// 3. **Wrong-typed value** — a supplied value whose datatype does not match
+///    its [`ScalarvalSpec::kind`] (e.g. a string where [`ScalarvalKind::Numeric`]
+///    is declared).
+/// 4. **Missing required name** — every declared name is required (see
+///    [`crate::agg_fn::CustomAggregate::scalarvals`]'s docs): a `declared` name
+///    with no matching entry in `supplied`.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] naming `iri` and the offending scalarval, for any of
+/// the four cases above.
+fn validate_scalarvals(
+    iri: &str,
+    supplied: &[(String, Literal)],
+    declared: &[ScalarvalSpec],
+) -> Result<(), EvalError> {
+    let mut seen: DetHashSet<&str> = DetHashSet::default();
+    for (name, value) in supplied {
+        if !seen.insert(name.as_str()) {
+            return Err(EvalError::function(format!(
+                "custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"
+            )));
+        }
+        let Some(spec) = declared.iter().find(|spec| spec.name == name) else {
+            return Err(EvalError::function(format!(
+                "custom aggregate <{iri}> does not accept a scalarval named `{name}`"
+            )));
+        };
+        if !scalarval_value_matches_kind(value, spec.kind) {
+            return Err(EvalError::function(format!(
+                "custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype \
+                 <{}>",
+                spec.kind.label(),
+                value.datatype().as_str()
+            )));
+        }
+    }
+    for spec in declared {
+        if !supplied.iter().any(|(name, _)| name == spec.name) {
+            return Err(EvalError::function(format!(
+                "custom aggregate <{iri}> requires a scalarval named `{}`, which the call site \
+                 did not supply",
+                spec.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `value`'s datatype matches `kind` — the per-literal check
+/// [`validate_scalarvals`] applies to each supplied scalarval. Goes through the
+/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `is_numeric_xsd`)
+/// the evaluator itself uses to classify a runtime `TermValue`, rather than a
+/// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
+/// admission rule can never drift from what the numeric tower actually accepts
+/// elsewhere in this crate.
+fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
+    match kind {
+        ScalarvalKind::Numeric => xsd_of(&literal_to_value(value))
+            .as_ref()
+            .is_some_and(is_numeric_xsd),
+        ScalarvalKind::String => {
+            value.language().is_none()
+                && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

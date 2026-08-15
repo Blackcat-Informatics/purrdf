@@ -882,8 +882,8 @@ fn fmt_function_name(s: &mut String, f: &Function) {
 }
 
 /// Emit a SPARQL aggregate expression: `COUNT(*)`, `FUNC([DISTINCT] expr
-/// [; SEPARATOR="…"])`, or `AGG(<iri>, [DISTINCT] arg, arg, …)` for a
-/// [`AggregateFunction::Custom`] aggregate.
+/// [; SEPARATOR="…"])`, or `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
+/// for a [`AggregateFunction::Custom`] aggregate.
 ///
 /// Used by [`fmt_subselect`] (via [`fmt_expr_agg`]) wherever an aggregate's
 /// synthetic output variable is referenced in the SELECT projection, `HAVING`,
@@ -907,14 +907,26 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         AggregateFunction::Sample => "SAMPLE",
         AggregateFunction::GroupConcat => "GROUP_CONCAT",
         AggregateFunction::Custom(n) => {
-            // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate
-            // surface (see `AggregateFunction::Custom`'s docs); the IRI is the
-            // FIRST positional argument, not a call prefix.
+            // `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` — the
+            // custom-aggregate surface (see `AggregateFunction::Custom`'s
+            // docs); the IRI is the FIRST positional argument, not a call
+            // prefix. `scalarvals` — populated ONLY by `parse_agg_scalarvals`
+            // for a `Custom` aggregate (a built-in's own scalarvals, e.g.
+            // GROUP_CONCAT's SEPARATOR, are rendered by the shared tail below,
+            // never here) — round-trips through `; NAME=value` clauses in the
+            // SAME order they were parsed, so a query that never wrote one
+            // never emits one either.
             let _ = write!(s, "AGG(<{}>, ", n.as_str());
             if *distinct {
                 s.push_str("DISTINCT ");
             }
             fmt_expr_list(s, args);
+            for (name, value) in &agg.scalarvals {
+                s.push_str("; ");
+                s.push_str(name);
+                s.push('=');
+                fmt_literal(s, value);
+            }
             s.push(')');
             return;
         }
@@ -1165,6 +1177,39 @@ mod tests {
         );
     }
 
+    /// The gap this increment closes: a NAMED scalarval on a custom aggregate
+    /// (`AGG(<iri>, …; NAME=value)`) must survive parse → serialize → parse —
+    /// the production SERVICE-federation path — with an EQUAL algebra, not just
+    /// equal text. Before this fix `fmt_aggregate`'s `Custom` branch dropped
+    /// `scalarvals` entirely, so this exact case silently lost data across a
+    /// SERVICE forward.
+    #[test]
+    fn roundtrip_agg_custom_single_scalarval() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (AGG(<http://ex/myAgg>, ?n; P=0.95) AS ?a) \
+             WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    #[test]
+    fn roundtrip_agg_custom_multiple_scalarvals() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (AGG(<http://ex/myAgg>, DISTINCT ?n; K=3; LABEL=\"top\") AS ?a) \
+             WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
+    /// `NAME` is matched case-insensitively and normalized upper-case, so a
+    /// lower-case spelling in the query text still round-trips to an EQUAL
+    /// algebra (the re-parsed key is the same upper-cased form either way).
+    #[test]
+    fn roundtrip_agg_custom_scalarval_name_is_case_normalized() {
+        assert_subselect_roundtrip(
+            "SELECT ?t (AGG(<http://ex/myAgg>, ?n; p=0.5) AS ?a) \
+             WHERE { ?x a ?t ; <http://ex/n> ?n } GROUP BY ?t",
+        );
+    }
+
     #[test]
     fn roundtrip_having_referencing_aggregate() {
         // The HAVING clause references the aggregate's synthetic output variable
@@ -1275,6 +1320,31 @@ mod tests {
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "AGG(<http://ex/myAgg>, DISTINCT ?a, ?b)");
+    }
+
+    #[test]
+    fn aggregate_renders_custom_agg_scalarval() {
+        let agg = AggregateExpression::new(
+            AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
+            vec![Expression::Variable(Variable::new("v"))],
+            vec![(
+                "P".to_owned(),
+                Literal::new_typed(
+                    "0.95",
+                    crate::ast::NamedNode::new_unchecked(
+                        "http://www.w3.org/2001/XMLSchema#decimal",
+                    ),
+                ),
+            )],
+            false,
+        )
+        .unwrap();
+        let mut s = String::new();
+        fmt_aggregate(&mut s, &agg);
+        assert_eq!(
+            s,
+            "AGG(<http://ex/myAgg>, ?v; P=\"0.95\"^^<http://www.w3.org/2001/XMLSchema#decimal>)"
+        );
     }
 
     #[test]

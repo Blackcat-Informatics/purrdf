@@ -3063,14 +3063,23 @@ impl<'a> Parser<'a, '_> {
         Ok(Expression::Variable(synth))
     }
 
-    /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, …)` custom-aggregate surface
-    /// (issue-normative spelling — no `ParserOptions` gate, since it introduces no
-    /// ambiguity with any other production). `<iri>` may be any IRI, including a
-    /// prefixed name, resolved and retained byte-exact via
-    /// [`Self::expect_iri_node`]. `DISTINCT`, if present, precedes the first
-    /// positional argument. At least one argument is required — an empty argument
-    /// list is a hard syntax error: the surface is positional-only, one or more
-    /// arguments (there is no `AGG(<iri>)` zero-arity form).
+    /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
+    /// custom-aggregate surface (issue-normative spelling for the call shape — no
+    /// `ParserOptions` gate, since it introduces no ambiguity with any other
+    /// production). `<iri>` may be any IRI, including a prefixed name, resolved
+    /// and retained byte-exact via [`Self::expect_iri_node`]. `DISTINCT`, if
+    /// present, precedes the first positional argument. At least one positional
+    /// argument is required — an empty argument list is a hard syntax error: the
+    /// positional surface is one or more arguments (there is no `AGG(<iri>)`
+    /// zero-arity form).
+    ///
+    /// After the positional arguments, zero or more trailing `; NAME=value`
+    /// scalarval clauses are admitted — see [`Self::parse_agg_scalarvals`] for
+    /// the grammar and its precedent. This is a purely STRUCTURAL parse: any
+    /// `NAME` is accepted here, and any literal `value`; whether a given custom
+    /// aggregate accepts a given name (and whether its value's type is right) is
+    /// validated at prepare time by the evaluator, against the registered
+    /// aggregate's own declaration — never by this parser.
     fn parse_agg_call(
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
@@ -3087,13 +3096,50 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
+        let scalarvals = self.parse_agg_scalarvals()?;
         self.expect(&Token::RParen)?;
         let agg =
-            AggregateExpression::new(AggregateFunction::Custom(iri), args, Vec::new(), distinct)
+            AggregateExpression::new(AggregateFunction::Custom(iri), args, scalarvals, distinct)
                 .expect("the `args.push` loop above always runs at least once");
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
+    }
+
+    /// Parse the `AGG(<iri>, …)` surface's optional trailing named
+    /// scalar-value clauses: zero or more `; NAME=value` pairs, generalizing
+    /// `GROUP_CONCAT`'s own `; SEPARATOR="…"` — SPARQL's existing precedent for
+    /// a named scalar aggregate parameter (see
+    /// [`AggregateExpression::scalarvals`]'s docs) — to an arbitrary custom
+    /// aggregate's own named parameters (`AGG(<ns>PERCENTILE, ?v; P=0.95)`,
+    /// `AGG(<ns>TOPK, ?v; K=3)`). `NAME` is any [`Token::Word`], matched
+    /// case-insensitively and stored UPPER-CASED, so `; separator="…"` and
+    /// `; SEPARATOR="…"` would normalize to the same key (this grammar itself
+    /// is reached only for [`AggregateFunction::Custom`] — a built-in aggregate
+    /// keeps its own dedicated `; SEPARATOR="…."` production, unaffected).
+    /// `value` is any SPARQL literal via [`Self::parse_literal`] — a numeric
+    /// scalarval (`P=0.95`, `K=3`) parses to its natural numeric datatype
+    /// rather than being forced through a string the way `SEPARATOR`'s value
+    /// is. Duplicate names and names a specific aggregate does not recognize
+    /// are accepted here (this is a structural parse only) and refused later,
+    /// at prepare time, by the evaluator.
+    fn parse_agg_scalarvals(&mut self) -> Result<Vec<(String, Literal)>> {
+        let mut scalarvals = Vec::new();
+        while self.eat(&Token::Semicolon) {
+            let name = match self.bump() {
+                Some(Token::Word(w)) => w.to_ascii_uppercase(),
+                other => {
+                    return Err(ParseError::syntax(
+                        format!("expected a scalarval name, found {other:?}"),
+                        self.span(),
+                    ));
+                }
+            };
+            self.expect(&Token::Eq)?;
+            let value = self.parse_literal()?;
+            scalarvals.push((name, value));
+        }
+        Ok(scalarvals)
     }
 
     fn parse_optional_separator(&mut self) -> Result<Option<String>> {
@@ -4228,6 +4274,79 @@ mod tests {
         let q =
             format!("{GM}SELECT ?t (AGG(<http://ex/myAgg>) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
         assert!(SparqlParser::new().parse_query(&q).is_err());
+    }
+
+    /// `AGG(<iri>, arg; NAME=value)` — the named scalarval clause — populates
+    /// [`AggregateExpression::scalarvals`] with the upper-cased name and the
+    /// literal's natural (here, decimal) datatype, exactly the surface
+    /// `PERCENTILE`'s `p`/`TOPK`'s `k` are meant to reach the evaluator through.
+    #[test]
+    fn agg_call_named_scalarval_populates_scalarvals() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; PERCENTILE = 0.95) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert_eq!(
+            agg.args.len(),
+            1,
+            "PERCENTILE=0.95 is a scalarval, not a positional arg"
+        );
+        assert_eq!(agg.scalarvals.len(), 1);
+        assert_eq!(agg.scalarvals[0].0, "PERCENTILE");
+        assert_eq!(agg.scalarvals[0].1.value(), "0.95");
+        assert_eq!(
+            agg.scalarvals[0].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        );
+    }
+
+    /// The scalarval NAME is matched case-insensitively and stored upper-cased —
+    /// mirroring `SEPARATOR`'s own case-insensitive keyword match.
+    #[test]
+    fn agg_call_scalarval_name_is_upper_cased() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; p=1) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates[0].1.scalarvals[0].0, "P");
+    }
+
+    /// Multiple `; NAME=value` clauses all parse, in the order written.
+    #[test]
+    fn agg_call_multiple_scalarvals_parse_in_order() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; K=3; LABEL=\"x\") AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        let scalarvals = &aggregates[0].1.scalarvals;
+        assert_eq!(scalarvals.len(), 2);
+        assert_eq!(scalarvals[0].0, "K");
+        assert_eq!(scalarvals[0].1.value(), "3");
+        assert_eq!(scalarvals[1].0, "LABEL");
+        assert_eq!(scalarvals[1].1.value(), "x");
     }
 
     #[test]

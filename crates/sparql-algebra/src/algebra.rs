@@ -1200,16 +1200,21 @@ pub enum OrderExpression {
 ///   parser's "at least one" rule.
 /// * [`Self::scalarvals`] — the spec's scalar-values map. An ORDERED
 ///   `Vec<(key, value)>` — deliberately never a hash map, so serialization and
-///   any diagnostic built from it stay byte-deterministic. Only the built-ins
-///   populate it, and only with the keys the SPARQL grammar itself defines:
-///   today, `"separator"` for `GROUP_CONCAT`'s optional `SEPARATOR="…"`
-///   (absent — `scalarvals` empty — when no `SEPARATOR` was written). Every
-///   other built-in's `scalarvals` is empty. A [`AggregateFunction::Custom`]
-///   aggregate's `scalarvals` is ALWAYS empty: the
-///   `AGG(<iri>, …)` surface is positional-only (see that variant's docs) —
-///   PurRDF invents no `key = value` scalar syntax for it. A future parse form
-///   that needs named scalars is a new surface decision, not a silent reuse of
-///   this field.
+///   any diagnostic built from it stay byte-deterministic.
+///   * A built-in's `scalarvals` uses only the keys the SPARQL grammar itself
+///     defines: today, `"separator"` for `GROUP_CONCAT`'s optional
+///     `SEPARATOR="…"` (absent — `scalarvals` empty — when no `SEPARATOR` was
+///     written). Every other built-in's `scalarvals` is empty.
+///   * A [`AggregateFunction::Custom`] aggregate's `scalarvals` holds every
+///     `NAME=value` clause the `AGG(<iri>, …; NAME=value; …)` surface's
+///     trailing scalarval clauses supplied (see that variant's docs) — empty
+///     when the call wrote none. The KEY is the parser's upper-cased spelling
+///     of `NAME`; it is NOT validated against any registry here — the parser
+///     accepts any name structurally, and whether a given custom aggregate
+///     accepts a given name (and whether its value's type is right) is a
+///     prepare-time host concern (see `purrdf_sparql_eval::agg_fn::CustomAggregate::scalarvals`),
+///     not a parser-level one, exactly as an unregistered `AGG(<iri>, …)` IRI
+///     itself is a prepare-time refusal rather than a parse error.
 /// * [`Self::distinct`] — whether `DISTINCT` preceded the arguments
 ///   (`COUNT(DISTINCT *)` / `COUNT(DISTINCT ?x)` / `AGG(<iri>, DISTINCT ?a,
 ///   ?b)` / …); recorded verbatim regardless of whether the function gives it
@@ -1372,12 +1377,16 @@ pub enum AggregateFunction {
     /// the function name.
     GroupConcat,
     /// A custom aggregate identified by an arbitrary IRI, parsed from
-    /// `AGG(<iri>, [DISTINCT] arg, arg, …)`:
-    /// positional expression arguments only, no `key = value` scalars. `<iri>`
-    /// may be any IRI, including a prefixed name resolved against the query's
-    /// prologue; it is retained byte-exact so serialization re-emits exactly
-    /// what the query author wrote (PurRDF fabricates no vocabulary IRI of its
-    /// own on output).
+    /// `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`: positional
+    /// expression arguments (`args`, evaluated PER ROW like any built-in
+    /// aggregate's arguments), followed by zero or more trailing NAMED
+    /// scalar-value clauses (landing in the owning
+    /// [`AggregateExpression::scalarvals`]) — ONE value for the whole
+    /// aggregation, never re-evaluated per row. `<iri>` may be any IRI,
+    /// including a prefixed name resolved against the query's prologue; it is
+    /// retained byte-exact so serialization re-emits exactly what the query
+    /// author wrote (PurRDF fabricates no vocabulary IRI of its own on
+    /// output).
     ///
     /// This is a deliberate divergence from Jena's ARQ, which spells a custom
     /// aggregate as `AGG <iri>(args)` (the IRI directly prefixing the call,
@@ -1385,8 +1394,25 @@ pub enum AggregateFunction {
     /// first positional argument so the call form needs no grammar beyond an
     /// ordinary argument list.
     ///
+    /// # The `; NAME=value` scalarval clause
+    ///
+    /// Generalizes SPARQL's own precedent for a named scalar aggregate
+    /// parameter — `GROUP_CONCAT`'s `; SEPARATOR="…"` — to an arbitrary custom
+    /// aggregate's own named parameters: `AGG(<ns>PERCENTILE, ?v; P=0.95)`,
+    /// `AGG(<ns>TOPK, ?v; K=3)`. `NAME` is matched case-insensitively by the
+    /// parser and stored upper-cased in [`AggregateExpression::scalarvals`], so
+    /// `; p=0.95` and `; P=0.95` normalize to the same key; `value` is any
+    /// SPARQL literal, so a numeric scalarval parses to its natural numeric
+    /// datatype rather than being forced through a string the way
+    /// `GROUP_CONCAT`'s own `SEPARATOR` is. See
+    /// [`crate::parser::SparqlParser`]'s module docs for the grammar and
+    /// `purrdf_sparql_eval::agg_fn::CustomAggregate::scalarvals` for how a
+    /// registered aggregate declares which names it accepts.
+    ///
     /// Evaluation resolves the IRI against a caller-supplied aggregate
-    /// registry in `sparql-eval`; an unregistered IRI is refused with a typed
+    /// registry in `sparql-eval`; an unregistered IRI, an unrecognized
+    /// scalarval name, a duplicate scalarval name, a missing required
+    /// scalarval, or a wrong-typed scalarval value is refused with a typed
     /// error when the query is prepared, before any evaluation work is spent.
     Custom(NamedNode),
 }

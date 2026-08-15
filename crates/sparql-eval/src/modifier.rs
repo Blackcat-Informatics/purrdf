@@ -21,7 +21,7 @@ use purrdf_xsd::{
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
-use crate::convert::{ground_term_to_value, named_node_to_value};
+use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::{eval_expr, xsd_of, xsd_to_term};
@@ -1068,10 +1068,23 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
             return Ok(None);
         }
     }
+    // The call site's `; NAME=value` scalarval clauses, resolved to `TermValue`
+    // ONCE, ahead of every accumulator this fold creates — a scalarval is ONE
+    // value for the WHOLE aggregation (see `AggregateExpression::scalarvals`'s
+    // docs), never re-evaluated per row or per chunk. Already validated at
+    // prepare time (`crate::property_fn_plan::plan_aggregate`) against
+    // `custom`'s declared `CustomAggregate::scalarvals`: every name known, no
+    // duplicate, every declared name present, every value the right kind — so
+    // `CustomAggregate::init` below can trust this slice without re-checking it.
+    let scalarvals: Vec<(String, TermValue)> = agg
+        .scalarvals
+        .iter()
+        .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
+        .collect();
     let force_sequential = (!stable).then(crate::parallel::force_sequential_operation);
     let accumulator = crate::parallel::par_chunk_reduce_init(
         &survivors,
-        || crate::agg_fn::init_contained(custom.as_ref(), iri),
+        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals),
         |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
         |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
     )?;
@@ -3070,7 +3083,10 @@ mod tests {
         fn state_bound(&self) -> u64 {
             256
         }
-        fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+        fn init(
+            &self,
+            _scalarvals: &[(String, TermValue)],
+        ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
             Box::new(ListCollector { items: Vec::new() })
         }
     }
@@ -3433,14 +3449,14 @@ mod tests {
                 Variable::new("g"),
                 AggregateExpression::new(
                     AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}TOPK"))),
-                    vec![
-                        Expression::Variable(Variable::new("val")),
-                        Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                    vec![Expression::Variable(Variable::new("val"))],
+                    vec![(
+                        "K".to_owned(),
+                        purrdf_sparql_algebra::Literal::new_typed(
                             "3",
                             NamedNode::new_unchecked(XINT),
-                        )),
-                    ],
-                    Vec::new(),
+                        ),
+                    )],
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),

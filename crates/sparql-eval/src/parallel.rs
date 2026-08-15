@@ -1636,7 +1636,10 @@ mod tests {
         fn state_bound(&self) -> u64 {
             0
         }
-        fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+        fn init(
+            &self,
+            _scalarvals: &[(String, TermValue)],
+        ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
             Box::new(NoOpAccumulator)
         }
     }

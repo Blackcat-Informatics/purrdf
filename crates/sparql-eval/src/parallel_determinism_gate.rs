@@ -787,7 +787,10 @@ impl crate::agg_fn::CustomAggregate for ListCollectorAggregate {
     fn state_bound(&self) -> u64 {
         256
     }
-    fn init(&self) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+    fn init(
+        &self,
+        _scalarvals: &[(String, purrdf_core::TermValue)],
+    ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
         Box::new(ListCollectorAccumulator { items: Vec::new() })
     }
 }

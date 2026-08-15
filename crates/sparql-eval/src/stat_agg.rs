@@ -55,16 +55,24 @@
 //! values — a decimal `0.5` literal keeps the whole computation exact. `p = 0`
 //! and `p = 1` reduce to the group's minimum and maximum.
 //!
-//! # `PERCENTILE`'s two-argument form
+//! # `PERCENTILE`'s named scalarval
 //!
-//! `AGG(<ns>PERCENTILE, ?x, ?p)` — `p` is evaluated per row, like every other
-//! aggregate argument (the custom-aggregate surface takes positional
-//! expression arguments only; there is no separate "parameter" channel), but
-//! it must be numerically the SAME value on every row the group folds: a
-//! group whose `p` differs across rows has no single percentile to report, so
-//! it poisons to unbound exactly as a non-numeric value does. `p` outside
-//! `[0, 1]` likewise poisons to unbound (never a hard error — the SAME
-//! "poison, don't abort" discipline every other numeric member uses).
+//! `AGG(<ns>PERCENTILE, ?x; P=0.95)` — `P` is a NAMED SCALARVAL (see
+//! [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs and
+//! [`crate::agg_fn::CustomAggregate::scalarvals`]), not a positional argument:
+//! ONE value for the whole aggregation, resolved once at accumulator `init`
+//! time, never re-evaluated per row. This is a deliberate correction from an
+//! earlier shape that took `p` as a second positional argument
+//! (`AGG(<ns>PERCENTILE, ?x, ?p)`) — semantically wrong, since a positional
+//! argument is evaluated PER ROW, and `p` is a parameter of the aggregation
+//! itself, not a per-row quantity. `crate::property_fn_plan::plan_aggregate`
+//! refuses a call missing `P`, naming an unrecognized scalarval, or supplying
+//! a non-numeric `P` at PREPARE time, before any evaluation work is spent. `P`
+//! outside `[0, 1]` still poisons the fold to unbound at EVALUATION time
+//! (never a hard error — the SAME "poison, don't abort" discipline every
+//! other numeric member uses), because that check depends on nothing prepare
+//! time can see (a literal `P=1.5` is a well-typed decimal; only its VALUE is
+//! out of domain).
 //!
 //! # `MODE`
 //!
@@ -85,25 +93,32 @@
 //! `GROUP_CONCAT`/`SAMPLE` fold over — see `crate::modifier`'s module docs):
 //! `FIRST` is the earliest row's value, `LAST` the latest.
 //!
-//! # `TOPK`'s two-argument form and its "one term" contract
+//! # `TOPK`'s named scalarval and its "one term" contract
 //!
-//! `AGG(<ns>TOPK, ?x, ?k)` — `k` is a positive `xsd:integer`, constant across
-//! the group (the SAME per-row-constant discipline `PERCENTILE`'s `p` uses; a
-//! non-integer, non-positive, or inconsistent `k` poisons to unbound). Every
-//! SPARQL aggregate's contract is to yield exactly ONE RDF term (this crate
-//! has no CDT-list container type to hand back "the k values" as a list), so
-//! `TOPK` answers the way `GROUP_CONCAT` already answers an inherently
-//! multi-valued question: the top `k` values, in DESCENDING order under the
-//! SAME total value order `MIN`/`MAX`/`MODE` use, with their **lexical forms**
-//! joined by a single fixed space separator (mirroring
-//! `crate::modifier`'s `GROUP_CONCAT`, whose default separator is likewise
-//! `" "` per SPARQL §18.6.1.7). A configurable separator would need a THIRD
-//! positional argument; two-argument `TOPK(value, k)` keeps the arity
-//! contract as simple as `PERCENTILE`'s, so the separator is fixed by design,
-//! not by oversight. A term with no lexical form (a blank node or a triple
-//! term — the same case `GROUP_CONCAT` itself poisons on) poisons `TOPK` too.
-//! Fewer than `k` distinct rows in the group → every value the group has.
-//! Empty group → unbound, like every other member here.
+//! `AGG(<ns>TOPK, ?x; K=3)` — `K`, like `PERCENTILE`'s `P`, is a NAMED
+//! SCALARVAL, not a positional argument: a positive `xsd:integer`, ONE value
+//! for the whole aggregation, resolved once at `init` time (the same
+//! correction from an earlier two-positional-argument shape `PERCENTILE`'s
+//! docs describe — `K` is a parameter of the aggregation, not a per-row
+//! quantity). A missing, non-integer, or non-positive `K` poisons the fold to
+//! unbound (never a hard error, the same "poison, don't abort" discipline
+//! every other numeric member uses) — `crate::property_fn_plan::plan_aggregate`
+//! catches "missing" and "not an `xsd:integer` literal" at prepare time; only
+//! "present, well-typed, but `≤ 0`" survives to evaluation, exactly as `P`
+//! outside `[0, 1]` does for `PERCENTILE`. Every SPARQL aggregate's contract
+//! is to yield exactly ONE RDF term (this crate has no CDT-list container
+//! type to hand back "the k values" as a list), so `TOPK` answers the way
+//! `GROUP_CONCAT` already answers an inherently multi-valued question: the
+//! top `k` values, in DESCENDING order under the SAME total value order
+//! `MIN`/`MAX`/`MODE` use, with their **lexical forms** joined by a single
+//! fixed space separator (mirroring `crate::modifier`'s `GROUP_CONCAT`, whose
+//! default separator is likewise `" "` per SPARQL §18.6.1.7). A configurable
+//! separator would need a second named scalarval; `TOPK(value; K=k)` keeps
+//! the scalarval contract as simple as `PERCENTILE`'s, so the separator is
+//! fixed by design, not by oversight. A term with no lexical form (a blank
+//! node or a triple term — the same case `GROUP_CONCAT` itself poisons on)
+//! poisons `TOPK` too. Fewer than `k` distinct rows in the group → every
+//! value the group has. Empty group → unbound, like every other member here.
 //!
 //! # Real merges via `AggregateAccumulator::into_any` (all ten are `Volatility::Stable`)
 //!
@@ -197,14 +212,14 @@ use std::mem;
 use std::sync::Arc;
 
 use purrdf_core::TermValue;
-use purrdf_xsd::numeric::{numeric_cmp, numeric_eq};
+use purrdf_xsd::numeric::numeric_cmp;
 use purrdf_xsd::{
     XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
 };
 
 use crate::agg_fn::{
-    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
-    downcast_combine_partial,
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate, ScalarvalKind,
+    ScalarvalSpec, downcast_combine_partial,
 };
 use crate::error::EvalError;
 use crate::expr::xsd_of;
@@ -228,6 +243,28 @@ const TOPK: &str = "TOPK";
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+/// `PERCENTILE`'s named scalarval: `AGG(<ns>PERCENTILE, ?v; P=0.95)`.
+const PERCENTILE_P: &str = "P";
+/// `TOPK`'s named scalarval: `AGG(<ns>TOPK, ?v; K=3)`.
+const TOPK_K: &str = "K";
+
+/// Look up a named scalarval by (already upper-cased) key in the resolved
+/// `(name, value)` slice [`CustomAggregate::init`] receives, filtered to the
+/// SPARQL numeric tower. `None` covers BOTH "absent" and "present but
+/// non-numeric" — both poison the fold the same way (see each member's `init`),
+/// which is the correct behavior even though prepare-time validation
+/// (`crate::property_fn_plan::plan_aggregate`) should already have refused a
+/// non-numeric value or a missing required name before evaluation is ever
+/// reached; this is the same defense-in-depth `eval_custom_aggregate`'s own
+/// doc comment describes for a caller that bypasses that walk.
+fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<XsdValue> {
+    scalarvals
+        .iter()
+        .find(|(k, _)| k == name)
+        .and_then(|(_, v)| xsd_of(v))
+        .filter(is_numeric_xsd)
+}
 
 /// The Welford moment accumulators' declared [`CustomAggregate::state_bound`]:
 /// genuinely `O(1)` — see the module docs.
@@ -404,7 +441,7 @@ impl CustomAggregate for MedianAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(MedianAccumulator {
             state: NumericSeries::Empty,
         })
@@ -415,75 +452,58 @@ impl CustomAggregate for MedianAggregate {
 // PERCENTILE
 // ---------------------------------------------------------------------------
 
-enum PercentileSeries {
-    Empty,
-    Ok { p: XsdValue, values: Vec<XsdValue> },
-    Poisoned,
-}
-
 struct PercentileAccumulator {
-    state: PercentileSeries,
+    /// `None` when `P` was missing or non-numeric at `init` time — a
+    /// defense-in-depth poison for a caller that bypassed prepare-time
+    /// validation (see `numeric_scalarval`'s docs); the ordinary path always
+    /// has `Some` here, because `crate::property_fn_plan::plan_aggregate`
+    /// already refused any call this accumulator would otherwise see with `P`
+    /// missing or wrong-typed.
+    p: Option<XsdValue>,
+    state: NumericSeries,
 }
 
 impl AggregateAccumulator for PercentileAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, PercentileSeries::Poisoned) {
+        if self.p.is_none() {
+            self.state = NumericSeries::Poisoned;
             return Ok(());
         }
-        let (Some(value_term), Some(p_term)) = (args.first(), args.get(1)) else {
-            self.state = PercentileSeries::Poisoned;
-            return Ok(());
-        };
-        let Some(p) = xsd_of(p_term).filter(is_numeric_xsd) else {
-            self.state = PercentileSeries::Poisoned;
-            return Ok(());
-        };
-        let Some(x) = xsd_of(value_term).filter(is_numeric_xsd) else {
-            self.state = PercentileSeries::Poisoned;
-            return Ok(());
-        };
-        let p_mismatch = matches!(
-            &self.state,
-            PercentileSeries::Ok { p: existing_p, .. } if !numeric_eq(existing_p, &p)
-        );
-        if p_mismatch {
-            self.state = PercentileSeries::Poisoned;
+        if matches!(self.state, NumericSeries::Poisoned) {
             return Ok(());
         }
-        if let PercentileSeries::Ok { values, .. } = &mut self.state {
+        let Some(x) = args.first().and_then(xsd_of).filter(is_numeric_xsd) else {
+            self.state = NumericSeries::Poisoned;
+            return Ok(());
+        };
+        if let NumericSeries::Ok(values) = &mut self.state {
             values.push(x);
         } else {
-            self.state = PercentileSeries::Ok { p, values: vec![x] };
+            self.state = NumericSeries::Ok(vec![x]);
         }
         Ok(())
     }
 
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) {
-        // Same shape as `MedianAccumulator::combine`, plus the same `p`-mismatch
-        // poison `step` applies within one accumulator: two partials that
-        // disagree on `p` have no single percentile to report either.
+        // `p` is identical on both sides BY CONSTRUCTION — every partial
+        // accumulator a single `combine` chain merges was created by the SAME
+        // `CustomAggregate::init` factory call, with the SAME resolved
+        // scalarvals (see the module docs' "Real merges" section and
+        // `crate::agg_fn`'s "Merging structural state" section) — so, unlike
+        // the old per-row positional-argument design, there is no cross-chunk
+        // `p`-mismatch to detect here: concatenating the (still-unsorted)
+        // value lists is always correct, since `finish` sorts the whole
+        // multiset before computing a rank either way.
         let other = downcast_combine_partial::<Self>(other);
         self.state = match (
-            mem::replace(&mut self.state, PercentileSeries::Empty),
+            mem::replace(&mut self.state, NumericSeries::Empty),
             other.state,
         ) {
-            (PercentileSeries::Poisoned, _) | (_, PercentileSeries::Poisoned) => {
-                PercentileSeries::Poisoned
-            }
-            (PercentileSeries::Empty, s) | (s, PercentileSeries::Empty) => s,
-            (
-                PercentileSeries::Ok { p, mut values },
-                PercentileSeries::Ok {
-                    p: other_p,
-                    values: other_values,
-                },
-            ) => {
-                if numeric_eq(&p, &other_p) {
-                    values.extend(other_values);
-                    PercentileSeries::Ok { p, values }
-                } else {
-                    PercentileSeries::Poisoned
-                }
+            (NumericSeries::Poisoned, _) | (_, NumericSeries::Poisoned) => NumericSeries::Poisoned,
+            (NumericSeries::Empty, s) | (s, NumericSeries::Empty) => s,
+            (NumericSeries::Ok(mut values), NumericSeries::Ok(other_values)) => {
+                values.extend(other_values);
+                NumericSeries::Ok(values)
             }
         };
     }
@@ -495,14 +515,12 @@ impl AggregateAccumulator for PercentileAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { state } = *self;
-        match state {
-            PercentileSeries::Empty | PercentileSeries::Poisoned => Ok(None),
-            PercentileSeries::Ok { p, mut values } => {
-                values.sort_by(|a, b| numeric_cmp(a, b).unwrap_or(Ordering::Equal));
-                Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
-            }
-        }
+        let Self { p, state } = *self;
+        let (Some(p), NumericSeries::Ok(mut values)) = (p, state) else {
+            return Ok(None);
+        };
+        values.sort_by(|a, b| numeric_cmp(a, b).unwrap_or(Ordering::Equal));
+        Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
     }
 }
 
@@ -510,7 +528,7 @@ struct PercentileAggregate;
 
 impl CustomAggregate for PercentileAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(2)
+        Arity::Exact(1)
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -521,9 +539,14 @@ impl CustomAggregate for PercentileAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn scalarvals(&self) -> &[ScalarvalSpec] {
+        const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(PERCENTILE_P, ScalarvalKind::Numeric)];
+        &SPEC
+    }
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(PercentileAccumulator {
-            state: PercentileSeries::Empty,
+            p: numeric_scalarval(scalarvals, PERCENTILE_P),
+            state: NumericSeries::Empty,
         })
     }
 }
@@ -732,7 +755,7 @@ impl CustomAggregate for MomentsAggregate {
     fn state_bound(&self) -> u64 {
         MOMENTS_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(MomentsAccumulator {
             kind: self.kind,
             state: MomentsState::Empty,
@@ -826,7 +849,7 @@ impl CustomAggregate for ModeAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(ModeAccumulator { values: Vec::new() })
     }
 }
@@ -885,7 +908,7 @@ impl CustomAggregate for FirstAggregate {
     fn state_bound(&self) -> u64 {
         SCALAR_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(FirstAccumulator { value: None })
     }
 }
@@ -935,7 +958,7 @@ impl CustomAggregate for LastAggregate {
     fn state_bound(&self) -> u64 {
         SCALAR_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(LastAccumulator { value: None })
     }
 }
@@ -945,8 +968,15 @@ impl CustomAggregate for LastAggregate {
 // ---------------------------------------------------------------------------
 
 enum TopKState {
-    Empty,
-    Ok { k: i128, values: Vec<TermValue> },
+    /// `k` resolved to a valid positive integer at `init` time (see
+    /// `TopKAggregate::init`); `values` is the accumulator's live bounded
+    /// top-`k` set, empty until the first row is folded. An empty `values` at
+    /// `finish` — no row ever folded — is exactly the "empty group" case: see
+    /// `finish`'s own `is_empty` check.
+    Valid {
+        k: usize,
+        values: Vec<TermValue>,
+    },
     Poisoned,
 }
 
@@ -975,35 +1005,14 @@ struct TopKAccumulator {
 
 impl AggregateAccumulator for TopKAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, TopKState::Poisoned) {
+        let TopKState::Valid { k, values } = &mut self.state else {
             return Ok(());
-        }
-        let (Some(value), Some(k_term)) = (args.first(), args.get(1)) else {
+        };
+        let Some(value) = args.first() else {
             self.state = TopKState::Poisoned;
             return Ok(());
         };
-        let Some(XsdValue::Integer { value: k, .. }) = xsd_of(k_term) else {
-            self.state = TopKState::Poisoned;
-            return Ok(());
-        };
-        if k <= 0 {
-            self.state = TopKState::Poisoned;
-            return Ok(());
-        }
-        let mismatch =
-            matches!(&self.state, TopKState::Ok { k: existing_k, .. } if *existing_k != k);
-        if mismatch {
-            self.state = TopKState::Poisoned;
-            return Ok(());
-        }
-        let k_usize = usize::try_from(k).unwrap_or(usize::MAX);
-        if let TopKState::Ok { values, .. } = &mut self.state {
-            insert_bounded(values, k_usize, value.clone());
-        } else {
-            let mut values = Vec::new();
-            insert_bounded(&mut values, k_usize, value.clone());
-            self.state = TopKState::Ok { k, values };
-        }
+        insert_bounded(values, *k, value.clone());
         Ok(())
     }
 
@@ -1012,27 +1021,27 @@ impl AggregateAccumulator for TopKAccumulator {
         // values into `self`'s top-`k` set via the SAME `insert_bounded`
         // primitive `step` uses, truncating back down to `k` as it goes — the
         // merged state never exceeds `O(k)` elements, matching `step`'s own
-        // bound.
+        // bound. `k` is identical on both sides BY CONSTRUCTION (see
+        // `PercentileAccumulator::combine`'s identical note on `p`), so there
+        // is no cross-chunk `k`-mismatch left to detect, unlike the old
+        // per-row positional-argument design.
         let other = downcast_combine_partial::<Self>(other);
-        self.state = match (mem::replace(&mut self.state, TopKState::Empty), other.state) {
+        self.state = match (
+            mem::replace(&mut self.state, TopKState::Poisoned),
+            other.state,
+        ) {
             (TopKState::Poisoned, _) | (_, TopKState::Poisoned) => TopKState::Poisoned,
-            (TopKState::Empty, s) | (s, TopKState::Empty) => s,
             (
-                TopKState::Ok { k, mut values },
-                TopKState::Ok {
-                    k: other_k,
+                TopKState::Valid { k, mut values },
+                TopKState::Valid {
                     values: other_values,
+                    ..
                 },
             ) => {
-                if k != other_k {
-                    TopKState::Poisoned
-                } else {
-                    let k_usize = usize::try_from(k).unwrap_or(usize::MAX);
-                    for value in other_values {
-                        insert_bounded(&mut values, k_usize, value);
-                    }
-                    TopKState::Ok { k, values }
+                for value in other_values {
+                    insert_bounded(&mut values, k, value);
                 }
+                TopKState::Valid { k, values }
             }
         };
     }
@@ -1045,9 +1054,14 @@ impl AggregateAccumulator for TopKAccumulator {
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         let Self { state } = *self;
-        let TopKState::Ok { values, .. } = state else {
+        let TopKState::Valid { values, .. } = state else {
             return Ok(None);
         };
+        if values.is_empty() {
+            // No row was ever folded: the empty group answers unbound, like
+            // every other member here.
+            return Ok(None);
+        }
         let mut sorted = values;
         // Descending: largest first — reverse-argument `term_value_order`/`Ord`.
         sorted.sort_by(|a, b| term_value_order(b, a).then_with(|| b.cmp(a)));
@@ -1071,7 +1085,7 @@ struct TopKAggregate;
 
 impl CustomAggregate for TopKAggregate {
     fn arity(&self) -> Arity {
-        Arity::Exact(2)
+        Arity::Exact(1)
     }
     fn volatility(&self) -> Volatility {
         Volatility::Stable
@@ -1082,9 +1096,27 @@ impl CustomAggregate for TopKAggregate {
     fn state_bound(&self) -> u64 {
         TOPK_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn scalarvals(&self) -> &[ScalarvalSpec] {
+        const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(TOPK_K, ScalarvalKind::Numeric)];
+        &SPEC
+    }
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        // `K` must be a positive `xsd:integer`, constant across the group — a
+        // non-integer or non-positive `K` poisons the fold to unbound (never a
+        // hard error), the same "poison, don't abort" discipline every other
+        // numeric member here uses.
+        let k = numeric_scalarval(scalarvals, TOPK_K).and_then(|v| match v {
+            XsdValue::Integer { value, .. } if value > 0 => usize::try_from(value).ok(),
+            _ => None,
+        });
         Box::new(TopKAccumulator {
-            state: TopKState::Empty,
+            state: match k {
+                Some(k) => TopKState::Valid {
+                    k,
+                    values: Vec::new(),
+                },
+                None => TopKState::Poisoned,
+            },
         })
     }
 }
@@ -1182,13 +1214,32 @@ mod tests {
     }
 
     fn fold(local: &str, rows: &[Vec<TermValue>]) -> Option<TermValue> {
+        fold_with(local, &[], rows)
+    }
+
+    /// [`fold`]'s twin for a member that reads a named scalarval at `init`
+    /// time (`PERCENTILE`'s `P`, `TOPK`'s `K`) rather than a positional
+    /// argument.
+    fn fold_with(
+        local: &str,
+        scalarvals: &[(String, TermValue)],
+        rows: &[Vec<TermValue>],
+    ) -> Option<TermValue> {
         let registry = registry();
         let agg = registry.resolve(&iri(local)).expect("registered");
-        let mut acc = agg.init();
+        let mut acc = agg.init(scalarvals);
         for row in rows {
             acc.step(row).expect("step");
         }
         acc.finish().expect("finish")
+    }
+
+    /// A `[(String, TermValue)]` scalarval slice with one numeric entry —
+    /// the shape [`CustomAggregate::init`] receives after prepare-time
+    /// resolution, built directly here (rather than through the parser) since
+    /// these are unit tests of the accumulator, not the surface syntax.
+    fn scalarval(name: &str, value: TermValue) -> Vec<(String, TermValue)> {
+        vec![(name.to_owned(), value)]
     }
 
     // ---- registration / closed-set property --------------------------------
@@ -1255,29 +1306,33 @@ mod tests {
 
     #[test]
     fn percentile_zero_is_the_minimum_and_one_is_the_maximum() {
-        let rows = |p: TermValue| {
-            vec![
-                vec![int(1), p.clone()],
-                vec![int(2), p.clone()],
-                vec![int(3), p],
-            ]
-        };
-        let p0 = fold(PERCENTILE, &rows(dec("0"))).expect("bound");
+        let rows = vec![vec![int(1)], vec![int(2)], vec![int(3)]];
+        let p0 = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("0")), &rows).expect("bound");
         assert_eq!(lex(&p0), "1");
-        let p1 = fold(PERCENTILE, &rows(dec("1"))).expect("bound");
+        let p1 = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("1")), &rows).expect("bound");
         assert_eq!(lex(&p1), "3");
     }
 
     #[test]
     fn percentile_out_of_range_poisons() {
-        let rows = vec![vec![int(1), dec("1.5")], vec![int(2), dec("1.5")]];
-        assert_eq!(fold(PERCENTILE, &rows), None);
+        let rows = vec![vec![int(1)], vec![int(2)]];
+        assert_eq!(
+            fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("1.5")), &rows),
+            None
+        );
     }
 
+    /// `P` is a named scalarval — a single value for the WHOLE aggregation —
+    /// so there is no longer a "P differs per row" case to poison on (that
+    /// was only representable under the old two-positional-argument shape).
+    /// A missing `P` (an empty scalarval slice, the shape prepare-time
+    /// validation would have refused before evaluation ever reached this
+    /// accumulator) still poisons, exactly as `TOPK`'s missing `K` does — the
+    /// defense-in-depth path `numeric_scalarval`'s docs describe.
     #[test]
-    fn percentile_inconsistent_p_across_rows_poisons() {
-        let rows = vec![vec![int(1), dec("0.5")], vec![int(2), dec("0.25")]];
-        assert_eq!(fold(PERCENTILE, &rows), None);
+    fn percentile_missing_p_poisons() {
+        let rows = vec![vec![int(1)], vec![int(2)]];
+        assert_eq!(fold_with(PERCENTILE, &[], &rows), None);
     }
 
     // ---- STDDEV / STDDEV_POP / VARIANCE / VAR_POP -----------------------------
@@ -1388,9 +1443,9 @@ mod tests {
     fn first_combine_keeps_the_earlier_chunks_value() {
         let registry = registry();
         let agg = registry.resolve(&iri(FIRST)).expect("registered");
-        let mut a = agg.init();
+        let mut a = agg.init(&[]);
         a.step(&[int(1)]).expect("step");
-        let mut b = agg.init();
+        let mut b = agg.init(&[]);
         b.step(&[int(2)]).expect("step");
         a.combine(b);
         assert_eq!(lex(&a.finish().expect("finish").expect("bound")), "1");
@@ -1400,9 +1455,9 @@ mod tests {
     fn last_combine_keeps_the_later_chunks_value() {
         let registry = registry();
         let agg = registry.resolve(&iri(LAST)).expect("registered");
-        let mut a = agg.init();
+        let mut a = agg.init(&[]);
         a.step(&[int(1)]).expect("step");
-        let mut b = agg.init();
+        let mut b = agg.init(&[]);
         b.step(&[int(2)]).expect("step");
         a.combine(b);
         assert_eq!(lex(&a.finish().expect("finish").expect("bound")), "2");
@@ -1414,38 +1469,43 @@ mod tests {
     fn topk_returns_the_largest_k_values_descending() {
         let rows = [3, 1, 4, 1, 5, 9, 2, 6]
             .into_iter()
-            .map(|n| vec![int(n), int(3)])
+            .map(|n| vec![int(n)])
             .collect::<Vec<_>>();
-        let v = fold(TOPK, &rows).expect("bound");
+        let v = fold_with(TOPK, &scalarval(TOPK_K, int(3)), &rows).expect("bound");
         assert_eq!(lex(&v), "9 6 5");
     }
 
     #[test]
     fn topk_with_fewer_values_than_k_returns_all_of_them() {
-        let rows = vec![vec![int(1), int(5)], vec![int(2), int(5)]];
-        let v = fold(TOPK, &rows).expect("bound");
+        let rows = vec![vec![int(1)], vec![int(2)]];
+        let v = fold_with(TOPK, &scalarval(TOPK_K, int(5)), &rows).expect("bound");
         assert_eq!(lex(&v), "2 1");
     }
 
     #[test]
     fn topk_non_positive_k_poisons() {
-        assert_eq!(fold(TOPK, &[vec![int(1), int(0)]]), None);
-        assert_eq!(fold(TOPK, &[vec![int(1), int(-1)]]), None);
+        let rows = vec![vec![int(1)]];
+        assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, int(0)), &rows), None);
+        assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, int(-1)), &rows), None);
     }
 
     #[test]
     fn topk_non_integer_k_poisons() {
-        assert_eq!(fold(TOPK, &[vec![int(1), dec("2.5")]]), None);
+        let rows = vec![vec![int(1)]];
+        assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, dec("2.5")), &rows), None);
     }
 
+    /// `K` is a named scalarval, so there is no longer a "K differs per row"
+    /// case to poison on — see `percentile_missing_p_poisons`'s identical note
+    /// for `PERCENTILE`'s `P`. A missing `K` still poisons.
     #[test]
-    fn topk_inconsistent_k_across_rows_poisons() {
-        let rows = vec![vec![int(1), int(2)], vec![int(2), int(3)]];
-        assert_eq!(fold(TOPK, &rows), None);
+    fn topk_missing_k_poisons() {
+        let rows = vec![vec![int(1)], vec![int(2)]];
+        assert_eq!(fold_with(TOPK, &[], &rows), None);
     }
 
     #[test]
     fn topk_of_empty_group_is_unbound() {
-        assert_eq!(fold(TOPK, &[]), None);
+        assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, int(3)), &[]), None);
     }
 }

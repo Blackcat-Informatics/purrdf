@@ -2371,7 +2371,10 @@ mod tests {
         fn state_bound(&self) -> u64 {
             0
         }
-        fn init(&self) -> Box<dyn purrdf_sparql_eval::AggregateAccumulator> {
+        fn init(
+            &self,
+            _scalarvals: &[(String, ::purrdf::TermValue)],
+        ) -> Box<dyn purrdf_sparql_eval::AggregateAccumulator> {
             Box::new(AggSumAccumulator { total: 0 })
         }
     }

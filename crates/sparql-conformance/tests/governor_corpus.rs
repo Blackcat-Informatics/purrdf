@@ -941,7 +941,7 @@ impl CustomAggregate for CorpusSumAggregate {
     fn state_bound(&self) -> u64 {
         AGGREGATE_STATE_BOUND
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(CorpusSumAccumulator { total: 0 })
     }
 }

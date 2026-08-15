@@ -143,6 +143,61 @@ impl AlgebraicClass {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Named scalar-value parameters
+// ---------------------------------------------------------------------------
+
+/// The value kind a [`ScalarvalSpec`] admits — checked at PREPARE time
+/// (`crate::property_fn_plan::plan_aggregate`) against the LITERAL's datatype
+/// the query text supplied for a `; NAME=value` scalarval clause (see
+/// [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs), never
+/// against a runtime-evaluated value — a scalarval is never per-row.
+///
+/// `#[non_exhaustive]`: a finer kind (e.g. a specific numeric sub-tower) is
+/// addable without a breaking change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScalarvalKind {
+    /// Any member of the SPARQL numeric tower (`xsd:integer`/`xsd:decimal`/
+    /// `xsd:float`/`xsd:double`).
+    Numeric,
+    /// A plain string (`xsd:string`, no language tag).
+    String,
+}
+
+impl ScalarvalKind {
+    /// A stable diagnostic label — used by `registry_fingerprint` and prepare-time
+    /// error messages, mirroring [`AlgebraicClass::label`].
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Numeric => "numeric",
+            Self::String => "string",
+        }
+    }
+}
+
+/// One named scalar-value parameter a [`CustomAggregate`] declares accepting —
+/// the `AGG(<iri>, …; NAME=value)` surface's per-aggregate contract (see
+/// [`CustomAggregate::scalarvals`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScalarvalSpec {
+    /// The canonical, upper-cased name — matched against the parser's own
+    /// upper-cased `NAME` (see `purrdf_sparql_algebra`'s `parse_agg_scalarvals`
+    /// docs), so a declaration should itself be written upper-case.
+    pub name: &'static str,
+    /// The value kind this parameter admits.
+    pub kind: ScalarvalKind,
+}
+
+impl ScalarvalSpec {
+    /// Declare a named scalarval parameter.
+    #[must_use]
+    pub const fn new(name: &'static str, kind: ScalarvalKind) -> Self {
+        Self { name, kind }
+    }
+}
+
 /// The per-invocation folding state a [`CustomAggregate`] hands out from
 /// [`CustomAggregate::init`].
 ///
@@ -279,10 +334,40 @@ pub trait CustomAggregate: Send + Sync {
     /// folds: a running sum, a running count) declares `0`.
     fn state_bound(&self) -> u64;
 
+    /// The named scalar-value parameters this aggregate accepts on the
+    /// `AGG(<iri>, …; NAME=value)` surface (see
+    /// [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs).
+    ///
+    /// Checked at PREPARE time (`crate::property_fn_plan::plan_aggregate`),
+    /// the same fail-fast doctrine [`Self::arity`] applies to its own seam: an
+    /// unrecognized name, a duplicate, a missing REQUIRED name (every declared
+    /// name is required — there is no optional-scalarval declaration, mirroring
+    /// how every declared positional argument is required), or a supplied
+    /// value whose [`ScalarvalKind`] does not match is refused before any
+    /// governor charge.
+    ///
+    /// Default: none — most custom aggregates take no named scalar parameter
+    /// at all, exactly as most take a fixed, purely positional arity.
+    fn scalarvals(&self) -> &[ScalarvalSpec] {
+        &[]
+    }
+
     /// Begin one invocation — one fresh accumulator for one `GROUP BY` group (or
     /// for the query's single implicit group, when there is no `GROUP BY` at
     /// all).
-    fn init(&self) -> Box<dyn AggregateAccumulator>;
+    ///
+    /// `scalarvals` is the call site's `; NAME=value` clauses, already resolved
+    /// to [`TermValue`] and ALREADY VALIDATED against [`Self::scalarvals`]'s
+    /// declaration at prepare time (name known, no duplicate, right kind, every
+    /// declared name present) — never per-row, never re-evaluated: the SAME
+    /// slice for every row this accumulator, and every accumulator a chunked
+    /// fold creates alongside it, ever folds (see the module docs' "`combine`
+    /// and determinism" section for why every partial accumulator in one
+    /// `combine` chain shares one `init` factory call site). An aggregate that
+    /// declares [`Self::scalarvals`] empty may ignore this parameter entirely;
+    /// one that declares names reads them back by [`ScalarvalSpec::name`]
+    /// (e.g. `scalarvals.iter().find(|(k, _)| k == "P")`).
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator>;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +389,9 @@ const KIND: &str = "custom aggregate";
 pub(crate) fn init_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
+    scalarvals: &[(String, TermValue)],
 ) -> Result<Box<dyn AggregateAccumulator>, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "initial accumulator", || agg.init())
+    crate::contain::declaration_contained(KIND, iri, "initial accumulator", || agg.init(scalarvals))
 }
 
 /// Fold one row's argument tuple into `accumulator` with the host call contained.
@@ -438,6 +524,22 @@ pub(crate) fn state_bound_contained(
     crate::contain::declaration_contained(KIND, iri, "state bound", || agg.state_bound())
 }
 
+/// [`arity_contained`]'s twin for [`CustomAggregate::scalarvals`] — read by
+/// `crate::property_fn_plan::plan_aggregate` (prepare-time scalarval
+/// validation) and by [`AggregateRegistry::describe`]/`registry_fingerprint`.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic.
+pub(crate) fn scalarvals_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+) -> Result<Vec<ScalarvalSpec>, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || {
+        agg.scalarvals().to_vec()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
@@ -458,6 +560,8 @@ pub struct AggDescriptor {
     pub algebraic_class: AlgebraicClass,
     /// The declared per-accumulator state bound, in bytes.
     pub state_bound: u64,
+    /// The declared named scalar-value parameters.
+    pub scalarvals: Vec<ScalarvalSpec>,
 }
 
 /// A caller-injected table of custom aggregates, keyed by the `AGG(<iri>, …)`
@@ -579,6 +683,7 @@ impl AggregateRegistry {
                 volatility: volatility_contained(aggregate, iri)?,
                 algebraic_class: algebraic_class_contained(aggregate, iri)?,
                 state_bound: state_bound_contained(aggregate, iri)?,
+                scalarvals: scalarvals_contained(aggregate, iri)?,
             });
         }
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
@@ -637,6 +742,19 @@ pub(crate) fn registry_fingerprint(
         out.push_str(descriptor.algebraic_class.label());
         out.push('\u{2}');
         out.push_str(&descriptor.state_bound.to_string());
+        out.push('\u{2}');
+        // Declared scalarvals affect prepare-time admission (an unrecognized or
+        // wrong-typed `; NAME=value` is refused there) exactly as arity does, so
+        // they must fold into the fingerprint too: two registries that declare
+        // the SAME IRI with different accepted scalarval names/kinds must not
+        // share a fingerprint, or a plan admitted under one's (looser or
+        // stricter) declaration could be silently reused under the other's.
+        for spec in &descriptor.scalarvals {
+            out.push_str(spec.name);
+            out.push('\u{3}');
+            out.push_str(spec.kind.label());
+            out.push('\u{3}');
+        }
         out.push('\u{4}');
     }
     Ok(out)
@@ -709,7 +827,7 @@ mod tests {
         fn state_bound(&self) -> u64 {
             0
         }
-        fn init(&self) -> Box<dyn AggregateAccumulator> {
+        fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
             Box::new(SumAccumulator { total: 0 })
         }
     }
@@ -836,7 +954,7 @@ mod tests {
     #[test]
     fn sum_accumulator_folds_and_finishes() {
         let aggregate = SumAggregate;
-        let mut accumulator = init_contained(&aggregate, EX_SUM).expect("init");
+        let mut accumulator = init_contained(&aggregate, EX_SUM, &[]).expect("init");
         step_contained(accumulator.as_mut(), EX_SUM, &[int(2)]).expect("step");
         step_contained(accumulator.as_mut(), EX_SUM, &[int(40)]).expect("step");
         let value = finish_contained(accumulator, EX_SUM).expect("finish");
@@ -848,7 +966,7 @@ mod tests {
         // No `step` at all — `finish(init())` — and the aggregate still answers,
         // rather than the evaluator inventing a default.
         let aggregate = SumAggregate;
-        let accumulator = init_contained(&aggregate, EX_SUM).expect("init");
+        let accumulator = init_contained(&aggregate, EX_SUM, &[]).expect("init");
         let value = finish_contained(accumulator, EX_SUM).expect("finish");
         assert_eq!(value, Some(int(0)));
     }
@@ -856,9 +974,9 @@ mod tests {
     #[test]
     fn combine_merges_in_the_order_given() {
         let aggregate = SumAggregate;
-        let mut a = init_contained(&aggregate, EX_SUM).expect("init");
+        let mut a = init_contained(&aggregate, EX_SUM, &[]).expect("init");
         step_contained(a.as_mut(), EX_SUM, &[int(10)]).expect("step");
-        let mut b = init_contained(&aggregate, EX_SUM).expect("init");
+        let mut b = init_contained(&aggregate, EX_SUM, &[]).expect("init");
         step_contained(b.as_mut(), EX_SUM, &[int(32)]).expect("step");
         combine_contained(a.as_mut(), EX_SUM, b).expect("combine");
         let value = finish_contained(a, EX_SUM).expect("finish");
@@ -908,7 +1026,7 @@ mod tests {
         fn state_bound(&self) -> u64 {
             0
         }
-        fn init(&self) -> Box<dyn AggregateAccumulator> {
+        fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
             assert!(!self.panic_on_init, "aggregate exploded in init");
             Box::new(PanickingAccumulator {
                 panic_on_step: true,
@@ -936,7 +1054,7 @@ mod tests {
         let error = without_panic_output(|| {
             // `Box<dyn AggregateAccumulator>` has no `Debug` impl, so `expect_err`
             // (which would need to format the `Ok` side) is not usable here.
-            let Err(error) = init_contained(&aggregate, EX_PANIC) else {
+            let Err(error) = init_contained(&aggregate, EX_PANIC, &[]) else {
                 panic!("a panicking init must not escape");
             };
             error
@@ -956,7 +1074,7 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let mut accumulator = init_contained(&aggregate, EX_PANIC).expect("init");
+        let mut accumulator = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
         let error = without_panic_output(|| {
             step_contained(accumulator.as_mut(), EX_PANIC, &[int(1)])
                 .expect_err("a panicking step must not escape")
@@ -974,8 +1092,8 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let mut a = init_contained(&aggregate, EX_PANIC).expect("init");
-        let b = init_contained(&aggregate, EX_PANIC).expect("init");
+        let mut a = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
+        let b = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
         let error = without_panic_output(|| {
             combine_contained(a.as_mut(), EX_PANIC, b)
                 .expect_err("a panicking combine must not escape")
@@ -995,7 +1113,7 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let accumulator = init_contained(&aggregate, EX_PANIC).expect("init");
+        let accumulator = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
         let error = without_panic_output(|| {
             finish_contained(accumulator, EX_PANIC).expect_err("a panicking finish must not escape")
         });

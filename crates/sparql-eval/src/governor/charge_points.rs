@@ -1337,7 +1337,7 @@ impl CustomAggregate for SumAggregate {
     fn state_bound(&self) -> u64 {
         0
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(SumAccumulator { total: 0 })
     }
 }
@@ -1639,7 +1639,7 @@ impl CustomAggregate for PartialCounterAggregate {
     fn state_bound(&self) -> u64 {
         self.state_bound
     }
-    fn init(&self) -> Box<dyn AggregateAccumulator> {
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(PartialCounterAccumulator { partials: 1 })
     }
 }
