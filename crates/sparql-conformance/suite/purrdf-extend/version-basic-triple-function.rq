@@ -1,0 +1,3 @@
+VERSION "1.2-basic"
+PREFIX ex: <http://ex/>
+SELECT (isTRIPLE(?t) AS ?x) WHERE { ?s ex:p ?t }

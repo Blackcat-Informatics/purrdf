@@ -51,7 +51,10 @@ pub enum EvalError {
     /// syntax-only for `VERSION` and accepts any string, so an unrecognized one is
     /// refused here, at evaluation admission, rather than at parse time, on both the
     /// query and the update evaluator (see `crate::eval::admit_version`, the one
-    /// function both admission sites call). The string names the unsupported
+    /// function both admission sites call). A `VERSION "1.2-basic"` request that uses
+    /// an RDF 1.2 triple-term/reification construct outside that profile (SPARQL 1.2
+    /// Query specification §4.3.1) is refused the same way, by the same chokepoint
+    /// (see `crate::basic_profile`). The string names the unsupported
     /// construct. (Property paths are evaluated in-engine — S8 — and
     /// `DESCRIBE` evaluates via the canonical Symmetric CBD, so neither is here
     /// either. A property-function call whose predicate IRI resolves to no registered

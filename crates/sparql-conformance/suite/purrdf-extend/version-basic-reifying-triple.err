@@ -1,0 +1,7 @@
+# Every non-comment, non-blank line is text the failure diagnostic must contain.
+# A reifying triple `<< s p o >>` desugars to a `rdf:reifies <<( s p o )>>`
+# triple at parse time, so it is caught by the same triple-term check as the
+# explicit `<<( ... )>>` spelling — the diagnostic names both spellings.
+native-sparql-query-eval
+reifying triple
+1.2-basic

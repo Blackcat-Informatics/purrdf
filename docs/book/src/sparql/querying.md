@@ -124,12 +124,22 @@ longer discarded: `Query::version()` / `Update::version()` expose it as a typed
 `SparqlVersion`, alongside the existing `dataset()`/`base_iri()` accessors.
 
 Evaluation is the admission boundary. `VERSION "1.2"` and `VERSION "1.2-basic"`
-are recognized and evaluate normally on the full engine (`1.2-basic` is a subset
-of `1.2`; this evaluator does not yet enforce that narrower profile, so a
-`1.2-basic` query runs exactly as a `1.2` one would). Any other declared string —
-`VERSION "1.1"`, a typo, a future version this build predates — is refused at
-evaluation admission with a typed error naming the declared string, before any
-work is spent.
+are recognized; any other declared string — `VERSION "1.1"`, a typo, a future
+version this build predates — is refused at evaluation admission with a typed
+error naming the declared string, before any work is spent.
+
+`VERSION "1.2"` evaluates normally on the full engine. `VERSION "1.2-basic"` is
+enforced as a narrower profile: the SPARQL 1.2 Query specification's §4.3.1
+"Version Labels" table defines `1.2-basic` as full `1.2` syntax "without triple
+terms and without triple patterns that have a triple pattern in their subject
+or object position" — the RDF 1.2 triple-term/reification feature area. A
+`1.2-basic` query or update that uses a quoted triple term (`<<( s p o )>>`), a
+reifying triple or annotation (`<< s p o >>`, `{| ... |}`), a ground triple term
+in `VALUES`, or one of the "Functions on Triple Terms" (`TRIPLE`, `isTRIPLE`,
+`SUBJECT`, `PREDICATE`, `OBJECT`, §17.4.6) is refused at evaluation admission
+with a typed error naming the offending construct — for an update, with no
+mutation applied. A `1.2-basic` request that uses none of those constructs
+evaluates exactly as a `1.2` one would.
 
 ## Extending the evaluator: custom aggregates
 

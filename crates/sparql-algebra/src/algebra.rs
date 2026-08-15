@@ -50,11 +50,19 @@ use crate::ast::{
 /// declaring the same unrecognized version are refused identically (an UPDATE's
 /// refusal, in particular, applies no mutation):
 ///
-/// - [`Self::V12`] and [`Self::V12Basic`] evaluate normally on the full engine.
-///   `1.2-basic` is a subset of `1.2` (the SPARQL 1.2 Query specification's
-///   Basic profile drops a handful of full-profile features); this evaluator
-///   does not yet enforce that narrower subset, so a `1.2-basic` request runs
-///   exactly as a `1.2` one would.
+/// - [`Self::V12`] evaluates normally on the full engine.
+/// - [`Self::V12Basic`] is admitted, then walked: the SPARQL 1.2 Query
+///   specification's §4.3.1 "Version Labels" table defines `1.2-basic` as
+///   `1.2` syntax "without triple terms and without triple patterns that have
+///   a triple pattern in their subject or object position" — the RDF 1.2
+///   triple-term/reification feature area (`<<( s p o )>>`, `<< s p o >>`,
+///   `{| ... |}`, and the `TRIPLE`/`isTRIPLE`/`SUBJECT`/`PREDICATE`/`OBJECT`
+///   functions on triple terms, §17.4.6). `purrdf-sparql-eval`'s
+///   `basic_profile` module enforces exactly that restriction (see its docs
+///   for the full spec citation and the gated construct set); a `1.2-basic`
+///   request that uses none of those constructs evaluates exactly as a `1.2`
+///   one would, and one that does use one of them is refused at admission,
+///   naming the offending construct.
 /// - [`Self::Other`] is refused at admission with a typed error naming the
 ///   declared version — an unrecognized `VERSION` names a spec this evaluator
 ///   does not know how to honor, so admitting it would silently evaluate (or,

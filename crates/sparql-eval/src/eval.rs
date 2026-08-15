@@ -2107,7 +2107,7 @@ pub(crate) enum AdmittedRequest<'a> {
 
 impl AdmittedRequest<'_> {
     /// The request's `VERSION` declaration, if its prologue declared one.
-    fn version(&self) -> Option<&SparqlVersion> {
+    pub(crate) fn version(&self) -> Option<&SparqlVersion> {
         match self {
             Self::Query(query) => query.version(),
             Self::Update(update) => update.version(),
@@ -2125,14 +2125,24 @@ impl AdmittedRequest<'_> {
 /// Evaluation is the admission boundary — a version this evaluator does not
 /// recognize names a spec it does not know how to honor, so admitting it would
 /// silently evaluate (or, for an update, silently *mutate*) under the wrong (or
-/// unknown) semantics. [`SparqlVersion::V12`]/[`SparqlVersion::V12Basic`] fall
-/// through and evaluate normally on the full engine (`1.2-basic` is a subset of
-/// `1.2`; this evaluator does not yet enforce that narrower profile).
+/// unknown) semantics. [`SparqlVersion::V12`] falls through and evaluates
+/// normally on the full engine. [`SparqlVersion::V12Basic`] ALSO falls through
+/// here (it is a recognized version), but is then walked by
+/// [`crate::basic_profile::admit`], which refuses any construct outside the
+/// Basic profile the SPARQL 1.2 Query specification §4.3.1 defines (see that
+/// module's docs for the spec citation and the gated construct set) — so a
+/// `1.2-basic` request that stays inside the profile evaluates exactly as a
+/// `1.2` one would, and one that does not is refused here, before any work is
+/// spent.
 pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalError> {
-    if let Some(SparqlVersion::Other(raw)) = request.version() {
-        return Err(EvalError::unsupported(format!(
-            "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
-        )));
+    match request.version() {
+        Some(SparqlVersion::Other(raw)) => {
+            return Err(EvalError::unsupported(format!(
+                "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
+            )));
+        }
+        Some(SparqlVersion::V12Basic) => crate::basic_profile::admit(request)?,
+        Some(SparqlVersion::V12) | None => {}
     }
     Ok(())
 }
@@ -2409,6 +2419,75 @@ mod tests {
                 "empty dataset yields no solutions"
             );
         }
+    }
+
+    #[test]
+    fn basic_profile_refuses_a_triple_term_and_names_it() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2-basic\"\n\
+                 PREFIX : <http://example.org/>\n\
+                 SELECT * WHERE { ?r :reifies <<( ?s ?p ?o )>> }",
+            )
+            .expect("triple terms parse under any VERSION (syntax-only)");
+        let mut ctx = EvalCtx::new(&ds);
+        let err = evaluate_query(&query, &mut ctx)
+            .expect_err("a triple term outside the Basic profile is refused");
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("triple term"),
+            "error should name the offending construct: {err}"
+        );
+    }
+
+    #[test]
+    fn basic_profile_answers_a_within_profile_query() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2-basic\"\n\
+                 SELECT * WHERE { ?s ?p ?o . FILTER(BOUND(?s)) }",
+            )
+            .expect("parse");
+        let mut ctx = EvalCtx::new(&ds);
+        let outcome = evaluate_query(&query, &mut ctx)
+            .expect("a query that stays inside the Basic profile still answers");
+        assert!(
+            matches!(outcome, Outcome::Solutions(seq) if seq.len() == 1),
+            "expected the one matching solution"
+        );
+    }
+
+    #[test]
+    fn full_profile_version_is_unaffected_by_the_basic_gate() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2\"\n\
+                 PREFIX : <http://example.org/>\n\
+                 SELECT * WHERE { ?r :reifies <<( ?s ?p ?o )>> }",
+            )
+            .expect("parse");
+        let mut ctx = EvalCtx::new(&ds);
+        let outcome = evaluate_query(&query, &mut ctx)
+            .expect("VERSION \"1.2\" admits triple terms; the Basic gate never runs");
+        assert!(
+            matches!(outcome, Outcome::Solutions(seq) if seq.is_empty()),
+            "empty dataset yields no solutions"
+        );
     }
 
     #[test]

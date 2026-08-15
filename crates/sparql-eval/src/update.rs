@@ -1303,6 +1303,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn basic_profile_gate_refuses_triple_term_and_leaves_dataset_unchanged() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let code = failure_code(
+            eval_update(
+                &parse(
+                    "VERSION \"1.2-basic\" INSERT DATA { ex:x ex:reifies <<( ex:a ex:p ex:b )>> }",
+                ),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-update-eval");
+        // Same admission chokepoint as the unrecognized-VERSION case: it runs before any
+        // operation applies, so the store is exactly what it was.
+        assert_eq!(quad_set(&m), before, "no mutation applied");
+    }
+
+    #[test]
+    fn basic_profile_gate_admits_a_within_profile_update() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        eval_update(
+            &parse("VERSION \"1.2-basic\" INSERT DATA { ex:x ex:y ex:z }"),
+            &mut m,
+            None,
+            &cfg,
+        )
+        .expect("a within-profile update must still apply");
+        assert_eq!(quad_set(&m).len(), 1);
+    }
+
     // ── LOAD ─────────────────────────────────────────────────────────────────
 
     struct TestResolver {

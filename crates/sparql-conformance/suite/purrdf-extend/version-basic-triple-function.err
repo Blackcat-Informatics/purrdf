@@ -1,0 +1,8 @@
+# Every non-comment, non-blank line is text the failure diagnostic must contain.
+# isTRIPLE() carries no triple-term SYNTAX of its own (its argument is a plain
+# variable that could bind to any dataset value), so this pins that the whole
+# §17.4.6 "Functions on Triple Terms" family is gated, not merely the
+# triple-term grammar production.
+native-sparql-query-eval
+triple-term function
+isTRIPLE()

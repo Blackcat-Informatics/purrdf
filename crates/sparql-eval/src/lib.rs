@@ -78,6 +78,7 @@
 #![warn(missing_docs)]
 
 pub mod agg_fn;
+mod basic_profile;
 mod bgp;
 mod binop;
 mod clock;

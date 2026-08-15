@@ -27,6 +27,14 @@
 #   * VERSION "1.2" — a positive EVALUATION case (not merely syntax): proves
 #     the version prologue is not just parsed but actually ADMITTED, letting
 #     the query run to completion.
+#   * VERSION "1.2-basic" — the Basic profile (SPARQL 1.2 Query specification
+#     §4.3.1) is ENFORCED, not merely parsed: a within-profile query still
+#     answers (:versionBasicEval), while a query using an RDF 1.2 triple term
+#     (:versionBasicTripleTerm), a reifying triple that desugars onto one
+#     (:versionBasicReifyingTriple), a ground triple term in VALUES
+#     (:versionBasicValuesTripleTerm), or one of the "Functions on Triple
+#     Terms" (:versionBasicTripleFunction) is refused at evaluation admission,
+#     naming the offending construct.
 #   * AGG(<iri>, args…) — the custom-aggregate call surface. This harness has
 #     no per-case mechanism to configure an `AggregateRegistry` (see
 #     `crate::run::run`'s `QueryOptions` construction, which never sets
@@ -78,6 +86,11 @@
         :adjustTimeRemoval
         :adjustBoundaryPt14h
         :versionEval
+        :versionBasicEval
+        :versionBasicTripleTerm
+        :versionBasicReifyingTriple
+        :versionBasicValuesTripleTerm
+        :versionBasicTripleFunction
         :aggCallSyntax
         :aggCallNoArgs
         :aggStarNonCount
@@ -163,6 +176,31 @@
     mf:name "VERSION \"1.2\" is admitted, not merely parsed: the prologue-carrying query evaluates" ;
     mf:action [ qt:query <version-eval.rq> ] ;
     mf:result <version-eval.srx> .
+
+:versionBasicEval a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" is enforced, not merely admitted: a within-profile query still evaluates" ;
+    mf:action [ qt:query <version-basic-eval.rq> ] ;
+    mf:result <version-basic-eval.srx> .
+
+:versionBasicTripleTerm a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses an RDF 1.2 triple term (<<( s p o )>>) in a triple pattern" ;
+    mf:action [ qt:query <version-basic-triple-term.rq> ] ;
+    mf:result <version-basic-triple-term.err> .
+
+:versionBasicReifyingTriple a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses a reifying triple (<< s p o >>), which desugars onto a triple term" ;
+    mf:action [ qt:query <version-basic-reifying-triple.rq> ] ;
+    mf:result <version-basic-reifying-triple.err> .
+
+:versionBasicValuesTripleTerm a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses a ground triple term in a VALUES data block" ;
+    mf:action [ qt:query <version-basic-values-triple-term.rq> ] ;
+    mf:result <version-basic-values-triple-term.err> .
+
+:versionBasicTripleFunction a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses isTRIPLE(), one of the Functions on Triple Terms (§17.4.6)" ;
+    mf:action [ qt:query <version-basic-triple-function.rq> ] ;
+    mf:result <version-basic-triple-function.err> .
 
 :aggCallSyntax a mf:PositiveSyntaxTest ;
     mf:name "AGG(<iri>, args…) parses: the custom-aggregate call surface, one-or-more positional args" ;
