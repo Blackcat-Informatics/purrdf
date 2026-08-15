@@ -10,6 +10,15 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 
 - **BREAKING** **results:** ITS base-direction keys and a caller-named provenance extension
 - **sparql:** Let aggregate partial states merge by their concrete type
+- **sparql:** `SERVICE` bodies forward custom scalar-function calls again unless `SILENT` is
+  present. A prior fix closed a real silent-wrong-answer hazard for `Function::Custom` calls
+  inside `SERVICE`, but the refusal it added was unconditional rather than scoped to the
+  hazard it described — so a plain (non-`SILENT`) `SERVICE` body containing a call to the
+  endpoint's own extension function (e.g. `FILTER(<http://example.org/fn>(?x) > 0)`) now
+  hard-failed even though a non-silent `SERVICE` already turns any endpoint-side failure
+  into an honest error. Callers who worked around the regression by dropping `SILENT` need
+  no further change; callers who still need `SILENT` and hit the refusal should read the
+  error message, which now names the same workaround (drop `SILENT`) directly.
 
 ### Features
 
