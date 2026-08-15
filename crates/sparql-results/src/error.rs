@@ -25,6 +25,13 @@ pub enum Error {
     /// be told about (an unsupported result kind for the format, or an
     /// XML-unrepresentable character in a literal or IRI).
     Format(String),
+    /// A caller-supplied [`crate::model::ProvenanceNamespace`] failed
+    /// construction-time validation: the `prefix` is not a valid XML
+    /// Namespaces `NCName`, the `prefix` collides with a reserved name
+    /// (`xml`/`xmlns`, checked case-insensitively), or the `iri` is not a
+    /// syntactically valid absolute IRI. See
+    /// [`crate::model::ProvenanceNamespace::new`] for the exact rules.
+    InvalidNamespace(String),
     /// An internal invariant failed. Used sparingly; prefer a specific variant.
     Internal(String),
 }
@@ -34,6 +41,7 @@ impl fmt::Display for Error {
         match self {
             Self::MalformedTerm(msg) => write!(f, "malformed result term: {msg}"),
             Self::Format(msg) => write!(f, "result format error: {msg}"),
+            Self::InvalidNamespace(msg) => write!(f, "invalid provenance namespace: {msg}"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }

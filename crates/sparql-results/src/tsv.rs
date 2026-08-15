@@ -12,7 +12,13 @@
 //! `"lex"@lang` / `"lex"^^<dt>`, `_:label`, or the non-asserting triple term
 //! `<<( … )>>`). Unbound cells are the
 //! empty string. Tab/newline characters inside literals are escaped by the
-//! kernel's literal emitter, so no field-level quoting is needed.
+//! kernel's literal emitter, so no field-level quoting is needed for bound
+//! values.
+//!
+//! TSV has NO quoting mechanism at all, unlike CSV's RFC-4180 quoting — so a
+//! variable NAME containing a raw tab/CR/LF (which would silently shift a
+//! later column, or start a phantom record) is a hard [`Error::Format`] at
+//! the header rather than emitted raw; see [`to_tsv`].
 //!
 //! TSV is a flat exit gate with no extension point: a populated
 //! [`ResultProvenance`] is trimmed and signalled via
@@ -29,13 +35,17 @@ use purrdf_core::SparqlResult;
 /// # Errors
 ///
 /// Returns [`Error::Format`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)
-/// results, which W3C TSV does not define.  Returns [`Error::MalformedTerm`]
-/// if any solution row contains more bindings than there are projected
-/// variables (over-wide rows are an invariant violation; short rows are
-/// intentional and padded with empty fields for unbound variables), or if a
-/// triple-term cell (at any nesting depth) carries a predicate that is not an
-/// IRI — RDF 1.2 requires predicates to be IRIs, so a malformed predicate is
-/// rejected rather than laundered into a fabricated IRI cell.
+/// results, which W3C TSV does not define, and for a variable name that
+/// contains a literal tab, CR, or LF — TSV has no quoting mechanism to escape
+/// one inside the header, so emitting it raw would silently corrupt the
+/// column/record structure a reader relies on.  Returns
+/// [`Error::MalformedTerm`] if any solution row contains more bindings than
+/// there are projected variables (over-wide rows are an invariant violation;
+/// short rows are intentional and padded with empty fields for unbound
+/// variables), or if a triple-term cell (at any nesting depth) carries a
+/// predicate that is not an IRI — RDF 1.2 requires predicates to be IRIs, so a
+/// malformed predicate is rejected rather than laundered into a fabricated
+/// IRI cell.
 pub fn to_tsv(
     result: &SparqlResult,
     provenance: &ResultProvenance,
@@ -65,8 +75,7 @@ pub fn to_tsv(
         if i > 0 {
             out.push('\t');
         }
-        out.push('?');
-        out.push_str(var);
+        push_var_header(var, &mut out)?;
     }
     out.push('\n');
 
@@ -94,6 +103,29 @@ pub fn to_tsv(
         bytes: out.into_bytes(),
         provenance_dropped: !provenance.is_empty(),
     })
+}
+
+/// Append one `?`-prefixed TSV header field.
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] if `var` contains a literal tab, CR, or LF. TSV
+/// (unlike CSV) has no quoting mechanism, so those bytes cannot be escaped —
+/// emitting one raw would either shift every later header field (a tab) or
+/// start a phantom header record (a CR/LF), which no conformant reader could
+/// distinguish from the caller's intended column/row boundary. This mirrors
+/// the XML/JSON writers, which reject/escape the same class of caller-
+/// controlled structural character rather than splicing it in unescaped.
+fn push_var_header(var: &str, out: &mut String) -> Result<(), Error> {
+    if var.contains(['\t', '\n', '\r']) {
+        return Err(Error::Format(format!(
+            "variable name {var:?} contains a tab/CR/LF, which SPARQL Results TSV \
+             has no way to escape in the header"
+        )));
+    }
+    out.push('?');
+    out.push_str(var);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,6 +348,51 @@ mod tests {
             matches!(err, Error::MalformedTerm(_)),
             "expected MalformedTerm: {err:?}"
         );
+    }
+
+    #[test]
+    fn variable_name_with_tab_is_format_error() {
+        // TSV has no quoting mechanism: a raw tab in a variable name would
+        // silently shift every later header field, so it must hard-fail
+        // rather than be emitted verbatim.
+        let result = SparqlResult::Solutions {
+            variables: vec!["a\tb".to_string()],
+            rows: vec![vec![Some(TermValue::Iri(
+                "http://example.org/x".to_string(),
+            ))]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("tab in variable name must be rejected");
+        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+    }
+
+    #[test]
+    fn variable_name_with_newline_is_format_error() {
+        let result = SparqlResult::Solutions {
+            variables: vec!["a\nb".to_string()],
+            rows: vec![vec![Some(TermValue::Iri(
+                "http://example.org/x".to_string(),
+            ))]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("newline in variable name must be rejected");
+        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+    }
+
+    #[test]
+    fn variable_name_with_cr_is_format_error() {
+        let result = SparqlResult::Solutions {
+            variables: vec!["a\rb".to_string()],
+            rows: vec![vec![Some(TermValue::Iri(
+                "http://example.org/x".to_string(),
+            ))]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("CR in variable name must be rejected");
+        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
     }
 
     #[test]

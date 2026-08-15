@@ -129,10 +129,8 @@ fn populated_provenance() -> ResultProvenance {
 /// every populated-provenance golden must configure one explicitly
 /// (`example.org`-scoped, per repository convention).
 fn provenance_namespace() -> ProvenanceNamespace {
-    ProvenanceNamespace {
-        prefix: "prov".to_string(),
-        iri: "http://example.org/ns/prov#".to_string(),
-    }
+    ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+        .expect("golden namespace is a valid NCName prefix + absolute IRI")
 }
 
 fn text(

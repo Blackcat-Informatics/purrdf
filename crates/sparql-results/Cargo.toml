@@ -32,6 +32,11 @@ name = "purrdf_sparql_results"
 
 [dependencies]
 purrdf-core = { workspace = true }
+# The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`
+# namespace IRI as an absolute RFC-3987 IRI (see `model::ProvenanceNamespace::new`).
+# Zero-dep, wasm-clean leaf — does not compromise this crate's no-oxigraph
+# discipline.
+purrdf-iri = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

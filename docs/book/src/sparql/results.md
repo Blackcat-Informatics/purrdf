@@ -70,15 +70,18 @@ purrdf-minted one (PurRDF mints no vocabulary IRIs of its own; see
 [AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/AGENTS.md)'s
 "NOT an ontology" contract). Supply a `ProvenanceNamespace` — a `prefix` (the
 bare top-level JSON member key, and the XML namespace prefix) plus the XML
-namespace `iri` — as `serialize`/`to_json`/`to_xml`'s fourth argument:
+namespace `iri` — as `serialize`/`to_json`/`to_xml`'s fourth argument.
+`ProvenanceNamespace::new` validates `prefix` as an XML Namespaces `NCName`
+(rejecting, among other things, `:`, whitespace, and the reserved `xml`/
+`xmlns` names) and `iri` as an absolute IRI, since `prefix` is spliced
+directly into XML element/attribute names and cannot be escaped the way text
+content can:
 
 ```rust,ignore
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, serialize};
 
-let namespace = ProvenanceNamespace {
-    prefix: "prov".to_string(),
-    iri: "https://example.org/provenance#".to_string(),
-};
+let namespace = ProvenanceNamespace::new("prov", "https://example.org/provenance#")
+    .expect("valid NCName prefix + absolute IRI");
 let provenance = ResultProvenance::default(); // or a populated one
 let outcome = serialize(&result, SparqlResultsFormat::Json, &provenance, Some(&namespace))?;
 ```

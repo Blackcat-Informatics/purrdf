@@ -1567,6 +1567,7 @@ dependencies = [
  "insta",
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-iri",
 ]
 
 [[package]]

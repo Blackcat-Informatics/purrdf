@@ -109,7 +109,7 @@ fn write_srj(
         ));
     }
     out.push(',');
-    json_string(&namespace.prefix, out);
+    json_string(namespace.prefix(), out);
     out.push(':');
     write_provenance_body(result, provenance, out);
     out.push('}');
@@ -605,10 +605,8 @@ mod tests {
                 sources: vec!["http://example.org/g1".to_string()],
             }],
         };
-        let namespace = ProvenanceNamespace {
-            prefix: "prov".to_string(),
-            iri: "http://example.org/ns/prov#".to_string(),
-        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("test namespace is a valid NCName prefix + absolute IRI");
         let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
         assert!(!outcome.provenance_dropped, "namespace was supplied");
         let text = String::from_utf8(outcome.bytes).expect("UTF-8");
@@ -645,10 +643,8 @@ mod tests {
             engine: Some("e".to_string()),
             ..Default::default()
         };
-        let namespace = ProvenanceNamespace {
-            prefix: "prov".to_string(),
-            iri: "http://example.org/ns/prov#".to_string(),
-        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("test namespace is a valid NCName prefix + absolute IRI");
         let text = json_text_ns(&result, &provenance, &namespace);
         assert!(
             text.contains("\"queryForm\":\"ask\""),

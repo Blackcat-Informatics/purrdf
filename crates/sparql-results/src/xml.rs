@@ -256,13 +256,13 @@ fn write_provenance(
     namespace: &ProvenanceNamespace,
     out: &mut String,
 ) -> Result<(), Error> {
-    let prefix = &namespace.prefix;
+    let prefix = namespace.prefix();
     out.push_str("  <");
     out.push_str(prefix);
     out.push_str(":provenance xmlns:");
     out.push_str(prefix);
     out.push_str("=\"");
-    xml_escape_attr(&namespace.iri, out)?;
+    xml_escape_attr(namespace.iri(), out)?;
     out.push_str("\">\n");
 
     out.push_str("    <");
@@ -407,10 +407,8 @@ mod tests {
     /// `example.org`-scoped per repository convention (never a fabricated
     /// default; the crate itself mints nothing).
     fn test_namespace() -> ProvenanceNamespace {
-        ProvenanceNamespace {
-            prefix: "prov".to_string(),
-            iri: "http://example.org/ns/prov#".to_string(),
-        }
+        ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("test namespace is a valid NCName prefix + absolute IRI")
     }
 
     fn xml_text(result: &SparqlResult, prov: &ResultProvenance) -> String {
@@ -741,6 +739,115 @@ mod tests {
         assert!(
             after_results.contains("<prov:provenance"),
             "provenance must follow </results>: {text}"
+        );
+    }
+
+    // ---- Namespace-prefix injection: unconstructible, not merely escaped ----
+
+    /// A prefix engineered to close the `xmlns:{prefix}="…"` attribute and the
+    /// `<{prefix}:provenance …>` start tag, splicing an attacker-controlled
+    /// element into the document, must never construct. Every character this
+    /// string needs (`"`, `<`, `>`, space) individually violates the XML
+    /// `NCName` grammar `ProvenanceNamespace::new` enforces, so there is no
+    /// path from caller input to this writer emitting it.
+    #[test]
+    fn crafted_breakout_prefix_cannot_be_constructed() {
+        let crafted = "prov\"><evil xmlns:x=\"http://evil.example/";
+        let err = ProvenanceNamespace::new(crafted, "http://example.org/ns/prov#")
+            .expect_err("a markup-breakout prefix must never construct");
+        assert!(
+            matches!(err, Error::InvalidNamespace(_)),
+            "expected InvalidNamespace, got: {err:?}"
+        );
+    }
+
+    /// Defence in depth: for every namespace `ProvenanceNamespace::new` DOES
+    /// accept (plain ASCII, a non-leading digit/hyphen/dot, a leading
+    /// underscore, and a non-ASCII `NCNameStartChar`), the XML this writer
+    /// emits still parses cleanly through this crate's own SRX reader
+    /// (`from_xml`) — the base SELECT document (variables + bindings) is
+    /// unaffected by the appended provenance element, exactly as the "the
+    /// writer must never emit a document it cannot itself read" contract
+    /// requires.
+    #[test]
+    fn accepted_namespaces_round_trip_through_the_crate_reader() {
+        let accepted = [
+            ("prov", "http://example.org/ns/prov#"),
+            ("_prov-1.thing_2", "http://example.org/ns/prov#"),
+            ("_leading_underscore", "http://example.org/ns/prov#"),
+            // A non-ASCII NCNameStartChar (Cyrillic Ze, U+0417) — the
+            // NCName production admits far more than ASCII letters.
+            ("\u{417}prov", "http://example.org/ns/prov#"),
+        ];
+        for (prefix, iri) in accepted {
+            let namespace =
+                ProvenanceNamespace::new(prefix, iri).expect("accepted shape must construct");
+            let result = SparqlResult::Solutions {
+                variables: vec!["s".to_string()],
+                rows: vec![vec![Some(TermValue::Iri(
+                    "http://example.org/s".to_string(),
+                ))]],
+                aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            };
+            let provenance = ResultProvenance {
+                engine: Some("purrdf-sparql-eval".to_string()),
+                ..Default::default()
+            };
+            let outcome = to_xml(&result, &provenance, Some(&namespace))
+                .unwrap_or_else(|e| panic!("prefix {prefix:?} must serialize: {e:?}"));
+            let parsed = crate::xml_read::from_xml(&outcome.bytes)
+                .unwrap_or_else(|e| panic!("prefix {prefix:?} document must re-parse: {e:?}"));
+            assert_eq!(parsed.variables, ["s"]);
+            assert_eq!(
+                parsed.rows,
+                [vec![Some(TermValue::Iri(
+                    "http://example.org/s".to_string()
+                ))]]
+            );
+        }
+    }
+
+    /// The legitimate custom-prefix surface stays fully usable end to end: a
+    /// caller-chosen prefix serializes, and the base document (bindings) reads
+    /// back correctly via this crate's own reader — the fix must not break the
+    /// happy path while closing the injection hole.
+    #[test]
+    fn valid_custom_prefix_write_then_read_back() {
+        let namespace = ProvenanceNamespace::new("myProv", "https://example.org/ns/my-prov#")
+            .expect("custom prefix is a valid NCName + absolute IRI");
+        let result = SparqlResult::Solutions {
+            variables: vec!["s".to_string(), "label".to_string()],
+            rows: vec![vec![
+                Some(TermValue::Iri("http://example.org/s".to_string())),
+                Some(lit("hello", XSD_STRING)),
+            ]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_string()),
+            ..Default::default()
+        };
+        let outcome = to_xml(&result, &provenance, Some(&namespace)).expect("serializes");
+        assert!(!outcome.provenance_dropped, "namespace was supplied");
+        let text = String::from_utf8(outcome.bytes.clone()).expect("UTF-8");
+        assert!(
+            text.contains("<myProv:provenance xmlns:myProv=\"https://example.org/ns/my-prov#\">"),
+            "missing provenance element: {text}"
+        );
+
+        let parsed = crate::xml_read::from_xml(&outcome.bytes).expect("document re-parses");
+        assert_eq!(parsed.variables, ["s", "label"]);
+        assert_eq!(
+            parsed.rows,
+            [vec![
+                Some(TermValue::Iri("http://example.org/s".to_string())),
+                Some(TermValue::Literal {
+                    lexical_form: "hello".to_string(),
+                    datatype: XSD_STRING.to_string(),
+                    language: None,
+                    direction: None,
+                }),
+            ]]
         );
     }
 
