@@ -460,21 +460,27 @@ class Store:
     # need no kwarg here: both are ordinary grammar the parser and evaluator
     # handle unconditionally, unlike the extension seams above.
     #
-    # There is no Python surface for the CUSTOM-AGGREGATE seam
-    # (`AGG(<iri>, args…)`, `purrdf_sparql_eval::agg_fn`), including the
-    # ten-member statistical set (`AggregateRegistry::register_statistical_aggregates`,
-    # `MEDIAN`/`PERCENTILE`/`STDDEV`/…). Like the property-function registry
-    # above, a registered aggregate is arbitrary host Rust — `init`/`step`/
-    # `combine`/`finish` closures, never Python callables — so registration is
-    # Rust-host-only. The property-function seam's `relations` kwarg exists
-    # because a RELATION reduces to pure data (a frozen row table); a fold has
-    # no equivalent data-only reduction, so this binding exposes no `aggregates`
-    # kwarg, not even a namespace-only one (contrast `property_fn_namespaces`,
-    # which needs no Python code either but is still absent above the
-    # data-relation surface it enables). A host embedding the Rust engine
-    # directly reaches the statistical set with one `register_statistical_aggregates`
-    # call and a `QueryOptions.aggregates` registry; through this binding, it is
-    # not reachable at all today.
+    # `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    # (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+    # `FIRST`, `LAST`, `TOPK` — `AggregateRegistry::register_statistical_aggregates`)
+    # under that IRI, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.:
+    #
+    #   store.query(
+    #       "SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) "
+    #       "WHERE { ?s ex:value ?v }",
+    #       aggregate_namespace="https://ex.example/agg#",
+    #   )
+    #
+    # Unset (the default) leaves every one of the ten names an ordinary unregistered
+    # custom-aggregate IRI, refused at prepare time exactly as any other unregistered
+    # `AGG(<iri>, …)` call. `AggregateRegistry::register_statistical_aggregates` takes
+    # only a namespace string — no host Rust closure to marshal — which is what makes
+    # this kwarg possible: it crosses the Python boundary exactly the way
+    # `property_fn_namespaces` does. The GENERAL custom-aggregate seam
+    # (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
+    # `init`/`step`/`combine`/`finish` closure) remains Rust-host-only — a fold has no
+    # data-only reduction the way a property-function relation does — and this binding
+    # exposes no surface for it, not even a namespace-only one.
     def query(
         self,
         query: str,
@@ -485,6 +491,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -500,6 +507,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -509,7 +517,10 @@ class Store:
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
     # Governed two-phase entailment query. `outcome` and `report` are absent only
-    # when the closure phase itself was stopped.
+    # when the closure phase itself was stopped. NOTE: this entry takes no
+    # `aggregate_namespace` — the entailment-aware query lane evaluates under no
+    # `QueryOptions` seam at all, on any regime, so there is nothing here for a
+    # registry to reach.
     def query_entailment_governed(
         self,
         query: str,
@@ -527,6 +538,9 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
+    # `aggregate_namespace` behaves exactly as on `query` above, and is reachable
+    # from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` —
+    # the only place SPARQL UPDATE's grammar admits an aggregate.
     def update(
         self,
         update: str,
@@ -536,6 +550,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -548,6 +563,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -624,7 +640,8 @@ class MutableDataset:
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
     ) -> bytes: ...
-    # Engine configuration kwargs: as on `Store.query` / `Store.update`.
+    # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
+    # `aggregate_namespace` (see `Store.query`).
     def query(
         self,
         query: str,
@@ -635,6 +652,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
     # `Store.query_governed` / `Store.update_governed`.
@@ -648,6 +666,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -682,6 +701,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> None: ...
     def update_governed(
         self,
@@ -692,6 +712,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,

@@ -29,7 +29,7 @@
 /**
  * ABI minor version.
  */
-#define PURRDF_ABI_MINOR 3
+#define PURRDF_ABI_MINOR 4
 
 /**
  * ABI patch version.
@@ -1958,15 +1958,24 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
  * certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
  * Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
  *
+ * `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
+ * set under that IRI namespace, so the query text can call
+ * `AGG(<namespace><NAME>, args…)` for `MEDIAN`/`PERCENTILE`/`STDDEV`/`STDDEV_POP`/
+ * `VARIANCE`/`VAR_POP`/`MODE`/`FIRST`/`LAST`/`TOPK`. Null leaves every one of the ten
+ * names an ordinary unregistered custom-aggregate IRI, exactly as before this parameter
+ * existed.
+ *
  * # Safety
  * `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
  * `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
  * result pointer must be writable when that shape is returned. Any enabled cancellation
- * handle must remain live until the call returns.
+ * handle must remain live until the call returns. `aggregate_namespace`, if non-null,
+ * must be a NUL-terminated UTF-8 C string live for the call.
  */
 int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               const char *query,
                               const char *base_iri,
+                              const char *aggregate_namespace,
                               const PurrdfQueryGovernors *governors,
                               int32_t *out_outcome,
                               int32_t *out_kind,
@@ -2016,14 +2025,20 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
  * `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
  * enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
  *
+ * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`],
+ * reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
+ * `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
+ *
  * # Safety
  * `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
  * string; `governors` live for the call; and both output pointers writable. Any enabled
- * cancellation handle must remain live until the call returns.
+ * cancellation handle must remain live until the call returns. `aggregate_namespace`, if
+ * non-null, must be a NUL-terminated UTF-8 C string live for the call.
  */
 int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *request,
                                const char *base_iri,
+                               const char *aggregate_namespace,
                                const PurrdfQueryGovernors *governors,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,

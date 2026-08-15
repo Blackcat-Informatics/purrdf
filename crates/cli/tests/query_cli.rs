@@ -847,3 +847,136 @@ fn a_sub_property_axiom_falls_back_and_still_answers() {
         stderr(&out)
     );
 }
+
+/// Numeric fixture for the statistical-aggregate end-to-end tests: three values
+/// (1, 2, 3) on distinct subjects — `MEDIAN` folds this to `2`.
+const NUMBERS_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:s1 ex:value 1 .\n",
+    "ex:s2 ex:value 2 .\n",
+    "ex:s3 ex:value 3 .\n",
+);
+
+/// End-to-end: `--aggregate-namespace` actually COMPUTES `MEDIAN` through the built
+/// CLI binary — not merely that the flag parses. This is the reachability gap the
+/// flag closes: before it existed, `AggregateRegistry::register_statistical_aggregates`
+/// was reachable only by embedding the Rust engine directly.
+#[test]
+fn aggregate_namespace_computes_median_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the aggregate-namespace query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let json = stdout(&out);
+    assert!(
+        json.contains("\"value\":\"2\""),
+        "MEDIAN of {{1, 2, 3}} is 2:\n{json}"
+    );
+}
+
+/// Regression: the namespace stays caller-supplied with no fabricated default —
+/// omitting `--aggregate-namespace` leaves the ten statistical names unregistered,
+/// and the SAME typed error an ordinary unregistered custom-aggregate IRI already
+/// produces surfaces here, unchanged (existing behaviour with the parameter absent
+/// is unchanged).
+#[test]
+fn omitted_aggregate_namespace_leaves_the_statistical_set_unregistered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&["query", "--data", &ttl, "--results-format", "json", query]);
+    assert!(
+        !out.status.success(),
+        "an unregistered custom aggregate must be refused"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("aggregate") || err.contains("regist"),
+        "the refusal must name the unregistered aggregate:\n{err}"
+    );
+}
+
+/// End-to-end: `purrdf update`'s `--aggregate-namespace` reaches `MEDIAN` from a
+/// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` — the only
+/// place SPARQL UPDATE's grammar admits an aggregate.
+#[test]
+fn aggregate_namespace_computes_median_through_a_cli_update() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let update = "PREFIX ex: <http://example.org/> \
+                  INSERT { ex:summary ex:median ?m } \
+                  WHERE { SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                          WHERE { ?s ex:value ?v } }";
+
+    let out = run(&[
+        "update",
+        "--data",
+        &ttl,
+        "--to",
+        "ntriples",
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        update,
+    ]);
+    assert!(
+        out.status.success(),
+        "the aggregate-namespace update must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let ntriples = stdout(&out);
+    assert!(
+        ntriples.contains("<http://example.org/summary> <http://example.org/median> \"2\""),
+        "MEDIAN of {{1, 2, 3}} inserted as 2:\n{ntriples}"
+    );
+}
+
+/// `--aggregate-namespace` combined with `--entailment` is refused by name — the
+/// entailment-aware query lane takes no `QueryOptions` seam at all, so the flag would
+/// silently do nothing if it were accepted.
+#[test]
+fn aggregate_namespace_with_entailment_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "SELECT ?s WHERE { ?s ?p ?o }",
+    ]);
+    assert!(
+        !out.status.success(),
+        "the combination must be refused rather than silently dropping the flag"
+    );
+    assert!(
+        stderr(&out).contains("aggregate-namespace"),
+        "the refusal must name the flag:\n{}",
+        stderr(&out)
+    );
+}

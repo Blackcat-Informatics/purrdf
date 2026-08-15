@@ -444,7 +444,7 @@ int main(int argc, char **argv) {
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
     printf("libpurrdf ABI %u.%u.%u\n", version.major, version.minor, version.patch);
-    CHECK(version.major == 0 && version.minor == 3, "abi 0.3.x");
+    CHECK(version.major == 0 && version.minor == 4, "abi 0.4.x");
 
     /* parse */
     const char *doc = "<http://a> <http://b> <http://c> .";
@@ -661,7 +661,7 @@ int main(int argc, char **argv) {
     PurrdfGovernorEvidence query_evidence;
     PurrdfPartialCertificate partial_certificate;
     rc = purrdf_query_governed(
-        dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &governors,
+        dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL, &governors,
         &query_outcome, &result_kind, &partial_rows, &partial_graph,
         &partial_boolean, &query_evidence, &partial_certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
@@ -679,6 +679,52 @@ int main(int argc, char **argv) {
         purrdf_rowcursor_free(partial_rows);
     }
     CHECK(partial_graph == NULL, "a SELECT writes no partial graph");
+
+    /* `aggregate_namespace` end-to-end: registers purrdf's first-party statistical
+     * aggregate set and actually COMPUTES `MEDIAN` through the real C ABI (header +
+     * linkage) — the reachability gap this parameter closes. */
+    const char *median_doc =
+        "<http://example.org/s1> <http://example.org/value> \"1\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/s2> <http://example.org/value> \"2\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/s3> <http://example.org/value> \"3\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n";
+    PurrdfDataset *median_dataset = NULL;
+    rc = purrdf_parse((const uint8_t *)median_doc, strlen(median_doc), "text/turtle",
+                      NULL, NULL, &median_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && median_dataset != NULL,
+          "median fixture parses");
+
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "median governor initializer");
+    int32_t median_outcome = -1;
+    int32_t median_kind = -1;
+    PurrdfRowCursor *median_rows = NULL;
+    PurrdfGovernorEvidence median_evidence;
+    PurrdfPartialCertificate median_partial;
+    rc = purrdf_query_governed(
+        median_dataset,
+        "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) "
+        "WHERE { ?s <http://example.org/value> ?v }",
+        NULL, "https://example.org/agg#", &governors, &median_outcome,
+        &median_kind, &median_rows, NULL, NULL, &median_evidence,
+        &median_partial, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL, "aggregate_namespace query runs");
+    CHECK(median_outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
+          "aggregate_namespace query completes");
+    CHECK(purrdf_rowcursor_next(median_rows) == PURRDF_STATUS_OK,
+          "MEDIAN row present");
+    PurrdfTermView median_view;
+    uint8_t median_bound = 0;
+    CHECK(purrdf_rowcursor_term(median_rows, 0, &median_view, &median_bound) ==
+                  PURRDF_STATUS_OK &&
+              median_bound == 1,
+          "?m is bound");
+    CHECK(median_view.lexical.len == 1 && median_view.lexical.ptr[0] == '2',
+          "MEDIAN of {1, 2, 3} is 2");
+    purrdf_rowcursor_free(median_rows);
+    purrdf_dataset_free(median_dataset);
 
     /* The entailment-aware carrier keeps phase two and its closure report together. */
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
@@ -729,7 +775,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        &governors, &update_outcome, &update_evidence, &error);
+        NULL, &governors, &update_outcome, &update_evidence, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");

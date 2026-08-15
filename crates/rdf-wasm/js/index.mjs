@@ -133,6 +133,21 @@ const GOVERNOR_OPTION_KEYS = [
   "cancel",
 ];
 
+// `aggregateNamespace` registers purrdf's first-party statistical aggregate set
+// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+// `LAST`, `TOPK`) under an IRI namespace, so the query text can call
+// `AGG(<namespace><NAME>, args…)`. Like the governor keys above, it is honored ONLY by
+// `queryGoverned`/`updateGoverned` (the two entry points that accept a `QueryOptions`
+// registry at all) — an ungoverned call or `queryEntailmentGoverned` would silently drop
+// it, so both refuse it by name instead.
+function normalizeAggregateNamespace(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("query option aggregateNamespace must be a string when supplied");
+  }
+  return value;
+}
+
 function normalizeQueryOptions(options) {
   if (options == null) return { base: undefined, format: undefined };
   if (typeof options !== "object") {
@@ -146,6 +161,12 @@ function normalizeQueryOptions(options) {
       );
     }
   }
+  if (options.aggregateNamespace != null) {
+    throw new TypeError(
+      "query option aggregateNamespace registers the statistical-aggregate registry and " +
+        "is honored only by queryGoverned/updateGoverned; this call would ignore it entirely",
+    );
+  }
   return {
     base: options.base ?? undefined,
     format: options.format ?? undefined,
@@ -153,12 +174,13 @@ function normalizeQueryOptions(options) {
 }
 
 function normalizeGovernedOptions(options) {
-  if (options == null) return { base: undefined };
+  if (options == null) return { base: undefined, aggregateNamespace: undefined };
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
   return {
     base: options.base ?? undefined,
+    aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
     fuel: governorCeiling(options.fuel, "fuel"),
     deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
     maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
@@ -177,6 +199,16 @@ function normalizeGovernedOptions(options) {
 
 function normalizeEntailmentGovernedOptions(options) {
   const governed = normalizeGovernedOptions(options);
+  // The entailment-aware query lane takes no `QueryOptions` at all — on every regime, it
+  // always evaluates under an empty seam (see `QueryEngine::query_entailment_governed` in
+  // Rust) — so an aggregate registry named here would never reach the evaluation that runs
+  // the query. Refused by name rather than silently dropped.
+  if (options?.aggregateNamespace != null) {
+    throw new TypeError(
+      "query option aggregateNamespace is not honored by queryEntailmentGoverned: the " +
+        "entailment-aware query lane takes no aggregate registry on any regime",
+    );
+  }
   return {
     ...governed,
     program: options?.program ?? undefined,
@@ -634,6 +666,7 @@ export async function ready(wasmBytesOrUrl) {
           dataset,
           sparql,
           o.base,
+          o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,
@@ -680,6 +713,7 @@ export async function ready(wasmBytesOrUrl) {
           dataset,
           sparql,
           o.base,
+          o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,

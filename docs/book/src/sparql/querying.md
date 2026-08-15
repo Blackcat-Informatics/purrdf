@@ -311,21 +311,84 @@ result byte-identical to the sequential fold.
 ## Reaching extensions from other hosts
 
 The property-function registry, the SHACL-AF function registry, and the
-custom-aggregate registry described above are all **Rust-closure seams**: a
-registered relation, function, or aggregate is arbitrary host Rust, so
-registering one is a Rust-host-only operation. The Python binding exposes a
-narrower, data-only reachable subset of the property-function seam
-(`property_fn_namespaces` for recognition, plus `relations`/
-`relations_from_graph` for wholly data-shaped relations — see the `Store`
-class in the `purrdf` Python package); it exposes no equivalent for the
-custom-aggregate seam today, and neither WebAssembly, the C ABI, nor the CLI
-expose either registry at all. `AggregateRegistry::register_statistical_aggregates`
-needs no per-call marshaling — unlike a general custom aggregate, it takes
-only a namespace string and wires ten pre-built Rust instances — so any host
-that already threads `QueryOptions` through to `purrdf-sparql-eval` can
-reach the whole statistical set with a one-line change, without inventing a
-cross-language callback protocol; until a binding wires that call, the set is
-reachable only by embedding the Rust engine directly.
+GENERAL custom-aggregate registry are all **Rust-closure seams**: a registered
+relation, function, or aggregate is arbitrary host Rust (`init`/`step`/
+`combine`/`finish` closures for an aggregate), so registering one is a
+Rust-host-only operation. It genuinely cannot cross a Python, WebAssembly, or C
+boundary as a string or any other FFI-shaped value — there is no callback
+protocol this project is willing to invent for it, and none of the four host
+surfaces below expose it.
+
+purrdf's first-party **statistical set** is different, precisely because it is
+NOT an arbitrary closure: `AggregateRegistry::register_statistical_aggregates`
+takes only a namespace **string** and wires ten pre-built Rust instances
+internally, so it crosses every host boundary this crate ships exactly the way
+`property_fn_namespaces` does — no callback, no per-aggregate marshaling. Every
+host surface threads it through as a keyword argument / flag / parameter named
+`aggregate_namespace` (`aggregateNamespace` in camelCase-spelled JavaScript),
+mirroring however that surface already threads `property_fn_namespaces` or the
+nearest equivalent optional-string configuration:
+
+- **Rust** (embedding the engine directly): `QueryOptions.aggregates`, as
+  shown throughout this page.
+- **Python** (`purrdf.Store` / `purrdf.MutableDataset`): the
+  `aggregate_namespace` keyword on `query` / `query_governed` / `update` /
+  `update_governed`.
+
+  ```python
+  store.query(
+      "SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) "
+      "WHERE { ?s ex:value ?v }",
+      aggregate_namespace="https://ex.example/agg#",
+  )
+  ```
+
+- **CLI** (`purrdf query` / `purrdf update`): the `--aggregate-namespace IRI`
+  flag.
+
+  ```sh
+  purrdf query --data data.ttl --aggregate-namespace 'https://ex.example/agg#' \
+    'SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) WHERE { ?s ?p ?v }'
+  ```
+
+- **WebAssembly** (`QueryEngine.queryGoverned` / `updateGoverned`): the
+  `aggregateNamespace` option, alongside the other governed-call options.
+
+  ```js
+  const outcome = engine.queryGoverned(dataset, sparql, {
+    aggregateNamespace: "https://ex.example/agg#",
+  });
+  ```
+
+- **C ABI** (`purrdf_query_governed` / `purrdf_update_governed`): a nullable
+  `const char *aggregate_namespace` parameter, the same optional-C-string
+  convention every other nullable string on this ABI uses.
+
+  ```c
+  purrdf_query_governed(dataset, query, /* base_iri */ NULL,
+                         "https://ex.example/agg#", &governors, /* … */);
+  ```
+
+`namespace` stays caller-supplied configuration with no fabricated default on
+every one of these surfaces: omitting it (`None` / not passing the flag /
+`undefined` / a null pointer) leaves every one of the ten names an ordinary
+unregistered custom-aggregate IRI, refused exactly as before this parameter
+existed.
+
+Two structural limits apply everywhere the statistical set is reachable:
+
+- The **entailment-aware query lane** (`query_with_entailment_governed` and
+  its Python/CLI/WebAssembly/C wrappers) evaluates under no `QueryOptions` seam
+  at all, on any regime — closing that gap is a larger, separate change to
+  `purrdf-entail`'s query-under-a-regime plumbing, not a parameter
+  pass-through, so every host refuses (or has no parameter for) combining
+  `aggregate_namespace` with an entailment-regime query rather than silently
+  dropping it.
+- SPARQL UPDATE's grammar admits an aggregate only inside a nested
+  `SELECT … GROUP BY` in a `WHERE` clause (an ordinary `DELETE`/`INSERT WHERE`
+  basic graph pattern has no `GROUP BY` of its own) — every host's `update`
+  entry reaches the statistical set through exactly that nested-subquery
+  shape.
 
 ## Entailment regimes
 

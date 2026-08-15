@@ -106,8 +106,8 @@ use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{
-    GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation, QueryGovernors,
-    QueryOptions as EngineQueryOptions,
+    AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
+    QueryGovernors, QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
@@ -130,16 +130,45 @@ use crate::source::{self, ViewOp};
 struct QueryOp<'a> {
     engine: &'a NativeSparqlEngine,
     prepared: &'a PreparedQuery,
+    /// The registry `--aggregate-namespace` built, or `None` when the flag was not
+    /// given. This MUST be the exact same registry instance `prepared` was parsed
+    /// against (see [`AggregateRegistry`]'s instance-identity fingerprint) — never a
+    /// freshly built one, even with identical content, or evaluation refuses the plan.
+    aggregates: Option<&'a AggregateRegistry>,
 }
 
 impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
-        Ok(self
-            .engine
-            .query_prepared_view(view, self.prepared, &[], EngineQueryOptions::EMPTY)?)
+        Ok(self.engine.query_prepared_view(
+            view,
+            self.prepared,
+            &[],
+            EngineQueryOptions {
+                aggregates: self.aggregates,
+                ..EngineQueryOptions::EMPTY
+            },
+        )?)
     }
+}
+
+/// Build the statistical-aggregate registry `--aggregate-namespace` requests, or
+/// `None` when the flag is absent — the CLI's SOLE aggregate-registration surface.
+///
+/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
+/// string, so it crosses this command-line boundary the same way `--property-fn-namespaces`
+/// would if this binary had a relations surface to declare one over: no callback, no
+/// per-aggregate marshaling. The general custom-aggregate seam
+/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
+/// `init`/`step`/`combine`/`finish` closure) is a Rust-host-only capability with no
+/// string-shaped surface at all — it genuinely cannot reach a command-line flag — and this
+/// binary does not attempt to expose it.
+pub(crate) fn build_aggregate_registry(namespace: Option<&str>) -> Option<AggregateRegistry> {
+    let namespace = namespace?;
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates(namespace);
+    Some(registry)
 }
 
 /// The GOVERNED query operation: evaluate the prepared query over the concrete view under
@@ -160,6 +189,8 @@ struct GovernedQueryOp<'a> {
     engine: &'a NativeSparqlEngine,
     prepared: &'a PreparedQuery,
     flags: GovernorFlags,
+    /// The SAME registry instance `prepared` was parsed against; see [`QueryOp::aggregates`].
+    aggregates: Option<&'a AggregateRegistry>,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
@@ -167,14 +198,19 @@ impl ViewOp for GovernedQueryOp<'_> {
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors();
-        // `QueryOptions::EMPTY`: the CLI wires no SHACL-AF function table and no
-        // property-function registry, and it prepared this plan through the matching
-        // registry-free parse — so the plan and the evaluation agree on an empty seam.
+        // `QueryOptions::EMPTY` for every axis but `aggregates`: the CLI wires no
+        // SHACL-AF function table and no property-function registry, and it prepared
+        // this plan through the matching registry-free parse — so the plan and the
+        // evaluation agree on an empty seam there. `aggregates` is `self.aggregates`
+        // exactly, the SAME instance `prepared` was parsed against (see `run` below).
         Ok(self.engine.query_prepared_governed_view(
             view,
             self.prepared,
             &[],
-            purrdf_sparql_eval::QueryOptions::EMPTY,
+            purrdf_sparql_eval::QueryOptions {
+                aggregates: self.aggregates,
+                ..purrdf_sparql_eval::QueryOptions::EMPTY
+            },
             &governors,
         )?)
     }
@@ -378,6 +414,10 @@ pub(crate) struct QueryOptions<'a> {
     pub(crate) explain: bool,
     /// `--jsonld-options`: the configured JSON-LD/YAML-LD serializer options.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
+    /// `--aggregate-namespace`: registers purrdf's first-party statistical aggregate
+    /// set under this IRI namespace. `None` (the default) leaves every one of the ten
+    /// names an unregistered custom-aggregate IRI, exactly as before this flag existed.
+    pub(crate) aggregate_namespace: Option<&'a str>,
 }
 
 /// Run the `query` subcommand.
@@ -413,7 +453,22 @@ pub(crate) fn run(
         return Ok(CliOutcome::Complete);
     }
 
-    let prepared = engine.prepare_query(options.query, options.base)?;
+    // Built ONCE, before the parse, and reused verbatim by every lane below: a
+    // `Custom` aggregate IRI is admitted (registered, correct arity) against this
+    // EXACT registry instance at prepare time, and a plan/registry disagreement at
+    // evaluation is refused rather than silently mismatched (see
+    // `AggregateRegistry`'s instance-identity fingerprint) — so preparing and
+    // evaluating against two independently built registries, even with identical
+    // content, would break every `--aggregate-namespace` query.
+    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+    let prepared = engine.prepare_query_with_options(
+        options.query,
+        options.base,
+        EngineQueryOptions {
+            aggregates: aggregates.as_ref(),
+            ..EngineQueryOptions::EMPTY
+        },
+    )?;
 
     if let Some(regime) = options.entailment {
         // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
@@ -449,6 +504,7 @@ pub(crate) fn run(
                 engine: &engine,
                 prepared: &prepared,
                 flags: options.governors,
+                aggregates: aggregates.as_ref(),
             },
         )?;
         return emit_governed(options, &outcome, ledger_target);
@@ -464,6 +520,7 @@ pub(crate) fn run(
             engine: &engine,
             // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
             prepared: &prepared,
+            aggregates: aggregates.as_ref(),
         },
     )?;
     emit_result(
@@ -501,6 +558,18 @@ pub(crate) fn run(
 /// closure — is documented on `--entailment` itself, where an operator reading the flag
 /// meets it. It is a stated scope, not a silent no-op: a `--fuel` beside `--entailment` is
 /// enforced over every step of the evaluation it names.
+///
+/// * `--aggregate-namespace` with `--entailment`: the entailment-aware query lane
+///   ([`purrdf::query_with_entailment_governed`], [`purrdf::query_with_entailment`]) takes
+///   no `QueryOptions` at all — it always evaluates under an empty seam, on every regime —
+///   so an aggregate registry named here would never reach the evaluation that runs the
+///   query, and `AGG(<ns>MEDIAN, ?x)` would report exactly the "unregistered" error it
+///   reports without the flag. Refused by name rather than silently doing nothing.
+/// * `--aggregate-namespace` with `--explain`: the engine has no aggregate-registry-aware
+///   explain entry (contrast [`NativeSparqlEngine::explain_query_with_property_functions_view`],
+///   which exists for relations but has no aggregate counterpart), so `--explain` would
+///   describe the query with every `Custom` aggregate call refused as unregistered — a
+///   receipt of a run that could not evaluate, printed as if it were the plan.
 fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
     let named = options.governors.named();
     if !named.is_empty() && options.explain {
@@ -517,6 +586,24 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
             "--explain describes the plan the SPARQL evaluator runs, and --entailment answers \
              through the entailment-aware query lane instead, whose work is a closure rather \
              than a plan this can price: drop one of the two"
+                .to_owned(),
+        ));
+    }
+    if options.aggregate_namespace.is_some() && options.entailment.is_some() {
+        return Err(CliError::Usage(
+            "--aggregate-namespace registers a registry the ordinary SPARQL evaluator reads, \
+             and --entailment answers through the entailment-aware query lane instead, which \
+             takes no such registry: the statistical aggregate set would stay unreachable \
+             under --entailment regardless of this flag. Drop one of the two"
+                .to_owned(),
+        ));
+    }
+    if options.aggregate_namespace.is_some() && options.explain {
+        return Err(CliError::Usage(
+            "--aggregate-namespace names a registry the engine has no --explain entry point \
+             that accepts: a query calling one of the ten statistical aggregates would explain \
+             as an unregistered-aggregate refusal rather than the plan that runs it. Drop one \
+             of the two"
                 .to_owned(),
         ));
     }

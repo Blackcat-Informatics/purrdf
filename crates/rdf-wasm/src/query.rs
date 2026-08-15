@@ -57,7 +57,7 @@ use purrdf::{
 };
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
-    BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
+    AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
     QueryGovernors, QueryOptions, ResourceDimension, StopCause, StopSignal,
     TrippedGovernor as TrippedValue, WallDeadline,
@@ -998,6 +998,12 @@ impl QueryEngine {
     ///
     /// **A tripped governor is an outcome, not a thrown error** — see the module header.
     ///
+    /// `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    /// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+    /// `FIRST`, `LAST`, `TOPK`) under that IRI namespace, so the query text can call
+    /// `AGG(<namespace><NAME>, args…)` (see [`build_aggregates`]). `None` (the default)
+    /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
+    ///
     /// # Errors
     ///
     /// A parse or evaluation failure, and a negative ceiling. A governor trip is neither.
@@ -1014,6 +1020,7 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
         max_answers: Option<i64>,
@@ -1032,12 +1039,16 @@ impl QueryEngine {
         };
         let governors = args.engage(cancel.as_ref());
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let aggregates = build_aggregates(aggregate_namespace);
         let outcome = self
             .inner
             .query_governed(
                 &frozen,
                 sparql_request(sparql, base.as_deref()),
-                QueryOptions::EMPTY,
+                QueryOptions {
+                    aggregates: aggregates.as_ref(),
+                    ..QueryOptions::EMPTY
+                },
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;
@@ -1108,6 +1119,10 @@ impl QueryEngine {
     /// exactly as it was found, whichever operation the governor stopped and however much
     /// work the earlier operations of the same request had already done.
     ///
+    /// `aggregate_namespace` behaves exactly as on [`Self::query_governed`], reachable
+    /// from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` —
+    /// the only place SPARQL UPDATE's grammar admits an aggregate.
+    ///
     /// # Errors
     ///
     /// A parse or evaluation failure, a negative ceiling, and `max_answers`. A governor
@@ -1125,6 +1140,7 @@ impl QueryEngine {
         dataset: &mut Dataset,
         sparql: &str,
         base: Option<String>,
+        aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
         max_answers: Option<i64>,
@@ -1150,12 +1166,16 @@ impl QueryEngine {
         };
         let governors = args.engage(cancel.as_ref());
         let mut frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let aggregates = build_aggregates(aggregate_namespace);
         let outcome = self
             .inner
             .update_governed(
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
-                QueryOptions::EMPTY,
+                QueryOptions {
+                    aggregates: aggregates.as_ref(),
+                    ..QueryOptions::EMPTY
+                },
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;
@@ -1276,6 +1296,26 @@ fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> SparqlRequest<'
         base_iri: base,
         substitutions: &[],
     }
+}
+
+/// Build the statistical-aggregate registry `aggregateNamespace` requests, or `None`
+/// when the JS caller supplied none.
+///
+/// This is the ENTIRE wasm surface for purrdf's first-party statistical aggregate set
+/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
+/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
+/// string, so it crosses the wasm boundary with no callback and no per-aggregate
+/// marshaling. The GENERAL custom-aggregate seam
+/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
+/// `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has no string-shaped
+/// surface at all — it cannot cross into JavaScript — and this crate does not attempt to
+/// expose it.
+fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
+    let namespace = namespace?;
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates(&namespace);
+    Some(registry)
 }
 
 fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {

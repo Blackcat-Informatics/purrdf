@@ -151,6 +151,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_scratch_bytes,
             max_remote_requests,
             explain,
+            aggregate_namespace,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -170,6 +171,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 },
                 explain: *explain,
                 jsonld_options: jsonld_options.as_ref(),
+                aggregate_namespace: aggregate_namespace.as_deref(),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
@@ -185,6 +187,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            aggregate_namespace,
             update,
         } => update::run(
             &update::UpdateOptions {
@@ -203,6 +206,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_remote_requests: *max_remote_requests,
                 },
                 jsonld_options: jsonld_options.as_ref(),
+                aggregate_namespace: aggregate_namespace.as_deref(),
             },
             &ledger_target,
         ),

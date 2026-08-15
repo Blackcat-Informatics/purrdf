@@ -290,6 +290,18 @@ pub(crate) enum Command {
         /// governor flag or `--entailment`, neither of which it can honor.
         #[arg(long)]
         explain: bool,
+        /// Register purrdf's first-party statistical aggregate set (`MEDIAN`,
+        /// `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+        /// `LAST`, `TOPK`) under this IRI namespace, so the query text can call
+        /// `AGG(<NAMESPACE><NAME>, args…)`, e.g. `AGG(<https://ex.example/agg#>MEDIAN,
+        /// ?x)`. There is no default namespace (PurRDF mints no vocabulary IRIs of its
+        /// own) — omit this flag and every one of the ten names is an ordinary
+        /// unregistered custom-aggregate IRI, refused at parse time exactly as before.
+        /// This is the CLOSED, namespace-only statistical set; it carries no surface for
+        /// an arbitrary caller-defined aggregate, which is host Rust closures that cannot
+        /// cross this command-line boundary as a string.
+        #[arg(long, value_name = "IRI")]
+        aggregate_namespace: Option<String>,
         /// The SPARQL query text.
         query: String,
     },
@@ -326,6 +338,13 @@ pub(crate) enum Command {
         /// Bound remote/federated requests issued while computing the mutation.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Register purrdf's first-party statistical aggregate set under this IRI
+        /// namespace — identical to `query --aggregate-namespace`, reachable from a
+        /// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY`, which
+        /// is the only place SPARQL UPDATE's grammar admits an aggregate. Omit it and
+        /// every one of the ten names stays an unregistered custom-aggregate IRI.
+        #[arg(long, value_name = "IRI")]
+        aggregate_namespace: Option<String>,
         /// The SPARQL UPDATE text.
         update: String,
     },

@@ -15,7 +15,7 @@ use pyo3::types::{PyBytes, PyDict};
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
-    PyUpdateOutcome, build_engine, build_relations, collect_relations,
+    PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
     materialize_entailment_outcome, materialize_outcome, materialize_results,
     materialize_update_outcome, run_governed,
 };
@@ -213,6 +213,9 @@ impl PyMutableDataset {
     /// prefix recognition, `standpoint_predicates` is the `(according_to, sharpens)`
     /// table `heldIn` requires, and `relations` / `relations_from_graph` register
     /// host relations for this call.
+    ///
+    /// `aggregate_namespace` behaves exactly as on `Store.query` (see
+    /// [`build_aggregates`](super::query::build_aggregates)).
     #[pyo3(signature = (
         query,
         *,
@@ -222,6 +225,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        aggregate_namespace=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -237,6 +241,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let subs = collect_substitutions(substitutions)?;
         let specs = collect_relations(relations, relations_from_graph)?;
@@ -253,6 +258,7 @@ impl PyMutableDataset {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
             let engine = build_engine(config);
             engine
                 .query_with_options_view(
@@ -264,6 +270,7 @@ impl PyMutableDataset {
                     },
                     purrdf_sparql_eval::QueryOptions {
                         property_functions: registry.as_ref(),
+                        aggregates: aggregates.as_ref(),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -284,6 +291,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -307,6 +315,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -338,6 +347,7 @@ impl PyMutableDataset {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
             let engine = build_engine(config);
             engine
                 .query_governed(
@@ -349,6 +359,7 @@ impl PyMutableDataset {
                     },
                     purrdf_sparql_eval::QueryOptions {
                         property_functions: registry.as_ref(),
+                        aggregates: aggregates.as_ref(),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -446,6 +457,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
         max_intermediate_cells=None,
@@ -467,6 +479,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_intermediate_cells: Option<u64>,
@@ -495,6 +508,7 @@ impl PyMutableDataset {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
             let outcome = build_engine(config)
                 .update_governed(
                     &mut dataset,
@@ -505,6 +519,7 @@ impl PyMutableDataset {
                     },
                     purrdf_sparql_eval::QueryOptions {
                         property_functions: registry.as_ref(),
+                        aggregates: aggregates.as_ref(),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -532,6 +547,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        aggregate_namespace=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -546,6 +562,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
     ) -> PyResult<()> {
         let specs = collect_relations(relations, relations_from_graph)?;
         let config = EngineConfig {
@@ -561,6 +578,7 @@ impl PyMutableDataset {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
             let engine = build_engine(config);
             engine
                 .update_with_options(
@@ -572,6 +590,7 @@ impl PyMutableDataset {
                     },
                     purrdf_sparql_eval::QueryOptions {
                         property_functions: registry.as_ref(),
+                        aggregates: aggregates.as_ref(),
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )

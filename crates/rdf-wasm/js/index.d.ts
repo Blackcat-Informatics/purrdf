@@ -97,11 +97,41 @@ export interface QueryOptions {
   readonly base?: string | null;
 }
 
-export interface GovernedQueryOptions extends QueryOptions, GovernorOptions {}
+/**
+ * Registers purrdf's first-party statistical aggregate set (`MEDIAN`, `PERCENTILE`,
+ * `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`) under
+ * this IRI namespace, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.
+ * `AGG(<https://ex.example/agg#>MEDIAN, ?x)`. There is no default namespace — omit this
+ * and every one of the ten names is an ordinary unregistered custom-aggregate IRI,
+ * refused at parse time exactly as before.
+ *
+ * Reachable ONLY through `queryGoverned`/`updateGoverned` (the two entry points that take
+ * a `QueryOptions` registry at all): naming it on `query`/`select`/`ask`/`construct`/
+ * `describe`/`update`/`queryRaw`/`explainQuery`/`queryEntailmentGoverned` throws rather
+ * than silently doing nothing.
+ *
+ * This is the CLOSED, namespace-only statistical set. The GENERAL custom-aggregate seam
+ * (an arbitrary host `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has
+ * no string-shaped surface — it cannot cross into JavaScript at all, with or without this
+ * flag.
+ */
+export interface AggregateNamespaceOption {
+  readonly aggregateNamespace?: string | null;
+}
+
+export interface GovernedQueryOptions
+  extends QueryOptions,
+    GovernorOptions,
+    AggregateNamespaceOption {}
 
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
+  /**
+   * NOT honored: the entailment-aware query lane takes no aggregate registry on any
+   * regime, so setting this throws rather than silently doing nothing.
+   */
+  readonly aggregateNamespace?: never;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -733,6 +763,9 @@ export class QueryEngine {
    * A tripped governor is an OUTCOME, not a throw: check `isComplete`, read `result`
    * when it holds, and read `tripped` with `partial` when it does not. Only a parse
    * error, an evaluation error, or a malformed ceiling throws.
+   *
+   * `options.aggregateNamespace` registers purrdf's first-party statistical aggregate
+   * set — see {@link AggregateNamespaceOption}.
    */
   queryGoverned(
     dataset: Dataset,
@@ -753,6 +786,10 @@ export class QueryEngine {
    * Apply a SPARQL UPDATE under caller-supplied execution governors. A tripped request
    * applies NOTHING and leaves `dataset` exactly as it was found. `maxAnswers` is
    * refused: an UPDATE has no answer sequence to bound.
+   *
+   * `options.aggregateNamespace` behaves exactly as on {@link queryGoverned}, reachable
+   * from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` — the
+   * only place SPARQL UPDATE's grammar admits an aggregate.
    */
   updateGoverned(
     dataset: Dataset,

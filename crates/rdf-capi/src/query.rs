@@ -11,8 +11,8 @@ use purrdf_rs::{
     query_with_entailment_governed,
 };
 use purrdf_sparql_eval::{
-    BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine, PartialAnswers,
-    QueryOptions,
+    AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
+    PartialAnswers, QueryOptions,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -131,6 +131,36 @@ impl PurrdfPartialCertificate {
 /// OS entropy itself, so no host-side clock/entropy wiring is needed here.
 fn engine() -> NativeSparqlEngine {
     NativeSparqlEngine::new()
+}
+
+/// Decode `aggregate_namespace` (nullable, `opt_cstr_to_str`'s convention for every
+/// other optional string parameter on this ABI) and build the statistical-aggregate
+/// registry it requests, or `None` for a null pointer.
+///
+/// This is the ENTIRE C ABI surface for purrdf's first-party statistical aggregate set
+/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
+/// `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
+/// string, so it crosses the ABI as one nullable `const char*`, with no callback and no
+/// per-aggregate marshaling. The GENERAL custom-aggregate seam
+/// (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
+/// `init`/`step`/`combine`/`finish` closure) is Rust-host-only and genuinely cannot cross
+/// a C boundary as a string at all — this crate exposes no surface for it, with or
+/// without this parameter.
+///
+/// # Safety
+/// Same contract as [`opt_cstr_to_str`].
+unsafe fn decode_aggregate_namespace(
+    aggregate_namespace: *const c_char,
+) -> Result<Option<AggregateRegistry>, PurrdfError> {
+    unsafe {
+        let Some(namespace) = opt_cstr_to_str(aggregate_namespace)? else {
+            return Ok(None);
+        };
+        let mut registry = AggregateRegistry::new();
+        registry.register_statistical_aggregates(namespace);
+        Ok(Some(registry))
+    }
 }
 
 /// Run a SPARQL query over a frozen dataset, materializing the result.
@@ -409,16 +439,25 @@ pub unsafe extern "C" fn purrdf_query_json(
 /// certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
 /// Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
 ///
+/// `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
+/// set under that IRI namespace, so the query text can call
+/// `AGG(<namespace><NAME>, args…)` for `MEDIAN`/`PERCENTILE`/`STDDEV`/`STDDEV_POP`/
+/// `VARIANCE`/`VAR_POP`/`MODE`/`FIRST`/`LAST`/`TOPK`. Null leaves every one of the ten
+/// names an ordinary unregistered custom-aggregate IRI, exactly as before this parameter
+/// existed.
+///
 /// # Safety
 /// `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
 /// `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
 /// result pointer must be writable when that shape is returned. Any enabled cancellation
-/// handle must remain live until the call returns.
+/// handle must remain live until the call returns. `aggregate_namespace`, if non-null,
+/// must be a NUL-terminated UTF-8 C string live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_governed(
     dataset: *const PurrdfDataset,
     query: *const c_char,
     base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_kind: *mut i32,
@@ -450,6 +489,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
             let query = cstr_to_str(query)?;
             let base_iri = opt_cstr_to_str(base_iri)?;
             let governors = decode_governors(governors)?;
+            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
             let outcome = engine()
                 .query_governed(
                     PurrdfDataset::arc(dataset),
@@ -458,7 +498,10 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    QueryOptions {
+                        aggregates: aggregates.as_ref(),
+                        ..QueryOptions::EMPTY
+                    },
                     &governors,
                 )
                 .map_err(|diagnostic| {
@@ -614,15 +657,21 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
 /// `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
 /// enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
 ///
+/// `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`],
+/// reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
+/// `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
+///
 /// # Safety
 /// `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
 /// string; `governors` live for the call; and both output pointers writable. Any enabled
-/// cancellation handle must remain live until the call returns.
+/// cancellation handle must remain live until the call returns. `aggregate_namespace`, if
+/// non-null, must be a NUL-terminated UTF-8 C string live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_update_governed(
     dataset: *mut PurrdfDataset,
     request: *const c_char,
     base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -645,6 +694,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
             let request = cstr_to_str(request)?;
             let base_iri = opt_cstr_to_str(base_iri)?;
             let governors = decode_governors(governors)?;
+            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
             let outcome = engine()
                 .update_governed(
                     &mut (*dataset).0,
@@ -653,7 +703,10 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    QueryOptions {
+                        aggregates: aggregates.as_ref(),
+                        ..QueryOptions::EMPTY
+                    },
                     &governors,
                 )
                 .map_err(|diagnostic| {
@@ -680,7 +733,7 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
 
     use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
     use crate::governor::{
@@ -689,7 +742,8 @@ mod tests {
         purrdf_query_governors_init,
     };
     use crate::handles::purrdf_dataset_free;
-    use crate::rowcursor::{purrdf_rowcursor_free, purrdf_rowcursor_next};
+    use crate::rowcursor::{purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term};
+    use crate::term::PurrdfTermView;
 
     use super::*;
 
@@ -775,6 +829,7 @@ mod tests {
             purrdf_query_governed(
                 dataset,
                 query.as_ptr(),
+                std::ptr::null(),
                 std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
@@ -966,6 +1021,7 @@ mod tests {
                 dataset,
                 request.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
@@ -1008,6 +1064,7 @@ mod tests {
                 dataset,
                 query.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -1031,5 +1088,204 @@ mod tests {
             purrdf_cancellation_free(cancellation);
             purrdf_dataset_free(dataset);
         }
+    }
+
+    /// Three `xsd:integer` values (1, 2, 3) on distinct subjects under one predicate —
+    /// the fixture `MEDIAN` folds to the value `2`.
+    fn median_dataset() -> *mut PurrdfDataset {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("http://example.org/value");
+        for value in [1_i64, 2, 3] {
+            let subject = builder.intern_iri(&format!("http://example.org/s{value}"));
+            let object = builder.intern_literal(RdfLiteral::typed(
+                value.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+    }
+
+    /// End-to-end: `purrdf_query_governed`'s `aggregate_namespace` parameter actually
+    /// registers and COMPUTES `MEDIAN` through the C ABI — not merely that the
+    /// parameter parses. This is the reachability gap this parameter closes: before it
+    /// existed, `AggregateRegistry::register_statistical_aggregates` was reachable only
+    /// by embedding the Rust engine directly.
+    #[test]
+    fn aggregate_namespace_computes_median_through_the_c_abi() {
+        const NS: &str = "https://example.org/agg#";
+        let dataset = median_dataset();
+        let query = CString::new(
+            "PREFIX ex: <http://example.org/> \
+             SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+             WHERE { ?s ex:value ?v }",
+        )
+        .expect("query C string");
+        let namespace = CString::new(NS).expect("namespace C string");
+        let governors = initialized_governors();
+
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                namespace.as_ptr(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32, "status");
+        assert!(error.is_null(), "no error");
+        assert_eq!(outcome, PurrdfQueryOutcomeKind::Complete as i32);
+        assert_eq!(kind, KIND_SOLUTIONS);
+
+        assert_eq!(
+            unsafe { purrdf_rowcursor_next(rows) },
+            PurrdfStatus::Ok as i32
+        );
+        let mut view = MaybeUninit::<PurrdfTermView>::uninit();
+        let mut bound = 0u8;
+        assert_eq!(
+            unsafe { purrdf_rowcursor_term(rows, 0, view.as_mut_ptr(), &raw mut bound) },
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(bound, 1, "?m is bound");
+        let view = unsafe { view.assume_init() };
+        let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
+        assert_eq!(lexical, "2", "MEDIAN of {{1, 2, 3}} is 2");
+
+        unsafe {
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(dataset);
+        }
+    }
+
+    /// Regression: the namespace stays caller-supplied with no fabricated default —
+    /// omitting `aggregate_namespace` (a null pointer) leaves the ten statistical names
+    /// unregistered, and the SAME typed error an ordinary unregistered custom-aggregate
+    /// IRI already produces surfaces here, unchanged.
+    #[test]
+    fn omitted_aggregate_namespace_leaves_the_statistical_set_unregistered() {
+        let dataset = median_dataset();
+        let query = CString::new(
+            "PREFIX ex: <http://example.org/> \
+             SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+             WHERE { ?s ex:value ?v }",
+        )
+        .expect("query C string");
+        let governors = initialized_governors();
+
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(), // no aggregate_namespace
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_ne!(
+            status,
+            PurrdfStatus::Ok as i32,
+            "unregistered aggregate refuses"
+        );
+        assert!(!error.is_null());
+        unsafe {
+            let message = crate::error::purrdf_error_message(error);
+            let text = std::ffi::CStr::from_ptr(message).to_string_lossy();
+            assert!(
+                text.contains("aggregate") || text.contains("registered"),
+                "error should name the unregistered aggregate, got: {text}"
+            );
+            crate::error::purrdf_error_free(error);
+            purrdf_dataset_free(dataset);
+        }
+    }
+
+    /// End-to-end: `purrdf_update_governed`'s `aggregate_namespace` reaches `MEDIAN`
+    /// from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` —
+    /// the only place SPARQL UPDATE's grammar admits an aggregate.
+    #[test]
+    fn aggregate_namespace_computes_median_through_a_governed_update() {
+        const NS: &str = "https://example.org/agg#";
+        let dataset = median_dataset();
+        let update = CString::new(
+            "PREFIX ex: <http://example.org/> \
+             INSERT { ex:summary ex:median ?m } \
+             WHERE { SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                     WHERE { ?s ex:value ?v } }",
+        )
+        .expect("update C string");
+        let namespace = CString::new(NS).expect("namespace C string");
+        let governors = initialized_governors();
+
+        let mut outcome = -1;
+        let mut evidence = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_update_governed(
+                dataset,
+                update.as_ptr(),
+                std::ptr::null(),
+                namespace.as_ptr(),
+                &raw const governors,
+                &raw mut outcome,
+                evidence.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32, "status");
+        assert!(error.is_null(), "no error");
+        assert_eq!(outcome, PurrdfUpdateOutcomeKind::Applied as i32);
+
+        let check = engine()
+            .query(
+                unsafe { &(*dataset).0 },
+                SparqlRequest {
+                    query: "PREFIX ex: <http://example.org/> \
+                            SELECT ?m WHERE { ex:summary ex:median ?m }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("check query evaluates");
+        let SparqlResult::Solutions { rows, .. } = check else {
+            panic!("expected SELECT solutions");
+        };
+        assert_eq!(rows.len(), 1);
+        let cell = rows[0][0].as_ref().expect("?m is bound");
+        let TermValue::Literal { lexical_form, .. } = cell else {
+            panic!("?m must be a literal, got {cell:?}");
+        };
+        assert_eq!(lexical_form, "2");
+
+        unsafe { purrdf_dataset_free(dataset) };
     }
 }
