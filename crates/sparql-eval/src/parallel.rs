@@ -149,11 +149,12 @@ const AGGREGATE_CHUNK_REFERENCE_THREADS: usize = 8;
 /// That is harmless for its own callers (see its doc comment) because none of them folds
 /// chunk-local state back together. [`par_chunk_reduce_init`] is exactly that: it reduces
 /// every chunk's partial accumulator into one final accumulator through
-/// [`crate::agg_fn::AggregateAccumulator::combine`]/[`crate::modifier`]'s built-in
-/// `BuiltinFold::combine`, strictly in chunk order. That makes the chunk COUNT part of the
-/// observable computation rather than merely its schedule, in two ways
-/// `crate::modifier::eval_custom_aggregate` and `crate::modifier::NumericFold` both rely
-/// on being fixed:
+/// [`crate::agg_fn::AggregateAccumulator::combine`] — every built-in aggregate in
+/// [`crate::modifier`] implements that SAME trait now, so this applies identically
+/// whether the accumulator is a built-in's or a registered custom aggregate's — strictly
+/// in chunk order. That makes the chunk COUNT part of the observable computation rather
+/// than merely its schedule, in two ways `crate::modifier::eval_custom_aggregate` and
+/// `crate::modifier::NumericFold` both rely on being fixed:
 ///
 /// - a custom accumulator's declared [`crate::agg_fn::CustomAggregate::state_bound`] is
 ///   charged once per LIVE chunk accumulator (`chunk_count - 1` beyond the first,

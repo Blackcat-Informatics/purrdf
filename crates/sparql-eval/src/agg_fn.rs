@@ -14,17 +14,28 @@
 //! module injects a **fold**: a `GROUP BY` group's rows reduce to one value through
 //! a caller-supplied accumulator, exactly as a built-in aggregate does.
 //!
-//! # The fold shape, shared with the built-ins
+//! # The fold shape, shared with the built-ins — literally, not just in prose
 //!
 //! Every aggregate — built-in or custom — is `init` (an aggregate's answer over the
 //! empty group, `finish(init())`, is never absent: `COUNT` → `0`, `SUM` → `0`,
 //! `AVG`/`MIN`/`MAX`/`SAMPLE` → unbound, `GROUP_CONCAT` → `""`), `step` (fold one
 //! row's already-evaluated argument tuple in), and `finish` (produce the group's
-//! answer, or `None` for unbound). The built-ins instantiate this shape internally,
-//! with static dispatch and no per-row boxing (see `crate::modifier::BuiltinFold`);
-//! this module is where a HOST instantiates it dynamically, through
-//! [`CustomAggregate`]/[`AggregateAccumulator`] and an
-//! [`AggregateRegistry`] entry.
+//! answer, or `None` for unbound) — exactly [`AggregateAccumulator`]'s three
+//! methods. Every built-in aggregate (`crate::modifier`'s `CountAccumulator`/
+//! `SumAccumulator`/`AvgAccumulator`/`MinAccumulator`/`MaxAccumulator`/
+//! `SampleAccumulator`/`GroupConcatAccumulator`) is a genuine
+//! `impl AggregateAccumulator`, the SAME trait a [`CustomAggregate::init`] call
+//! produces from a HOST registration — one fold algebra, not two. Only the
+//! DISPATCH differs: a built-in's concrete accumulator type is known at compile
+//! time, so `crate::modifier::fold_builtin` drives it by generic monomorphization
+//! (an ordinary, inlinable call on every `step`, no vtable); a registered
+//! aggregate's concrete type is not known until [`AggregateRegistry::resolve`]
+//! looks up an IRI at RUN time, so it is necessarily driven through
+//! `Box<dyn AggregateAccumulator>` — the one place this module's own dynamic
+//! dispatch earns its cost. See `crate::modifier::eval_aggregate`'s doc comment
+//! for the one dispatch SITE both paths share, and `crate::modifier::fold_builtin`'s
+//! for why the static path never pays a per-row cost for implementing the
+//! identical trait a dynamically dispatched aggregate uses.
 //!
 //! # The trust boundary
 //!

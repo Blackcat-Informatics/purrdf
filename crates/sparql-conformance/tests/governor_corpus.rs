@@ -878,9 +878,10 @@ const AGGREGATE_IRI: &str = "http://example.org/agg/customSum";
 
 /// [`CorpusSumAggregate`]'s declared per-accumulator [`CustomAggregate::state_bound`].
 ///
-/// Nonzero on purpose, unlike every built-in fold (whose `state_bound` is always `0` —
-/// see `crate::modifier::BuiltinFold`'s docs in the evaluator crate): the fold itself is
-/// stateless (a running `i64`), so this is a FICTITIOUS bound standing in for the opaque
+/// Nonzero on purpose, unlike every built-in fold (a built-in aggregate's accumulator —
+/// see `crate::modifier`'s `CountAccumulator`/`SumAccumulator`/etc. in the evaluator
+/// crate — declares no `state_bound` at all; only `CustomAggregate` does): the fold
+/// itself is stateless (a running `i64`), so this is a FICTITIOUS bound standing in for the opaque
 /// host state a real custom accumulator (a running median, a per-value histogram) would
 /// actually retain. It exists so the `aggregate-custom-scratch-bytes-*` lane has a real,
 /// nonzero `ScratchBytes` charge to band.

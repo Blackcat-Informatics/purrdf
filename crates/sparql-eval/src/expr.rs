@@ -2755,7 +2755,16 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(&v.canonical_lexical(), v.datatype().iri()))
+    intern(ctx, xsd_literal_value(v))
+}
+
+/// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
+/// computed [`XsdValue`], with no interning. Shared with `crate::modifier`'s built-in
+/// aggregate accumulators, whose [`crate::agg_fn::AggregateAccumulator::finish`] produces
+/// a plain `TermValue` (interned once, by the caller, exactly as a custom aggregate's own
+/// `finish` is) rather than an [`EvalCtx`]-bound [`SolutionTerm`].
+pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
+    typed(&v.canonical_lexical(), v.datatype().iri())
 }
 
 /// Evaluate a binary numeric expression: resolve both operands to [`XsdValue`], call
