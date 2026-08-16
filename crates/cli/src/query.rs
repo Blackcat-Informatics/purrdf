@@ -89,17 +89,21 @@
 //! --explain` would print the receipt of a run that was never bounded by 1000. It refuses
 //! `--entailment` for the same shape of reason — the entailment-aware query lane is a
 //! different entry point with no explanation to give — and both refusals name what to drop.
-//! Those two are now the WHOLE refusal list: `--entailment` beside a governor flag used to
-//! be a third, and it runs instead (see [`refuse_unenforceable_combinations`]).
+//! Those two are the WHOLE refusal list: `--entailment` beside a governor flag used to be a
+//! third, and `--aggregate-namespace` beside either `--entailment` or `--explain` used to be
+//! a fourth and a fifth; all three now run instead (see
+//! [`refuse_unenforceable_combinations`]).
 //!
 //! The rendered `relations` block is always empty here: the CLI has no property-function
-//! registration surface at all — [`ExplainOp::run`] calls the registry-free
-//! [`NativeSparqlEngine::explain_query_view`], never
+//! registration surface at all — [`ExplainOp::run`] never calls
 //! [`NativeSparqlEngine::explain_query_with_property_functions_view`] — so there is never
 //! anything for it to list. That is the honest minimal form, not a missing feature —
 //! [`QueryExplanation::render`] always emits the block, empty or not, precisely so "no
 //! relations were in scope" and "this build does not report relations" stay distinguishable
-//! bytes.
+//! bytes. The `aggregates` block is the exact opposite case: with `--aggregate-namespace`,
+//! [`ExplainOp::run`] calls [`NativeSparqlEngine::explain_query_with_aggregates_view`]
+//! instead of the registry-free [`NativeSparqlEngine::explain_query_view`], and the block
+//! lists the ten registered statistical aggregate IRIs.
 
 use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
@@ -227,15 +231,23 @@ struct ExplainOp<'a> {
     engine: &'a NativeSparqlEngine,
     query: &'a str,
     base: Option<&'a str>,
+    /// The SAME registry `--aggregate-namespace` builds for every other lane; see
+    /// [`QueryOp::aggregates`] for why identity (not merely content) matters.
+    aggregates: Option<&'a AggregateRegistry>,
 }
 
 impl ViewOp for ExplainOp<'_> {
     type Output = QueryExplanation;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
-        Ok(self
-            .engine
-            .explain_query_view(view, self.query, self.base)?)
+        Ok(match self.aggregates {
+            Some(aggregates) => self
+                .engine
+                .explain_query_with_aggregates_view(view, self.query, self.base, aggregates)?,
+            None => self
+                .engine
+                .explain_query_view(view, self.query, self.base)?,
+        })
     }
 }
 
@@ -340,6 +352,19 @@ fn emit_result(
 ///
 /// An INCONSISTENT knowledge base is handled exactly as `reason` handles it: it has no closure
 /// and it did have a run, so the report is written first and the refusal returned after.
+///
+/// `aggregates` is the SAME registry instance every other lane in this module uses (see
+/// [`QueryOp::aggregates`]): `query_with_entailment_governed` now takes the engine's
+/// `QueryOptions` and threads it into both the closure query's PARSE and its evaluation,
+/// so a statistical aggregate reaches the entailment-aware lane exactly as it reaches the
+/// ordinary one.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input (the engine, the \
+              dataset, the query text/base, the resolved entailment plan, the governors, \
+              the aggregate registry, and the report target); bundling them into a struct \
+              would not shrink the call sites, which already name every field"
+)]
 fn entailed_query(
     engine: &NativeSparqlEngine,
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
@@ -347,6 +372,7 @@ fn entailed_query(
     base: Option<&str>,
     plan: &reason::EntailmentPlan,
     governors: &QueryGovernors,
+    aggregates: Option<&AggregateRegistry>,
     report_target: &ReportTarget,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
@@ -359,6 +385,10 @@ fn entailed_query(
         dataset,
         request,
         plan.query_entailment(),
+        EngineQueryOptions {
+            aggregates: aggregates.unwrap_or(&AggregateRegistry::EMPTY),
+            ..EngineQueryOptions::EMPTY
+        },
         governors,
     ) {
         Ok(answered) => {
@@ -436,9 +466,19 @@ pub(crate) fn run(
 
     let engine = NativeSparqlEngine::new();
 
+    // Built ONCE, before the parse, and reused verbatim by every lane below (including
+    // `--explain`): a `Custom` aggregate IRI is admitted (registered, correct arity)
+    // against this EXACT registry instance at prepare time, and a plan/registry
+    // disagreement at evaluation is refused rather than silently mismatched (see
+    // `AggregateRegistry`'s instance-identity fingerprint) — so preparing and evaluating
+    // against two independently built registries, even with identical content, would
+    // break every `--aggregate-namespace` query.
+    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+
     if options.explain {
-        // `explain_query_view` parses, surveys and evaluates the query itself, so this lane
-        // prepares nothing of its own and the plan cache is warmed once.
+        // `explain_query_view`/`explain_query_with_aggregates_view` parse, survey and
+        // evaluate the query themselves, so this lane prepares nothing of its own and the
+        // plan cache is warmed once.
         let explanation = source::run_over_input(
             options.data,
             data_format,
@@ -447,20 +487,13 @@ pub(crate) fn run(
                 engine: &engine,
                 query: options.query,
                 base: options.base,
+                aggregates: aggregates.as_ref(),
             },
         )?;
         sink::write_out("-", explanation.render().as_bytes())?;
         return Ok(CliOutcome::Complete);
     }
 
-    // Built ONCE, before the parse, and reused verbatim by every lane below: a
-    // `Custom` aggregate IRI is admitted (registered, correct arity) against this
-    // EXACT registry instance at prepare time, and a plan/registry disagreement at
-    // evaluation is refused rather than silently mismatched (see
-    // `AggregateRegistry`'s instance-identity fingerprint) — so preparing and
-    // evaluating against two independently built registries, even with identical
-    // content, would break every `--aggregate-namespace` query.
-    let aggregates = build_aggregate_registry(options.aggregate_namespace);
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
@@ -490,6 +523,7 @@ pub(crate) fn run(
             options.base,
             &plan,
             &governors,
+            aggregates.as_ref(),
             report_target,
         )?;
         return emit_entailed(options, answered, ledger_target);
@@ -533,9 +567,9 @@ pub(crate) fn run(
     Ok(CliOutcome::Complete)
 }
 
-/// Refuse the two flag combinations this lane cannot honor, naming what to drop.
+/// Refuse the one flag combination this lane cannot honor, naming what to drop.
 ///
-/// Both exist because the alternative is a flag that silently does nothing — the shape this
+/// It exists because the alternative is a flag that silently does nothing — the shape this
 /// pipeline refuses everywhere else, and the most dangerous shape a GOVERNOR can take: a
 /// ceiling an operator believes is in force and that nothing enforces is worse than no
 /// ceiling at all, because it is relied upon.
@@ -559,17 +593,21 @@ pub(crate) fn run(
 /// meets it. It is a stated scope, not a silent no-op: a `--fuel` beside `--entailment` is
 /// enforced over every step of the evaluation it names.
 ///
-/// * `--aggregate-namespace` with `--entailment`: the entailment-aware query lane
-///   ([`purrdf::query_with_entailment_governed`], [`purrdf::query_with_entailment`]) takes
-///   no `QueryOptions` at all — it always evaluates under an empty seam, on every regime —
-///   so an aggregate registry named here would never reach the evaluation that runs the
-///   query, and `AGG(<ns>MEDIAN, ?x)` would report exactly the "unregistered" error it
-///   reports without the flag. Refused by name rather than silently doing nothing.
-/// * `--aggregate-namespace` with `--explain`: the engine has no aggregate-registry-aware
-///   explain entry (contrast [`NativeSparqlEngine::explain_query_with_property_functions_view`],
-///   which exists for relations but has no aggregate counterpart), so `--explain` would
-///   describe the query with every `Custom` aggregate call refused as unregistered — a
-///   receipt of a run that could not evaluate, printed as if it were the plan.
+/// # `--aggregate-namespace` with `--entailment` or `--explain` is NOT refused
+///
+/// Both used to be, and both were honest about real gaps rather than real impossibilities.
+/// The entailment-aware query lane took no `QueryOptions` seam at all, so a registry named
+/// beside `--entailment` never reached the evaluation that runs the closure's query; it
+/// takes the engine's `QueryOptions` now
+/// ([`purrdf::query_with_entailment_governed`]), threaded into both the closure query's
+/// parse and its evaluation, so `AGG(<ns>MEDIAN, ?x)` resolves over the entailed closure
+/// exactly as it resolves over a raw view. The engine had no aggregate-registry-aware
+/// explain entry at all; [`NativeSparqlEngine::explain_query_with_aggregates_view`] is that
+/// entry now, the exact counterpart
+/// [`NativeSparqlEngine::explain_query_with_property_functions_view`] has for relations, so
+/// `--explain` with `--aggregate-namespace` prints the plan with the registered aggregates
+/// named in the receipt's `aggregates` block instead of refusing every `Custom` call as
+/// unregistered.
 fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
     let named = options.governors.named();
     if !named.is_empty() && options.explain {
@@ -586,24 +624,6 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
             "--explain describes the plan the SPARQL evaluator runs, and --entailment answers \
              through the entailment-aware query lane instead, whose work is a closure rather \
              than a plan this can price: drop one of the two"
-                .to_owned(),
-        ));
-    }
-    if options.aggregate_namespace.is_some() && options.entailment.is_some() {
-        return Err(CliError::Usage(
-            "--aggregate-namespace registers a registry the ordinary SPARQL evaluator reads, \
-             and --entailment answers through the entailment-aware query lane instead, which \
-             takes no such registry: the statistical aggregate set would stay unreachable \
-             under --entailment regardless of this flag. Drop one of the two"
-                .to_owned(),
-        ));
-    }
-    if options.aggregate_namespace.is_some() && options.explain {
-        return Err(CliError::Usage(
-            "--aggregate-namespace names a registry the engine has no --explain entry point \
-             that accepts: a query calling one of the ten statistical aggregates would explain \
-             as an unregistered-aggregate refusal rather than the plan that runs it. Drop one \
-             of the two"
                 .to_owned(),
         ));
     }

@@ -1095,11 +1095,16 @@ impl QueryEngine {
         };
         let governors = args.engage(cancel.as_ref());
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        // `QueryOptions::EMPTY`: this binding exposes no registry parameter on the
+        // entailment-governed lane (unlike `queryGoverned`'s `aggregateNamespace`), so
+        // there is nothing here for a caller to have configured — unchanged from before
+        // `query_with_entailment_governed` took a `QueryOptions` parameter.
         let outcome = query_with_entailment_governed(
             &self.inner,
             &frozen,
             sparql_request(sparql, base.as_deref()),
             plan.entailment(),
+            QueryOptions::EMPTY,
             &governors,
         )
         .map_err(|error| JsError::new(&error.to_string()))?;

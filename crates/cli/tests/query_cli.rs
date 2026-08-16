@@ -951,16 +951,50 @@ fn aggregate_namespace_computes_median_through_a_cli_update() {
     );
 }
 
-/// `--aggregate-namespace` combined with `--entailment` is refused by name — the
-/// entailment-aware query lane takes no `QueryOptions` seam at all, so the flag would
-/// silently do nothing if it were accepted.
+/// End-to-end: `--aggregate-namespace` combined with `--entailment` COMPUTES `MEDIAN`
+/// over the ENTAILED CLOSURE, not merely over the raw asserted data. The RDFS closure
+/// entails `ex:s1`/`ex:s2`/`ex:s3` are `ex:Thing` (their only common ancestor beyond
+/// `ex:value`'s domain assertion), so a query that could only match through the closure
+/// pins that the closure — not the raw view — is what the aggregate folds over.
+///
+/// Before `query_with_entailment_governed` took a `QueryOptions` parameter, this exact
+/// combination was refused BY NAME rather than silently doing nothing; it now runs.
 #[test]
-fn aggregate_namespace_with_entailment_is_refused() {
+fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
-    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    const VALUES_WITH_DOMAIN_TTL: &str = concat!(
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+        "ex:value rdfs:domain ex:Thing .\n",
+        "ex:s1 ex:value 1 .\n",
+        "ex:s2 ex:value 2 .\n",
+        "ex:s3 ex:value 3 .\n",
+    );
+    let ttl = write_file(dir, "numbers.ttl", VALUES_WITH_DOMAIN_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s a <http://example.org/Thing> . ?s <http://example.org/value> ?v }";
 
-    let out = run(&[
+    // Without --entailment: `rdfs:domain` is not applied, so no ?s is typed `ex:Thing` and
+    // the aggregate folds an empty group (unbound, per this build's `MEDIAN` over no rows).
+    let without = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(without.status.success(), "stderr:\n{}", stderr(&without));
+    assert!(
+        !stdout(&without).contains("\"value\":\"2\""),
+        "without --entailment no ?s is typed ex:Thing, so MEDIAN must not see the rows:\n{}",
+        stdout(&without)
+    );
+
+    let with = run(&[
         "query",
         "--data",
         &ttl,
@@ -968,15 +1002,64 @@ fn aggregate_namespace_with_entailment_is_refused() {
         "rdfs",
         "--aggregate-namespace",
         "https://example.org/agg#",
-        "SELECT ?s WHERE { ?s ?p ?o }",
+        "--results-format",
+        "json",
+        query,
     ]);
     assert!(
-        !out.status.success(),
-        "the combination must be refused rather than silently dropping the flag"
+        with.status.success(),
+        "the aggregate-namespace + entailment query must exit 0; stderr:\n{}",
+        stderr(&with)
+    );
+    let json = stdout(&with);
+    assert!(
+        json.contains("\"value\":\"2\""),
+        "MEDIAN of {{1, 2, 3}} over the RDFS-entailed ex:Thing group is 2:\n{json}"
+    );
+}
+
+/// End-to-end: `--explain` combined with `--aggregate-namespace` renders the plan WITH the
+/// registered custom aggregate named in the receipt's `aggregates` block, rather than
+/// refusing the combination by name.
+///
+/// Before `explain_query_with_aggregates`/`_view` existed, this exact combination was
+/// refused: the engine had no aggregate-registry-aware explain entry, so `--explain` would
+/// have described a run in which the query's own `Custom` aggregate call was refused as
+/// unregistered.
+#[test]
+fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--explain",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "--explain with --aggregate-namespace must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\naggregates\n"),
+        "the explanation must carry the `aggregates` section: {body}"
     );
     assert!(
-        stderr(&out).contains("aggregate-namespace"),
-        "the refusal must name the flag:\n{}",
-        stderr(&out)
+        body.contains("https://example.org/agg#MEDIAN"),
+        "the registered aggregate must be named in the receipt: {body}"
+    );
+    // The answers are replaced, not accompanied: an EXPLAIN returns a plan, not rows.
+    assert!(
+        !body.contains("\"value\":\"2\""),
+        "--explain prints the explanation INSTEAD of the answers: {body}"
     );
 }

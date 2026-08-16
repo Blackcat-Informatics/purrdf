@@ -583,6 +583,10 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
             let plan = QueryEntailmentPlan::parse(regime, program)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             let governors = decode_governors(governors)?;
+            // `QueryOptions::EMPTY`: this ABI function exposes no registry parameter of its
+            // own (unlike `purrdf_query_governed`'s `aggregate_namespace`), so there is
+            // nothing here for a caller to have configured — unchanged from before
+            // `query_with_entailment_governed` took a `QueryOptions` parameter.
             let outcome = query_with_entailment_governed(
                 &engine(),
                 PurrdfDataset::arc(dataset),
@@ -592,6 +596,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                     substitutions: &[],
                 },
                 plan.entailment(),
+                QueryOptions::EMPTY,
                 &governors,
             )
             .map_err(|error| match error {

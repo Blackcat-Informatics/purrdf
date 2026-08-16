@@ -87,13 +87,14 @@
 //!
 //! Every case above names the built-in `SUM`. `Source::Aggregate` wires a registered
 //! [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead
-//! ([`registered_custom_aggregate`]), through `QueryOptions::aggregates` — the one seam
-//! `explain_query`/`explain_query_with_property_functions` cannot express (there is no
-//! `explain_query_with_aggregates`: see `NativeSparqlEngine::explain_for`'s doc comment in
-//! the evaluator crate), so a `Source::Aggregate` case carries no `.charges` decomposition,
-//! only `.answer`/`.spend`/`.metered` like an ordinary band. `aggregate-custom-fuel-*` folds
-//! the SAME group shape `aggregate-accumulation-*` does through the custom path instead of
-//! the built-in one, so the two lanes' fuel is directly comparable
+//! ([`registered_custom_aggregate`]), through `QueryOptions::aggregates`. It owes the SAME
+//! fourth record too, taken through
+//! [`NativeSparqlEngine::explain_query_with_aggregates`](purrdf_sparql_eval::NativeSparqlEngine::explain_query_with_aggregates) —
+//! the injected-seam decomposition entry a registered custom aggregate needs, the exact
+//! counterpart `explain_query_with_property_functions` is for the relation lane
+//! ([`charge_decomposition_custom_aggregate`]). `aggregate-custom-fuel-*` folds the SAME
+//! group shape `aggregate-accumulation-*` does through the custom path instead of the
+//! built-in one, so the two lanes' fuel is directly comparable
 //! ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]).
 //! `aggregate-custom-scratch-bytes-*` bands the ONE dimension no built-in aggregate ever
 //! charges at all — [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound)
@@ -1296,6 +1297,24 @@ fn charge_decomposition_dataset(case: &Case) -> String {
     render_charge_decomposition(explanation.ledger())
 }
 
+/// [`charge_decomposition`]'s twin for the two `Source::Aggregate` lanes
+/// (`aggregate-custom-fuel-*`, `aggregate-custom-scratch-bytes-*`), which exercise a
+/// REGISTERED custom aggregate rather than a built-in — the injected seam
+/// [`NativeSparqlEngine::explain_query_with_aggregates`] takes, the exact counterpart
+/// [`NativeSparqlEngine::explain_query_with_property_functions`] is for the relation lane.
+/// Before that entry point existed, these two lanes carried no `.charges` decomposition at
+/// all and were compared against the built-in lane's numbers directly instead; the registry
+/// is [`registered_custom_aggregate`], the SAME one [`observe`] wires for `Source::Aggregate`.
+fn charge_decomposition_custom_aggregate(case: &Case) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let registry = registered_custom_aggregate();
+    let explanation = NativeSparqlEngine::new()
+        .explain_query_with_aggregates(&dataset, &query, None, &registry)
+        .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    render_charge_decomposition(explanation.ledger())
+}
+
 /// The one place that sums a per-node ledger into a `.charges` record: both
 /// [`charge_decomposition`] and [`charge_decomposition_dataset`] differ only in how they
 /// obtain the ledger (through a property-function-wired explain call or a plain one), and
@@ -1691,6 +1710,12 @@ fn regenerate_case(
         );
     } else if wants_dataset_charge_decomposition(&case.name) {
         write_expected(&case, "charges", &charge_decomposition_dataset(&case));
+    } else if case.source == Source::Aggregate {
+        write_expected(
+            &case,
+            "charges",
+            &charge_decomposition_custom_aggregate(&case),
+        );
     }
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec, relation_spec);
@@ -1986,6 +2011,25 @@ fn every_boundary_is_derived_from_a_metered_run() {
             // `aggregate-accumulation` are the same kind of fuel-internal pair, taken
             // through a plain `explain_query` rather than a scripted relation.
             let decomposition = charge_decomposition_dataset(case);
+            assert_eq!(
+                decomposition,
+                read_expected(case, "charges"),
+                "{}: the per-charge-point decomposition of the metered fuel moved without \
+                 the corpus being regenerated",
+                case.name
+            );
+            assert_eq!(
+                charged_total(&decomposition),
+                consumed_in(&measured.spend, ResourceDimension::Fuel),
+                "{}: the pinned decomposition does not add up to the fuel it decomposes",
+                case.name
+            );
+        } else if case.source == Source::Aggregate {
+            // The two `Source::Aggregate` lanes' twin of the checks above, taken through
+            // `NativeSparqlEngine::explain_query_with_aggregates` — the injected-seam
+            // decomposition a registered custom aggregate needs, exactly as the relation
+            // lane needs `explain_query_with_property_functions`.
+            let decomposition = charge_decomposition_custom_aggregate(case);
             assert_eq!(
                 decomposition,
                 read_expected(case, "charges"),

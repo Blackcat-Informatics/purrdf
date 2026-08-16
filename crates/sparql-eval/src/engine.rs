@@ -1282,7 +1282,60 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         registry: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_for(dataset, query_text, base_iri, registry)
+        self.explain_for(
+            dataset,
+            query_text,
+            base_iri,
+            registry,
+            &crate::agg_fn::AggregateRegistry::EMPTY,
+        )
+    }
+
+    /// [`Self::explain_query`] with a custom-aggregate registry injected, so a query
+    /// calling `AGG(<iri>, …)` against a registered aggregate can be explained at all —
+    /// and so the explanation NAMES it.
+    ///
+    /// The exact twin of [`Self::explain_query_with_property_functions`], for the exact
+    /// same reason: a `Custom` aggregate is host code that folds a `GROUP BY` group into a
+    /// value no built-in accumulator produces, so it is part of what produced the answer
+    /// in exactly the way the charge schedule is. [`QueryExplanation::aggregates`] carries
+    /// the registered IRIs, sorted, and [`QueryExplanation::render`] prints them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_aggregates(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+        aggregates: &crate::agg_fn::AggregateRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_query_with_aggregates_view(&**dataset, query_text, base_iri, aggregates)
+    }
+
+    /// [`Self::explain_query_with_aggregates`] over any [`DatasetView`] backend whose id
+    /// type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_aggregates_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        aggregates: &crate::agg_fn::AggregateRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for(
+            dataset,
+            query_text,
+            base_iri,
+            &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+            aggregates,
+        )
     }
 
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
@@ -1304,34 +1357,30 @@ impl NativeSparqlEngine {
             query_text,
             base_iri,
             &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+            &crate::agg_fn::AggregateRegistry::EMPTY,
         )
     }
 
-    /// The one explain body, parameterized by the property-function registry in scope.
+    /// The one explain body, parameterized by the property-function registry AND the
+    /// custom-aggregate registry in scope.
     ///
-    /// `relations` is threaded everywhere it changes the answer: into the parse (which is
-    /// where a predicate becomes a call node and the plan is feasibility-ordered), into
-    /// the survey (a relation's declared row bound is the only prediction a call has), and
-    /// into the receipt (which names the registered IRIs).
+    /// Both are threaded everywhere they change the answer: into the parse (which is
+    /// where a relation's predicate becomes a call node and a `Custom` aggregate's IRI is
+    /// admitted, and where the plan is feasibility-ordered), into the survey (a relation's
+    /// declared row bound is the only prediction a call has — an aggregate contributes no
+    /// survey prediction, since it is ordinary algebra rather than an injected row
+    /// source), into the evaluation context (so a registered aggregate actually resolves
+    /// rather than exploding at `AGG(<iri>, …)`), and into the receipt (which names the
+    /// registered IRIs of both).
     fn explain_for<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
         relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        // No aggregate registry on the EXPLAIN path: it explains the join order and
-        // charge schedule a query is evaluated under, and a `Custom` aggregate's
-        // registry does not change either — `plan_query`'s admission check for one
-        // still runs (against `AggregateRegistry::EMPTY`), so an unregistered
-        // `AGG(<iri>, …)` is refused here exactly as prepare would refuse it, just
-        // without a registry to admit it against.
-        let prepared = self.prepare_for(
-            query_text,
-            base_iri,
-            relations,
-            &crate::agg_fn::AggregateRegistry::EMPTY,
-        )?;
+        let prepared = self.prepare_for(query_text, base_iri, relations, aggregates)?;
         let survey = self.survey_plan(dataset, &prepared.query, relations)?;
         // The ledger's node table is fixed against the plan that is about to be evaluated.
         // No substitutions are applied on this path, so the addresses the ledger records
@@ -1345,7 +1394,8 @@ impl NativeSparqlEngine {
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
             .with_charge_ledger(Arc::clone(&ledger))
-            .with_property_functions(relations);
+            .with_property_functions(relations)
+            .with_aggregates(aggregates);
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
@@ -1356,10 +1406,15 @@ impl NativeSparqlEngine {
         let registered = relations
             .describe()
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        // The exact twin, for the custom-aggregate registry.
+        let registered_aggregates = aggregates
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
             registered,
+            registered_aggregates,
             state.evidence(),
         ))
     }
@@ -2807,11 +2862,127 @@ mod tests {
             left_receipt.render()
         );
 
-        // With no registry the block is present and empty — "nothing was in scope",
+        // With no registry EITHER block is present and empty — "nothing was in scope",
         // not "this build does not report what was".
         let bare = engine.explain_query(&ds, query, None).expect("explain");
         assert!(bare.relations().is_empty());
-        assert!(bare.render().contains("relations\njoin-orders"));
+        assert!(bare.aggregates().is_empty());
+        assert!(bare.render().contains("relations\naggregates\njoin-orders"));
+    }
+
+    /// A minimal `Commutative` `SUM`-alike over a single `xsd:integer`-lexical argument,
+    /// for [`the_explain_receipt_names_the_registered_aggregates`] alone. Merges through
+    /// `other.finish()` because the running total already IS the accumulator's whole
+    /// mergeable state (see [`crate::agg_fn::AggregateAccumulator::combine`]'s doc
+    /// comment on when that shortcut is sound).
+    struct ExplainTestSumAccumulator {
+        total: i64,
+    }
+
+    impl crate::agg_fn::AggregateAccumulator for ExplainTestSumAccumulator {
+        fn step(&mut self, args: &[TermValue]) -> Result<(), crate::error::EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn combine(
+            &mut self,
+            other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        ) -> Result<(), crate::error::EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, crate::error::EvalError> {
+            Ok(Some(TermValue::typed_literal(
+                self.total.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            )))
+        }
+    }
+
+    struct ExplainTestSumAggregate;
+
+    impl crate::agg_fn::CustomAggregate for ExplainTestSumAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(1)
+        }
+        fn volatility(&self) -> crate::user_fn::Volatility {
+            crate::user_fn::Volatility::Stable
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(
+            &self,
+            _scalarvals: &[(String, TermValue)],
+        ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+            Box::new(ExplainTestSumAccumulator { total: 0 })
+        }
+    }
+
+    /// The exact twin of [`the_explain_receipt_names_the_registered_relations`], for the
+    /// custom-aggregate registry [`NativeSparqlEngine::explain_query_with_aggregates`]
+    /// takes: [`QueryExplanation::aggregates`] lists every registered IRI, IRI-sorted
+    /// rather than registration-ordered, with its full declaration (arity, volatility,
+    /// algebraic class, state bound, scalarvals) riding along.
+    #[test]
+    fn the_explain_receipt_names_the_registered_aggregates() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT (AGG(<http://example.org/agg/first>, ?o) AS ?f) \
+                     WHERE { ?s <http://ex/p> ?o }";
+
+        // Registered in the reverse of their sorted order, so a receipt that echoed
+        // registration order would disagree with one that sorted.
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register(
+            "http://example.org/agg/second",
+            Arc::new(ExplainTestSumAggregate),
+        );
+        registry.register(
+            "http://example.org/agg/first",
+            Arc::new(ExplainTestSumAggregate),
+        );
+
+        let receipt = engine
+            .explain_query_with_aggregates(&ds, query, None, &registry)
+            .expect("explain");
+        let iris: Vec<&str> = receipt
+            .aggregates()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
+        assert_eq!(
+            iris,
+            [
+                "http://example.org/agg/first",
+                "http://example.org/agg/second"
+            ],
+            "the receipt lists every registered IRI, sorted"
+        );
+        assert!(
+            receipt.render().contains("http://example.org/agg/first"),
+            "the rendering names the registered aggregate: {}",
+            receipt.render()
+        );
+        // The `relations` block is unaffected — this seam is aggregates-only.
+        assert!(receipt.relations().is_empty());
     }
 
     #[test]

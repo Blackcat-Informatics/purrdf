@@ -65,6 +65,7 @@ use purrdf_sparql_algebra::GraphPattern;
 use super::soundness::{pattern_label, walk_spine};
 use super::{CHARGE_SCHEDULE, ChargePoint};
 use crate::DetHashMap;
+use crate::agg_fn::AggDescriptor;
 use crate::property_fn::PfDescriptor;
 
 /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
@@ -292,6 +293,16 @@ pub struct QueryExplanation {
     /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe),
     /// which this is taken from verbatim.
     relations: Vec<PfDescriptor>,
+    /// The full self-description of every custom-aggregate that was in scope, sorted by
+    /// IRI. The exact twin of [`Self::relations`], for the exact same reason: a `Custom`
+    /// aggregate is HOST code that folds a `GROUP BY` group into a value no built-in
+    /// accumulator produces, and two runs of the same query text that differ only in
+    /// which aggregates were injected are two different runs — an explanation that did
+    /// not name them would print the same bytes for both. Sorted by
+    /// [`AggregateRegistry::describe`](crate::agg_fn::AggregateRegistry::describe), which
+    /// this is taken from verbatim, so the list is a function of what was registered
+    /// rather than of registration order.
+    aggregates: Vec<AggDescriptor>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -336,6 +347,7 @@ impl QueryExplanation {
         join_orders: Vec<String>,
         ledger: Vec<NodeCharges>,
         relations: Vec<PfDescriptor>,
+        aggregates: Vec<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
     ) -> Self {
         Self {
@@ -343,6 +355,7 @@ impl QueryExplanation {
             join_orders,
             ledger,
             relations,
+            aggregates,
             evidence,
         }
     }
@@ -380,6 +393,20 @@ impl QueryExplanation {
         &self.relations
     }
 
+    /// The full self-description of every custom-aggregate that was in scope, sorted by
+    /// IRI.
+    ///
+    /// Empty when the explanation was taken with no aggregate registry injected, which is
+    /// the same thing an empty registry means: no `AGG(<iri>, …)` call in the query could
+    /// resolve to a registered aggregate. Populated by
+    /// [`NativeSparqlEngine::explain_query_with_aggregates`](crate::NativeSparqlEngine::explain_query_with_aggregates),
+    /// [`NativeSparqlEngine::explain_query_with_aggregates_view`](crate::NativeSparqlEngine::explain_query_with_aggregates_view),
+    /// the exact counterpart [`Self::relations`] has for the property-function seam.
+    #[must_use]
+    pub fn aggregates(&self) -> &[AggDescriptor] {
+        &self.aggregates
+    }
+
     /// The whole execution's consumption and ceilings.
     #[must_use]
     pub const fn evidence(&self) -> &purrdf_core::GovernorEvidence {
@@ -387,7 +414,8 @@ impl QueryExplanation {
     }
 
     /// The stable text rendering: a profile header, the charge schedule, the per-node
-    /// ledger, the injected relations, and the join orders.
+    /// ledger, the injected relations, the injected custom aggregates, and the join
+    /// orders.
     ///
     /// Byte-deterministic for a given query, dataset, and build — every number in it is a
     /// counter and every string is either a pinned schedule label or an algebra variant
@@ -450,6 +478,24 @@ impl QueryExplanation {
             );
             for mode in &descriptor.modes {
                 let _ = write!(out, " {}={}", mode.code, mode.rows_per_invocation);
+            }
+            out.push('\n');
+        }
+        // Always emitted, empty or not, for the exact reason the `relations` block is: see
+        // above.
+        let _ = writeln!(out, "aggregates");
+        for descriptor in &self.aggregates {
+            let _ = write!(
+                out,
+                "  {} arity={} volatility={} algebraic-class={} state-bound={}",
+                descriptor.iri,
+                descriptor.arity,
+                descriptor.volatility.label(),
+                descriptor.algebraic_class.label(),
+                descriptor.state_bound,
+            );
+            for spec in &descriptor.scalarvals {
+                let _ = write!(out, " {}={}", spec.name, spec.kind.label());
             }
             out.push('\n');
         }

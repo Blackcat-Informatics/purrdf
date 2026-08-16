@@ -86,16 +86,21 @@ Fuel is **one** number, and profile v5 put **two** new charge points inside it �
 more — `aggregate-invocation` and `aggregate-accumulation`. A band on the
 aggregate is satisfied by any schedule whose total happens to land in the same
 place, including one that doubled one point's cost and halved the other's. So
-every relation case, and the two `aggregate-*-fuel-*` lanes, also carry
-`expected/<case>.charges`: the metered run's fuel decomposed **per charge
-point**, read off the public per-node ledger (`QueryExplanation::ledger`, taken
-under the same `QueryGovernors::METERED` — for a relation case through
-`NativeSparqlEngine::explain_query_with_property_functions`, and for an
+every relation case, every `aggregate-*-fuel-*` lane, and the two
+`aggregate-custom-*` lanes all carry `expected/<case>.charges`: the metered
+run's fuel decomposed **per charge point**, read off the public per-node ledger
+(`QueryExplanation::ledger`, taken under the same `QueryGovernors::METERED` —
+for a relation case through
+`NativeSparqlEngine::explain_query_with_property_functions`, for a built-in
 aggregate case through plain `NativeSparqlEngine::explain_query`, since an
-aggregate is ordinary algebra rather than an injected seam). The harness
-re-derives it on every run and additionally checks that the thirteen counts add
-back up to the `.metered` fuel — a decomposition that did not sum to the
-quantity it claims to decompose would be a decomposition of something else.
+aggregate is ordinary algebra rather than an injected seam, and for an
+`aggregate-custom-*` case through `NativeSparqlEngine::explain_query_with_aggregates`
+— the injected-seam decomposition entry a REGISTERED custom aggregate needs, the
+exact counterpart `explain_query_with_property_functions` is for a scripted
+relation). The harness re-derives it on every run and additionally checks that
+the thirteen counts add back up to the `.metered` fuel — a decomposition that
+did not sum to the quantity it claims to decompose would be a decomposition of
+something else.
 
 Note that `.charges` and `relations.tsv` describe **different runs**: the
 `.charges` sidecar decomposes the unconstrained METERED measurement, while the
@@ -113,16 +118,14 @@ rather than inside the fold — the row is reported, certified as a positional
 prefix of itself, at both boundary and over-bound.
 
 The `aggregate-custom-*` lanes name a registered **custom** aggregate instead
-of a built-in, and carry no `.charges` sidecar at all — not by omission, but
-because there is no seam to take one through. `explain_query_with_property_functions`
-exists for the relation lane; there is no `explain_query_with_aggregates`
-counterpart (`NativeSparqlEngine::explain_for` in the evaluator crate takes no
-aggregate registry, so a query naming a custom `AGG(<iri>, …)` is refused at
-its prepare-time admission check exactly as an unregistered one would be). The
-`aggregate-custom-*` cases are therefore ordinary bands — `.answer`/`.spend`/
-`.metered` only — and their fuel is compared against the built-in lane's
-directly, case for case, rather than through a shared per-charge-point
-decomposition.
+of a built-in, wired through `QueryOptions::aggregates` exactly as
+`registered_custom_aggregate` wires it for `Source::Aggregate`, and DO carry a
+`.charges` sidecar — `NativeSparqlEngine::explain_query_with_aggregates` is the
+injected-seam decomposition entry point that makes it possible, the exact
+counterpart `explain_query_with_property_functions` is for the relation lane.
+`aggregate-custom-fuel-*`'s fuel is additionally compared against
+`aggregate-accumulation-fuel-*`'s directly, case for case, since the two lanes
+fold the identical group shape through two different dispatch paths.
 
 ## The boundary is measured, never guessed
 

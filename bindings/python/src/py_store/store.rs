@@ -398,6 +398,11 @@ impl PyStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let engine = build_engine(config);
+            // `QueryOptions::EMPTY`: this method exposes no `relations` /
+            // `relations_from_graph` / `aggregate_namespace` keywords (unlike
+            // `query_governed`), so there is nothing here for a caller to have
+            // configured — unchanged from before `query_with_entailment_governed` took a
+            // `QueryOptions` parameter.
             query_with_entailment_governed(
                 &engine,
                 &dataset,
@@ -407,6 +412,7 @@ impl PyStore {
                     substitutions: &subs,
                 },
                 plan.entailment(),
+                purrdf_sparql_eval::QueryOptions::EMPTY,
                 governors,
             )
             .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))
