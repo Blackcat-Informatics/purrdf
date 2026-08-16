@@ -41,6 +41,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::dataset_view::{DatasetMut, GraphMatch, GraphMatchValue};
+use crate::hash::{FastMap, FastSet};
 use crate::ir::{RdfDataset, RdfDatasetBuilder, TermValue};
 use crate::model::RdfLiteral;
 
@@ -163,10 +164,27 @@ pub struct MutableDataset {
     /// The delta's own term interner (mints `Delta` ids for brand-new terms).
     delta: DeltaBuilder,
     /// Quads added on top of the base, in [`MutTermId`] space, deduplicated by value.
-    added: HashSet<QuadKey>,
+    /// Fixed-key hashed (never a source of process-random iteration order); the
+    /// insertion SEQUENCE a caller actually cares about is tracked separately in
+    /// `added_ord`, since — per the workspace's hash-determinism policy — hash
+    /// iteration order must never be observed, even a fixed-key one built from a
+    /// different insertion sequence than some other equal-content set.
+    added: FastSet<QuadKey>,
+    /// The insertion ordinal of each key currently in `added`, so `freeze()` and
+    /// `effective_keys()` can replay delta-added quads in the order the caller
+    /// actually added them — never in `added`'s hash-iteration order (see
+    /// [`Self::added_in_order`]). A key present in `added` is always present here
+    /// with the SAME ordinal it was (re)inserted at; removed keys are dropped from
+    /// both maps together.
+    added_ord: FastMap<QuadKey, u64>,
+    /// The next ordinal `insert_key` will hand out to a brand-new `added` entry.
+    /// Monotonically increasing for the lifetime of this `MutableDataset` — never
+    /// reused, even across a remove/reinsert of the same key.
+    next_added_ord: u64,
     /// Base quads suppressed (logically removed). A base quad is effective iff it is
-    /// NOT in this set.
-    suppressed: HashSet<QuadKey>,
+    /// NOT in this set. Fixed-key hashed; only ever probed by membership, never
+    /// iterated for order.
+    suppressed: FastSet<QuadKey>,
 }
 
 impl MutableDataset {
@@ -177,8 +195,10 @@ impl MutableDataset {
         Self {
             base,
             delta: DeltaBuilder::default(),
-            added: HashSet::new(),
-            suppressed: HashSet::new(),
+            added: FastSet::default(),
+            added_ord: FastMap::default(),
+            next_added_ord: 0,
+            suppressed: FastSet::default(),
         }
     }
 
@@ -343,7 +363,15 @@ impl MutableDataset {
         if self.contains_key(&key) {
             return false;
         }
-        self.added.insert(key)
+        let inserted = self.added.insert(key);
+        if inserted {
+            // A brand-new `added` entry: stamp it with the next insertion ordinal so
+            // `added_in_order` can replay delta-added quads in call order rather than
+            // `added`'s hash-iteration order.
+            self.added_ord.insert(key, self.next_added_ord);
+            self.next_added_ord += 1;
+        }
+        inserted
     }
 
     /// Remove an effective quad (the four rules, remove side). Returns `true` if the
@@ -351,6 +379,9 @@ impl MutableDataset {
     fn remove_key(&mut self, key: QuadKey) -> bool {
         // Rule 2: removing a delta-added quad drops it from `added` (no suppression).
         if self.added.remove(&key) {
+            // Drop the matching ordinal too — a later reinsert of the SAME key mints a
+            // fresh (later) ordinal, so it replays at its new position, not its stale one.
+            self.added_ord.remove(&key);
             return true;
         }
         // Rule 3: removing a base quad (not in `added`) creates a suppression — but
@@ -367,6 +398,33 @@ impl MutableDataset {
             return false;
         }
         self.added.contains(key) || self.base_contains(key)
+    }
+
+    /// The delta-added keys, replayed in the order they were actually added — NEVER
+    /// `added`'s own hash-iteration order.
+    ///
+    /// `added`/`suppressed` are fixed-key hashed sets, which makes hash-bucket layout
+    /// a pure (reproducible) function of content — but reproducible-given-content is
+    /// not enough: two processes that inserted the same quads in a different order
+    /// (or that hashed to different bucket counts along the way) can still iterate a
+    /// fixed-key `HashSet` in different orders. Per the workspace's hash-determinism
+    /// policy (`crate::hash`), the fix is never "iterate the hash set" — it's an
+    /// explicit sort. Here that sort key is `added_ord`, the insertion ordinal minted
+    /// in [`Self::insert_key`], so `freeze()`/`quads_for_pattern` reproduce the exact
+    /// call-order sequence a caller built, independent of hash layout or process.
+    fn added_in_order(&self) -> Vec<QuadKey> {
+        let mut ordered: Vec<(u64, QuadKey)> = self
+            .added_ord
+            .iter()
+            .map(|(&key, &ord)| (ord, key))
+            .collect();
+        debug_assert_eq!(
+            ordered.len(),
+            self.added.len(),
+            "added/added_ord must stay in lockstep"
+        );
+        ordered.sort_unstable_by_key(|&(ord, _)| ord);
+        ordered.into_iter().map(|(_, key)| key).collect()
     }
 
     /// A signal that the delta has grown enough that compacting (re-`freeze()` to a
@@ -412,9 +470,9 @@ impl MutableDataset {
                 out.push(self.quad_values_of(&key));
             }
         }
-        // Delta-added quads.
-        for key in &self.added {
-            out.push(self.quad_values_of(key));
+        // Delta-added quads, in call order (never `added`'s hash-iteration order).
+        for key in self.added_in_order() {
+            out.push(self.quad_values_of(&key));
         }
         out
     }
@@ -526,11 +584,16 @@ impl MutableDataset {
         // `fold_statement_layer` (native codec ingest) already applies at PARSE time;
         // this mirrors it at UPDATE-freeze time so both paths agree.
         //
-        // Pass 1: resolve every added quad to its value ONCE, and bind any reifier
-        // declaration (`_ rdf:reifies <<( … )>>`) among them — recording its subject
-        // so pass 2 can route that reifier's OTHER added triples to `push_annotation`.
-        let added_values: Vec<QuadValues> =
-            self.added.iter().map(|k| self.quad_values_of(k)).collect();
+        // Pass 1: resolve every added quad to its value ONCE, in call order (never
+        // `added`'s hash-iteration order — see `added_in_order`), and bind any
+        // reifier declaration (`_ rdf:reifies <<( … )>>`) among them — recording its
+        // subject so pass 2 can route that reifier's OTHER added triples to
+        // `push_annotation`.
+        let added_values: Vec<QuadValues> = self
+            .added_in_order()
+            .into_iter()
+            .map(|k| self.quad_values_of(&k))
+            .collect();
         let mut reifier_decl: Vec<bool> = Vec::with_capacity(added_values.len());
         for q in &added_values {
             let is_decl = matches!(&q.p, TermValue::Iri(iri) if iri == RDF_REIFIES)
@@ -771,7 +834,10 @@ impl MutableDataset {
                 out.push(key);
             }
         }
-        out.extend(self.added.iter().copied());
+        // Delta-added quads, in call order (never `added`'s hash-iteration order) —
+        // `quads_for_pattern` (the sole caller) filters this list, so its own output
+        // order inherits the same call-order guarantee.
+        out.extend(self.added_in_order());
         out
     }
 
@@ -1080,6 +1146,79 @@ mod tests {
             frozen.annotations().filter(|(_, p, _)| *p == conf).count(),
             1,
             "the decimal annotation survived remap, keyed on the remapped predicate"
+        );
+    }
+
+    /// Regression pin for the process-nondeterministic scan order defect: `freeze()`
+    /// must replay delta-added quads in CALL order, never `added`'s hash-iteration
+    /// order — because a bare `std::collections::HashSet<QuadKey>` (the pre-fix
+    /// `added`/`suppressed` type) draws a fresh, process-random `RandomState` key
+    /// EVERY time `HashSet::new()` runs (a per-call counter seeded once per thread
+    /// from OS randomness), so two `MutableDataset`s built from the identical
+    /// insertion sequence — even in the SAME process — could iterate `added` in
+    /// different orders. That reordered which brand-new term got which dense
+    /// `TermId` at `freeze()` time, and the frozen dataset sorts quads BY `TermId`,
+    /// so the reordering was directly observable as scan-order drift downstream
+    /// (`GROUP_CONCAT`, `FIRST`/`LAST`, `TOPK`, and plain projection order all read
+    /// that scan).
+    ///
+    /// This test defeats exactly that per-construction seeding: it builds MANY fresh
+    /// `MutableDataset`s (each its own `HashSet::new()` call, had the bug still been
+    /// present) off the SAME base, replays the SAME scrambled insertion sequence of
+    /// brand-new subjects into each, freezes each, and asserts every one yields the
+    /// bitwise-identical subject order. Against the pre-fix implementation this loop
+    /// is expected to observe at least two different orderings; against the fix it
+    /// always sees exactly one.
+    #[test]
+    fn freeze_replays_delta_insertions_in_call_order_across_fresh_datasets() {
+        // A scrambled (neither insertion-adjacent-sorted nor alphabetical) subject
+        // sequence, so an order bug can't hide behind a coincidental match.
+        let order = ["s7", "s2", "s9", "s0", "s5", "s3", "s8", "s1", "s6", "s4"];
+
+        let mut orderings: std::collections::BTreeSet<Vec<String>> =
+            std::collections::BTreeSet::new();
+        for _ in 0..25 {
+            let mut m = MutableDataset::new(base3());
+            for s in order {
+                assert!(m.insert(q(s, "brand-new-pred", "o")));
+            }
+            let frozen = m.freeze().expect("freeze compacts");
+
+            // Read back the delta-added quads' subjects in the frozen dataset's own
+            // scan order (`quads()`, id-ascending — the same order a full BGP scan
+            // over this dataset walks).
+            let pred = frozen
+                .term_id_by_value(&iri_val("brand-new-pred"))
+                .expect("the shared new predicate is interned");
+            let mut subjects: Vec<String> = Vec::new();
+            for qd in frozen.quads() {
+                if qd.p != pred {
+                    continue;
+                }
+                let TermValue::Iri(iri) = MutableDataset::base_value_of(&frozen, qd.s) else {
+                    panic!("subject must be an IRI");
+                };
+                subjects.push(iri);
+            }
+            orderings.insert(subjects);
+        }
+
+        assert_eq!(
+            orderings.len(),
+            1,
+            "every fresh MutableDataset replayed the SAME insertion sequence into \
+             the SAME base, so freeze()'s scan order must be identical every time — \
+             observed {} distinct orderings: {orderings:#?}",
+            orderings.len()
+        );
+        let only = orderings.into_iter().next().unwrap();
+        let want: Vec<String> = order
+            .iter()
+            .map(|s| format!("http://example.org/{s}"))
+            .collect();
+        assert_eq!(
+            only, want,
+            "scan order must equal insertion (call) order, not hash-bucket order"
         );
     }
 

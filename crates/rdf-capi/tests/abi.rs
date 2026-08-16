@@ -1174,6 +1174,78 @@ unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfR
     }
 }
 
+/// Regression pin for the process-nondeterministic scan-order defect that lived in
+/// `purrdf_core::ir::MutableDataset` (the shared COW delta layer `purrdf_graph_*`
+/// wraps directly): building a graph off an empty base, inserting the SAME
+/// scrambled sequence of brand-new subjects through `purrdf_graph_insert`, freezing,
+/// and reading back a plain (unordered) `SELECT ?s` scan must yield the
+/// bitwise-identical subject sequence every single time — never a hash-bucket-
+/// derived reordering that could vary per `MutableDataset` construction (and, before
+/// the fix, per process). See `purrdf_core::ir::mutable`'s own
+/// `freeze_replays_delta_insertions_in_call_order_across_fresh_datasets` unit test
+/// for the same pin at the kernel level; this one exercises the actual `extern "C"`
+/// entry points a C caller (and, transitively, the wasm/Python hosts) would use.
+#[test]
+fn graph_insert_then_scan_order_is_stable_across_fresh_graphs() {
+    unsafe {
+        let order = [
+            "http://s7",
+            "http://s2",
+            "http://s9",
+            "http://s0",
+            "http://s5",
+            "http://s3",
+            "http://s8",
+            "http://s1",
+            "http://s6",
+            "http://s4",
+        ];
+
+        let mut orderings: std::collections::BTreeSet<Vec<String>> =
+            std::collections::BTreeSet::new();
+        for _ in 0..25 {
+            let graph = graph_of("");
+            for s in order {
+                insert(graph, s, "http://p-new", "http://o");
+            }
+            let frozen = freeze(graph);
+
+            let rows = run_select(frozen, "SELECT ?s WHERE { ?s <http://p-new> ?o }");
+            let mut subjects = Vec::new();
+            while purrdf_rowcursor_next(rows) == PurrdfStatus::Ok as i32 {
+                let mut view = out_view();
+                let mut bound: u8 = 0;
+                assert_eq!(
+                    purrdf_rowcursor_term(rows, 0, &raw mut view, &raw mut bound),
+                    PurrdfStatus::Ok as i32
+                );
+                assert_eq!(bound, 1);
+                subjects.push(view_str(&view));
+            }
+            orderings.insert(subjects);
+
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(frozen);
+            purrdf_graph_free(graph);
+        }
+
+        assert_eq!(
+            orderings.len(),
+            1,
+            "every fresh graph replayed the SAME insertion sequence, so the plain \
+             scan order must be identical every time — observed {} distinct \
+             orderings: {orderings:#?}",
+            orderings.len()
+        );
+        let only = orderings.into_iter().next().unwrap();
+        let want: Vec<String> = order.iter().map(|s| (*s).to_string()).collect();
+        assert_eq!(
+            only, want,
+            "scan order must equal insertion (call) order, not hash-bucket order"
+        );
+    }
+}
+
 #[test]
 fn select_lists_subjects() {
     unsafe {
