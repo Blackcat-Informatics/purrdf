@@ -78,8 +78,8 @@ fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlResult 
 /// `"its:dir"` (compact) — cross-anchored against the fixture's own (spaced)
 /// `"its:dir": "…"` spelling on disk.
 ///
-/// This same fixture also pins the simple-literal decision (H6 item 2 / issue
-/// requirement 4): its `"langdir"` column carries a plain empty-string
+/// This same fixture also pins the simple-literal encoding decision: its
+/// `"langdir"` column carries a plain empty-string
 /// literal written BARE (`{ "type": "literal" , "value": "" }`, no
 /// `"datatype"` member) — the spec's own encoding table says a simple literal
 /// serializes bare (see `crates/sparql-results/src/json.rs`'s module docs),

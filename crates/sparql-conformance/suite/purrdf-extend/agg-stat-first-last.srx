@@ -6,8 +6,8 @@
   </head>
   <results>
     <result>
-      <binding name="first"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">1</literal></binding>
-      <binding name="last"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">5</literal></binding>
+      <binding name="first"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">40</literal></binding>
+      <binding name="last"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">30</literal></binding>
     </result>
   </results>
 </sparql>

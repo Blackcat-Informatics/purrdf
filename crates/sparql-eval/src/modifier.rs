@@ -1225,7 +1225,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // duplicate, every declared name present, every value the right kind — so
     // `CustomAggregate::init` below can trust this slice without re-checking it.
     let scalarvals: Vec<(String, TermValue)> = agg
-        .scalarvals
+        .scalarvals()
         .iter()
         .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
         .collect();

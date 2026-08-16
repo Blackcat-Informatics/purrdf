@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# Three subjects carrying {10, 10, 20} — mirroring
-# `crates/sparql-eval/tests/aggregate_function_e2e.rs`'s `stat_dataset`'s `g2`
-# group — a genuine repeated value for MODE to find, rather than an all-distinct
-# smallest-value tie-break.
+# Four subjects carrying {10, 20, 20, 30} — the repeated value (20) is
+# DELIBERATELY neither the minimum (10) nor the maximum (30) nor the first
+# (m1 = 10) nor the last (m4 = 30) row, so this fixture can only pass for the
+# right reason: MODE finding the genuinely repeated value discriminates from
+# every coincidental stand-in (MIN, MAX, FIRST, LAST) an incorrect
+# implementation could fall back to and still pass an all-distinct or
+# smallest-repeats-first tie-break dataset.
 @prefix : <https://example.org/agg-stat#> .
 
 :m1 :value 10 .
-:m2 :value 10 .
+:m2 :value 20 .
 :m3 :value 20 .
+:m4 :value 30 .

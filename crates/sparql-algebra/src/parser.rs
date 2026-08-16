@@ -3064,9 +3064,9 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
-    /// custom-aggregate surface (issue-normative spelling for the call shape — no
-    /// `ParserOptions` gate, since it introduces no ambiguity with any other
-    /// production). `<iri>` may be any IRI, including a prefixed name, resolved
+    /// custom-aggregate surface (the normative spelling for a custom-aggregate
+    /// call — no `ParserOptions` gate, since it introduces no ambiguity with any
+    /// other production). `<iri>` may be any IRI, including a prefixed name, resolved
     /// and retained byte-exact via [`Self::expect_iri_node`]. `DISTINCT`, if
     /// present, precedes the first positional argument. At least one positional
     /// argument is required — an empty argument list is a hard syntax error: the

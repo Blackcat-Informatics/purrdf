@@ -1823,7 +1823,7 @@ mod tests {
         assert!(d.is_nan(), "0.0 / 0.0 must be NaN");
     }
 
-    /// H10 regression: `decimal_div_raw` must return `Err(DivisionByZero)` for a
+    /// Regression coverage: `decimal_div_raw` must return `Err(DivisionByZero)` for a
     /// zero divisor on its OWN, not merely rely on a caller's pre-check — this
     /// calls it DIRECTLY (bypassing every one of `numeric_div`'s/`temporal.rs`'s own
     /// zero checks) with a zero divisor, so this test only passes if the function's
@@ -1831,7 +1831,7 @@ mod tests {
     /// crate does not build with debug assertions disabled in `cargo test`, so a
     /// `#[should_panic]` on a `debug_assert!` would pass in either build profile);
     /// instead it asserts the typed `Err` shape directly, which is what actually
-    /// changed: before this fix, this exact call would panic on an integer division
+    /// matters: without this check, this exact call would panic on an integer division
     /// by zero in a release build (where `debug_assert!` compiles out), which on
     /// `wasm32-unknown-unknown` (`panic = "abort"`) tears down the whole module.
     #[test]

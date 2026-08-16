@@ -517,10 +517,13 @@ class Store:
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
     # Governed two-phase entailment query. `outcome` and `report` are absent only
-    # when the closure phase itself was stopped. NOTE: this entry takes no
-    # `aggregate_namespace` — the entailment-aware query lane evaluates under no
-    # `QueryOptions` seam at all, on any regime, so there is nothing here for a
-    # registry to reach.
+    # when the closure phase itself was stopped. `aggregate_namespace` behaves
+    # exactly as on `query_governed` above. `property_fn_namespaces` / `relations` /
+    # `relations_from_graph` behave exactly as on `query_governed`, too: a
+    # registered relation is reachable from the closure query exactly as it is from
+    # an ordinary one, so registering one here and omitting it there cannot silently
+    # change which rows the SAME predicate position yields. `relations_from_graph`
+    # reads its table from this store's PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -529,7 +532,10 @@ class Store:
         program: str = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -676,6 +682,10 @@ class MutableDataset:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
+    # `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly
+    # as on `query_governed` above: a registered relation is reachable from the
+    # closure query exactly as it is from an ordinary one. `relations_from_graph`
+    # reads its table from this dataset's PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -684,7 +694,10 @@ class MutableDataset:
         program: str = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,

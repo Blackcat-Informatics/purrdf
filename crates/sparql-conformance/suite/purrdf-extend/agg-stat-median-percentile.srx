@@ -3,11 +3,15 @@
   <head>
     <variable name="median"/>
     <variable name="p50"/>
+    <variable name="p10"/>
+    <variable name="p90"/>
   </head>
   <results>
     <result>
       <binding name="median"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">3</literal></binding>
       <binding name="p50"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">3</literal></binding>
+      <binding name="p10"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">1.4</literal></binding>
+      <binding name="p90"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">4.6</literal></binding>
     </result>
   </results>
 </sparql>

@@ -118,7 +118,9 @@ use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
     QueryGovernors, QueryOptions as EngineQueryOptions,
 };
-use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, serialize};
+use purrdf_sparql_results::{
+    ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, serialize,
+};
 use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
@@ -345,9 +347,8 @@ fn emit_result(
             };
             // The results serializer itself rejects the shapes its format cannot carry
             // (CSV/TSV reject a boolean); its `Err` maps cleanly to a runtime failure.
-            // `--provenance-namespace` anchors the additive provenance extension on
-            // JSON/XML; CSV/TSV have no extension point and the serializer trims it
-            // (`SerializeOutcome::provenance_dropped`), exactly as with no namespace.
+            // `--provenance-namespace` + CSV/TSV is refused up front by
+            // `refuse_unenforceable_combinations`, before this lane ever runs the query.
             let provenance = build_query_provenance(provenance_namespace, query);
             let outcome = serialize(result, fmt, &provenance, provenance_namespace)?;
             sink::write_out("-", &outcome.bytes)?;
@@ -726,6 +727,16 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
                 .to_owned(),
         ));
     }
+    // `--rules` names the RIF-in-XML rule document `--entailment rif` runs; `options.rules`
+    // is read only inside the `--entailment` lane below, so a bare `--rules FILE` with no
+    // `--entailment` would otherwise be accepted by clap and silently do nothing.
+    if options.rules.is_some() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--rules names the rule document an entailment regime runs under; it has no \
+             effect without --entailment"
+                .to_owned(),
+        ));
+    }
     if options.explain && options.provenance_namespace.is_some() {
         return Err(CliError::Usage(
             "--explain prints the plan and its charge ledger INSTEAD of the query's answers, \
@@ -733,6 +744,27 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
              accepted and never emitted: drop one of the two"
                 .to_owned(),
         ));
+    }
+    // CSV/TSV are pure-W3C value-only SPARQL-results formats with no extension point at
+    // all — unlike JSON/XML, which anchor the additive `purrdf` provenance extension.
+    // `purrdf_sparql_results::serialize` tolerates a namespace here (it trims the
+    // extension silently and reports `SerializeOutcome::provenance_dropped` for a library
+    // caller to inspect), but this CLI's own contract is to refuse a flag by name when it
+    // cannot do anything, exactly as `--provenance-namespace` is refused above beside
+    // `--explain` and below for a CONSTRUCT/DESCRIBE graph, rather than accept it and
+    // silently ignore it.
+    if options.provenance_namespace.is_some()
+        && matches!(
+            options.results_format.to_results_format(),
+            Some(SparqlResultsFormat::Csv | SparqlResultsFormat::Tsv)
+        )
+    {
+        return Err(CliError::Usage(format!(
+            "--provenance-namespace anchors the additive extension on SPARQL-results \
+             JSON/XML: --results-format {} is a pure-W3C value-only format with no \
+             extension point and cannot carry it",
+            options.results_format.token()
+        )));
     }
     Ok(())
 }

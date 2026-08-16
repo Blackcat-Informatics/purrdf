@@ -623,7 +623,7 @@ mod tests {
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
 
-    /// F6 round-trip: what [`crate::xml::to_xml`] writes under a namespace,
+    /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits
     /// something nothing can decode.
     #[test]
@@ -818,7 +818,7 @@ mod tests {
         );
     }
 
-    /// H9 fix pin: the ITS namespace declared on the ROOT `<sparql>` element
+    /// Namespace-inheritance pin: the ITS namespace declared on the ROOT `<sparql>` element
     /// — this crate's own writer's default style (see [`crate::xml`]'s module
     /// docs) — must still resolve for a `<literal its:dir="…">` several
     /// elements deeper, since XML namespace scope is inherited downward.
@@ -842,7 +842,7 @@ mod tests {
         );
     }
 
-    /// H9 fix pin: XML namespace semantics are defined by URI, not prefix
+    /// Namespace-by-URI pin: XML namespace semantics are defined by URI, not prefix
     /// spelling (<https://www.w3.org/TR/xml-names/>). A document that binds
     /// the ITS namespace to a NON-`its` prefix (here `i`) must still be read
     /// correctly — matching by `(namespace URI, local name)` rather than the
@@ -867,7 +867,7 @@ mod tests {
         );
     }
 
-    /// H9 fix pin, combined: the ITS namespace bound to a non-`its` prefix
+    /// Combined namespace pin: the ITS namespace bound to a non-`its` prefix
     /// AND declared on the root element rather than inline on the literal —
     /// the fully general case a raw-QName match cannot handle at all.
     #[test]

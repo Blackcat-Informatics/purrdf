@@ -152,7 +152,7 @@ fn first_party_suite_inventory() {
 /// This suite mixes `mf:action` shapes on purpose (a blank node carrying
 /// `qt:query`/`qt:data` for most `mf:QueryEvaluationTest` cases, and a bare IRI
 /// action for the `mf:PositiveSyntaxTest`/`mf:NegativeSyntaxTest` cases), which is
-/// exactly the shape H13 flagged as a silent-skip risk if the loader ever started
+/// exactly the shape that would silently skip cases if the loader ever started
 /// requiring one shape unconditionally.
 #[test]
 fn purrdf_extend_case_count_and_kinds() {
@@ -164,8 +164,8 @@ fn purrdf_extend_case_count_and_kinds() {
 
     assert_eq!(
         cases.len(),
-        31,
-        "purrdf-extend/manifest.ttl must load exactly 31 cases (its mf:entries list \
+        32,
+        "purrdf-extend/manifest.ttl must load exactly 32 cases (its mf:entries list \
          count); got {} — a case silently stopped loading",
         cases.len()
     );
@@ -189,9 +189,9 @@ fn purrdf_extend_case_count_and_kinds() {
         "purrdf-extend must carry no unmodeled (TestKind::Unknown) cases"
     );
     assert_eq!(
-        query_eval, 28,
+        query_eval, 29,
         "purrdf-extend's mf:QueryEvaluationTest count drifted (blank-node \
-         qt:query/qt:data actions) — expected 28, got {query_eval}"
+         qt:query/qt:data actions) — expected 29, got {query_eval}"
     );
     assert_eq!(
         positive_syntax, 1,
@@ -224,7 +224,7 @@ fn fixtures_root() -> std::path::PathBuf {
         .join("fixtures")
 }
 
-/// F9: prove the manifest loader's silent-skip completeness guard actually FIRES,
+/// Prove the manifest loader's silent-skip completeness guard actually FIRES,
 /// rather than merely existing unexercised (it was previously verified only by
 /// hand-breaking a manifest locally — never by a committed regression).
 ///

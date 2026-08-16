@@ -210,7 +210,7 @@ wrong string instead of coincidentally passing.
 Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/
 `SAMPLE`/`GROUP_CONCAT`), a Rust host may register additional `GROUP BY`
 reductions and reach them from query text as `AGG(<iri>, [DISTINCT] arg, arg, …)`
-— the issue-normative positional spelling (a deliberate divergence from Jena
+— the normative positional spelling (a deliberate divergence from Jena
 ARQ's `AGG <iri>(args)`). Where `purrdf_sparql_eval::property_fn` injects a
 *relation* (a row source in graph-pattern position) and `user_fn` injects a
 *scalar function* (one value per call), `agg_fn` injects a **fold**: a group's

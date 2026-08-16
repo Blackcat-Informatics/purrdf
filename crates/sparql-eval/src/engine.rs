@@ -3920,9 +3920,9 @@ mod tests {
         );
     }
 
-    /// H12: pins that `QueryOptions`'s three registries becoming non-optional
+    /// Pins that `QueryOptions`'s three registries being non-optional
     /// (`&Registry`, `AggregateRegistry::EMPTY`/`PropertyFunctionRegistry::EMPTY`
-    /// standing in for the old `Option::None`) did not weaken
+    /// standing in for an absent registry) does not weaken
     /// [`check_plan_matches_relations`]'s plan-identity guard. Three cases:
     ///
     /// 1. A plan prepared under no registry at all, evaluated under

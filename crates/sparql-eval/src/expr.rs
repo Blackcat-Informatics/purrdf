@@ -1265,7 +1265,7 @@ pub(crate) fn substitute_pattern(
                     let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
                         agg.function().clone(),
                         args,
-                        agg.scalarvals.clone(),
+                        agg.scalarvals().to_vec(),
                         agg.distinct,
                     )
                     .expect("substitution preserves argument count, so arity stays valid");

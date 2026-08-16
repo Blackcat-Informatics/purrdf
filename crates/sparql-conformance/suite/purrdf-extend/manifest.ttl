@@ -120,6 +120,7 @@
         :aggStatFirstLast
         :aggStatTopk
         :aggStatMode
+        :aggStatTopkDiscriminating
         :groupConcatOrder
         :baseDirection
     ) .
@@ -242,7 +243,7 @@
     mf:action <agg-star-non-count.rq> .
 
 :aggStatMedianPercentile a mf:QueryEvaluationTest ;
-    mf:name "AGG(...) MEDIAN and the named-scalarval PERCENTILE(P=0.5) form agree, both real EVALUATIONS through a registered namespace" ;
+    mf:name "AGG(...) MEDIAN and the named-scalarval PERCENTILE(P=0.5) form agree, and PERCENTILE(P=0.1)/PERCENTILE(P=0.9) prove a genuinely INTERPOLATED rank, not merely the P=0.5 fraction MEDIAN's own path already covers at zero interpolation" ;
     mf:action [
         qt:query <agg-stat-median-percentile.rq> ;
         qt:data <agg-stat.ttl> ;
@@ -260,10 +261,10 @@
     mf:result <agg-stat-moments.srx> .
 
 :aggStatFirstLast a mf:QueryEvaluationTest ;
-    mf:name "AGG(...) FIRST/LAST fold over a spec-ordered (ORDER BY) row sequence, exactly like :groupConcatOrder's determinism proof" ;
+    mf:name "AGG(...) FIRST/LAST fold over a spec-ordered (ORDER BY DESC) row sequence, exactly like :groupConcatOrder's determinism proof, over a permutation deliberately uncorrelated with subject order so FIRST/LAST cannot coincide with MIN/MAX or with scan order" ;
     mf:action [
         qt:query <agg-stat-first-last.rq> ;
-        qt:data <agg-stat.ttl> ;
+        qt:data <agg-stat-first-last.ttl> ;
         purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
     ] ;
     mf:result <agg-stat-first-last.srx> .
@@ -278,13 +279,22 @@
     mf:result <agg-stat-topk.srx> .
 
 :aggStatMode a mf:QueryEvaluationTest ;
-    mf:name "AGG(...) MODE finds the genuinely repeated value, not merely the smallest under an all-distinct tie-break" ;
+    mf:name "AGG(...) MODE finds the genuinely repeated value, over data where that value is deliberately neither the minimum, the maximum, the first row, nor the last row, so this case cannot pass by coincidentally reading off any of those instead" ;
     mf:action [
         qt:query <agg-stat-mode.rq> ;
         qt:data <agg-stat-mode.ttl> ;
         purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
     ] ;
     mf:result <agg-stat-mode.srx> .
+
+:aggStatTopkDiscriminating a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) TOPK(K=3) sorts by VALUE, over a permutation uncorrelated with subject/insertion order, so it cannot pass by coincidentally returning the last K rows seen instead" ;
+    mf:action [
+        qt:query <agg-stat-topk-discriminating.rq> ;
+        qt:data <agg-stat-first-last.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-topk-discriminating.srx> .
 
 :groupConcatOrder a mf:QueryEvaluationTest ;
     mf:name "GROUP_CONCAT concatenates in inner-operator row order, proved via a spec-guaranteed ORDER BY DESC subquery rather than incidental store scan order — an exact-string pin through this harness's own load/evaluate path" ;

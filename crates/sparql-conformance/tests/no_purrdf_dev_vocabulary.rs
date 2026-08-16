@@ -21,7 +21,7 @@
 //! test proves none of them is reachable again: a banned host anywhere in the
 //! TRACKED tree is a repeat of the mistake, not a new feature.
 //!
-//! The standing exemptions are:
+//! The standing exemption is:
 //! - `crates/sparql-results/src/xml_read.rs`'s
 //!   `tolerates_legacy_dir_spellings`/`its_dir_takes_priority_over_legacy_spellings`
 //!   tests. They construct SPARQL-XML fixtures carrying the OLD (now-deleted)
@@ -30,13 +30,8 @@
 //!   pick the same string. Recognizing a legacy spelling on READ is not minting
 //!   it, the same way recognizing the third-party `its:dir` attribute the same
 //!   two tests also cover is not minting `http://www.w3.org/2005/11/its`.
-//! - `crates/rdf-core/src/turtle.rs`'s reifier/annotation-emission tests, which
-//!   spell arbitrary THIRD-PARTY sample predicates as `https://purrdf.org/…`
-//!   the same way another fixture might spell them under `example.org` —
-//!   round-tripping caller-supplied data, not a vocabulary this crate reads or
-//!   writes on its own account. Pre-existing on `origin/main`, out of scope for
-//!   this gate's own crate boundary; flagged here only so a NEW occurrence
-//!   elsewhere still trips the gate.
+//!   `crates/rdf-core/src/turtle.rs`'s reifier/annotation-emission tests spell
+//!   their sample predicates under `example.org` and carry no exemption here.
 //!
 //! Enumeration is driven by `git ls-files` rather than a filesystem walk, so
 //! the scan covers exactly the committed tree — untracked build artifacts
@@ -85,46 +80,6 @@ const EXEMPT_SITES: &[(&str, &str)] = &[
     (
         "crates/sparql-results/src/xml_read.rs",
         r#"<literal xml:lang="en" xmlns:its="http://www.w3.org/2005/11/its" its:dir="rtl" dir="ltr" purrdf:dir="ltr" xmlns:purrdf="https://purrdf.dev/ns/results#">hello</literal>"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#""https://purrdf.org/ontology#viaRule".to_owned(),"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#"iri("https://purrdf.org/rule/x"),"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#"assert!(out.contains("purrdf.org/ontology#viaRule> <https://purrdf.org/rule/x>"));"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#""https://purrdf.org/ontology#viaRule","#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#"RdfTerm::iri("https://purrdf.org/rule/x"),"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#""https://purrdf.org/ontology#dl-el-crosscheck","#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#"iri("https://purrdf.org/ontology#CrosscheckLedger"),"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#""https://purrdf.org/ontology#consistent".to_owned(),"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r#"assert!(out.contains("<https://purrdf.org/ontology#dl-el-crosscheck>"));"#,
-    ),
-    (
-        "crates/rdf-core/src/turtle.rs",
-        r##"assert!(out.contains("#type> <https://purrdf.org/ontology#CrosscheckLedger> ;"));"##,
     ),
 ];
 

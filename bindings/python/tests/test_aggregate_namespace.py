@@ -147,7 +147,7 @@ def test_aggregate_namespace_registration_does_not_leak_across_calls() -> None:
         store.query(MEDIAN_QUERY)
 
 
-# ── the entailment-governed lane (F10: it took no `QueryOptions` at all) ──────────
+# ── the entailment-governed lane (it took no `QueryOptions` at all) ───────────────
 
 ANIMALS_TTL = f"""
 <{EX}Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <{EX}Animal> .

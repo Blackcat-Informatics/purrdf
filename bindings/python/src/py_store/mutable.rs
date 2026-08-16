@@ -380,6 +380,12 @@ impl PyMutableDataset {
     /// Governed entailment-aware query, with the same two-phase carrier as `Store`.
     ///
     /// `aggregate_namespace` behaves exactly as on `Store.query_entailment_governed`.
+    ///
+    /// `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly as on
+    /// `Store.query_entailment_governed`: a registered relation is reachable from the closure
+    /// query exactly as it is from an ordinary one. `relations_from_graph` reads its table
+    /// from this dataset's PRE-entailment snapshot — the base the closure is materialized
+    /// from.
     #[pyo3(signature = (
         query,
         entailment,
@@ -387,7 +393,10 @@ impl PyMutableDataset {
         program="",
         substitutions=None,
         extension_namespaces=None,
+        property_fn_namespaces=None,
         standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -409,7 +418,10 @@ impl PyMutableDataset {
         program: &str,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -420,6 +432,7 @@ impl PyMutableDataset {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
+        let specs = collect_relations(relations, relations_from_graph)?;
         let plan =
             QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
         let args = GovernorArgs {
@@ -433,13 +446,14 @@ impl PyMutableDataset {
         let inner = &self.inner;
         let config = EngineConfig {
             extension_namespaces,
-            property_fn_namespaces: None,
+            property_fn_namespaces,
             standpoint_predicates,
         };
         let outcome = run_governed(py, args, cancel, move |governors| {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
+            let registry = build_relations(specs, &dataset)?;
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
@@ -452,6 +466,9 @@ impl PyMutableDataset {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
+                    property_functions: registry
+                        .as_ref()
+                        .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
                     aggregates: aggregates
                         .as_ref()
                         .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),

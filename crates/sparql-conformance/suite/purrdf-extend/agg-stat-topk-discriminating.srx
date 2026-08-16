@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <sparql xmlns="http://www.w3.org/2005/sparql-results#">
   <head>
-    <variable name="mode"/>
+    <variable name="top"/>
   </head>
   <results>
     <result>
-      <binding name="mode"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">20</literal></binding>
+      <binding name="top"><literal>50 40 30</literal></binding>
     </result>
   </results>
 </sparql>

@@ -1673,12 +1673,12 @@ mod tests {
         assert!(aggregate_is_unsafe(AGG_IRI, &registry));
     }
 
-    /// H12: `aggregate_is_unsafe` takes `&AggregateRegistry`, never
-    /// `Option<&AggregateRegistry>` — there is no longer an "absent registry" call
-    /// this could exercise as a case DISTINCT from an empty one, which is what
-    /// makes the old pre-H12 expectation (that `None` and `Some(&AggregateRegistry::new())`
-    /// behave identically) structurally impossible now rather than merely tested:
-    /// the type system admits only the one spelling. [`AggregateRegistry::EMPTY`]
+    /// `aggregate_is_unsafe` takes `&AggregateRegistry`, never
+    /// `Option<&AggregateRegistry>` — there is no "absent registry" call this could
+    /// exercise as a case DISTINCT from an empty one, which makes "a `None`-shaped
+    /// call and a `Some(&AggregateRegistry::new())`-shaped call behave identically"
+    /// structurally impossible to violate rather than merely tested: the type
+    /// system admits only the one spelling. [`AggregateRegistry::EMPTY`]
     /// and a freshly built, still-empty [`AggregateRegistry::new`] both resolve
     /// `AGG_IRI` to nothing, so the gate refuses under either — the SAME
     /// conservative treatment an unresolved property function gets

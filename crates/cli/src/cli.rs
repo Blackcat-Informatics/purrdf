@@ -307,8 +307,9 @@ pub(crate) enum Command {
         /// `--results-format`. PurRDF mints no vocabulary IRIs of its own — there is no
         /// default namespace, and omitting this flag emits pure-W3C output exactly as
         /// before it existed. `PREFIX` must be a valid XML NCName (neither `xml` nor
-        /// `xmlns`) and `IRI` must be an absolute IRI; CSV/TSV have no extension point
-        /// and ignore this flag. Read the extension back with
+        /// `xmlns`) and `IRI` must be an absolute IRI; CSV/TSV have no extension point,
+        /// so this flag is REFUSED (not silently ignored) when combined with
+        /// `--results-format csv`/`tsv`. Read the extension back with
         /// `purrdf_sparql_results::provenance_from_json`/`provenance_from_xml` under the
         /// SAME namespace.
         #[arg(long, value_name = "PREFIX=IRI", value_parser = crate::query::parse_provenance_namespace)]

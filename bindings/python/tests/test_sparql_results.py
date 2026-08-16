@@ -336,7 +336,7 @@ def test_oracle_parses_purrdf_tsv_output(
     ]
 
 
-# ── F6: the additive `purrdf` provenance extension, reachable and readable back ───
+# ── the additive `purrdf` provenance extension, reachable and readable back ───────
 
 
 @pytest.mark.parametrize("fmt", ["json", "xml"])

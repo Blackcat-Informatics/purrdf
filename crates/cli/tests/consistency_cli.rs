@@ -432,6 +432,44 @@ fn ntriples_input_is_inferred_from_the_extension() {
     assert!(stdout(&out).starts_with("consistency true\n"));
 }
 
+/// `--base` resolves relative IRIs on parse; the native pack container stores
+/// fully-resolved terms and has no relative-IRI syntax, so `--base` combined with
+/// `--from pack` would otherwise be accepted by clap and silently do nothing
+/// (`source::load_dataset`'s pack arm never reads the base it is handed) — refused
+/// by name instead, the same no-op shape `--loss-ledger`/`--jsonld-options` are
+/// refused for below.
+#[test]
+fn base_with_pack_from_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let pack = dir.path().join("ontology.purrpck");
+    let pack_path = pack.to_str().expect("pack path");
+
+    let packed = run(&[
+        "convert", "--from", "turtle", "--to", "pack", &input, pack_path,
+    ]);
+    assert!(
+        packed.status.success(),
+        "seeding the source pack must succeed: {}",
+        stderr(&packed)
+    );
+
+    let out = run(&[
+        "consistency",
+        "--from",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        pack_path,
+    ]);
+    assert_eq!(code(&out), 2, "a usage error");
+    assert!(
+        stderr(&out).contains("--base"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+}
+
 /// `--loss-ledger` is refused rather than silently ignored: it is a GLOBAL clap flag, so
 /// without a refusal it would be accepted and do nothing, the no-op this repository
 /// refuses everywhere else.

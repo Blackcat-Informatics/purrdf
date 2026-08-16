@@ -1533,9 +1533,9 @@ mod tests {
     //    `plan_where_pattern` call) ────────────────────────────────────────────
 
     /// An unregistered `AGG(<iri>, …)` reached through an UPDATE's `WHERE` (nested
-    /// inside a sub-`SELECT`'s `GROUP BY`, exactly as the H4 reproduction shape
-    /// reads) must be refused at PREPARE time — before `m.freeze()`'s snapshot is
-    /// even evaluated — under the AGGREGATE diagnostic code, and it must spend
+    /// inside a sub-`SELECT`'s `GROUP BY`) must be refused at PREPARE time —
+    /// before `m.freeze()`'s snapshot is even evaluated — under the AGGREGATE
+    /// diagnostic code, and it must spend
     /// EXACTLY ZERO of a governed request's budget: every dimension `QueryGovernors
     /// ::METERED` engages is asserted at zero, not merely "the request failed",
     /// because a coarse assertion would not catch an admission failure that ran

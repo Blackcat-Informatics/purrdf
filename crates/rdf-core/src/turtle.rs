@@ -584,14 +584,14 @@ mod tests {
         let out = emit_reifier(
             &reifier,
             &[(
-                "https://purrdf.org/ontology#viaRule".to_owned(),
-                iri("https://purrdf.org/rule/x"),
+                "https://example.org/ontology#viaRule".to_owned(),
+                iri("https://example.org/rule/x"),
             )],
         );
         // Anonymous reifier subject, rdf:reifies head, non-asserting triple term,
         // and the folded annotation — all in one statement.
         assert!(out.starts_with("[] <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( "));
-        assert!(out.contains("purrdf.org/ontology#viaRule> <https://purrdf.org/rule/x>"));
+        assert!(out.contains("example.org/ontology#viaRule> <https://example.org/rule/x>"));
         assert!(out.trim_end().ends_with(" ."));
     }
 
@@ -618,8 +618,8 @@ mod tests {
         // very same blank node, so the link survives serialization.
         let annotation = RdfAnnotation::new(
             RdfTerm::blank_node("r0"),
-            "https://purrdf.org/ontology#viaRule",
-            RdfTerm::iri("https://purrdf.org/rule/x"),
+            "https://example.org/ontology#viaRule",
+            RdfTerm::iri("https://example.org/rule/x"),
         );
         assert!(emit_annotation(&annotation).starts_with("_:r0 "));
     }
@@ -722,14 +722,14 @@ mod tests {
     #[test]
     fn emit_resource_property_list() {
         let out = emit_resource(
-            "https://purrdf.org/ontology#dl-el-crosscheck",
+            "https://example.org/ontology#dl-el-crosscheck",
             &[
                 (
                     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned(),
-                    iri("https://purrdf.org/ontology#CrosscheckLedger"),
+                    iri("https://example.org/ontology#CrosscheckLedger"),
                 ),
                 (
-                    "https://purrdf.org/ontology#consistent".to_owned(),
+                    "https://example.org/ontology#consistent".to_owned(),
                     RdfTerm::Literal(RdfLiteral::typed(
                         "true",
                         "http://www.w3.org/2001/XMLSchema#boolean",
@@ -737,8 +737,8 @@ mod tests {
                 ),
             ],
         );
-        assert!(out.contains("<https://purrdf.org/ontology#dl-el-crosscheck>"));
-        assert!(out.contains("#type> <https://purrdf.org/ontology#CrosscheckLedger> ;"));
+        assert!(out.contains("<https://example.org/ontology#dl-el-crosscheck>"));
+        assert!(out.contains("#type> <https://example.org/ontology#CrosscheckLedger> ;"));
         assert!(
             out.contains("#consistent> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .")
         );

@@ -1375,8 +1375,8 @@ fn query_json_has_sparql_results_shape() {
 
 /// End-to-end: `purrdf_query_json`'s `provenance_prefix`/`provenance_iri` anchor a
 /// populated additive `purrdf` extension, and what this ABI writes,
-/// `purrdf_sparql_results::provenance_from_json` reads back — F6's reachable-AND-readable
-/// closure for the C ABI.
+/// `purrdf_sparql_results::provenance_from_json` reads back — the
+/// reachable-AND-readable closure for the C ABI.
 #[test]
 fn query_json_provenance_namespace_populates_and_round_trips() {
     unsafe {

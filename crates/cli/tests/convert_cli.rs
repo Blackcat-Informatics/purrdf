@@ -1129,6 +1129,105 @@ fn base_resolves_relative_iris_on_parse() {
     );
 }
 
+/// `--rules FILE` names the rule document an entailment regime runs under; without
+/// `--entailment` at all it would otherwise be accepted by clap and silently do
+/// nothing (`options.rules` is read only inside the `--entailment`/`--canonical`
+/// transform lane) — refused by name instead, naming `--rules` in the message.
+#[test]
+fn rules_without_entailment_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedA.nt", SEED_A);
+    let rules = write_file(dir, "unused.rif", "<rdf:RDF xmlns:rdf=\"x\"></rdf:RDF>");
+    let out = path(dir, "out.nt");
+    let o = run(&[
+        "convert", "--from", "ntriples", "--to", "ntriples", "--rules", &rules, &seed, &out,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--rules with no --entailment must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--rules"),
+        "the refusal must name --rules: {}",
+        stderr(&o)
+    );
+}
+
+/// `--base` resolves relative IRIs on parse and relativizes them on serialize; the
+/// native pack container stores fully-resolved terms and has no relative-IRI syntax,
+/// so `--base` combined with a pack `--from`/`--to` would otherwise be silently
+/// ignored (`source::load_dataset`'s and `sink::write_rdf`'s pack arms never read the
+/// base they are handed) — refused by name instead, on both sides.
+#[test]
+fn base_with_pack_from_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedA.nt", SEED_A);
+    let pack = path(dir, "seedA.purrpck");
+    assert!(
+        run(&[
+            "convert", "--from", "ntriples", "--to", "pack", &seed, &pack
+        ])
+        .status
+        .success(),
+        "seeding the source pack must succeed"
+    );
+    let out = path(dir, "out.nt");
+    let o = run(&[
+        "convert",
+        "--from",
+        "pack",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/base/",
+        &pack,
+        &out,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --from source must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+}
+
+/// The `--to` half of [`base_with_pack_from_is_refused_by_name`].
+#[test]
+fn base_with_pack_to_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedA.nt", SEED_A);
+    let out = path(dir, "out.purrpck");
+    let o = run(&[
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        &seed,
+        &out,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --to target must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+}
+
 /// `--entailment rdfs` materializes the closure so an inferred `rdf:type` triple appears
 /// that is ABSENT without the flag — from a TEXT input.
 #[test]

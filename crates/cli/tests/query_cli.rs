@@ -1063,7 +1063,7 @@ fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
     );
 }
 
-// ── `--provenance-namespace` (F6): reachable AND readable back ────────────────────
+// ── `--provenance-namespace`: reachable AND readable back ─────────────────────────
 
 /// End-to-end: `--provenance-namespace PREFIX=IRI` actually anchors a populated
 /// `purrdf` provenance extension in the emitted SPARQL-results JSON, and what this
@@ -1253,6 +1253,70 @@ fn provenance_namespace_with_a_construct_result_is_refused() {
     assert!(
         stderr(&out).contains("--provenance-namespace"),
         "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside `--results-format csv`/`tsv` is refused rather than
+/// silently accepted and trimmed: CSV/TSV are pure-W3C value-only formats with no
+/// extension point at all, unlike JSON/XML.
+#[test]
+fn provenance_namespace_with_csv_or_tsv_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    for fmt in ["csv", "tsv"] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--provenance-namespace",
+            "prov=https://example.org/ns/prov#",
+            "--results-format",
+            fmt,
+            "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+        ]);
+        assert!(
+            !out.status.success(),
+            "--provenance-namespace with --results-format {fmt} must be refused"
+        );
+        assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+        assert!(
+            stderr(&out).contains("--provenance-namespace"),
+            "the error must name the flag for {fmt}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// `--rules FILE` names the rule document `--entailment rif` runs; without
+/// `--entailment` at all it would otherwise be accepted by clap and silently do
+/// nothing (`options.rules` is read only inside the `--entailment` lane) — refused by
+/// name instead.
+#[test]
+fn rules_without_entailment_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let rules = write_file(dir, "unused.rif", "<rdf:RDF xmlns:rdf=\"x\"></rdf:RDF>");
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--rules",
+        &rules,
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(
+        !out.status.success(),
+        "--rules with no --entailment must be refused"
+    );
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--rules"),
+        "the refusal must name --rules: {}",
         stderr(&out)
     );
 }

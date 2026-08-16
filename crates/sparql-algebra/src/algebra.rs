@@ -1226,23 +1226,55 @@ pub enum OrderExpression {
 /// empty `args` for any `function` other than [`AggregateFunction::Count`],
 /// so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/`GROUP_CONCAT(*)` — and a
 /// zero-arity [`AggregateFunction::Custom`] — cannot be built at all, from
-/// inside this crate or out. Both `args` AND `function` are therefore private
-/// outside this crate: [`Self::args`]/[`Self::function`] (the accessor
-/// methods) give read access without opening a second, unchecked write path.
-/// A `pub function` field would have let a caller build a valid value through
-/// [`Self::new`] and then assign a DIFFERENT `function` into it — e.g. build
-/// `COUNT(*)` (empty `args`, legal) and reassign `function = Sum`, producing
-/// an in-memory `SUM` with zero args that `new` would have refused outright.
-/// `scalarvals` and `distinct` stay `pub`: neither, alone or together with
-/// the other, can put the arity invariant at risk, so hiding them would only
-/// add call-site friction with no matching safety gain. Both private fields
-/// are `pub(crate)` rather than fully private: `serialize.rs`'s formatter and
-/// `parser.rs`'s own tests read (and, in tests, pattern-match) them directly
-/// elsewhere in this crate, and this crate is small and disciplined enough
-/// that a `pub(crate)` seam is an honest tradeoff — the invariant only needs
-/// to hold at the crate's public boundary, which `new` alone already
-/// guarantees for every external caller (embedders included), since neither
-/// field has a public setter.
+/// inside this crate or out. It also rejects a `scalarvals` key `function`
+/// does not admit: only [`AggregateFunction::GroupConcat`] accepts one (the
+/// key `"separator"`), every other BUILT-IN accepts none at all, and
+/// [`AggregateFunction::Custom`] accepts any key structurally (the closed
+/// check against a specific registered aggregate's own declaration is a
+/// prepare-time concern in `sparql-eval`, not this crate's). `args`,
+/// `function`, AND `scalarvals` are therefore all private outside this
+/// crate: [`Self::args`]/[`Self::function`]/[`Self::scalarvals`] (the
+/// accessor methods) give read access without opening a second, unchecked
+/// write path. A `pub function` field would have let a caller build a valid
+/// value through [`Self::new`] and then assign a DIFFERENT `function` into
+/// it — e.g. build `COUNT(*)` (empty `args`, legal) and reassign `function =
+/// Sum`, producing an in-memory `SUM` with zero args that `new` would have
+/// refused outright. A `pub scalarvals` field is the SAME hole one level
+/// over: build a legal `SUM(?v)` through [`Self::new`] and then push a
+/// `"separator"` entry onto it directly, and [`crate::serialize`]'s
+/// `SUM`-branch renderer — which writes every `scalarvals` entry it is
+/// handed, by key, for every function alike — emits `SUM(?v; SEPARATOR="…")`,
+/// which is not SPARQL grammar for anything: it is unparseable text a
+/// checked constructor exists specifically to make unreachable. `distinct`
+/// stays `pub`: no `bool` value it could hold makes the serializer emit
+/// anything ungrammatical (`SUM(DISTINCT ?v)` parses fine even though
+/// `DISTINCT` gives `SUM` no extra meaning), so hiding it would only add
+/// call-site friction with no matching safety gain. The three private fields
+/// are `pub(crate)` rather than fully private: `serialize.rs`'s formatter
+/// and `parser.rs`'s own tests read (and, in tests, pattern-match) them
+/// directly elsewhere in this crate, and this crate is small and
+/// disciplined enough that a `pub(crate)` seam is an honest tradeoff — the
+/// invariant only needs to hold at the crate's public boundary, which `new`
+/// alone already guarantees for every external caller (embedders
+/// included), since none of the three has a public setter.
+///
+/// An embedder outside this crate cannot reach past [`Self::new`] to mutate a
+/// checked-valid value into one [`crate::serialize`] cannot render — this fails
+/// to compile, the same way it would for `args`/`function`:
+///
+/// ```compile_fail,E0616
+/// use purrdf_sparql_algebra::{AggregateExpression, AggregateFunction, Expression, Literal, Variable};
+///
+/// let mut agg = AggregateExpression::new(
+///     AggregateFunction::Sum,
+///     vec![Expression::Variable(Variable::new("v"))],
+///     Vec::new(),
+///     false,
+/// )
+/// .expect("SUM(?v) is a valid one-argument call");
+/// // `scalarvals` is private outside this crate — this line does not compile.
+/// agg.scalarvals.push(("separator".to_owned(), Literal::new_simple("|")));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AggregateExpression {
     /// Which aggregate function. Private outside this crate — go through
@@ -1255,8 +1287,11 @@ pub struct AggregateExpression {
     /// through [`Self::new`] to build one, [`Self::args`] to read it back.
     pub(crate) args: Vec<Expression>,
     /// The spec's scalar-values map — an ordered, deterministic
-    /// `(key, value)` list; see the struct docs.
-    pub scalarvals: Vec<(String, Literal)>,
+    /// `(key, value)` list; see the struct docs. Private outside this crate —
+    /// go through [`Self::new`] to build one, [`Self::scalarvals`] to read it
+    /// back; see the struct docs for why a public setter would let a
+    /// checked-valid value be mutated into one the serializer cannot render.
+    pub(crate) scalarvals: Vec<(String, Literal)>,
     /// Whether `DISTINCT` was present.
     pub distinct: bool,
 }
@@ -1267,24 +1302,51 @@ impl AggregateExpression {
     ///
     /// # Errors
     ///
-    /// [`AggregateArityError`] if `args` is empty and `function` is anything
-    /// other than [`AggregateFunction::Count`] — SPARQL's `'*'` exprlist
-    /// shorthand names only `COUNT(*)`/`COUNT(DISTINCT *)`; every other
-    /// built-in is fixed-arity one, and every [`AggregateFunction::Custom`]
-    /// call is positional-only, one-or-more (see that variant's docs). This
-    /// is what makes a re-founded "empty exprlist" bug like the one this
-    /// constructor replaces unrepresentable: the shape that used to be read
-    /// off `args.is_empty()` — with the reader trusting an un-enforced
-    /// comment — is now enforced once, here, at the only place a value comes
-    /// into existence.
+    /// [`AggregateExpressionError::Arity`] if `args` is empty and `function` is
+    /// anything other than [`AggregateFunction::Count`] — SPARQL's `'*'`
+    /// exprlist shorthand names only `COUNT(*)`/`COUNT(DISTINCT *)`; every
+    /// other built-in is fixed-arity one, and every
+    /// [`AggregateFunction::Custom`] call is positional-only, one-or-more
+    /// (see that variant's docs). This is what makes a re-founded "empty
+    /// exprlist" bug like the one this constructor replaces unrepresentable:
+    /// the shape that used to be read off `args.is_empty()` — with the
+    /// reader trusting an un-enforced comment — is now enforced once, here,
+    /// at the only place a value comes into existence.
+    ///
+    /// [`AggregateExpressionError::Scalarval`] if `scalarvals` carries a key
+    /// `function` does not admit — every built-in but
+    /// [`AggregateFunction::GroupConcat`] (whose one admitted key is
+    /// `"separator"`) admits none at all, so a `scalarvals` entry there is
+    /// always refused. [`AggregateFunction::Custom`] admits any key
+    /// structurally (the closed check against a specific registered
+    /// aggregate's own declaration happens at prepare time, in
+    /// `sparql-eval`, against data this crate does not have). This is what
+    /// makes handing [`crate::serialize`]'s renderer a value it cannot
+    /// render back out — e.g. a `SUM` carrying a `"separator"` entry, which
+    /// would emit `SUM(?v; SEPARATOR="…")`, not SPARQL grammar for anything
+    /// — unrepresentable, the same way the arity check makes `SUM(*)`
+    /// unrepresentable.
     pub fn new(
         function: AggregateFunction,
         args: Vec<Expression>,
         scalarvals: Vec<(String, Literal)>,
         distinct: bool,
-    ) -> Result<Self, AggregateArityError> {
+    ) -> Result<Self, AggregateExpressionError> {
         if args.is_empty() && !matches!(function, AggregateFunction::Count) {
-            return Err(AggregateArityError { function });
+            return Err(AggregateExpressionError::Arity(AggregateArityError {
+                function,
+            }));
+        }
+        if let Some((key, _)) = scalarvals
+            .iter()
+            .find(|(key, _)| !scalarval_key_is_admitted(&function, key))
+        {
+            return Err(AggregateExpressionError::Scalarval(
+                AggregateScalarvalError {
+                    function,
+                    key: key.clone(),
+                },
+            ));
         }
         Ok(Self {
             function,
@@ -1305,21 +1367,32 @@ impl AggregateExpression {
 
     /// Which aggregate function this is; see the struct docs. There is no
     /// public setter — mutating `function` after construction without
-    /// re-checking `args`' length is exactly the hole [`Self::new`] closes,
-    /// so changing which function a value names means building a new one
-    /// through [`Self::new`] (or [`Self::into_parts`] plus [`Self::new`]).
+    /// re-checking `args`'/`scalarvals`' validity is exactly the hole
+    /// [`Self::new`] closes, so changing which function a value names means
+    /// building a new one through [`Self::new`] (or [`Self::into_parts`]
+    /// plus [`Self::new`]).
     #[must_use]
     pub fn function(&self) -> &AggregateFunction {
         &self.function
     }
 
+    /// The spec's scalar-values map; see the struct docs. Every key is one
+    /// [`Self::function`] admits — [`Self::new`] enforces that for every
+    /// value that exists. There is no public setter — mutating `scalarvals`
+    /// after construction without re-checking each key against `function` is
+    /// exactly the hole [`Self::new`] closes.
+    #[must_use]
+    pub fn scalarvals(&self) -> &[(String, Literal)] {
+        &self.scalarvals
+    }
+
     /// Decompose into `(function, args, scalarvals, distinct)`, consuming
-    /// `self`. The inverse of [`Self::new`] minus its arity check — for a
-    /// caller (an expression-substitution or query-planning rewrite) that
-    /// only ever replaces `args` with a same-length transform of itself, so
-    /// the arity invariant this type protects cannot be disturbed by the
-    /// round trip: feed the tuple back through [`Self::new`] and the call
-    /// cannot fail.
+    /// `self`. The inverse of [`Self::new`] minus its checks — for a caller
+    /// (an expression-substitution or query-planning rewrite) that only ever
+    /// replaces `args` with a same-length transform of itself and leaves
+    /// `function`/`scalarvals` untouched, so neither invariant this type
+    /// protects can be disturbed by the round trip: feed the tuple back
+    /// through [`Self::new`] and the call cannot fail.
     #[must_use]
     pub fn into_parts(
         self,
@@ -1341,6 +1414,73 @@ impl AggregateExpression {
             .iter()
             .find(|(k, _)| k == "separator")
             .map(|(_, v)| v.value())
+    }
+}
+
+/// Whether `key` is a `scalarvals` entry [`AggregateExpression::new`] admits for
+/// `function` — the single source of truth the constructor's validation and this
+/// module's docs both describe. [`AggregateFunction::Custom`] admits any key
+/// structurally; every other (built-in) function admits none, except
+/// [`AggregateFunction::GroupConcat`], which admits exactly `"separator"`.
+fn scalarval_key_is_admitted(function: &AggregateFunction, key: &str) -> bool {
+    match function {
+        AggregateFunction::Custom(_) => true,
+        AggregateFunction::GroupConcat => key == "separator",
+        AggregateFunction::Count
+        | AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Sample => false,
+    }
+}
+
+/// Why [`AggregateExpression::new`] refused to build a value: either an
+/// [`AggregateArityError`] (an empty `args` for a `function` that requires at
+/// least one argument) or an [`AggregateScalarvalError`] (a `scalarvals` key
+/// `function` does not admit). See [`AggregateExpression::new`]'s `# Errors`
+/// section for exactly when each arm fires.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AggregateExpressionError {
+    /// See [`AggregateArityError`].
+    Arity(AggregateArityError),
+    /// See [`AggregateScalarvalError`].
+    Scalarval(AggregateScalarvalError),
+}
+
+impl AggregateExpressionError {
+    /// The function that was refused, regardless of which arm this is —
+    /// [`AggregateArityError::function`]/[`AggregateScalarvalError::function`]
+    /// under the hood.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        match self {
+            Self::Arity(error) => error.function(),
+            Self::Scalarval(error) => error.function(),
+        }
+    }
+}
+
+impl core::fmt::Display for AggregateExpressionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Arity(error) => core::fmt::Display::fmt(error, f),
+            Self::Scalarval(error) => core::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl std::error::Error for AggregateExpressionError {}
+
+impl From<AggregateArityError> for AggregateExpressionError {
+    fn from(error: AggregateArityError) -> Self {
+        Self::Arity(error)
+    }
+}
+
+impl From<AggregateScalarvalError> for AggregateExpressionError {
+    fn from(error: AggregateScalarvalError) -> Self {
+        Self::Scalarval(error)
     }
 }
 
@@ -1373,6 +1513,43 @@ impl core::fmt::Display for AggregateArityError {
 }
 
 impl std::error::Error for AggregateArityError {}
+
+/// Why [`AggregateExpression::new`] refused to build a value: `scalarvals`
+/// carried a key `function` does not admit. Every built-in but
+/// [`AggregateFunction::GroupConcat`] admits no `scalarvals` key at all;
+/// `GroupConcat` admits exactly `"separator"`; [`AggregateFunction::Custom`]
+/// admits any key (see [`AggregateExpression::new`]'s `# Errors` section).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AggregateScalarvalError {
+    function: AggregateFunction,
+    key: String,
+}
+
+impl AggregateScalarvalError {
+    /// The function that refused `key`.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+
+    /// The `scalarvals` key that was refused.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl core::fmt::Display for AggregateScalarvalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:?} does not admit a scalarval named {:?}",
+            self.function, self.key
+        )
+    }
+}
+
+impl std::error::Error for AggregateScalarvalError {}
 
 /// The named SPARQL aggregate functions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

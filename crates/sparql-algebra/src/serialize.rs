@@ -3,24 +3,32 @@
 
 //! Algebra → SPARQL **surface-text** serialization.
 //!
-//! The inverse of [`crate::parser`]: it renders a [`GraphPattern`] back to a
-//! complete `SELECT * WHERE { ... }` query string. The driving use case is
-//! SPARQL `SERVICE` federation: the evaluator forwards a federated sub-pattern
-//! to a remote endpoint as a complete query, and that requires re-materializing
-//! the algebra as text.
+//! The inverse of [`crate::parser`]: [`pattern_to_select_query`] renders a
+//! [`GraphPattern`] back to a complete, standalone `SELECT` query string. The
+//! driving use case is SPARQL `SERVICE` federation: the evaluator forwards a
+//! federated sub-pattern to a remote endpoint as a complete query, and that
+//! requires re-materializing the algebra as text.
 //!
 //! # Design
 //!
 //! * Pure `core::fmt::Write` into a `String` — **wasm-clean**, no std-only deps,
 //!   reusing the existing [`crate::algebra::PropertyPathExpression`] `Display`
 //!   for paths.
-//! * **Round-trips** with the parser: `parse(serialize(p))` reproduces `p` for
-//!   every [`GraphPattern`]/[`Expression`] variant the parser emits. Expressions
-//!   are conservatively fully parenthesized — over-parenthesization is a no-op on
-//!   re-parse, so correctness never depends on reproducing the exact precedence.
+//! * **Round-trips** with the parser: `parse(pattern_to_select_query(p))`
+//!   reproduces `p` for every [`GraphPattern`]/[`Expression`] variant the parser
+//!   emits, INCLUDING an aggregate/`GROUP BY` chain with its own outer `Project`
+//!   already peeled away (the shape [`pattern_to_select_query`]'s own doctest
+//!   takes, and the shape a whole aggregate query is once a caller — federation or
+//!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
+//!   body underneath it). Expressions are conservatively fully parenthesized —
+//!   over-parenthesization is a no-op on re-parse, so correctness never depends on
+//!   reproducing the exact precedence.
 //! * Solution-modifier nodes (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
-//!   shape the parser produces for an inline subquery.
+//!   shape the parser produces for an inline subquery; an aggregate's own
+//!   `SELECT`-expression/`HAVING` chain reaching `Group` with NO such node above it
+//!   re-materializes as a complete top-level `SELECT` instead — see
+//!   [`pattern_to_select_query`]'s own docs for why the distinction matters.
 //!
 //! The PurRDF predicate-wildcard path extension (`<any>`) is emit-only (no parse),
 //! exactly as documented on [`crate::algebra::PropertyPathExpression`]'s
@@ -42,10 +50,27 @@ use crate::ast::{
 /// [`GraphPattern::Group`] node during sub-`SELECT` reconstruction.
 type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 
-/// Render `inner` as a complete `SELECT * WHERE { … }` query string.
+/// Render `inner` as a complete, standalone `SELECT` query string.
 ///
 /// This is the entry point SERVICE federation uses to forward a sub-pattern to a
 /// remote endpoint. The result is a syntactically complete, re-parseable query.
+///
+/// For an ORDINARY graph pattern (the common case: `inner` is a WHERE-body element
+/// with no `SELECT`-expression/aggregate machinery of its own — a BGP, a join, a
+/// filter, …) the rendering is the literal `SELECT * WHERE { … }` template the
+/// module docs describe.
+///
+/// For `inner` reaching a [`GraphPattern::Group`] through a leading chain of
+/// `SELECT`-expression (`Extend`) / `HAVING` (`Filter`) nodes with **no** `Project`
+/// anywhere above it — the shape an aggregate query's own modifier chain takes once
+/// its outer `Project` has already been peeled away, exactly as the doctest below
+/// does — the rendering is that aggregate query's own complete `SELECT … WHERE { … }
+/// [GROUP BY …] [HAVING …]` text instead, rather than `SELECT * WHERE { … }` wrapped
+/// around it: SPARQL admits no `SELECT *` reading over a `GROUP BY`, and wrapping a
+/// literal `SELECT *` around this shape would either be rejected as invalid syntax on
+/// re-parse or — for the implicit whole-table group, which has no `GROUP BY` clause
+/// to make the shape visible — silently drop the aggregate behind a `BIND`
+/// referencing a variable nothing in the rendered text binds.
 ///
 /// # Examples
 ///
@@ -72,9 +97,26 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
     let mut s = String::new();
-    s.push_str("SELECT * WHERE { ");
-    fmt_group_body(&mut s, inner);
-    s.push_str(" }");
+    if extend_chain_reaches_group(inner) {
+        // `inner` IS a `SELECT`-expression/`HAVING` chain reaching a `Group` node with
+        // no `Project` anywhere above it — the shape the parser's algebra takes for an
+        // aggregate query once its own outer `Project` has already been peeled away
+        // (exactly what this function's doctest above does before calling it). Render
+        // it through [`fmt_subselect`] DIRECTLY: that already reconstructs a complete
+        // `SELECT … WHERE { … } [GROUP BY] …` string on its own, so wrapping it in
+        // ANOTHER literal `SELECT * WHERE { … }` here would either double-nest a
+        // needless subquery or — because a `Group`-containing pattern has no valid
+        // `SELECT *` reading — render `SELECT *` over an aggregate query, which SPARQL
+        // does not admit. Un-fixed, that second failure mode is exactly how an
+        // aggregate call could vanish behind a dangling reference to its synthetic
+        // output variable: seeing this shape and choosing NOT to reach for
+        // `fmt_subselect` is the bug, not a detail of how to call it.
+        fmt_subselect(&mut s, inner);
+    } else {
+        s.push_str("SELECT * WHERE { ");
+        fmt_group_body(&mut s, inner);
+        s.push_str(" }");
+    }
     s
 }
 
@@ -90,6 +132,32 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
             | GraphPattern::OrderBy { .. }
             | GraphPattern::Group { .. }
     )
+}
+
+/// Whether `p` is a leading chain of ONLY `Extend` (a SELECT-expression `(expr AS
+/// ?v)` bind) / `Filter`-directly-over-`Group` (`HAVING`) nodes that terminates at a
+/// `Group` — the shape an aggregate query's own SELECT-expression/`HAVING` chain
+/// takes once its outer `Project` has already been peeled away.
+///
+/// Deliberately narrower than [`is_subselect_node`]/[`fmt_subselect`]'s full peel
+/// loop: a `Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy` node anywhere in the chain
+/// means `p` is already one of [`is_subselect_node`]'s recognized shapes — a genuine,
+/// self-contained sub-`SELECT` meant to be embedded as one element of a forwarded
+/// WHERE body, which [`fmt_group_body`] continues to wrap in a nested `{ SELECT … }`
+/// exactly as it always has. Only the narrower, `Project`-less shape here needs
+/// [`pattern_to_select_query`]'s different (unwrapped) treatment — and it can ONLY
+/// arise there: an ordinary WHERE-body `BIND`/`HAVING` never wraps a bare `Group` (a
+/// `Group` node is minted only by the parser's aggregate-lifting, always immediately
+/// under the query's own modifier chain), and any `{ SELECT … }` written in source
+/// text parses to a `Project`-wrapped pattern, not a bare `Extend`/`Group` chain — so
+/// this predicate cannot mistake an ordinary body element for this shape.
+fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Group { .. } => true,
+        GraphPattern::Extend { inner, .. } => extend_chain_reaches_group(inner),
+        GraphPattern::Filter { inner, .. } => matches!(**inner, GraphPattern::Group { .. }),
+        _ => false,
+    }
 }
 
 /// Emit a graph pattern as the body of a `{ … }` group. Modifier-wrapped patterns
@@ -954,6 +1022,7 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
 mod tests {
     use super::*;
     use crate::Query;
+    use crate::algebra::AggregateExpressionError;
     use crate::parser::{ParserOptions, SparqlParser};
 
     /// Parse a full query and return its root pattern.
@@ -1240,6 +1309,83 @@ mod tests {
         );
     }
 
+    // ── the DIRECT (un-doubled) aggregate shape `pattern_to_select_query`'s own
+    //    doctest exercises: a caller peels exactly ONE outer `Project`, same as
+    //    every `assert_roundtrip` case above, with NO extra nested-subselect wrapper.
+    //    An aggregate query with no further modifier (`Distinct`/`Slice`/`OrderBy`/
+    //    an explicit outer `Project` of its own) around it lands here as an
+    //    `Extend`-over-`Group` chain, which used to reach `fmt_group_body`'s ordinary
+    //    (aggregate-unaware) `Extend` handling instead of `fmt_subselect` — silently
+    //    dropping the aggregate behind a `BIND` referencing a variable nothing
+    //    upstream binds, or — for an explicit `GROUP BY` — producing `SELECT *` over
+    //    an aggregate query, which SPARQL does not admit at all. ──────────────────
+
+    /// The implicit whole-table group (no `GROUP BY` at all): the exact repro this
+    /// fix closes. Before it, this rendered as
+    /// `SELECT * WHERE { { SELECT * WHERE { … } } BIND(?__purrdf_agg_0 AS ?s) }` —
+    /// the `SUM` silently dropped.
+    #[test]
+    fn direct_roundtrip_implicit_group_no_group_by() {
+        assert_roundtrip("SELECT (SUM(?v) AS ?s) WHERE { ?x <http://ex/v> ?v }");
+    }
+
+    /// The explicit `GROUP BY` variant: before this fix, the SAME `Extend`-over-
+    /// `Group` shape rendered `SELECT *` over an aggregate query, which the parser
+    /// then refused to re-parse (`SELECT * is not allowed in an aggregate query`).
+    #[test]
+    fn direct_roundtrip_explicit_group_by() {
+        assert_roundtrip(
+            "SELECT ?t (SUM(?v) AS ?s) WHERE { ?x a ?t ; <http://ex/v> ?v } GROUP BY ?t",
+        );
+    }
+
+    /// The `HAVING` clause referencing the aggregate's synthetic output variable,
+    /// rendered directly (no double-nesting) — the `Filter`-directly-over-`Group`
+    /// half of the shape this fix recognizes.
+    #[test]
+    fn direct_roundtrip_having() {
+        assert_roundtrip(
+            "SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t HAVING(COUNT(?x) > 1)",
+        );
+    }
+
+    // NOTE: an `ORDER BY` above the aggregate chain is `is_subselect_node`-true
+    // ALREADY (`OrderBy` is one of that predicate's original members, untouched by
+    // this fix) and takes the PRE-EXISTING nested-subselect path
+    // `roundtrip_order_by_referencing_aggregate` above pins via
+    // `assert_subselect_roundtrip` — that path was never the "aggregate silently
+    // dropped" defect this fix closes (it reparses to a semantically identical,
+    // merely one-level-more-nested query), so it is not repeated here.
+
+    /// Multiple aggregates, and no `GROUP BY` key, rendered directly — proving the
+    /// fix is not a one-aggregate special case.
+    #[test]
+    fn direct_roundtrip_multiple_aggregates_no_group_by() {
+        assert_roundtrip(
+            "SELECT (COUNT(?x) AS ?c) (SUM(?v) AS ?s) \
+             WHERE { ?x <http://ex/v> ?v }",
+        );
+    }
+
+    /// `pattern_to_select_query`'s rendering of the implicit-group repro is a
+    /// syntactically complete, standalone query with the aggregate call itself
+    /// present in the text (not a dangling reference to its synthetic variable).
+    #[test]
+    fn direct_render_of_implicit_group_names_the_aggregate_call() {
+        let body = where_body(&pattern_of(
+            "SELECT (SUM(?v) AS ?s) WHERE { ?x <http://ex/v> ?v }",
+        ));
+        let text = pattern_to_select_query(&body);
+        assert!(
+            text.contains("SUM(?v)"),
+            "the aggregate call must appear in the rendered text: {text}"
+        );
+        assert!(
+            !text.contains("__purrdf_agg"),
+            "no synthetic aggregate variable may leak into the rendered text: {text}"
+        );
+    }
+
     #[test]
     fn produces_complete_select() {
         let p = pattern_of("SELECT * WHERE { ?s <http://ex/p> ?o }");
@@ -1368,6 +1514,80 @@ mod tests {
         assert!(
             AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
                 .is_ok()
+        );
+    }
+
+    /// The other half of the checked constructor: a `scalarvals` key the function
+    /// does not admit is refused too, not just an empty `args`. Every built-in but
+    /// `GroupConcat` admits NO key at all — this is what makes handing
+    /// `fmt_aggregate`'s built-in tail a `SUM`/`AVG`/`MIN`/`MAX`/`SAMPLE` carrying a
+    /// `"separator"` entry (which would render `SUM(?v; SEPARATOR="…")`, not SPARQL
+    /// grammar for anything) unrepresentable.
+    #[test]
+    fn aggregate_expression_new_rejects_a_scalarval_key_the_function_does_not_admit() {
+        let bogus_separator = vec![("separator".to_owned(), Literal::new_simple("|"))];
+        for function in [
+            AggregateFunction::Sum,
+            AggregateFunction::Avg,
+            AggregateFunction::Min,
+            AggregateFunction::Max,
+            AggregateFunction::Sample,
+        ] {
+            let err = AggregateExpression::new(
+                function.clone(),
+                vec![Expression::Variable(Variable::new("v"))],
+                bogus_separator.clone(),
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(err.function(), &function);
+            assert!(
+                matches!(err, AggregateExpressionError::Scalarval(_)),
+                "must be the Scalarval arm, not Arity: {err:?}"
+            );
+        }
+        // `COUNT` admits no scalarval key either, but it is the one function whose
+        // `args` MAY also be empty — cover it with a non-empty `args` so this test
+        // isolates the scalarval check from the arity check.
+        let err = AggregateExpression::new(
+            AggregateFunction::Count,
+            vec![Expression::Variable(Variable::new("v"))],
+            bogus_separator,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, AggregateExpressionError::Scalarval(_)));
+    }
+
+    /// `GroupConcat` is the one built-in that DOES admit a scalarval key
+    /// (`"separator"`) — the positive half of the check the previous test pins the
+    /// negative half of.
+    #[test]
+    fn aggregate_expression_new_accepts_group_concats_separator() {
+        assert!(
+            AggregateExpression::new(
+                AggregateFunction::GroupConcat,
+                vec![Expression::Variable(Variable::new("v"))],
+                vec![("separator".to_owned(), Literal::new_simple("|"))],
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    /// `AggregateFunction::Custom` admits ANY scalarval key structurally — the
+    /// closed check against a specific registered aggregate's own declaration is a
+    /// `sparql-eval` prepare-time concern, not this crate's (see the struct docs).
+    #[test]
+    fn aggregate_expression_new_accepts_any_scalarval_key_for_a_custom_aggregate() {
+        assert!(
+            AggregateExpression::new(
+                AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
+                vec![Expression::Variable(Variable::new("v"))],
+                vec![("ANYTHING_AT_ALL".to_owned(), Literal::new_simple("x"))],
+                false,
+            )
+            .is_ok()
         );
     }
 

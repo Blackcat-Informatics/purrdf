@@ -444,16 +444,16 @@ fn unregistered_property_function_still_reports_the_property_function_code() {
     );
 }
 
-// ── H12: EMPTY ≡ any other empty registry ───────────────────────────────────
+// ── EMPTY ≡ any other empty registry ───────────────────────────────────────
 
-/// H12: `QueryOptions::aggregates` is `&AggregateRegistry`, never
-/// `Option<&AggregateRegistry>` — there is no longer a separate "no registry
+/// `QueryOptions::aggregates` is `&AggregateRegistry`, never
+/// `Option<&AggregateRegistry>` — there is no separate "no registry
 /// configured" spelling for a query to distinguish from "an empty registry was
-/// configured". The old expectation this test pinned (`aggregates: None` and
-/// `aggregates: Some(&AggregateRegistry::new())` must answer identically) is
-/// therefore structurally impossible to even state now: `None` does not
+/// configured". A `None`-shaped call and a
+/// `Some(&AggregateRegistry::new())`-shaped call answering differently is
+/// therefore structurally impossible to even state: `None` does not
 /// type-check as a `QueryOptions::aggregates` value at all. What remains
-/// meaningful, and is what this test now pins, is the weaker but still real
+/// meaningful, and is what this test pins, is the weaker but still real
 /// property that motivated `AggregateRegistry::EMPTY` being one canonical
 /// shared constant rather than every call site minting its own empty registry:
 /// [`QueryOptions::EMPTY`] (which carries `&AggregateRegistry::EMPTY`) and an
@@ -627,6 +627,33 @@ fn group_by_query_computes_several_statistical_members_per_group() {
     assert_eq!(stat_lex(&result_rows[1], 3), "10");
 }
 
+/// `stat_dataset`'s g2 group ({10, 10, 20}) proves MODE finds A repeat, but 10 is
+/// SIMULTANEOUSLY the mode, the minimum, and the first row seen — so it cannot
+/// discriminate "found the genuine mode" from "defaulted to MIN" or "defaulted to
+/// FIRST". This dataset's repeated value (20) is deliberately neither the min (10)
+/// nor the max (30) nor the first (`g3s0` = 10) nor the last (`g3s3` = 30) row, so
+/// this test can only pass for the right reason.
+#[test]
+fn mode_finds_the_genuine_repeat_not_a_coincidental_stand_in() {
+    let reg = statistical_registry();
+    let mut b = RdfDatasetBuilder::new();
+    let val = b.intern_iri(&format!("{EX}val"));
+    for (i, v) in [10, 20, 20, 30].into_iter().enumerate() {
+        let s = b.intern_iri(&format!("{EX}g3s{i}"));
+        let vt = int_literal(&mut b, v);
+        b.push_quad(s, val, vt, None);
+    }
+    let ds = b.freeze().expect("freeze");
+    let query = format!("SELECT (AGG(<{STAT_NS}MODE>, ?v) AS ?mode) WHERE {{ ?s <{EX}val> ?v }}");
+    let result = run(&ds, &query, with_aggregates(&reg));
+    assert_eq!(
+        stat_lex(&rows(&result)[0], 0),
+        "20",
+        "MODE must be the genuinely repeated value, distinct from MIN (10), MAX (30), \
+         the first row (10), and the last row (30)"
+    );
+}
+
 #[test]
 fn percentile_named_scalarval_form_end_to_end() {
     let reg = statistical_registry();
@@ -638,6 +665,25 @@ fn percentile_named_scalarval_form_end_to_end() {
     let result = run(&ds, &query, with_aggregates(&reg));
     // P=0.5 over {1,2,3,4} is the same interpolated median as MEDIAN itself.
     assert_eq!(stat_lex(&rows(&result)[0], 0), "2.5");
+}
+
+/// `P=0.5` alone is MEDIAN's own path at zero interpolation (an even split needing
+/// no weighting between unequal neighbors) — it cannot prove PERCENTILE's
+/// interpolation arithmetic runs at all. `P=0.1` over g1's {1,2,3,4} lands at
+/// `rank = P * (n-1) = 0.3`, strictly between the two smallest values (1 and 2),
+/// so the answer (1.3) is only reachable by actually interpolating: it is not
+/// MEDIAN (2.5), not MIN (1), not MAX (4), and not an unweighted average of any
+/// two data points.
+#[test]
+fn percentile_at_a_genuinely_interpolating_fraction() {
+    let reg = statistical_registry();
+    let ds = stat_dataset();
+    let query = format!(
+        "SELECT (AGG(<{STAT_NS}PERCENTILE>, ?v; P=0.1) AS ?p) \
+         WHERE {{ ?s <{EX}cat> <{EX}g1> . ?s <{EX}val> ?v }}"
+    );
+    let result = run(&ds, &query, with_aggregates(&reg));
+    assert_eq!(stat_lex(&rows(&result)[0], 0), "1.3");
 }
 
 #[test]

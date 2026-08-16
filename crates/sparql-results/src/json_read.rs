@@ -935,7 +935,7 @@ mod tests {
     use crate::json::to_json;
     use purrdf_core::SparqlResult;
 
-    /// F6 round-trip: what [`crate::json::to_json`] writes under a namespace,
+    /// Provenance round-trip: what [`crate::json::to_json`] writes under a namespace,
     /// [`provenance_from_json`] reads back — the writer no longer emits
     /// something nothing can decode.
     #[test]

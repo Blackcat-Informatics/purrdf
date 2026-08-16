@@ -793,7 +793,7 @@ fn plan_aggregate(
         }
         let declared_scalarvals = crate::agg_fn::scalarvals_contained(custom.as_ref(), iri_str)
             .map_err(PlanError::aggregate)?;
-        validate_scalarvals(iri_str, &aggregate.scalarvals, &declared_scalarvals)
+        validate_scalarvals(iri_str, aggregate.scalarvals(), &declared_scalarvals)
             .map_err(PlanError::aggregate)?;
     }
     let args = aggregate
@@ -807,7 +807,7 @@ fn plan_aggregate(
     Ok(AggregateExpression::new(
         aggregate.function().clone(),
         args,
-        aggregate.scalarvals.clone(),
+        aggregate.scalarvals().to_vec(),
         aggregate.distinct,
     )
     .expect("plan_expression preserves argument count, so arity stays valid"))
@@ -1090,7 +1090,7 @@ mod registry_fingerprint_tests {
 
     const EX_REL: &str = "http://example.org/ns#rel";
 
-    /// H12: [`PropertyFunctionRegistry::EMPTY`] (the canonical "no registry" value
+    /// [`PropertyFunctionRegistry::EMPTY`] (the canonical "no registry" value
     /// [`crate::engine::QueryOptions::property_functions`]/[`crate::eval::EvalCtx::property_functions`]/[`crate::parallel::SafetyRegistries::relations`]
     /// now carry in place of `Option::None`) and a freshly built, still-empty
     /// [`PropertyFunctionRegistry::new`] are two DIFFERENT instances (different

@@ -949,15 +949,16 @@ mod tests {
         assert!(other_at < sum_at, "Debug output is IRI-sorted: {rendered}");
     }
 
-    /// H12: [`AggregateRegistry::EMPTY`] (the canonical "no registry" value every
+    /// [`AggregateRegistry::EMPTY`] (the canonical "no registry" value every
     /// registry-carrying seam now uses) and a freshly constructed, still-empty
     /// [`AggregateRegistry::new`] must produce the IDENTICAL "" fingerprint —
     /// they are two different registry INSTANCES (different underlying maps),
     /// yet both resolve every IRI to `None`, so a plan's admitted behavior can
-    /// never depend on which one it was prepared against. This is what makes the
-    /// old two-spellings-of-one-state gap (`None` vs. `Some(&AggregateRegistry::new())`)
-    /// structurally impossible now rather than merely tested: there is no `Option`
-    /// left to spell two ways in the first place — see [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s
+    /// never depend on which one it was prepared against. This makes a
+    /// `None`-shaped call and a `Some(&AggregateRegistry::new())`-shaped call
+    /// disagreeing about behavior structurally impossible rather than merely
+    /// tested: there is no `Option` left to spell two ways in the first place —
+    /// see [`RegistryId::EMPTY`](crate::registry_id::RegistryId::EMPTY)'s
     /// docs for the full reasoning on why this is the CORRECT identity behavior,
     /// not a weakening of the plan-identity guard the two later tests below pin.
     #[test]
@@ -1060,7 +1061,7 @@ mod tests {
         assert_eq!(value, Some(int(42)));
     }
 
-    // ---- H11: a mismatched `into_any` downcast is a typed refusal, never a panic --
+    // ---- a mismatched `into_any` downcast is a typed refusal, never a panic ----
 
     /// An accumulator that merges through [`AggregateAccumulator::into_any`]'s
     /// downcast escape hatch — deliberately, unlike [`SumAccumulator`] above,
@@ -1096,11 +1097,11 @@ mod tests {
         }
     }
 
-    /// H11 regression: `combine` receiving a partial built by a DIFFERENT
+    /// Regression coverage: `combine` receiving a partial built by a DIFFERENT
     /// `CustomAggregate::init` factory than `self` — a host contract violation
     /// (see [`downcast_combine_partial`]'s docs for why this cannot arise from
     /// this crate's own evaluator) — must produce a typed [`EvalError`], not a
-    /// panic. Before H11, [`downcast_combine_partial`] could only report this by
+    /// panic. Previously [`downcast_combine_partial`] could only report this by
     /// panicking, relying on [`combine_contained`]'s `catch_unwind` containment;
     /// containment is unavailable under `panic = "abort"`
     /// (`wasm32-unknown-unknown`), so a `Result`-returning `combine` is what

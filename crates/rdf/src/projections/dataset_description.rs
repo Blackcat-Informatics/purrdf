@@ -1015,7 +1015,7 @@ mod tests {
     fn construct_rejects_non_reproducible_and_blank_minting_queries() {
         // Each builtin's own name must appear in the message the production parse
         // path produces — not a restatement of the whole non-reproducible-builtin
-        // list regardless of which one actually fired (F2: that used to be the ONE
+        // list regardless of which one actually fired (that used to be the ONE
         // message every refusal here returned).
         for (query, own_name) in [
             (
