@@ -29,7 +29,7 @@
 /**
  * ABI minor version.
  */
-#define PURRDF_ABI_MINOR 4
+#define PURRDF_ABI_MINOR 6
 
 /**
  * ABI patch version.
@@ -1939,13 +1939,23 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
  * CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
  * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
  *
+ * `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
+ * additive `purrdf` provenance extension on a SELECT/ASK emission under that
+ * `PREFIX`/`IRI`. Null leaves the output pure W3C SRJ, exactly as before these
+ * parameters existed; a CONSTRUCT/DESCRIBE result never carries the extension
+ * (it is not a SPARQL-results document). Read the extension back with
+ * `purrdf_sparql_results::provenance_from_json` under the SAME namespace.
+ *
  * # Safety
  * `dataset` must be a live handle; `query` must be a NUL-terminated C string;
- * the out-params must be writable.
+ * the out-params must be writable. `provenance_prefix`/`provenance_iri`, if non-null,
+ * must be NUL-terminated UTF-8 C strings live for the call.
  */
 int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           const char *query,
                           const char *base_iri,
+                          const char *provenance_prefix,
+                          const char *provenance_iri,
                           PurrdfBuffer **out_buffer,
                           PurrdfError **out_error);
 
@@ -1996,16 +2006,25 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
  * the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
  * query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
  *
+ * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
+ * it registers purrdf's first-party statistical aggregate set under that IRI namespace
+ * for the closure query's PARSE and its evaluation, so `AGG(<namespace><NAME>, args…)`
+ * reaches the entailment-aware lane exactly as it reaches the ordinary one. Null leaves
+ * every one of the ten names an ordinary unregistered custom-aggregate IRI.
+ *
  * # Safety
  * All input strings and handles must remain live for the synchronous call. Required
  * out-pointers must be writable; any enabled cancellation handle must remain live until
  * return. Shape-specific result pointers are required when that shape is returned.
+ * `aggregate_namespace`, if non-null, must be a NUL-terminated UTF-8 C string live for
+ * the call.
  */
 int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const char *query,
                                          const char *base_iri,
                                          const char *regime,
                                          const char *program,
+                                         const char *aggregate_namespace,
                                          const PurrdfQueryGovernors *governors,
                                          int32_t *out_outcome,
                                          int32_t *out_kind,

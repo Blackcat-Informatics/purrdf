@@ -35,21 +35,31 @@
 #     (:versionBasicValuesTripleTerm), or one of the "Functions on Triple
 #     Terms" (:versionBasicTripleFunction) is refused at evaluation admission,
 #     naming the offending construct.
-#   * AGG(<iri>, args…) — the custom-aggregate call surface. This harness has
-#     no per-case mechanism to configure an `AggregateRegistry` (see
-#     `crate::run::run`'s `QueryOptions` construction, which never sets
-#     `aggregates`, and `SparqlTestCase`, which carries no such field) — so
-#     evaluating a *registered* custom aggregate is out of reach here and is
-#     instead covered end-to-end in
-#     `crates/sparql-eval/tests/aggregate_function_e2e.rs`. What THIS harness
-#     can and does prove is the SYNTAX: a positive case for the one-or-more-
-#     args call shape, and a negative case for the zero-args form (a genuine
-#     parse-time arity rule — SPARQL 1.2's "positional args only, one-or-more"
-#     — not a registry-dependent admission check). A third negative case,
-#     `:aggStarNonCount`, pins the sibling rule for the OTHER aggregate
-#     surface: `'*'` is the spec's empty exprlist, and the grammar admits it
-#     in exactly one production (`Count`) — `SUM(*)` and friends are hard
-#     syntax errors, not a silent row count.
+#   * AGG(<iri>, args…) — the custom-aggregate call surface. Syntax: a
+#     positive case for the one-or-more-args call shape, and a negative case
+#     for the zero-args form (a genuine parse-time arity rule — SPARQL 1.2's
+#     "positional args only, one-or-more" — not a registry-dependent
+#     admission check). A third negative case, `:aggStarNonCount`, pins the
+#     sibling rule for the OTHER aggregate surface: `'*'` is the spec's empty
+#     exprlist, and the grammar admits it in exactly one production
+#     (`Count`) — `SUM(*)` and friends are hard syntax errors, not a silent
+#     row count.
+#
+#     EVALUATION, for the closed first-party statistical set (`MEDIAN`,
+#     `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+#     `FIRST`, `LAST`, `TOPK` — `purrdf_sparql_eval::stat_agg`), is a per-case
+#     concern via the harness-loader-only `purrdf:aggregateNamespace`
+#     predicate (`SparqlTestCase::aggregate_namespace`, decoded by
+#     `crate::manifest::load` and registered by `crate::run::run` for exactly
+#     the cases that declare it — see both files' doc comments for why this
+#     is PER-CASE rather than a harness-wide constant like `EXT_NS`/`REL_NS`).
+#     `:aggStatMedianPercentile`/`:aggStatMoments`/`:aggStatFirstLast`/
+#     `:aggStatTopk`/`:aggStatMode` below compute real answers for all ten
+#     names, cross-checked against the same fixture shapes
+#     `crates/sparql-eval/tests/aggregate_function_e2e.rs` already covers at
+#     the Rust-engine level — this closes the SAME set at the conformance-
+#     manifest level, the surface a namespace-is-just-a-string harness has no
+#     structural reason to leave uncovered.
 #   * GROUP_CONCAT determinism — an exact-string pin of the row-order-dependent
 #     concatenation (see `purrdf_sparql_eval::modifier`'s "Aggregate
 #     semantics" docs), exercised through this harness's own
@@ -74,9 +84,10 @@
 # ext:heldIn. The harness loads qt:graphData into named graphs to support this
 # case. See :standpointWorld below.
 
-@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
-@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
-@prefix :    <http://purrdf.test/extend#> .
+@prefix mf:     <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:     <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix purrdf: <https://purrdf.dev/ns/conformance-manifest#> .
+@prefix :       <http://purrdf.test/extend#> .
 
 :manifest a mf:Manifest ;
     mf:entries (
@@ -104,6 +115,11 @@
         :aggCallSyntax
         :aggCallNoArgs
         :aggStarNonCount
+        :aggStatMedianPercentile
+        :aggStatMoments
+        :aggStatFirstLast
+        :aggStatTopk
+        :aggStatMode
         :groupConcatOrder
         :baseDirection
     ) .
@@ -224,6 +240,51 @@
 :aggStarNonCount a mf:NegativeSyntaxTest ;
     mf:name "SUM(*) is a hard syntax error: '*' is COUNT-only (COUNT(*)/COUNT(DISTINCT *)), never another aggregate's empty exprlist" ;
     mf:action <agg-star-non-count.rq> .
+
+:aggStatMedianPercentile a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) MEDIAN and the named-scalarval PERCENTILE(P=0.5) form agree, both real EVALUATIONS through a registered namespace" ;
+    mf:action [
+        qt:query <agg-stat-median-percentile.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-median-percentile.srx> .
+
+:aggStatMoments a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) VARIANCE/VAR_POP/STDDEV/STDDEV_POP compute the sample and population moments" ;
+    mf:action [
+        qt:query <agg-stat-moments.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-moments.srx> .
+
+:aggStatFirstLast a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) FIRST/LAST fold over a spec-ordered (ORDER BY) row sequence, exactly like :groupConcatOrder's determinism proof" ;
+    mf:action [
+        qt:query <agg-stat-first-last.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-first-last.srx> .
+
+:aggStatTopk a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) TOPK(K=3) returns the three largest values, space-joined, descending" ;
+    mf:action [
+        qt:query <agg-stat-topk.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-topk.srx> .
+
+:aggStatMode a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) MODE finds the genuinely repeated value, not merely the smallest under an all-distinct tie-break" ;
+    mf:action [
+        qt:query <agg-stat-mode.rq> ;
+        qt:data <agg-stat-mode.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-mode.srx> .
 
 :groupConcatOrder a mf:QueryEvaluationTest ;
     mf:name "GROUP_CONCAT concatenates in inner-operator row order, proved via a spec-guaranteed ORDER BY DESC subquery rather than incidental store scan order — an exact-string pin through this harness's own load/evaluate path" ;

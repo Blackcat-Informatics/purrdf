@@ -16,8 +16,8 @@ use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, QueryOptions,
-    StandpointPredicates,
+    AggregateRegistry, EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions,
+    QueryOptions, StandpointPredicates,
 };
 
 const BASE: &str = "http://purrdf.test/manifest/";
@@ -47,6 +47,13 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
 /// Evaluate `case` using a pre-built `engine`, a pre-loaded `dataset`, and the
 /// already-read `query_text`. The in-memory SERVICE `remote` source is reused when
 /// the case is federated, so fixture parsing is not repeated between planner runs.
+///
+/// `case.aggregate_namespace` (see `crate::manifest::SparqlTestCase` and
+/// `crate::run::run`, whose per-case aggregate registration this mirrors) is
+/// registered here too: an AGG(...) evaluation case must be compared under an
+/// engine that can actually resolve its aggregate, or it would "error under both
+/// planners" for a reason that has nothing to do with BGP order — see the
+/// `skipped == expected_failures` identity this function's caller checks.
 fn eval_case(
     engine: &NativeSparqlEngine,
     case: &SparqlTestCase,
@@ -59,21 +66,20 @@ fn eval_case(
         base_iri: Some(BASE),
         substitutions: &[],
     };
+    let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
+        let mut registry = AggregateRegistry::new();
+        registry.register_statistical_aggregates(namespace);
+        registry
+    });
+    let empty_aggregates = AggregateRegistry::EMPTY;
+    let options = QueryOptions {
+        property_functions: purrdf_sparql_conformance::run::harness_relations(),
+        aggregates: aggregates.as_ref().unwrap_or(&empty_aggregates),
+        ..QueryOptions::EMPTY
+    };
     let result = match remote {
-        Some(source) => engine.query_with_source(
-            dataset,
-            request,
-            source,
-            QueryOptions {
-                property_functions: purrdf_sparql_conformance::run::harness_relations(),
-                ..QueryOptions::EMPTY
-            },
-        ),
-        None => engine.query_with_property_functions(
-            dataset,
-            request,
-            purrdf_sparql_conformance::run::harness_relations(),
-        ),
+        Some(source) => engine.query_with_source(dataset, request, source, options),
+        None => engine.query_with_options_view(&**dataset, request, options),
     }
     .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
     Ok(result)

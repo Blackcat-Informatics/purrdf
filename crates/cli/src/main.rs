@@ -152,6 +152,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_remote_requests,
             explain,
             aggregate_namespace,
+            provenance_namespace,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -172,6 +173,9 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 explain: *explain,
                 jsonld_options: jsonld_options.as_ref(),
                 aggregate_namespace: aggregate_namespace.as_deref(),
+                provenance_namespace: provenance_namespace
+                    .as_ref()
+                    .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),

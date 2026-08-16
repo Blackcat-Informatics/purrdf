@@ -113,7 +113,8 @@ use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
     QueryGovernors, QueryOptions as EngineQueryOptions,
 };
-use purrdf_sparql_results::{ResultProvenance, serialize};
+use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, serialize};
+use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::{CliError, CliOutcome};
@@ -173,6 +174,48 @@ pub(crate) fn build_aggregate_registry(namespace: Option<&str>) -> Option<Aggreg
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(namespace);
     Some(registry)
+}
+
+/// Parse `--provenance-namespace PREFIX=IRI` into its raw `(prefix, iri)` halves.
+///
+/// A bare split on the first `=` — [`ProvenanceNamespace::new`] does the real
+/// validation (a well-formed XML NCName prefix that is neither `xml` nor `xmlns`, and an
+/// absolute IRI) once [`run`] builds the namespace, so this clap `value_parser` only has
+/// to find the separator and name a missing one.
+pub(crate) fn parse_provenance_namespace(text: &str) -> Result<(String, String), String> {
+    let (prefix, iri) = text.split_once('=').ok_or_else(|| {
+        format!(
+            "--provenance-namespace must be `PREFIX=IRI` (e.g. \
+             `prov=https://example.org/ns/prov#`), got `{text}` with no `=`"
+        )
+    })?;
+    Ok((prefix.to_owned(), iri.to_owned()))
+}
+
+/// Build the [`ResultProvenance`] a governed/ungoverned SPARQL-results emission carries:
+/// empty when no `--provenance-namespace` was supplied (pure-W3C output, unchanged from
+/// before this flag existed), or populated with a content hash of the query text plus this
+/// engine's label when one was.
+///
+/// `query_hash` is `sha256:` followed by the lowercase hex digest of the UTF-8 query text —
+/// an opaque, deterministic query identity a caller can compare across runs, computed from
+/// data this host already has in hand rather than anything the evaluator would need to
+/// track. `solutions` stays empty: per-solution source provenance is the evaluator/S11
+/// derivation graph's progressive fill (see `purrdf_sparql_results::ResultProvenance`'s
+/// module docs), not something this command-line host can populate on its own.
+fn build_query_provenance(
+    namespace: Option<&ProvenanceNamespace>,
+    query: &str,
+) -> ResultProvenance {
+    if namespace.is_none() {
+        return ResultProvenance::default();
+    }
+    let digest = Sha256::digest(query.as_bytes());
+    ResultProvenance {
+        query_hash: Some(format!("sha256:{digest:x}")),
+        engine: Some("purrdf-sparql-eval".to_owned()),
+        solutions: Vec::new(),
+    }
 }
 
 /// The GOVERNED query operation: evaluate the prepared query over the concrete view under
@@ -253,11 +296,18 @@ impl ViewOp for ExplainOp<'_> {
 
 /// Emit a SPARQL result to stdout, dispatching on the result shape × format kind, and
 /// surface the loss ledger the emission produced.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input; bundling them into a \
+              struct would not shrink the call sites, which already name every field"
+)]
 fn emit_result(
     result: &SparqlResult,
     results_format: QueryFormat,
     base: Option<&str>,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    provenance_namespace: Option<&ProvenanceNamespace>,
+    query: &str,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     match result {
@@ -281,16 +331,26 @@ fn emit_result(
             };
             // The results serializer itself rejects the shapes its format cannot carry
             // (CSV/TSV reject a boolean); its `Err` maps cleanly to a runtime failure.
-            // No provenance namespace: the CLI has no user-facing option to supply one
-            // (PurRDF mints no vocabulary IRIs of its own), so the additive provenance
-            // extension is never emitted here.
-            let outcome = serialize(result, fmt, &ResultProvenance::default(), None)?;
+            // `--provenance-namespace` anchors the additive provenance extension on
+            // JSON/XML; CSV/TSV have no extension point and the serializer trims it
+            // (`SerializeOutcome::provenance_dropped`), exactly as with no namespace.
+            let provenance = build_query_provenance(provenance_namespace, query);
+            let outcome = serialize(result, fmt, &provenance, provenance_namespace)?;
             sink::write_out("-", &outcome.bytes)?;
             // A tabular/boolean result performs no lossy transcode; honor the flag
             // uniformly with an empty ledger.
             ledger::surface(ledger_target, &LossLedger::new())
         }
         SparqlResult::Graph(graph) => {
+            if provenance_namespace.is_some() {
+                return Err(CliError::Usage(
+                    "--provenance-namespace anchors the additive extension on a SELECT/ASK \
+                     result serialized to SPARQL-results JSON/XML: a CONSTRUCT/DESCRIBE graph \
+                     is serialized as RDF and has no SPARQL-results provenance extension to \
+                     carry it"
+                        .to_owned(),
+                ));
+            }
             let Some(fmt) = results_format.to_rdf_format() else {
                 return Err(CliError::Runtime(format!(
                     "a CONSTRUCT/DESCRIBE graph result cannot be serialized to the SPARQL-results \
@@ -448,6 +508,10 @@ pub(crate) struct QueryOptions<'a> {
     /// set under this IRI namespace. `None` (the default) leaves every one of the ten
     /// names an unregistered custom-aggregate IRI, exactly as before this flag existed.
     pub(crate) aggregate_namespace: Option<&'a str>,
+    /// `--provenance-namespace`: the raw `(prefix, iri)` halves anchoring the additive
+    /// `purrdf` provenance extension on a SPARQL-results JSON/XML emission. `None` (the
+    /// default) emits pure-W3C output, exactly as before this flag existed.
+    pub(crate) provenance_namespace: Option<(&'a str, &'a str)>,
 }
 
 /// Run the `query` subcommand.
@@ -474,6 +538,16 @@ pub(crate) fn run(
     // against two independently built registries, even with identical content, would
     // break every `--aggregate-namespace` query.
     let aggregates = build_aggregate_registry(options.aggregate_namespace);
+
+    // Validated ONCE, before any lane runs, so a malformed `--provenance-namespace` is a
+    // usage error before the query is even parsed — never discovered only after a
+    // successful evaluation, when serializing the answer would otherwise be the first
+    // place `ProvenanceNamespace::new` could fail.
+    let provenance_namespace = options
+        .provenance_namespace
+        .map(|(prefix, iri)| ProvenanceNamespace::new(prefix, iri))
+        .transpose()
+        .map_err(|e| CliError::Usage(format!("--provenance-namespace: {e}")))?;
 
     if options.explain {
         // `explain_query_view`/`explain_query_with_aggregates_view` parse, survey and
@@ -526,7 +600,12 @@ pub(crate) fn run(
             aggregates.as_ref(),
             report_target,
         )?;
-        return emit_entailed(options, answered, ledger_target);
+        return emit_entailed(
+            options,
+            provenance_namespace.as_ref(),
+            answered,
+            ledger_target,
+        );
     }
 
     if options.governors.is_engaged() {
@@ -541,7 +620,12 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
             },
         )?;
-        return emit_governed(options, &outcome, ledger_target);
+        return emit_governed(
+            options,
+            provenance_namespace.as_ref(),
+            &outcome,
+            ledger_target,
+        );
     }
 
     // The ungoverned lane, unchanged: the same call over the same zero-copy view the
@@ -562,6 +646,8 @@ pub(crate) fn run(
         options.results_format,
         options.base,
         options.jsonld_options,
+        provenance_namespace.as_ref(),
+        options.query,
         ledger_target,
     )?;
     Ok(CliOutcome::Complete)
@@ -627,6 +713,14 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
                 .to_owned(),
         ));
     }
+    if options.explain && options.provenance_namespace.is_some() {
+        return Err(CliError::Usage(
+            "--explain prints the plan and its charge ledger INSTEAD of the query's answers, \
+             so a --provenance-namespace anchoring an extension on those answers would be \
+             accepted and never emitted: drop one of the two"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -639,12 +733,13 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
 /// on stdout is the claim "this query has no answers" and this run never asked it.
 fn emit_entailed(
     options: &QueryOptions<'_>,
+    provenance_namespace: Option<&ProvenanceNamespace>,
     answered: GovernedEntailment,
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
     match answered {
         GovernedEntailment::Answered { outcome, .. } => {
-            emit_governed(options, &outcome, ledger_target)
+            emit_governed(options, provenance_namespace, &outcome, ledger_target)
         }
         GovernedEntailment::ClosureStopped { tripped } => {
             eprint!("{}", governors::render_closure_stop(tripped));
@@ -665,6 +760,7 @@ fn emit_entailed(
 /// document of the requested format rather than a special one.
 fn emit_governed(
     options: &QueryOptions<'_>,
+    provenance_namespace: Option<&ProvenanceNamespace>,
     outcome: &GovernedOutcome,
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
@@ -674,6 +770,8 @@ fn emit_governed(
             options.results_format,
             options.base,
             options.jsonld_options,
+            provenance_namespace,
+            options.query,
             ledger_target,
         )
     };

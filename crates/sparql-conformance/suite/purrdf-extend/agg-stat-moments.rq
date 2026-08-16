@@ -1,0 +1,6 @@
+PREFIX : <https://example.org/agg-stat#>
+SELECT (AGG(<https://example.org/agg-stat-fn#VARIANCE>, ?v) AS ?variance)
+       (AGG(<https://example.org/agg-stat-fn#VAR_POP>, ?v) AS ?varPop)
+       (AGG(<https://example.org/agg-stat-fn#STDDEV>, ?v) AS ?stddev)
+       (AGG(<https://example.org/agg-stat-fn#STDDEV_POP>, ?v) AS ?stddevPop)
+WHERE { ?s :value ?v }

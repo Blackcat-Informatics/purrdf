@@ -1063,3 +1063,197 @@ fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
         "--explain prints the explanation INSTEAD of the answers: {body}"
     );
 }
+
+// ── `--provenance-namespace` (F6): reachable AND readable back ────────────────────
+
+/// End-to-end: `--provenance-namespace PREFIX=IRI` actually anchors a populated
+/// `purrdf` provenance extension in the emitted SPARQL-results JSON, and what this
+/// binary writes, `purrdf_sparql_results::provenance_from_json` reads back — closing
+/// the "writer emits something nothing can read back" gap.
+#[test]
+fn provenance_namespace_populates_and_round_trips_through_json() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the provenance-namespace query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let json = stdout(&out);
+    assert!(
+        json.contains("\"prov\":{"),
+        "the additive prov member must appear: {json}"
+    );
+    assert!(
+        json.contains("\"queryForm\":\"select\""),
+        "queryForm must name the result kind: {json}"
+    );
+    assert!(
+        json.contains("\"engine\":\"purrdf-sparql-eval\""),
+        "engine must be populated: {json}"
+    );
+    assert!(
+        json.contains("\"queryHash\":\"sha256:"),
+        "queryHash must be a sha256 content hash of the query text: {json}"
+    );
+
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+    let decoded = purrdf_sparql_results::provenance_from_json(json.as_bytes(), &namespace)
+        .expect("the CLI's own output decodes back");
+    assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+    assert!(
+        decoded
+            .query_hash
+            .as_deref()
+            .is_some_and(|h| h.starts_with("sha256:")),
+        "decoded query_hash: {:?}",
+        decoded.query_hash
+    );
+}
+
+/// The same round trip through XML.
+#[test]
+fn provenance_namespace_populates_and_round_trips_through_xml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "xml",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the provenance-namespace XML query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let xml = stdout(&out);
+    assert!(
+        xml.contains("<prov:provenance"),
+        "the additive prov:provenance element must appear: {xml}"
+    );
+
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+    let decoded = purrdf_sparql_results::provenance_from_xml(xml.as_bytes(), &namespace)
+        .expect("the CLI's own XML output decodes back");
+    assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+}
+
+/// Regression: the namespace stays caller-supplied with no fabricated default —
+/// omitting `--provenance-namespace` emits pure-W3C output, byte-unchanged from
+/// before the flag existed.
+#[test]
+fn omitting_provenance_namespace_emits_pure_w3c_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&["query", "--data", &ttl, "--results-format", "json", query]);
+    assert!(out.status.success(), "stderr:\n{}", stderr(&out));
+    let json = stdout(&out);
+    assert!(
+        !json.contains("\"prov\""),
+        "no namespace was supplied: no additive member may appear: {json}"
+    );
+}
+
+/// A malformed `--provenance-namespace` value (no `=`) is a usage error at parse
+/// time, before the query even runs.
+#[test]
+fn malformed_provenance_namespace_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "not-a-prefix-iri-pair",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "a missing `=` must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside `--explain` is refused rather than silently
+/// dropped: `--explain` prints the plan INSTEAD of the answers, so the extension it
+/// would anchor is never emitted.
+#[test]
+fn provenance_namespace_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside a CONSTRUCT query is refused: a graph result has
+/// no SPARQL-results provenance extension to carry it.
+#[test]
+fn provenance_namespace_with_a_construct_result_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "turtle",
+        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}

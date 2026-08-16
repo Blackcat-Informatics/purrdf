@@ -18,6 +18,7 @@ use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
 use crate::json_read::ParsedSolutions;
+use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -86,6 +87,62 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
         "false" => Ok(false),
         other => Err(fmt(&format!("invalid <boolean> value `{other}`"))),
     }
+}
+
+/// Decode the additive `<{prefix}:provenance>` element a
+/// [`ProvenanceNamespace`]-keyed SRX document carries, or
+/// [`ResultProvenance::default`] when no such element is present.
+///
+/// The inverse of [`crate::xml::to_xml`]'s additive extension: the writer emits
+/// `<{prefix}:provenance>` (keyed by `namespace.prefix()`, exactly as it chose
+/// to write it) only when both the source `provenance` was non-empty and a
+/// namespace was supplied, so a reader must be told the SAME namespace to know
+/// which element to decode. Matched by the element's literal `{prefix}:`
+/// QName — the prefix this crate's own writer uses IS `namespace.prefix()`
+/// verbatim (see [`crate::xml::to_xml`]), so this is exact for any document
+/// this crate wrote; a document using a different prefix for the same
+/// namespace IRI (legal XML, since namespace identity is URI-based) decodes to
+/// the empty provenance rather than guessing.
+///
+/// `<{prefix}:queryForm>` is read to validate the element's shape but is not
+/// itself carried in [`ResultProvenance`] (derived from the result kind on
+/// write, not caller data).
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] on malformed XML or a non-`<sparql>` root.
+pub fn provenance_from_xml(
+    bytes: &[u8],
+    namespace: &ProvenanceNamespace,
+) -> Result<ResultProvenance, Error> {
+    let root = parse_root(bytes)?;
+    let prefix = namespace.prefix();
+    let provenance_name = format!("{prefix}:provenance");
+    let Some(provenance_elem) = root.child(&provenance_name) else {
+        return Ok(ResultProvenance::default());
+    };
+    let query_hash = provenance_elem
+        .child(&format!("{prefix}:queryHash"))
+        .map(Element::text);
+    let engine = provenance_elem
+        .child(&format!("{prefix}:engine"))
+        .map(Element::text);
+    let solution_name = format!("{prefix}:solution");
+    let source_name = format!("{prefix}:source");
+    let solutions = provenance_elem
+        .children_named(&solution_name)
+        .map(|solution_elem| SolutionProvenance {
+            sources: solution_elem
+                .children_named(&source_name)
+                .map(Element::text)
+                .collect(),
+        })
+        .collect();
+    Ok(ResultProvenance {
+        query_hash,
+        engine,
+        solutions,
+    })
 }
 
 /// Parse the document and return its `<sparql>` root element.
@@ -563,6 +620,45 @@ fn unescape(s: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xml::to_xml;
+    use purrdf_core::SparqlResult;
+
+    /// F6 round-trip: what [`crate::xml::to_xml`] writes under a namespace,
+    /// [`provenance_from_xml`] reads back — the writer no longer emits
+    /// something nothing can decode.
+    #[test]
+    fn provenance_round_trips_through_xml() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_owned()),
+            engine: Some("purrdf-sparql-eval".to_owned()),
+            solutions: vec![
+                SolutionProvenance {
+                    sources: vec!["http://example.org/g1".to_owned()],
+                },
+                SolutionProvenance { sources: vec![] },
+            ],
+        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let outcome = to_xml(&result, &provenance, Some(&namespace)).expect("serializes");
+
+        let decoded =
+            provenance_from_xml(&outcome.bytes, &namespace).expect("provenance decodes back");
+        assert_eq!(decoded, provenance);
+    }
+
+    /// A document with no `<{prefix}:provenance>` element decodes to the empty
+    /// provenance rather than erroring.
+    #[test]
+    fn absent_provenance_element_decodes_to_default() {
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean></sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes");
+        assert!(decoded.is_empty());
+    }
 
     #[test]
     fn reads_select_with_mixed_terms() {

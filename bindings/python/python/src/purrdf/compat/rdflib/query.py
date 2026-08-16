@@ -55,10 +55,31 @@ def _result_format_id(fmt: str | None) -> str:
         raise ResultException(f"unsupported SPARQL result format: {fmt!r}") from None
 
 
-def _serialize_result_bytes(result: Result, fmt_id: str) -> bytes:
-    """Serialize a SELECT/ASK :class:`Result` to SPARQL-Results bytes via the native codec."""
+def _serialize_result_bytes(
+    result: Result,
+    fmt_id: str,
+    provenance_namespace: tuple[str, str] | None = None,
+    query_hash: str | None = None,
+) -> bytes:
+    """Serialize a SELECT/ASK :class:`Result` to SPARQL-Results bytes via the native codec.
+
+    ``provenance_namespace`` (a ``(prefix, iri)`` pair) anchors the additive
+    ``purrdf`` provenance extension on a JSON/XML ``fmt_id`` under that namespace;
+    ``query_hash`` supplies the caller's own opaque query identity for it — this
+    :class:`Result` object carries no query text of its own to hash (RDFLib
+    parity: the result, not the query, is what this wrapper holds). ``None`` for
+    either leaves pure-W3C output / an unpopulated field, exactly as before these
+    parameters existed. Read the extension back with
+    :func:`purrdf.provenance_from_json`/:func:`purrdf.provenance_from_xml` under
+    the SAME namespace.
+    """
     if result.type == "ASK":
-        out = purrdf.serialize_sparql_boolean(fmt_id, bool(result.askAnswer))
+        out = purrdf.serialize_sparql_boolean(
+            fmt_id,
+            bool(result.askAnswer),
+            provenance_namespace=provenance_namespace,
+            query_hash=query_hash,
+        )
         assert isinstance(out, bytes)
         return out
     if result.type == "SELECT":
@@ -66,7 +87,13 @@ def _serialize_result_bytes(result: Result, fmt_id: str) -> bytes:
             [None if cell is None else to_native(cell) for cell in row]
             for row in result._rows
         ]
-        out = purrdf.serialize_sparql_solutions(fmt_id, [str(v) for v in result.vars], rows)
+        out = purrdf.serialize_sparql_solutions(
+            fmt_id,
+            [str(v) for v in result.vars],
+            rows,
+            provenance_namespace=provenance_namespace,
+            query_hash=query_hash,
+        )
         assert isinstance(out, bytes)
         return out
     raise ResultException(
@@ -226,22 +253,38 @@ class Result:
         destination: str | Path | IO[bytes] | None = None,
         encoding: str | None = None,
         format: str | None = None,
+        provenance_namespace: tuple[str, str] | None = None,
+        query_hash: str | None = None,
         **args: Any,
     ) -> bytes | str | None:
         """Serialize the result (RDFLib ``Result.serialize`` parity).
 
         SELECT/ASK results emit a W3C SPARQL Results document (JSON/XML/CSV/TSV)
         via the native codec; CONSTRUCT/DESCRIBE results serialize as an RDF graph
-        (delegating to :meth:`Graph.serialize`). With no ``destination`` the bytes
-        are returned (a ``str`` when ``encoding`` is ``None``); otherwise they are
-        written to the file-like / path destination.
+        (delegating to :meth:`Graph.serialize`, which does not accept
+        ``provenance_namespace``/``query_hash`` — a SPARQL-results-only concept).
+        With no ``destination`` the bytes are returned (a ``str`` when
+        ``encoding`` is ``None``); otherwise they are written to the file-like /
+        path destination.
+
+        ``provenance_namespace`` (a ``(prefix, iri)`` pair) anchors the additive
+        ``purrdf`` provenance extension on a JSON/XML result under that
+        namespace; ``query_hash`` supplies the caller's own opaque query
+        identity for it. Neither is fabricated: PurRDF mints no vocabulary IRIs
+        of its own, and this :class:`Result` carries no query text to hash on
+        its own. Omit both for pure-W3C output, exactly as before they existed.
         """
         if self.type in ("CONSTRUCT", "DESCRIBE"):
             assert self.graph is not None
             return self.graph.serialize(
                 destination, format=format or "xml", encoding=encoding, **args
             )
-        data = _serialize_result_bytes(self, _result_format_id(format))
+        data = _serialize_result_bytes(
+            self,
+            _result_format_id(format),
+            provenance_namespace=provenance_namespace,
+            query_hash=query_hash,
+        )
         if destination is None:
             return data if encoding is not None else data.decode("utf-8")
         writer = getattr(destination, "write", None)

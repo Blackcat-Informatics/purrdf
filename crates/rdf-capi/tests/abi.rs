@@ -152,7 +152,7 @@ unsafe fn buffer_bytes(buf: *const PurrdfBuffer) -> Vec<u8> {
 }
 
 #[test]
-fn abi_version_is_beta_0_4_0() {
+fn abi_version_is_the_current_minor() {
     let mut version = PurrdfAbiVersion {
         major: 9,
         minor: 9,
@@ -163,7 +163,7 @@ fn abi_version_is_beta_0_4_0() {
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
     assert_eq!(version.patch, PURRDF_ABI_PATCH);
-    assert_eq!((version.major, version.minor, version.patch), (0, 4, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 6, 0));
 }
 
 #[test]
@@ -1355,6 +1355,8 @@ fn query_json_has_sparql_results_shape() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &raw mut buffer,
             &raw mut error,
         );
@@ -1367,6 +1369,74 @@ fn query_json_has_sparql_results_shape() {
         assert!(json.contains("\"type\":\"uri\""), "got: {json}");
         assert!(json.contains("http://s1"), "got: {json}");
         purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// End-to-end: `purrdf_query_json`'s `provenance_prefix`/`provenance_iri` anchor a
+/// populated additive `purrdf` extension, and what this ABI writes,
+/// `purrdf_sparql_results::provenance_from_json` reads back — F6's reachable-AND-readable
+/// closure for the C ABI.
+#[test]
+fn query_json_provenance_namespace_populates_and_round_trips() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("SELECT ?s ?o WHERE { ?s ?p ?o }").unwrap();
+        let prefix = CString::new("prov").unwrap();
+        let iri = CString::new("https://example.org/ns/prov#").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            prefix.as_ptr(),
+            iri.as_ptr(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let json = buffer_bytes(buffer);
+        let namespace =
+            purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+                .expect("valid namespace");
+        let decoded =
+            purrdf_sparql_results::provenance_from_json(&json, &namespace).expect("decodes back");
+        assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+        assert!(
+            decoded
+                .query_hash
+                .as_deref()
+                .is_some_and(|h| h.starts_with("sha256:"))
+        );
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Exactly one of `provenance_prefix`/`provenance_iri` null is a usage error rather
+/// than a silent "no namespace" — a namespace needs both halves.
+#[test]
+fn query_json_lone_provenance_half_is_refused() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("SELECT ?s WHERE { ?s ?p ?o }").unwrap();
+        let prefix = CString::new("prov").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            prefix.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_ne!(status, PurrdfStatus::Ok as i32);
+        assert!(!error.is_null());
+        purrdf_error_free(error);
         purrdf_dataset_free(dataset);
     }
 }

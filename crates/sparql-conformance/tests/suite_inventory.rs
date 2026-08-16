@@ -164,8 +164,8 @@ fn purrdf_extend_case_count_and_kinds() {
 
     assert_eq!(
         cases.len(),
-        26,
-        "purrdf-extend/manifest.ttl must load exactly 26 cases (its mf:entries list \
+        31,
+        "purrdf-extend/manifest.ttl must load exactly 31 cases (its mf:entries list \
          count); got {} — a case silently stopped loading",
         cases.len()
     );
@@ -189,9 +189,9 @@ fn purrdf_extend_case_count_and_kinds() {
         "purrdf-extend must carry no unmodeled (TestKind::Unknown) cases"
     );
     assert_eq!(
-        query_eval, 23,
+        query_eval, 28,
         "purrdf-extend's mf:QueryEvaluationTest count drifted (blank-node \
-         qt:query/qt:data actions) — expected 23, got {query_eval}"
+         qt:query/qt:data actions) — expected 28, got {query_eval}"
     );
     assert_eq!(
         positive_syntax, 1,
@@ -213,6 +213,72 @@ fn purrdf_extend_case_count_and_kinds() {
 /// The `suite/` directory of this crate.
 fn suite_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
+}
+
+/// The `tests/fixtures/` directory of this crate — deliberately NOT under `suite/`,
+/// so nothing here is ever discovered as a live conformance case by
+/// `sparql_conformance.rs`'s `datatest_stable::harness!` (rooted at `suite/` only).
+fn fixtures_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+/// F9: prove the manifest loader's silent-skip completeness guard actually FIRES,
+/// rather than merely existing unexercised (it was previously verified only by
+/// hand-breaking a manifest locally — never by a committed regression).
+///
+/// `tests/fixtures/broken-manifests/undescribed-entry/manifest.ttl` declares one
+/// `mf:entries` member with no `rdf:type`/`mf:name`/`mf:action` triples at all — the
+/// loader's row-grouping SELECT requires all three to bind, so that entry produces
+/// no row and would otherwise vanish from the loaded case set with no trace. The
+/// completeness check in `crate::manifest::load` (see its doc comment, around the
+/// `list_entry_iris`/`missing` logic) must catch exactly this and name the offending
+/// entry in its error, rather than returning a manifest that silently advertises
+/// fewer cases than it declares.
+#[test]
+fn broken_manifest_with_an_undescribed_entry_is_rejected() {
+    let manifest = fixtures_root()
+        .join("broken-manifests")
+        .join("undescribed-entry")
+        .join("manifest.ttl");
+    assert!(
+        manifest.is_file(),
+        "negative fixture missing: {}",
+        manifest.display()
+    );
+
+    let error = purrdf_sparql_conformance::manifest::load(&manifest)
+        .expect_err("a manifest with a declared-but-undescribed mf:entries member must be refused");
+
+    assert!(
+        error.contains("silent-skip"),
+        "the guard's error must name what it caught, got: {error}"
+    );
+    assert!(
+        error.contains("#undescribedEntry"),
+        "the guard's error must name the OFFENDING entry, got: {error}"
+    );
+    assert!(
+        error.contains("1 of 1"),
+        "the guard's error must state the declared-vs-loaded count, got: {error}"
+    );
+}
+
+/// Positive control for the test above: a manifest whose sole entry IS fully
+/// described loads cleanly — proving the guard's rejection above is triggered by
+/// the missing description, not by some other structural defect in the fixture.
+#[test]
+fn broken_manifest_fixture_directory_does_not_leak_into_the_live_suite() {
+    // The negative fixture lives under `tests/fixtures/`, never under `suite/`, so
+    // `suite_root()` must not see it — pinning the placement invariant the module
+    // doc for `broken_manifest_with_an_undescribed_entry_is_rejected` relies on.
+    let leaked = suite_root().join("broken-manifests");
+    assert!(
+        !leaked.exists(),
+        "the negative fixture must live under tests/fixtures/, not suite/, or the \
+         datatest harness would pick it up as a real (and permanently failing) case"
+    );
 }
 
 /// Assert every `<tree>/<group>/manifest.ttl` is on disk.

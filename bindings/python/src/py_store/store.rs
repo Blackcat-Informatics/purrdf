@@ -339,6 +339,12 @@ impl PyStore {
 
     /// Run a governed SPARQL query over a closure produced by the named entailment
     /// regime, carrying both the query outcome and the reasoning report.
+    ///
+    /// `aggregate_namespace` behaves exactly as on [`query_governed`](Self::query_governed):
+    /// it registers purrdf's first-party statistical aggregate set under that IRI for the
+    /// closure query's PARSE and its evaluation, so `AGG(<namespace><NAME>, args…)` reaches
+    /// the entailment-aware lane exactly as it reaches the ordinary one. Unset (the default)
+    /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     #[pyo3(signature = (
         query,
         entailment,
@@ -347,6 +353,7 @@ impl PyStore {
         substitutions=None,
         extension_namespaces=None,
         standpoint_predicates=None,
+        aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -368,6 +375,7 @@ impl PyStore {
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -398,11 +406,7 @@ impl PyStore {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let engine = build_engine(config);
-            // `QueryOptions::EMPTY`: this method exposes no `relations` /
-            // `relations_from_graph` / `aggregate_namespace` keywords (unlike
-            // `query_governed`), so there is nothing here for a caller to have
-            // configured — unchanged from before `query_with_entailment_governed` took a
-            // `QueryOptions` parameter.
+            let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
                 &engine,
                 &dataset,
@@ -412,7 +416,12 @@ impl PyStore {
                     substitutions: &subs,
                 },
                 plan.entailment(),
-                purrdf_sparql_eval::QueryOptions::EMPTY,
+                purrdf_sparql_eval::QueryOptions {
+                    aggregates: aggregates
+                        .as_ref()
+                        .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                    ..purrdf_sparql_eval::QueryOptions::EMPTY
+                },
                 governors,
             )
             .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))

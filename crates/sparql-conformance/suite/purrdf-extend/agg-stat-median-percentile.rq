@@ -1,0 +1,4 @@
+PREFIX : <https://example.org/agg-stat#>
+SELECT (AGG(<https://example.org/agg-stat-fn#MEDIAN>, ?v) AS ?median)
+       (AGG(<https://example.org/agg-stat-fn#PERCENTILE>, ?v; P=0.5) AS ?p50)
+WHERE { ?s :value ?v }

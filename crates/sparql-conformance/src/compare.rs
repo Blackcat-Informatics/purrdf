@@ -461,6 +461,7 @@ mod tests {
             graph_data: Vec::new(),
             service_data: Vec::new(),
             regime: None,
+            aggregate_namespace: None,
             expected,
         }
     }

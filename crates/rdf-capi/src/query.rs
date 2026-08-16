@@ -14,6 +14,7 @@ use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
     PartialAnswers, QueryOptions,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
@@ -385,19 +386,82 @@ pub unsafe extern "C" fn purrdf_query(
     }
 }
 
+/// Decode `provenance_prefix`/`provenance_iri` (both nullable) into an optional
+/// [`purrdf_sparql_results::ProvenanceNamespace`] anchoring the additive `purrdf`
+/// provenance extension on a JSON emission. Both null → `None` (pure W3C output,
+/// unchanged from before these parameters existed). Exactly one null is a usage error:
+/// a namespace needs both halves, and silently treating a lone prefix or IRI as "no
+/// namespace" would be the exact silent-drop this ABI refuses everywhere else.
+///
+/// # Safety
+/// Same contract as [`opt_cstr_to_str`].
+unsafe fn decode_provenance_namespace(
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
+) -> Result<Option<purrdf_sparql_results::ProvenanceNamespace>, PurrdfError> {
+    unsafe {
+        let prefix = opt_cstr_to_str(provenance_prefix)?;
+        let iri = opt_cstr_to_str(provenance_iri)?;
+        match (prefix, iri) {
+            (None, None) => Ok(None),
+            (Some(prefix), Some(iri)) => {
+                let namespace = purrdf_sparql_results::ProvenanceNamespace::new(prefix, iri)
+                    .map_err(|e| PurrdfError::new(PurrdfStatus::ParseError, e.to_string()))?;
+                Ok(Some(namespace))
+            }
+            _ => Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                "provenance_prefix and provenance_iri must be both null or both non-null",
+            )),
+        }
+    }
+}
+
+/// Build the [`purrdf_sparql_results::ResultProvenance`] a JSON emission carries: empty
+/// when no namespace was supplied (pure-W3C output), or populated with a content hash of
+/// the query text plus this engine's label when one was. Mirrors
+/// `crate::query::build_query_provenance` in the CLI. `solutions` stays empty:
+/// per-solution source provenance is the evaluator/S11 derivation graph's progressive
+/// fill (see `purrdf_sparql_results::ResultProvenance`'s module docs), not something
+/// this ABI entry point can populate on its own.
+fn build_query_provenance(
+    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    query: &str,
+) -> purrdf_sparql_results::ResultProvenance {
+    if namespace.is_none() {
+        return purrdf_sparql_results::ResultProvenance::default();
+    }
+    let digest = Sha256::digest(query.as_bytes());
+    purrdf_sparql_results::ResultProvenance {
+        query_hash: Some(format!("sha256:{digest:x}")),
+        engine: Some("purrdf-sparql-eval".to_owned()),
+        solutions: Vec::new(),
+    }
+}
+
 /// Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
 /// Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
 /// CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
 /// `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
 ///
+/// `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
+/// additive `purrdf` provenance extension on a SELECT/ASK emission under that
+/// `PREFIX`/`IRI`. Null leaves the output pure W3C SRJ, exactly as before these
+/// parameters existed; a CONSTRUCT/DESCRIBE result never carries the extension
+/// (it is not a SPARQL-results document). Read the extension back with
+/// `purrdf_sparql_results::provenance_from_json` under the SAME namespace.
+///
 /// # Safety
 /// `dataset` must be a live handle; `query` must be a NUL-terminated C string;
-/// the out-params must be writable.
+/// the out-params must be writable. `provenance_prefix`/`provenance_iri`, if non-null,
+/// must be NUL-terminated UTF-8 C strings live for the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_json(
     dataset: *const PurrdfDataset,
     query: *const c_char,
     base_iri: *const c_char,
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -409,22 +473,23 @@ pub unsafe extern "C" fn purrdf_query_json(
                     "null pointer argument to purrdf_query_json",
                 ));
             }
+            let query_text = cstr_to_str(query)?;
+            let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
             let result = run_query(dataset, query, base_iri)?;
             // Delegate to the canonical SPARQL-Results serializer (purrdf S9). An
-            // empty `ResultProvenance` yields byte-identical pure W3C SRJ for
-            // SELECT/ASK; the CONSTRUCT-graph path is rendered by the crate's
-            // wasm-clean rdf-core N-Triples writer.
-            let outcome = purrdf_sparql_results::to_json(
-                &result,
-                &purrdf_sparql_results::ResultProvenance::default(),
-                None,
-            )
-            .map_err(|e| {
-                PurrdfError::new(
-                    PurrdfStatus::QueryError,
-                    format!("SPARQL results JSON serialization failed: {e}"),
-                )
-            })?;
+            // empty `ResultProvenance` (no namespace supplied) yields byte-identical
+            // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
+            // crate's wasm-clean rdf-core N-Triples writer and never carries the
+            // extension (`to_json` only appends it for `Solutions`/`Boolean` — a
+            // `Graph` result serializes as `{"graph": "..."}` regardless).
+            let provenance = build_query_provenance(namespace.as_ref(), query_text);
+            let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
+                .map_err(|e| {
+                    PurrdfError::new(
+                        PurrdfStatus::QueryError,
+                        format!("SPARQL results JSON serialization failed: {e}"),
+                    )
+                })?;
             *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
             Ok(PurrdfStatus::Ok)
         })
@@ -532,10 +597,18 @@ pub unsafe extern "C" fn purrdf_query_governed(
 /// the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
 /// query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
 ///
+/// `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
+/// it registers purrdf's first-party statistical aggregate set under that IRI namespace
+/// for the closure query's PARSE and its evaluation, so `AGG(<namespace><NAME>, args…)`
+/// reaches the entailment-aware lane exactly as it reaches the ordinary one. Null leaves
+/// every one of the ten names an ordinary unregistered custom-aggregate IRI.
+///
 /// # Safety
 /// All input strings and handles must remain live for the synchronous call. Required
 /// out-pointers must be writable; any enabled cancellation handle must remain live until
 /// return. Shape-specific result pointers are required when that shape is returned.
+/// `aggregate_namespace`, if non-null, must be a NUL-terminated UTF-8 C string live for
+/// the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_entailment_governed(
     dataset: *const PurrdfDataset,
@@ -543,6 +616,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
     base_iri: *const c_char,
     regime: *const c_char,
     program: *const c_char,
+    aggregate_namespace: *const c_char,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_kind: *mut i32,
@@ -583,10 +657,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
             let plan = QueryEntailmentPlan::parse(regime, program)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             let governors = decode_governors(governors)?;
-            // `QueryOptions::EMPTY`: this ABI function exposes no registry parameter of its
-            // own (unlike `purrdf_query_governed`'s `aggregate_namespace`), so there is
-            // nothing here for a caller to have configured — unchanged from before
-            // `query_with_entailment_governed` took a `QueryOptions` parameter.
+            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
             let outcome = query_with_entailment_governed(
                 &engine(),
                 PurrdfDataset::arc(dataset),
@@ -596,7 +667,10 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                     substitutions: &[],
                 },
                 plan.entailment(),
-                QueryOptions::EMPTY,
+                QueryOptions {
+                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                    ..QueryOptions::EMPTY
+                },
                 &governors,
             )
             .map_err(|error| match error {
@@ -907,6 +981,7 @@ mod tests {
                 std::ptr::null(),
                 regime.as_ptr(),
                 program.as_ptr(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -971,6 +1046,7 @@ mod tests {
                 std::ptr::null(),
                 regime.as_ptr(),
                 program.as_ptr(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -1003,6 +1079,104 @@ mod tests {
         );
 
         unsafe { purrdf_dataset_free(dataset) };
+    }
+
+    /// Three cats, each `rdfs:subClassOf`-entailed to be an `Animal`, carrying distinct
+    /// `ex:weight` literals (1, 2, 3) — `MEDIAN` over the entailed `?s a Animal` binding
+    /// folds to `2`.
+    fn entailed_median_dataset() -> *mut PurrdfDataset {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+        let weight = builder.intern_iri("http://example.org/weight");
+        let cat = builder.intern_iri("http://example.org/Cat");
+        let animal = builder.intern_iri("http://example.org/Animal");
+        builder.push_quad(cat, subclass, animal, None);
+        for (name, value) in [("tom", 1_i64), ("felix", 2), ("garfield", 3)] {
+            let subject = builder.intern_iri(&format!("http://example.org/{name}"));
+            builder.push_quad(subject, rdf_type, cat, None);
+            let literal = builder.intern_literal(RdfLiteral::typed(
+                value.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ));
+            builder.push_quad(subject, weight, literal, None);
+        }
+        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+    }
+
+    /// End-to-end: `purrdf_query_entailment_governed`'s `aggregate_namespace` parameter
+    /// reaches `MEDIAN` over bindings the RDFS closure itself produced — the reachability
+    /// gap F10 closes. Before this parameter existed, the entailment-aware C ABI lane
+    /// passed empty query options unconditionally, so no statistical aggregate could ever
+    /// be registered on it, unlike `purrdf_query_governed`.
+    #[test]
+    fn aggregate_namespace_computes_median_through_entailment_governed_query() {
+        const NS: &str = "https://example.org/agg#";
+        let dataset = entailed_median_dataset();
+        let query = CString::new(
+            "PREFIX ex: <http://example.org/> \
+             SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) \
+             WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
+        )
+        .expect("query");
+        let regime = CString::new("rdfs").expect("regime");
+        let program = CString::new("").expect("program");
+        let namespace = CString::new(NS).expect("namespace C string");
+        let governors = initialized_governors();
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut report = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+
+        let status = unsafe {
+            purrdf_query_entailment_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                regime.as_ptr(),
+                program.as_ptr(),
+                namespace.as_ptr(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut report,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32, "status");
+        assert!(error.is_null(), "no error");
+        assert_eq!(outcome, PurrdfEntailmentQueryOutcomeKind::Complete as i32);
+        assert_eq!(kind, KIND_SOLUTIONS);
+        assert!(!report.is_null());
+
+        assert_eq!(
+            unsafe { purrdf_rowcursor_next(rows) },
+            PurrdfStatus::Ok as i32
+        );
+        let mut view = MaybeUninit::<PurrdfTermView>::uninit();
+        let mut bound = 0u8;
+        assert_eq!(
+            unsafe { purrdf_rowcursor_term(rows, 0, view.as_mut_ptr(), &raw mut bound) },
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(bound, 1, "?m is bound");
+        let view = unsafe { view.assume_init() };
+        let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
+        assert_eq!(lexical, "2", "MEDIAN of the entailed {{1, 2, 3}} is 2");
+
+        unsafe {
+            purrdf_buffer_free(report);
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(dataset);
+        }
     }
 
     #[test]

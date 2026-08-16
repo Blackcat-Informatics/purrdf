@@ -40,6 +40,15 @@ const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
 /// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
 const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
 
+/// purrdf's own manifest-EXTENSION vocabulary, for fields the W3C `mf:`/`qt:`
+/// vocabulary has no slot for. This is test-INFRASTRUCTURE metadata that
+/// configures this harness's own loader — never shipped product output, so it is
+/// exempt from the "PurRDF mints no vocabulary IRIs" product contract (AGENTS.md)
+/// in exactly the way `EXT_NS`/`REL_NS`/`LOSS_NS` in `crate::run` already are
+/// (those are query-text namespaces the harness supplies as caller configuration;
+/// this is manifest-authoring vocabulary for the harness's own loader).
+const PURRDF_MF_NS: &str = "https://purrdf.dev/ns/conformance-manifest#";
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
@@ -126,6 +135,13 @@ pub struct SparqlTestCase {
     /// for a plain (Simple-entailment) test or one whose only regimes the native
     /// reasoner cannot materialize (OWL-Direct / D / RIF).
     pub regime: Option<purrdf_entail::Regime>,
+    /// `purrdf:aggregateNamespace` on the test's `mf:action` (`PURRDF_MF_NS`,
+    /// harness-loader vocabulary — see its doc comment): the IRI namespace this
+    /// case's `AGG(<namespace><NAME>, args…)` calls resolve against. `None` (the
+    /// default, and every case but the ones that opt in) registers no statistical
+    /// aggregate registry for this case, exactly as before this field existed —
+    /// PurRDF mints no default namespace.
+    pub aggregate_namespace: Option<String>,
     /// The expected result.
     pub expected: ExpectedResult,
 }
@@ -149,13 +165,15 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         "PREFIX mf: <{MF}>\n\
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
-         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result WHERE {{\n\
+         PREFIX purrdf: <{PURRDF_MF_NS}>\n\
+         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\
          OPTIONAL {{ ?act qt:query ?query }}\n\
          OPTIONAL {{ ?act qt:data ?data }}\n\
          OPTIONAL {{ ?act qt:graphData ?graphData }}\n\
          OPTIONAL {{ ?act qt:serviceData ?sd . ?sd qt:endpoint ?serviceEp ; qt:data ?serviceData }}\n\
+         OPTIONAL {{ ?act purrdf:aggregateNamespace ?aggNs }}\n\
          OPTIONAL {{ ?test mf:result ?result }}\n\
          }}"
     );
@@ -178,6 +196,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
                 graph_data: Vec::new(),
                 service_data: Vec::new(),
                 regime: None,
+                aggregate_namespace: None,
                 expected: ExpectedResult::None,
             });
         // A test may carry several rdf:type values; prefer a recognized kind.
@@ -211,6 +230,11 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         }
         if let Some(result) = iri_of(row, "result") {
             entry.expected = classify_result(&local_path(&dir, &result));
+        }
+        if entry.aggregate_namespace.is_none()
+            && let Some(ns) = lexical_of(row, "aggNs")
+        {
+            entry.aggregate_namespace = Some(ns);
         }
     }
 

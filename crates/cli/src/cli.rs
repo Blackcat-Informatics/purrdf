@@ -302,6 +302,17 @@ pub(crate) enum Command {
         /// cross this command-line boundary as a string.
         #[arg(long, value_name = "IRI")]
         aggregate_namespace: Option<String>,
+        /// Anchor the additive `purrdf` provenance extension under `PREFIX=IRI`
+        /// (e.g. `prov=https://example.org/ns/prov#`) on a SPARQL-results JSON/XML
+        /// `--results-format`. PurRDF mints no vocabulary IRIs of its own — there is no
+        /// default namespace, and omitting this flag emits pure-W3C output exactly as
+        /// before it existed. `PREFIX` must be a valid XML NCName (neither `xml` nor
+        /// `xmlns`) and `IRI` must be an absolute IRI; CSV/TSV have no extension point
+        /// and ignore this flag. Read the extension back with
+        /// `purrdf_sparql_results::provenance_from_json`/`provenance_from_xml` under the
+        /// SAME namespace.
+        #[arg(long, value_name = "PREFIX=IRI", value_parser = crate::query::parse_provenance_namespace)]
+        provenance_namespace: Option<(String, String)>,
         /// The SPARQL query text.
         query: String,
     },

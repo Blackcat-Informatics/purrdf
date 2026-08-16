@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ready, Dataset, QueryEngine } from "../index.mjs";
+import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -169,6 +169,62 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
   );
   assert.equal(ds.canonicalize(), stable);
   assert.notEqual(ds.canonicalize(), before);
+});
+
+test("queryRaw provenanceNamespace populates and round-trips through JSON", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const query = "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+
+  const json = engine.queryRaw(ds, query, {
+    format: "json",
+    provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
+  });
+  assert.match(json, /"prov":\{/);
+  assert.match(json, /"engine":"purrdf-sparql-eval"/);
+  assert.match(json, /"queryHash":"sha256:/);
+
+  const decoded = provenanceFromJson(json, "prov", "https://example.org/ns/prov#");
+  assert.equal(decoded.engine, "purrdf-sparql-eval");
+  assert.ok(decoded.queryHash.startsWith("sha256:"));
+  decoded.free();
+});
+
+test("queryRaw provenanceNamespace populates and round-trips through XML", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const query = "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+
+  const xml = engine.queryRaw(ds, query, {
+    format: "xml",
+    provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
+  });
+  assert.match(xml, /<prov:provenance/);
+
+  const decoded = provenanceFromXml(xml, "prov", "https://example.org/ns/prov#");
+  assert.equal(decoded.engine, "purrdf-sparql-eval");
+  decoded.free();
+});
+
+test("omitting provenanceNamespace emits pure W3C output", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const json = engine.queryRaw(
+    ds,
+    "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name }",
+    { format: "json" },
+  );
+  assert.ok(!json.includes('"prov"'));
+});
+
+test("a lone provenanceNamespace half is refused", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  assert.throws(() =>
+    engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+      provenanceNamespace: { prefix: "prov" },
+    }),
+  );
 });
 
 test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => {

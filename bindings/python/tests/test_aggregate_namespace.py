@@ -145,3 +145,64 @@ def test_aggregate_namespace_registration_does_not_leak_across_calls() -> None:
     assert len(store.query(MEDIAN_QUERY, aggregate_namespace=NS)) == 1
     with pytest.raises(ValueError):
         store.query(MEDIAN_QUERY)
+
+
+# ── the entailment-governed lane (F10: it took no `QueryOptions` at all) ──────────
+
+ANIMALS_TTL = f"""
+<{EX}Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <{EX}Animal> .
+<{EX}tom> a <{EX}Cat> ; <{EX}weight> 1 .
+<{EX}felix> a <{EX}Cat> ; <{EX}weight> 2 .
+<{EX}garfield> a <{EX}Cat> ; <{EX}weight> 3 .
+"""
+
+ENTAILED_MEDIAN_QUERY = (
+    f"SELECT (AGG(<{NS}MEDIAN>, ?w) AS ?m) WHERE {{ "
+    f"?s a <{EX}Animal> . ?s <{EX}weight> ?w }}"
+)
+
+
+def _animals_store() -> purrdf.Store:
+    store = purrdf.Store()
+    store.load(ANIMALS_TTL, purrdf.RdfFormat.TURTLE)
+    return store
+
+
+def test_query_entailment_governed_computes_median_over_an_entailed_closure() -> None:
+    """`aggregate_namespace` reaches `query_entailment_governed` exactly as it
+    reaches `query_governed`: `MEDIAN` folds over the `?s a Animal` binding the
+    RDFS closure itself produced, not a binding present in the raw data."""
+    store = _animals_store()
+
+    outcome = store.query_entailment_governed(
+        ENTAILED_MEDIAN_QUERY, "rdfs", aggregate_namespace=NS
+    )
+
+    assert outcome.phase == "answered"
+    assert outcome.is_complete
+    assert outcome.outcome is not None and outcome.outcome.is_complete
+    rows = list(outcome.outcome.result)
+    assert len(rows) == 1
+    assert str(rows[0][0].value) == "2"
+
+
+def test_mutable_dataset_query_entailment_governed_computes_median() -> None:
+    dataset = purrdf.MutableDataset()
+    dataset.load(ANIMALS_TTL, purrdf.RdfFormat.TURTLE)
+
+    outcome = dataset.query_entailment_governed(
+        ENTAILED_MEDIAN_QUERY, "rdfs", aggregate_namespace=NS
+    )
+
+    assert outcome.is_complete
+    assert outcome.outcome is not None
+    rows = list(outcome.outcome.result)
+    assert len(rows) == 1
+    assert str(rows[0][0].value) == "2"
+
+
+def test_omitting_aggregate_namespace_leaves_entailment_lane_unregistered() -> None:
+    store = _animals_store()
+
+    with pytest.raises(ValueError, match="entailment query failed"):
+        store.query_entailment_governed(ENTAILED_MEDIAN_QUERY, "rdfs")

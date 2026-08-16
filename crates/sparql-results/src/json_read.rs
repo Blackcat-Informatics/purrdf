@@ -18,6 +18,7 @@
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
+use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -257,6 +258,80 @@ pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
         Some(Json::Bool(b)) => Ok(*b),
         _ => Err(fmt("missing boolean `boolean` field")),
     }
+}
+
+/// Decode the additive `purrdf` provenance extension a
+/// [`ProvenanceNamespace`]-keyed SRJ document carries, or
+/// [`ResultProvenance::default`] when no such top-level member is present.
+///
+/// This is the inverse of [`crate::json::to_json`]'s additive extension (see
+/// [`crate::model::ProvenanceNamespace`]'s module docs): the writer emits the
+/// member keyed under the caller-supplied namespace's `prefix` ONLY when both
+/// the source `provenance` was non-empty and a namespace was supplied, so a
+/// reader must be told the SAME namespace to know which top-level member to
+/// decode — this crate cannot guess it, because PurRDF mints no vocabulary
+/// IRIs of its own. A document with no member under `namespace.prefix()`
+/// (never written, or written under a different namespace) decodes to the
+/// empty provenance, exactly like a document nothing ever populated.
+///
+/// The `queryForm` field is read to VALIDATE the member's shape but is not
+/// itself carried in [`ResultProvenance`] (it is derived from the result kind
+/// on write, not caller data).
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] on malformed JSON, a non-object document, or a
+/// member present under `namespace.prefix()` whose shape does not match the
+/// writer's (`queryForm`/`queryHash`/`engine`/`solutions[].sources[]`, all
+/// strings).
+pub fn provenance_from_json(
+    bytes: &[u8],
+    namespace: &ProvenanceNamespace,
+) -> Result<ResultProvenance, Error> {
+    let doc = JsonParser::new(bytes).parse_document()?;
+    let obj = doc
+        .as_object()
+        .ok_or_else(|| fmt("top level is not an object"))?;
+    let Some(member) = obj_get(obj, namespace.prefix()) else {
+        return Ok(ResultProvenance::default());
+    };
+    let member_obj = member
+        .as_object()
+        .ok_or_else(|| fmt("provenance member is not an object"))?;
+    let query_hash = obj_get(member_obj, "queryHash")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
+    let engine = obj_get(member_obj, "engine")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
+    let solutions = match obj_get(member_obj, "solutions") {
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let item_obj = item
+                    .as_object()
+                    .ok_or_else(|| fmt("provenance solution is not an object"))?;
+                let sources = match obj_get(item_obj, "sources") {
+                    Some(Json::Array(values)) => values
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .ok_or_else(|| fmt("provenance source is not a string"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => Vec::new(),
+                };
+                Ok(SolutionProvenance { sources })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => Vec::new(),
+    };
+    Ok(ResultProvenance {
+        query_hash,
+        engine,
+        solutions,
+    })
 }
 
 /// Decode one SPARQL-JSON binding object into a [`TermValue`] (recursive for
@@ -857,6 +932,65 @@ impl<'a> JsonParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json::to_json;
+    use purrdf_core::SparqlResult;
+
+    /// F6 round-trip: what [`crate::json::to_json`] writes under a namespace,
+    /// [`provenance_from_json`] reads back — the writer no longer emits
+    /// something nothing can decode.
+    #[test]
+    fn provenance_round_trips_through_json() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_owned()),
+            engine: Some("purrdf-sparql-eval".to_owned()),
+            solutions: vec![
+                SolutionProvenance {
+                    sources: vec!["http://example.org/g1".to_owned()],
+                },
+                SolutionProvenance { sources: vec![] },
+            ],
+        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
+
+        let decoded =
+            provenance_from_json(&outcome.bytes, &namespace).expect("provenance decodes back");
+        assert_eq!(decoded, provenance);
+    }
+
+    /// A document with no member under the caller's namespace prefix — because
+    /// the writer never populated one, or a different namespace was used —
+    /// decodes to the empty provenance rather than erroring.
+    #[test]
+    fn absent_provenance_member_decodes_to_default() {
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"{"head":{},"boolean":true}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes");
+        assert!(decoded.is_empty());
+    }
+
+    /// Reading under a DIFFERENT namespace than the one the document was
+    /// written with also decodes to empty (the member is keyed by prefix; a
+    /// mismatched prefix finds nothing rather than mis-decoding another key).
+    #[test]
+    fn provenance_under_a_different_namespace_is_not_found() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            engine: Some("e".to_owned()),
+            ..Default::default()
+        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
+
+        let other = ProvenanceNamespace::new("other", "http://example.org/ns/other#")
+            .expect("valid namespace");
+        let decoded = provenance_from_json(&outcome.bytes, &other).expect("decodes without error");
+        assert!(decoded.is_empty());
+    }
 
     #[test]
     fn reads_select_with_mixed_terms() {

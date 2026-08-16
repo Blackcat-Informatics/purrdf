@@ -243,6 +243,90 @@ impl QueryResult {
 }
 
 // ---------------------------------------------------------------------------
+// The additive provenance extension: read-back
+// ---------------------------------------------------------------------------
+
+/// The `queryHash`/`engine` halves of a decoded provenance extension — the inverse of
+/// `queryRaw`'s `provenanceNamespace` option. `undefined` in either slot means the
+/// document carried no member under `prefix`, or the member omitted that field.
+///
+/// Per-solution source provenance (`ResultProvenance::solutions`) is not exposed here:
+/// no writer on this surface (or the CLI's/C ABI's matching `build_query_provenance`)
+/// populates it today — it is the evaluator/S11 derivation graph's progressive fill
+/// (see `purrdf_sparql_results::ResultProvenance`'s module docs) — so there is nothing
+/// yet for this binding to round-trip beyond `queryHash`/`engine`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ProvenanceInfo {
+    query_hash: Option<String>,
+    engine: Option<String>,
+}
+
+#[wasm_bindgen]
+impl ProvenanceInfo {
+    /// The decoded `queryHash`, or `undefined` if absent.
+    #[wasm_bindgen(getter, js_name = queryHash)]
+    #[must_use]
+    pub fn query_hash(&self) -> Option<String> {
+        self.query_hash.clone()
+    }
+
+    /// The decoded `engine` label, or `undefined` if absent.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn engine(&self) -> Option<String> {
+        self.engine.clone()
+    }
+}
+
+impl From<ResultProvenance> for ProvenanceInfo {
+    fn from(provenance: ResultProvenance) -> Self {
+        Self {
+            query_hash: provenance.query_hash,
+            engine: provenance.engine,
+        }
+    }
+}
+
+/// Decode the additive `purrdf` provenance extension a SPARQL-results JSON document
+/// carries under the namespace `prefix`/`iri`, the inverse of `queryRaw`'s
+/// `provenanceNamespace` option. A document with no member under `prefix` (never
+/// written, or written under a different namespace) decodes to an empty
+/// [`ProvenanceInfo`] rather than erroring.
+///
+/// # Errors
+///
+/// An invalid `prefix`/`iri`, malformed JSON, or a member under `prefix` whose shape
+/// does not match the writer's.
+#[wasm_bindgen(js_name = provenanceFromJson)]
+pub fn provenance_from_json(
+    json: &str,
+    prefix: &str,
+    iri: &str,
+) -> Result<ProvenanceInfo, JsError> {
+    let namespace = purrdf_sparql_results::ProvenanceNamespace::new(prefix, iri)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let provenance = purrdf_sparql_results::provenance_from_json(json.as_bytes(), &namespace)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(provenance.into())
+}
+
+/// Decode the additive `purrdf` provenance extension a SPARQL-results XML document
+/// carries under the namespace `prefix`/`iri` — the XML twin of [`provenance_from_json`].
+///
+/// # Errors
+///
+/// An invalid `prefix`/`iri`, malformed XML, or a non-`<sparql>` root.
+#[wasm_bindgen(js_name = provenanceFromXml)]
+pub fn provenance_from_xml(xml: &str, prefix: &str, iri: &str) -> Result<ProvenanceInfo, JsError> {
+    let namespace = purrdf_sparql_results::ProvenanceNamespace::new(prefix, iri)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let provenance = purrdf_sparql_results::provenance_from_xml(xml.as_bytes(), &namespace)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(provenance.into())
+}
+
+// ---------------------------------------------------------------------------
 // The governed lane: configuration
 // ---------------------------------------------------------------------------
 
@@ -955,17 +1039,36 @@ impl QueryEngine {
     }
 
     /// Run any SPARQL query and serialize its raw result.
+    ///
+    /// `provenance_prefix`/`provenance_iri` (both `undefined`, or both a string) anchor
+    /// the additive `purrdf` provenance extension on a SELECT/ASK result serialized to
+    /// SPARQL-results JSON/XML, under that `PREFIX`/`IRI`. `undefined` (the default)
+    /// leaves the output pure W3C, exactly as before these parameters existed; a
+    /// CONSTRUCT/DESCRIBE graph result and CSV/TSV never carry the extension. Read it
+    /// back with `provenanceFromJson`/`provenanceFromXml` under the SAME namespace.
+    ///
+    /// # Errors
+    ///
+    /// A parse/evaluation failure, an unsupported format, or exactly one of
+    /// `provenance_prefix`/`provenance_iri` supplied without the other.
     #[wasm_bindgen(js_name = queryRaw)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+    )]
     pub fn query_raw(
         &self,
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
         format: Option<String>,
+        provenance_prefix: Option<String>,
+        provenance_iri: Option<String>,
     ) -> Result<String, JsError> {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
-        serialize_query_result(&result, format.as_deref())
+        let namespace = build_provenance_namespace(provenance_prefix, provenance_iri)?;
+        serialize_query_result(&result, format.as_deref(), namespace.as_ref(), sparql)
     }
 
     /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD.
@@ -1058,6 +1161,13 @@ impl QueryEngine {
     /// Run a governed SPARQL query over a closure produced by `regime`, carrying the
     /// closure report and query outcome together.
     ///
+    /// `aggregate_namespace` behaves exactly as on [`Self::query_governed`]: it registers
+    /// purrdf's first-party statistical aggregate set under that IRI namespace for the
+    /// closure query's PARSE and its evaluation, so `AGG(<namespace><NAME>, args…)` reaches
+    /// the entailment-aware lane exactly as it reaches the ordinary one. `undefined` (the
+    /// default) leaves every one of the ten names an ordinary unregistered custom-aggregate
+    /// IRI.
+    ///
     /// # Errors
     ///
     /// An invalid regime/program, query parse/evaluation failure, entailment failure, or
@@ -1075,6 +1185,7 @@ impl QueryEngine {
         base: Option<String>,
         regime: &str,
         program: Option<String>,
+        aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
         max_answers: Option<i64>,
@@ -1095,16 +1206,16 @@ impl QueryEngine {
         };
         let governors = args.engage(cancel.as_ref());
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        // `QueryOptions::EMPTY`: this binding exposes no registry parameter on the
-        // entailment-governed lane (unlike `queryGoverned`'s `aggregateNamespace`), so
-        // there is nothing here for a caller to have configured — unchanged from before
-        // `query_with_entailment_governed` took a `QueryOptions` parameter.
+        let aggregates = build_aggregates(aggregate_namespace);
         let outcome = query_with_entailment_governed(
             &self.inner,
             &frozen,
             sparql_request(sparql, base.as_deref()),
             plan.entailment(),
-            QueryOptions::EMPTY,
+            QueryOptions {
+                aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                ..QueryOptions::EMPTY
+            },
             &governors,
         )
         .map_err(|error| JsError::new(&error.to_string()))?;
@@ -1291,7 +1402,7 @@ impl Dataset {
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {
-        QueryEngine::new().query_raw(self, sparql, base, None)
+        QueryEngine::new().query_raw(self, sparql, base, None, None, None)
     }
 }
 
@@ -1495,7 +1606,56 @@ fn term_from_value(value: purrdf::TermValue) -> Result<Term, String> {
     Ok(Term::from_canonical_rdf_term(term))
 }
 
-fn serialize_query_result(result: &SparqlResult, format: Option<&str>) -> Result<String, JsError> {
+/// Decode `provenance_prefix`/`provenance_iri` (both `None`, or both `Some`) into an
+/// optional [`purrdf_sparql_results::ProvenanceNamespace`]. Exactly one `Some` is a
+/// usage error: a namespace needs both halves, and silently treating a lone prefix or
+/// IRI as "no namespace" would be the exact silent-drop this binding refuses elsewhere.
+fn build_provenance_namespace(
+    prefix: Option<String>,
+    iri: Option<String>,
+) -> Result<Option<purrdf_sparql_results::ProvenanceNamespace>, JsError> {
+    match (prefix, iri) {
+        (None, None) => Ok(None),
+        (Some(prefix), Some(iri)) => {
+            let namespace = purrdf_sparql_results::ProvenanceNamespace::new(prefix, iri)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            Ok(Some(namespace))
+        }
+        _ => Err(JsError::new(
+            "provenance_prefix and provenance_iri must be both supplied or both omitted",
+        )),
+    }
+}
+
+/// Build the [`ResultProvenance`] a tabular emission carries: empty when no namespace
+/// was supplied (pure-W3C output), or populated with a content hash of the query text
+/// plus this engine's label when one was. Mirrors the CLI's and C ABI's
+/// `build_query_provenance`. `solutions` stays empty: per-solution source provenance is
+/// the evaluator/S11 derivation graph's progressive fill, not something this binding can
+/// populate on its own.
+fn build_query_provenance(
+    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    query: &str,
+) -> ResultProvenance {
+    use sha2::{Digest as _, Sha256};
+
+    if namespace.is_none() {
+        return ResultProvenance::default();
+    }
+    let digest = Sha256::digest(query.as_bytes());
+    ResultProvenance {
+        query_hash: Some(format!("sha256:{digest:x}")),
+        engine: Some("purrdf-sparql-eval".to_owned()),
+        solutions: Vec::new(),
+    }
+}
+
+fn serialize_query_result(
+    result: &SparqlResult,
+    format: Option<&str>,
+    provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    query: &str,
+) -> Result<String, JsError> {
     match result {
         SparqlResult::Graph(graph) => serialize_graph_result(graph, format.unwrap_or("turtle")),
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
@@ -1503,7 +1663,7 @@ fn serialize_query_result(result: &SparqlResult, format: Option<&str>) -> Result
                 None => SparqlResultsFormat::Json,
                 Some(format) => resolve_results_format(format)?,
             };
-            serialize_tabular_result(result, results_format)
+            serialize_tabular_result(result, results_format, provenance_namespace, query)
         }
     }
 }
@@ -1527,8 +1687,11 @@ fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, JsError> 
 fn serialize_tabular_result(
     result: &SparqlResult,
     format: SparqlResultsFormat,
+    provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    query: &str,
 ) -> Result<String, JsError> {
-    let outcome = serialize_results(result, format, &ResultProvenance::default(), None)
+    let provenance = build_query_provenance(provenance_namespace, query);
+    let outcome = serialize_results(result, format, &provenance, provenance_namespace)
         .map_err(|e| JsError::new(&e.to_string()))?;
     String::from_utf8(outcome.bytes)
         .map_err(|e| JsError::new(&format!("SPARQL result is not valid UTF-8: {e}")))

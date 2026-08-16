@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Three subjects carrying {10, 10, 20} — mirroring
+# `crates/sparql-eval/tests/aggregate_function_e2e.rs`'s `stat_dataset`'s `g2`
+# group — a genuine repeated value for MODE to find, rather than an all-distinct
+# smallest-value tie-break.
+@prefix : <https://example.org/agg-stat#> .
+
+:m1 :value 10 .
+:m2 :value 10 .
+:m3 :value 20 .

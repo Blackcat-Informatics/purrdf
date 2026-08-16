@@ -378,6 +378,8 @@ impl PyMutableDataset {
     }
 
     /// Governed entailment-aware query, with the same two-phase carrier as `Store`.
+    ///
+    /// `aggregate_namespace` behaves exactly as on `Store.query_entailment_governed`.
     #[pyo3(signature = (
         query,
         entailment,
@@ -386,6 +388,7 @@ impl PyMutableDataset {
         substitutions=None,
         extension_namespaces=None,
         standpoint_predicates=None,
+        aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -407,6 +410,7 @@ impl PyMutableDataset {
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -437,11 +441,7 @@ impl PyMutableDataset {
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let engine = build_engine(config);
-            // `QueryOptions::EMPTY`: this method exposes no `relations` /
-            // `relations_from_graph` / `aggregate_namespace` keywords (unlike
-            // `query_governed`), so there is nothing here for a caller to have
-            // configured — unchanged from before `query_with_entailment_governed` took a
-            // `QueryOptions` parameter.
+            let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
                 &engine,
                 &dataset,
@@ -451,7 +451,12 @@ impl PyMutableDataset {
                     substitutions: &subs,
                 },
                 plan.entailment(),
-                purrdf_sparql_eval::QueryOptions::EMPTY,
+                purrdf_sparql_eval::QueryOptions {
+                    aggregates: aggregates
+                        .as_ref()
+                        .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                    ..purrdf_sparql_eval::QueryOptions::EMPTY
+                },
                 governors,
             )
             .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))

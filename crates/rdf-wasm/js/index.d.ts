@@ -98,6 +98,21 @@ export interface QueryOptions {
 }
 
 /**
+ * Anchors the additive `purrdf` provenance extension on a SELECT/ASK result
+ * serialized to SPARQL-results JSON/XML, under this `prefix`/`iri`. Honored ONLY by
+ * `queryRaw` — the one entry point that serializes to a raw wire-format document;
+ * `select`/`ask`/`construct`/`describe`/`update`/`explainQuery` return typed objects
+ * with no document to anchor an extension in, exactly like `QueryRawOptions.format`
+ * beside them. There is no default namespace (PurRDF mints no vocabulary IRIs of its
+ * own) — omit this and the output stays pure W3C. Read the extension back with
+ * `provenanceFromJson`/`provenanceFromXml` under the SAME `prefix`/`iri`.
+ */
+export interface ProvenanceNamespaceOption {
+  readonly prefix: string;
+  readonly iri: string;
+}
+
+/**
  * Registers purrdf's first-party statistical aggregate set (`MEDIAN`, `PERCENTILE`,
  * `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`) under
  * this IRI namespace, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.
@@ -105,10 +120,10 @@ export interface QueryOptions {
  * and every one of the ten names is an ordinary unregistered custom-aggregate IRI,
  * refused at parse time exactly as before.
  *
- * Reachable ONLY through `queryGoverned`/`updateGoverned` (the two entry points that take
- * a `QueryOptions` registry at all): naming it on `query`/`select`/`ask`/`construct`/
- * `describe`/`update`/`queryRaw`/`explainQuery`/`queryEntailmentGoverned` throws rather
- * than silently doing nothing.
+ * Reachable through `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned` (the entry
+ * points that take a `QueryOptions` registry): naming it on `query`/`select`/`ask`/
+ * `construct`/`describe`/`update`/`queryRaw`/`explainQuery` throws rather than silently
+ * doing nothing.
  *
  * This is the CLOSED, namespace-only statistical set. The GENERAL custom-aggregate seam
  * (an arbitrary host `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has
@@ -127,15 +142,11 @@ export interface GovernedQueryOptions
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
-  /**
-   * NOT honored: the entailment-aware query lane takes no aggregate registry on any
-   * regime, so setting this throws rather than silently doing nothing.
-   */
-  readonly aggregateNamespace?: never;
 }
 
 export interface QueryRawOptions extends QueryOptions {
   readonly format?: QueryRawFormat | string | null;
+  readonly provenanceNamespace?: ProvenanceNamespaceOption | null;
 }
 
 /** Which kind of governor stopped an execution. */
@@ -775,6 +786,11 @@ export class QueryEngine {
   /**
    * Run a governed query over the named entailment closure. The answer and reasoning
    * report travel together; a closure-phase stop carries neither.
+   *
+   * `options.aggregateNamespace` behaves exactly as on {@link queryGoverned}: it registers
+   * purrdf's first-party statistical aggregate set for the closure query's PARSE and its
+   * evaluation, so `AGG(<namespace><NAME>, args…)` reaches the entailment-aware lane
+   * exactly as it reaches the ordinary one.
    */
   queryEntailmentGoverned(
     dataset: Dataset,
@@ -854,6 +870,32 @@ export class Sink {
  * engine's own declaration order — the keys of every `GovernorEvidence` map.
  */
 export function governorDimensions(): string[];
+
+/**
+ * The `queryHash`/`engine` halves of a decoded additive `purrdf` provenance
+ * extension — `undefined` in a slot the document omitted, or in both when no member
+ * was present under `prefix` at all.
+ */
+export class ProvenanceInfo {
+  private constructor();
+  readonly queryHash?: string;
+  readonly engine?: string;
+  free(): void;
+}
+
+/**
+ * Decode the additive `purrdf` provenance extension a SPARQL-results JSON document
+ * carries under the namespace `prefix`/`iri` — the inverse of `queryRaw`'s
+ * `provenanceNamespace` option. A document with no member under `prefix` decodes to
+ * an empty {@link ProvenanceInfo} rather than throwing.
+ *
+ * @throws {Error} An invalid `prefix`/`iri`, malformed JSON, or a member under
+ *   `prefix` whose shape does not match the writer's.
+ */
+export function provenanceFromJson(json: string, prefix: string, iri: string): ProvenanceInfo;
+
+/** The XML twin of {@link provenanceFromJson}. */
+export function provenanceFromXml(xml: string, prefix: string, iri: string): ProvenanceInfo;
 
 export function ready(wasmBytesOrUrl?: BufferSource | URL | string): Promise<void>;
 export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;

@@ -76,11 +76,12 @@ pub use error::Error;
 pub use json::to_json;
 pub use json_read::{
     BoundedParsedSolutions, ParsedSolutions, from_json, from_json_boolean, from_json_bounded,
+    provenance_from_json,
 };
 pub use model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 pub use tsv::to_tsv;
 pub use xml::to_xml;
-pub use xml_read::{from_xml, from_xml_boolean};
+pub use xml_read::{from_xml, from_xml_boolean, provenance_from_xml};
 
 /// Re-export of the egress result model this crate serializes, so consumers name
 /// a single path (`purrdf_sparql_results::SparqlResult`).

@@ -37,11 +37,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
-use purrdf_sparql_conformance::manifest::{ExpectedResult, TestKind};
+use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors, QueryOptions,
-    StandpointPredicates,
+    AggregateRegistry, EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions,
+    QueryGovernors, QueryOptions, StandpointPredicates,
 };
+
+/// Build the per-case statistical-aggregate registry `case.aggregate_namespace`
+/// requests (see `crate::manifest::SparqlTestCase` and `crate::run::run`, whose
+/// per-case registration this mirrors), or `None` when the case declares none. An
+/// AGG(...) evaluation case must be compared under both paths with an engine that
+/// can actually resolve its aggregate, or it would fail identically for a reason
+/// unrelated to D0.
+fn case_aggregates(case: &SparqlTestCase) -> Option<AggregateRegistry> {
+    case.aggregate_namespace.as_ref().map(|namespace| {
+        let mut registry = AggregateRegistry::new();
+        registry.register_statistical_aggregates(namespace);
+        registry
+    })
+}
 
 /// The sentinel base the manifest loader resolves case IRIs against.
 const BASE: &str = "http://purrdf.test/manifest/";
@@ -134,22 +148,17 @@ fn ungoverned(
     dataset: &Arc<RdfDataset>,
     query: &str,
     remote: Option<&purrdf_sparql_eval::LocalRemoteQuerySource>,
+    aggregates: Option<&AggregateRegistry>,
 ) -> Result<SparqlResult, String> {
+    let empty_aggregates = AggregateRegistry::EMPTY;
+    let options = QueryOptions {
+        property_functions: purrdf_sparql_conformance::run::harness_relations(),
+        aggregates: aggregates.unwrap_or(&empty_aggregates),
+        ..QueryOptions::EMPTY
+    };
     match remote {
-        Some(source) => engine.query_with_source(
-            dataset,
-            request(query),
-            source,
-            QueryOptions {
-                property_functions: purrdf_sparql_conformance::run::harness_relations(),
-                ..QueryOptions::EMPTY
-            },
-        ),
-        None => engine.query_with_property_functions(
-            dataset,
-            request(query),
-            purrdf_sparql_conformance::run::harness_relations(),
-        ),
+        Some(source) => engine.query_with_source(dataset, request(query), source, options),
+        None => engine.query_with_options_view(&**dataset, request(query), options),
     }
     .map_err(|error| error.to_string())
 }
@@ -206,7 +215,17 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 continue;
             };
 
-            let expected = ungoverned(&plain, &dataset, &query, remote.as_ref());
+            let case_aggregates = case_aggregates(&case);
+            let empty_aggregates = AggregateRegistry::EMPTY;
+            let aggregates_ref = case_aggregates.as_ref().unwrap_or(&empty_aggregates);
+
+            let expected = ungoverned(
+                &plain,
+                &dataset,
+                &query,
+                remote.as_ref(),
+                case_aggregates.as_ref(),
+            );
 
             // The governed path, with every ceiling and every counter declined. A trip is
             // not merely unexpected here, it is unrepresentable: `UNBOUNDED` engages
@@ -216,18 +235,24 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     source,
-                    QueryOptions::EMPTY,
+                    QueryOptions {
+                        aggregates: aggregates_ref,
+                        ..QueryOptions::EMPTY
+                    },
                     &QueryGovernors::UNBOUNDED,
                 ),
                 // The relation table travels on the governed path too, in the same
                 // options every governed entry takes: a first-party relation case must
                 // be COMPARED here, and a governed run whose calls resolved to nothing
-                // would be comparing a different query against the oracle.
+                // would be comparing a different query against the oracle. The
+                // per-case aggregate registry (`case_aggregates`) travels alongside it
+                // for the identical reason — see `case_aggregates`'s doc comment.
                 None => governed_engine.query_governed(
                     &dataset,
                     request(&query),
                     QueryOptions {
                         property_functions: purrdf_sparql_conformance::run::harness_relations(),
+                        aggregates: aggregates_ref,
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::UNBOUNDED,

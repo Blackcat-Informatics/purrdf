@@ -7,11 +7,11 @@
 // `purrdf_sparql_eval::stat_agg`), driven against the ACTUAL optimized wasm module.
 //
 // `AggregateRegistry::register_statistical_aggregates` takes only an IRI namespace
-// string, so `queryGoverned`/`updateGoverned`'s `aggregateNamespace` option is the
-// WHOLE surface: no callback, no per-aggregate marshaling. This file drives a real
-// `MEDIAN` query and a real UPDATE whose WHERE clause folds one through a nested
-// `SELECT … GROUP BY`, and asserts the COMPUTED values — not merely that the option
-// parses.
+// string, so `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned`'s
+// `aggregateNamespace` option is the WHOLE surface: no callback, no per-aggregate
+// marshaling. This file drives a real `MEDIAN` query, a real UPDATE whose WHERE clause
+// folds one through a nested `SELECT … GROUP BY`, and a real query over an RDFS-entailed
+// closure, and asserts the COMPUTED values — not merely that the option parses.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -90,14 +90,40 @@ test("an ungoverned entry refuses aggregateNamespace rather than ignoring it", (
   );
 });
 
-test("queryEntailmentGoverned refuses aggregateNamespace rather than ignoring it", () => {
+const ANIMALS_TRIG = `
+@prefix ex: <https://example.org/> .
+ex:Cat <http://www.w3.org/2000/01/rdf-schema#subClassOf> ex:Animal .
+ex:tom a ex:Cat ; ex:weight 1 .
+ex:felix a ex:Cat ; ex:weight 2 .
+ex:garfield a ex:Cat ; ex:weight 3 .
+`;
+
+const ENTAILED_MEDIAN_QUERY = `PREFIX ex: <https://example.org/>
+SELECT (AGG(<${NS}MEDIAN>, ?w) AS ?m) WHERE { ?s a ex:Animal . ?s ex:weight ?w }`;
+
+test("queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an entailed closure", () => {
   const engine = new QueryEngine();
-  const ds = Dataset.parse(TRIG, "trig");
+  const ds = Dataset.parse(ANIMALS_TRIG, "trig");
+
+  const outcome = engine.queryEntailmentGoverned(ds, ENTAILED_MEDIAN_QUERY, "rdfs", {
+    aggregateNamespace: NS,
+  });
+  assert.equal(outcome.phase, "answered");
+  assert.equal(outcome.isComplete, true);
+  const rows = outcome.outcome.result.rows.toArray();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].m.value, "2");
+});
+
+test("omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(ANIMALS_TRIG, "trig");
   assert.throws(
-    () =>
-      engine.queryEntailmentGoverned(ds, MEDIAN_QUERY, "rdfs", {
-        aggregateNamespace: NS,
-      }),
-    TypeError,
+    () => engine.queryEntailmentGoverned(ds, ENTAILED_MEDIAN_QUERY, "rdfs"),
+    (error) => {
+      return /custom.aggregate|not registered|unregistered|native-sparql-aggregate-function/i.test(
+        error.message,
+      );
+    },
   );
 });

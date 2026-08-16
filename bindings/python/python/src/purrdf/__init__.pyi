@@ -530,6 +530,7 @@ class Store:
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -684,6 +685,7 @@ class MutableDataset:
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -758,14 +760,38 @@ def xsd_normalize_whitespace(lexical: str, datatype: str) -> str | None: ...
 #: A SELECT row: one cell per projected variable, `None` for an unbound binding.
 _ResultRow = list[_Term | None]
 
+#: `(prefix, iri)` anchoring the additive `purrdf` provenance extension. PurRDF
+#: mints no vocabulary IRIs of its own — there is no default namespace.
+_ProvenanceNamespace = tuple[str, str]
+
 def serialize_sparql_solutions(
-    format: str, variables: list[str], rows: list[_ResultRow]
+    format: str,
+    variables: list[str],
+    rows: list[_ResultRow],
+    *,
+    provenance_namespace: _ProvenanceNamespace | None = ...,
+    query_hash: str | None = ...,
 ) -> bytes: ...
-def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
+def serialize_sparql_boolean(
+    format: str,
+    value: bool,
+    *,
+    provenance_namespace: _ProvenanceNamespace | None = ...,
+    query_hash: str | None = ...,
+) -> bytes: ...
 
 # A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
 # — a heterogeneous tuple discriminated by its first element.
 def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
+
+#: Decoded provenance: `{"query_hash": str | None, "engine": str | None}`.
+_ProvenanceDict = dict[str, str | None]
+
+# The inverse of `serialize_sparql_solutions`'s/`serialize_sparql_boolean`'s
+# `provenance_namespace`: a document with no member under `prefix` decodes to
+# both fields `None` rather than raising.
+def provenance_from_json(data: bytes, prefix: str, iri: str) -> _ProvenanceDict: ...
+def provenance_from_xml(data: bytes, prefix: str, iri: str) -> _ProvenanceDict: ...
 
 # ── RDF → GTS producer (bindings/python/src/py_gts.rs) ──────────────────────────
 
