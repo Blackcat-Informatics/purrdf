@@ -925,7 +925,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !agg.args().iter().all(|e| self.may_fork_row_loop(e)) {
             return false;
         }
-        if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = &agg.function {
+        if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = agg.function() {
             return !crate::parallel::aggregate_is_unsafe(
                 iri.as_str(),
                 self.safety_registries().aggregates,

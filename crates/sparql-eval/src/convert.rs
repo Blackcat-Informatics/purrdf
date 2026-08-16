@@ -45,23 +45,30 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
 
 /// Convert a **ground** quoted-triple pattern to a [`TermValue::Triple`].
 ///
+/// `site` names the construct the pattern was found in (`"a BGP"`, `"a
+/// property-path endpoint"`, …) so the [`EvalError::Unsupported`] a variable
+/// component produces names where it actually was, rather than a fixed site
+/// baked into this shared helper — see [`ground_term_pattern_to_value`]'s docs
+/// for why one caller's wording must not leak into another's diagnostic.
+///
 /// Returns [`EvalError::Unsupported`] if any component is a variable: matching a
 /// quoted triple term whose components *bind* variables (structural triple-term
-/// matching) is out of the current S6 BGP scope; only fully-ground quoted triples
-/// resolve to a single interned id.
+/// matching) is out of the current S6 scope for every caller of this helper, not
+/// only BGPs; only fully-ground quoted triples resolve to a single interned id.
 pub(crate) fn ground_triple_pattern_to_value(
     pattern: &TriplePattern,
+    site: &str,
 ) -> Result<TermValue, EvalError> {
-    let s = ground_term_pattern_to_value(&pattern.subject)?;
+    let s = ground_term_pattern_to_value(&pattern.subject, site)?;
     let p = match &pattern.predicate {
         purrdf_sparql_algebra::NamedNodePattern::NamedNode(n) => named_node_to_value(n),
         purrdf_sparql_algebra::NamedNodePattern::Variable(_) => {
-            return Err(EvalError::unsupported(
-                "variable predicate inside a quoted triple term in a BGP",
-            ));
+            return Err(EvalError::unsupported(format!(
+                "variable predicate inside a quoted triple term in {site}"
+            )));
         }
     };
-    let o = ground_term_pattern_to_value(&pattern.object)?;
+    let o = ground_term_pattern_to_value(&pattern.object, site)?;
     Ok(TermValue::Triple {
         s: Box::new(s),
         p: Box::new(p),
@@ -71,9 +78,17 @@ pub(crate) fn ground_triple_pattern_to_value(
 
 /// Convert a **ground** term pattern (no variables) to a [`TermValue`].
 ///
-/// A variable in a quoted-triple component is [`EvalError::Unsupported`] (see
-/// [`ground_triple_pattern_to_value`]).
-pub(crate) fn ground_term_pattern_to_value(pattern: &TermPattern) -> Result<TermValue, EvalError> {
+/// `site` is threaded through to [`ground_triple_pattern_to_value`] and named in
+/// the [`EvalError::Unsupported`] a variable component produces (see that
+/// function's docs). This helper is shared across every caller that needs a
+/// fully-ground term — a BGP triple position, a property-path endpoint, a
+/// property-function argument — and each names its own site so the message a
+/// caller sees always describes the construct it actually wrote, not whichever
+/// caller happened to be first to need this conversion.
+pub(crate) fn ground_term_pattern_to_value(
+    pattern: &TermPattern,
+    site: &str,
+) -> Result<TermValue, EvalError> {
     match pattern {
         TermPattern::NamedNode(n) => Ok(named_node_to_value(n)),
         TermPattern::BlankNode(b) => Ok(TermValue::Blank {
@@ -81,10 +96,10 @@ pub(crate) fn ground_term_pattern_to_value(pattern: &TermPattern) -> Result<Term
             scope: purrdf_core::BlankScope::DEFAULT,
         }),
         TermPattern::Literal(l) => Ok(literal_to_value(l)),
-        TermPattern::Triple(t) => ground_triple_pattern_to_value(t),
-        TermPattern::Variable(_) => Err(EvalError::unsupported(
-            "variable inside a quoted triple term in a BGP",
-        )),
+        TermPattern::Triple(t) => ground_triple_pattern_to_value(t, site),
+        TermPattern::Variable(_) => Err(EvalError::unsupported(format!(
+            "variable inside a quoted triple term in {site}"
+        ))),
     }
 }
 

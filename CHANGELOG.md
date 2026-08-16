@@ -196,7 +196,7 @@ surfaces; each is called out below with what a consumer must do.
   Rust engine. The C ABI's version moves `0.3.0` -> `0.4.0` to reflect the additive surface, and
   its header is regenerated; at this point in the series, the entailment and explain CLI lanes,
   and the ungoverned/entailment wasm calls, refuse the parameter outright since they structurally
-  cannot honour it — closed by two later entries below, which carry the C ABI to `0.6.0`.
+  cannot honour it — closed by the entry below, which carries the C ABI to `0.6.0`.
 - **BREAKING** **sparql-eval,purrdf:** The entailment-aware query lanes
   (`purrdf::query_with_entailment`/`query_with_entailment_governed`) hardcoded empty query
   options, so no scalar-function, property-function, or aggregate registry could reach a query
@@ -212,7 +212,8 @@ surfaces; each is called out below with what a consumer must do.
   everywhere it previously took no `QueryOptions` seam at all: the C interface, the WebAssembly
   binding, and the Python binding gain the same namespace parameter their ordinary governed
   entries already had, so `AGG(<ns>MEDIAN, ?x)` resolves over an entailed closure exactly as it
-  resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.5.0` and its header is
+  resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.6.0` (`0.5.0` is skipped —
+  one commit carries both the host-surface change and the version bump) and its header is
   regenerated.
 - **BREAKING** **sparql-eval,cli:** Give the engine one options-carrying explain entry,
   `NativeSparqlEngine::explain_query_with_options`/`_view`, that carries the SHACL-AF function,
@@ -257,9 +258,9 @@ surfaces; each is called out below with what a consumer must do.
 ### Testing
 
 - **results:** Pin its:dir precedence over legacy spellings in SRX
-- **sparql,conformance:** Pin the branch surface in the conformance corpus, including the
-  `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's grammar, and
-  `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
+- **sparql,conformance:** Pin the newly-added SPARQL evaluation surface in the conformance
+  corpus: the `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's
+  grammar, and `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
 
 ### Documentation
 
@@ -319,7 +320,7 @@ surfaces; each is called out below with what a consumer must do.
 - **docs:** Compose the ban patterns around their markers, rather than checking they contain one
 - **BREAKING** **entail:** A deep input must be an error, not a dead process
 - **BREAKING** **rdf:** Bound term nesting where it is parsed, and survey every position the merge writes
-- **entail:** Five reviewer findings — a lossy diagnostic, a split precedence, and three claims nothing checked
+- **entail:** Five entailment-diagnostic fixes — a lossy diagnostic, a split precedence, and three claims nothing checked
 
 ### Documentation
 

@@ -36,9 +36,21 @@
 //! that desugars onto it, AND the five accessor/constructor functions into one
 //! normative unit — the unit the Basic profile's "without triple terms"
 //! sentence excludes. No OTHER SPARQL 1.2 addition (base-direction literals,
-//! `LANGDIR`/`hasLANG`/`hasLANGDIR`/`STRLANGDIR`, `ADJUST`, `sameValue`, the
-//! `VERSION` declaration itself, …) is mentioned by the Basic profile's syntax
+//! `LANGDIR`/`hasLANG`/`hasLANGDIR`/`STRLANGDIR`, `ADJUST`, the `VERSION`
+//! declaration itself, …) is mentioned by the Basic profile's syntax
 //! restriction, so none of those is gated here.
+//!
+//! `sameValue` (§17.4.2.2) is deliberately NOT in that "available and simply
+//! not gated" list, even though it is a real SPARQL 1.2 addition: its own spec
+//! text says *"This function cannot be used directly in expressions"* — it
+//! replaces `RDFterm-equal` from SPARQL 1.1 to define what the `=` operator
+//! does with two RDF terms the operator-mapping table (§17.3) does not cover
+//! directly, not a name a query can call. There is therefore no profile
+//! question to ask about it: it was never callable syntax under ANY version
+//! label, Basic included. Its semantics (including the `sameValue`-only
+//! cross-type NaN carve-out — `"NaN"^^xsd:double = "NaN"^^xsd:float` is `true`)
+//! are what `crate::expr`'s `=`/`sameValue` evaluation already implements; see
+//! `crate::expr::sparql_value_eq`'s docs.
 //!
 //! # What is gated, and why
 //!

@@ -580,13 +580,20 @@ fn compare<D: DatasetView + Sync>(
     Ok(ord.map(|ord| bool_term(ctx, keep(ord))))
 }
 
-/// Evaluate `a = b` under SPARQL RDFterm-equality (SPARQL §17.4.1.7 / `RDFterm-equal`):
-/// both operands resolve to a term, identical terms are equal, value-comparable
-/// literals compare in the XSD value space, distinct terms where at least one is a
+/// Evaluate `a = b` under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
+/// `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1" — same
+/// question, current name): both operands resolve to a term, identical terms
+/// are equal, value-comparable literals compare in the XSD value space
+/// ([`sparql_value_eq`], including the `sameValue`-only cross-type NaN
+/// carve-out its docs explain), distinct terms where at least one is a
 /// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
 /// incomparable literals are a type error (`None`). This is the equality companion to
 /// the ordering [`compare`]; using `compare` for `=` would wrongly turn a distinct
-/// IRI pair into an error.
+/// IRI pair into an error. Note that `sameValue` "cannot be used directly in
+/// expressions" (its own spec text) — it names the semantics `=` embeds, not a
+/// callable SPARQL function, so there is no `Function::SameValue` parser/algebra
+/// arm to add; see `crate::basic_profile`'s module docs for where that
+/// distinction is recorded against the Basic-profile survey.
 fn equal<D: DatasetView + Sync>(
     a: &Expression,
     b: &Expression,
@@ -621,7 +628,7 @@ fn equal<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
     let eq = match (ax, bx) {
-        (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
+        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
         _ => {
             if term_is_literal(ctx, ta) && term_is_literal(ctx, tb) {
                 // Two different literals neither side could value-compare.
@@ -696,7 +703,7 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
         return triple_equal(s1, p1, o1, s2, p2, o2);
     }
     match (xsd_of(a), xsd_of(b)) {
-        (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
+        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
         _ => {
             if a == b {
                 Some(true)
@@ -709,6 +716,36 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
             }
         }
     }
+}
+
+/// Whether `x` is the `xsd:double`/`xsd:float` NaN value.
+fn is_xsd_nan(x: &XsdValue) -> bool {
+    matches!(x, XsdValue::Double(d) if d.is_nan()) || matches!(x, XsdValue::Float(f) if f.is_nan())
+}
+
+/// `=` / `sameValue` equality between two already-typed XSD values (SPARQL 1.2
+/// §17.4.2.2 `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1"):
+/// [`value_cmp`]'s value-space comparison, EXCEPT for one carve-out `sameValue`
+/// states explicitly and `value_cmp` cannot: *"`NaN`^^xsd:double and
+/// `NaN`^^xsd:float are considered to represent the same value. If term1 and
+/// term2 are both `NaN` for either xsd:double or xsd:float, then return TRUE."*
+/// This fires even ACROSS the two types — `"NaN"^^xsd:double = "NaN"^^xsd:float`
+/// is `true` — which the ordinary numeric-tower promotion in [`value_cmp`]
+/// cannot answer on its own, since `f64::partial_cmp` (and its `f32` sibling)
+/// treats NaN as unordered by IEEE 754 design, exactly as `value_cmp` should
+/// keep doing for `<`/`>`/`ORDER BY`: the carve-out is `sameValue`'s alone, so
+/// it lives here rather than in `value_cmp` itself. `same-type` NaN pairs
+/// (`double`/`double` or `float`/`float`) already answer `true` one level up,
+/// via [`equal`]'s/[`rdf_equal`]'s identical-RDF-term short-circuit — NaN's
+/// canonical lexical form is always `"NaN"`, so two same-typed NaN literals ARE
+/// the same RDF term before this function is ever reached (`sameValue` step 1)
+/// — this function is what the CROSS-type pair needs, since two literals with
+/// different datatype IRIs are never the same RDF term regardless of value.
+pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
+    if is_xsd_nan(ax) && is_xsd_nan(bx) {
+        return Some(true);
+    }
+    value_cmp(ax, bx).map(|o| o == Ordering::Equal)
 }
 
 /// Componentwise `=` over two triple terms (SPARQL §17.4.1.7 extended to RDF 1.2
@@ -1226,7 +1263,7 @@ pub(crate) fn substitute_pattern(
                     // changes the argument COUNT, so this can never turn a valid
                     // `agg` into an invalid one.
                     let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
-                        agg.function.clone(),
+                        agg.function().clone(),
                         args,
                         agg.scalarvals.clone(),
                         agg.distinct,
@@ -3133,6 +3170,41 @@ mod tests {
         );
         assert_eq!(ebv(&ds, &eq), Some(true));
         assert_eq!(ebv(&ds, &same), Some(false));
+    }
+
+    #[test]
+    fn equal_treats_cross_type_nan_as_same_value() {
+        // SPARQL 1.2 §17.4.2.2 `sameValue` (which defines `=`), step 5, verbatim:
+        // "NaN"^^xsd:double and "NaN"^^xsd:float are considered to represent the
+        // SAME value, even though they are not the same RDF term (different
+        // datatype IRIs) and `value_cmp`'s ordinary numeric-tower promotion
+        // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
+        // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
+        // closes: this used to evaluate to a type error (unbound), not `true`.
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        let ds = empty_ds();
+        let eq = Expression::Equal(
+            Box::new(typed_lit("NaN", XDOUBLE)),
+            Box::new(typed_lit("NaN", XFLOAT)),
+        );
+        assert_eq!(ebv(&ds, &eq), Some(true));
+        // Same-type NaN pairs already resolve via the identical-RDF-term
+        // short-circuit (NaN's canonical lexical form is always "NaN"); prove
+        // that path stays `true` too, not just the cross-type one this test
+        // targets.
+        let eq_same_type = Expression::Equal(
+            Box::new(typed_lit("NaN", XDOUBLE)),
+            Box::new(typed_lit("NaN", XDOUBLE)),
+        );
+        assert_eq!(ebv(&ds, &eq_same_type), Some(true));
+        // A NaN is still UNORDERED under `<`: the carve-out is `sameValue`'s
+        // alone and must not leak into the ordering operators.
+        let lt = Expression::Less(
+            Box::new(typed_lit("NaN", XDOUBLE)),
+            Box::new(typed_lit("NaN", XFLOAT)),
+        );
+        assert_eq!(ebv(&ds, &lt), None);
     }
 
     #[test]

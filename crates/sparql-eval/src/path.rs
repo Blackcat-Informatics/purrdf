@@ -461,8 +461,23 @@ fn resolve_end<D: DatasetView + Sync>(
         TermPattern::BlankNode(b) => Ok(Endpoint::Free {
             var: Variable::new(format!("\u{0}bnode:{}", b.as_str())),
         }),
+        // `crate::bgp` supports a variable *inside* a quoted-triple-term BGP
+        // position (`Pos::Triple`'s structural match), so a reader could expect
+        // the same for a path endpoint — it is NOT the same feature here. BGP's
+        // structural match runs inside the row/binding join: a candidate quoted
+        // triple's components resolve against the SAME schema the rest of the
+        // BGP's slots share. A path endpoint has no such row to bind into — path
+        // evaluation resolves each endpoint to a single node identity (or leaves
+        // it free) and then walks reachability over THAT node id
+        // ([`Endpoint::Bound`]/[`Endpoint::Free`]); a quoted triple term with a
+        // variable component names more than one node, and `path_schema` (below)
+        // gives an endpoint exactly one output column, not one per component. Would
+        // need its own node identity AND its own multi-variable schema/output
+        // contract before "support" could mean anything more than the refusal an
+        // inaccurate message used to hide — genuinely new evaluation semantics,
+        // not a wiring gap this conversion helper's `site` parameter can close.
         other => {
-            let value = ground_term_pattern_to_value(other)?;
+            let value = ground_term_pattern_to_value(other, "a property-path endpoint")?;
             Ok(match dataset.term_id_by_value(&value) {
                 Some(id) => Endpoint::Bound(id),
                 None => Endpoint::BoundAbsent(value),
@@ -1198,7 +1213,7 @@ mod tests {
     use crate::governor::{GovernorState, QueryGovernors};
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
-    use purrdf_sparql_algebra::NamedNode;
+    use purrdf_sparql_algebra::{NamedNode, TriplePattern};
 
     const EX: &str = "http://ex/";
 
@@ -2181,5 +2196,32 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b")]);
         let rows = run(&ds, &var("s"), &named("p"), &ground("nobody"), &["s"]);
         assert_eq!(rows, col1(&[]));
+    }
+
+    #[test]
+    fn variable_inside_quoted_triple_endpoint_names_the_path_not_a_bgp() {
+        // Regression guard: a variable inside a quoted-triple-term PATH endpoint
+        // used to report the shared `convert::ground_term_pattern_to_value`
+        // helper's hardcoded BGP wording ("... in a BGP") even though no BGP is
+        // anywhere in this query — `resolve_end` is a path-endpoint-only call
+        // site. The message must now name what it actually is.
+        let ds = graph_of(&[]);
+        let mut ctx = EvalCtx::new(&ds);
+        let object = TermPattern::Triple(Box::new(TriplePattern {
+            subject: ground("s"),
+            predicate: purrdf_sparql_algebra::NamedNodePattern::NamedNode(nn("p")),
+            object: var("o"),
+        }));
+        let err = eval_path(&var("r"), &named("reifies"), &object, &mut ctx)
+            .expect_err("a variable inside a quoted-triple path endpoint is Unsupported");
+        let message = err.to_string();
+        assert!(
+            message.contains("property-path endpoint"),
+            "message must name the path endpoint, not a BGP: {message:?}"
+        );
+        assert!(
+            !message.contains("BGP"),
+            "message must not claim this variable was found in a BGP: {message:?}"
+        );
     }
 }

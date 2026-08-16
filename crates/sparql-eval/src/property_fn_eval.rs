@@ -283,7 +283,7 @@ fn compile_arg(
 ) -> Result<Arg, EvalError> {
     match term {
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(Arg::Constant(
-            crate::convert::ground_term_pattern_to_value(term)?,
+            crate::convert::ground_term_pattern_to_value(term, "a property-function call")?,
         )),
         TermPattern::Variable(variable) => Ok(Arg::Slot(slot_for(
             variable.clone(),
@@ -309,7 +309,10 @@ fn compile_arg(
         TermPattern::Triple(triple) => {
             if triple_is_ground(triple) {
                 return Ok(Arg::Constant(
-                    crate::convert::ground_triple_pattern_to_value(triple)?,
+                    crate::convert::ground_triple_pattern_to_value(
+                        triple,
+                        "a property-function call",
+                    )?,
                 ));
             }
             let predicate = match &triple.predicate {
@@ -745,7 +748,7 @@ pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
     if let GraphPattern::Group { aggregates, .. } = pattern
         && aggregates
             .iter()
-            .any(|(_, aggregate)| matches!(aggregate.function, AggregateFunction::Custom(_)))
+            .any(|(_, aggregate)| matches!(aggregate.function(), AggregateFunction::Custom(_)))
     {
         return true;
     }

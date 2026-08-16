@@ -1042,7 +1042,7 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
             walk_graph_pattern(inner, out);
             for (_var, agg_expr) in aggregates {
                 use purrdf_sparql_algebra::AggregateFunction as AF;
-                if let AF::Custom(n) = &agg_expr.function {
+                if let AF::Custom(n) = agg_expr.function() {
                     insert_oxiri(n, out);
                 }
                 for arg in agg_expr.args() {

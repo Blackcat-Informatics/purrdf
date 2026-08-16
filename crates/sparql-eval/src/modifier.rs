@@ -864,13 +864,13 @@ fn eval_aggregate<D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    if let AggregateFunction::Custom(iri) = &agg.function {
+    if let AggregateFunction::Custom(iri) = agg.function() {
         return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
     }
 
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
     // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
-    // that can ever carry one — so dispatch reads `agg.function` itself
+    // that can ever carry one — so dispatch reads `agg.function()` itself
     // rather than asking whether `args` is empty. A zero-arity custom
     // aggregate cannot reach this arm by accident and fall through to a row
     // count: it cannot be constructed at all, and even if some future
@@ -887,7 +887,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // entirely, so a run of `survivors` zero-sized units is a faithful
     // (and allocation-free — `Vec<()>` never touches the heap) stand-in for
     // "this many rows survived to be folded."
-    if matches!(agg.function, AggregateFunction::Count) && agg.args().is_empty() {
+    if matches!(agg.function(), AggregateFunction::Count) && agg.args().is_empty() {
         // Every row is a value `COUNT(*)` folds, whether or not `DISTINCT` keeps
         // it — see [`ChargePoint::AggregateAccumulation`]'s doc for why the
         // charge precedes the dedup check. An explicit loop, rather than
@@ -990,7 +990,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // phase 1 above) and is therefore always safe to chunk regardless of any
     // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
     // re-entry, because nothing here evaluates an expression.
-    let value = match &agg.function {
+    let value = match agg.function() {
         AggregateFunction::Count => {
             fold_builtin(&survivors, CountAccumulator::default, acc_step_one)?
         }

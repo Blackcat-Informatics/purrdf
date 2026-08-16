@@ -1226,22 +1226,30 @@ pub enum OrderExpression {
 /// empty `args` for any `function` other than [`AggregateFunction::Count`],
 /// so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/`GROUP_CONCAT(*)` — and a
 /// zero-arity [`AggregateFunction::Custom`] — cannot be built at all, from
-/// inside this crate or out. The `args` field is therefore private outside
-/// this crate; [`Self::args`] (the accessor method) gives read access without
-/// opening a second, unchecked write path. `function`, `scalarvals` and
-/// `distinct` stay `pub`: none of the three, alone or together, can put the
-/// arity invariant at risk, so hiding them would only add call-site friction
-/// with no matching safety gain. The field itself is `pub(crate)` rather than
-/// fully private: `serialize.rs`'s formatter and `parser.rs`'s own tests read
-/// (and, in tests, construct) it directly elsewhere in this crate, and this
-/// crate is small and disciplined enough that a `pub(crate)` seam is an
-/// honest tradeoff — the invariant only needs to hold at the crate's public
-/// boundary, which `new` alone already guarantees for every external caller
-/// (embedders included).
+/// inside this crate or out. Both `args` AND `function` are therefore private
+/// outside this crate: [`Self::args`]/[`Self::function`] (the accessor
+/// methods) give read access without opening a second, unchecked write path.
+/// A `pub function` field would have let a caller build a valid value through
+/// [`Self::new`] and then assign a DIFFERENT `function` into it — e.g. build
+/// `COUNT(*)` (empty `args`, legal) and reassign `function = Sum`, producing
+/// an in-memory `SUM` with zero args that `new` would have refused outright.
+/// `scalarvals` and `distinct` stay `pub`: neither, alone or together with
+/// the other, can put the arity invariant at risk, so hiding them would only
+/// add call-site friction with no matching safety gain. Both private fields
+/// are `pub(crate)` rather than fully private: `serialize.rs`'s formatter and
+/// `parser.rs`'s own tests read (and, in tests, pattern-match) them directly
+/// elsewhere in this crate, and this crate is small and disciplined enough
+/// that a `pub(crate)` seam is an honest tradeoff — the invariant only needs
+/// to hold at the crate's public boundary, which `new` alone already
+/// guarantees for every external caller (embedders included), since neither
+/// field has a public setter.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AggregateExpression {
-    /// Which aggregate function.
-    pub function: AggregateFunction,
+    /// Which aggregate function. Private outside this crate — go through
+    /// [`Self::new`] to build one, [`Self::function`] to read it back; see
+    /// the struct docs for why a public setter would reopen the arity hole
+    /// [`Self::new`] closes.
+    pub(crate) function: AggregateFunction,
     /// The aggregate's expression list (the spec's `exprlist`). Empty only for
     /// `COUNT(*)`; see the struct docs. Private outside this crate — go
     /// through [`Self::new`] to build one, [`Self::args`] to read it back.
@@ -1293,6 +1301,16 @@ impl AggregateExpression {
     #[must_use]
     pub fn args(&self) -> &[Expression] {
         &self.args
+    }
+
+    /// Which aggregate function this is; see the struct docs. There is no
+    /// public setter — mutating `function` after construction without
+    /// re-checking `args`' length is exactly the hole [`Self::new`] closes,
+    /// so changing which function a value names means building a new one
+    /// through [`Self::new`] (or [`Self::into_parts`] plus [`Self::new`]).
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
     }
 
     /// Decompose into `(function, args, scalarvals, distinct)`, consuming

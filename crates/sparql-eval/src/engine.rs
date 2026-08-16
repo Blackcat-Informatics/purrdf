@@ -1491,108 +1491,6 @@ impl NativeSparqlEngine {
         })))
     }
 
-    /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
-    ///
-    /// Pre-bound variables are substituted into FILTER/EXISTS expressions and
-    /// `BOUND($v)` is rewritten to `true` for pre-bound variables, while
-    /// triple-pattern positions still receive the VALUES-join rewrite. This is
-    /// a convenience wrapper equivalent to [`Self::query_with_options_view`] with
-    /// [`ShaclPrebinding::Applied`] and no registry or mint prefix; the SHACL
-    /// validator itself drives [`Self::query_with_options_view`] directly. Normal
-    /// SPARQL evaluation uses [`SparqlEngine::query`].
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_shacl_prebinding_view(&**dataset, query, base_iri, substitutions)
-    }
-
-    /// [`Self::query_with_shacl_prebinding`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri,
-                substitutions,
-            },
-            QueryOptions {
-                prebinding: ShaclPrebinding::Applied,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
-    /// Like [`NativeSparqlEngine::query_with_shacl_prebinding`], but with a SHACL-AF
-    /// function registry in scope so `sh:sparql` bodies can call declared functions.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-        registry: &crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_shacl_prebinding_and_functions_view(
-            &**dataset,
-            query,
-            base_iri,
-            substitutions,
-            registry,
-        )
-    }
-
-    /// [`Self::query_with_shacl_prebinding_and_functions`] over any [`DatasetView`]
-    /// backend whose id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-        registry: &'d crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri,
-                substitutions,
-            },
-            QueryOptions {
-                prebinding: ShaclPrebinding::Applied,
-                functions: registry,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
     /// The one **ungoverned** options-carrying query entry, parameterized by
     /// [`QueryOptions`]: selects the substitution rewrite
     /// ([`QueryOptions::prebinding`]), optionally injects a SHACL-AF function
@@ -2494,7 +2392,18 @@ mod tests {
         let ds = subst_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_with_shacl_prebinding(&ds, query, None, substitutions)
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions,
+                },
+                QueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect("shacl prebinding query");
         col0(result)
     }

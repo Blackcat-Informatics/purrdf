@@ -436,7 +436,7 @@ fn pattern_reaches_non_reproducible_builtin(
                 // so this check cannot lean on a caller-configured gate the way the
                 // `PropertyFunction` arm's doc explains its own dead-under-default case —
                 // a `Custom` aggregate is reachable under `ParserOptions::default`, always.
-                if matches!(aggregate.function, AggregateFunction::Custom(_)) {
+                if matches!(aggregate.function(), AggregateFunction::Custom(_)) {
                     Some(NonReproducibleCause::CustomAggregate)
                 } else {
                     aggregate
@@ -1072,12 +1072,12 @@ mod tests {
             ("purrdf:listConcat(?list, ?list)", "listConcat"),
         ] {
             let query = format!(
-                "PREFIX purrdf: <https://purrdf.example/fn/> \
+                "PREFIX purrdf: <https://example.org/fn/> \
                  CONSTRUCT {{ <https://example.org/s> <https://example.org/p> ?value }} WHERE {{ \
                  ?s <https://example.org/source-predicate> ?list . BIND({call} AS ?value) }}"
             );
             let options = ParserOptions {
-                extension_fn_namespaces: vec!["https://purrdf.example/fn/".to_owned()],
+                extension_fn_namespaces: vec!["https://example.org/fn/".to_owned()],
                 ..ParserOptions::default()
             };
             let error = ConstructViewConfig::new_with_parser_options(

@@ -775,7 +775,7 @@ fn plan_aggregate(
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<AggregateExpression, PlanError> {
-    if let AggregateFunction::Custom(iri) = &aggregate.function {
+    if let AggregateFunction::Custom(iri) = aggregate.function() {
         let iri_str = iri.as_str();
         let Some(custom) = agg_registry.resolve(iri_str) else {
             return Err(PlanError::aggregate(EvalError::function(format!(
@@ -805,7 +805,7 @@ fn plan_aggregate(
     // argument COUNT, so this can never turn a valid `aggregate` into an
     // invalid one — the `AggregateExpression::new` call below cannot fail.
     Ok(AggregateExpression::new(
-        aggregate.function.clone(),
+        aggregate.function().clone(),
         args,
         aggregate.scalarvals.clone(),
         aggregate.distinct,

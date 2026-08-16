@@ -955,12 +955,12 @@ fn compile_term<D: DatasetView>(
                     None => Ok(None),
                 }
             } else {
-                let value = ground_term_pattern_to_value(term)?;
+                let value = ground_term_pattern_to_value(term, "a BGP")?;
                 Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
             }
         }
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
-            let value = ground_term_pattern_to_value(term)?;
+            let value = ground_term_pattern_to_value(term, "a BGP")?;
             Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
         }
     }
