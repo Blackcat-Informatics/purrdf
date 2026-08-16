@@ -78,6 +78,16 @@ surfaces; each is called out below with what a consumer must do.
   cannot inspect, so a view using them is not byte-reproducible. Callers who relied on such views
   being accepted must configure them without those constructs, or accept the resulting refusal.
   Built-in aggregates and built-in functions are unaffected.
+- **rdf:** The byte-reproducibility refusal above, and the planner's two admission seams, now name
+  the CONSTRUCT rejection's actual cause (a custom aggregate call, a custom scalar-function call,
+  or a `SERVICE` clause) instead of funnelling every rejection through one message that named only
+  the nondeterministic-builtin/blank-minting causes, which none of the three later-added causes
+  appears in.
+- **xsd,sparql-eval:** Integer `AVG`'s arbitrary-precision quotient is now taken on the same
+  arbitrary-precision path its sum already uses, so an average that used to answer nothing whenever
+  the exact running total escaped `i128` — even when the quotient itself was ordinary — now
+  answers exactly (for example, `AVG` of two copies of the largest representable integer now
+  answers that integer, rather than unbound).
 - **sparql-eval:** `SERVICE` bodies forward custom scalar-function calls again unless `SILENT` is
   present. A prior fix closed a real silent-wrong-answer hazard for `Function::Custom` calls
   inside `SERVICE`, but the refusal it added was unconditional rather than scoped to the
@@ -118,6 +128,17 @@ surfaces; each is called out below with what a consumer must do.
 - **BREAKING** **sparql-results:** `ProvenanceNamespace` gained the validated, fallible
   constructor described above; unvalidated construction is no longer possible (see the results
   writer-spelling entry).
+- **BREAKING** **rdf-core:** Replay delta-added quads in insertion order, not hash order. The
+  copy-on-write delta layer kept its added/suppressed keys in standard hash sets (a fresh random
+  seed per process), so freezing and pattern scanning walked them in per-process hash-iteration
+  order rather than a reproducible one — the same query over the same data mutated the same way
+  could return rows in a different order from one run to the next, which broke the documented
+  ordering guarantee for `GROUP_CONCAT` and the first/last aggregates. Those sets now use the
+  crate's fixed-key hasher and carry each key's insertion ordinal, so a delta replays in call
+  order. The CLI was never affected (it parses straight into a builder and never uses the delta
+  layer); the Python, WebAssembly, and C interfaces all wrap the delta layer directly and were all
+  fixed by this one kernel change. Callers that happened to rely on the previous arbitrary order
+  may observe a different, now-stable order.
 
 ### Features
 
@@ -149,6 +170,13 @@ surfaces; each is called out below with what a consumer must do.
   charge points — `aggregate-invocation` (once per group per aggregate expression) and
   `aggregate-accumulation` (once per value inspected) — shared by built-in and custom aggregates.
   `GOVERNOR_PROFILE_VERSION` is 6 and the profile/corpus digests a consumer pins have moved.
+- **BREAKING** **sparql-eval,xsd:** Charge the aggregate fold's retained per-group row buffer to
+  the scratch-bytes governor as it is buffered, on both the built-in and registered-aggregate
+  paths; that real, group-size-proportional memory was previously unpriced by any resource
+  dimension. Only the scratch-bytes figures move — fuel is byte-identical, so
+  `GOVERNOR_PROFILE_VERSION` and its digest correctly stay put — but a governed query near a
+  scratch-bytes ceiling may now be refused where it previously completed, and a consumer pinning
+  the frozen governor corpus's byte-frozen expectations must re-pin against the new figures.
 - **sparql:** Fold single large groups in parallel: rows fold in chunks whose partial states
   combine strictly in chunk order, byte-identical to the sequential fold for every algebraic
   class. `GROUP_CONCAT`'s row order is now pinned by exact strings (see the SPARQL querying book
@@ -165,9 +193,50 @@ surfaces; each is called out below with what a consumer must do.
   argument on the Python query/update entry points, a flag on the CLI query/update subcommands, a
   parameter on the governed wasm entry points, and a nullable string on the governed C ABI entry
   points — so the statistical aggregate set is reachable from every binding, not only the embedded
-  Rust engine. The C ABI's version moves to `0.4.0` to reflect the additive surface, and its
-  header is regenerated; the entailment and explain CLI lanes, and the ungoverned/entailment wasm
-  calls, refuse the parameter outright since they structurally cannot honour it.
+  Rust engine. The C ABI's version moves `0.3.0` -> `0.4.0` to reflect the additive surface, and
+  its header is regenerated; at this point in the series, the entailment and explain CLI lanes,
+  and the ungoverned/entailment wasm calls, refuse the parameter outright since they structurally
+  cannot honour it — closed by two later entries below, which carry the C ABI to `0.6.0`.
+- **BREAKING** **sparql-eval,purrdf:** The entailment-aware query lanes
+  (`purrdf::query_with_entailment`/`query_with_entailment_governed`) hardcoded empty query
+  options, so no scalar-function, property-function, or aggregate registry could reach a query
+  evaluated over an entailed closure — `AGG(<ns>MEDIAN, …)` over an inferred closure was simply
+  refused. Both lanes now take a `QueryOptions` and thread it through closure parsing, the
+  witness-restriction rewrite, and evaluation. `QueryExplanation` gains an `aggregates()` accessor
+  and a rendered block naming each resolved aggregate with its arity, volatility, algebraic class,
+  state bound, and scalar parameters, mirroring how resolved relations are already reported. The
+  CLI's prior refusal of `--aggregate-namespace` beside `--entailment` is removed. This closes the
+  gap at the Rust engine layer; the C ABI, wasm, and Python bindings did not yet expose the
+  parameter on their entailment-aware entries until the entry below.
+- **sparql,capi,wasm:** Accept the aggregate namespace on the entailment-aware governed query lane
+  everywhere it previously took no `QueryOptions` seam at all: the C interface, the WebAssembly
+  binding, and the Python binding gain the same namespace parameter their ordinary governed
+  entries already had, so `AGG(<ns>MEDIAN, ?x)` resolves over an entailed closure exactly as it
+  resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.5.0` and its header is
+  regenerated.
+- **BREAKING** **sparql-eval,cli:** Give the engine one options-carrying explain entry,
+  `NativeSparqlEngine::explain_query_with_options`/`_view`, that carries the SHACL-AF function,
+  property-function, and aggregate registries together, and remove the narrower single-registry
+  explain and query entries (`explain_query_with_aggregates`, `explain_query_with_property_functions`,
+  `query_with_property_functions`, `query_with_user_functions`, and their `_view` twins). A query
+  needing a registered relation and a registered aggregate together previously got a receipt (or
+  an answer) for a different, narrower query through a narrower entry — a silent wrong report
+  rather than a refusal — because an entry that could not be handed every registry in scope has no
+  registry-independent way to know a call it did not recognize was ever meant to resolve against
+  one it was not given. A caller of any removed entry now calls
+  `explain_query_with_options`/`_view` or `query_with_options_view` with the same registry set on
+  `QueryOptions`; the CLI's `--explain`, its ordinary query/update lanes, and every other in-tree
+  caller already went through the options-carrying entries and need no change. `--aggregate-namespace`
+  with `--entailment` or `--explain` is no longer refused (see the two entries above); `--explain`
+  with `--aggregate-namespace` now prints the plan with the registered aggregates named in the
+  receipt's `aggregates` block.
+- **sparql-conformance:** Respell the conformance harness's manifest-extension predicate namespace
+  under `example.org`; it was minted under this suite's own project-branded namespace, the same
+  mistake a prior change fixed for the SPARQL-XML results writer. A new hygiene test
+  (`no_purrdf_dev_iri_is_minted_outside_the_closed_exemption_list`) fails on any occurrence of
+  that branded namespace found in the tracked tree outside a closed, stale-checked allowlist of
+  two reader-tolerance fixtures. A sibling manifest fixture proves the guard's negative case is
+  triggered by the missing description specifically, not by some other structural defect.
 - **BREAKING** **sparql:** Accept named scalar-value parameters on aggregate calls: `AGG(<iri>,
   …)` now admits trailing `; NAME=value` clauses, generalizing `GROUP_CONCAT`'s own
   `; SEPARATOR="…"` clause to any custom aggregate (e.g. `AGG(<ns>PERCENTILE, ?x; P=0.95)`).

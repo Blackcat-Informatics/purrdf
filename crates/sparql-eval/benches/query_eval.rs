@@ -66,7 +66,9 @@ use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
     SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::{MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry};
+use purrdf_sparql_eval::{
+    MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 
 /// Entity count. Each person contributes ~10 quads, so 30k people ≈ 303k quads
 /// (within the 200k–500k target band).
@@ -335,14 +337,17 @@ fn run_with_relations(
     relations: &PropertyFunctionRegistry,
 ) -> usize {
     let result = engine
-        .query_with_property_functions(
-            ds,
+        .query_with_options_view(
+            &**ds,
             SparqlRequest {
                 query,
                 base_iri: None,
                 substitutions: &[],
             },
-            relations,
+            QueryOptions {
+                property_functions: relations,
+                ..QueryOptions::EMPTY
+            },
         )
         .expect("query evaluates");
     count(result)

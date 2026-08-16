@@ -834,7 +834,7 @@ typedef struct {
      */
     uint8_t query_ran;
     /**
-     * Reserved for ABI-compatible extension; always zero in ABI 0.3.
+     * Reserved for ABI-compatible extension; must be zero.
      */
     uint8_t reserved[7];
     /**

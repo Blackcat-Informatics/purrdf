@@ -54,6 +54,23 @@ fn repo_root() -> PathBuf {
         .expect("the workspace root resolves")
 }
 
+/// This file's own path, relative to the workspace root. The scan below must
+/// skip it: this file's doc comment, `EXEMPT_SITES` literals, and predicate
+/// strings all legitimately spell `purrdf.dev` to name the very string the
+/// scan is looking for, and once the file is tracked `git ls-files` includes
+/// it like any other file — it would otherwise flag itself.
+fn own_relative_path() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("no_purrdf_dev_vocabulary.rs")
+        .canonicalize()
+        .expect("this test's own source file resolves")
+        .strip_prefix(repo_root())
+        .expect("this test file lives under the workspace root")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 /// Every path `git` tracks in the working tree, relative to `root`, forward-slash
 /// separated regardless of host path convention.
 fn tracked_files(root: &Path) -> Vec<String> {
@@ -86,9 +103,13 @@ fn no_purrdf_dev_iri_is_minted_outside_the_closed_exemption_list() {
         files.len()
     );
 
+    let own = own_relative_path();
     let mut unexempted = Vec::new();
     let mut exempt_seen = vec![false; EXEMPT_SITES.len()];
     for rel in &files {
+        if *rel == own {
+            continue;
+        }
         let path = root.join(rel);
         let Ok(content) = std::fs::read_to_string(&path) else {
             // Not UTF-8 text (a binary fixture) — no IRI string can live in it.

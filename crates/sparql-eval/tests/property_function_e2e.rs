@@ -124,14 +124,17 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
     //    namespace from the registry itself, so a host that registers a relation does
     //    not also have to configure the parser for it.
     let result = NativeSparqlEngine::new()
-        .query_with_property_functions(
-            &dataset(),
+        .query_with_options_view(
+            &*dataset(),
             SparqlRequest {
                 query: QUERY,
                 base_iri: None,
                 substitutions: &[],
             },
-            &relations(),
+            QueryOptions {
+                property_functions: &relations(),
+                ..QueryOptions::EMPTY
+            },
         )
         .expect("the call resolves and evaluates");
 
@@ -303,14 +306,17 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
 
     let query = format!("SELECT ?s ?o WHERE {{ ?s <{long_predicate}> ?o }}");
     let result = NativeSparqlEngine::new()
-        .query_with_property_functions(
-            &dataset,
+        .query_with_options_view(
+            &*dataset,
             SparqlRequest {
                 query: &query,
                 base_iri: None,
                 substitutions: &[],
             },
-            &registry,
+            QueryOptions {
+                property_functions: &registry,
+                ..QueryOptions::EMPTY
+            },
         )
         .expect(
             "an unregistered, merely-prefix-sharing predicate must parse and evaluate as an \
@@ -506,7 +512,7 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
     // charge points that are unreachable from an entry with no registry — a run that
     // silently degraded the call to a BGP triple would spend zero at both.
     let explanation = engine
-        .explain_query_with_property_functions(&dataset, GOVERNED_QUERY, None, &registry)
+        .explain_query_with_options(&dataset, GOVERNED_QUERY, None, with_relations(&registry))
         .expect("explain");
     let invocations: u64 = explanation
         .ledger()
@@ -806,7 +812,7 @@ fn query_with_source_view_dispatches_a_registered_relation_with_options() {
         rows_of(&result).len(),
         3,
         "with the registry carried in `options`, the call is dispatched exactly as it is \
-         through `query_with_property_functions`"
+         through `query_with_options_view`"
     );
 }
 
@@ -927,7 +933,7 @@ const CHECK_QUERY: &str = "PREFIX ex: <https://example.org/d/>\n\
                            SELECT ?person ?team WHERE { ?person ex:member ?team } ORDER BY ?person\n";
 
 /// The ungoverned entry: `NativeSparqlEngine::update_with_options`, the UPDATE sibling of
-/// [`NativeSparqlEngine::query_with_property_functions`]. It inserts EXACTLY the
+/// [`NativeSparqlEngine::query_with_options_view`]. It inserts EXACTLY the
 /// relation's three rows — not a subset, and nothing from the graph, which holds no
 /// `rel:memberOf` triple to have matched instead.
 #[test]

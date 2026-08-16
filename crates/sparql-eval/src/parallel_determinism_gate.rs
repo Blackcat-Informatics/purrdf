@@ -679,14 +679,17 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
         let run = |force: bool| {
             let _guard = force_parallel_for_test(force);
             engine
-                .query_with_property_functions(
-                    &ds,
+                .query_with_options_view(
+                    &*ds,
                     SparqlRequest {
                         query,
                         base_iri: None,
                         substitutions: &[],
                     },
-                    &registry,
+                    crate::engine::QueryOptions {
+                        property_functions: &registry,
+                        ..crate::engine::QueryOptions::EMPTY
+                    },
                 )
                 .unwrap_or_else(|e| panic!("query `{name}` failed: {e:?}\n{query}"))
         };

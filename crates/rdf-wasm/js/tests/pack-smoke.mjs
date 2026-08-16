@@ -36,7 +36,11 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // exported symbol reached them. The most recent is the GOVERNED evaluation lane:
 // `queryGoverned`, `updateGoverned` and `explainQuery` reach the charge ledger, the
 // predictive admission check, the partial-lift certificate and the wall deadline, none of
-// which any exported symbol had reached before. Both ceilings hold; only the measured
+// which any exported symbol had reached before. The most recent is the statistical
+// aggregate namespace and the SPARQL-results provenance extension (see the matching
+// Makefile WASM_SIZE_MEASURED_BYTES entry): `aggregate_namespace` on the entailment-aware
+// governed entries, and `provenanceFromJson`/`provenanceFromXml`, both reach code the
+// linker had previously dead-code-eliminated. Both ceilings hold; only the measured
 // figures move.
 //
 // The MEASURED figures below are REPORTED, not enforced. They were equality-gated,
@@ -48,8 +52,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // and CI. Equality could not hold in both places at once, and it blocked merges and
 // a release while the package sat well inside its ceiling. Update these when you
 // want the printed note to track the build.
-const MEASURED_TARBALL_BYTES = 3_439_441;
-const MEASURED_UNPACKED_BYTES = 10_295_192;
+const MEASURED_TARBALL_BYTES = 3_725_246;
+const MEASURED_UNPACKED_BYTES = 11_338_675;
 const MAX_TARBALL_BYTES = 4_137_500;
 const MAX_UNPACKED_BYTES = 12_400_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;

@@ -89,9 +89,10 @@
 //! [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead
 //! ([`registered_custom_aggregate`]), through `QueryOptions::aggregates`. It owes the SAME
 //! fourth record too, taken through
-//! [`NativeSparqlEngine::explain_query_with_aggregates`](purrdf_sparql_eval::NativeSparqlEngine::explain_query_with_aggregates) —
-//! the injected-seam decomposition entry a registered custom aggregate needs, the exact
-//! counterpart `explain_query_with_property_functions` is for the relation lane
+//! [`NativeSparqlEngine::explain_query_with_options`](purrdf_sparql_eval::NativeSparqlEngine::explain_query_with_options)
+//! (with `QueryOptions::aggregates` populated) — the injected-seam decomposition entry a
+//! registered custom aggregate needs, the exact counterpart the same entry (with
+//! `QueryOptions::property_functions` populated instead) is for the relation lane
 //! ([`charge_decomposition_custom_aggregate`]). `aggregate-custom-fuel-*` folds the SAME
 //! group shape `aggregate-accumulation-*` does through the custom path instead of the
 //! built-in one, so the two lanes' fuel is directly comparable
@@ -1261,12 +1262,12 @@ fn metered(
 /// invocation-isolating and row-isolating lanes are read through.
 ///
 /// Taken from the public per-node ledger
-/// ([`NativeSparqlEngine::explain_query_with_property_functions`]), which runs the same
-/// query under the same [`QueryGovernors::METERED`] the `.metered` record is measured with —
-/// so the totals here must add back up to that record's fuel, and
-/// [`every_boundary_is_derived_from_a_metered_run`] checks that they do. A decomposition
-/// that did not sum to the quantity it claims to decompose would be a decomposition of
-/// something else.
+/// ([`NativeSparqlEngine::explain_query_with_options`], with `QueryOptions::property_functions`
+/// populated), which runs the same query under the same [`QueryGovernors::METERED`] the
+/// `.metered` record is measured with — so the totals here must add back up to that
+/// record's fuel, and [`every_boundary_is_derived_from_a_metered_run`] checks that they
+/// do. A decomposition that did not sum to the quantity it claims to decompose would be a
+/// decomposition of something else.
 fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
     let dataset = load_dataset(case);
     let query = load_query(case);
@@ -1277,7 +1278,15 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
         Arc::clone(&scripted) as Arc<dyn PropertyFunction>,
     );
     let explanation = NativeSparqlEngine::new()
-        .explain_query_with_property_functions(&dataset, &query, None, &registry)
+        .explain_query_with_options(
+            &dataset,
+            &query,
+            None,
+            QueryOptions {
+                property_functions: &registry,
+                ..QueryOptions::EMPTY
+            },
+        )
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
     render_charge_decomposition(explanation.ledger())
 }
@@ -1300,17 +1309,26 @@ fn charge_decomposition_dataset(case: &Case) -> String {
 /// [`charge_decomposition`]'s twin for the two `Source::Aggregate` lanes
 /// (`aggregate-custom-fuel-*`, `aggregate-custom-scratch-bytes-*`), which exercise a
 /// REGISTERED custom aggregate rather than a built-in — the injected seam
-/// [`NativeSparqlEngine::explain_query_with_aggregates`] takes, the exact counterpart
-/// [`NativeSparqlEngine::explain_query_with_property_functions`] is for the relation lane.
-/// Before that entry point existed, these two lanes carried no `.charges` decomposition at
-/// all and were compared against the built-in lane's numbers directly instead; the registry
-/// is [`registered_custom_aggregate`], the SAME one [`observe`] wires for `Source::Aggregate`.
+/// [`NativeSparqlEngine::explain_query_with_options`] takes (with `QueryOptions::aggregates`
+/// populated), the exact counterpart the same entry (with `QueryOptions::property_functions`
+/// populated instead) is for the relation lane. Before that entry point existed, these two
+/// lanes carried no `.charges` decomposition at all and were compared against the built-in
+/// lane's numbers directly instead; the registry is [`registered_custom_aggregate`], the
+/// SAME one [`observe`] wires for `Source::Aggregate`.
 fn charge_decomposition_custom_aggregate(case: &Case) -> String {
     let dataset = load_dataset(case);
     let query = load_query(case);
     let registry = registered_custom_aggregate();
     let explanation = NativeSparqlEngine::new()
-        .explain_query_with_aggregates(&dataset, &query, None, &registry)
+        .explain_query_with_options(
+            &dataset,
+            &query,
+            None,
+            QueryOptions {
+                aggregates: &registry,
+                ..QueryOptions::EMPTY
+            },
+        )
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
     render_charge_decomposition(explanation.ledger())
 }
@@ -2026,9 +2044,10 @@ fn every_boundary_is_derived_from_a_metered_run() {
             );
         } else if case.source == Source::Aggregate {
             // The two `Source::Aggregate` lanes' twin of the checks above, taken through
-            // `NativeSparqlEngine::explain_query_with_aggregates` — the injected-seam
-            // decomposition a registered custom aggregate needs, exactly as the relation
-            // lane needs `explain_query_with_property_functions`.
+            // `NativeSparqlEngine::explain_query_with_options` with `QueryOptions::aggregates`
+            // populated — the injected-seam decomposition a registered custom aggregate
+            // needs, exactly as the relation lane needs the same entry with
+            // `QueryOptions::property_functions` populated instead.
             let decomposition = charge_decomposition_custom_aggregate(case);
             assert_eq!(
                 decomposition,

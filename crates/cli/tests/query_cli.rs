@@ -1022,10 +1022,9 @@ fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
 /// registered custom aggregate named in the receipt's `aggregates` block, rather than
 /// refusing the combination by name.
 ///
-/// Before `explain_query_with_aggregates`/`_view` existed, this exact combination was
-/// refused: the engine had no aggregate-registry-aware explain entry, so `--explain` would
-/// have described a run in which the query's own `Custom` aggregate call was refused as
-/// unregistered.
+/// Before the engine had an aggregate-registry-aware explain entry, this exact
+/// combination was refused: `--explain` would have described a run in which the
+/// query's own `Custom` aggregate call was refused as unregistered.
 #[test]
 fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
     let dir = tempfile::tempdir().expect("tempdir");

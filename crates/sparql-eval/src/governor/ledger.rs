@@ -399,9 +399,10 @@ impl QueryExplanation {
     /// Empty when the explanation was taken with no aggregate registry injected, which is
     /// the same thing an empty registry means: no `AGG(<iri>, …)` call in the query could
     /// resolve to a registered aggregate. Populated by
-    /// [`NativeSparqlEngine::explain_query_with_aggregates`](crate::NativeSparqlEngine::explain_query_with_aggregates),
-    /// [`NativeSparqlEngine::explain_query_with_aggregates_view`](crate::NativeSparqlEngine::explain_query_with_aggregates_view),
-    /// the exact counterpart [`Self::relations`] has for the property-function seam.
+    /// [`NativeSparqlEngine::explain_query_with_options`](crate::NativeSparqlEngine::explain_query_with_options)/
+    /// [`NativeSparqlEngine::explain_query_with_options_view`](crate::NativeSparqlEngine::explain_query_with_options_view)
+    /// when `QueryOptions::aggregates` is populated — the exact counterpart [`Self::relations`]
+    /// has for the property-function seam.
     #[must_use]
     pub fn aggregates(&self) -> &[AggDescriptor] {
         &self.aggregates

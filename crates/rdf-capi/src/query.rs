@@ -83,7 +83,7 @@ pub enum PurrdfEntailmentQueryOutcomeKind {
 pub struct PurrdfGovernedEntailmentEvidence {
     /// `1` when closure completed and phase two ran; `0` on closure stop.
     pub query_ran: u8,
-    /// Reserved for ABI-compatible extension; always zero in ABI 0.3.
+    /// Reserved for ABI-compatible extension; must be zero.
     pub reserved: [u8; 7],
     /// Phase-two evidence, or an all-zero carrier when `query_ran == 0`.
     pub query: PurrdfGovernorEvidence,

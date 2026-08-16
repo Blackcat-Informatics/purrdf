@@ -105,10 +105,10 @@
 //! [`QueryOptions::aggregates`](purrdf_sparql_eval::QueryOptions::aggregates) on the SAME
 //! [`NativeSparqlEngine::explain_query_with_options_view`] call — there is one explain code
 //! path, not a registry-free entry and a registry-carrying one that could drift apart, which
-//! is exactly the shape gap a query using more than one registered extension at once
-//! exposed on the narrower per-registry explain entries (see
-//! [`NativeSparqlEngine::explain_query_with_aggregates`]'s documentation) — and the block
-//! lists the ten registered statistical aggregate IRIs.
+//! is exactly the shape gap a per-registry explain entry (removed; see
+//! [`NativeSparqlEngine::explain_query_with_options`]'s documentation) exposed for a query
+//! using more than one registered extension at once — and the block lists the ten
+//! registered statistical aggregate IRIs.
 
 use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
@@ -288,8 +288,9 @@ impl ViewOp for ExplainOp<'_> {
     type Output = QueryExplanation;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
-        // Routed through the one options-carrying explain entry rather than the
-        // narrower `explain_query_with_aggregates_view`/`explain_query_view` pair: the
+        // Routed through the one options-carrying explain entry rather than a
+        // narrower per-registry explain entry (none exist any more; see
+        // `NativeSparqlEngine::explain_query_with_options`'s documentation): the
         // CLI has no property-function registration surface, so `property_functions`
         // stays at `QueryOptions::EMPTY`'s value on every call, but going through the
         // SAME entry a caller with more than one registry would need keeps this the

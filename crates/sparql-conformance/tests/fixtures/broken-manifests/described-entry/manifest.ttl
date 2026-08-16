@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# N4 positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
+# A positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
 # the exact sibling shape of `../undescribed-entry/manifest.ttl`, except this
 # manifest's sole `mf:entries` member carries the `rdf:type`/`mf:name`/
 # `mf:action` triples the row-grouping SELECT in `crate::manifest::load`

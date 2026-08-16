@@ -1243,138 +1243,6 @@ impl NativeSparqlEngine {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
-    /// [`Self::explain_query`] with a property-function registry injected, so a query
-    /// whose predicates resolve to relations can be explained at all — and so the
-    /// explanation NAMES them.
-    ///
-    /// A relation is host code whose rows no index sized and no dataset holds, which
-    /// makes it part of what produced the answer in exactly the way the charge schedule
-    /// is: [`QueryExplanation::relations`] carries the registered IRIs, sorted, and
-    /// [`QueryExplanation::render`] prints them. Two hosts that ran the same query text
-    /// over the same dataset under two different registries therefore hold two receipts
-    /// that say so.
-    ///
-    /// This is [`Self::explain_query_with_options`] with `property_functions` set and
-    /// every other [`QueryOptions`] field at [`QueryOptions::EMPTY`] — in particular
-    /// `aggregates` is EMPTY here, so a query that ALSO calls a registered custom
-    /// aggregate has nothing to resolve that call against and this entry refuses it
-    /// (`native-sparql-aggregate-function`) rather than reporting a receipt for a
-    /// narrower query than the one that was asked about. A caller holding both a
-    /// property-function registry and an aggregate registry names them together at
-    /// [`Self::explain_query_with_options`] instead of reaching for this entry, exactly
-    /// as [`Self::query_with_property_functions`] documents for the non-explain lane.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_property_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query_text: &str,
-        base_iri: Option<&str>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_property_functions_view(&**dataset, query_text, base_iri, registry)
-    }
-
-    /// [`Self::explain_query_with_property_functions`] over any [`DatasetView`] backend
-    /// whose id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_property_functions_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query_text: &str,
-        base_iri: Option<&str>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_options_view(
-            dataset,
-            query_text,
-            base_iri,
-            QueryOptions {
-                property_functions: registry,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
-    /// [`Self::explain_query`] with a custom-aggregate registry injected, so a query
-    /// calling `AGG(<iri>, …)` against a registered aggregate can be explained at all —
-    /// and so the explanation NAMES it.
-    ///
-    /// The exact twin of [`Self::explain_query_with_property_functions`], for the exact
-    /// same reason: a `Custom` aggregate is host code that folds a `GROUP BY` group into a
-    /// value no built-in accumulator produces, so it is part of what produced the answer
-    /// in exactly the way the charge schedule is. [`QueryExplanation::aggregates`] carries
-    /// the registered IRIs, sorted, and [`QueryExplanation::render`] prints them.
-    ///
-    /// This is [`Self::explain_query_with_options`] with `aggregates` set and every
-    /// other [`QueryOptions`] field at [`QueryOptions::EMPTY`] — in particular
-    /// `property_functions` is EMPTY here. **This is the entry the N2 audit finding
-    /// names**: recognizing a predicate as a call to a relation is *parse*
-    /// configuration ([`ParserOptions::property_fn_iris`]/[`ParserOptions::property_fn_namespaces`]),
-    /// derived from a registry rather than fixed syntax the way `AGG(<iri>, …)` is, so an
-    /// EMPTY `property_functions` here does not by itself make a relation's predicate
-    /// unparseable — it can still be recognized, and then refused for lack of a
-    /// registry to resolve against, IF this engine declared the relation's namespace
-    /// once via [`Self::with_parser_options`] (see
-    /// [`ParserOptions::property_fn_namespaces`]'s own documentation: "so that spelling
-    /// one is a hard error rather than a silent data triple"). Without that
-    /// declaration, an unrecognized predicate parses as an ordinary triple pattern —
-    /// bit for bit the same algebra a host with no relations at all would get — and this
-    /// entry reports a receipt for that (different, narrower) query rather than
-    /// refusing, because from inside this call there is no registry-independent way to
-    /// know a relation's predicate was ever meant to be one. A caller holding a
-    /// property-function registry that this query might need therefore MUST NOT reach
-    /// for this entry; it names both registries together at
-    /// [`Self::explain_query_with_options`] instead, which is the only entry that can
-    /// give a query needing both a receipt describing the query that was actually asked
-    /// about.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_aggregates(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query_text: &str,
-        base_iri: Option<&str>,
-        aggregates: &crate::agg_fn::AggregateRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_aggregates_view(&**dataset, query_text, base_iri, aggregates)
-    }
-
-    /// [`Self::explain_query_with_aggregates`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_aggregates_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query_text: &str,
-        base_iri: Option<&str>,
-        aggregates: &crate::agg_fn::AggregateRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_options_view(
-            dataset,
-            query_text,
-            base_iri,
-            QueryOptions {
-                aggregates,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
     /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
@@ -1397,13 +1265,14 @@ impl NativeSparqlEngine {
     /// custom-aggregate registry together in one call, so a query that calls into more
     /// than one of them can be explained AT ALL, correctly, in one shot.
     ///
-    /// This is the entry every OTHER explain entry on this engine is defined in terms
-    /// of: [`Self::explain_query`], [`Self::explain_query_with_property_functions`], and
-    /// [`Self::explain_query_with_aggregates`] each call this with one field of
-    /// [`QueryOptions`] set and the rest at [`QueryOptions::EMPTY`]. A caller holding
-    /// more than one registry — the case none of the narrower entries can serve
-    /// correctly — names them all here, exactly as [`Self::query_with_options_view`] is
-    /// the non-explain twin that already requires this for [`SparqlEngine::query`]'s
+    /// This is the entry [`Self::explain_query`] is defined in terms of, with every
+    /// field at [`QueryOptions::EMPTY`]. There is no narrower per-registry explain
+    /// entry to fall into instead: a single-registry entry could under-declare a
+    /// query that needs more than one registry and silently explain a narrower query
+    /// than the one that was asked about (see [`QueryOptions`]'s own documentation),
+    /// so every caller holding a property-function registry, a custom-aggregate
+    /// registry, or both names them here, exactly as [`Self::query_with_options_view`]
+    /// is the non-explain twin that already requires this for [`SparqlEngine::query`]'s
     /// extension seams.
     ///
     /// `options.prebinding` and `options.bnode_mint_prefix` are accepted for shape
@@ -1781,7 +1650,7 @@ impl NativeSparqlEngine {
     /// registered relation's predicate as an ordinary triple pattern and answer the
     /// empty bag, silently, for every call whose `SERVICE` body is federated. The
     /// query's OUTER pattern resolves against `options.property_functions` exactly
-    /// as [`Self::query_with_property_functions`] resolves it; a call node inside the
+    /// as [`Self::query_with_options_view`] resolves it; a call node inside the
     /// `SERVICE` body itself is refused at forwarding regardless (see
     /// [`crate::remote::RemoteQuerySource`]).
     ///
@@ -1828,101 +1697,6 @@ impl NativeSparqlEngine {
             }
         };
         Ok(materialize(outcome, &ctx))
-    }
-
-    /// Like [`SparqlEngine::query`], but with a caller-supplied SHACL-AF function
-    /// registry (`sh:SPARQLFunction`) injected so a call-position IRI resolving to a
-    /// declared function evaluates its body at eval time. This is the entry the
-    /// shapes validator uses; the registry is built once per shapes graph and
-    /// borrowed for the call. An empty registry behaves exactly like [`Self::query`].
-    ///
-    /// This is [`Self::query_with_options_view`] with one field set. A caller that also
-    /// has a property-function registry, a pre-binding rewrite, or a blank-mint prefix in
-    /// scope names them together there rather than reaching for a narrower entry that
-    /// would drop them.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        request: SparqlRequest<'_>,
-        registry: &crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_user_functions_view(&**dataset, request, registry)
-    }
-
-    /// [`Self::query_with_user_functions`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        registry: &'d crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            request,
-            QueryOptions {
-                functions: registry,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
-    /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
-    /// registry injected, so a predicate IRI the parser lowered to a
-    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
-    /// — which it does only for an IRI that EXACTLY matches a registered relation
-    /// (via [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions),
-    /// derived from `registry`) or that falls under a caller-declared
-    /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
-    /// entry — resolves to a registered relation. The registry is built once per host
-    /// configuration and borrowed for the call. An empty registry behaves exactly like
-    /// [`Self::query`].
-    ///
-    /// This is [`Self::query_with_options_view`] with one field set, and
-    /// [`Self::query_governed`] under [`QueryGovernors::UNBOUNDED`] is its governed
-    /// sibling. A caller that also has a SHACL-AF function registry or a blank-mint
-    /// prefix in scope names them together at the options entry.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_property_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        request: SparqlRequest<'_>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_property_functions_view(&**dataset, request, registry)
-    }
-
-    /// [`Self::query_with_property_functions`] over any [`DatasetView`] backend whose
-    /// id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_property_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        registry: &'d crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            request,
-            QueryOptions {
-                property_functions: registry,
-                ..QueryOptions::EMPTY
-            },
-        )
     }
 }
 
@@ -2822,7 +2596,7 @@ mod tests {
 
     /// An EMPTY property-function registry is indistinguishable from none: the same
     /// query over the same data returns byte-identical results through
-    /// [`NativeSparqlEngine::query_with_property_functions`] and through the plain
+    /// [`NativeSparqlEngine::query_with_options_view`] and through the plain
     /// registry-free entry.
     ///
     /// This pins the equivalence the registry's `None` handling rests on. Without it,
@@ -2845,7 +2619,14 @@ mod tests {
         let registry = crate::property_fn::PropertyFunctionRegistry::new();
         assert!(registry.is_empty());
         let with_empty = engine
-            .query_with_property_functions(&ds, request(), &registry)
+            .query_with_options_view(
+                &*ds,
+                request(),
+                QueryOptions {
+                    property_functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect("empty-registry query");
 
         let (
@@ -2906,7 +2687,15 @@ mod tests {
 
         let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
             engine
-                .explain_query_with_property_functions(&ds, query, None, registry)
+                .explain_query_with_options(
+                    &ds,
+                    query,
+                    None,
+                    QueryOptions {
+                        property_functions: registry,
+                        ..QueryOptions::EMPTY
+                    },
+                )
                 .expect("explain")
         };
         let left_receipt = explain(&left);
@@ -3028,7 +2817,7 @@ mod tests {
     }
 
     /// The exact twin of [`the_explain_receipt_names_the_registered_relations`], for the
-    /// custom-aggregate registry [`NativeSparqlEngine::explain_query_with_aggregates`]
+    /// custom-aggregate registry [`NativeSparqlEngine::explain_query_with_options`]
     /// takes: [`QueryExplanation::aggregates`] lists every registered IRI, IRI-sorted
     /// rather than registration-ordered, with its full declaration (arity, volatility,
     /// algebraic class, state bound, scalarvals) riding along.
@@ -3052,7 +2841,15 @@ mod tests {
         );
 
         let receipt = engine
-            .explain_query_with_aggregates(&ds, query, None, &registry)
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    aggregates: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect("explain");
         let iris: Vec<&str> = receipt
             .aggregates()
@@ -3077,14 +2874,14 @@ mod tests {
     }
 
     /// A query that needs BOTH a registered relation and a registered custom aggregate
-    /// at once — the exact shape the N2 audit finding demonstrated a wrong receipt for.
-    /// The engine declares the relation's namespace once via
+    /// at once — the shape that under-declaring either registry answers wrong for
+    /// rather than refuses. The engine declares the relation's namespace once via
     /// [`NativeSparqlEngine::with_parser_options`] (see
     /// [`purrdf_sparql_algebra::ParserOptions::property_fn_namespaces`]'s own
     /// documentation on why: "so that spelling one is a hard error rather than a
     /// silent data triple"), so the predicate is recognized as a call REGARDLESS of
-    /// which registry object a given explain call was handed — the one variable across
-    /// [`explain_query_with_options_reports_a_correct_receipt_for_a_query_needing_both_registries`]
+    /// which registries a given [`QueryOptions`] value carries — the one variable
+    /// across [`explain_query_with_options_reports_a_correct_receipt_for_a_query_needing_both_registries`]
     /// and its refusal siblings below.
     fn dual_registry_explain_fixture() -> (
         Arc<RdfDataset>,
@@ -3124,7 +2921,7 @@ mod tests {
         (ds, engine, query, relations, aggregates)
     }
 
-    /// N2: the new dual-registry entry gives a CORRECT receipt for a query that needs
+    /// The dual-registry entry gives a CORRECT receipt for a query that needs
     /// both a registered relation and a registered custom aggregate — populated
     /// `relations` and `aggregates` blocks, and the actual row the relation fires
     /// materializes (matching what [`SparqlEngine::query`]/`query_with_options` would
@@ -3196,23 +2993,31 @@ mod tests {
         );
     }
 
-    /// N2: an entry that lacks the property-function registry — reached here through
-    /// [`NativeSparqlEngine::explain_query_with_aggregates`] — REFUSES the dual-need
-    /// query rather than silently answering a receipt for the narrower query "no
-    /// relation fired". The predicate is recognized as a call (the engine declared the
-    /// namespace), so admission finds nothing in the EMPTY relations registry to
-    /// resolve it against and reports that as an error, exactly the outcome
-    /// [`crate::property_fn_plan`]'s `resolve` documents: "a call with nothing to
-    /// resolve against is a host configuration that names a relation it never
-    /// supplied — never a silently empty one."
+    /// A [`QueryOptions`] value that carries the aggregate registry but leaves
+    /// `property_functions` at its `EMPTY` default REFUSES the dual-need query rather
+    /// than silently answering a receipt for the narrower query "no relation fired".
+    /// The predicate is recognized as a call (the engine declared the namespace), so
+    /// admission finds nothing in the EMPTY relations registry to resolve it against
+    /// and reports that as an error, exactly the outcome [`crate::property_fn_plan`]'s
+    /// `resolve` documents: "a call with nothing to resolve against is a host
+    /// configuration that names a relation it never supplied — never a silently empty
+    /// one."
     #[test]
-    fn explain_query_with_aggregates_refuses_a_query_that_also_needs_a_relation() {
+    fn explain_query_with_options_refuses_a_query_that_also_needs_a_relation() {
         let (ds, engine, query, _relations, aggregates) = dual_registry_explain_fixture();
         let err = engine
-            .explain_query_with_aggregates(&ds, query, None, &aggregates)
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    aggregates: &aggregates,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect_err(
-                "the aggregates-only entry must refuse rather than report a receipt for a \
-                 query with its relation silently dropped",
+                "options that omit the property-function registry must refuse rather than \
+                 report a receipt for a query with its relation silently dropped",
             );
         let message = err.to_string();
         assert!(
@@ -3222,21 +3027,27 @@ mod tests {
         );
     }
 
-    /// The exact symmetric case: an entry that lacks the aggregate registry — reached
-    /// through [`NativeSparqlEngine::explain_query_with_property_functions`] — also
+    /// The exact symmetric case: a [`QueryOptions`] value that carries the
+    /// property-function registry but leaves `aggregates` at its `EMPTY` default also
     /// refuses the SAME dual-need query, because `AGG(<iri>, …)` is fixed syntax
     /// admitted against the aggregate registry at prepare time regardless of which
-    /// registry is empty. This is the behavior the N2 finding records as already
-    /// correct ("`explain_query_with_property_functions` still refuses"); it is
-    /// asserted here, on the identical fixture, so the two refusal paths are proven
-    /// symmetric rather than merely asserted so in prose.
+    /// registry is empty. Asserted here, on the identical fixture, so the two refusal
+    /// paths are proven symmetric rather than merely asserted so in prose.
     #[test]
-    fn explain_query_with_property_functions_refuses_a_query_that_also_needs_an_aggregate() {
+    fn explain_query_with_options_refuses_a_query_that_also_needs_an_aggregate() {
         let (ds, engine, query, relations, _aggregates) = dual_registry_explain_fixture();
         let err = engine
-            .explain_query_with_property_functions(&ds, query, None, &relations)
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    property_functions: &relations,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect_err(
-                "the property-functions-only entry must refuse rather than report a \
+                "options that omit the aggregate registry must refuse rather than report a \
                  receipt for a query with its aggregate silently dropped",
             );
         let message = err.to_string();
@@ -4440,7 +4251,15 @@ mod tests {
         // The explain surface must disagree the same way.
         let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
             engine
-                .explain_query_with_property_functions(&ds, &query, None, registry)
+                .explain_query_with_options(
+                    &ds,
+                    &query,
+                    None,
+                    QueryOptions {
+                        property_functions: registry,
+                        ..QueryOptions::EMPTY
+                    },
+                )
                 .expect("explain")
         };
         assert_ne!(

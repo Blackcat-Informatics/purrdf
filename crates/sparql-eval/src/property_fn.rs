@@ -475,7 +475,8 @@ pub struct PfDescriptor {
 ///
 /// Built once per host configuration and borrowed into evaluation via
 /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions)
-/// or [`NativeSparqlEngine::query_with_property_functions`](crate::NativeSparqlEngine::query_with_property_functions).
+/// or [`NativeSparqlEngine::query_with_options_view`](crate::NativeSparqlEngine::query_with_options_view)
+/// (via `QueryOptions::property_functions`).
 /// Deterministic by construction: the map is the crate's fixed-key
 /// deterministic fixed-key hash map, and every ordered surface
 /// ([`describe`](Self::describe), [`Debug`]) sorts by IRI rather than reading

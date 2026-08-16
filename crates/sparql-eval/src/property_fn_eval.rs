@@ -937,14 +937,17 @@ mod tests {
     ) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_with_property_functions(
-                dataset,
+            .query_with_options_view(
+                &**dataset,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                registry,
+                crate::engine::QueryOptions {
+                    property_functions: registry,
+                    ..crate::engine::QueryOptions::EMPTY
+                },
             )
             .map_err(|e| e.to_string())?;
         match result {
@@ -1602,8 +1605,9 @@ mod tests {
 
     /// THE GAP-3 regression, at the registry-injection layer this module owns:
     /// registering `PF_SPLIT` must not hijack the DIFFERENT, merely
-    /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_property_functions`
-    /// (unlike the test above) configures NO caller namespace — the only seam in
+    /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_options_view` with
+    /// only `property_functions` populated (unlike the test above) configures NO
+    /// caller namespace — the only seam in
     /// scope is the registry-derived exact-IRI set — so `PF_SPLIT`+`x` stays an
     /// ordinary triple pattern and the query evaluates against the graph, which
     /// holds no such predicate, rather than hard-erroring as unregistered.
@@ -2153,7 +2157,14 @@ mod tests {
         };
         let rows_under = |registry: &PropertyFunctionRegistry| {
             let result = engine
-                .query_with_property_functions(&dataset, request(&query), registry)
+                .query_with_options_view(
+                    &*dataset,
+                    request(&query),
+                    crate::engine::QueryOptions {
+                        property_functions: registry,
+                        ..crate::engine::QueryOptions::EMPTY
+                    },
+                )
                 .expect("evaluates");
             let SparqlResult::Solutions { rows, .. } = result else {
                 panic!("expected solutions");

@@ -298,7 +298,8 @@ impl core::fmt::Debug for NativeFunction {
 /// cross-kind collision (see their docs) so an IRI is unambiguously one kind or
 /// the other, never silently shadowed. Built once per shapes graph / host
 /// configuration and borrowed into evaluation via
-/// [`NativeSparqlEngine::query_with_user_functions`](crate::NativeSparqlEngine::query_with_user_functions).
+/// [`NativeSparqlEngine::query_with_options_view`](crate::NativeSparqlEngine::query_with_options_view)
+/// (via `QueryOptions::functions`).
 #[derive(Default, Clone)]
 pub struct UserFunctionRegistry {
     fns: DetHashMap<String, UserFunction>,
@@ -641,6 +642,7 @@ mod tests {
 
     use crate::{
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
+        QueryOptions,
     };
 
     const EX_INC: &str = "http://example.org/ns#inc";
@@ -744,14 +746,17 @@ mod tests {
         registry: &UserFunctionRegistry,
     ) -> Vec<String> {
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 ds,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                registry,
+                QueryOptions {
+                    functions: registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -798,14 +803,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_INC}>(41)) AS ?v) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -838,14 +846,17 @@ mod tests {
         let run = |arg: i32| -> String {
             let query = format!("SELECT ((<{EX_EVEN}>({arg})) AS ?v) WHERE {{}}");
             match NativeSparqlEngine::new()
-                .query_with_user_functions(
+                .query_with_options_view(
                     &ds,
                     SparqlRequest {
                         query: &query,
                         base_iri: None,
                         substitutions: &[],
                     },
-                    &registry,
+                    QueryOptions {
+                        functions: &registry,
+                        ..QueryOptions::EMPTY
+                    },
                 )
                 .expect("query")
             {
@@ -880,14 +891,17 @@ mod tests {
         // `?missing` is never bound, so the sole mandatory argument is unbound.
         let query = format!("SELECT ((<{EX_EVEN}>(?missing)) AS ?v) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -920,14 +934,17 @@ mod tests {
         // Two arguments to a one-parameter function.
         let query = format!("SELECT ((<{EX_INC}>(1, 2)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("arity mismatch must fail");
         assert!(
@@ -957,14 +974,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_INC}>() = <{EX_INC}>()) AS ?eq) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -987,14 +1007,17 @@ mod tests {
         let ds = empty_dataset();
         let query = "SELECT ((<http://example.org/ns#nope>(1)) AS ?v) WHERE {}".to_owned();
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("undefined function must fail");
         assert!(
@@ -1027,14 +1050,17 @@ mod tests {
         // The sole parameter requires xsd:integer; pass a string.
         let query = format!("SELECT ((<{EX_INC}>(\"hello\")) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("parameter datatype violation must fail");
         assert!(
@@ -1061,14 +1087,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_INC}>(1)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("multi-projection body must fail");
         assert!(
@@ -1096,14 +1125,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_LOOP}>(1)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("runaway recursion must fail");
         assert!(
@@ -1162,9 +1194,9 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::QueryOptions {
+                QueryOptions {
                     functions: &registry,
-                    ..crate::QueryOptions::EMPTY
+                    ..QueryOptions::EMPTY
                 },
                 &state,
             )
@@ -1211,14 +1243,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_INC}>(1)) AS ?v) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("class-typed return must be accepted, not rejected");
         match result {
@@ -1247,14 +1282,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_NATIVE_INC}>(41)) AS ?v) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -1283,14 +1321,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_NATIVE_ERR}>(1)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("closure error must fail the query");
         assert!(
@@ -1324,14 +1365,17 @@ mod tests {
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_NATIVE_PANIC}>(1)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("a panicking closure must fail the query, not abort it");
 
@@ -1364,14 +1408,17 @@ mod tests {
         // Two arguments to a one-argument native function.
         let query = format!("SELECT ((<{EX_NATIVE_ARITY}>(1, 2)) AS ?v) WHERE {{}}");
         let err = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect_err("arity mismatch must fail");
         assert!(
@@ -1397,14 +1444,17 @@ mod tests {
         // `?missing` is never bound.
         let query = format!("SELECT ((<{EX_NATIVE_UNBOUND}>(?missing)) AS ?v) WHERE {{}}");
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
@@ -1496,14 +1546,17 @@ mod tests {
             "SELECT ((<{EX_SPARQL_ONLY}>(1)) AS ?a) ((<{EX_NATIVE_ONLY}>(1)) AS ?b) WHERE {{}}"
         );
         let result = NativeSparqlEngine::new()
-            .query_with_user_functions(
+            .query_with_options_view(
                 &ds,
                 SparqlRequest {
                     query: &query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                &registry,
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
             )
             .expect("query");
         match result {
