@@ -52,8 +52,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // and CI. Equality could not hold in both places at once, and it blocked merges and
 // a release while the package sat well inside its ceiling. Update these when you
 // want the printed note to track the build.
-const MEASURED_TARBALL_BYTES = 3_725_246;
-const MEASURED_UNPACKED_BYTES = 11_338_675;
+const MEASURED_TARBALL_BYTES = 3_726_378;
+const MEASURED_UNPACKED_BYTES = 11_340_694;
 const MAX_TARBALL_BYTES = 4_137_500;
 const MAX_UNPACKED_BYTES = 12_400_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;

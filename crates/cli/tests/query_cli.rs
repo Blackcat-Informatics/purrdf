@@ -1290,6 +1290,116 @@ fn provenance_namespace_with_csv_or_tsv_is_refused() {
     }
 }
 
+/// `--explain` never reaches [`emit_result`](crate::query::emit_result): it prints the
+/// plan as plain text and returns before any serializer runs. A named
+/// `--results-format` used to be accepted and silently ignored there (identical
+/// output for every choice); it is refused by name instead.
+#[test]
+fn results_format_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    for fmt in ["json", "xml", "csv", "tsv", "turtle"] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--explain",
+            "--results-format",
+            fmt,
+            "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+        ]);
+        assert!(
+            !out.status.success(),
+            "--explain with --results-format {fmt} must be refused"
+        );
+        assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+        assert!(
+            stderr(&out).contains("--results-format"),
+            "the error must name the flag for {fmt}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// `--explain` never runs the serializer that produces a loss ledger: a bare
+/// `--loss-ledger` used to be accepted, exit 0, and write nothing. It is refused by
+/// name instead, and `--loss-ledger=PATH` leaves no file behind either.
+#[test]
+fn loss_ledger_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let ledger_path = dir.join("ledger.json");
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "--loss-ledger",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--loss-ledger"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+
+    let out = run(&[
+        &format!("--loss-ledger={}", ledger_path.display()),
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(
+        !out.status.success(),
+        "the combination must be refused with a PATH value too"
+    );
+    assert!(
+        !ledger_path.exists(),
+        "a refused run must not write the ledger file"
+    );
+}
+
+/// `--explain` never reaches the results serializer, so a configured
+/// `--jsonld-options` document never reaches a serializer either: a bare
+/// `--explain --jsonld-options FILE` used to be accepted, exit 0, and render the plan
+/// as if the flag had never been named. It is refused by name instead.
+#[test]
+fn jsonld_options_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"expanded"}"#,
+    );
+
+    let out = run(&[
+        "--jsonld-options",
+        &options,
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--jsonld-options"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
 /// `--rules FILE` names the rule document `--entailment rif` runs; without
 /// `--entailment` at all it would otherwise be accepted by clap and silently do
 /// nothing (`options.rules` is read only inside the `--entailment` lane) — refused by

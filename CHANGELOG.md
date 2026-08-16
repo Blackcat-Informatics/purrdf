@@ -247,6 +247,24 @@ surfaces; each is called out below with what a consumer must do.
   `CustomAggregate::scalarvals` may ignore it). The first-party `PERCENTILE` and `TOPK`
   aggregates now take their fraction/bound through the named clause instead of as trailing
   positional arguments; callers passing them positionally must move them to named form.
+- **sparql-algebra:** `parse_literal` — the grammar behind an `AGG(<iri>, …; NAME=value)`
+  scalarval, a `VALUES` ground term, and a triple pattern's literal object — now accepts the
+  full SPARQL literal grammar it always claimed to: the signed halves of the numeric tower
+  (`Q=-1`, `P=+0.5`) and the boolean literals (`B=true`), not only unsigned numerals and
+  strings. `VALUES ?x { -1 true }` and `?s :p -3` parse for the same reason: both routed
+  through the same unsigned-only `parse_literal`, so the gap was one production, not one call
+  site.
+- **cli:** `purrdf query --explain` refuses `--results-format`, `--loss-ledger`, and
+  `--jsonld-options` by name instead of accepting and silently ignoring them — `--explain`
+  returns before any serializer or loss-ledger surface runs, so a named `--results-format`
+  never selected a serialization, a named `--loss-ledger` never had a transcode to report, and
+  a configured `--jsonld-options` document never reached a serializer. `--results-format` is
+  now `Option<QueryFormat>` (defaulting to `json` only when the flag is genuinely absent) so
+  "not named" and "named `json`" are distinguishable, which is what the refusal needs.
+- **cli:** `purrdf convert --canonical` refuses `--to` by name instead of silently overriding
+  it — canonical output is always RDFC-1.0 N-Quads, so a `--to` naming a different target
+  format was accepted and never read. `--to` may still be omitted under `--canonical`, exactly
+  as before.
 
 ### Refactor
 
@@ -268,6 +286,10 @@ surfaces; each is called out below with what a consumer must do.
   gains `ADJUST`, the `VERSION` declaration, the custom-aggregate seam with a worked registration
   example, and the ten statistical aggregates; the results chapter documents the `its:dir`
   spelling and the caller-named provenance extension.
+- **sparql:** Correct the book's query chapter, which still described the entailment-aware query
+  lane as refusing `aggregate_namespace` on every host — a paragraph an earlier fix removed from
+  the Python stub and one book location but left standing in a second. It now shows the
+  combination working, with a worked `--entailment`/`--aggregate-namespace` CLI example.
 
 ## [0.12.0] - 2026-08-02
 

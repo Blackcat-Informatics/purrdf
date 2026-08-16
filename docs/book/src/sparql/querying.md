@@ -336,8 +336,10 @@ Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing
 `GROUP_CONCAT`'s own `; SEPARATOR="…"` (SPARQL's existing precedent for a named
 scalar aggregate parameter) to any custom aggregate: `AGG(<ns>PERCENTILE, ?x;
 P=0.95)`, `AGG(<ns>TOPK, ?x; K=3)`. `NAME` is matched case-insensitively and
-stored upper-cased; `value` is any SPARQL literal, so a numeric scalarval keeps
-its natural datatype. Unlike a positional argument, a scalarval is evaluated
+stored upper-cased; `value` is any SPARQL literal — the full numeric tower
+including its signed forms (`Q=-1`, `P=+0.5`), the boolean literals (`B=true`),
+and strings — so a numeric scalarval keeps its natural datatype. Unlike a
+positional argument, a scalarval is evaluated
 **once for the whole aggregation**, never per row — the correct semantics for
 a parameter like a percentile rank or a "top k" count, which must be one fixed
 value across the group, not a per-row expression the query author merely
@@ -485,16 +487,26 @@ every one of these surfaces: omitting it (`None` / not passing the flag /
 unregistered custom-aggregate IRI, refused exactly as before this parameter
 existed.
 
-Two structural limits apply everywhere the statistical set is reachable:
+The **entailment-aware query lane** (`query_with_entailment`/
+`query_with_entailment_governed`, and every Python/CLI/WebAssembly/C wrapper
+around the governed entry point) combines with `aggregate_namespace` exactly
+as the raw-view lane does: both take the engine's `QueryOptions`, threaded
+through the closure query's parse and its evaluation, so `AGG(<ns>MEDIAN, …)`
+resolves over an entailed closure the same way it resolves over a raw view.
 
-- The **entailment-aware query lane** (`query_with_entailment_governed` and
-  its Python/CLI/WebAssembly/C wrappers) evaluates under no `QueryOptions` seam
-  at all, on any regime — closing that gap is a larger, separate change to
-  `purrdf-entail`'s query-under-a-regime plumbing, not a parameter
-  pass-through, so every host refuses (or has no parameter for) combining
-  `aggregate_namespace` with an entailment-regime query rather than silently
-  dropping it.
-- SPARQL UPDATE's grammar admits an aggregate only inside a nested
+```sh
+purrdf query --data ent.ttl --entailment rdfs \
+  --aggregate-namespace 'https://ex.example/agg#' \
+  'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?w) AS ?m) \
+   WHERE { ?x <http://example.org/measure> ?w }'
+```
+
+`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` answers
+the same query the same way, and the WebAssembly and C-ABI governed
+entailment entry points take the same parameter.
+
+One structural limit applies everywhere the statistical set is reachable:
+SPARQL UPDATE's grammar admits an aggregate only inside a nested
   `SELECT … GROUP BY` in a `WHERE` clause (an ordinary `DELETE`/`INSERT WHERE`
   basic graph pattern has no `GROUP BY` of its own) — every host's `update`
   entry reaches the statistical set through exactly that nested-subquery

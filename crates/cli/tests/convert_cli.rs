@@ -1503,10 +1503,12 @@ fn stdout_broken_pipe_exits_clean() {
     );
 }
 
-/// `--canonical` overrides `--to`: even with `--to turtle` requested, the output is
-/// RDFC-1.0 canonical N-Quads (documented precedence).
+/// `--canonical` output is always RDFC-1.0 canonical N-Quads, so a `--to` naming a
+/// different target format is never read on that lane — refused by name instead of
+/// silently ignored (the same shape `--jsonld-options` is refused for beside
+/// `--canonical`).
 #[test]
-fn canonical_overrides_to_format() {
+fn canonical_with_to_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -1521,14 +1523,32 @@ fn canonical_overrides_to_format() {
         &seed,
         &out,
     ]);
+    assert!(!o.status.success(), "--canonical with --to must be refused");
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--to"),
+        "the refusal must name --to: {}",
+        stderr(&o)
+    );
+}
+
+/// `--canonical` WITHOUT `--to` still emits RDFC-1.0 canonical N-Quads — `--to` may be
+/// omitted, since canonical output is always N-Quads.
+#[test]
+fn canonical_without_to_emits_canonical_nquads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedA.nq", SEED_A);
+    let out = path(dir, "out.canon");
+    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
     assert!(
         o.status.success(),
-        "--canonical over --to failed: {}",
+        "--canonical without --to failed: {}",
         stderr(&o)
     );
     let text = std::fs::read_to_string(&out).expect("read canonical");
     // Canonical N-Quads use `<...>` triples with a trailing ` .`, and NEVER Turtle's
-    // `@prefix` directives — proving `--to turtle` was ignored.
+    // `@prefix` directives.
     assert!(
         !text.contains("@prefix"),
         "canonical output must NOT be Turtle; got: {text}"

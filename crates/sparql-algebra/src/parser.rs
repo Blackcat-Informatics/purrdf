@@ -2300,14 +2300,12 @@ impl<'a> Parser<'a, '_> {
                 | Token::LongStringLit(_)
                 | Token::Integer(_)
                 | Token::Decimal(_)
-                | Token::Double(_),
+                | Token::Double(_)
+                | Token::Minus
+                | Token::Plus,
             ) => Ok(TermPattern::Literal(self.parse_literal()?)),
             Some(Token::Word(w)) if *w == "true" || *w == "false" => {
-                let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
-                Ok(TermPattern::Literal(Literal::new_typed(
-                    if b { "true" } else { "false" },
-                    NamedNode::new_unchecked(XSD_BOOLEAN),
-                )))
+                Ok(TermPattern::Literal(self.parse_literal()?))
             }
             Some(Token::TripleOpen) => {
                 let t = self.parse_quoted_triple()?;
@@ -2359,18 +2357,56 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// Parse any SPARQL literal: a numeral (optionally signed), a boolean, or a
+    /// string (optionally `@lang`- or `^^`-typed) — the full `RDFLiteral |
+    /// BooleanLiteral | NumericLiteral` production, not just its unsigned-numeral
+    /// subset.
+    ///
+    /// A leading `+`/`-` folds into the numeral here: SPARQL's
+    /// `NumericLiteralPositive`/`NumericLiteralNegative` productions tokenize as a
+    /// single unit, but this lexer emits the sign as its own
+    /// [`Token::Plus`]/[`Token::Minus`] — the shape `UnaryExpression` needs to
+    /// distinguish `-?x` from a signed numeral. Every call site reached through
+    /// this function (a triple pattern's object, `VALUES`' ground terms, an `AGG`
+    /// scalarval) has no unary operator standing between the sign and the
+    /// numeral, so the sign is folded back into the literal's lexical form
+    /// instead of being left for a caller that does not exist at these
+    /// positions. [`Self::parse_primary_with_aggs`] is the one call site where a
+    /// leading sign IS a unary operator ([`Self::parse_unary`] consumes it
+    /// first), so this function never observes one there.
     fn parse_literal(&mut self) -> Result<Literal> {
+        let sign = match self.peek() {
+            Some(Token::Minus) => {
+                self.pos += 1;
+                Some("-")
+            }
+            Some(Token::Plus) => {
+                self.pos += 1;
+                Some("+")
+            }
+            _ => None,
+        };
+        let signed = |s: &str| match sign {
+            Some(sign) => format!("{sign}{s}"),
+            None => s.to_owned(),
+        };
         match self.bump() {
-            Some(Token::Integer(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_INTEGER)))
+            Some(Token::Integer(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_INTEGER),
+            )),
+            Some(Token::Decimal(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_DECIMAL),
+            )),
+            Some(Token::Double(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_DOUBLE),
+            )),
+            Some(Token::Word(w)) if sign.is_none() && (w == "true" || w == "false") => {
+                Ok(Literal::new_typed(w, NamedNode::new_unchecked(XSD_BOOLEAN)))
             }
-            Some(Token::Decimal(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_DECIMAL)))
-            }
-            Some(Token::Double(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_DOUBLE)))
-            }
-            Some(Token::StringLit(s) | Token::LongStringLit(s)) => {
+            Some(Token::StringLit(s) | Token::LongStringLit(s)) if sign.is_none() => {
                 if let Some(Token::LangTag(_)) = self.peek() {
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
@@ -2385,7 +2421,11 @@ impl<'a> Parser<'a, '_> {
                 }
             }
             other => Err(ParseError::syntax(
-                format!("expected a literal, found {other:?}"),
+                if sign.is_some() {
+                    format!("expected a numeral after the sign, found {other:?}")
+                } else {
+                    format!("expected a literal, found {other:?}")
+                },
                 self.span(),
             )),
         }
@@ -2482,13 +2522,9 @@ impl<'a> Parser<'a, '_> {
                 let t = self.parse_ground_triple()?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
-            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
-                let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
-                Ok(GroundTerm::Literal(Literal::new_typed(
-                    if b { "true" } else { "false" },
-                    NamedNode::new_unchecked(XSD_BOOLEAN),
-                )))
-            }
+            // Every other legal ground term — a string, a boolean, or a numeral
+            // (optionally signed: `-1`, `+0.5`) — is `parse_literal`'s grammar;
+            // an illegal token surfaces through its own catch-all error.
             _ => Ok(GroundTerm::Literal(self.parse_literal()?)),
         }
     }
@@ -2874,11 +2910,10 @@ impl<'a> Parser<'a, '_> {
             Some(Token::Word(w)) => {
                 let w = *w;
                 if w == "true" || w == "false" {
-                    self.pos += 1;
-                    Ok(Expression::Literal(Literal::new_typed(
-                        if w == "true" { "true" } else { "false" },
-                        NamedNode::new_unchecked(XSD_BOOLEAN),
-                    )))
+                    // No sign precedes a bare boolean word here: `parse_unary` already
+                    // intercepts a leading `+`/`-` before a bare boolean word is ever
+                    // reached, so `parse_literal` observes none and takes its boolean arm.
+                    Ok(Expression::Literal(self.parse_literal()?))
                 } else {
                     self.parse_builtin_or_aggregate(w, aggs)
                 }
@@ -4347,6 +4382,115 @@ mod tests {
         assert_eq!(scalarvals[0].1.value(), "3");
         assert_eq!(scalarvals[1].0, "LABEL");
         assert_eq!(scalarvals[1].1.value(), "x");
+    }
+
+    /// `value` in `; NAME=value` is any SPARQL literal (§20.3), including the
+    /// signed halves of the numeric tower and the boolean literals — not just
+    /// the unsigned-numeral/string subset `parse_literal` used to accept.
+    #[test]
+    fn agg_call_scalarval_accepts_signed_numerals_and_booleans() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; Q=-1; P=+0.5; B=true) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        let scalarvals = &aggregates[0].1.scalarvals;
+        assert_eq!(scalarvals.len(), 3);
+        assert_eq!(scalarvals[0].0, "Q");
+        assert_eq!(scalarvals[0].1.value(), "-1");
+        assert_eq!(
+            scalarvals[0].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#integer"
+        );
+        assert_eq!(scalarvals[1].0, "P");
+        assert_eq!(scalarvals[1].1.value(), "+0.5");
+        assert_eq!(
+            scalarvals[1].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        );
+        assert_eq!(scalarvals[2].0, "B");
+        assert_eq!(scalarvals[2].1.value(), "true");
+        assert_eq!(
+            scalarvals[2].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#boolean"
+        );
+    }
+
+    /// A bare sign with nothing numeric behind it is refused, not silently
+    /// dropped or mis-parsed.
+    #[test]
+    fn agg_call_scalarval_bare_sign_is_a_syntax_error() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; Q=-true) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(matches!(err, ParseError::Syntax { .. }));
+    }
+
+    /// `VALUES` ground terms admit the same signed-numeral/boolean grammar as
+    /// any other literal position — the class this fix closes, not just the
+    /// `AGG` scalarval instance of it.
+    #[test]
+    fn values_ground_terms_accept_signed_numerals_and_booleans() {
+        let q = format!("{GM}SELECT ?x WHERE {{ ?s ?p ?o }} VALUES ?x {{ -1 +0.5 true false }}");
+        let where_pat = select_pattern(&q);
+        let GraphPattern::Project { inner, .. } = where_pat else {
+            panic!("expected Project, got {where_pat:?}");
+        };
+        let GraphPattern::Join { right, .. } = *inner else {
+            panic!("expected the trailing VALUES joined in, got {inner:?}");
+        };
+        let GraphPattern::Values { bindings, .. } = *right else {
+            panic!("expected Values, got {right:?}");
+        };
+        assert_eq!(bindings.len(), 4);
+        let Some(GroundTerm::Literal(l0)) = &bindings[0][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[0][0]);
+        };
+        assert_eq!(l0.value(), "-1");
+        let Some(GroundTerm::Literal(l1)) = &bindings[1][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[1][0]);
+        };
+        assert_eq!(l1.value(), "+0.5");
+        let Some(GroundTerm::Literal(l2)) = &bindings[2][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[2][0]);
+        };
+        assert_eq!(l2.value(), "true");
+        assert_eq!(
+            l2.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#boolean"
+        );
+        let Some(GroundTerm::Literal(l3)) = &bindings[3][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[3][0]);
+        };
+        assert_eq!(l3.value(), "false");
+    }
+
+    /// A triple pattern's object is the same ground-literal grammar too: a
+    /// signed numeral parses exactly as it does inside `VALUES`.
+    #[test]
+    fn triple_pattern_object_accepts_a_signed_numeral() {
+        let q = format!("{GM}SELECT ?s WHERE {{ ?s purrdf:p -3 }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 1);
+        let TermPattern::Literal(l) = &patterns[0].object else {
+            panic!("expected a literal object, got {:?}", patterns[0].object);
+        };
+        assert_eq!(l.value(), "-3");
+        assert_eq!(
+            l.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#integer"
+        );
     }
 
     #[test]

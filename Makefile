@@ -275,11 +275,17 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # The new `provenanceFromJson`/`provenanceFromXml` free functions and `queryRaw`'s new
 # `provenance_prefix`/`provenance_iri` parameters carry the additive SPARQL-results
 # provenance extension the rest of the way. The ceiling was unchanged, so this was a
-# measurement update and NOT a ceiling raise; the current artifact leaves 9.439%
-# headroom beneath it.
+# measurement update and NOT a ceiling raise.
+#
+# The increase 10_969_188 -> 10_971_207 came from refusing command-line flag
+# combinations by name rather than accepting and ignoring them, and from the
+# scalar-parameter grammar accepting signed numerals and bare booleans: both add
+# rejection paths and their diagnostic strings to code the wasm entry points
+# already reach. The ceiling was again unchanged; the artifact now measures
+# 10_971_207 bytes, 9.422% headroom beneath it.
 #
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 10969188
+WASM_SIZE_MEASURED_BYTES := 10971207
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

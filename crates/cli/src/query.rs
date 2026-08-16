@@ -88,11 +88,15 @@
 //! metering engages every counter at a ceiling nothing can reach, so a `--fuel 1000
 //! --explain` would print the receipt of a run that was never bounded by 1000. It refuses
 //! `--entailment` for the same shape of reason — the entailment-aware query lane is a
-//! different entry point with no explanation to give — and both refusals name what to drop.
-//! Those two are the WHOLE refusal list: `--entailment` beside a governor flag used to be a
-//! third, and `--aggregate-namespace` beside either `--entailment` or `--explain` used to be
-//! a fourth and a fifth; all three now run instead (see
-//! [`refuse_unenforceable_combinations`]).
+//! different entry point with no explanation to give — and it refuses
+//! `--provenance-namespace`, `--results-format`, `--loss-ledger`, and `--jsonld-options`
+//! for a third shape: each names something about the ANSWERS `--explain` never produces
+//! (an extension to anchor, a serialization to pick, a lossy-transcode report to surface,
+//! a JSON-LD/YAML-LD serializer to configure), so accepting any of them would be a flag
+//! that is parsed, validated, and then never acted on. Every refusal names what to drop
+//! (see [`refuse_unenforceable_combinations`]). `--entailment` beside a governor flag and
+//! `--aggregate-namespace` beside either `--entailment` or `--explain` used to be
+//! refusals too; both now run instead of being refused.
 //!
 //! The rendered `relations` block is always empty here: the CLI has no property-function
 //! registration surface at all — [`ExplainOp::run`] leaves
@@ -509,8 +513,12 @@ pub(crate) struct QueryOptions<'a> {
     pub(crate) entailment: Option<CliRegime>,
     /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
     pub(crate) rules: Option<&'a std::path::Path>,
-    /// `--results-format`: the result serialization.
-    pub(crate) results_format: QueryFormat,
+    /// `--results-format`: the result serialization. `None` means the flag was
+    /// not named at all (distinct from naming its default, `json`) — the
+    /// distinction [`refuse_unenforceable_combinations`] needs to refuse
+    /// `--results-format` beside `--explain` by name rather than silently
+    /// letting a named-but-inapplicable serialization do nothing.
+    pub(crate) results_format: Option<QueryFormat>,
     /// The SPARQL query text.
     pub(crate) query: &'a str,
     /// The six execution-governor flags.
@@ -541,7 +549,12 @@ pub(crate) fn run(
     if report_target.is_requested() && options.entailment.is_none() {
         return Err(report::requires_entailment("query"));
     }
-    refuse_unenforceable_combinations(options)?;
+    refuse_unenforceable_combinations(options, ledger_target)?;
+    // Resolved ONCE, here: `None` (the flag not named) defaults to `json`, exactly as
+    // clap's own `default_value_t` used to before `--results-format` became an
+    // `Option` — the only thing that changed is that "not named" and "named `json`"
+    // are now distinguishable, which is what lets `--explain` refuse the former.
+    let results_format = options.results_format.unwrap_or(QueryFormat::Json);
 
     let engine = NativeSparqlEngine::new();
 
@@ -658,7 +671,7 @@ pub(crate) fn run(
     )?;
     emit_result(
         &result,
-        options.results_format,
+        results_format,
         options.base,
         options.jsonld_options,
         provenance_namespace.as_ref(),
@@ -668,7 +681,7 @@ pub(crate) fn run(
     Ok(CliOutcome::Complete)
 }
 
-/// Refuse the one flag combination this lane cannot honor, naming what to drop.
+/// Refuse every flag combination this lane cannot honor, naming what to drop.
 ///
 /// It exists because the alternative is a flag that silently does nothing — the shape this
 /// pipeline refuses everywhere else, and the most dangerous shape a GOVERNOR can take: a
@@ -680,6 +693,16 @@ pub(crate) fn run(
 ///   printed in the receipt and enforced nowhere.
 /// * `--explain` with `--entailment`: that lane has no plan this prices, so an explanation
 ///   printed beside it would describe work the answer did not come from.
+/// * `--explain` with `--provenance-namespace`: `--explain` prints the plan INSTEAD of the
+///   answers a provenance extension would anchor onto.
+/// * `--explain` with `--results-format`: `--explain`'s rendering is plain text, not a
+///   result serialization there is a format for.
+/// * `--explain` with `--loss-ledger`: `--explain` never runs the serializer a loss ledger
+///   is a report ABOUT.
+/// * `--explain` with `--jsonld-options`: `--explain` never reaches the JSON-LD/YAML-LD
+///   serializer those options would configure.
+/// * `--provenance-namespace` with a CSV/TSV `--results-format`: those two are pure-W3C
+///   value-only formats with no extension point to anchor it on.
 ///
 /// # `--entailment` with a governor flag is NOT refused
 ///
@@ -708,7 +731,22 @@ pub(crate) fn run(
 /// aggregates, or both together) reaches this lane through — so `--explain` with
 /// `--aggregate-namespace` prints the plan with the registered aggregates named in the
 /// receipt's `aggregates` block instead of refusing every `Custom` call as unregistered.
-fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
+///
+/// # `--results-format`, `--loss-ledger`, and `--jsonld-options` beside `--explain` ARE
+/// refused now
+///
+/// All three used to be silently accepted and ignored: `--explain` returns before
+/// [`emit_result`] is ever called, so a named `--results-format` never selected a
+/// serializer, a named `--loss-ledger` never had a transcode to report on, and a
+/// configured `--jsonld-options` document never reached a serializer either. That was
+/// exactly the shape this module's own doctrine names as the thing to refuse —
+/// `--results-format` merely documented the no-op in its help text rather than
+/// refusing it, and `--loss-ledger`/`--jsonld-options` did not even document it. All
+/// three now name what to drop, matching every other refusal in this function.
+fn refuse_unenforceable_combinations(
+    options: &QueryOptions<'_>,
+    ledger_target: &LedgerTarget,
+) -> Result<(), CliError> {
     let named = options.governors.named();
     if !named.is_empty() && options.explain {
         let named = named.join(", ");
@@ -745,6 +783,42 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
                 .to_owned(),
         ));
     }
+    // `--explain` never reaches `emit_result`, so a named `--results-format` would
+    // select a serializer that never runs — the same silent-no-op shape every other
+    // arm in this function refuses by name.
+    if options.explain && options.results_format.is_some() {
+        return Err(CliError::Usage(
+            "--explain prints the plan as plain text INSTEAD of the query's answers, so \
+             --results-format (which names how ANSWERS serialize) would be accepted and \
+             never applied: drop one of the two"
+                .to_owned(),
+        ));
+    }
+    // `--explain` evaluates the query under the metering profile rather than through
+    // `emit_result`'s serializer, so it produces no loss ledger for `--loss-ledger` to
+    // surface — the flag would be accepted, and no file/stderr output would ever
+    // appear, exactly the silent shape this pipeline refuses everywhere else.
+    if options.explain && ledger_target.is_requested() {
+        return Err(CliError::Usage(
+            "--explain prints the plan and its charge ledger INSTEAD of evaluating a \
+             serializer, so --loss-ledger (which reports a lossy transcode THAT \
+             serializer produced) would be accepted and never written: drop one of the \
+             two"
+            .to_owned(),
+        ));
+    }
+    // `--explain` returns before `emit_result` is ever reached, so a configured
+    // JSON-LD/YAML-LD serializer never runs — the same silent-no-op shape every other
+    // arm in this function refuses by name.
+    if options.explain && options.jsonld_options.is_some() {
+        return Err(CliError::Usage(
+            "--explain prints the plan as plain text INSTEAD of the query's answers, so \
+             --jsonld-options (which configures the JSON-LD/YAML-LD serializer a \
+             CONSTRUCT/DESCRIBE graph result would use) would be accepted and never \
+             applied: drop one of the two"
+                .to_owned(),
+        ));
+    }
     // CSV/TSV are pure-W3C value-only SPARQL-results formats with no extension point at
     // all — unlike JSON/XML, which anchor the additive `purrdf` provenance extension.
     // `purrdf_sparql_results::serialize` tolerates a namespace here (it trims the
@@ -753,9 +827,10 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
     // cannot do anything, exactly as `--provenance-namespace` is refused above beside
     // `--explain` and below for a CONSTRUCT/DESCRIBE graph, rather than accept it and
     // silently ignore it.
+    let results_format = options.results_format.unwrap_or(QueryFormat::Json);
     if options.provenance_namespace.is_some()
         && matches!(
-            options.results_format.to_results_format(),
+            results_format.to_results_format(),
             Some(SparqlResultsFormat::Csv | SparqlResultsFormat::Tsv)
         )
     {
@@ -763,7 +838,7 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
             "--provenance-namespace anchors the additive extension on SPARQL-results \
              JSON/XML: --results-format {} is a pure-W3C value-only format with no \
              extension point and cannot carry it",
-            options.results_format.token()
+            results_format.token()
         )));
     }
     Ok(())
@@ -812,7 +887,7 @@ fn emit_governed(
     let emit = |result: &SparqlResult| {
         emit_result(
             result,
-            options.results_format,
+            options.results_format.unwrap_or(QueryFormat::Json),
             options.base,
             options.jsonld_options,
             provenance_namespace,

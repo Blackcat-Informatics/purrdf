@@ -23,7 +23,9 @@
 //!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
-//!   always N-Quads, so `--canonical` OVERRIDES (and lets you omit) `--to`.
+//!   always N-Quads, so `--canonical` lets you OMIT `--to` — and refuses it by name
+//!   (see [`run`]) rather than silently ignoring a `--to` naming a different format,
+//!   exactly as it refuses `--jsonld-options`.
 
 use std::sync::Arc;
 
@@ -98,6 +100,19 @@ pub(crate) fn run(
     if options.canonical && options.jsonld_options.is_some() {
         return Err(CliError::Usage(
             "--jsonld-options cannot be combined with --canonical".to_owned(),
+        ));
+    }
+    // `--canonical` output is always N-Quads, so a `--to` naming a different target
+    // format is never read on this lane (see `run_with_transforms`, which resolves
+    // `--to` only in its non-canonical arm) — the same silent-no-op shape
+    // `--jsonld-options` is refused for just above, rather than an override a caller
+    // could mistake for a format that was honored.
+    if options.canonical && options.to.is_some() {
+        return Err(CliError::Usage(
+            "--canonical emits RDFC-1.0 canonical N-Quads unconditionally, so a --to \
+             naming a different target format would be accepted and never read: drop \
+             one of the two"
+                .to_owned(),
         ));
     }
     // `--report` names the certificate of a reasoning run; without `--entailment` there is

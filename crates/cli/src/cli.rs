@@ -123,6 +123,15 @@ pub(crate) enum LedgerTarget {
     File(PathBuf),
 }
 
+impl LedgerTarget {
+    /// Whether the operator asked for the loss ledger at all — the same
+    /// tri-state-collapsing query [`ReportTarget::is_requested`] answers for
+    /// `--report`.
+    pub(crate) const fn is_requested(&self) -> bool {
+        !matches!(self, Self::Silent)
+    }
+}
+
 /// Where (if anywhere) the reasoning report should be surfaced — the decoded form of the
 /// `--report` tri-state flag, with the same three states as [`LedgerTarget`].
 #[derive(Debug, Clone)]
@@ -198,9 +207,11 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
-        /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. This overrides the
-        /// target format (canonical output is always N-Quads), so `--to` may be
-        /// omitted; combine with `--entailment` to canonicalize the closure.
+        /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
+        /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
+        /// ignored) when named beside `--canonical`, since it would otherwise be
+        /// accepted and never read. Combine with `--entailment` to canonicalize the
+        /// closure.
         #[arg(long)]
         canonical: bool,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
@@ -241,8 +252,14 @@ pub(crate) enum Command {
         report: Option<Option<PathBuf>>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
         /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
-        #[arg(long, value_enum, default_value_t = QueryFormat::Json)]
-        results_format: QueryFormat,
+        /// Defaults to `json` when omitted. `None` here (the flag genuinely
+        /// absent, not merely defaulted) is load-bearing: it is what lets
+        /// `--explain` tell "the operator asked for a serialization" apart from
+        /// "nothing was named" and refuse the former (see
+        /// `crate::query::refuse_unenforceable_combinations`) rather than
+        /// silently ignore it.
+        #[arg(long, value_enum)]
+        results_format: Option<QueryFormat>,
         /// Bound the query's abstract execution steps. The unit is the engine's own
         /// charge schedule, which `--explain` prints, so a fuel budget is comparable
         /// only against the same schedule. The ceiling is inclusive, and `0` is a valid
@@ -285,9 +302,12 @@ pub(crate) enum Command {
         /// beside the cardinality that materialized, the cost-based join orders, and the
         /// per-dimension consumption — INSTEAD of the query's answers. The query is
         /// evaluated to produce it, under the metering profile: every counter engaged at
-        /// a ceiling nothing can reach. The rendering is plain text, so `--results-format`
-        /// (which names how ANSWERS serialize) does not apply to it. Refused beside a
-        /// governor flag or `--entailment`, neither of which it can honor.
+        /// a ceiling nothing can reach. The rendering is plain text, so it is refused
+        /// beside every flag that names something about the ANSWERS: a governor flag,
+        /// `--entailment`, `--results-format` (which serialization to use),
+        /// `--loss-ledger` (which lossy transcode to report), and `--jsonld-options`
+        /// (which JSON-LD/YAML-LD serializer to configure) — none of which this lane
+        /// can honor.
         #[arg(long)]
         explain: bool,
         /// Register purrdf's first-party statistical aggregate set (`MEDIAN`,
