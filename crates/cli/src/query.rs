@@ -81,8 +81,8 @@
 //! profile header, the charge schedule, one line per algebra node with the planner's
 //! estimate beside the count that materialized, the join orders, and the per-dimension
 //! consumption — and it is produced by ONE evaluation, because
-//! [`NativeSparqlEngine::explain_query_view`] evaluates the query itself under the metering
-//! profile.
+//! [`NativeSparqlEngine::explain_query_with_options_view`] evaluates the query itself under
+//! the metering profile.
 //!
 //! That profile is why `--explain` refuses a governor flag rather than accepting it:
 //! metering engages every counter at a ceiling nothing can reach, so a `--fuel 1000
@@ -95,14 +95,19 @@
 //! [`refuse_unenforceable_combinations`]).
 //!
 //! The rendered `relations` block is always empty here: the CLI has no property-function
-//! registration surface at all — [`ExplainOp::run`] never calls
-//! [`NativeSparqlEngine::explain_query_with_property_functions_view`] — so there is never
-//! anything for it to list. That is the honest minimal form, not a missing feature —
-//! [`QueryExplanation::render`] always emits the block, empty or not, precisely so "no
-//! relations were in scope" and "this build does not report relations" stay distinguishable
-//! bytes. The `aggregates` block is the exact opposite case: with `--aggregate-namespace`,
-//! [`ExplainOp::run`] calls [`NativeSparqlEngine::explain_query_with_aggregates_view`]
-//! instead of the registry-free [`NativeSparqlEngine::explain_query_view`], and the block
+//! registration surface at all — [`ExplainOp::run`] leaves
+//! [`QueryOptions::property_functions`](purrdf_sparql_eval::QueryOptions::property_functions)
+//! at its `EMPTY` default on every call — so there is never anything for it to list. That
+//! is the honest minimal form, not a missing feature — [`QueryExplanation::render`] always
+//! emits the block, empty or not, precisely so "no relations were in scope" and "this build
+//! does not report relations" stay distinguishable bytes. The `aggregates` block is the
+//! exact opposite case: with `--aggregate-namespace`, [`ExplainOp::run`] sets
+//! [`QueryOptions::aggregates`](purrdf_sparql_eval::QueryOptions::aggregates) on the SAME
+//! [`NativeSparqlEngine::explain_query_with_options_view`] call — there is one explain code
+//! path, not a registry-free entry and a registry-carrying one that could drift apart, which
+//! is exactly the shape gap a query using more than one registered extension at once
+//! exposed on the narrower per-registry explain entries (see
+//! [`NativeSparqlEngine::explain_query_with_aggregates`]'s documentation) — and the block
 //! lists the ten registered statistical aggregate IRIs.
 
 use purrdf::GovernedEntailment;
@@ -283,14 +288,22 @@ impl ViewOp for ExplainOp<'_> {
     type Output = QueryExplanation;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
-        Ok(match self.aggregates {
-            Some(aggregates) => self
-                .engine
-                .explain_query_with_aggregates_view(view, self.query, self.base, aggregates)?,
-            None => self
-                .engine
-                .explain_query_view(view, self.query, self.base)?,
-        })
+        // Routed through the one options-carrying explain entry rather than the
+        // narrower `explain_query_with_aggregates_view`/`explain_query_view` pair: the
+        // CLI has no property-function registration surface, so `property_functions`
+        // stays at `QueryOptions::EMPTY`'s value on every call, but going through the
+        // SAME entry a caller with more than one registry would need keeps this the
+        // one CLI code path for "explain, optionally with an aggregate registry" rather
+        // than two that could drift.
+        Ok(self.engine.explain_query_with_options_view(
+            view,
+            self.query,
+            self.base,
+            EngineQueryOptions {
+                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
+                ..EngineQueryOptions::EMPTY
+            },
+        )?)
     }
 }
 
@@ -550,9 +563,9 @@ pub(crate) fn run(
         .map_err(|e| CliError::Usage(format!("--provenance-namespace: {e}")))?;
 
     if options.explain {
-        // `explain_query_view`/`explain_query_with_aggregates_view` parse, survey and
-        // evaluate the query themselves, so this lane prepares nothing of its own and the
-        // plan cache is warmed once.
+        // `explain_query_with_options_view` parses, surveys and evaluates the query
+        // itself, so this lane prepares nothing of its own and the plan cache is
+        // warmed once.
         let explanation = source::run_over_input(
             options.data,
             data_format,
@@ -688,12 +701,11 @@ pub(crate) fn run(
 /// ([`purrdf::query_with_entailment_governed`]), threaded into both the closure query's
 /// parse and its evaluation, so `AGG(<ns>MEDIAN, ?x)` resolves over the entailed closure
 /// exactly as it resolves over a raw view. The engine had no aggregate-registry-aware
-/// explain entry at all; [`NativeSparqlEngine::explain_query_with_aggregates_view`] is that
-/// entry now, the exact counterpart
-/// [`NativeSparqlEngine::explain_query_with_property_functions_view`] has for relations, so
-/// `--explain` with `--aggregate-namespace` prints the plan with the registered aggregates
-/// named in the receipt's `aggregates` block instead of refusing every `Custom` call as
-/// unregistered.
+/// explain entry at all; [`NativeSparqlEngine::explain_query_with_options_view`] is that
+/// entry now — the one options-carrying explain call every registry (relations,
+/// aggregates, or both together) reaches this lane through — so `--explain` with
+/// `--aggregate-namespace` prints the plan with the registered aggregates named in the
+/// receipt's `aggregates` block instead of refusing every `Custom` call as unregistered.
 fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
     let named = options.governors.named();
     if !named.is_empty() && options.explain {

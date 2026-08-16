@@ -86,7 +86,7 @@
 
 @prefix mf:     <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
 @prefix qt:     <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
-@prefix purrdf: <https://purrdf.dev/ns/conformance-manifest#> .
+@prefix purrdf: <https://example.org/conformance-manifest#> .
 @prefix :       <http://purrdf.test/extend#> .
 
 :manifest a mf:Manifest ;

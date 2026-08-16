@@ -40,14 +40,12 @@ const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
 /// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
 const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
 
-/// purrdf's own manifest-EXTENSION vocabulary, for fields the W3C `mf:`/`qt:`
-/// vocabulary has no slot for. This is test-INFRASTRUCTURE metadata that
-/// configures this harness's own loader — never shipped product output, so it is
-/// exempt from the "PurRDF mints no vocabulary IRIs" product contract (AGENTS.md)
-/// in exactly the way `EXT_NS`/`REL_NS`/`LOSS_NS` in `crate::run` already are
-/// (those are query-text namespaces the harness supplies as caller configuration;
-/// this is manifest-authoring vocabulary for the harness's own loader).
-const PURRDF_MF_NS: &str = "https://purrdf.dev/ns/conformance-manifest#";
+/// This harness's own manifest-EXTENSION vocabulary, for fields the W3C `mf:`/`qt:`
+/// vocabulary has no slot for. Test-INFRASTRUCTURE metadata that configures this
+/// harness's own loader, under `example.org` exactly as `EXT_NS`/`REL_NS`/`LOSS_NS`
+/// in `crate::run` are: caller-supplied harness configuration, never a vocabulary
+/// PurRDF itself mints or ships.
+const MF_EXT_NS: &str = "https://example.org/conformance-manifest#";
 
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +133,7 @@ pub struct SparqlTestCase {
     /// for a plain (Simple-entailment) test or one whose only regimes the native
     /// reasoner cannot materialize (OWL-Direct / D / RIF).
     pub regime: Option<purrdf_entail::Regime>,
-    /// `purrdf:aggregateNamespace` on the test's `mf:action` (`PURRDF_MF_NS`,
+    /// `purrdf:aggregateNamespace` on the test's `mf:action` (`MF_EXT_NS`,
     /// harness-loader vocabulary — see its doc comment): the IRI namespace this
     /// case's `AGG(<namespace><NAME>, args…)` calls resolve against. `None` (the
     /// default, and every case but the ones that opt in) registers no statistical
@@ -165,7 +163,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         "PREFIX mf: <{MF}>\n\
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
-         PREFIX purrdf: <{PURRDF_MF_NS}>\n\
+         PREFIX purrdf: <{MF_EXT_NS}>\n\
          SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\

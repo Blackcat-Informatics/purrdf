@@ -265,19 +265,71 @@ fn broken_manifest_with_an_undescribed_entry_is_rejected() {
     );
 }
 
-/// Positive control for the test above: a manifest whose sole entry IS fully
-/// described loads cleanly — proving the guard's rejection above is triggered by
-/// the missing description, not by some other structural defect in the fixture.
+/// Guards the PLACEMENT invariant `broken_manifest_with_an_undescribed_entry_is_rejected`
+/// (and its positive control immediately below) both rely on: the negative fixture
+/// directory lives under `tests/fixtures/`, never under `suite/`, so it is never
+/// discovered as a real (and permanently failing) conformance case by
+/// `sparql_conformance.rs`'s `datatest_stable::harness!`, which is rooted at
+/// `suite/` only.
+///
+/// This is a directory-existence check, not the positive control the module doc
+/// for the test above once claimed to be here — see
+/// `broken_manifest_with_a_described_entry_loads_cleanly` for that.
 #[test]
 fn broken_manifest_fixture_directory_does_not_leak_into_the_live_suite() {
-    // The negative fixture lives under `tests/fixtures/`, never under `suite/`, so
-    // `suite_root()` must not see it — pinning the placement invariant the module
-    // doc for `broken_manifest_with_an_undescribed_entry_is_rejected` relies on.
     let leaked = suite_root().join("broken-manifests");
     assert!(
         !leaked.exists(),
         "the negative fixture must live under tests/fixtures/, not suite/, or the \
          datatest harness would pick it up as a real (and permanently failing) case"
+    );
+}
+
+/// The ACTUAL positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
+/// `tests/fixtures/broken-manifests/described-entry/manifest.ttl` is the exact sibling
+/// shape of `undescribed-entry/manifest.ttl` — same `mf:Manifest`/single-entry
+/// `mf:entries` list, same bare-IRI `mf:action` style — except its sole entry DOES
+/// carry `rdf:type`/`mf:name`/`mf:action`, the three triples the loader's
+/// row-grouping SELECT requires to bind a row at all.
+///
+/// If this manifest failed to load, or loaded with a different case count than 1,
+/// the negative test's rejection could not be attributed specifically to the missing
+/// description — it could equally be some other structural defect the two fixtures
+/// happen to share (a malformed `mf:entries` list, an unresolvable base IRI, a Turtle
+/// parse error). This test rules that out: the only difference between the two
+/// fixtures is the presence of the description triples, and only the one missing
+/// them is rejected.
+#[test]
+fn broken_manifest_with_a_described_entry_loads_cleanly() {
+    let manifest = fixtures_root()
+        .join("broken-manifests")
+        .join("described-entry")
+        .join("manifest.ttl");
+    assert!(
+        manifest.is_file(),
+        "positive-control fixture missing: {}",
+        manifest.display()
+    );
+
+    let cases = purrdf_sparql_conformance::manifest::load(&manifest).unwrap_or_else(|e| {
+        panic!("a manifest whose sole entry IS fully described must load cleanly, got: {e}")
+    });
+
+    assert_eq!(
+        cases.len(),
+        1,
+        "the manifest declares exactly one mf:entries member; it must load exactly \
+         one case, got {}",
+        cases.len()
+    );
+    assert_eq!(
+        cases[0].iri, "http://purrdf.test/manifest/#describedEntry",
+        "the loaded case must be the described entry, not some other IRI"
+    );
+    assert_eq!(
+        cases[0].kind,
+        purrdf_sparql_conformance::manifest::TestKind::PositiveSyntax,
+        "the loaded case's kind must reflect its declared rdf:type"
     );
 }
 
