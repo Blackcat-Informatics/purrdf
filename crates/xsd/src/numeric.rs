@@ -884,16 +884,29 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
 /// `AVG`'s finish for exactly that case — mirrors `decimal_div_raw`'s
 /// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape exactly (same target
 /// scale, same truncate-toward-zero), just computed over an
-/// arbitrary-precision dividend instead of an `i128` one, so a total that
-/// overflowed `i128` does not have to poison `AVG` when the QUOTIENT is
-/// perfectly ordinary (e.g. `(i128::MAX + i128::MAX) / 2 == i128::MAX`, exactly
-/// representable, even though the sum it divides is not).
+/// arbitrary-precision dividend instead of an `i128` one.
 ///
-/// `None` only when the resulting MANTISSA does not fit `i128` either —
-/// `xsd:decimal`'s own `i128`-mantissa bound (this crate's documented design,
-/// unchanged by this function), not a limitation `BigInt` introduces. `count`
-/// must be nonzero; `AVG`'s one caller only reaches this with a folded row
-/// count, which is never zero for a non-empty group.
+/// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
+/// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
+/// crate's documented design, unchanged by this function; matches
+/// `oxsdatatypes`' precision). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
+/// digits BEFORE dividing multiplies the required headroom by 18 decimal
+/// digits, so this fails far more readily than the bare integer quotient
+/// would: an escaped-`i128` `dividend` needs a `count` on the order of
+/// `10^18` or larger before the scaled quotient's mantissa fits back inside
+/// `i128` (see `bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not`
+/// in this module's tests for a worked case) — a plausible `GROUP BY` row
+/// count for some workloads, but not for a small one. In particular, an
+/// ordinary-looking quotient like `(i128::MAX + i128::MAX) / 2` — mathematically
+/// exactly `i128::MAX`, an entirely ordinary integer — still returns `None`
+/// here purely because of the forced scale-18 representation: at scale 18,
+/// `i128::MAX`'s mantissa alone needs roughly 56 decimal digits, far past
+/// `i128`'s ~38-digit ceiling. Callers that must answer even then use
+/// [`bigint_avg_decimal_lexical`], which has no such bound (see its doc for
+/// why bypassing [`Decimal`] entirely is safe there).
+///
+/// `count` must be nonzero; `AVG`'s one caller only reaches this with a folded
+/// row count, which is never zero for a non-empty group.
 ///
 /// # Panics
 ///
@@ -913,6 +926,43 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
         mantissa,
         MAX_DECIMAL_SCALE,
     )))
+}
+
+/// `AVG`'s finish for an escaped-`i128` running total whose scale-`MAX_DECIMAL_SCALE`
+/// quotient mantissa has ALSO escaped `i128` — the case [`bigint_avg_decimal`]
+/// answers `None` for. Computes the IDENTICAL exact scale-18 quotient
+/// [`bigint_avg_decimal`] does (same scale-then-divide, same truncate-toward-zero),
+/// but renders it as raw canonical `xsd:decimal` lexical TEXT via
+/// [`crate::bigint::BigInt::to_decimal_lexical`] instead of constructing an
+/// in-memory [`Decimal`] — bypassing `xsd:decimal`'s `i128`-mantissa bound
+/// entirely rather than moving it. This is safe for the same reason the crate
+/// already accepts the analogous asymmetry for `SUM`: a fold's FINISH is allowed
+/// to emit a wider literal than any single parsed `xsd:decimal`/`xsd:integer`
+/// INPUT could ever produce (see [`crate::bigint::BigInt::to_decimal_string`]'s
+/// doc and its `SUM`-side caller, `purrdf-sparql-eval`'s `int_sum_value`, which
+/// makes the identical choice for a pure-integer running total that exceeds
+/// `i128`). No representation this function produces is ever fed back through
+/// [`Decimal`]'s arithmetic — the IEEE (`float`/`double`) families and the rest
+/// of the numeric promotion tower are untouched by this function's existence.
+///
+/// Always succeeds: `BigInt` has no magnitude bound beyond available memory, so
+/// unlike [`bigint_avg_decimal`] this has no `None` case at all.
+///
+/// # Panics
+///
+/// If `count == 0` — the caller's contract, not a runtime input (identical to
+/// [`bigint_avg_decimal`]).
+#[must_use]
+pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
+    assert!(
+        count != 0,
+        "AVG's divisor is a folded row count, never zero"
+    );
+    let scaled = dividend.mul_pow10(u32::from(MAX_DECIMAL_SCALE));
+    let (quotient, _remainder) = scaled
+        .div_rem_u64(count)
+        .expect("count != 0 was just asserted");
+    quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
 }
 
 /// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.
@@ -1639,15 +1689,35 @@ mod tests {
     #[test]
     fn bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128() {
         // dividend = 2 * i128::MAX, divided by 2: the mathematically exact quotient
-        // (i128::MAX) is an ordinary integer, but `AVG`'s result type is `decimal`,
-        // and `decimal`'s mantissa must hold BOTH the integer part AND 18
-        // fractional digits — `i128::MAX` scaled to 18 fractional digits does not
-        // fit `i128` either. This is `xsd:decimal`'s own documented bound, not a
+        // (i128::MAX) is an ordinary integer, but `bigint_avg_decimal`'s result type
+        // is the `i128`-mantissa `Decimal`, and its mantissa must hold BOTH the
+        // integer part AND 18 fractional digits — `i128::MAX` scaled to 18
+        // fractional digits does not fit `i128` either. This is `xsd:decimal`'s own
+        // documented bound (`Decimal`'s deliberate, unchanged design), not a
         // limitation `BigInt` introduces, and it already applied — for the same
         // reason — to sufficiently large in-range `AVG`s before this module existed.
+        //
+        // `bigint_avg_decimal` genuinely has no answer here (there is no `i128`
+        // mantissa to return); [`bigint_avg_decimal_lexical`] is the escape hatch
+        // that answers this exact case by rendering the exact result as text
+        // instead — see the next test.
         let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
         dividend.add_i128(i128::MAX);
         assert!(bigint_avg_decimal(&dividend, 2).is_none());
+    }
+
+    #[test]
+    fn bigint_avg_decimal_lexical_answers_exactly_where_bigint_avg_decimal_poisons() {
+        // Same fixture as the test above (dividend = 2 * i128::MAX, count = 2):
+        // `bigint_avg_decimal` has no `i128`-mantissa `Decimal` to return, but the
+        // exact scale-18 quotient is perfectly representable as TEXT, with no
+        // magnitude bound at all — `170141183460469231731687303715884105727` (i.e.
+        // `i128::MAX`) followed by 18 zero fractional digits, trimmed to an
+        // integer-valued canonical form per XSD 1.1 §3.3.3.2.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        let lexical = bigint_avg_decimal_lexical(&dividend, 2);
+        assert_eq!(lexical, i128::MAX.to_string());
     }
 
     // -- decimal exactness: 0.1 + 0.2 == 0.3 (the classic float failure) --

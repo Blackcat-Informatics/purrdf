@@ -113,6 +113,7 @@ use purrdf_xsd::{
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 
 use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
@@ -1383,24 +1384,33 @@ impl NumericFold {
     /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
     /// division by the (always-small) folded row count, mirroring
     /// `numeric_div`'s own truncated-to-18-fractional-digit `Decimal` result
-    /// bit for bit — so a `SUM` that escaped `i128` does not have to poison
-    /// `AVG` when the QUOTIENT is perfectly ordinary (e.g. `(i128::MAX +
-    /// i128::MAX) / 2 == i128::MAX`, exactly representable even though the sum
-    /// it divides is not). That helper answers `None` only when the resulting
-    /// MANTISSA still does not fit `i128` either — `xsd:decimal`'s own
-    /// `i128`-mantissa bound (this crate's documented design, unmoved by this
-    /// fold), which really is "genuinely unrepresentable in the result type":
-    /// no `AVG` this poisons was ever answerable before this change either,
-    /// since it poisoned earlier still, on the first bounded-arithmetic
-    /// overflow. This is the ONE place a `NumericFold` that never poisoned in
-    /// `step`/`combine_owned` can still finish unbound — a finish-time, not a
-    /// fold-time, poison — so unlike [`Self::finish_sum`] this stays fallible.
+    /// bit for bit. That helper itself answers `None` when the resulting
+    /// MANTISSA does not fit `i128` — `xsd:decimal`'s `Decimal` representation
+    /// is deliberately `i128`-mantissa-bounded (this crate's documented design,
+    /// unmoved by this fold) — but THIS finish does not stop there: it falls
+    /// back to [`purrdf_xsd::bigint_avg_decimal_lexical`], which renders the
+    /// identical exact scale-18 quotient as raw lexical TEXT with no magnitude
+    /// bound at all, the same bypass [`Self::finish_sum`]'s `int_sum_value`
+    /// already uses for a pure-integer total that exceeds `i128`. So a `SUM`
+    /// that escaped `i128` never has to poison `AVG`, full stop — not only when
+    /// the quotient happens to still fit `i128` after scaling, but always. This
+    /// makes the `Self::Int` arm infallible; unlike [`Self::finish_sum`] this
+    /// function stays `Option`-returning only because [`Self::Ok`]'s
+    /// `numeric_div` call can still fail (a `decimal`-tier intermediate
+    /// overflow — see `purrdf_xsd::numeric::decimal_div_raw`).
     fn finish_avg(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(integer_value(0)),
             Self::Int { sum, count, .. } => {
-                let avg = purrdf_xsd::bigint_avg_decimal(&sum, count)?;
-                Some(crate::expr::xsd_literal_value(&avg))
+                Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
+                    || TermValue::Literal {
+                        lexical_form: purrdf_xsd::bigint_avg_decimal_lexical(&sum, count),
+                        datatype: XSD_DECIMAL.to_owned(),
+                        language: None,
+                        direction: None,
+                    },
+                    |avg| crate::expr::xsd_literal_value(&avg),
+                ))
             }
             Self::Ok { acc, count } => {
                 let count_val = XsdValue::Integer {
@@ -2764,6 +2774,57 @@ mod tests {
             Some("340282366920938463463374607431768211454"),
             "2 * i128::MAX must answer exactly, not unbound"
         );
+    }
+
+    /// `AVG` over a total that genuinely exceeds `i128`, where the scale-18
+    /// quotient mantissa ALSO exceeds `i128` (`bigint_avg_decimal` alone would
+    /// answer `None` here — see `purrdf_xsd::numeric`'s doc on it): must still
+    /// answer exactly rather than go unbound.
+    /// `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the two `i128::MAX`
+    /// values sum to `2 × i128::MAX`, divided by a count of 2), rendered through
+    /// [`purrdf_xsd::bigint_avg_decimal_lexical`]'s TEXT bypass — the same shape
+    /// [`sum_overflow_exceeding_i128_answers_exact_total`] pins for `SUM`. This
+    /// is the exact fixture the crate's public rustdoc worked example describes
+    /// (`(i128::MAX + i128::MAX) / 2 == i128::MAX`); before the lexical-text
+    /// fallback existed this answered unbound instead, because `Decimal`'s own
+    /// `i128`-mantissa bound rejects the scale-18 quotient even though the
+    /// value itself is an ordinary integer.
+    #[test]
+    fn avg_overflow_exceeding_i128_answers_exact_total() {
+        let max = i128::MAX.to_string();
+        let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
+        assert_eq!(
+            result.as_deref(),
+            Some(max.as_str()),
+            "AVG({{i128::MAX, i128::MAX}}) must answer i128::MAX exactly, not unbound"
+        );
+    }
+
+    /// `xsd:double`'s IEEE semantics are untouched by the `AVG` lexical-text
+    /// fallback: an overflowing double running total still saturates to IEEE
+    /// infinity divided by the row count, which is still infinity — the
+    /// spec-correct IEEE answer, never routed through the integer/`BigInt` path
+    /// at all (`NumericFold::Ok`, not `NumericFold::Int` — see `finish_avg`
+    /// above in this module).
+    #[test]
+    fn avg_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        let huge = format!("{:e}", f64::MAX);
+        let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
+        assert_eq!(result.as_deref(), Some("INF"));
+    }
+
+    /// `NaN` still propagates through a `double` `AVG`, per IEEE 754 — identical
+    /// to [`sum_double_nan_propagates`], unaffected by the lexical-text fallback
+    /// (which only ever fires for the pure-integer `NumericFold::Int` case).
+    #[test]
+    fn avg_double_nan_propagates() {
+        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
+        let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
+        assert_eq!(result.as_deref(), Some("NaN"));
     }
 
     /// Once a pure-integer running sum has escaped `i128` (see

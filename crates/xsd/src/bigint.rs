@@ -175,18 +175,47 @@ impl BigInt {
     /// leading zero (`"0"` for zero itself).
     #[must_use]
     pub fn to_decimal_string(&self) -> String {
-        let Some((most_significant, rest)) = self.limbs.split_last() else {
-            return "0".to_string();
-        };
-        let mut out = String::with_capacity(self.limbs.len() * 9 + 1);
+        let digits = magnitude_decimal_digits(&self.limbs);
         if self.negative {
-            out.push('-');
+            format!("-{digits}")
+        } else {
+            digits
         }
-        write!(out, "{most_significant}").expect("writing to a String cannot fail");
-        for limb in rest.iter().rev() {
-            write!(out, "{limb:09}").expect("writing to a String cannot fail");
+    }
+
+    /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.2
+    /// `decimalCanonicalMap`) of `self` interpreted as a fixed-point mantissa at
+    /// `scale` fractional digits — i.e. as if `self` were a
+    /// [`crate::numeric::Decimal`]'s mantissa, but with no `i128` bound on the
+    /// magnitude. Mirrors `Decimal::canonical_lexical`'s digit-split/trim
+    /// algorithm exactly (an integer-valued result has no decimal point; a
+    /// fractional one keeps its fractional part with trailing zeros trimmed).
+    ///
+    /// Used only by [`crate::numeric::bigint_avg_decimal_lexical`] — `AVG`'s
+    /// finish once the scale-18 quotient mantissa has ALSO escaped `i128` (not
+    /// just the running sum that produced it) — the identical TEXT-rendering
+    /// bypass this module's own [`Self::to_decimal_string`] already gives
+    /// `SUM`'s finish for a pure-integer running total that exceeds `i128`.
+    #[must_use]
+    pub fn to_decimal_lexical(&self, scale: u8) -> String {
+        let digits = magnitude_decimal_digits(&self.limbs);
+        let scale = usize::from(scale);
+        let (int_part, frac_part) = if scale == 0 {
+            (digits, String::new())
+        } else if digits.len() > scale {
+            let split = digits.len() - scale;
+            (digits[..split].to_string(), digits[split..].to_string())
+        } else {
+            let pad = "0".repeat(scale - digits.len());
+            ("0".to_string(), format!("{pad}{digits}"))
+        };
+        let frac_trimmed = frac_part.trim_end_matches('0');
+        let sign = if self.negative { "-" } else { "" };
+        if frac_trimmed.is_empty() {
+            format!("{sign}{int_part}")
+        } else {
+            format!("{sign}{int_part}.{frac_trimmed}")
         }
-        out
     }
 
     /// Whether this value is strictly negative (`false` for zero).
@@ -236,6 +265,22 @@ impl BigInt {
         };
         Some((quotient, remainder))
     }
+}
+
+/// Render a canonical (no trailing zero limb) magnitude as unsigned decimal digits,
+/// with no leading zero (`"0"` for the empty/zero magnitude). Shared by
+/// [`BigInt::to_decimal_string`] and [`BigInt::to_decimal_lexical`], which differ
+/// only in the sign placement and in whether a decimal point is spliced in.
+fn magnitude_decimal_digits(limbs: &[u32]) -> String {
+    let Some((most_significant, rest)) = limbs.split_last() else {
+        return "0".to_string();
+    };
+    let mut out = String::with_capacity(limbs.len() * 9);
+    write!(out, "{most_significant}").expect("writing to a String cannot fail");
+    for limb in rest.iter().rev() {
+        write!(out, "{limb:09}").expect("writing to a String cannot fail");
+    }
+    out
 }
 
 /// Compare two canonical (no trailing zero limb) magnitudes.
@@ -399,6 +444,37 @@ mod tests {
         assert_eq!(
             sum.to_decimal_string(),
             "-340282366920938463463374607431768211456"
+        );
+    }
+
+    #[test]
+    fn to_decimal_lexical_matches_decimal_canonical_lexical_shape() {
+        // Integer-valued: no decimal point, matching XSD 1.1 §3.3.3.2.
+        assert_eq!(BigInt::from_i128(0).to_decimal_lexical(0), "0");
+        assert_eq!(BigInt::from_i128(42).to_decimal_lexical(0), "42");
+        // scale > 0 but the magnitude's digits are all consumed by trailing zeros:
+        // 4200 at scale 2 is "42.00" -> trimmed to "42".
+        assert_eq!(BigInt::from_i128(4200).to_decimal_lexical(2), "42");
+        // Fractional, trailing zeros trimmed but not the whole fraction: 425 at
+        // scale 2 is "4.25".
+        assert_eq!(BigInt::from_i128(425).to_decimal_lexical(2), "4.25");
+        // Magnitude shorter than scale: leading zero padding in the fraction.
+        assert_eq!(BigInt::from_i128(5).to_decimal_lexical(3), "0.005");
+        // Negative sign preserved.
+        assert_eq!(BigInt::from_i128(-425).to_decimal_lexical(2), "-4.25");
+    }
+
+    #[test]
+    fn to_decimal_lexical_exceeds_i128_and_still_renders_exactly() {
+        // The whole point of this method: a magnitude with no i128 mantissa
+        // representation at all still renders as exact canonical decimal text —
+        // 2 * i128::MAX at scale 18 (AVG's fixed target scale).
+        let mut dividend = BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        let scaled = dividend.mul_pow10(18);
+        assert_eq!(
+            scaled.to_decimal_lexical(18),
+            "340282366920938463463374607431768211454"
         );
     }
 
