@@ -116,7 +116,7 @@ export interface ProvenanceNamespaceOption {
  * Registers purrdf's first-party statistical aggregate set (`MEDIAN`, `PERCENTILE`,
  * `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`) under
  * this IRI namespace, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.
- * `AGG(<https://ex.example/agg#>MEDIAN, ?x)`. There is no default namespace — omit this
+ * `AGG(<https://ex.example/agg#MEDIAN>, ?x)`. There is no default namespace — omit this
  * and every one of the ten names is an ordinary unregistered custom-aggregate IRI,
  * refused at parse time exactly as before.
  *

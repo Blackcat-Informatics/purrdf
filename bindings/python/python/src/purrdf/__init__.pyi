@@ -466,7 +466,8 @@ class Store:
     # under that IRI, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.:
     #
     #   store.query(
-    #       "SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) "
+    #       "PREFIX ex: <https://ex.example/> "
+    #       "SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) "
     #       "WHERE { ?s ex:value ?v }",
     #       aggregate_namespace="https://ex.example/agg#",
     #   )

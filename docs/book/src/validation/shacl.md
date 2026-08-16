@@ -309,7 +309,7 @@ wasm-clean Rust.
 ## From Python
 
 ```python
-from purrdf_native import shacl
+from purrdf import shacl
 
 report = shacl.validate(shapes_ttl="...", data_nt="...")
 print(report["conforms"])  # True / False

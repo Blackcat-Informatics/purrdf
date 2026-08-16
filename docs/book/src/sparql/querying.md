@@ -98,6 +98,7 @@ two-argument signature, which maps onto XPath and XQuery Functions and Operators
 for every other SPARQL 1.2 temporal builtin).
 
 ```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 SELECT ?adjusted WHERE {
   BIND(ADJUST("2011-01-10T14:45:13Z"^^xsd:dateTime,
               "-PT05H"^^xsd:dayTimeDuration) AS ?adjusted)
@@ -313,7 +314,7 @@ let result = engine.query_with_options_view(
         substitutions: &[],
     },
     QueryOptions {
-        aggregates: Some(&registry),
+        aggregates: &registry,
         ..QueryOptions::EMPTY
     },
 )?;
@@ -449,7 +450,8 @@ nearest equivalent optional-string configuration:
 
   ```python
   store.query(
-      "SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) "
+      "PREFIX ex: <https://ex.example/> "
+      "SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) "
       "WHERE { ?s ex:value ?v }",
       aggregate_namespace="https://ex.example/agg#",
   )
@@ -460,7 +462,7 @@ nearest equivalent optional-string configuration:
 
   ```sh
   purrdf query --data data.ttl --aggregate-namespace 'https://ex.example/agg#' \
-    'SELECT (AGG(<https://ex.example/agg#>MEDIAN, ?v) AS ?m) WHERE { ?s ?p ?v }'
+    'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'
   ```
 
 - **WebAssembly** (`QueryEngine.queryGoverned` / `updateGoverned`): the
@@ -497,7 +499,7 @@ resolves over an entailed closure the same way it resolves over a raw view.
 ```sh
 purrdf query --data ent.ttl --entailment rdfs \
   --aggregate-namespace 'https://ex.example/agg#' \
-  'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?w) AS ?m) \
+  'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?w) AS ?m)
    WHERE { ?x <http://example.org/measure> ?w }'
 ```
 

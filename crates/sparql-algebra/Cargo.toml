@@ -54,6 +54,12 @@ proptest = { workspace = true }
 insta = { workspace = true }
 # Tokenizer hot-path baselines (dev-dep only).
 criterion = { workspace = true }
+# Text extraction for `tests/shipped_sparql_examples.rs` — the gate that pulls
+# SPARQL query/update text and `AGG(<iri>...)` call fragments out of the book,
+# `--help` text, `.pyi`, `.d.ts`, and rustdoc, and parses each with THIS crate's
+# own parser. Dev-only: never a runtime or release dependency, so the wasm gate
+# is unaffected.
+regex = { workspace = true }
 
 [[bench]]
 name = "tokenize"

@@ -313,7 +313,7 @@ pub(crate) enum Command {
         /// Register purrdf's first-party statistical aggregate set (`MEDIAN`,
         /// `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
         /// `LAST`, `TOPK`) under this IRI namespace, so the query text can call
-        /// `AGG(<NAMESPACE><NAME>, args…)`, e.g. `AGG(<https://ex.example/agg#>MEDIAN,
+        /// `AGG(<NAMESPACE><NAME>, args…)`, e.g. `AGG(<https://ex.example/agg#MEDIAN>,
         /// ?x)`. There is no default namespace (PurRDF mints no vocabulary IRIs of its
         /// own) — omit this flag and every one of the ten names is an ordinary
         /// unregistered custom-aggregate IRI, refused at parse time exactly as before.

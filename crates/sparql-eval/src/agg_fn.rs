@@ -90,15 +90,22 @@
 //! merges was created by the SAME [`CustomAggregate::init`] factory
 //! (`crate::parallel::par_chunk_reduce_init` never mixes accumulators from two
 //! different registrations) — so a mismatch can only mean a host bug, never a
-//! state this crate's own evaluator can produce; `downcast_combine_partial`
-//! is the standard way to consume it, returning `Err(EvalError::Function)`
-//! rather than panicking on a mismatch — `combine`'s own `Result` return type
-//! (not `()`) is what makes that a plain propagated error instead of a panic
-//! `combine_contained`'s `crate::contain` containment would otherwise have to
-//! catch, which matters because that containment cannot run at all under
-//! `panic = "abort"` (see the wasm32 note below). `crate::stat_agg`'s
-//! `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK` members are this crate's
-//! first-party example of the pattern.
+//! state this crate's own evaluator can produce. Consume the recovered type with
+//! `other.into_any().downcast::<Self>()`, mapping the `Err(Box<dyn Any + Send>)`
+//! case (the impossible-by-construction mismatch above) to an [`EvalError`] and
+//! propagating it with `?` — that is the ordinary, public way to consume
+//! [`into_any`](AggregateAccumulator::into_any)'s result from OUTSIDE this crate,
+//! and it is what returns `Err(EvalError::Function)` on a mismatch rather than
+//! panicking — `combine`'s own `Result` return type (not `()`) is what makes that
+//! a plain propagated error instead of a panic `combine_contained`'s
+//! `crate::contain` containment would otherwise have to catch, which matters
+//! because that containment cannot run at all under `panic = "abort"` (see the
+//! wasm32 note below). This crate's OWN accumulators (`crate::stat_agg`'s
+//! `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK` members) happen to share a
+//! private `downcast_combine_partial` helper for identical error text across all
+//! five, but that helper is `pub(crate)` and not part of this crate's public API
+//! — an external implementation reaches for the plain `downcast::<Self>()` call
+//! above instead, exactly as shown in the book's custom-aggregate walkthrough.
 //!
 //! # wasm32 note
 //!
@@ -107,9 +114,9 @@
 //! reason of its own outside the downcast — that containment still requires
 //! `panic = "unwind"` and is unavailable under `panic = "abort"` exactly as every
 //! other extension seam's is (see `crate::contain`'s module docs). The
-//! `downcast_combine_partial` mismatch case above no longer depends on it: it is
-//! a typed `Err`, not a panic, so it degrades cleanly on every target regardless
-//! of panic strategy.
+//! same-type-by-construction downcast above no longer depends on it: reported
+//! through a typed `Err`, not a panic, it degrades cleanly on every target
+//! regardless of panic strategy.
 
 use std::sync::Arc;
 
@@ -281,10 +288,11 @@ pub trait AggregateAccumulator: Send + 'static {
     /// # Errors
     ///
     /// Any [`EvalError`] the aggregate raises to refuse a merge — in particular,
-    /// the typed refusal `downcast_combine_partial` returns when `other`'s
-    /// concrete type does not match `Self`, which an implementation reaching for
-    /// [`into_any`](Self::into_any)'s escape hatch should propagate with `?`
-    /// rather than discard. `Result` here (not `()`) is what lets that mismatch —
+    /// the typed refusal an implementation reaching for
+    /// [`into_any`](Self::into_any)'s escape hatch gets back from
+    /// `other.into_any().downcast::<Self>()` when `other`'s concrete type does
+    /// not match `Self`, mapped to an [`EvalError`] and propagated with `?`
+    /// rather than discarded. `Result` here (not `()`) is what lets that mismatch —
     /// a host contract violation this crate cannot rule out at compile time, only
     /// by construction (see [`into_any`](Self::into_any)'s docs) — surface as an
     /// ordinary refusal on every target, including `wasm32-unknown-unknown` under
@@ -299,7 +307,9 @@ pub trait AggregateAccumulator: Send + 'static {
     /// more than `finish()`'s single answer (see the module docs' "Merging
     /// structural state" section). `self: Box<Self>` (consuming, not `&mut
     /// self`) because `combine` always consumes `other` too, and
-    /// `downcast_combine_partial` is the standard way to consume the result.
+    /// `other.into_any().downcast::<Self>()` — mapping a mismatched `Err` to an
+    /// [`EvalError`] — is the standard way to consume the result from outside
+    /// this crate.
     ///
     /// No default body: a default here would need to type-check against a
     /// fully generic, possibly-unsized `Self`, which the `Box<Self> -> Box<dyn
@@ -692,6 +702,118 @@ impl AggregateRegistry {
     ///
     /// Panics if `iri` is already registered — see the type's docs for why an
     /// aggregate may not be silently shadowed.
+    ///
+    /// # Examples
+    ///
+    /// A running-total aggregate, registered under
+    /// `https://example.org/agg#total` and called from query text as
+    /// `AGG(<https://example.org/agg#total>, ?x)` — the compiled twin of the book's
+    /// "Extending the evaluator: custom aggregates" walkthrough, so the seam it
+    /// teaches (in particular [`crate::engine::QueryOptions::aggregates`] taking the registry
+    /// directly, not an `Option`, and [`AggregateAccumulator::into_any`]'s
+    /// `other.into_any().downcast::<Self>()` merge pattern) cannot drift from what
+    /// actually compiles:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue};
+    /// use purrdf_sparql_eval::{
+    ///     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate,
+    ///     EvalError, NativeSparqlEngine, QueryOptions, Volatility,
+    /// };
+    ///
+    /// struct TotalAccumulator {
+    ///     sum: i64,
+    /// }
+    ///
+    /// impl AggregateAccumulator for TotalAccumulator {
+    ///     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+    ///         if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+    ///             && let Ok(n) = lexical_form.parse::<i64>()
+    ///         {
+    ///             self.sum += n;
+    ///         }
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+    ///         // The public, outside-this-crate way to recover `other`'s real state
+    ///         // through `into_any` — see `AggregateAccumulator::combine`'s docs.
+    ///         let other = other.into_any().downcast::<Self>().map_err(|_| {
+    ///             EvalError::function(
+    ///                 "combine received a partial accumulator of a different concrete type",
+    ///             )
+    ///         })?;
+    ///         self.sum += other.sum;
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+    ///         self
+    ///     }
+    ///
+    ///     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+    ///         Ok(Some(TermValue::typed_literal(
+    ///             self.sum.to_string(),
+    ///             "http://www.w3.org/2001/XMLSchema#integer",
+    ///         )))
+    ///     }
+    /// }
+    ///
+    /// struct TotalAggregate;
+    ///
+    /// impl CustomAggregate for TotalAggregate {
+    ///     fn arity(&self) -> Arity {
+    ///         Arity::Exact(1)
+    ///     }
+    ///     fn volatility(&self) -> Volatility {
+    ///         Volatility::Stable
+    ///     }
+    ///     fn algebraic_class(&self) -> AlgebraicClass {
+    ///         AlgebraicClass::Commutative
+    ///     }
+    ///     fn state_bound(&self) -> u64 {
+    ///         0
+    ///     }
+    ///     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+    ///         Box::new(TotalAccumulator { sum: 0 })
+    ///     }
+    /// }
+    ///
+    /// let mut registry = AggregateRegistry::new();
+    /// registry.register("https://example.org/agg#total", Arc::new(TotalAggregate));
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let s = b.intern_iri("https://example.org/s");
+    /// let n = b.intern_iri("https://example.org/n");
+    /// let v1 = b.intern_literal(RdfLiteral::typed("3", "http://www.w3.org/2001/XMLSchema#integer"));
+    /// let v2 = b.intern_literal(RdfLiteral::typed("4", "http://www.w3.org/2001/XMLSchema#integer"));
+    /// b.push_quad(s, n, v1, None);
+    /// b.push_quad(s, n, v2, None);
+    /// let ds = b.freeze().expect("freeze");
+    ///
+    /// let engine = NativeSparqlEngine::new();
+    /// let result = engine
+    ///     .query_with_options_view(
+    ///         &ds,
+    ///         SparqlRequest {
+    ///             query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) \
+    ///                     WHERE { ?s <https://example.org/n> ?x }",
+    ///             base_iri: None,
+    ///             substitutions: &[],
+    ///         },
+    ///         QueryOptions {
+    ///             aggregates: &registry,
+    ///             ..QueryOptions::EMPTY
+    ///         },
+    ///     )
+    ///     .expect("evaluates");
+    ///
+    /// if let SparqlResult::Solutions { rows, .. } = result {
+    ///     assert_eq!(rows.len(), 1);
+    /// }
+    /// ```
     pub fn register(&mut self, iri: impl Into<String>, aggregate: Arc<dyn CustomAggregate>) {
         let iri = iri.into();
         assert!(
