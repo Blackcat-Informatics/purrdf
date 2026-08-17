@@ -2442,6 +2442,39 @@ mod tests {
         nt
     }
 
+    /// The IRI of the `i`th `ex:v` focus node minted by [`aggregate_data_nt`] and
+    /// [`pf_data_nt`] (both follow the same `ex:v{i}` naming scheme).
+    fn v_iri(i: usize) -> String {
+        format!("http://example.org/ns#v{i}")
+    }
+
+    /// Every `ex:v{i}` focus-node [`Term`] for `i` in `0..n`, in the SAME order the
+    /// `0..n` corpus generators (`aggregate_data_nt`/`pf_data_nt`) mint them. Used to
+    /// hand the bounded [`PreparedValidator`] routes a focus-node slice whose length
+    /// genuinely crosses `crate::parallel::PARALLEL_MIN_FOCUS_NODES` — a scheduling
+    /// claim a single-node slice could never establish.
+    fn all_v_terms(n: usize) -> Vec<Term> {
+        (0..n)
+            .map(|i| NamedNode::new_unchecked(v_iri(i)).into_term())
+            .collect()
+    }
+
+    /// Resolve each `terms` entry (all named nodes, all `ex:v{i}` focus nodes) to its
+    /// [`TermId`] in `projected`, panicking with `label` context on a lookup miss.
+    fn term_ids_for(projected: &RdfDataset, terms: &[Term], label: &str) -> Vec<TermId> {
+        terms
+            .iter()
+            .map(|term| {
+                let Term::NamedNode(named) = term else {
+                    panic!("{label}: focus term must be a named node: {term:?}")
+                };
+                projected
+                    .term_id_by_iri(named.as_str())
+                    .unwrap_or_else(|| panic!("{label}: {named} must be interned"))
+            })
+            .collect()
+    }
+
     /// A registered custom aggregate installed through the PUBLIC `Shapes::aggregates`
     /// field resolves inside a `sh:sparql` `HAVING` clause and produces the correct
     /// verdict — the capability the module's own docs promise, not the refusal every
@@ -2572,6 +2605,14 @@ mod tests {
     /// (the serial path) and above it (the forked path), because
     /// `evaluate_shape_focus_nodes` now builds the aggregate scope for every focus chunk
     /// directly from `shapes`, the same way it already built the function scope.
+    ///
+    /// The bounded routes (`validate_focus_nodes`/`validate_focus_node_ids`) fork on the
+    /// SIZE OF THE SLICE THE CALLER PASSES IN, not on the size of the underlying dataset
+    /// — `should_parallelize` reads `work_items` from that slice. So the above-threshold
+    /// case passes the WHOLE `> PARALLEL_MIN_FOCUS_NODES`-sized focus set to each bounded
+    /// route (genuinely forking it), while the below-threshold case passes a single node
+    /// (genuinely staying serial); a case that always hands over one node, whatever its
+    /// label claims, could never fork and would not establish the above-threshold claim.
     #[test]
     fn custom_aggregate_resolves_across_every_prepared_validator_route() {
         let shapes = Arc::new({
@@ -2587,7 +2628,16 @@ mod tests {
             .expect("test pool must build");
         let v0 = NamedNode::new_unchecked("http://example.org/ns#v0").into_term();
 
-        for (label, n) in [("below-threshold", 10usize), ("above-threshold", above_n)] {
+        for (label, n, bounded_focus_terms) in [
+            ("below-threshold", 10usize, vec![v0]),
+            ("above-threshold", above_n, all_v_terms(above_n)),
+        ] {
+            assert_eq!(
+                bounded_focus_terms.len() > crate::parallel::PARALLEL_MIN_FOCUS_NODES,
+                label == "above-threshold",
+                "{label}: the bounded routes' focus-node slice must cross \
+                 PARALLEL_MIN_FOCUS_NODES exactly when the label claims it does"
+            );
             let data = load_data_nt(&aggregate_data_nt(n));
             pool.install(|| {
                 let projected = project_dataset(data.as_ref()).expect("projection must succeed");
@@ -2610,30 +2660,33 @@ mod tests {
                 assert!(!whole.conforms, "{label}: PreparedValidator::validate");
 
                 let bounded = prepared
-                    .validate_focus_nodes(std::slice::from_ref(&v0))
+                    .validate_focus_nodes(&bounded_focus_terms)
                     .unwrap_or_else(|error| {
                         panic!("{label}: PreparedValidator::validate_focus_nodes: {error}")
                     });
                 assert_eq!(
                     bounded.results.len(),
                     1,
-                    "{label}: validate_focus_nodes must resolve the registered aggregate"
+                    "{label}: validate_focus_nodes must resolve the registered aggregate \
+                     across a {}-node slice: {:?}",
+                    bounded_focus_terms.len(),
+                    bounded.results
                 );
                 assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-                let v0_id = projected
-                    .term_id_by_iri("http://example.org/ns#v0")
-                    .expect("v0 must be interned");
-                let bounded_ids =
-                    prepared
-                        .validate_focus_node_ids(&[v0_id])
-                        .unwrap_or_else(|error| {
-                            panic!("{label}: PreparedValidator::validate_focus_node_ids: {error}")
-                        });
+                let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
+                let bounded_ids = prepared
+                    .validate_focus_node_ids(&bounded_ids_input)
+                    .unwrap_or_else(|error| {
+                        panic!("{label}: PreparedValidator::validate_focus_node_ids: {error}")
+                    });
                 assert_eq!(
                     bounded_ids.results.len(),
                     1,
-                    "{label}: validate_focus_node_ids must resolve the registered aggregate"
+                    "{label}: validate_focus_node_ids must resolve the registered aggregate \
+                     across a {}-node slice: {:?}",
+                    bounded_ids_input.len(),
+                    bounded_ids.results
                 );
                 assert!(!bounded_ids.conforms, "{label}: validate_focus_node_ids");
             });
@@ -2805,6 +2858,13 @@ mod tests {
     /// F10-2 shape (a value silently sourced from whichever caller happened to install a
     /// scope first): here every route resolves correctly as long as the scope wraps THAT
     /// route's own call, proven at both scheduling geometries.
+    ///
+    /// As with the aggregate twin above, the bounded routes fork on the SIZE OF THE
+    /// SLICE THE CALLER PASSES IN (`should_parallelize` reads `work_items` from that
+    /// slice, not from the dataset), so the above-threshold case hands each bounded
+    /// route the WHOLE `> PARALLEL_MIN_FOCUS_NODES`-sized focus set — genuinely forking
+    /// it — while the below-threshold case hands over a single node — genuinely staying
+    /// serial.
     #[test]
     fn property_function_resolves_across_every_prepared_validator_route_when_the_caller_wraps_the_call()
      {
@@ -2816,7 +2876,16 @@ mod tests {
             .expect("test pool must build");
         let v0 = NamedNode::new_unchecked("http://example.org/ns#v0").into_term();
 
-        for (label, n) in [("below-threshold", 10usize), ("above-threshold", above_n)] {
+        for (label, n, bounded_focus_terms) in [
+            ("below-threshold", 10usize, vec![v0]),
+            ("above-threshold", above_n, all_v_terms(above_n)),
+        ] {
+            assert_eq!(
+                bounded_focus_terms.len() > crate::parallel::PARALLEL_MIN_FOCUS_NODES,
+                label == "above-threshold",
+                "{label}: the bounded routes' focus-node slice must cross \
+                 PARALLEL_MIN_FOCUS_NODES exactly when the label claims it does"
+            );
             let data = load_data_nt(&pf_data_nt(n));
             let projected =
                 pool.install(|| project_dataset(data.as_ref()).expect("projection must succeed"));
@@ -2849,27 +2918,33 @@ mod tests {
                     let _scope = crate::sparql::enter_property_function_scope(Arc::new(
                         pf_flagged_registry(),
                     ));
-                    prepared.validate_focus_nodes(std::slice::from_ref(&v0))
+                    prepared.validate_focus_nodes(&bounded_focus_terms)
                 })
                 .unwrap_or_else(|error| panic!("{label}: validate_focus_nodes: {error}"));
-            assert_eq!(bounded.results.len(), 1, "{label}: validate_focus_nodes");
+            assert_eq!(
+                bounded.results.len(),
+                1,
+                "{label}: validate_focus_nodes across a {}-node slice: {:?}",
+                bounded_focus_terms.len(),
+                bounded.results
+            );
             assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-            let v0_id = projected
-                .term_id_by_iri("http://example.org/ns#v0")
-                .expect("v0 must be interned");
+            let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
             let bounded_ids = pool
                 .install(|| {
                     let _scope = crate::sparql::enter_property_function_scope(Arc::new(
                         pf_flagged_registry(),
                     ));
-                    prepared.validate_focus_node_ids(&[v0_id])
+                    prepared.validate_focus_node_ids(&bounded_ids_input)
                 })
                 .unwrap_or_else(|error| panic!("{label}: validate_focus_node_ids: {error}"));
             assert_eq!(
                 bounded_ids.results.len(),
                 1,
-                "{label}: validate_focus_node_ids"
+                "{label}: validate_focus_node_ids across a {}-node slice: {:?}",
+                bounded_ids_input.len(),
+                bounded_ids.results
             );
             assert!(!bounded_ids.conforms, "{label}: validate_focus_node_ids");
         }
