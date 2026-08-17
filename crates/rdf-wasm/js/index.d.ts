@@ -115,7 +115,7 @@ export interface ProvenanceNamespaceOption {
 /**
  * Registers purrdf's first-party statistical aggregate set (`MEDIAN`, `PERCENTILE`,
  * `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`) under
- * this IRI namespace, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.
+ * this IRI namespace, so the query text can call `AGG(<{NAMESPACE}NAME>, args…)`, e.g.
  * `AGG(<https://ex.example/agg#MEDIAN>, ?x)`. There is no default namespace — omit this
  * and every one of the ten names is an ordinary unregistered custom-aggregate IRI,
  * refused at parse time exactly as before.
@@ -789,7 +789,7 @@ export class QueryEngine {
    *
    * `options.aggregateNamespace` behaves exactly as on {@link queryGoverned}: it registers
    * purrdf's first-party statistical aggregate set for the closure query's PARSE and its
-   * evaluation, so `AGG(<namespace><NAME>, args…)` reaches the entailment-aware lane
+   * evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches the entailment-aware lane
    * exactly as it reaches the ordinary one.
    */
   queryEntailmentGoverned(

@@ -8,7 +8,7 @@
 //! is the single entry point: a Rust host that already constructs an
 //! [`AggregateRegistry`] (for [`crate::engine::QueryOptions::aggregates`]) calls it
 //! once with a namespace IRI, and every member below becomes reachable from the
-//! query text as `AGG(<namespace><LOCAL-NAME>, args…)` — a Python/WASM/C/CLI
+//! query text as `AGG(<{NAMESPACE}LOCAL-NAME>, args…)` — a Python/WASM/C/CLI
 //! binding that already exposes registry configuration gets the whole set for
 //! free, through the string surface, with zero additional Rust callbacks.
 //!
@@ -17,7 +17,7 @@
 //! `MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
 //! `FIRST`, `LAST`, `TOPK` — ten members, closed (no caller extension point; a
 //! local name outside this set under the configured namespace is registered
-//! nowhere, so `AGG(<ns>NOT_A_MEMBER, ?x)` is refused at prepare time exactly as
+//! nowhere, so `AGG(<{NS}NOT_A_MEMBER>, ?x)` is refused at prepare time exactly as
 //! any other unregistered custom-aggregate IRI is).
 //!
 //! # Numeric discipline
@@ -57,13 +57,13 @@
 //!
 //! # `PERCENTILE`'s named scalarval
 //!
-//! `AGG(<ns>PERCENTILE, ?x; P=0.95)` — `P` is a NAMED SCALARVAL (see
+//! `AGG(<{NS}PERCENTILE>, ?x; P=0.95)` — `P` is a NAMED SCALARVAL (see
 //! [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs and
 //! [`crate::agg_fn::CustomAggregate::scalarvals`]), not a positional argument:
 //! ONE value for the whole aggregation, resolved once at accumulator `init`
 //! time, never re-evaluated per row. This is a deliberate correction from an
 //! earlier shape that took `p` as a second positional argument
-//! (`AGG(<ns>PERCENTILE, ?x, ?p)`) — semantically wrong, since a positional
+//! (`AGG(<{NS}PERCENTILE>, ?x, ?p)`) — semantically wrong, since a positional
 //! argument is evaluated PER ROW, and `p` is a parameter of the aggregation
 //! itself, not a per-row quantity. `crate::property_fn_plan::plan_aggregate`
 //! refuses a call missing `P`, naming an unrecognized scalarval, or supplying
@@ -95,7 +95,7 @@
 //!
 //! # `TOPK`'s named scalarval and its "one term" contract
 //!
-//! `AGG(<ns>TOPK, ?x; K=3)` — `K`, like `PERCENTILE`'s `P`, is a NAMED
+//! `AGG(<{NS}TOPK>, ?x; K=3)` — `K`, like `PERCENTILE`'s `P`, is a NAMED
 //! SCALARVAL, not a positional argument: a positive `xsd:integer`, ONE value
 //! for the whole aggregation, resolved once at `init` time (the same
 //! correction from an earlier two-positional-argument shape `PERCENTILE`'s
@@ -247,9 +247,9 @@ const TOPK: &str = "TOPK";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 
-/// `PERCENTILE`'s named scalarval: `AGG(<ns>PERCENTILE, ?v; P=0.95)`.
+/// `PERCENTILE`'s named scalarval: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`.
 const PERCENTILE_P: &str = "P";
-/// `TOPK`'s named scalarval: `AGG(<ns>TOPK, ?v; K=3)`.
+/// `TOPK`'s named scalarval: `AGG(<{NS}TOPK>, ?v; K=3)`.
 const TOPK_K: &str = "K";
 
 /// Look up a named scalarval by (already upper-cased) key in the resolved
@@ -1167,7 +1167,7 @@ impl AggregateRegistry {
     /// Register the crate's first-party statistical aggregate set —
     /// `MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`,
     /// `MODE`, `FIRST`, `LAST`, `TOPK` — under `namespace`, so each becomes
-    /// reachable as `AGG(<namespace><LOCAL-NAME>, args…)`.
+    /// reachable as `AGG(<{NAMESPACE}LOCAL-NAME>, args…)`.
     ///
     /// `namespace` is caller configuration, never a purrdf-owned vocabulary
     /// (see [`crate::stat_agg`]'s module docs) — there is no default: a host

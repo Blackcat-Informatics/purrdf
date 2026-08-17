@@ -1593,8 +1593,8 @@ pub enum AggregateFunction {
     ///
     /// Generalizes SPARQL's own precedent for a named scalar aggregate
     /// parameter — `GROUP_CONCAT`'s `; SEPARATOR="…"` — to an arbitrary custom
-    /// aggregate's own named parameters: `AGG(<ns>PERCENTILE, ?v; P=0.95)`,
-    /// `AGG(<ns>TOPK, ?v; K=3)`. `NAME` is matched case-insensitively by the
+    /// aggregate's own named parameters: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`,
+    /// `AGG(<{NS}TOPK>, ?v; K=3)`. `NAME` is matched case-insensitively by the
     /// parser and stored upper-cased in [`AggregateExpression::scalarvals`], so
     /// `; p=0.95` and `; P=0.95` normalize to the same key; `value` is any
     /// SPARQL literal, so a numeric scalarval parses to its natural numeric

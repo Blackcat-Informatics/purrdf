@@ -724,7 +724,7 @@ pub(crate) fn run(
 /// beside `--entailment` never reached the evaluation that runs the closure's query; it
 /// takes the engine's `QueryOptions` now
 /// ([`purrdf::query_with_entailment_governed`]), threaded into both the closure query's
-/// parse and its evaluation, so `AGG(<ns>MEDIAN, ?x)` resolves over the entailed closure
+/// parse and its evaluation, so `AGG(<{NS}MEDIAN>, ?x)` resolves over the entailed closure
 /// exactly as it resolves over a raw view. The engine had no aggregate-registry-aware
 /// explain entry at all; [`NativeSparqlEngine::explain_query_with_options_view`] is that
 /// entry now — the one options-carrying explain call every registry (relations,

@@ -89,24 +89,28 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
     }
 }
 
-/// Decode the additive `<{prefix}:provenance>` element a
+/// Decode the additive `<provenance>` element (under `namespace.iri()`) a
 /// [`ProvenanceNamespace`]-keyed SRX document carries, or
 /// [`ResultProvenance::default`] when no such element is present.
 ///
 /// The inverse of [`crate::xml::to_xml`]'s additive extension: the writer emits
-/// `<{prefix}:provenance>` (keyed by `namespace.prefix()`, exactly as it chose
-/// to write it) only when both the source `provenance` was non-empty and a
+/// `<{prefix}:provenance xmlns:{prefix}="{iri}">` (and matching QNames for its
+/// members) only when both the source `provenance` was non-empty and a
 /// namespace was supplied, so a reader must be told the SAME namespace to know
-/// which element to decode. Matched by the element's literal `{prefix}:`
-/// QName — the prefix this crate's own writer uses IS `namespace.prefix()`
-/// verbatim (see [`crate::xml::to_xml`]), so this is exact for any document
-/// this crate wrote; a document using a different prefix for the same
-/// namespace IRI (legal XML, since namespace identity is URI-based) decodes to
-/// the empty provenance rather than guessing.
-///
-/// `<{prefix}:queryForm>` is read to validate the element's shape but is not
-/// itself carried in [`ResultProvenance`] (derived from the result kind on
-/// write, not caller data).
+/// which element to decode. Matched by NAMESPACE URI plus local name — exactly
+/// as `Element::attr_ns` (this module's private DOM helper) resolves
+/// `its:dir` — not by the literal QName
+/// prefix spelling, because XML namespace identity is URI-based
+/// (<https://www.w3.org/TR/xml-names/>): a document that binds
+/// `namespace.iri()` to a DIFFERENT prefix than this crate's own writer uses
+/// still decodes correctly, and a document that reuses `namespace.prefix()`'s
+/// spelling for an UNRELATED namespace (e.g. the actual W3C PROV namespace,
+/// `http://www.w3.org/ns/prov#`, bound to `prov:` — the single most common
+/// real-world `prov:` binding) is correctly NOT read as this caller's
+/// extension. A document with no `provenance` element under `namespace.iri()`
+/// (never written, written under a different namespace, or written by
+/// something other than this crate's own writer) decodes to the empty
+/// provenance rather than guessing.
 ///
 /// # Errors
 ///
@@ -116,24 +120,19 @@ pub fn provenance_from_xml(
     namespace: &ProvenanceNamespace,
 ) -> Result<ResultProvenance, Error> {
     let root = parse_root(bytes)?;
-    let prefix = namespace.prefix();
-    let provenance_name = format!("{prefix}:provenance");
-    let Some(provenance_elem) = root.child(&provenance_name) else {
+    let iri = namespace.iri();
+    let Some(provenance_elem) = root.child_ns(iri, "provenance") else {
         return Ok(ResultProvenance::default());
     };
     let query_hash = provenance_elem
-        .child(&format!("{prefix}:queryHash"))
+        .child_ns(iri, "queryHash")
         .map(Element::text);
-    let engine = provenance_elem
-        .child(&format!("{prefix}:engine"))
-        .map(Element::text);
-    let solution_name = format!("{prefix}:solution");
-    let source_name = format!("{prefix}:source");
+    let engine = provenance_elem.child_ns(iri, "engine").map(Element::text);
     let solutions = provenance_elem
-        .children_named(&solution_name)
+        .children_named_ns(iri, "solution")
         .map(|solution_elem| SolutionProvenance {
             sources: solution_elem
-                .children_named(&source_name)
+                .children_named_ns(iri, "source")
                 .map(Element::text)
                 .collect(),
         })
@@ -257,6 +256,12 @@ struct Element {
     /// inherit a default `xmlns`) or a prefix with no in-scope binding. See
     /// [`Self::attr_ns`].
     ns_attrs: Vec<(Option<String>, String, String)>,
+    /// THIS element's own namespace URI, resolved from its QName plus the
+    /// `xmlns`/`xmlns:*` bindings in scope at its own start tag (its own
+    /// declarations plus every ancestor's) — `None` for an unprefixed element
+    /// with no default namespace in scope, or a prefix with no in-scope
+    /// binding. See [`Self::child_ns`]/[`Self::children_named_ns`].
+    ns: Option<String>,
     children: Vec<Node>,
 }
 
@@ -301,6 +306,31 @@ impl Element {
     /// All direct child elements named `name`.
     fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Self> {
         self.child_elements().filter(move |e| e.name == name)
+    }
+
+    /// The first direct child element whose namespace URI is `ns` and local
+    /// name is `local`, resolved via each child's OWN QName plus the
+    /// `xmlns`/`xmlns:*` bindings in scope where it appears — matching by
+    /// namespace URI rather than by the literal QName prefix, exactly as
+    /// [`Self::attr_ns`] does for attributes and XML Namespaces defines
+    /// element identity. A document that binds `ns` to a different prefix
+    /// than the writer's own convention (or none at all — a default
+    /// namespace) still resolves correctly; a document that reuses the same
+    /// PREFIX spelling for an unrelated namespace does not falsely match.
+    fn child_ns(&self, ns: &str, local: &str) -> Option<&Self> {
+        self.child_elements()
+            .find(|e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
+    }
+
+    /// All direct child elements whose namespace URI is `ns` and local name
+    /// is `local`. See [`Self::child_ns`].
+    fn children_named_ns<'a>(
+        &'a self,
+        ns: &'a str,
+        local: &'a str,
+    ) -> impl Iterator<Item = &'a Self> {
+        self.child_elements()
+            .filter(move |e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
     }
 
     /// All direct child elements (text nodes skipped).
@@ -406,14 +436,23 @@ impl<'a> XmlParser<'a> {
             self.skip_ws();
             match self.peek() {
                 Some(b'/') => {
-                    // Self-closing element.
+                    // Self-closing element. Extend the scope with this
+                    // element's OWN `xmlns:*`/`xmlns` declarations first —
+                    // exactly as the non-self-closing branch below does —
+                    // so a self-closing element that both declares and uses
+                    // a namespace on itself (`<foo xmlns:i="..." i:bar="baz"/>`)
+                    // resolves both its attributes and its own element name
+                    // correctly, not just a namespace declared on an ancestor.
                     self.pos += 1;
                     self.expect(b'>')?;
-                    let ns_attrs = resolve_ns_attrs(&attrs, parent_scope);
+                    let scope = extend_ns_scope(parent_scope, &attrs);
+                    let ns_attrs = resolve_ns_attrs(&attrs, &scope);
+                    let ns = resolve_element_ns(&name, &scope);
                     return Ok(Element {
                         name,
                         attrs,
                         ns_attrs,
+                        ns,
                         children: Vec::new(),
                     });
                 }
@@ -430,6 +469,7 @@ impl<'a> XmlParser<'a> {
         }
         let scope = extend_ns_scope(parent_scope, &attrs);
         let ns_attrs = resolve_ns_attrs(&attrs, &scope);
+        let ns = resolve_element_ns(&name, &scope);
         // Parse children until the matching end tag.
         let mut children = Vec::new();
         loop {
@@ -472,6 +512,7 @@ impl<'a> XmlParser<'a> {
             name,
             attrs,
             ns_attrs,
+            ns,
             children,
         })
     }
@@ -536,9 +577,12 @@ impl<'a> XmlParser<'a> {
     }
 }
 
-/// Extend `parent_scope` with any `xmlns:prefix="uri"` declarations found
-/// among `attrs` (this element's own start tag) — the namespace scope every
-/// descendant, and this element's own attributes, resolve against.
+/// Extend `parent_scope` with any `xmlns:prefix="uri"` declaration, OR a bare
+/// default-namespace `xmlns="uri"` declaration (tracked under the empty-string
+/// "prefix", exactly the key an unprefixed ELEMENT name resolves against —
+/// see [`resolve_element_ns`]), found among `attrs` (this element's own start
+/// tag) — the namespace scope every descendant, and this element's own
+/// attributes and name, resolve against.
 fn extend_ns_scope(
     parent_scope: &[(String, String)],
     attrs: &[(String, String)],
@@ -547,9 +591,33 @@ fn extend_ns_scope(
     for (k, v) in attrs {
         if let Some(prefix) = k.strip_prefix("xmlns:") {
             scope.push((prefix.to_owned(), v.clone()));
+        } else if k == "xmlns" {
+            scope.push((String::new(), v.clone()));
         }
     }
     scope
+}
+
+/// Resolve an ELEMENT's (as opposed to an attribute's) namespace URI from its
+/// raw QName `name` and the bindings in scope at its own start tag: a
+/// prefixed name (`p:local`) resolves against the nearest `xmlns:p`
+/// declaration; an unprefixed name resolves against the nearest bare
+/// `xmlns=` (default namespace) declaration, if any — unlike an attribute, an
+/// unprefixed ELEMENT is NOT namespace-less when a default namespace is in
+/// scope (<https://www.w3.org/TR/xml-names/#defaulting>).
+fn resolve_element_ns(name: &str, scope: &[(String, String)]) -> Option<String> {
+    let prefix = name.split_once(':').map_or("", |(p, _)| p);
+    scope
+        .iter()
+        .rev()
+        .find(|(p, _)| p == prefix)
+        .map(|(_, uri)| uri.clone())
+}
+
+/// An element's local name: everything after its QName's `:`, or the whole
+/// name when it carries no prefix.
+fn local_name(name: &str) -> &str {
+    name.split_once(':').map_or(name, |(_, local)| local)
 }
 
 /// Resolve every attribute in `attrs` to `(namespace URI, local name, value)`
@@ -658,6 +726,59 @@ mod tests {
           <head></head><boolean>true</boolean></sparql>"#;
         let decoded = provenance_from_xml(doc, &namespace).expect("decodes");
         assert!(decoded.is_empty());
+    }
+
+    /// Namespace-by-URI pin (false NEGATIVE, mirroring
+    /// [`reads_its_dir_bound_to_non_its_prefix`]): a document that binds the
+    /// caller's OWN namespace IRI to a prefix OTHER than the one this crate's
+    /// writer happens to use (`p:` instead of `prov:`) must still decode —
+    /// XML namespace identity is URI-based, not QName-spelling-based.
+    #[test]
+    fn provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean>
+          <p:provenance xmlns:p="https://example.org/ns/prov#">
+            <p:queryForm>ask</p:queryForm>
+            <p:queryHash>deadbeef</p:queryHash>
+            <p:engine>purrdf-sparql-eval</p:engine>
+          </p:provenance>
+        </sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes");
+        assert_eq!(
+            decoded,
+            ResultProvenance {
+                query_hash: Some("deadbeef".to_owned()),
+                engine: Some("purrdf-sparql-eval".to_owned()),
+                solutions: Vec::new(),
+            }
+        );
+    }
+
+    /// Namespace-by-URI pin (false POSITIVE): a document that reuses this
+    /// crate's writer's OWN prefix spelling (`prov:`) but binds it to an
+    /// UNRELATED namespace — here the actual W3C PROV namespace
+    /// (`http://www.w3.org/ns/prov#`), the single most common real-world
+    /// `prov:` binding — must NOT be read as the caller's provenance
+    /// extension just because the QName spelling matches; only the bound
+    /// namespace IRI identifies it.
+    #[test]
+    fn foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean>
+          <prov:provenance xmlns:prov="http://www.w3.org/ns/prov#">
+            <prov:queryHash>deadbeef</prov:queryHash>
+          </prov:provenance>
+        </sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes without error");
+        assert!(
+            decoded.is_empty(),
+            "a `prov:provenance` element bound to the W3C PROV namespace must not be \
+             mistaken for this caller's own `prov` namespace extension"
+        );
     }
 
     #[test]

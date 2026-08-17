@@ -335,8 +335,8 @@ a fold's finished answer alone cannot reconstruct).
 Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing
 `; NAME=value` clauses — a named, per-aggregation scalar parameter, generalizing
 `GROUP_CONCAT`'s own `; SEPARATOR="…"` (SPARQL's existing precedent for a named
-scalar aggregate parameter) to any custom aggregate: `AGG(<ns>PERCENTILE, ?x;
-P=0.95)`, `AGG(<ns>TOPK, ?x; K=3)`. `NAME` is matched case-insensitively and
+scalar aggregate parameter) to any custom aggregate: `AGG(<{NS}PERCENTILE>, ?x;
+P=0.95)`, `AGG(<{NS}TOPK>, ?x; K=3)`. `NAME` is matched case-insensitively and
 stored upper-cased; `value` is any SPARQL literal — the full numeric tower
 including its signed forms (`Q=-1`, `P=+0.5`), the boolean literals (`B=true`),
 and strings — so a numeric scalarval keeps its natural datatype. Unlike a
@@ -397,7 +397,7 @@ Per-member semantics:
 - **`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between
   the two closest ranks — for an even-sized group this is exactly the mean of
   the two middle values.
-- **`PERCENTILE`** takes a named scalarval, `AGG(<ns>PERCENTILE, ?x; P=0.95)`:
+- **`PERCENTILE`** takes a named scalarval, `AGG(<{NS}PERCENTILE>, ?x; P=0.95)`:
   `P` is resolved once for the whole aggregation (never per row — see "Named
   scalar-value parameters" above); a `P` outside `[0, 1]` poisons to unbound,
   the same "poison, don't abort" discipline every numeric member uses. A
@@ -407,7 +407,7 @@ Per-member semantics:
   terms). A tie is broken toward the smallest term under the same total order
   `MIN`/`ORDER BY` use.
 - **`FIRST`/`LAST`** work over any term kind, in input row order.
-- **`TOPK`** takes a named scalarval, `AGG(<ns>TOPK, ?x; K=3)`: `K` must be a
+- **`TOPK`** takes a named scalarval, `AGG(<{NS}TOPK>, ?x; K=3)`: `K` must be a
   positive `xsd:integer`, resolved once for the whole aggregation (a `K ≤ 0`
   poisons to unbound; a missing or non-integer `K` is refused at prepare
   time). Since every SPARQL aggregate yields exactly one RDF term, `TOPK`
@@ -493,7 +493,7 @@ The **entailment-aware query lane** (`query_with_entailment`/
 `query_with_entailment_governed`, and every Python/CLI/WebAssembly/C wrapper
 around the governed entry point) combines with `aggregate_namespace` exactly
 as the raw-view lane does: both take the engine's `QueryOptions`, threaded
-through the closure query's parse and its evaluation, so `AGG(<ns>MEDIAN, …)`
+through the closure query's parse and its evaluation, so `AGG(<{NS}MEDIAN>, …)`
 resolves over an entailed closure the same way it resolves over a raw view.
 
 ```sh

@@ -15,10 +15,20 @@
 //! could have caught any of them: `--help` text, `.d.ts` typings, `.pyi`
 //! stubs, and mdBook prose are never compiled or executed by anything else in
 //! this repository. This is that gate, extended to the same surfaces —
-//! **the book, `--help` text, `.pyi`, `.d.ts`, and rustdoc across every
-//! crate** — and it parses every candidate with THIS crate's own
-//! [`SparqlParser`], not a hand-rolled approximation of the grammar: a
+//! **the book, `--help` text, `.pyi`, `.d.ts`, rustdoc across every crate,
+//! and `CHANGELOG.md`** — and it parses every candidate with THIS crate's
+//! own [`SparqlParser`], not a hand-rolled approximation of the grammar: a
 //! candidate is wrong exactly when the real parser says so.
+//!
+//! A second defect class this gate closed after its first release: the
+//! `AGG(<iri>...)` extraction pass (below) originally only ever parsed a
+//! fragment whose bracket named a real `://` scheme, which meant a
+//! PLACEHOLDER spelling of the exact same "IRI closed too early" defect
+//! (`AGG(<namespace><NAME>, ...)`, `AGG(<ns>MEDIAN, ...)`) sailed through
+//! unchecked — the very exclusion meant to spare schematic prose was hiding
+//! a real, parseable-once-substituted bug. The pass now also parses
+//! placeholder brackets, substituting a synthetic real namespace for the
+//! placeholder text first (see [`agg_fragment_synthesis`]).
 //!
 //! # What counts as a candidate
 //!
@@ -45,10 +55,29 @@
 //!    worked example uses (`"SELECT ... " "WHERE ... "`).
 //! 4. **`AGG(<iri>...)` call fragments** — a narrower pass over the same
 //!    documentation text, independent of whether the fragment sits inside a
-//!    full query: it matches `AGG(<...>...)` wherever the bracketed part
-//!    contains a real `://` scheme (excluding schematic placeholders like
-//!    `AGG(<NAMESPACE><NAME>, args…)`, which is prose ABOUT the shape, not a
-//!    literal invocation), and wraps the fragment in a synthetic
+//!    full query: it matches `AGG(<...>...)` and always parses the fragment
+//!    when the bracketed part names a real `://` scheme. When the bracketed
+//!    part is placeholder text instead (no scheme — `<ns>`, `<{NAMESPACE}>`,
+//!    `<namespace>`, …), it is STILL parsed, in either of two cases: (a) the
+//!    bracket's shape itself looks wrong — something other than `,`/`)`
+//!    follows the closing `>` (a second `<...>` bracket, or a bareword local
+//!    name stuck outside the IRI slot), which is exactly the "IRI closed too
+//!    early" defect this gate exists to catch, regardless of whether the
+//!    example used a concrete scheme or a placeholder; or (b) the bracket
+//!    shape is fine (one well-formed `<...>`) but the trailing argument list
+//!    looks like a real, callable SPARQL argument list — it names a `?`/`$`
+//!    variable — rather than schematic BNF-ish prose (`args…`,
+//!    `[DISTINCT] arg, arg, …`) that was never meant to literally parse. A
+//!    placeholder bracket that gets parsed is first rewritten: any `{...}`
+//!    template token inside it is stripped (curly braces are not legal
+//!    IRIREF characters) and a synthetic real scheme is prepended, so a
+//!    template like `<{NAMESPACE}NAME>` becomes a lexically legal IRIREF
+//!    before the fragment is handed to the parser. The substitution only
+//!    ever touches the bracket's OWN text, never the surrounding shape, so a
+//!    namespace/name split across two brackets (`<namespace><NAME>`), or a
+//!    name spilling out of the IRI entirely (`<ns>MEDIAN`), still fails to
+//!    parse exactly the way it would with a concrete IRI. Either way the
+//!    fragment is wrapped in a synthetic
 //!    `SELECT (<fragment> AS ?x) WHERE { ?s ?p ?o }` so a bare, non-full-query
 //!    copy-pasteable snippet — exactly the shape all five originally broken
 //!    spots used — is still parsed for real.
@@ -59,7 +88,7 @@
 //! `LOAD`, `CLEAR`, `DROP`, `CREATE`, `COPY`, `MOVE`, `ADD`) — the cheap,
 //! conservative filter that keeps this gate from trying to parse an unrelated
 //! quoted string that happens to contain the substring "SELECT" — or (pass 4)
-//! names a real IRI scheme.
+//! meets the concrete-scheme/malformed-shape/real-argument-list test above.
 //!
 //! # What this gate does NOT cover, and why
 //!
@@ -258,12 +287,69 @@ static PURE_QUOTED_LINE: LazyLock<Regex> =
 static QUOTED_STRING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""((?:[^"\\]|\\.)*)""#).expect("valid regex"));
 
-/// An `AGG(<iri>...)` call fragment whose bracketed part names a real scheme —
-/// excludes schematic placeholders like `AGG(<NAMESPACE><NAME>, args…)`, which
-/// contain no `://`.
-static AGG_FRAGMENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"AGG\(<([a-zA-Z][a-zA-Z0-9+.-]*://[^>]*)>([^)]*)\)").expect("valid regex")
-});
+/// An `AGG(<...>...)` call fragment: group 1 is the FIRST bracket's content
+/// (a real `://`-scheme IRI, or placeholder text), group 2 is everything
+/// between that bracket's closing `>` and the call's closing `)`. Deliberately
+/// permissive about group 1's content — filtering concrete vs. placeholder,
+/// and well-formed vs. malformed placeholder shapes, is [`agg_fragment_synthesis`]'s
+/// job, not the regex's, so this same pattern also matches a namespace/name
+/// split across two adjacent brackets (`<namespace><NAME>`, where group 1 is
+/// just `namespace` and group 2 starts with the second bracket).
+static AGG_FRAGMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"AGG\(<([^>]*)>([^)]*)\)").expect("valid regex"));
+
+/// A `{...}` template token — not itself legal inside a real IRIREF (`{`/`}`
+/// are excluded by the SPARQL/Turtle grammar), so it must be stripped before a
+/// placeholder bracket's content can be handed to the real parser.
+static PLACEHOLDER_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{[^}]*\}").expect("valid regex"));
+
+/// A synthetic, lexically legal, definitely-not-a-real-vocabulary scheme this
+/// gate prepends to placeholder bracket content so it becomes a real IRIREF.
+const SYNTHETIC_NAMESPACE: &str = "https://agg-gate.example.org/ns#";
+
+/// Whether `rest` — the text between an `AGG(<...>` fragment's first bracket
+/// and the call's closing `)` — is shaped like a REAL, callable SPARQL
+/// argument list (names a `?`/`$` variable) rather than schematic, BNF-ish
+/// prose (`args…`, `[DISTINCT] arg, arg, …`) that was never meant to parse.
+fn looks_like_real_arg_list(rest: &str) -> bool {
+    rest.contains('?') || rest.contains('$')
+}
+
+/// Whether `rest` opens with the call's own `,` (or is empty, i.e. the
+/// bracket is immediately followed by the closing `)`) — the shape a
+/// single, well-formed IRI slot has. Anything else (a bareword local name,
+/// or a second `<...>` bracket, stuck onto the first bracket before the next
+/// `,`) is the "IRI closed too early" defect this gate exists to catch.
+fn bracket_is_well_formed(rest: &str) -> bool {
+    let trimmed = rest.trim_start();
+    trimmed.is_empty() || trimmed.starts_with(',')
+}
+
+/// Decide whether an `AGG(<bracket1>rest)` fragment is worth handing to the
+/// real parser, and if so, the (possibly synthesized) bracket-1 content to
+/// use. Returns `None` for fragments this gate deliberately leaves untested:
+/// a well-formed placeholder bracket (`<iri>`, `<ns>`, `<{NAMESPACE}NAME>`, …)
+/// whose trailing text is schematic prose rather than a real argument list.
+///
+/// A concrete `://` scheme is ALWAYS tested, exactly as before this gate
+/// covered placeholders at all — that is how the five originally-broken
+/// concrete-IRI call sites were caught. A placeholder bracket is tested when
+/// its shape looks malformed (regardless of the argument list — a namespace
+/// split from its local name is wrong even in schematic prose), or when its
+/// shape is fine but the argument list looks real (worth proving the fixed
+/// convention actually parses).
+fn agg_fragment_synthesis(bracket1: &str, rest: &str) -> Option<String> {
+    if bracket1.contains("://") {
+        return Some(bracket1.to_string());
+    }
+    let malformed = !bracket_is_well_formed(rest);
+    if !malformed && !looks_like_real_arg_list(rest) {
+        return None;
+    }
+    let stripped = PLACEHOLDER_TOKEN.replace_all(bracket1, "");
+    Some(format!("{SYNTHETIC_NAMESPACE}{stripped}"))
+}
 
 /// Minimal unescape for a Rust/Python/JS double-quoted string body: the only
 /// escapes this repository's own examples use.
@@ -370,7 +456,12 @@ fn scan_doc_lines(file: &Path, lines: &[(usize, String)], out: &mut Vec<Candidat
         }
         for cap in AGG_FRAGMENT.captures_iter(&joined) {
             let whole = cap.get(0).expect("match 0");
-            let fragment = whole.as_str();
+            let bracket1 = &cap[1];
+            let rest = &cap[2];
+            let Some(bracket_content) = agg_fragment_synthesis(bracket1, rest) else {
+                continue;
+            };
+            let fragment = format!("AGG(<{bracket_content}>{rest})");
             let line = line_at.get(whole.start()).copied().unwrap_or(run[0].0);
             out.push(Candidate {
                 file: file.to_path_buf(),
@@ -593,6 +684,13 @@ fn collect_candidates() -> Vec<Candidate> {
     let pyi = root.join("bindings/python/python/src/purrdf/__init__.pyi");
     let text = fs::read_to_string(&pyi).unwrap_or_else(|e| panic!("read {pyi:?}: {e}"));
     scan_doc_lines(&pyi, &python_comment_lines(&text), &mut out);
+
+    // The changelog — shipped, human-facing prose, and (per its own header)
+    // the authoritative migration guide for exactly the kind of breaking
+    // surface change an `AGG(<iri>...)` call shape is.
+    let changelog = root.join("CHANGELOG.md");
+    let text = fs::read_to_string(&changelog).unwrap_or_else(|e| panic!("read {changelog:?}: {e}"));
+    out.extend(markdown_candidates(&changelog, &text));
 
     out
 }

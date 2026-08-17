@@ -135,7 +135,7 @@ pub struct SparqlTestCase {
     pub regime: Option<purrdf_entail::Regime>,
     /// `purrdf:aggregateNamespace` on the test's `mf:action` (`MF_EXT_NS`,
     /// harness-loader vocabulary — see its doc comment): the IRI namespace this
-    /// case's `AGG(<namespace><NAME>, args…)` calls resolve against. `None` (the
+    /// case's `AGG(<{NAMESPACE}NAME>, args…)` calls resolve against. `None` (the
     /// default, and every case but the ones that opt in) registers no statistical
     /// aggregate registry for this case, exactly as before this field existed —
     /// PurRDF mints no default namespace.

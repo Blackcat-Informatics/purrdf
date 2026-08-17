@@ -3146,8 +3146,8 @@ impl<'a> Parser<'a, '_> {
     /// `GROUP_CONCAT`'s own `; SEPARATOR="…"` — SPARQL's existing precedent for
     /// a named scalar aggregate parameter (see
     /// [`AggregateExpression::scalarvals`]'s docs) — to an arbitrary custom
-    /// aggregate's own named parameters (`AGG(<ns>PERCENTILE, ?v; P=0.95)`,
-    /// `AGG(<ns>TOPK, ?v; K=3)`). `NAME` is any [`Token::Word`], matched
+    /// aggregate's own named parameters (`AGG(<{NS}PERCENTILE>, ?v; P=0.95)`,
+    /// `AGG(<{NS}TOPK>, ?v; K=3)`). `NAME` is any [`Token::Word`], matched
     /// case-insensitively and stored UPPER-CASED, so `; separator="…"` and
     /// `; SEPARATOR="…"` would normalize to the same key (this grammar itself
     /// is reached only for [`AggregateFunction::Custom`] — a built-in aggregate

@@ -463,7 +463,7 @@ class Store:
     # `aggregate_namespace` registers purrdf's first-party statistical aggregate set
     # (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
     # `FIRST`, `LAST`, `TOPK` — `AggregateRegistry::register_statistical_aggregates`)
-    # under that IRI, so the query text can call `AGG(<namespace><NAME>, args…)`, e.g.:
+    # under that IRI, so the query text can call `AGG(<{NAMESPACE}NAME>, args…)`, e.g.:
     #
     #   store.query(
     #       "PREFIX ex: <https://ex.example/> "

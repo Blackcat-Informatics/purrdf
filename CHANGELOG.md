@@ -200,7 +200,7 @@ surfaces; each is called out below with what a consumer must do.
 - **BREAKING** **sparql-eval,purrdf:** The entailment-aware query lanes
   (`purrdf::query_with_entailment`/`query_with_entailment_governed`) hardcoded empty query
   options, so no scalar-function, property-function, or aggregate registry could reach a query
-  evaluated over an entailed closure — `AGG(<ns>MEDIAN, …)` over an inferred closure was simply
+  evaluated over an entailed closure — `AGG(<{NS}MEDIAN>, …)` over an inferred closure was simply
   refused. Both lanes now take a `QueryOptions` and thread it through closure parsing, the
   witness-restriction rewrite, and evaluation. `QueryExplanation` gains an `aggregates()` accessor
   and a rendered block naming each resolved aggregate with its arity, volatility, algebraic class,
@@ -211,7 +211,7 @@ surfaces; each is called out below with what a consumer must do.
 - **sparql,capi,wasm:** Accept the aggregate namespace on the entailment-aware governed query lane
   everywhere it previously took no `QueryOptions` seam at all: the C interface, the WebAssembly
   binding, and the Python binding gain the same namespace parameter their ordinary governed
-  entries already had, so `AGG(<ns>MEDIAN, ?x)` resolves over an entailed closure exactly as it
+  entries already had, so `AGG(<{NS}MEDIAN>, ?x)` resolves over an entailed closure exactly as it
   resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.6.0` (`0.5.0` is skipped —
   one commit carries both the host-surface change and the version bump) and its header is
   regenerated.
@@ -240,7 +240,7 @@ surfaces; each is called out below with what a consumer must do.
   triggered by the missing description specifically, not by some other structural defect.
 - **BREAKING** **sparql:** Accept named scalar-value parameters on aggregate calls: `AGG(<iri>,
   …)` now admits trailing `; NAME=value` clauses, generalizing `GROUP_CONCAT`'s own
-  `; SEPARATOR="…"` clause to any custom aggregate (e.g. `AGG(<ns>PERCENTILE, ?x; P=0.95)`).
+  `; SEPARATOR="…"` clause to any custom aggregate (e.g. `AGG(<{NS}PERCENTILE>, ?x; P=0.95)`).
   `CustomAggregate::init` now takes the call site's resolved named scalar-value parameters
   (`&[(String, TermValue)]`) alongside `self`; every implementor of the trait must add the
   parameter (an aggregate declaring no scalar parameters via the new default

@@ -138,7 +138,7 @@ const GOVERNOR_OPTION_KEYS = [
 // `aggregateNamespace` registers purrdf's first-party statistical aggregate set
 // (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
 // `LAST`, `TOPK`) under an IRI namespace, so the query text can call
-// `AGG(<namespace><NAME>, args…)`. Like the governor keys above, it is honored ONLY by
+// `AGG(<{NAMESPACE}NAME>, args…)`. Like the governor keys above, it is honored ONLY by
 // `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned` (the entry points that accept
 // a `QueryOptions` registry) — an ungoverned call would silently drop it, so that lane
 // refuses it by name instead.

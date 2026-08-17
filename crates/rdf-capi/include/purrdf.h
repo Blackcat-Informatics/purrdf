@@ -1970,7 +1970,7 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
  *
  * `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
  * set under that IRI namespace, so the query text can call
- * `AGG(<namespace><NAME>, args…)` for `MEDIAN`/`PERCENTILE`/`STDDEV`/`STDDEV_POP`/
+ * `AGG(<{NAMESPACE}NAME>, args…)` for `MEDIAN`/`PERCENTILE`/`STDDEV`/`STDDEV_POP`/
  * `VARIANCE`/`VAR_POP`/`MODE`/`FIRST`/`LAST`/`TOPK`. Null leaves every one of the ten
  * names an ordinary unregistered custom-aggregate IRI, exactly as before this parameter
  * existed.
@@ -2008,7 +2008,7 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
  *
  * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
  * it registers purrdf's first-party statistical aggregate set under that IRI namespace
- * for the closure query's PARSE and its evaluation, so `AGG(<namespace><NAME>, args…)`
+ * for the closure query's PARSE and its evaluation, so `AGG(<{NAMESPACE}NAME>, args…)`
  * reaches the entailment-aware lane exactly as it reaches the ordinary one. Null leaves
  * every one of the ten names an ordinary unregistered custom-aggregate IRI.
  *
