@@ -423,6 +423,21 @@ pub fn run(
                 base_iri: Some(BASE),
                 substitutions: &[],
             };
+            // `purrdf:aggregateNamespace` (see `crate::manifest::SparqlTestCase`) is
+            // PER-CASE, unlike `EXT_NS`/`REL_NS`: unlike the property-function/
+            // extension-function namespaces (recognized only when the query text
+            // actually calls one), `AggregateRegistry::register_statistical_aggregates`
+            // registers ten IRIs unconditionally under its namespace, so registering it
+            // harness-wide would change the answer of any OTHER case (including a
+            // vendored W3C fixture) whose query happens to call `AGG(<iri>, …)` under
+            // that same namespace. Opt-in per case keeps every other case byte-for-byte
+            // unaffected — `None` here is the untouched behavior from before this field
+            // existed.
+            let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
+                let mut registry = purrdf_sparql_eval::AggregateRegistry::new();
+                registry.register_statistical_aggregates(namespace);
+                registry
+            });
             // A federated case resolves `SERVICE` through the injected source; every case
             // (federated or not) carries the harness relation table for its OUTER
             // pattern — a call node inside a `SERVICE` body is refused at forwarding
@@ -431,15 +446,15 @@ pub fn run(
             // fixtures happen to spell no `REL_NS` predicate today, but the registry
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
+            let empty_aggregates = purrdf_sparql_eval::AggregateRegistry::EMPTY;
             let options = QueryOptions {
-                property_functions: Some(harness_relations()),
+                property_functions: harness_relations(),
+                aggregates: aggregates.as_ref().unwrap_or(&empty_aggregates),
                 ..QueryOptions::EMPTY
             };
             let result = match remote {
                 Some(source) => engine.query_with_source(&dataset, request, source, options),
-                None => {
-                    engine.query_with_property_functions(&dataset, request, harness_relations())
-                }
+                None => engine.query_with_options_view(&*dataset, request, options),
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
             let ordered = query_is_top_level_ordered(&query_text, &parser_options);

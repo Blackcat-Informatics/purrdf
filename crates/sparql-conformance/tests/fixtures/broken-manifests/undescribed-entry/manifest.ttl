@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# F9 negative fixture: a manifest that DECLARES a test in its `mf:entries` list
+# but never DESCRIBES it (no `rdf:type`/`mf:name`/`mf:action` triples at all) —
+# the exact silent-skip shape `crate::manifest::load`'s completeness check
+# exists to catch (see its doc comment in `crates/sparql-conformance/src/
+# manifest.rs`, around the `list_entry_iris`/`missing` logic).
+#
+# Deliberately placed OUTSIDE `suite/`: `crates/sparql-conformance/tests/
+# sparql_conformance.rs`'s `datatest_stable::harness!` only discovers
+# `suite/**/manifest.ttl`, so this file is never picked up as a live
+# conformance case — it exists ONLY to be fed to `manifest::load` directly by
+# `crates/sparql-conformance/tests/suite_inventory.rs`'s
+# `broken_manifest_with_an_undescribed_entry_is_rejected` test, proving the
+# guard actually fires rather than merely existing unexercised.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<#manifest> a mf:Manifest ;
+    mf:entries ( <#undescribedEntry> ) .
+
+# <#undescribedEntry> is a member of the mf:entries list above but carries NO
+# rdf:type, mf:name, or mf:action triples anywhere in this document — the
+# loader's row-grouping SELECT requires all three to bind, so this entry
+# produces no row and would otherwise vanish from the loaded case set with no
+# trace.

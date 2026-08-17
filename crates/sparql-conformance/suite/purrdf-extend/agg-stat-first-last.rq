@@ -1,0 +1,12 @@
+# The inner ORDER BY DESC(?s) subquery supplies a spec-defined row order (SPARQL's
+# ORDER BY total order, §15.1, over distinct IRIs) for FIRST/LAST to fold over,
+# exactly as :groupConcatOrder's inner ORDER BY DESC(?s) does for GROUP_CONCAT —
+# see that case's comment for why store scan order alone is not a determinism
+# proof, and `agg-stat-first-last.ttl`'s comment for why the DESCENDING direction
+# (rather than ascending) is what keeps FIRST/LAST from coinciding with MIN/MAX.
+PREFIX : <https://example.org/agg-stat#>
+SELECT (AGG(<https://example.org/agg-stat-fn#FIRST>, ?v) AS ?first)
+       (AGG(<https://example.org/agg-stat-fn#LAST>, ?v) AS ?last)
+WHERE {
+  SELECT ?v WHERE { ?s :value ?v } ORDER BY DESC(?s)
+}

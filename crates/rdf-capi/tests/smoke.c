@@ -444,7 +444,7 @@ int main(int argc, char **argv) {
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
     printf("libpurrdf ABI %u.%u.%u\n", version.major, version.minor, version.patch);
-    CHECK(version.major == 0 && version.minor == 3, "abi 0.3.x");
+    CHECK(version.major == 0 && version.minor == 6, "abi 0.6.x");
 
     /* parse */
     const char *doc = "<http://a> <http://b> <http://c> .";
@@ -637,14 +637,28 @@ int main(int argc, char **argv) {
 
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;
-    rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &json,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL,
+                           NULL, &json, &error);
     CHECK(rc == PURRDF_STATUS_OK && json != NULL, "query_json");
     const uint8_t *jbytes = NULL;
     size_t jlen = 0;
     purrdf_buffer_data(json, &jbytes, &jlen);
     CHECK(jlen > 0, "sparql-json bytes present");
     purrdf_buffer_free(json);
+
+    /* `provenance_prefix`/`provenance_iri` anchor the additive purrdf extension. */
+    PurrdfBuffer *prov_json = NULL;
+    rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, "prov",
+                           "https://example.org/ns/prov#", &prov_json, &error);
+    CHECK(rc == PURRDF_STATUS_OK && prov_json != NULL, "query_json with provenance");
+    const uint8_t *pbytes = NULL;
+    size_t plen = 0;
+    purrdf_buffer_data(prov_json, &pbytes, &plen);
+    CHECK(contains_bytes(pbytes, plen, "\"prov\":{"),
+          "additive prov member present");
+    CHECK(contains_bytes(pbytes, plen, "\"engine\":\"purrdf-sparql-eval\""),
+          "engine populated");
+    purrdf_buffer_free(prov_json);
 
     /* governed SPARQL: exhaustion is an OK outcome carrying typed evidence and a
      * certified result, never a query error or a complete answer. */
@@ -661,7 +675,7 @@ int main(int argc, char **argv) {
     PurrdfGovernorEvidence query_evidence;
     PurrdfPartialCertificate partial_certificate;
     rc = purrdf_query_governed(
-        dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &governors,
+        dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL, &governors,
         &query_outcome, &result_kind, &partial_rows, &partial_graph,
         &partial_boolean, &query_evidence, &partial_certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
@@ -680,6 +694,52 @@ int main(int argc, char **argv) {
     }
     CHECK(partial_graph == NULL, "a SELECT writes no partial graph");
 
+    /* `aggregate_namespace` end-to-end: registers purrdf's first-party statistical
+     * aggregate set and actually COMPUTES `MEDIAN` through the real C ABI (header +
+     * linkage) — the reachability gap this parameter closes. */
+    const char *median_doc =
+        "<http://example.org/s1> <http://example.org/value> \"1\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/s2> <http://example.org/value> \"2\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/s3> <http://example.org/value> \"3\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n";
+    PurrdfDataset *median_dataset = NULL;
+    rc = purrdf_parse((const uint8_t *)median_doc, strlen(median_doc), "text/turtle",
+                      NULL, NULL, &median_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && median_dataset != NULL,
+          "median fixture parses");
+
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "median governor initializer");
+    int32_t median_outcome = -1;
+    int32_t median_kind = -1;
+    PurrdfRowCursor *median_rows = NULL;
+    PurrdfGovernorEvidence median_evidence;
+    PurrdfPartialCertificate median_partial;
+    rc = purrdf_query_governed(
+        median_dataset,
+        "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) "
+        "WHERE { ?s <http://example.org/value> ?v }",
+        NULL, "https://example.org/agg#", &governors, &median_outcome,
+        &median_kind, &median_rows, NULL, NULL, &median_evidence,
+        &median_partial, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL, "aggregate_namespace query runs");
+    CHECK(median_outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
+          "aggregate_namespace query completes");
+    CHECK(purrdf_rowcursor_next(median_rows) == PURRDF_STATUS_OK,
+          "MEDIAN row present");
+    PurrdfTermView median_view;
+    uint8_t median_bound = 0;
+    CHECK(purrdf_rowcursor_term(median_rows, 0, &median_view, &median_bound) ==
+                  PURRDF_STATUS_OK &&
+              median_bound == 1,
+          "?m is bound");
+    CHECK(median_view.lexical.len == 1 && median_view.lexical.ptr[0] == '2',
+          "MEDIAN of {1, 2, 3} is 2");
+    purrdf_rowcursor_free(median_rows);
+    purrdf_dataset_free(median_dataset);
+
     /* The entailment-aware carrier keeps phase two and its closure report together. */
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
           "entailment governor initializer");
@@ -690,7 +750,7 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate entailment_partial;
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
-        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", &governors,
+        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, &governors,
         &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
@@ -703,6 +763,71 @@ int main(int argc, char **argv) {
     CHECK(entailment_evidence.query_ran == 1 && entailment_report != NULL,
           "governed entailment query carries both phases");
     purrdf_buffer_free(entailment_report);
+
+    /* `aggregate_namespace` reaches MEDIAN over a binding the RDFS closure itself
+     * produced: three cats entailed `Animal`, each carrying a distinct weight. */
+    const char *entailed_median_doc =
+        "<http://example.org/Cat> "
+        "<http://www.w3.org/2000/01/rdf-schema#subClassOf> "
+        "<http://example.org/Animal> .\n"
+        "<http://example.org/tom> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/Cat> .\n"
+        "<http://example.org/tom> <http://example.org/weight> \"1\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/felix> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/Cat> .\n"
+        "<http://example.org/felix> <http://example.org/weight> \"2\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        "<http://example.org/garfield> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/Cat> .\n"
+        "<http://example.org/garfield> <http://example.org/weight> \"3\"^^"
+        "<http://www.w3.org/2001/XMLSchema#integer> .\n";
+    PurrdfDataset *entailed_median_dataset = NULL;
+    rc = purrdf_parse((const uint8_t *)entailed_median_doc,
+                      strlen(entailed_median_doc), "text/turtle", NULL, NULL,
+                      &entailed_median_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
+              entailed_median_dataset != NULL,
+          "entailed median fixture parses");
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "entailed median governor initializer");
+    int32_t entailed_median_outcome = -1;
+    int32_t entailed_median_kind = -1;
+    PurrdfRowCursor *entailed_median_rows = NULL;
+    PurrdfGovernedEntailmentEvidence entailed_median_evidence;
+    PurrdfPartialCertificate entailed_median_partial;
+    PurrdfBuffer *entailed_median_report = NULL;
+    rc = purrdf_query_entailment_governed(
+        entailed_median_dataset,
+        "PREFIX ex: <http://example.org/> "
+        "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
+        "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
+        NULL, "rdfs", "", "https://example.org/agg#", &governors,
+        &entailed_median_outcome, &entailed_median_kind,
+        &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
+        &entailed_median_partial, &entailed_median_report, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL,
+          "aggregate_namespace query over an entailed closure runs");
+    CHECK(entailed_median_outcome ==
+              PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE,
+          "aggregate_namespace query over an entailed closure completes");
+    CHECK(purrdf_rowcursor_next(entailed_median_rows) == PURRDF_STATUS_OK,
+          "entailed MEDIAN row present");
+    PurrdfTermView entailed_median_view;
+    uint8_t entailed_median_bound = 0;
+    CHECK(purrdf_rowcursor_term(entailed_median_rows, 0, &entailed_median_view,
+                                &entailed_median_bound) == PURRDF_STATUS_OK &&
+              entailed_median_bound == 1,
+          "entailed ?m is bound");
+    CHECK(entailed_median_view.lexical.len == 1 &&
+              entailed_median_view.lexical.ptr[0] == '2',
+          "MEDIAN of the entailed {1, 2, 3} is 2");
+    purrdf_buffer_free(entailed_median_report);
+    purrdf_rowcursor_free(entailed_median_rows);
+    purrdf_dataset_free(entailed_median_dataset);
 
     /* C cancellation is a shareable monotone handle. */
     PurrdfCancellation *cancellation = NULL;
@@ -729,7 +854,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        &governors, &update_outcome, &update_evidence, &error);
+        NULL, &governors, &update_outcome, &update_evidence, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");

@@ -26,18 +26,19 @@ quads = purrdf.parse(
 
 ## Validation: SHACL and ShEx
 
-The native validation engines are exposed from the `purrdf_native` extension
-module:
+The native validation engines are exposed as top-level submodules mirroring the
+Rust `purrdf` umbrella crate — never through the internal `purrdf_native`
+extension module directly:
 
 ```python
-from purrdf_native import shacl, shex
+from purrdf import shacl, shex
 
 report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 
-result = shex.validate(my_schema_shexc, my_data_ttl,
-                       [("https://example.org/alice", "https://example.org/PersonShape")])
-print(result["conforms"])
+results = shex.validate(my_schema_shexc, my_data_ttl,
+                        [("https://example.org/alice", "https://example.org/PersonShape")])
+print(results[0]["conformant"])
 ```
 
 SHACL result dicts keep the stable keys `focus`, `path`, `value`, `severity`,
@@ -56,7 +57,7 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs")
+closure, report = entail.materialize(dataset, "rdfs", "")
 print(closure.to_nquads())
 print(report)          # what fired, what did not, boundaries, budget, contract hash
 ```

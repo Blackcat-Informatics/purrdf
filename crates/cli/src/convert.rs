@@ -23,7 +23,9 @@
 //!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
-//!   always N-Quads, so `--canonical` OVERRIDES (and lets you omit) `--to`.
+//!   always N-Quads, so `--canonical` lets you OMIT `--to` — and refuses it by name
+//!   (see [`run`]) rather than silently ignoring a `--to` naming a different format,
+//!   exactly as it refuses `--jsonld-options`.
 
 use std::sync::Arc;
 
@@ -94,9 +96,23 @@ pub(crate) fn run(
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let source_format = format::resolve(options.from, input)?;
+    format::refuse_base_with_pack(source_format, options.base, "a pack --from source")?;
     if options.canonical && options.jsonld_options.is_some() {
         return Err(CliError::Usage(
             "--jsonld-options cannot be combined with --canonical".to_owned(),
+        ));
+    }
+    // `--canonical` output is always N-Quads, so a `--to` naming a different target
+    // format is never read on this lane (see `run_with_transforms`, which resolves
+    // `--to` only in its non-canonical arm) — the same silent-no-op shape
+    // `--jsonld-options` is refused for just above, rather than an override a caller
+    // could mistake for a format that was honored.
+    if options.canonical && options.to.is_some() {
+        return Err(CliError::Usage(
+            "--canonical emits RDFC-1.0 canonical N-Quads unconditionally, so a --to \
+             naming a different target format would be accepted and never read: drop \
+             one of the two"
+                .to_owned(),
         ));
     }
     // `--report` names the certificate of a reasoning run; without `--entailment` there is
@@ -104,6 +120,18 @@ pub(crate) fn run(
     // refuses everywhere else.
     if report_target.is_requested() && options.entailment.is_none() {
         return Err(report::requires_entailment("convert"));
+    }
+    // `--rules` names the RIF-in-XML rule document `--entailment rif` runs; without
+    // `--entailment` at all, `options.rules` is never even read (only the
+    // `--entailment`/`--canonical` transform lane below consults it), so a bare
+    // `--rules FILE` would otherwise be accepted by clap and silently do nothing —
+    // the same no-op shape this pipeline refuses everywhere else.
+    if options.rules.is_some() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--rules names the rule document an entailment regime runs under; it has no \
+             effect without --entailment"
+                .to_owned(),
+        ));
     }
 
     // The transform lane: either `--entailment` or `--canonical` needs a concrete
@@ -123,6 +151,7 @@ pub(crate) fn run(
     // pack is mmap-borrowed (no `Vec<u8>` copy of the pack contents); stdin has no
     // file to map, so it still buffers into a `Vec`.
     let target_format = format::resolve(options.to, output)?;
+    format::refuse_base_with_pack(target_format, options.base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
     if matches!(source_format, CliFormat::Pack) && matches!(target_format, CliFormat::Pack) {
         if input == "-" {
@@ -167,6 +196,7 @@ fn run_with_transforms(
         None
     } else {
         let target = format::resolve(options.to, output)?;
+        format::refuse_base_with_pack(target, options.base, "a pack --to target")?;
         sink::validate_jsonld_options(target, options.jsonld_options)?;
         Some(target)
     };

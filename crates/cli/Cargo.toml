@@ -59,11 +59,12 @@ purrdf-validate = { workspace = true }
 memmap2 = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
+# `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
+# from data this host already has in hand (see `query::build_query_provenance`).
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Isolated temp files/dirs for the integration tests that drive the built binary.
 tempfile = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
-# Pin complete attached-carrier bytes at the process boundary.
-sha2 = { workspace = true }

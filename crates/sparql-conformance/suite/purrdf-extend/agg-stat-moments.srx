@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="variance"/>
+    <variable name="varPop"/>
+    <variable name="stddev"/>
+    <variable name="stddevPop"/>
+  </head>
+  <results>
+    <result>
+      <binding name="variance"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">2.5</literal></binding>
+      <binding name="varPop"><literal datatype="http://www.w3.org/2001/XMLSchema#decimal">2</literal></binding>
+      <binding name="stddev"><literal datatype="http://www.w3.org/2001/XMLSchema#double">1.5811388300841898E0</literal></binding>
+      <binding name="stddevPop"><literal datatype="http://www.w3.org/2001/XMLSchema#double">1.4142135623730951E0</literal></binding>
+    </result>
+  </results>
+</sparql>

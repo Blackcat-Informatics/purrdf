@@ -1216,13 +1216,43 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// to the plan survey (see `crate::bgp::survey_pattern_plans`), so a relation that declares a
 /// bound above the caller's cell ceiling is refused before it opens a cursor rather than
 /// metered while it fills memory.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 5;
+///
+/// # v6
+///
+/// [`CHARGE_SCHEDULE`] gains two more points, because an aggregate — `COUNT`, `SUM`,
+/// `GROUP_CONCAT`, every other built-in in `crate::modifier`'s fold, and every registered
+/// [`crate::agg_fn::CustomAggregate`] alike — is a **third** producer whose per-group work an
+/// outside party (the data, not the plan) sizes, and until v6 that work was as invisible to
+/// the schedule as a property-function relation's was before v5: a `GROUP_CONCAT` folding a
+/// million rows into one group priced at roughly one `algebra-node-entry` plus one
+/// `committed-output-row`, exactly as a `GROUP_CONCAT` folding ten did.
+///
+/// - [`ChargePoint::AggregateInvocation`] is charged once per `(group, aggregate expression)`
+///   pair — the fold's init/finish overhead, charged uniformly whether the expression folds
+///   through the built-in `crate::modifier` path or dispatches to a registered
+///   [`crate::agg_fn::CustomAggregate`], because both instantiate the same init/step/finish
+///   shape and a caller's budget should not need to know which one a given aggregate function
+///   happens to be.
+/// - [`ChargePoint::AggregateAccumulation`] is charged once per value a group folds — once per
+///   `step` call the fold path would make, including a value `DISTINCT` later discards: the
+///   work of producing that value (evaluating its argument expression, or its custom-aggregate
+///   argument tuple) and inspecting it against the running `DISTINCT` set already happened by
+///   the time the dedup check runs, so the charge is placed before that check rather than
+///   after it.
+///
+/// Both points are charged from the one dispatch path `crate::modifier::eval_aggregate` and
+/// `crate::modifier::eval_custom_aggregate` share, so a built-in and a custom aggregate over
+/// the same shape of group cost the same fuel. No query without an aggregate charges either
+/// point, so a budget sized against v5 for such a query buys exactly the same execution under
+/// v6. The number moves anyway, because the schedule moved and the schedule is what the
+/// digest describes.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 6;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
-/// Byte-identical from v1 through v3; v4 appends `update-mutated-quad` and v5 appends the
-/// two property-function points — see [`GOVERNOR_PROFILE_VERSION`] for what each version
-/// moved and why.
+/// Byte-identical from v1 through v3; v4 appends `update-mutated-quad`, v5 appends the two
+/// property-function points, and v6 appends the two aggregate points — see
+/// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
@@ -1234,9 +1264,11 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 5;
 /// caller can reason about and a corpus can pin, rather than a weighted score whose units
 /// mean nothing outside this build. `update-mutated-quad` is priced at one for the same
 /// reason: it is one observable event — one quad inserted into, or removed from, the store.
-/// So are `property-function-invocation` (one call into a host relation) and
-/// `property-function-row` (one row that relation emitted and this engine accepted).
-pub const CHARGE_SCHEDULE: [(&str, u64); 11] = [
+/// So are `property-function-invocation` (one call into a host relation),
+/// `property-function-row` (one row that relation emitted and this engine accepted),
+/// `aggregate-invocation` (one group folding one aggregate expression), and
+/// `aggregate-accumulation` (one value folded into a group's running aggregate state).
+pub const CHARGE_SCHEDULE: [(&str, u64); 13] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1248,6 +1280,8 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 11] = [
     ("update-mutated-quad", 1),
     ("property-function-invocation", 1),
     ("property-function-row", 1),
+    ("aggregate-invocation", 1),
+    ("aggregate-accumulation", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1313,6 +1347,37 @@ pub enum ChargePoint {
     /// charged here: it is an ordinary non-match, and it is the relation's own
     /// [`Self::PropertyFunctionInvocation`] charge that already accounts for having asked.
     PropertyFunctionRow,
+    /// One `(group, aggregate expression)` pair folded — the fold's init/finish overhead.
+    ///
+    /// Charged once per call into `crate::modifier::eval_aggregate`, before it dispatches
+    /// on which kind of fold the expression names — a built-in's `crate::modifier`-local
+    /// fold state or a registered [`crate::agg_fn::CustomAggregate`]'s accumulator — so a
+    /// built-in and a custom aggregate over the same group cost the same invocation fuel. A
+    /// `SELECT` with `N` aggregate expressions over `G` groups charges this point `N × G`
+    /// times regardless of how many rows fall into any group, which is what makes the
+    /// **number of groups** — as opposed to the size of the input that produced them —
+    /// visible to a budget: a `GROUP BY` fanning out into a million singleton groups used to
+    /// cost the same one `algebra-node-entry` and one `committed-output-row` per group that
+    /// ten groups would.
+    AggregateInvocation,
+    /// One value folded into a group's running aggregate state.
+    ///
+    /// Charged once per value the fold path would pass to `step` — a built-in's argument
+    /// expression evaluating to a bound term, or a custom aggregate's positional argument
+    /// tuple having every position bound — **before** the `DISTINCT` dedup check, not after
+    /// it: producing and inspecting the value against the running `DISTINCT` set is the work
+    /// this point prices, and that work already happened by the time a duplicate is
+    /// discarded. `COUNT(DISTINCT ?x)` folding a million duplicates of one value therefore
+    /// charges this point a million times even though `step` itself runs once — the same
+    /// reading [`Self::PropertyFunctionInvocation`] gives a call the engine refused: a value
+    /// this point does not see is a value nothing evaluated, never a value that was folded
+    /// and then discarded for free.
+    ///
+    /// A row whose argument expression is honestly unbound — the row never reaches `step`
+    /// under any built-in other than `COUNT(*)`, which takes no argument and so charges this
+    /// point once per row unconditionally — is not a value this point ever counted: no
+    /// expression evaluated to nothing, so no value existed to inspect.
+    AggregateAccumulation,
 }
 
 impl ChargePoint {
@@ -1329,6 +1394,8 @@ impl ChargePoint {
         Self::UpdateMutatedQuad,
         Self::PropertyFunctionInvocation,
         Self::PropertyFunctionRow,
+        Self::AggregateInvocation,
+        Self::AggregateAccumulation,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1351,6 +1418,8 @@ impl ChargePoint {
             Self::UpdateMutatedQuad => 8,
             Self::PropertyFunctionInvocation => 9,
             Self::PropertyFunctionRow => 10,
+            Self::AggregateInvocation => 11,
+            Self::AggregateAccumulation => 12,
         }
     }
 
@@ -1486,7 +1555,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "cde71eb36c54cb9b09ebb419827d6214d35dd8110b93e8cad9589584c090d51a";
+    "d1d453f692d3dfae0dcbef58b5f8d9ffdc288ee6e6394441c256bfb200929732";
 
 #[cfg(test)]
 mod tests {

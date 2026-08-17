@@ -174,6 +174,8 @@ pub(crate) fn run(
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve(to, output)?;
+    format::refuse_base_with_pack(source_format, base, "a pack --from source")?;
+    format::refuse_base_with_pack(target_format, base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
 
     let dataset = source::load_dataset(input, source_format, base)?;

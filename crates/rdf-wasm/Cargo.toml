@@ -56,6 +56,10 @@ purrdf-sparql-results = { workspace = true }
 purrdf-validate = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `queryRaw`'s provenance-namespace `query_hash`: a content hash of the query text,
+# computed from data this host already has in hand (see `build_query_provenance`).
+# `default-features = false` (the workspace default) keeps this wasm32-clean.
+sha2 = { workspace = true }
 # EXACT pin (in the workspace table): the `wasm-bindgen` CLI that generates the JS
 # bindings must match the library version byte-for-byte or it refuses to run.
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.

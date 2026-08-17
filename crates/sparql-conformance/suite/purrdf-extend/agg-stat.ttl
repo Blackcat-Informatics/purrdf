@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Five subjects s1..s5 carrying the values {1, 2, 3, 4, 5} — chosen (mirroring
+# `crates/sparql-eval/tests/aggregate_function_e2e.rs`'s `moments_dataset`) so
+# BOTH the population and sample moments land on an exact, clean decimal:
+# Sigma(x)=15, Sigma(x^2)=55, numerator Sigma(x^2) - Sigma(x)^2/n = 55 - 45 = 10,
+# population denom 5 -> VAR_POP = 2, sample denom 4 -> VARIANCE = 2.5.
+@prefix : <https://example.org/agg-stat#> .
+
+:s1 :value 1 .
+:s2 :value 2 .
+:s3 :value 3 .
+:s4 :value 4 .
+:s5 :value 5 .

@@ -47,6 +47,7 @@
 //!     &result,
 //!     SparqlResultsFormat::Json,
 //!     &ResultProvenance::default(),
+//!     None,
 //! )
 //! .expect("SELECT serializes to JSON");
 //! assert!(!outcome.provenance_dropped);
@@ -75,11 +76,12 @@ pub use error::Error;
 pub use json::to_json;
 pub use json_read::{
     BoundedParsedSolutions, ParsedSolutions, from_json, from_json_boolean, from_json_bounded,
+    provenance_from_json,
 };
-pub use model::{ResultProvenance, SolutionProvenance};
+pub use model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 pub use tsv::to_tsv;
 pub use xml::to_xml;
-pub use xml_read::{from_xml, from_xml_boolean};
+pub use xml_read::{from_xml, from_xml_boolean, provenance_from_xml};
 
 /// Re-export of the egress result model this crate serializes, so consumers name
 /// a single path (`purrdf_sparql_results::SparqlResult`).
@@ -111,10 +113,16 @@ pub struct SerializeOutcome {
 }
 
 /// Serialize a [`SparqlResult`] to the requested [`SparqlResultsFormat`],
-/// carrying the additive `purrdf` provenance extension where the format allows.
+/// carrying the additive provenance extension where the format allows AND a
+/// [`ProvenanceNamespace`] is supplied to anchor it under.
 ///
 /// This is the single public entry point: it dispatches to the per-format
-/// writer ([`to_json`], [`to_xml`], [`to_csv`], [`to_tsv`]).
+/// writer ([`to_json`], [`to_xml`], [`to_csv`], [`to_tsv`]). `namespace` is
+/// consulted only by the JSON/XML writers — CSV/TSV have no extension point at
+/// all and trim any non-empty `provenance` regardless. PurRDF mints no
+/// vocabulary IRIs of its own: with `namespace: None`, JSON/XML emit no
+/// provenance element/member either, however populated `provenance` is (see
+/// [`ProvenanceNamespace`]).
 ///
 /// # Examples
 ///
@@ -134,6 +142,7 @@ pub struct SerializeOutcome {
 ///     &result,
 ///     SparqlResultsFormat::Tsv,
 ///     &ResultProvenance::default(),
+///     None,
 /// )
 /// .expect("SELECT serializes to TSV");
 /// assert_eq!(tsv.bytes, b"?s\n<http://example.org/s>\n");
@@ -148,10 +157,11 @@ pub fn serialize(
     result: &SparqlResult,
     format: SparqlResultsFormat,
     provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
 ) -> Result<SerializeOutcome, Error> {
     match format {
-        SparqlResultsFormat::Json => to_json(result, provenance),
-        SparqlResultsFormat::Xml => to_xml(result, provenance),
+        SparqlResultsFormat::Json => to_json(result, provenance, namespace),
+        SparqlResultsFormat::Xml => to_xml(result, provenance, namespace),
         SparqlResultsFormat::Csv => to_csv(result, provenance),
         SparqlResultsFormat::Tsv => to_tsv(result, provenance),
     }
@@ -177,27 +187,27 @@ mod tests {
         let result = select_one();
         let prov = ResultProvenance::default();
 
-        let json = serialize(&result, SparqlResultsFormat::Json, &prov).expect("json");
+        let json = serialize(&result, SparqlResultsFormat::Json, &prov, None).expect("json");
         assert!(
             String::from_utf8(json.bytes)
                 .expect("utf8")
                 .starts_with('{')
         );
 
-        let xml = serialize(&result, SparqlResultsFormat::Xml, &prov).expect("xml");
+        let xml = serialize(&result, SparqlResultsFormat::Xml, &prov, None).expect("xml");
         assert!(
             String::from_utf8(xml.bytes)
                 .expect("utf8")
                 .starts_with("<?xml")
         );
 
-        let csv = serialize(&result, SparqlResultsFormat::Csv, &prov).expect("csv");
+        let csv = serialize(&result, SparqlResultsFormat::Csv, &prov, None).expect("csv");
         assert_eq!(
             String::from_utf8(csv.bytes).expect("utf8"),
             "s\r\nhttp://example.org/s\r\n"
         );
 
-        let tsv = serialize(&result, SparqlResultsFormat::Tsv, &prov).expect("tsv");
+        let tsv = serialize(&result, SparqlResultsFormat::Tsv, &prov, None).expect("tsv");
         assert_eq!(
             String::from_utf8(tsv.bytes).expect("utf8"),
             "?s\n<http://example.org/s>\n"

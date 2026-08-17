@@ -39,6 +39,20 @@
 //!   call into a host-injected 50-row relation: one `bf` invocation per driving row,
 //!   which is the per-row dispatch path (argument evaluation, cursor open, filtered
 //!   scan, row bind) beside the ordinary joins above.
+//! - `l_single_group_aggregate` — the WITHIN-group chunked partial aggregation shape:
+//!   NO `GROUP BY` at all, so `GROUP_CONCAT`/`MAX` fold the whole 30k-row `age`
+//!   relation as ONE implicit group. `e_group_aggregate` above has 200 groups of
+//!   ~150 rows each, which the ACROSS-groups fork (`eval_group`'s per-group
+//!   `par_chunk_try_map_init`) already parallelizes; a single group never gives that
+//!   fork more than one unit of work, so THIS case is the one
+//!   `crate::parallel::par_chunk_reduce_init` (wired into
+//!   `crate::modifier::eval_aggregate`'s phase 2) exists for. Report-only, like every
+//!   other case here: no speedup is asserted, this documents the curve honestly —
+//!   `GROUP_CONCAT`'s string-building work scales with total output size regardless
+//!   of chunking, and `MAX`'s comparison work is cheap per item either way, so the
+//!   wall-clock win this case shows (if any, on a given machine) comes entirely from
+//!   spreading that fold's `step`/`combine` calls across rayon workers rather than
+//!   from doing less work.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
 //! `make bench` lane) — excluded from `make check`. Timings are not asserted;
@@ -52,7 +66,9 @@ use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
     SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::{MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry};
+use purrdf_sparql_eval::{
+    MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 
 /// Entity count. Each person contributes ~10 quads, so 30k people ≈ 303k quads
 /// (within the 200k–500k target band).
@@ -250,6 +266,15 @@ SELECT ?p ?region WHERE {
   ?c rel:cityRegion ?region .
 }";
 
+/// (l) A single implicit group (no `GROUP BY`): `GROUP_CONCAT`/`MAX` fold the
+/// whole 30k-row `age` relation as ONE group — the shape within-group chunked
+/// partial aggregation targets (see the module docs' case list).
+const Q_L: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT (GROUP_CONCAT(?a; separator=\",\") AS ?ages) (MAX(?a) AS ?max) WHERE {
+  ?p ex:age ?a .
+}";
+
 /// The namespace the benchmark host configures for its one relation.
 const REL_NS: &str = "https://example.org/rel/";
 
@@ -285,6 +310,7 @@ const CASES: &[(&str, &str, usize)] = &[
     ("h_distinct_dept", Q_H, 200),
     ("i_construct_blank_free", Q_I, PEOPLE),
     ("j_construct_blank_bearing", Q_J, PEOPLE),
+    ("l_single_group_aggregate", Q_L, 1),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.
@@ -311,14 +337,17 @@ fn run_with_relations(
     relations: &PropertyFunctionRegistry,
 ) -> usize {
     let result = engine
-        .query_with_property_functions(
-            ds,
+        .query_with_options_view(
+            &**ds,
             SparqlRequest {
                 query,
                 base_iri: None,
                 substitutions: &[],
             },
-            relations,
+            QueryOptions {
+                property_functions: relations,
+                ..QueryOptions::EMPTY
+            },
         )
         .expect("query evaluates");
     count(result)

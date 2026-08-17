@@ -201,6 +201,54 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
     assert!(!ledger["losses"].as_array().expect("loss array").is_empty());
 }
 
+/// `--base` resolves relative IRIs on parse; the native pack container stores
+/// fully-resolved terms and has no relative-IRI syntax, so `--base` combined with
+/// `--from pack` would otherwise be accepted by clap and silently do nothing
+/// (`source::run_over_input`'s pack arm never reads the base it is handed) — refused
+/// by name instead.
+#[test]
+fn base_with_pack_from_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("input.ttl"), TURTLE);
+    let config = write(&dir.path().join("config.json"), lpg_config());
+    let pack = dir.path().join("input.purrpck");
+    let pack_path = pack.to_str().expect("pack path");
+
+    let packed = run(&[
+        "convert", "--from", "turtle", "--to", "pack", &input, pack_path,
+    ]);
+    assert!(
+        packed.status.success(),
+        "seeding the source pack must succeed: {}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+
+    let out = dir.path().join("out.tar");
+    let projected = run(&[
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--from",
+        "pack",
+        "--base",
+        "https://example.org/base/",
+        pack_path,
+        out.to_str().expect("out path"),
+    ]);
+    assert!(
+        !projected.status.success(),
+        "--base with a pack --from source must be refused"
+    );
+    assert_eq!(projected.status.code(), Some(2), "usage errors exit 2");
+    let stderr = String::from_utf8_lossy(&projected.stderr);
+    assert!(
+        stderr.contains("--base"),
+        "the refusal must name --base: {stderr}"
+    );
+}
+
 #[test]
 fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
     let dir = tempfile::tempdir().expect("tempdir");

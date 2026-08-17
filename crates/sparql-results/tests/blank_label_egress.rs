@@ -114,12 +114,12 @@ fn every_writer_emits_a_legal_blank_node_label() {
                 .bytes,
         );
         let json = text_of(
-            to_json(&result, &provenance)
+            to_json(&result, &provenance, None)
                 .unwrap_or_else(|e| panic!("JSON must serialize {label:?}: {e}"))
                 .bytes,
         );
         let xml = text_of(
-            to_xml(&result, &provenance)
+            to_xml(&result, &provenance, None)
                 .unwrap_or_else(|e| panic!("XML must serialize {label:?}: {e}"))
                 .bytes,
         );
@@ -159,7 +159,7 @@ fn the_hostile_label_reaches_json_and_xml_escaped_not_raw() {
     let expected = "purrdfesc_a_0000D7b";
 
     let json = text_of(
-        to_json(&result, &provenance)
+        to_json(&result, &provenance, None)
             .expect("JSON serializes")
             .bytes,
     );
@@ -172,7 +172,11 @@ fn the_hostile_label_reaches_json_and_xml_escaped_not_raw() {
         "the raw label must not leak: {json}"
     );
 
-    let xml = text_of(to_xml(&result, &provenance).expect("XML serializes").bytes);
+    let xml = text_of(
+        to_xml(&result, &provenance, None)
+            .expect("XML serializes")
+            .bytes,
+    );
     assert!(
         xml.contains(&format!("<bnode>{expected}</bnode>")),
         "XML must carry the escaped id: {xml}"
@@ -211,8 +215,8 @@ fn distinct_blank_nodes_stay_distinct_in_every_writer() {
 
     let tsv = text_of(to_tsv(&result, &provenance).expect("TSV").bytes);
     let csv = text_of(to_csv(&result, &provenance).expect("CSV").bytes);
-    let json = text_of(to_json(&result, &provenance).expect("JSON").bytes);
-    let xml = text_of(to_xml(&result, &provenance).expect("XML").bytes);
+    let json = text_of(to_json(&result, &provenance, None).expect("JSON").bytes);
+    let xml = text_of(to_xml(&result, &provenance, None).expect("XML").bytes);
 
     for (name, labels) in [
         ("TSV", all_labels_between(&tsv, "_:", "\n")),
@@ -247,7 +251,7 @@ fn construct_graph_writer_escapes_every_label() {
     let provenance = ResultProvenance::default();
     for label in HOSTILE_LABELS {
         let result = graph_with_blank(label);
-        let bytes = to_json(&result, &provenance)
+        let bytes = to_json(&result, &provenance, None)
             .unwrap_or_else(|e| panic!("the graph writer must serialize {label:?}: {e}"))
             .bytes;
         let text = text_of(bytes);
@@ -270,13 +274,13 @@ fn writers_are_byte_deterministic_for_escaped_labels() {
             "{label:?}"
         );
         assert_eq!(
-            to_json(&result, &provenance).expect("JSON").bytes,
-            to_json(&result, &provenance).expect("JSON").bytes,
+            to_json(&result, &provenance, None).expect("JSON").bytes,
+            to_json(&result, &provenance, None).expect("JSON").bytes,
             "{label:?}"
         );
         assert_eq!(
-            to_xml(&result, &provenance).expect("XML").bytes,
-            to_xml(&result, &provenance).expect("XML").bytes,
+            to_xml(&result, &provenance, None).expect("XML").bytes,
+            to_xml(&result, &provenance, None).expect("XML").bytes,
             "{label:?}"
         );
     }

@@ -1,0 +1,13 @@
+# `P=0.5` alone would only prove PERCENTILE agrees with MEDIAN at the one fraction
+# that is MEDIAN's own path at zero interpolation (an even split needing no
+# weighting between unequal neighbors). `P=0.1`/`P=0.9` additionally exercise a
+# genuinely INTERPOLATED rank over {1,2,3,4,5}: rank = P * (n-1) lands at 0.4 and
+# 3.6 respectively — strictly between two adjacent sorted values, neither an exact
+# rank nor equal to MEDIAN (3), MIN (1), or MAX (5) — so a fixed/wrong interpolation
+# weight cannot coincidentally reproduce the right answer.
+PREFIX : <https://example.org/agg-stat#>
+SELECT (AGG(<https://example.org/agg-stat-fn#MEDIAN>, ?v) AS ?median)
+       (AGG(<https://example.org/agg-stat-fn#PERCENTILE>, ?v; P=0.5) AS ?p50)
+       (AGG(<https://example.org/agg-stat-fn#PERCENTILE>, ?v; P=0.1) AS ?p10)
+       (AGG(<https://example.org/agg-stat-fn#PERCENTILE>, ?v; P=0.9) AS ?p90)
+WHERE { ?s :value ?v }

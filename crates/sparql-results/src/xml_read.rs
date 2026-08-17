@@ -18,10 +18,16 @@ use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
 use crate::json_read::ParsedSolutions;
+use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+/// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
+/// Results specification uses for the base-direction attribute — see
+/// [`crate::xml`]'s module docs for the spec quote. Matched by namespace URI,
+/// not by the literal `its:` prefix spelling — see [`Element::attr_ns`].
+const ITS_NS: &str = "http://www.w3.org/2005/11/its";
 
 /// Parse a SPARQL Results XML `SELECT` document into [`ParsedSolutions`].
 ///
@@ -83,6 +89,61 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
     }
 }
 
+/// Decode the additive `<provenance>` element (under `namespace.iri()`) a
+/// [`ProvenanceNamespace`]-keyed SRX document carries, or
+/// [`ResultProvenance::default`] when no such element is present.
+///
+/// The inverse of [`crate::xml::to_xml`]'s additive extension: the writer emits
+/// `<{prefix}:provenance xmlns:{prefix}="{iri}">` (and matching QNames for its
+/// members) only when both the source `provenance` was non-empty and a
+/// namespace was supplied, so a reader must be told the SAME namespace to know
+/// which element to decode. Matched by NAMESPACE URI plus local name — exactly
+/// as `Element::attr_ns` (this module's private DOM helper) resolves
+/// `its:dir` — not by the literal QName
+/// prefix spelling, because XML namespace identity is URI-based
+/// (<https://www.w3.org/TR/xml-names/>): a document that binds
+/// `namespace.iri()` to a DIFFERENT prefix than this crate's own writer uses
+/// still decodes correctly, and a document that reuses `namespace.prefix()`'s
+/// spelling for an UNRELATED namespace (e.g. the actual W3C PROV namespace,
+/// `http://www.w3.org/ns/prov#`, bound to `prov:` — the single most common
+/// real-world `prov:` binding) is correctly NOT read as this caller's
+/// extension. A document with no `provenance` element under `namespace.iri()`
+/// (never written, written under a different namespace, or written by
+/// something other than this crate's own writer) decodes to the empty
+/// provenance rather than guessing.
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] on malformed XML or a non-`<sparql>` root.
+pub fn provenance_from_xml(
+    bytes: &[u8],
+    namespace: &ProvenanceNamespace,
+) -> Result<ResultProvenance, Error> {
+    let root = parse_root(bytes)?;
+    let iri = namespace.iri();
+    let Some(provenance_elem) = root.child_ns(iri, "provenance") else {
+        return Ok(ResultProvenance::default());
+    };
+    let query_hash = provenance_elem
+        .child_ns(iri, "queryHash")
+        .map(Element::text);
+    let engine = provenance_elem.child_ns(iri, "engine").map(Element::text);
+    let solutions = provenance_elem
+        .children_named_ns(iri, "solution")
+        .map(|solution_elem| SolutionProvenance {
+            sources: solution_elem
+                .children_named_ns(iri, "source")
+                .map(Element::text)
+                .collect(),
+        })
+        .collect();
+    Ok(ResultProvenance {
+        query_hash,
+        engine,
+        solutions,
+    })
+}
+
 /// Parse the document and return its `<sparql>` root element.
 fn parse_root(bytes: &[u8]) -> Result<Element, Error> {
     let text = core::str::from_utf8(bytes).map_err(|_| fmt("non-UTF-8 document"))?;
@@ -114,8 +175,22 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
         }),
         "literal" => {
             let language = elem.attr("xml:lang").map(str::to_owned);
-            // Our writer emits `purrdf:dir`; tolerate a plain `dir` too.
-            let dir_str = elem.attr("dir").or_else(|| elem.attr("purrdf:dir"));
+            // `its:dir` — resolved by NAMESPACE URI (`ITS_NS`) plus local name
+            // `dir`, not by the literal QName spelling — is the spelling the
+            // SPARQL 1.2 Query Results specification uses for RDF 1.2 base
+            // direction (see [`crate::xml`]'s module docs for the spec
+            // quote), so it is preferred. Matching by namespace URI means a
+            // document that binds the ITS namespace to a non-`its` prefix (or
+            // declares it on an ancestor element, e.g. the document root —
+            // this crate's own writer's default style) is read correctly:
+            // XML namespace semantics are defined by URI, not prefix spelling.
+            // The bare `dir` and `purrdf:dir` spellings are tolerated ONLY
+            // because this crate's own earlier writer emitted them before
+            // this de-minting pass — never because they are spec-sanctioned.
+            let dir_str = elem
+                .attr_ns(ITS_NS, "dir")
+                .or_else(|| elem.attr("dir"))
+                .or_else(|| elem.attr("purrdf:dir"));
             let direction = match dir_str {
                 Some("ltr") => Some(RdfTextDirection::Ltr),
                 Some("rtl") => Some(RdfTextDirection::Rtl),
@@ -167,11 +242,26 @@ fn fmt(msg: &str) -> Error {
     Error::Format(format!("SPARQL-XML: {msg}"))
 }
 
-/// A minimal parsed XML element: name, attributes, and ordered child nodes.
+/// A minimal parsed XML element: name, attributes (raw QName spelling plus a
+/// namespace-resolved view), and ordered child nodes.
 #[derive(Debug)]
 struct Element {
     name: String,
     attrs: Vec<(String, String)>,
+    /// Every attribute resolved to `(namespace URI, local name, value)` using
+    /// the `xmlns:*` bindings in scope at this element (its own declarations
+    /// plus every ancestor's — XML namespace scope is inherited downward).
+    /// `namespace` is `None` for an unprefixed attribute (XML Namespaces never
+    /// puts an unprefixed ATTRIBUTE in a namespace, unlike elements, which
+    /// inherit a default `xmlns`) or a prefix with no in-scope binding. See
+    /// [`Self::attr_ns`].
+    ns_attrs: Vec<(Option<String>, String, String)>,
+    /// THIS element's own namespace URI, resolved from its QName plus the
+    /// `xmlns`/`xmlns:*` bindings in scope at its own start tag (its own
+    /// declarations plus every ancestor's) — `None` for an unprefixed element
+    /// with no default namespace in scope, or a prefix with no in-scope
+    /// binding. See [`Self::child_ns`]/[`Self::children_named_ns`].
+    ns: Option<String>,
     children: Vec<Node>,
 }
 
@@ -182,12 +272,30 @@ enum Node {
 }
 
 impl Element {
-    /// The value of an attribute, if present.
+    /// The value of an attribute, if present, matched by its RAW QName
+    /// (literal prefix spelling). Used for attributes this reader matches
+    /// positionally (`name`, `xml:lang`, `datatype`) or for legacy fallback
+    /// spellings that were never namespace-qualified in the first place. For
+    /// an attribute whose correctness depends on XML namespace semantics
+    /// (defined by URI, not prefix), use [`Self::attr_ns`] instead.
     fn attr(&self, key: &str) -> Option<&str> {
         self.attrs
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// The value of the attribute whose namespace URI is `ns` and local name
+    /// is `local`, resolved via the `xmlns:*` bindings in scope at this
+    /// element — matching by namespace URI rather than by the literal QName
+    /// prefix, exactly as XML Namespaces (<https://www.w3.org/TR/xml-names/>)
+    /// defines attribute identity. A document that binds `ns` to a different
+    /// prefix than the writer's own convention, or declares the binding on an
+    /// ancestor element rather than this one, still resolves correctly.
+    fn attr_ns(&self, ns: &str, local: &str) -> Option<&str> {
+        self.ns_attrs.iter().find_map(|(uri, name, value)| {
+            (uri.as_deref() == Some(ns) && name == local).then_some(value.as_str())
+        })
     }
 
     /// The first direct child element named `name`.
@@ -198,6 +306,31 @@ impl Element {
     /// All direct child elements named `name`.
     fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Self> {
         self.child_elements().filter(move |e| e.name == name)
+    }
+
+    /// The first direct child element whose namespace URI is `ns` and local
+    /// name is `local`, resolved via each child's OWN QName plus the
+    /// `xmlns`/`xmlns:*` bindings in scope where it appears — matching by
+    /// namespace URI rather than by the literal QName prefix, exactly as
+    /// [`Self::attr_ns`] does for attributes and XML Namespaces defines
+    /// element identity. A document that binds `ns` to a different prefix
+    /// than the writer's own convention (or none at all — a default
+    /// namespace) still resolves correctly; a document that reuses the same
+    /// PREFIX spelling for an unrelated namespace does not falsely match.
+    fn child_ns(&self, ns: &str, local: &str) -> Option<&Self> {
+        self.child_elements()
+            .find(|e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
+    }
+
+    /// All direct child elements whose namespace URI is `ns` and local name
+    /// is `local`. See [`Self::child_ns`].
+    fn children_named_ns<'a>(
+        &'a self,
+        ns: &'a str,
+        local: &'a str,
+    ) -> impl Iterator<Item = &'a Self> {
+        self.child_elements()
+            .filter(move |e| e.ns.as_deref() == Some(ns) && local_name(&e.name) == local)
     }
 
     /// All direct child elements (text nodes skipped).
@@ -244,7 +377,7 @@ impl<'a> XmlParser<'a> {
         if self.peek() != Some(b'<') {
             return Err(fmt("expected root element"));
         }
-        self.parse_element()
+        self.parse_element(&[])
     }
 
     fn peek(&self) -> Option<u8> {
@@ -290,8 +423,12 @@ impl<'a> XmlParser<'a> {
         }
     }
 
-    /// Parse an element starting at `<`.
-    fn parse_element(&mut self) -> Result<Element, Error> {
+    /// Parse an element starting at `<`. `parent_scope` is the `(prefix,
+    /// namespace URI)` bindings in scope from ancestor elements; this
+    /// element's own `xmlns:*` declarations extend it (see
+    /// [`extend_ns_scope`]) both for resolving its own attributes and for
+    /// every descendant this call parses.
+    fn parse_element(&mut self, parent_scope: &[(String, String)]) -> Result<Element, Error> {
         self.pos += 1; // consume '<'
         let name = self.parse_name()?;
         let mut attrs = Vec::new();
@@ -299,12 +436,23 @@ impl<'a> XmlParser<'a> {
             self.skip_ws();
             match self.peek() {
                 Some(b'/') => {
-                    // Self-closing element.
+                    // Self-closing element. Extend the scope with this
+                    // element's OWN `xmlns:*`/`xmlns` declarations first —
+                    // exactly as the non-self-closing branch below does —
+                    // so a self-closing element that both declares and uses
+                    // a namespace on itself (`<foo xmlns:i="..." i:bar="baz"/>`)
+                    // resolves both its attributes and its own element name
+                    // correctly, not just a namespace declared on an ancestor.
                     self.pos += 1;
                     self.expect(b'>')?;
+                    let scope = extend_ns_scope(parent_scope, &attrs);
+                    let ns_attrs = resolve_ns_attrs(&attrs, &scope);
+                    let ns = resolve_element_ns(&name, &scope);
                     return Ok(Element {
                         name,
                         attrs,
+                        ns_attrs,
+                        ns,
                         children: Vec::new(),
                     });
                 }
@@ -319,6 +467,9 @@ impl<'a> XmlParser<'a> {
                 None => return Err(fmt("unterminated start tag")),
             }
         }
+        let scope = extend_ns_scope(parent_scope, &attrs);
+        let ns_attrs = resolve_ns_attrs(&attrs, &scope);
+        let ns = resolve_element_ns(&name, &scope);
         // Parse children until the matching end tag.
         let mut children = Vec::new();
         loop {
@@ -346,7 +497,7 @@ impl<'a> XmlParser<'a> {
                         children.push(Node::Text(self.src[start..start + rel].to_owned()));
                         self.pos = start + rel + "]]>".len();
                     } else {
-                        children.push(Node::Element(self.parse_element()?));
+                        children.push(Node::Element(self.parse_element(&scope)?));
                     }
                 }
                 Some(_) => {
@@ -360,6 +511,8 @@ impl<'a> XmlParser<'a> {
         Ok(Element {
             name,
             attrs,
+            ns_attrs,
+            ns,
             children,
         })
     }
@@ -424,6 +577,75 @@ impl<'a> XmlParser<'a> {
     }
 }
 
+/// Extend `parent_scope` with any `xmlns:prefix="uri"` declaration, OR a bare
+/// default-namespace `xmlns="uri"` declaration (tracked under the empty-string
+/// "prefix", exactly the key an unprefixed ELEMENT name resolves against —
+/// see [`resolve_element_ns`]), found among `attrs` (this element's own start
+/// tag) — the namespace scope every descendant, and this element's own
+/// attributes and name, resolve against.
+fn extend_ns_scope(
+    parent_scope: &[(String, String)],
+    attrs: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut scope = parent_scope.to_vec();
+    for (k, v) in attrs {
+        if let Some(prefix) = k.strip_prefix("xmlns:") {
+            scope.push((prefix.to_owned(), v.clone()));
+        } else if k == "xmlns" {
+            scope.push((String::new(), v.clone()));
+        }
+    }
+    scope
+}
+
+/// Resolve an ELEMENT's (as opposed to an attribute's) namespace URI from its
+/// raw QName `name` and the bindings in scope at its own start tag: a
+/// prefixed name (`p:local`) resolves against the nearest `xmlns:p`
+/// declaration; an unprefixed name resolves against the nearest bare
+/// `xmlns=` (default namespace) declaration, if any — unlike an attribute, an
+/// unprefixed ELEMENT is NOT namespace-less when a default namespace is in
+/// scope (<https://www.w3.org/TR/xml-names/#defaulting>).
+fn resolve_element_ns(name: &str, scope: &[(String, String)]) -> Option<String> {
+    let prefix = name.split_once(':').map_or("", |(p, _)| p);
+    scope
+        .iter()
+        .rev()
+        .find(|(p, _)| p == prefix)
+        .map(|(_, uri)| uri.clone())
+}
+
+/// An element's local name: everything after its QName's `:`, or the whole
+/// name when it carries no prefix.
+fn local_name(name: &str) -> &str {
+    name.split_once(':').map_or(name, |(_, local)| local)
+}
+
+/// Resolve every attribute in `attrs` to `(namespace URI, local name, value)`
+/// using `scope` (the nearest — i.e. last-pushed — binding for a prefix
+/// wins, matching XML's "nearest declaration in scope" resolution rule).
+/// `xmlns`/`xmlns:*` declaration attributes themselves are namespace
+/// machinery, not ordinary content attributes, so they are excluded here.
+fn resolve_ns_attrs(
+    attrs: &[(String, String)],
+    scope: &[(String, String)],
+) -> Vec<(Option<String>, String, String)> {
+    attrs
+        .iter()
+        .filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:"))
+        .map(|(k, v)| match k.split_once(':') {
+            Some((prefix, local)) => {
+                let ns = scope
+                    .iter()
+                    .rev()
+                    .find(|(p, _)| p == prefix)
+                    .map(|(_, uri)| uri.clone());
+                (ns, local.to_owned(), v.clone())
+            }
+            None => (None, k.clone(), v.clone()),
+        })
+        .collect()
+}
+
 /// Unescape the five predefined XML entities plus numeric character references.
 fn unescape(s: &str) -> Result<String, Error> {
     if !s.contains('&') {
@@ -466,6 +688,98 @@ fn unescape(s: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xml::to_xml;
+    use purrdf_core::SparqlResult;
+
+    /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
+    /// [`provenance_from_xml`] reads back — the writer no longer emits
+    /// something nothing can decode.
+    #[test]
+    fn provenance_round_trips_through_xml() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_owned()),
+            engine: Some("purrdf-sparql-eval".to_owned()),
+            solutions: vec![
+                SolutionProvenance {
+                    sources: vec!["http://example.org/g1".to_owned()],
+                },
+                SolutionProvenance { sources: vec![] },
+            ],
+        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let outcome = to_xml(&result, &provenance, Some(&namespace)).expect("serializes");
+
+        let decoded =
+            provenance_from_xml(&outcome.bytes, &namespace).expect("provenance decodes back");
+        assert_eq!(decoded, provenance);
+    }
+
+    /// A document with no `<{prefix}:provenance>` element decodes to the empty
+    /// provenance rather than erroring.
+    #[test]
+    fn absent_provenance_element_decodes_to_default() {
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean></sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes");
+        assert!(decoded.is_empty());
+    }
+
+    /// Namespace-by-URI pin (false NEGATIVE, mirroring
+    /// [`reads_its_dir_bound_to_non_its_prefix`]): a document that binds the
+    /// caller's OWN namespace IRI to a prefix OTHER than the one this crate's
+    /// writer happens to use (`p:` instead of `prov:`) must still decode —
+    /// XML namespace identity is URI-based, not QName-spelling-based.
+    #[test]
+    fn provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean>
+          <p:provenance xmlns:p="https://example.org/ns/prov#">
+            <p:queryForm>ask</p:queryForm>
+            <p:queryHash>deadbeef</p:queryHash>
+            <p:engine>purrdf-sparql-eval</p:engine>
+          </p:provenance>
+        </sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes");
+        assert_eq!(
+            decoded,
+            ResultProvenance {
+                query_hash: Some("deadbeef".to_owned()),
+                engine: Some("purrdf-sparql-eval".to_owned()),
+                solutions: Vec::new(),
+            }
+        );
+    }
+
+    /// Namespace-by-URI pin (false POSITIVE): a document that reuses this
+    /// crate's writer's OWN prefix spelling (`prov:`) but binds it to an
+    /// UNRELATED namespace — here the actual W3C PROV namespace
+    /// (`http://www.w3.org/ns/prov#`), the single most common real-world
+    /// `prov:` binding — must NOT be read as the caller's provenance
+    /// extension just because the QName spelling matches; only the bound
+    /// namespace IRI identifies it.
+    #[test]
+    fn foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head></head><boolean>true</boolean>
+          <prov:provenance xmlns:prov="http://www.w3.org/ns/prov#">
+            <prov:queryHash>deadbeef</prov:queryHash>
+          </prov:provenance>
+        </sparql>"#;
+        let decoded = provenance_from_xml(doc, &namespace).expect("decodes without error");
+        assert!(
+            decoded.is_empty(),
+            "a `prov:provenance` element bound to the W3C PROV namespace must not be \
+             mistaken for this caller's own `prov` namespace extension"
+        );
+    }
 
     #[test]
     fn reads_select_with_mixed_terms() {
@@ -537,6 +851,162 @@ mod tests {
                     language: None,
                     direction: None,
                 }),
+            })
+        );
+    }
+
+    /// `its:dir` (the SPARQL 1.2 Query Results spec spelling) is preferred and
+    /// yields `rdf:dirLangString` off the datatype ladder.
+    #[test]
+    fn reads_its_dir_directional_literal() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" xmlns:its="http://www.w3.org/2005/11/its" its:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// The legacy `dir`/`purrdf:dir` spellings this crate's own earlier writer
+    /// emitted are tolerated on read, `its:dir` taking priority when both are
+    /// present.
+    #[test]
+    fn tolerates_legacy_dir_spellings() {
+        let bare_dir = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" dir="ltr">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(bare_dir.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+        );
+
+        let purrdf_dir = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" purrdf:dir="ltr" xmlns:purrdf="https://purrdf.dev/ns/results#">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(purrdf_dir.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+        );
+    }
+
+    /// When `its:dir` and a legacy spelling disagree on one literal, the spec
+    /// spelling wins.
+    #[test]
+    fn its_dir_takes_priority_over_legacy_spellings() {
+        let both = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" xmlns:its="http://www.w3.org/2005/11/its" its:dir="rtl" dir="ltr" purrdf:dir="ltr" xmlns:purrdf="https://purrdf.dev/ns/results#">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(both.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// Namespace-inheritance pin: the ITS namespace declared on the ROOT `<sparql>` element
+    /// — this crate's own writer's default style (see [`crate::xml`]'s module
+    /// docs) — must still resolve for a `<literal its:dir="…">` several
+    /// elements deeper, since XML namespace scope is inherited downward.
+    #[test]
+    fn reads_its_dir_declared_on_root() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" its:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// Namespace-by-URI pin: XML namespace semantics are defined by URI, not prefix
+    /// spelling (<https://www.w3.org/TR/xml-names/>). A document that binds
+    /// the ITS namespace to a NON-`its` prefix (here `i`) must still be read
+    /// correctly — matching by `(namespace URI, local name)` rather than the
+    /// raw QName `its:dir`.
+    #[test]
+    fn reads_its_dir_bound_to_non_its_prefix() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="ar" xmlns:i="http://www.w3.org/2005/11/its" i:dir="rtl">قطة</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "قطة".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// Combined namespace pin: the ITS namespace bound to a non-`its` prefix
+    /// AND declared on the root element rather than inline on the literal —
+    /// the fully general case a raw-QName match cannot handle at all.
+    #[test]
+    fn reads_its_dir_non_its_prefix_declared_on_root() {
+        let srx = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:ns7="http://www.w3.org/2005/11/its" ns7:version="2.0">
+          <head><variable name="x"/></head>
+          <results><result><binding name="x">
+            <literal xml:lang="en" ns7:dir="ltr">hello</literal>
+          </binding></result></results>
+        </sparql>"#;
+        let parsed = from_xml(srx.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
             })
         );
     }

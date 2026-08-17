@@ -231,6 +231,58 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
              the relation would never be invoked and the answer would be silently wrong",
         ));
     }
+    // A custom aggregate call inside a forwarded body is refused the same way, for the
+    // same reason: `AGG(<iri>, …)` serializes as text the remote endpoint has no
+    // registered meaning for, and this engine's registry — the one place the IRI is
+    // actually resolved — never sees the call at all once it has been shipped away.
+    // Hard, unconditional on `SILENT`, before any charge — the exact treatment the
+    // property-function refusal above gets, and for the identical reason: `SILENT`
+    // promises an empty result from an unreachable ENDPOINT, never a wrong (or
+    // endpoint-syntax-error) one from a request that could never have meant what it
+    // meant locally.
+    if crate::property_fn_eval::pattern_reaches_custom_aggregate(inner) {
+        return Err(EvalError::unsupported(
+            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded \
+             as text the remote endpoint has no registered meaning for, so this engine's \
+             aggregate registry would never resolve the call and the answer would be silently \
+             wrong",
+        ));
+    }
+    // A custom SCALAR function call inside a forwarded body is NOT the unconditional twin
+    // of the two refusals above — it is scoped to `SILENT` only, and deliberately so.
+    //
+    // `Function::Custom` serializes as ordinary function-call syntax (`<iri>(args…)`), and
+    // that is exactly the shape the SPARQL specification expects for a remote endpoint's
+    // OWN extension functions: `purrdf_sparql_algebra::parser` falls through to
+    // `Function::Custom` for every call-position IRI that is not a builtin and not under a
+    // *configured* extension namespace (see its module docs), so this call form is the
+    // normal, spec-sanctioned way to invoke a function the LOCAL engine does not know but
+    // the endpoint might. A property-function call and a custom-aggregate call have no such
+    // meaning at a remote endpoint — a relation IRI just matches ITS data as an ordinary
+    // triple with no symptom, and `AGG(<iri>, …)` is this engine's own registry syntax — so
+    // those two stay unconditional refusals (see above). A custom scalar function is
+    // different: an endpoint that has no such function fails LOUDLY on its own account
+    // (`pattern_reaches_custom_function`'s doc: this engine's own evaluation of an
+    // unresolved `Function::Custom` already raises a typed error rather than silently
+    // matching unrelated data), and the non-silent path below turns any such endpoint
+    // failure into an honest [`EvalError::Remote`] — there is no silent-wrong-answer hazard
+    // to close for a plain, non-silent `SERVICE`.
+    //
+    // The hazard is real ONLY under `SERVICE SILENT`: `SILENT` swallows an endpoint failure
+    // to the join identity, so a loud, honest "no such function" failure at the endpoint
+    // would be swallowed into a silent wrong answer. So the refusal is gated on `silent`,
+    // and its message names the escape — dropping `SILENT` makes the query forward and
+    // work — so the refusal is actionable rather than a dead end.
+    if silent && crate::property_fn_eval::pattern_reaches_custom_function(inner) {
+        return Err(EvalError::unsupported(
+            "a custom scalar-function call inside a SERVICE SILENT body: the call would be \
+             forwarded as ordinary function-call syntax, and if the remote endpoint has no \
+             such function the failure would degrade to the join identity under SILENT — a \
+             silent wrong answer rather than an honest one; drop SILENT and the query \
+             forwards and answers normally, with an unrecognized function surfacing as an \
+             honest remote failure instead",
+        ));
+    }
     // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
     // resolution, which the engine defers — so it is a hard error unless SILENT.
     let endpoint = match name {
@@ -699,6 +751,160 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "native-sparql-query-eval");
         assert!(err.message.contains("SERVICE"), "got: {}", err.message);
+    }
+
+    // ── custom-aggregate / custom-function SERVICE forwarding refusals ────────
+
+    #[test]
+    fn custom_aggregate_inside_a_service_body_is_refused_at_the_forwarding_boundary() {
+        let source = LocalRemoteQuerySource::new();
+        let err = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?s WHERE { SERVICE <http://ep> { \
+             SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { ?s <http://ex/name> ?n } \
+             GROUP BY ?s } }",
+        )
+        .unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("custom-aggregate call inside a SERVICE body"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn custom_aggregate_inside_a_silent_service_body_is_refused_too() {
+        let source = LocalRemoteQuerySource::new();
+        let err = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
+             SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { ?s <http://ex/name> ?n } \
+             GROUP BY ?s } }",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom-aggregate call inside a SERVICE body"),
+            "SILENT promises an empty result from a failed endpoint, never a wrong one from a \
+             misread AGG(<iri>, …) call: {err}"
+        );
+    }
+
+    #[test]
+    fn custom_function_inside_a_non_silent_service_body_forwards_and_answers() {
+        // The regression this pins: `Function::Custom` is exactly how the SPARQL grammar
+        // expects a remote endpoint's OWN extension functions to be written (the parser
+        // falls through to `Function::Custom` for any call-position IRI outside a
+        // configured namespace), so a non-silent SERVICE body containing one must still be
+        // forwarded — an endpoint that does not recognize it fails loudly on its own
+        // account, and that failure already surfaces as an honest `EvalError::Remote`
+        // rather than a silent wrong answer.
+        let posts = AtomicUsize::new(0);
+        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+            posts.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                request.query_text.contains("http://ex/customFn"),
+                "the custom function call must reach the endpoint verbatim: {}",
+                request.query_text
+            );
+            Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+                {"n":{"type":"literal","value":"X"}}
+            ]}}"#
+                .to_vec())
+        });
+        let result = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?n WHERE { SERVICE <http://ep> { \
+             ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
+        )
+        .expect("a non-silent SERVICE body must forward a custom scalar-function call");
+        assert_eq!(
+            posts.load(Ordering::Relaxed),
+            1,
+            "the request must actually be issued, not refused locally"
+        );
+        assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
+    }
+
+    #[test]
+    fn custom_function_inside_a_silent_service_body_is_refused_with_the_escape_named() {
+        let source = LocalRemoteQuerySource::new();
+        let err = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
+             ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
+        )
+        .unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("custom scalar-function call inside a SERVICE SILENT body"),
+            "SILENT must not launder a forwarded custom-function call into a degrade-to-\
+             join-identity wrong answer: {err}"
+        );
+        assert!(
+            err.to_string().contains("drop SILENT"),
+            "the refusal must name the escape so it is actionable rather than a dead end: {err}"
+        );
+    }
+
+    #[test]
+    fn a_custom_function_nested_inside_another_calls_arguments_still_trips_the_silent_guard() {
+        // The regression this pins: `visit_expression_parts`'s `FunctionCall` arm visits
+        // each argument as `ExpressionPart::Sub`, and `expression_reaches_custom_function`
+        // recurses into every `Sub`, so a `Function::Custom` call need not be the
+        // OUTERMOST call in the expression tree to be found — it can be buried inside
+        // another call's argument list. `CONCAT(<http://ex/customFn>(?n), "a")` nests the
+        // custom call one level down; if the walk only inspected an expression's own
+        // `Call` part and never descended into `FunctionCall` arguments, this query would
+        // slip the guard and forward under `SILENT`.
+        let source = LocalRemoteQuerySource::new();
+        let err = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?s WHERE { SERVICE SILENT <http://ep> { \
+             ?s <http://ex/name> ?n . \
+             FILTER(CONCAT(<http://ex/customFn>(?n), \"a\") = \"Xa\") } }",
+        )
+        .unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("custom scalar-function call inside a SERVICE SILENT body"),
+            "a custom call nested inside CONCAT's argument list must trip the same guard a \
+             top-level custom call does: {err}"
+        );
+    }
+
+    #[test]
+    fn custom_aggregate_refusal_precedes_the_no_source_check() {
+        // No remote source configured at all: the forwarding refusal must still win —
+        // it is checked before the endpoint/source resolution, exactly like the
+        // property-function refusal it mirrors.
+        let engine = NativeSparqlEngine::new();
+        let err = engine
+            .query(
+                &local(),
+                SparqlRequest {
+                    query: "SELECT ?s WHERE { SERVICE <http://ep> { \
+                            SELECT ?s (AGG(<http://ex/customAgg>, ?n) AS ?v) WHERE { \
+                            ?s <http://ex/name> ?n } GROUP BY ?s } }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert!(
+            err.message
+                .contains("custom-aggregate call inside a SERVICE body"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]

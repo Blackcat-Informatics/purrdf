@@ -504,7 +504,7 @@ fn int_binop(
 /// Product `< 10^18 × 10^18 = 10^36 < i128::MAX (≈ 1.70×10^38)`. No overflow.
 /// However, the mantissa of an *add/sub result* can be up to `2 × 10^36` which still
 /// fits in i128; the caller must not further scale without checking.
-fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
+pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
     if a.scale() == b.scale() {
         return (a.mantissa(), b.mantissa(), a.scale());
     }
@@ -687,6 +687,13 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
+    decimal_mul_raw(a, b).map(XsdValue::Decimal)
+}
+
+/// The exact-decimal-multiplication math behind [`decimal_mul`], returning the raw
+/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ×
+/// numeric, XPath F&O `op:multiply-yearMonthDuration`/`op:multiply-dayTimeDuration`).
+pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
     let new_mantissa =
         a.mantissa()
             .checked_mul(b.mantissa())
@@ -697,24 +704,18 @@ fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
             })?;
     let raw_scale = u32::from(a.scale()) + u32::from(b.scale());
     if raw_scale <= u32::from(MAX_DECIMAL_SCALE) {
-        Ok(XsdValue::Decimal(Decimal::from_parts(
-            new_mantissa,
-            raw_scale as u8,
-        )))
+        Ok(Decimal::from_parts(new_mantissa, raw_scale as u8))
     } else {
         // Truncate toward zero to MAX_DECIMAL_SCALE fractional digits.
-        let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
         // SAFETY: excess ≤ 36 (max raw_scale is 36); 10^excess ≤ 10^36 < i128::MAX.
         // But we cannot represent 10^36 in i128 (i128::MAX ≈ 1.70×10^38 > 10^36),
         // however 10^38 > i128::MAX, so we need to be careful.
         // excess ≤ raw_scale - 0 ≤ 18 + 18 = 36; 10^36 ≈ 1×10^36 < 1.70×10^38 = i128::MAX.
         // So 10i128.pow(excess) does not overflow for excess ≤ 36.
+        let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
         let divisor = 10i128.pow(excess);
         let truncated = new_mantissa / divisor;
-        Ok(XsdValue::Decimal(Decimal::from_parts(
-            truncated,
-            MAX_DECIMAL_SCALE,
-        )))
+        Ok(Decimal::from_parts(truncated, MAX_DECIMAL_SCALE))
     }
 }
 
@@ -815,6 +816,33 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// The shift factor is chosen as `MAX_DECIMAL_SCALE + divisor.scale()` minus the
 /// dividend scale so that the final result lands at exactly scale `MAX_DECIMAL_SCALE`.
 fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
+    decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
+}
+
+/// The exact-decimal-division math behind [`decimal_div`], returning the raw
+/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ÷
+/// numeric and `dayTimeDuration` ÷ `dayTimeDuration`, XPath F&O
+/// `op:divide-dayTimeDuration`/`op:divide-dayTimeDuration-by-dayTimeDuration`).
+///
+/// Every current caller (in this module and in `temporal.rs`) already checks its own
+/// divisor and returns a datatype-specific `Err(DivisionByZero)` before ever reaching
+/// here, so this function's own zero check normally never fires. It is not, however,
+/// a `debug_assert!`: this is `pub(crate)` and reachable from more than one call
+/// site, so a caller added later that forgets its own check must still get a typed
+/// `Err`, in every build profile, rather than the `i128` division below panicking —
+/// on `wasm32-unknown-unknown` with `panic = "abort"` an integer-division panic tears
+/// down the whole module, not just the one call, so this is not merely a debug-time
+/// convenience. The datatype this reports is always [`XsdDatatype::Decimal`]
+/// (the type this raw function itself operates over) rather than whatever
+/// caller-specific datatype (`Integer`, `YearMonthDuration`, …) a pre-check would
+/// have reported — irrelevant in practice, since every real caller's own check
+/// already reports the right datatype and never lets a zero divisor reach here.
+pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<Decimal, XsdError> {
+    if divisor.is_zero() {
+        return Err(XsdError::DivisionByZero {
+            datatype: XsdDatatype::Decimal,
+        });
+    }
     // We want: result = dividend / divisor at scale MAX_DECIMAL_SCALE.
     // dividend = dm × 10^(-ds), divisor = vm × 10^(-vs).
     // result mantissa at scale S = dm × 10^(S + vs - ds) / vm
@@ -847,10 +875,94 @@ fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdErr
         let factor = 10i128.pow((-shift_exp) as u32);
         dm / factor
     };
-    Ok(XsdValue::Decimal(Decimal::from_parts(
-        scaled_dm / vm,
-        target_scale,
+    Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
+}
+
+/// `op:numeric-divide` for an integer `SUM` fold's running total (`dividend`)
+/// once it has grown past `i128` (see [`crate::bigint::BigInt`]'s module docs
+/// for why that can happen), divided by the folded row `count`. This is
+/// `AVG`'s finish for exactly that case — mirrors `decimal_div_raw`'s
+/// scale-to-`MAX_DECIMAL_SCALE`-then-divide shape exactly (same target
+/// scale, same truncate-toward-zero), just computed over an
+/// arbitrary-precision dividend instead of an `i128` one.
+///
+/// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
+/// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
+/// crate's documented design, unchanged by this function; matches
+/// `oxsdatatypes`' precision). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
+/// digits BEFORE dividing multiplies the required headroom by 18 decimal
+/// digits, so this fails far more readily than the bare integer quotient
+/// would: an escaped-`i128` `dividend` needs a `count` on the order of
+/// `10^18` or larger before the scaled quotient's mantissa fits back inside
+/// `i128` (see `bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not`
+/// in this module's tests for a worked case) — a plausible `GROUP BY` row
+/// count for some workloads, but not for a small one. In particular, an
+/// ordinary-looking quotient like `(i128::MAX + i128::MAX) / 2` — mathematically
+/// exactly `i128::MAX`, an entirely ordinary integer — still returns `None`
+/// here purely because of the forced scale-18 representation: at scale 18,
+/// `i128::MAX`'s mantissa alone needs roughly 56 decimal digits, far past
+/// `i128`'s ~38-digit ceiling. Callers that must answer even then use
+/// [`bigint_avg_decimal_lexical`], which has no such bound (see its doc for
+/// why bypassing [`Decimal`] entirely is safe there).
+///
+/// `count` must be nonzero; `AVG`'s one caller only reaches this with a folded
+/// row count, which is never zero for a non-empty group.
+///
+/// # Panics
+///
+/// If `count == 0` — the caller's contract, not a runtime input.
+#[must_use]
+pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
+    assert!(
+        count != 0,
+        "AVG's divisor is a folded row count, never zero"
+    );
+    let scaled = dividend.mul_pow10(u32::from(MAX_DECIMAL_SCALE));
+    let (quotient, _remainder) = scaled
+        .div_rem_u64(count)
+        .expect("count != 0 was just asserted");
+    let mantissa = quotient.to_i128()?;
+    Some(XsdValue::Decimal(Decimal::from_parts(
+        mantissa,
+        MAX_DECIMAL_SCALE,
     )))
+}
+
+/// `AVG`'s finish for an escaped-`i128` running total whose scale-`MAX_DECIMAL_SCALE`
+/// quotient mantissa has ALSO escaped `i128` — the case [`bigint_avg_decimal`]
+/// answers `None` for. Computes the IDENTICAL exact scale-18 quotient
+/// [`bigint_avg_decimal`] does (same scale-then-divide, same truncate-toward-zero),
+/// but renders it as raw canonical `xsd:decimal` lexical TEXT via
+/// [`crate::bigint::BigInt::to_decimal_lexical`] instead of constructing an
+/// in-memory [`Decimal`] — bypassing `xsd:decimal`'s `i128`-mantissa bound
+/// entirely rather than moving it. This is safe for the same reason the crate
+/// already accepts the analogous asymmetry for `SUM`: a fold's FINISH is allowed
+/// to emit a wider literal than any single parsed `xsd:decimal`/`xsd:integer`
+/// INPUT could ever produce (see [`crate::bigint::BigInt::to_decimal_string`]'s
+/// doc and its `SUM`-side caller, `purrdf-sparql-eval`'s `int_sum_value`, which
+/// makes the identical choice for a pure-integer running total that exceeds
+/// `i128`). No representation this function produces is ever fed back through
+/// [`Decimal`]'s arithmetic — the IEEE (`float`/`double`) families and the rest
+/// of the numeric promotion tower are untouched by this function's existence.
+///
+/// Always succeeds: `BigInt` has no magnitude bound beyond available memory, so
+/// unlike [`bigint_avg_decimal`] this has no `None` case at all.
+///
+/// # Panics
+///
+/// If `count == 0` — the caller's contract, not a runtime input (identical to
+/// [`bigint_avg_decimal`]).
+#[must_use]
+pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
+    assert!(
+        count != 0,
+        "AVG's divisor is a folded row count, never zero"
+    );
+    let scaled = dividend.mul_pow10(u32::from(MAX_DECIMAL_SCALE));
+    let (quotient, _remainder) = scaled
+        .div_rem_u64(count)
+        .expect("count != 0 was just asserted");
+    quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
 }
 
 /// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.
@@ -1535,6 +1647,79 @@ mod tests {
         );
     }
 
+    // -- `bigint_avg_decimal`: AVG's finish once a running SUM has escaped `i128` --
+
+    #[test]
+    fn bigint_avg_matches_numeric_div_within_i128_range() {
+        // A dividend still small enough to fit `i128` must agree byte-for-byte with
+        // the ordinary `numeric_div` path — `bigint_avg_decimal` is a strict
+        // generalization, not a different algorithm.
+        let dividend = crate::bigint::BigInt::from_i128(1);
+        let via_bigint = bigint_avg_decimal(&dividend, 3).expect("1/3 fits");
+        let via_numeric_div = numeric_div(&int_val(1), &int_val(3)).unwrap();
+        assert_eq!(
+            as_decimal(&via_bigint).cmp_exact(&as_decimal(&via_numeric_div)),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not() {
+        // dividend = 2 * i128::MAX (exceeds i128; only representable as a BigInt),
+        // divided by a count large enough that the QUOTIENT'S 18-fractional-digit
+        // mantissa still fits i128 — proving the escaped-i128 SUM does not have to
+        // poison AVG when the answer itself is ordinary.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        assert_eq!(
+            dividend.to_i128(),
+            None,
+            "fixture must genuinely exceed i128"
+        );
+        let avg = bigint_avg_decimal(&dividend, 10_000_000_000_000_000_000)
+            .expect("quotient magnitude is well under i128::MAX");
+        let d = as_decimal(&avg);
+        // (2 * i128::MAX) / 1e19, truncated toward zero at 18 fractional digits.
+        assert_eq!(
+            d.canonical_lexical(),
+            "34028236692093846346.337460743176821145"
+        );
+    }
+
+    #[test]
+    fn bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128() {
+        // dividend = 2 * i128::MAX, divided by 2: the mathematically exact quotient
+        // (i128::MAX) is an ordinary integer, but `bigint_avg_decimal`'s result type
+        // is the `i128`-mantissa `Decimal`, and its mantissa must hold BOTH the
+        // integer part AND 18 fractional digits — `i128::MAX` scaled to 18
+        // fractional digits does not fit `i128` either. This is `xsd:decimal`'s own
+        // documented bound (`Decimal`'s deliberate, unchanged design), not a
+        // limitation `BigInt` introduces, and it already applied — for the same
+        // reason — to sufficiently large in-range `AVG`s before this module existed.
+        //
+        // `bigint_avg_decimal` genuinely has no answer here (there is no `i128`
+        // mantissa to return); [`bigint_avg_decimal_lexical`] is the escape hatch
+        // that answers this exact case by rendering the exact result as text
+        // instead — see the next test.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        assert!(bigint_avg_decimal(&dividend, 2).is_none());
+    }
+
+    #[test]
+    fn bigint_avg_decimal_lexical_answers_exactly_where_bigint_avg_decimal_poisons() {
+        // Same fixture as the test above (dividend = 2 * i128::MAX, count = 2):
+        // `bigint_avg_decimal` has no `i128`-mantissa `Decimal` to return, but the
+        // exact scale-18 quotient is perfectly representable as TEXT, with no
+        // magnitude bound at all — `170141183460469231731687303715884105727` (i.e.
+        // `i128::MAX`) followed by 18 zero fractional digits, trimmed to an
+        // integer-valued canonical form per XSD 1.1 §3.3.3.2.
+        let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
+        dividend.add_i128(i128::MAX);
+        let lexical = bigint_avg_decimal_lexical(&dividend, 2);
+        assert_eq!(lexical, i128::MAX.to_string());
+    }
+
     // -- decimal exactness: 0.1 + 0.2 == 0.3 (the classic float failure) --
 
     #[test]
@@ -1636,6 +1821,29 @@ mod tests {
         let result = numeric_div(&double_val(0.0), &double_val(0.0)).unwrap();
         let d = as_double(&result);
         assert!(d.is_nan(), "0.0 / 0.0 must be NaN");
+    }
+
+    /// Regression coverage: `decimal_div_raw` must return `Err(DivisionByZero)` for a
+    /// zero divisor on its OWN, not merely rely on a caller's pre-check — this
+    /// calls it DIRECTLY (bypassing every one of `numeric_div`'s/`temporal.rs`'s own
+    /// zero checks) with a zero divisor, so this test only passes if the function's
+    /// own check fires. Deliberately not a `debug_assert!`-detecting test (this
+    /// crate does not build with debug assertions disabled in `cargo test`, so a
+    /// `#[should_panic]` on a `debug_assert!` would pass in either build profile);
+    /// instead it asserts the typed `Err` shape directly, which is what actually
+    /// matters: without this check, this exact call would panic on an integer division
+    /// by zero in a release build (where `debug_assert!` compiles out), which on
+    /// `wasm32-unknown-unknown` (`panic = "abort"`) tears down the whole module.
+    #[test]
+    fn decimal_div_raw_rejects_a_zero_divisor_without_a_callers_precheck() {
+        let zero = Decimal::from_parts(0, 0);
+        let five = dec("5.0");
+        assert!(matches!(
+            decimal_div_raw(&five, &zero),
+            Err(XsdError::DivisionByZero {
+                datatype: XsdDatatype::Decimal
+            })
+        ));
     }
 
     // -- unary minus --

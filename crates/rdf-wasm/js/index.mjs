@@ -64,6 +64,8 @@ import init, {
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
+  provenanceFromJson,
+  provenanceFromXml,
   Quad,
   QueryEngine,
   ReasoningAnswer,
@@ -133,8 +135,53 @@ const GOVERNOR_OPTION_KEYS = [
   "cancel",
 ];
 
+// `aggregateNamespace` registers purrdf's first-party statistical aggregate set
+// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+// `LAST`, `TOPK`) under an IRI namespace, so the query text can call
+// `AGG(<{NAMESPACE}NAME>, args…)`. Like the governor keys above, it is honored ONLY by
+// `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned` (the entry points that accept
+// a `QueryOptions` registry) — an ungoverned call would silently drop it, so that lane
+// refuses it by name instead.
+function normalizeAggregateNamespace(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("query option aggregateNamespace must be a string when supplied");
+  }
+  return value;
+}
+
+// `provenanceNamespace` anchors the additive `purrdf` provenance extension on a
+// SELECT/ASK result serialized to SPARQL-results JSON/XML — honored ONLY by
+// `queryRaw`, the one entry point that serializes to raw text (`select`/`ask`/
+// `construct`/`describe`/`update`/`explainQuery` all return typed objects with no
+// wire-format document to anchor an extension in, exactly like `format` beside them).
+function normalizeProvenanceNamespace(value) {
+  if (value === undefined || value === null) {
+    return { prefix: undefined, iri: undefined };
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(
+      "query option provenanceNamespace must be an object ({ prefix, iri }) when supplied",
+    );
+  }
+  const { prefix, iri } = value;
+  if (typeof prefix !== "string" || typeof iri !== "string") {
+    throw new TypeError(
+      "query option provenanceNamespace must supply both a string `prefix` and a string `iri`",
+    );
+  }
+  return { prefix, iri };
+}
+
 function normalizeQueryOptions(options) {
-  if (options == null) return { base: undefined, format: undefined };
+  if (options == null) {
+    return {
+      base: undefined,
+      format: undefined,
+      provenancePrefix: undefined,
+      provenanceIri: undefined,
+    };
+  }
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
@@ -146,19 +193,31 @@ function normalizeQueryOptions(options) {
       );
     }
   }
+  if (options.aggregateNamespace != null) {
+    throw new TypeError(
+      "query option aggregateNamespace registers the statistical-aggregate registry and " +
+        "is honored only by queryGoverned/updateGoverned; this call would ignore it entirely",
+    );
+  }
+  const { prefix: provenancePrefix, iri: provenanceIri } = normalizeProvenanceNamespace(
+    options.provenanceNamespace,
+  );
   return {
     base: options.base ?? undefined,
     format: options.format ?? undefined,
+    provenancePrefix,
+    provenanceIri,
   };
 }
 
 function normalizeGovernedOptions(options) {
-  if (options == null) return { base: undefined };
+  if (options == null) return { base: undefined, aggregateNamespace: undefined };
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
   return {
     base: options.base ?? undefined,
+    aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
     fuel: governorCeiling(options.fuel, "fuel"),
     deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
     maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
@@ -177,6 +236,9 @@ function normalizeGovernedOptions(options) {
 
 function normalizeEntailmentGovernedOptions(options) {
   const governed = normalizeGovernedOptions(options);
+  // The entailment-aware query lane now threads a `QueryOptions` registry through both the
+  // closure query's PARSE and its evaluation (see `QueryEngine::query_entailment_governed`
+  // in Rust), exactly as `queryGoverned` does — `aggregateNamespace` is honored, not refused.
   return {
     ...governed,
     program: options?.program ?? undefined,
@@ -623,8 +685,16 @@ export async function ready(wasmBytesOrUrl) {
       return dataset;
     };
     QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
-      const { base, format } = normalizeQueryOptions(options);
-      return wasmQueryRaw.call(this, dataset, sparql, base, format);
+      const { base, format, provenancePrefix, provenanceIri } = normalizeQueryOptions(options);
+      return wasmQueryRaw.call(
+        this,
+        dataset,
+        sparql,
+        base,
+        format,
+        provenancePrefix,
+        provenanceIri,
+      );
     };
     QueryEngine.prototype.queryGoverned = function (dataset, sparql, options) {
       const o = normalizeGovernedOptions(options);
@@ -634,6 +704,7 @@ export async function ready(wasmBytesOrUrl) {
           dataset,
           sparql,
           o.base,
+          o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,
@@ -659,6 +730,7 @@ export async function ready(wasmBytesOrUrl) {
           o.base,
           entailment,
           o.program,
+          o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,
@@ -680,6 +752,7 @@ export async function ready(wasmBytesOrUrl) {
           dataset,
           sparql,
           o.base,
+          o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,
@@ -748,6 +821,8 @@ export {
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
+  provenanceFromJson,
+  provenanceFromXml,
   Quad,
   QueryEngine,
   ReasoningAnswer,

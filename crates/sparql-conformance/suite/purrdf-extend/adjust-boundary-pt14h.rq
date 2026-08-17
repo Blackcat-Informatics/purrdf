@@ -1,0 +1,8 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# PT14H is the INCLUSIVE upper edge of fn:adjust-dateTime-to-timezone's
+# +-PT14H domain (contrast adjust-out-of-range-unbound.rq's PT15H, which is
+# outside it) — this pins the boundary is accepted, not just "large offsets
+# are rejected".
+SELECT ?adjusted WHERE {
+  BIND(ADJUST("2024-06-15T10:00:00Z"^^xsd:dateTime, "PT14H"^^xsd:dayTimeDuration) AS ?adjusted)
+}

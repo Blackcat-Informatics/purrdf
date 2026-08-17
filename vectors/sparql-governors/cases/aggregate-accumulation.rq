@@ -1,0 +1,4 @@
+PREFIX ex: <http://example.org/>
+
+SELECT (SUM(?val) AS ?total)
+WHERE { ?s ex:val ?val }

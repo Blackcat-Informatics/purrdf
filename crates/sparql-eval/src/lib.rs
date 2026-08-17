@@ -31,18 +31,25 @@
 //!   `path` module.
 //! - **Hard-fail, no degraded fallback.** `SERVICE` federation ([`remote`],
 //!   [`remote_http`]), `LATERAL` (`binop`), host-injected **property-function**
-//!   relations ([`property_fn`], `property_fn_plan`, `property_fn_eval`), and SPARQL
-//!   `UPDATE` ([`update`]) are all evaluated in-engine — none of them is out of scope.
-//!   What remains a typed [`EvalError::Unsupported`] is a narrow, enumerated residue:
-//!   a variable-bound quoted-triple-term component in a BGP or property-path pattern
-//!   (`convert`), an unresolved custom SPARQL function or aggregate IRI (`expr`,
-//!   `modifier`), `heldIn` called without a caller-supplied standpoint-predicate
-//!   configuration, and a manually constructed graph pattern whose nesting exceeds the
-//!   parser's safety bound (`governor::soundness`). A call into a relation the host did
-//!   not register, or one no declared access pattern admits, is not in that residue
-//!   either: it is a typed [`EvalError::Function`], because the construct is supported
-//!   and the host's table is what does not answer it. Never a wrong answer, and never a
-//!   partial one *offered as complete* (the project `no-optionality` doctrine).
+//!   relations ([`property_fn`], `property_fn_plan`, `property_fn_eval`) and
+//!   **custom aggregates** ([`agg_fn`], including the closed, ten-member
+//!   first-party statistical set in [`stat_agg`] — `MEDIAN`/`PERCENTILE`/
+//!   `STDDEV`/`VARIANCE`-family/`MODE`/`FIRST`/`LAST`/`TOPK`, reachable under a
+//!   caller-supplied namespace via one
+//!   [`agg_fn::AggregateRegistry::register_statistical_aggregates`] call), and
+//!   SPARQL `UPDATE` ([`update`]) are all
+//!   evaluated in-engine — none of them is out of scope. What remains a typed
+//!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
+//!   quoted-triple-term component in a BGP or property-path pattern (`convert`), an
+//!   unresolved custom SPARQL function IRI (`expr`), `heldIn` called without a
+//!   caller-supplied standpoint-predicate configuration, and a manually constructed
+//!   graph pattern whose nesting exceeds the parser's safety bound
+//!   (`governor::soundness`). A call into a relation, or an `AGG(<iri>, …)` custom
+//!   aggregate, the host did not register — or one no declared access pattern
+//!   admits, for a relation — is not in that residue either: it is a typed
+//!   [`EvalError::Function`], because the construct is supported and the host's
+//!   table is what does not answer it. Never a wrong answer, and never a partial
+//!   one *offered as complete* (the project `no-optionality` doctrine).
 //! - **Governed execution, when a caller asks for it.** A caller may attach ceilings
 //!   and a stop signal ([`governor::QueryGovernors`]) and run
 //!   [`NativeSparqlEngine::query_governed`], which either completes or returns
@@ -70,10 +77,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod agg_fn;
+mod basic_profile;
 mod bgp;
 mod binop;
 mod clock;
 mod construct;
+mod contain;
 mod convert;
 mod dataset_spec;
 mod describe_query;
@@ -93,6 +103,7 @@ mod path;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
+mod registry_id;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
@@ -100,11 +111,21 @@ pub mod remote_http;
 mod row_ingest;
 pub mod scratch;
 pub mod solution;
+pub mod stat_agg;
 mod substitute;
 mod template;
 pub mod update;
 pub mod user_fn;
 
+// The custom-aggregate seam: the fold-algebra trait a host implements, the
+// accumulator trait its `init` hands out, and the registry `AGG(<iri>, …)`
+// resolves an IRI against. Re-exported so a host wires an aggregate into the
+// engine without naming the module path — the aggregate twin of `property_fn`'s
+// re-export block.
+pub use agg_fn::{
+    AggDescriptor, AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
+    ScalarvalKind, ScalarvalSpec,
+};
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
 pub use error::EvalError;
 pub use eval::{

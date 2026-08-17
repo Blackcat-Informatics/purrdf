@@ -54,11 +54,11 @@ recursion, and an `EXTERNAL` resolver hook.
 From Python:
 
 ```python
-from purrdf_native import shex
+from purrdf import shex
 
-result = shex.validate(my_schema_shexc, my_data_ttl,
-                       [("https://example.org/alice", "https://example.org/PersonShape")])
-print(result["conforms"])
+results = shex.validate(my_schema_shexc, my_data_ttl,
+                        [("https://example.org/alice", "https://example.org/PersonShape")])
+print(results[0]["conformant"])
 ```
 
 ## Conformance

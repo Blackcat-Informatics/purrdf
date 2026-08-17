@@ -71,6 +71,39 @@
 //! row charges) and a *row-isolating* pair driven by a single row (one invocation, many
 //! row charges). A cost change at either point moves exactly one of them.
 //!
+//! # The aggregate lane
+//!
+//! v6 put a second pair of charge points inside the same fuel number —
+//! `aggregate-invocation` and `aggregate-accumulation` — for the evaluator's third
+//! producer whose per-group work an outside party sizes: `GROUP BY`'s aggregate fold,
+//! built-in and custom alike. It owes the same fourth record the relation lane does, taken
+//! the same way but over a plain `explain_query` (no property-function registry needed,
+//! since an aggregate is ordinary algebra rather than an injected seam): `aggregate-invocation-fuel-*`
+//! isolates the invocation point with many aggregate expressions folding an empty group
+//! (many invocation charges, zero accumulation charges), and `aggregate-accumulation-fuel-*`
+//! isolates the accumulation point with one aggregate expression folding many rows (one
+//! invocation charge, many accumulation charges) — the same isolating-pair shape the
+//! relation lane uses, for the same reason.
+//!
+//! Every case above names the built-in `SUM`. `Source::Aggregate` wires a registered
+//! [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead
+//! ([`registered_custom_aggregate`]), through `QueryOptions::aggregates`. It owes the SAME
+//! fourth record too, taken through
+//! [`NativeSparqlEngine::explain_query_with_options`](purrdf_sparql_eval::NativeSparqlEngine::explain_query_with_options)
+//! (with `QueryOptions::aggregates` populated) — the injected-seam decomposition entry a
+//! registered custom aggregate needs, the exact counterpart the same entry (with
+//! `QueryOptions::property_functions` populated instead) is for the relation lane
+//! ([`charge_decomposition_custom_aggregate`]). `aggregate-custom-fuel-*` folds the SAME
+//! group shape `aggregate-accumulation-*` does through the custom path instead of the
+//! built-in one, so the two lanes' fuel is directly comparable
+//! ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]).
+//! `aggregate-custom-scratch-bytes-*` bands the ONE dimension no built-in aggregate ever
+//! charges at all — [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound)
+//! — over a group large enough to cross the within-group chunk threshold, freezing the claim
+//! that this charge (and the fold's answer) is a pure function of the group's row count,
+//! never of the host's thread count
+//! (see [`the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state`]).
+//!
 //! # The parallel drive
 //!
 //! One relation pair drives more rows than `parallel::PARALLEL_MIN_ROWS`, so the BGP
@@ -110,7 +143,8 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, CancellationFlag, ChargePoint, EvalError, GovernedOutcome,
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
+    CancellationFlag, ChargePoint, CustomAggregate, EvalError, GovernedOutcome,
     HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
     PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
     QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
@@ -134,8 +168,18 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 /// numeric dimensions (15), an injected deterministic deadline (3), the property-function
 /// charge points' joint fuel lane (3), and the three relation lanes that exist to take that
 /// joint lane apart — invocation-isolating, row-isolating, and the parallel drive, a
-/// boundary and an over-bound each (6).
-const REQUIRED_BAND_CASES: usize = 27;
+/// boundary and an over-bound each (6) — plus the two aggregate lanes that isolate
+/// `aggregate-invocation` and `aggregate-accumulation` from each other, a boundary and an
+/// over-bound each (4) — plus the two `Source::Aggregate` lanes that exercise the CUSTOM
+/// path those four never touch: `aggregate-custom-fuel-*`, the same group shape as
+/// `aggregate-accumulation-*` but folded through a registered
+/// [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate) instead of the built-in `SUM`,
+/// so the two lanes' `.metered` fuel is directly comparable
+/// ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]), and
+/// `aggregate-custom-scratch-bytes-*`, whose 1200-row single implicit group crosses the
+/// within-group chunk threshold and bands the custom accumulator's declared
+/// `ScratchBytes` state bound — a boundary and an over-bound each (4).
+const REQUIRED_BAND_CASES: usize = 35;
 
 /// The driving-row count above which the evaluator's chunk drivers fork.
 ///
@@ -231,9 +275,14 @@ impl StopSpec {
 
 /// Where a case's rows come from, beyond the dataset it loads.
 ///
-/// A third value rather than a second boolean: the two injected seams — a remote endpoint
-/// and a host relation — are the two producers whose bag size an outside party picks, and
-/// a case wires exactly one of them.
+/// A fourth value rather than a third: the injected seams — a remote endpoint, a host
+/// relation, and a host **aggregate** — are the producers whose bag size (or, for the
+/// aggregate, whose per-accumulator retained state) an outside party picks, and a case
+/// wires at most one of them. The aggregate seam needs no per-case sidecar table the way
+/// the transport and relation seams do — see [`registered_custom_aggregate`] — because it
+/// is deterministic by construction (`Volatility::Stable`, a pure fold over its rows'
+/// already-bound argument tuples), so nothing about a run needs to be counted and pinned
+/// beyond what `.answer`/`.spend`/`.metered` already record for every other lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Source {
     /// The dataset and nothing else.
@@ -242,6 +291,9 @@ enum Source {
     Http,
     /// The scripted property-function relation described in `relations.tsv`.
     Relation,
+    /// The registered custom aggregate from [`registered_custom_aggregate`], wired through
+    /// `QueryOptions::aggregates` rather than through an injected graph-pattern seam.
+    Aggregate,
 }
 
 impl Source {
@@ -250,6 +302,7 @@ impl Source {
             "none" => Self::Dataset,
             "http" => Self::Http,
             "relation" => Self::Relation,
+            "aggregate" => Self::Aggregate,
             other => panic!("manifest.tsv line {line}: unknown source {other:?}"),
         }
     }
@@ -258,6 +311,7 @@ impl Source {
         match self {
             Self::Dataset => "none",
             Self::Http => "http",
+            Self::Aggregate => "aggregate",
             Self::Relation => "relation",
         }
     }
@@ -814,6 +868,100 @@ fn responses_for(case: &Case) -> BTreeMap<String, Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
+// The aggregate seam
+// ---------------------------------------------------------------------------
+
+/// The IRI [`registered_custom_aggregate`]'s one entry resolves under.
+///
+/// A fixture IRI under `example.org`, exactly as every other fixture in this corpus is:
+/// the custom-aggregate seam is caller configuration, so the corpus supplies its own
+/// vocabulary rather than depending on one the engine mints.
+const AGGREGATE_IRI: &str = "http://example.org/agg/customSum";
+
+/// [`CorpusSumAggregate`]'s declared per-accumulator [`CustomAggregate::state_bound`].
+///
+/// Nonzero on purpose, unlike every built-in fold (a built-in aggregate's accumulator —
+/// see `crate::modifier`'s `CountAccumulator`/`SumAccumulator`/etc. in the evaluator
+/// crate — declares no `state_bound` at all; only `CustomAggregate` does): the fold
+/// itself is stateless (a running `i64`), so this is a FICTITIOUS bound standing in for the opaque
+/// host state a real custom accumulator (a running median, a per-value histogram) would
+/// actually retain. It exists so the `aggregate-custom-scratch-bytes-*` lane has a real,
+/// nonzero `ScratchBytes` charge to band.
+const AGGREGATE_STATE_BOUND: u64 = 64;
+
+/// A `Commutative` custom `SUM`-alike over a single `xsd:integer`-lexical argument:
+/// `step` parses and adds, and `combine` merges through `other.finish()` because the
+/// running total already IS this accumulator's whole mergeable state (see
+/// [`AggregateAccumulator::combine`]'s doc comment on when that shortcut is sound, in the
+/// evaluator crate). Registered under [`AGGREGATE_IRI`] by every `Source::Aggregate` case
+/// via [`registered_custom_aggregate`].
+struct CorpusSumAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for CorpusSumAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        )))
+    }
+}
+
+struct CorpusSumAggregate;
+
+impl CustomAggregate for CorpusSumAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        AGGREGATE_STATE_BOUND
+    }
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        Box::new(CorpusSumAccumulator { total: 0 })
+    }
+}
+
+/// The registry every `Source::Aggregate` case wires — one entry, [`AGGREGATE_IRI`].
+///
+/// Freshly built per call rather than shared, mirroring [`ScriptedRelation`]'s own
+/// per-observation construction: a governed run must never carry state left over from a
+/// previous one.
+fn registered_custom_aggregate() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register(AGGREGATE_IRI, Arc::new(CorpusSumAggregate));
+    registry
+}
+
+// ---------------------------------------------------------------------------
 // Running a case
 // ---------------------------------------------------------------------------
 
@@ -1009,7 +1157,21 @@ fn observe(
                 &dataset,
                 request,
                 QueryOptions {
-                    property_functions: Some(&registry),
+                    property_functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
+                &configured.governors,
+            )
+        }
+        Source::Aggregate => {
+            let registry = registered_custom_aggregate();
+            // Same shape as the relation lane's own comment: the aggregate lane differs
+            // from `Source::Dataset` in exactly one `QueryOptions` field.
+            engine.query_governed(
+                &dataset,
+                request,
+                QueryOptions {
+                    aggregates: &registry,
                     ..QueryOptions::EMPTY
                 },
                 &configured.governors,
@@ -1100,12 +1262,12 @@ fn metered(
 /// invocation-isolating and row-isolating lanes are read through.
 ///
 /// Taken from the public per-node ledger
-/// ([`NativeSparqlEngine::explain_query_with_property_functions`]), which runs the same
-/// query under the same [`QueryGovernors::METERED`] the `.metered` record is measured with —
-/// so the totals here must add back up to that record's fuel, and
-/// [`every_boundary_is_derived_from_a_metered_run`] checks that they do. A decomposition
-/// that did not sum to the quantity it claims to decompose would be a decomposition of
-/// something else.
+/// ([`NativeSparqlEngine::explain_query_with_options`], with `QueryOptions::property_functions`
+/// populated), which runs the same query under the same [`QueryGovernors::METERED`] the
+/// `.metered` record is measured with — so the totals here must add back up to that
+/// record's fuel, and [`every_boundary_is_derived_from_a_metered_run`] checks that they
+/// do. A decomposition that did not sum to the quantity it claims to decompose would be a
+/// decomposition of something else.
 fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
     let dataset = load_dataset(case);
     let query = load_query(case);
@@ -1116,18 +1278,82 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
         Arc::clone(&scripted) as Arc<dyn PropertyFunction>,
     );
     let explanation = NativeSparqlEngine::new()
-        .explain_query_with_property_functions(&dataset, &query, None, &registry)
+        .explain_query_with_options(
+            &dataset,
+            &query,
+            None,
+            QueryOptions {
+                property_functions: &registry,
+                ..QueryOptions::EMPTY
+            },
+        )
         .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    render_charge_decomposition(explanation.ledger())
+}
+
+/// [`charge_decomposition`]'s twin for the aggregate lane, which needs no injected seam:
+/// an aggregate is ordinary algebra, not a host relation, so the metered run is taken
+/// through plain [`NativeSparqlEngine::explain_query`] rather than the property-function
+/// variant. Used only for [`wants_dataset_charge_decomposition`] cases — every other case's
+/// `.charges` decomposition would just be its `.metered` fuel restated per point for no
+/// reason a caller could act on.
+fn charge_decomposition_dataset(case: &Case) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let explanation = NativeSparqlEngine::new()
+        .explain_query(&dataset, &query, None)
+        .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    render_charge_decomposition(explanation.ledger())
+}
+
+/// [`charge_decomposition`]'s twin for the two `Source::Aggregate` lanes
+/// (`aggregate-custom-fuel-*`, `aggregate-custom-scratch-bytes-*`), which exercise a
+/// REGISTERED custom aggregate rather than a built-in — the injected seam
+/// [`NativeSparqlEngine::explain_query_with_options`] takes (with `QueryOptions::aggregates`
+/// populated), the exact counterpart the same entry (with `QueryOptions::property_functions`
+/// populated instead) is for the relation lane. Before that entry point existed, these two
+/// lanes carried no `.charges` decomposition at all and were compared against the built-in
+/// lane's numbers directly instead; the registry is [`registered_custom_aggregate`], the
+/// SAME one [`observe`] wires for `Source::Aggregate`.
+fn charge_decomposition_custom_aggregate(case: &Case) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let registry = registered_custom_aggregate();
+    let explanation = NativeSparqlEngine::new()
+        .explain_query_with_options(
+            &dataset,
+            &query,
+            None,
+            QueryOptions {
+                aggregates: &registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    render_charge_decomposition(explanation.ledger())
+}
+
+/// The one place that sums a per-node ledger into a `.charges` record: both
+/// [`charge_decomposition`] and [`charge_decomposition_dataset`] differ only in how they
+/// obtain the ledger (through a property-function-wired explain call or a plain one), and
+/// share this render so a `.charges` format change cannot update one path and miss the
+/// other.
+fn render_charge_decomposition(ledger: &[purrdf_sparql_eval::governor::NodeCharges]) -> String {
     let mut out = String::new();
     for point in ChargePoint::ALL {
-        let total: u64 = explanation
-            .ledger()
-            .iter()
-            .map(|node| node.fuel_at(point))
-            .sum();
+        let total: u64 = ledger.iter().map(|node| node.fuel_at(point)).sum();
         writeln!(out, "{point}\t{total}").expect("writing to a String cannot fail");
     }
     out
+}
+
+/// Whether `name` is one of the two lanes that separate `aggregate-invocation` from
+/// `aggregate-accumulation` — the aggregate lane's counterpart to a relation case's
+/// `relation_spec.is_some()` test, since neither aggregate lane wires an injected seam for
+/// `load_relations`/`load_transport` to key on.
+fn wants_dataset_charge_decomposition(name: &str) -> bool {
+    name.starts_with("aggregate-invocation-fuel-")
+        || name.starts_with("aggregate-accumulation-fuel-")
 }
 
 /// The fuel a rendered decomposition attributes to `point`.
@@ -1500,6 +1726,14 @@ fn regenerate_case(
             "charges",
             &charge_decomposition(&case, relation_spec),
         );
+    } else if wants_dataset_charge_decomposition(&case.name) {
+        write_expected(&case, "charges", &charge_decomposition_dataset(&case));
+    } else if case.source == Source::Aggregate {
+        write_expected(
+            &case,
+            "charges",
+            &charge_decomposition_custom_aggregate(&case),
+        );
     }
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec, relation_spec);
@@ -1777,6 +2011,44 @@ fn every_boundary_is_derived_from_a_metered_run() {
         // nobody can trust.
         if let Some(relation_spec) = relations.get(&case.name).copied() {
             let decomposition = charge_decomposition(case, relation_spec);
+            assert_eq!(
+                decomposition,
+                read_expected(case, "charges"),
+                "{}: the per-charge-point decomposition of the metered fuel moved without \
+                 the corpus being regenerated",
+                case.name
+            );
+            assert_eq!(
+                charged_total(&decomposition),
+                consumed_in(&measured.spend, ResourceDimension::Fuel),
+                "{}: the pinned decomposition does not add up to the fuel it decomposes",
+                case.name
+            );
+        } else if wants_dataset_charge_decomposition(&case.name) {
+            // The aggregate lane's twin of the check above: `aggregate-invocation` and
+            // `aggregate-accumulation` are the same kind of fuel-internal pair, taken
+            // through a plain `explain_query` rather than a scripted relation.
+            let decomposition = charge_decomposition_dataset(case);
+            assert_eq!(
+                decomposition,
+                read_expected(case, "charges"),
+                "{}: the per-charge-point decomposition of the metered fuel moved without \
+                 the corpus being regenerated",
+                case.name
+            );
+            assert_eq!(
+                charged_total(&decomposition),
+                consumed_in(&measured.spend, ResourceDimension::Fuel),
+                "{}: the pinned decomposition does not add up to the fuel it decomposes",
+                case.name
+            );
+        } else if case.source == Source::Aggregate {
+            // The two `Source::Aggregate` lanes' twin of the checks above, taken through
+            // `NativeSparqlEngine::explain_query_with_options` with `QueryOptions::aggregates`
+            // populated — the injected-seam decomposition a registered custom aggregate
+            // needs, exactly as the relation lane needs the same entry with
+            // `QueryOptions::property_functions` populated instead.
+            let decomposition = charge_decomposition_custom_aggregate(case);
             assert_eq!(
                 decomposition,
                 read_expected(case, "charges"),
@@ -2237,6 +2509,209 @@ fn the_two_property_function_charge_points_are_banded_separately() {
             row.name
         );
     }
+}
+
+/// [`the_two_property_function_charge_points_are_banded_separately`]'s twin for the
+/// aggregate lane: `aggregate-invocation` and `aggregate-accumulation` both denominate
+/// fuel, so a band on the aggregate alone is satisfied by any schedule whose total lands in
+/// the same place — including one that doubled the invocation cost and halved the
+/// accumulation cost. Two lanes take the pair apart:
+///
+/// - `aggregate-invocation-fuel-*` folds twelve aggregate expressions over one implicit
+///   group whose input matches nothing, so its band carries twelve invocation charges and
+///   provably **zero** accumulation charges — `COUNT(*)`'s empty-group answer is `0`, not
+///   unbound, so the query still completes and commits a row.
+/// - `aggregate-accumulation-fuel-*` folds one aggregate expression (`SUM`) over one
+///   implicit group holding twelve rows, so its band carries exactly **one** invocation
+///   charge and twelve accumulation charges.
+///
+/// Read off the pinned `.charges` decomposition rather than recomputed, so what this
+/// asserts is the published numbers. Neither lane carries a `zero` member, for the same
+/// reason the property-function lanes do not: a zero fuel ceiling trips at the first
+/// algebra-node entry, before the `Group` node — let alone any aggregate expression — is
+/// ever reached.
+#[test]
+fn the_two_aggregate_charge_points_are_banded_separately() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    // `.charges` decomposes the unconstrained METERED measurement (see
+    // `charge_decomposition_dataset`'s docs), exactly as a relation case's does — so a
+    // lane's boundary and over-bound members share the identical record, and what it
+    // shows is the shape of the LANE's full cost, not of whichever ceiling a given case
+    // happens to set. That is what the boundary/over-bound pair's `.spend` and `.answer`
+    // records are for instead: they pin what the ACTUAL banded run did.
+    for band in ["boundary", "over-bound"] {
+        let invocation = case_named(&cases, &format!("aggregate-invocation-fuel-{band}"));
+        let charges = read_expected(invocation, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::AggregateAccumulation),
+            0,
+            "{}: the invocation lane isolates by folding an empty group; a non-empty group \
+             would put accumulation charges back into the band",
+            invocation.name
+        );
+        let invocations = charged_at(&charges, ChargePoint::AggregateInvocation);
+        assert_eq!(
+            invocations, 12,
+            "{}: the lane's full cost must attribute exactly twelve charges to the \
+             invocation point — one per aggregate expression the query names",
+            invocation.name
+        );
+
+        let accumulation = case_named(&cases, &format!("aggregate-accumulation-fuel-{band}"));
+        let charges = read_expected(accumulation, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::AggregateInvocation),
+            1,
+            "{}: the accumulation lane isolates by driving exactly one aggregate expression \
+             over one implicit group",
+            accumulation.name
+        );
+        let accumulated = charged_at(&charges, ChargePoint::AggregateAccumulation);
+        assert_eq!(
+            accumulated, 12,
+            "{}: the lane's full cost must attribute exactly twelve charges to the \
+             accumulation point — one per row the single group folds",
+            accumulation.name
+        );
+
+        // The two lanes' full costs must not be interchangeable, or a schedule that
+        // doubled `aggregate-invocation` and halved `aggregate-accumulation` (say) would
+        // leave both `.charges` records looking the same.
+        assert_ne!(
+            charged_total(&read_expected(invocation, "charges")),
+            charged_total(&read_expected(accumulation, "charges")),
+            "the two lanes drive different query shapes and must not coincidentally cost \
+             the same total fuel"
+        );
+
+        // The banded run itself. Both fixtures fold a SINGLE implicit group to completion
+        // well inside their boundary ceiling — the fold's own charges (the twelve
+        // `aggregate-invocation` or `aggregate-accumulation` units above) are a small
+        // fraction of the lane's total cost, which also pays the generic per-node
+        // accounting every node pays (`algebra-node-entry` on the way in,
+        // `committed-output-row` on the way out for the group's own already-computed
+        // row). So the over-bound ceiling — one unit below the boundary — lands on that
+        // TRAILING generic charge rather than inside the fold itself: the group's one row
+        // is fully computed either way, and what differs is only whether committing it
+        // crosses the ceiling. The certificate says so directly: `Truncation::origin`
+        // reports the node's own complete output as a positional prefix of itself, not an
+        // opaque withholding — a caller paging by raising the ceiling by exactly one gets
+        // the same row back, now as `complete` rather than `budget-exhausted`.
+        for case in [invocation, accumulation] {
+            let expected_outcome = if band == "boundary" {
+                "complete"
+            } else {
+                "budget-exhausted fuel"
+            };
+            assert_eq!(case.outcome, expected_outcome, "{}", case.name);
+            assert_eq!(
+                pinned_row_count(case),
+                1,
+                "{}: the group's one row is computed in full before either ceiling is \
+                 reached, so it is reported at both boundary and over-bound",
+                case.name
+            );
+        }
+    }
+
+    // And the pair really is one fuel unit apart, exactly like every other boundary/
+    // over-bound pair in the corpus — re-checked here rather than assumed, because it is
+    // the fact that makes "over-bound" a meaningful name for the second member.
+    for prefix in ["aggregate-invocation", "aggregate-accumulation"] {
+        let boundary = case_named(&cases, &format!("{prefix}-fuel-boundary"));
+        let over_bound = case_named(&cases, &format!("{prefix}-fuel-over-bound"));
+        let boundary_fuel =
+            consumed_in(&read_expected(boundary, "metered"), ResourceDimension::Fuel);
+        let (dimension, ceiling) = boundary.ceiling.expect("a band case sets a ceiling");
+        assert_eq!(dimension, ResourceDimension::Fuel);
+        assert_eq!(ceiling, boundary_fuel);
+        let (_, over_bound_ceiling) = over_bound.ceiling.expect("a band case sets a ceiling");
+        assert_eq!(over_bound_ceiling, boundary_fuel - 1);
+    }
+}
+
+/// The custom-aggregate path's fuel, compared DIRECTLY against the built-in path's over the
+/// identical group shape.
+///
+/// `aggregate-accumulation-*` and `aggregate-custom-*` share one dataset
+/// (`cases/aggregate-accumulation.ttl`, twelve rows, no `GROUP BY`) and differ only in
+/// whether the aggregate expression names the built-in `SUM` or a registered
+/// [`CustomAggregate`](purrdf_sparql_eval::CustomAggregate)
+/// ([`CorpusSumAggregate`]) — `AggregateInvocation`/`AggregateAccumulation` are charged from
+/// the ONE call site in the evaluator that dispatches either kind (see
+/// `crate::modifier::eval_aggregate`'s docs in the evaluator crate), so this corpus's own
+/// in-crate counterpart
+/// (`a_custom_aggregate_spends_the_same_invocation_and_accumulation_fuel_as_a_built_in_over_the_same_group_shape`
+/// in `purrdf_sparql_eval::governor::charge_points`) is not the only place that claim is
+/// checked — it is checked here too, against the FROZEN corpus, so a regression that moved
+/// only the custom path's cost cannot hide behind a green in-crate unit test alone.
+#[test]
+fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    let built_in = case_named(&cases, "aggregate-accumulation-fuel-boundary");
+    let custom = case_named(&cases, "aggregate-custom-fuel-boundary");
+    assert_eq!(
+        built_in.data, custom.data,
+        "the two lanes must share the identical dataset — the fuel comparison means \
+         nothing if the group shape differs"
+    );
+    let built_in_fuel = consumed_in(&read_expected(built_in, "metered"), ResourceDimension::Fuel);
+    let custom_fuel = consumed_in(&read_expected(custom, "metered"), ResourceDimension::Fuel);
+    assert_eq!(
+        built_in_fuel, custom_fuel,
+        "the built-in and custom aggregate paths must cost the SAME fuel over the same \
+         group shape — a regression here is a regression in the custom-aggregate charge \
+         path this corpus otherwise never exercises at all"
+    );
+}
+
+/// The custom-aggregate path's `ScratchBytes` charge is a pure function of the group's row
+/// count — never of the host's thread count.
+///
+/// `aggregate-custom-scratch-bytes-*` drives 1200 rows into ONE implicit group (no
+/// `GROUP BY`), well above the within-group chunk threshold
+/// ([`PARALLEL_FORK_MIN_ROWS`]), through [`CorpusSumAggregate`]'s declared nonzero
+/// [`CustomAggregate::state_bound`](purrdf_sparql_eval::CustomAggregate::state_bound). Before
+/// the within-group chunk planner was made a pure function of row count, this exact charge
+/// scaled with `rayon::current_num_threads()`, so the SAME query/data/ceiling triple this
+/// pair pins would admit on one host and refuse on another — see
+/// `purrdf_sparql_eval::parallel::aggregate_chunk_size_for`'s doc comment. Freezing this
+/// pair's boundary and over-bound `ScratchBytes` ceilings turns that host-invariance claim
+/// into something `python3 scripts/check-corpus-frozen.py` (hence CI, on whatever host it
+/// happens to run on) checks on every run, not merely something an in-crate test asserts on
+/// the host that happened to build it.
+#[test]
+fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+
+    let boundary = case_named(&cases, "aggregate-custom-scratch-bytes-boundary");
+    let over_bound = case_named(&cases, "aggregate-custom-scratch-bytes-over-bound");
+    let boundary_bytes = consumed_in(
+        &read_expected(boundary, "metered"),
+        ResourceDimension::ScratchBytes,
+    );
+    assert!(
+        boundary_bytes > 0,
+        "the lane must actually cost scratch bytes, or it bands nothing"
+    );
+    let (dimension, ceiling) = boundary.ceiling.expect("a band case sets a ceiling");
+    assert_eq!(dimension, ResourceDimension::ScratchBytes);
+    assert_eq!(ceiling, boundary_bytes);
+    let (_, over_bound_ceiling) = over_bound.ceiling.expect("a band case sets a ceiling");
+    assert_eq!(over_bound_ceiling, boundary_bytes - 1);
+    assert_eq!(boundary.outcome, "complete");
+    assert_eq!(over_bound.outcome, "budget-exhausted scratch-bytes");
 }
 
 /// The parallel drive lane is genuinely above the evaluator's fork threshold.

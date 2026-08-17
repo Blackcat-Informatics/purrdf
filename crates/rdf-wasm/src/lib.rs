@@ -86,9 +86,9 @@ pub use factory::DataFactory;
 pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use query::{
-    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, PartialAnswers, QueryEngine,
-    QueryOutcome, QueryResult, SelectResult, SelectRow, TrippedGovernor, UpdateOutcome,
-    governor_dimensions,
+    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, PartialAnswers, ProvenanceInfo,
+    QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow, TrippedGovernor,
+    UpdateOutcome, governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;
 pub use term::{Quad, Term};

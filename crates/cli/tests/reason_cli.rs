@@ -436,6 +436,78 @@ fn pack_input_is_reconstructed_and_reasoned() {
     );
 }
 
+/// `--base` resolves relative IRIs on parse and relativizes them on serialize; the
+/// native pack container stores fully-resolved terms and has no relative-IRI syntax,
+/// so `--base` combined with a pack `--from`/`--to` would otherwise be accepted by
+/// clap and silently do nothing (`source::load_dataset`'s and `sink::write_rdf`'s
+/// pack arms never read the base they are handed) — refused by name instead, on both
+/// sides.
+#[test]
+fn base_with_pack_from_or_to_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "sub.ttl",
+        "@prefix ex: <http://example.org/> .\nex:s a ex:Dog .\n",
+    );
+    let pack = path(dir, "sub.purrpck");
+    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    assert!(
+        o.status.success(),
+        "building the pack failed: {}",
+        stderr(&o)
+    );
+
+    let out = path(dir, "out.nt");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/base/",
+        &pack,
+        &out,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --from source must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+
+    let out_pack = path(dir, "out2.purrpck");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        &ttl,
+        &out_pack,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --to target must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+}
+
 /// `reason --from --to - -` reads a Turtle fixture from stdin and writes N-Triples to
 /// stdout — the gap this module exists to close: `-`/`-` (the documented default) is
 /// otherwise unreachable without `--from`/`--to`. Asserts exit 0 and the RDFS-inferred

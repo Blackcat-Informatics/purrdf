@@ -1,8 +1,12 @@
-# purrdf-sparql-governors profile v5 — normative vector manifest.
+# purrdf-sparql-governors profile v6 — normative vector manifest.
 # Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
-#   source     none | http | relation
+#   source     none | http | relation | aggregate
 #              http wires the injected transport described in transport.tsv;
-#              relation wires the scripted property function described in relations.tsv
+#              relation wires the scripted property function described in relations.tsv;
+#              aggregate wires the registered custom aggregate from governor_corpus.rs's
+#              `registered_custom_aggregate` (no sidecar table — it is deterministic by
+#              construction, so nothing about a run needs to be counted and pinned beyond
+#              what every other lane's `.answer`/`.spend`/`.metered` already record)
 #   governors  comma-separated <setting>=<value>; a ceiling names a caller-settable
 #              dimension (fuel, answer-rows, intermediate-cells, scratch-bytes,
 #              remote-requests); "deadline-polls" names the deterministic injected
@@ -59,3 +63,11 @@ property-function-row-fuel-over-bound	cases/property-function-single.ttl	cases/p
 property-function-first-row-fuel-ceiling	cases/property-function-single.ttl	cases/property-function.rq	relation	fuel=7	n/a	budget-exhausted fuel
 property-function-parallel-fuel-boundary	cases/property-function-wide.ttl	cases/property-function-wide.rq	relation	fuel=4804	boundary	complete
 property-function-parallel-fuel-over-bound	cases/property-function-wide.ttl	cases/property-function-wide.rq	relation	fuel=4803	over-bound	budget-exhausted fuel
+aggregate-invocation-fuel-boundary	cases/aggregate-invocation.ttl	cases/aggregate-invocation.rq	none	fuel=53	boundary	complete
+aggregate-invocation-fuel-over-bound	cases/aggregate-invocation.ttl	cases/aggregate-invocation.rq	none	fuel=52	over-bound	budget-exhausted fuel
+aggregate-accumulation-fuel-boundary	cases/aggregate-accumulation.ttl	cases/aggregate-accumulation.rq	none	fuel=45	boundary	complete
+aggregate-accumulation-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregate-accumulation.rq	none	fuel=44	over-bound	budget-exhausted fuel
+aggregate-custom-fuel-boundary	cases/aggregate-accumulation.ttl	cases/aggregate-custom.rq	aggregate	fuel=45	boundary	complete
+aggregate-custom-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregate-custom.rq	aggregate	fuel=44	over-bound	budget-exhausted fuel
+aggregate-custom-scratch-bytes-boundary	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92202	boundary	complete
+aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92201	over-bound	budget-exhausted scratch-bytes

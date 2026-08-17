@@ -1047,6 +1047,47 @@ fn every_input_syntax_reaches_the_boundary() {
     assert!(stderr(&bare).contains("--from"), "{}", stderr(&bare));
 }
 
+/// `--base` resolves relative IRIs on parse; the native pack container stores
+/// fully-resolved terms and has no relative-IRI syntax, so `--base` combined with a
+/// pack `--premise`/`--conclusion`/`--import` document would otherwise be accepted by
+/// clap and silently do nothing (`source::load_dataset`'s pack arm never reads the
+/// base it is handed) — refused by name instead, naming the specific document.
+#[test]
+fn base_with_a_pack_document_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let pack = path(dir, "premise.purrpck");
+    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    assert!(o.status.success(), "convert failed: {}", stderr(&o));
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &pack,
+        "--from",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "usage errors exit 2: {}",
+        stderr(&o)
+    );
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+}
+
 /// A PREMISE ON STDIN with `--from` is answered, and the verdict goes to stdout.
 #[test]
 fn a_stdin_premise_is_answered() {

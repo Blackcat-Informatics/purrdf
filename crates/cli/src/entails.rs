@@ -361,6 +361,7 @@ fn read_as_nquads(
     options: &EntailsOptions<'_>,
 ) -> Result<String, CliError> {
     let format = format::resolve(options.from, path)?;
+    format::refuse_base_with_pack(format, options.base, &format!("a pack {what} document"))?;
     let dataset = source::load_dataset(path, format, options.base)?;
     let outcome = serialize_dataset_to_format(&*dataset, NativeRdfFormat::NQuads, None)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {

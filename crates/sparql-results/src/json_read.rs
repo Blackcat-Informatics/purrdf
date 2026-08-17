@@ -18,6 +18,7 @@
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
+use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -259,6 +260,92 @@ pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
     }
 }
 
+/// Decode the additive `purrdf` provenance extension a
+/// [`ProvenanceNamespace`]-keyed SRJ document carries, or
+/// [`ResultProvenance::default`] when no such top-level member is present.
+///
+/// This is the inverse of [`crate::json::to_json`]'s additive extension (see
+/// [`crate::model::ProvenanceNamespace`]'s module docs): the writer emits the
+/// member keyed under the caller-supplied namespace's `prefix`, but the KEY
+/// SPELLING is not what identifies the member as this caller's own — a bare
+/// string like `"prov"` has no uniqueness guarantee (the actual W3C PROV
+/// namespace, `http://www.w3.org/ns/prov#`, is commonly bound to exactly that
+/// prefix). Identity is the `"namespace"` field the writer records INSIDE the
+/// member (the JSON twin of the XML writer's `xmlns:{prefix}="{iri}"`
+/// declaration): every top-level object-valued member is scanned, and the
+/// first one whose own `"namespace"` field equals `namespace.iri()` is
+/// decoded — regardless of which key it happens to be spelled under. This
+/// mirrors [`crate::xml_read::provenance_from_xml`]'s namespace-URI match
+/// exactly: a document that writes this caller's IRI under a DIFFERENT
+/// top-level key still decodes correctly, and a document that reuses this
+/// caller's PREFIX spelling for an unrelated namespace is correctly not read
+/// as this caller's extension. A document with no member recording
+/// `namespace.iri()` (never written, or written under a different namespace)
+/// decodes to the empty provenance, exactly like a document nothing ever
+/// populated.
+///
+/// The `queryForm` field is read to VALIDATE the member's shape but is not
+/// itself carried in [`ResultProvenance`] (it is derived from the result kind
+/// on write, not caller data).
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] on malformed JSON, a non-object document, or a
+/// member recording `namespace.iri()` whose shape does not match the
+/// writer's (`queryForm`/`queryHash`/`engine`/`solutions[].sources[]`, all
+/// strings).
+pub fn provenance_from_json(
+    bytes: &[u8],
+    namespace: &ProvenanceNamespace,
+) -> Result<ResultProvenance, Error> {
+    let doc = JsonParser::new(bytes).parse_document()?;
+    let obj = doc
+        .as_object()
+        .ok_or_else(|| fmt("top level is not an object"))?;
+    let iri = namespace.iri();
+    let Some(member_obj) = obj.iter().find_map(|(_, value)| {
+        let candidate = value.as_object()?;
+        let recorded = obj_get(candidate, "namespace").and_then(Json::as_str)?;
+        (recorded == iri).then_some(candidate)
+    }) else {
+        return Ok(ResultProvenance::default());
+    };
+    let query_hash = obj_get(member_obj, "queryHash")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
+    let engine = obj_get(member_obj, "engine")
+        .and_then(Json::as_str)
+        .map(str::to_owned);
+    let solutions = match obj_get(member_obj, "solutions") {
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let item_obj = item
+                    .as_object()
+                    .ok_or_else(|| fmt("provenance solution is not an object"))?;
+                let sources = match obj_get(item_obj, "sources") {
+                    Some(Json::Array(values)) => values
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .ok_or_else(|| fmt("provenance source is not a string"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => Vec::new(),
+                };
+                Ok(SolutionProvenance { sources })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => Vec::new(),
+    };
+    Ok(ResultProvenance {
+        query_hash,
+        engine,
+        solutions,
+    })
+}
+
 /// Decode one SPARQL-JSON binding object into a [`TermValue`] (recursive for
 /// RDF 1.2 triple terms).
 fn decode_binding(value: &Json) -> Result<TermValue, Error> {
@@ -283,8 +370,12 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
             let language = obj_get(obj, "xml:lang").and_then(Json::as_str);
-            // SPARQL 1.2 JSON results carry the base direction under `its:dir`
-            // (the i18n/ITS convention); accept the bare `dir` spelling too.
+            // `its:dir` (the ITS — Internationalization Tag Set — namespace
+            // convention) is the spelling the SPARQL 1.2 Query Results
+            // specification uses for RDF 1.2 base direction — see
+            // [`crate::json`]'s module docs for the fixture evidence. The bare
+            // `dir` spelling is tolerated too, for interop with producers that
+            // predate the SPARQL 1.2 spelling.
             let direction = match obj_get(obj, "its:dir")
                 .or_else(|| obj_get(obj, "dir"))
                 .and_then(Json::as_str)
@@ -853,6 +944,99 @@ impl<'a> JsonParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json::to_json;
+    use purrdf_core::SparqlResult;
+
+    /// Provenance round-trip: what [`crate::json::to_json`] writes under a namespace,
+    /// [`provenance_from_json`] reads back — the writer no longer emits
+    /// something nothing can decode.
+    #[test]
+    fn provenance_round_trips_through_json() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_owned()),
+            engine: Some("purrdf-sparql-eval".to_owned()),
+            solutions: vec![
+                SolutionProvenance {
+                    sources: vec!["http://example.org/g1".to_owned()],
+                },
+                SolutionProvenance { sources: vec![] },
+            ],
+        };
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
+
+        let decoded =
+            provenance_from_json(&outcome.bytes, &namespace).expect("provenance decodes back");
+        assert_eq!(decoded, provenance);
+    }
+
+    /// A document with no member under the caller's namespace prefix — because
+    /// the writer never populated one, or a different namespace was used —
+    /// decodes to the empty provenance rather than erroring.
+    #[test]
+    fn absent_provenance_member_decodes_to_default() {
+        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"{"head":{},"boolean":true}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes");
+        assert!(decoded.is_empty());
+    }
+
+    /// Namespace-by-IRI pin (false NEGATIVE, mirroring
+    /// [`crate::xml_read::tests::provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace`]):
+    /// a document that records the caller's OWN namespace IRI under a top-level
+    /// key spelled with a DIFFERENT prefix than this crate's own writer happens
+    /// to use (`p` instead of `prov`) must still decode — JSON provenance
+    /// identity is IRI-based (the `"namespace"` field), not top-level-key-based.
+    #[test]
+    fn provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"{"head":{},"boolean":true,"p":{
+            "namespace":"https://example.org/ns/prov#",
+            "queryForm":"ask",
+            "queryHash":"deadbeef",
+            "engine":"purrdf-sparql-eval"
+        }}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes");
+        assert_eq!(
+            decoded,
+            ResultProvenance {
+                query_hash: Some("deadbeef".to_owned()),
+                engine: Some("purrdf-sparql-eval".to_owned()),
+                solutions: Vec::new(),
+            }
+        );
+    }
+
+    /// Namespace-by-IRI pin (false POSITIVE, mirroring
+    /// [`crate::xml_read::tests::foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance`]):
+    /// a document that reuses this crate's writer's OWN prefix spelling
+    /// (`prov`) as its top-level key, but records an UNRELATED namespace IRI —
+    /// here the actual W3C PROV namespace (`http://www.w3.org/ns/prov#`), the
+    /// single most common real-world `prov:` binding — must NOT be read as the
+    /// caller's provenance extension just because the top-level key spelling
+    /// matches; only the recorded `"namespace"` IRI identifies it. This is the
+    /// direction the old, tautological `provenance_under_a_different_namespace_is_not_found`
+    /// test (which varied prefix AND iri together) could never actually observe.
+    #[test]
+    fn foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+        let doc = br#"{"head":{},"boolean":true,"prov":{
+            "namespace":"http://www.w3.org/ns/prov#",
+            "queryForm":"ask",
+            "queryHash":"deadbeef"
+        }}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes without error");
+        assert!(
+            decoded.is_empty(),
+            "a `prov`-keyed member recording the W3C PROV namespace must not be mistaken \
+             for this caller's own `prov` namespace extension"
+        );
+    }
 
     #[test]
     fn reads_select_with_mixed_terms() {
@@ -951,8 +1135,10 @@ mod tests {
 
     #[test]
     fn reads_directional_literal() {
+        // `its:dir` is the SPARQL 1.2 Query Results spec spelling (see
+        // `crate::json`'s module docs for the fixture evidence).
         let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
-          {"x":{"type":"literal","value":"שלום","xml:lang":"he","dir":"rtl"}}]}}"#;
+          {"x":{"type":"literal","value":"שלום","xml:lang":"he","its:dir":"rtl"}}]}}"#;
         let parsed = from_json(srj.as_bytes()).expect("parse");
         assert_eq!(
             parsed.rows[0][0],
@@ -961,6 +1147,42 @@ mod tests {
                 datatype: RDF_DIR_LANGSTRING.to_owned(),
                 language: Some("he".to_owned()),
                 direction: Some(RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// The bare `dir` spelling is tolerated for interop with producers that
+    /// predate the SPARQL 1.2 `its:dir` spelling.
+    #[test]
+    fn tolerates_legacy_bare_dir_spelling() {
+        let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
+          {"x":{"type":"literal","value":"hello","xml:lang":"en","dir":"ltr"}}]}}"#;
+        let parsed = from_json(srj.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+        );
+    }
+
+    /// When both spellings are present, `its:dir` — the spec spelling — takes
+    /// priority over the legacy bare `dir`.
+    #[test]
+    fn its_dir_takes_priority_over_bare_dir() {
+        let srj = r#"{"head":{"vars":["x"]},"results":{"bindings":[
+          {"x":{"type":"literal","value":"hello","xml:lang":"en","its:dir":"ltr","dir":"rtl"}}]}}"#;
+        let parsed = from_json(srj.as_bytes()).expect("parse");
+        assert_eq!(
+            parsed.rows[0][0],
+            Some(TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: RDF_DIR_LANGSTRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
             })
         );
     }

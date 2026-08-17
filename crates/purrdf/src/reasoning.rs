@@ -17,8 +17,8 @@ use purrdf_rdf::{
     SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::{
-    AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal,
-    NamedNodePattern, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
+    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors,
@@ -199,6 +199,19 @@ impl From<EntailError> for ReasoningError {
 /// than by copying the dataset to obtain it. The equality is asserted in this module's
 /// tests rather than asserted in prose.
 ///
+/// # `options` reaches the closure's query exactly as it reaches any other
+///
+/// `options` is the SAME [`QueryOptions`] every other query entry point takes: the
+/// SHACL-AF/native function registry, the property-function registry, and the
+/// custom-aggregate registry are all *parse* configuration as much as evaluation
+/// configuration (a registered relation's predicate becomes a call node only if the
+/// registry that will evaluate it was in scope when the query was parsed), so `options` is
+/// threaded into the parse of the QUERY ([`NativeSparqlEngine::prepare_query_with_options`])
+/// and into evaluating it over the materialized closure
+/// ([`NativeSparqlEngine::query_prepared`]) — never into materializing the closure itself,
+/// which reads no registry of any kind. Pass [`QueryOptions::EMPTY`] to configure none,
+/// which is the behaviour this function had before it took the parameter.
+///
 /// # Errors
 ///
 /// Returns [`ReasoningError::Query`] for SPARQL failures and
@@ -208,10 +221,15 @@ pub fn query_with_entailment(
     dataset: &Arc<RdfDataset>,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
+    options: QueryOptions<'_>,
 ) -> Result<(SparqlResult, ReasoningReport), ReasoningError> {
     // Parse first so invalid queries fail before potentially expensive closure work.
     // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
-    let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
+    // Registry-aware: `options` decides which predicates in the QUERY become call nodes
+    // and which `Custom` aggregate IRIs are admitted, exactly as every other prepared-plan
+    // entry point does.
+    let prepared_query =
+        engine.prepare_query_with_options(request.query, request.base_iri, options)?;
     // Every lane hands back a `ReasoningReport` alongside the closure, and every one of
     // them is carried out of this function rather than dropped at this call site.
     // `collect_query_bgp` is bound outside the match because the OWL-Direct plan BORROWS
@@ -268,17 +286,20 @@ pub fn query_with_entailment(
     // sees the filtered sequence) and a constructed graph (scrubbed after, because a
     // `DESCRIBE` draws triples from the dataset rather than from a variable binding).
     let surrogates = combined_surrogates.unwrap_or_default();
+    // The rewrite is tagged with the SAME `options` the original plan was prepared under —
+    // required by `PreparedQuery::rewritten`'s own contract, and necessary here: the
+    // rewritten plan is evaluated under `options` below, and a mismatched tag would refuse
+    // it (`check_plan_matches_relations`) rather than silently drop a registry.
     let restricted = (!surrogates.is_empty())
         .then(|| {
             PreparedQuery::rewritten(
                 restrict_witness_bindings(&prepared_query.query, &surrogates),
-                QueryOptions::EMPTY,
+                options,
             )
         })
         .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
-    let mut result =
-        engine.query_prepared(&prepared, plan, request.substitutions, QueryOptions::EMPTY)?;
+    let mut result = engine.query_prepared(&prepared, plan, request.substitutions, options)?;
     let _ = withhold_surrogate_triples(&mut result, &surrogates);
     Ok((result, report))
 }
@@ -433,7 +454,9 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// execution governors, and say what the reasoner did.
 ///
 /// The governed sibling of [`query_with_entailment`], which keeps its signature and its
-/// behaviour exactly: an ungoverned entailment query is the same call it always was.
+/// behaviour exactly (plus `governors`): an ungoverned entailment query is the same call it
+/// always was, and `options` reaches the closure's query the same way in both — see
+/// [`query_with_entailment`]'s doc comment for what it does and does not reach.
 ///
 /// # What is governed, and by what
 ///
@@ -491,11 +514,14 @@ pub fn query_with_entailment_governed(
     dataset: &Arc<RdfDataset>,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
+    options: QueryOptions<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
     // Parse first, exactly as the ungoverned lane does: an invalid query is a failure rather
-    // than a budget, and it must be one before any closure work is charged for.
-    let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
+    // than a budget, and it must be one before any closure work is charged for. Registry-aware
+    // exactly as `query_with_entailment`'s parse is.
+    let prepared_query =
+        engine.prepare_query_with_options(request.query, request.base_iri, options)?;
     let pattern = match entailment {
         QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
         _ => Vec::new(),
@@ -577,24 +603,23 @@ pub fn query_with_entailment_governed(
     // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
     // triples). See this function's documentation for why a partial answer needs both.
     let surrogates = combined_surrogates.unwrap_or_default();
+    // Tagged with the SAME `options` the original plan was prepared under — see
+    // `query_with_entailment`'s identical rewrite for why a mismatched tag would refuse the
+    // plan rather than silently drop a registry.
     let restricted = (!surrogates.is_empty())
         .then(|| {
             PreparedQuery::rewritten(
                 restrict_witness_bindings(&prepared_query.query, &surrogates),
-                QueryOptions::EMPTY,
+                options,
             )
         })
         .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
-    // `QueryOptions::EMPTY`: this lane owns its plan (it rewrites the algebra to restrict
-    // chase-minted witnesses) and exposes no registry seam of its own, so there is nothing
-    // for a caller to have configured and nothing that could be silently dropped here. A
-    // host that wants relations in scope names them at the engine's own governed entries.
     let outcome = engine.query_prepared_governed_view(
         &*prepared,
         plan,
         request.substitutions,
-        QueryOptions::EMPTY,
+        options,
         governors,
     )?;
     Ok(GovernedEntailment::Answered {
@@ -753,15 +778,16 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
         } => {
             names.extend(variables.iter().map(|v| v.as_str().to_owned()));
             for (_, aggregate) in aggregates {
-                match aggregate {
-                    // `COUNT(*)` names no variable and returns row MULTIPLICITY, which every
-                    // variable of the grouped pattern contributes to — so all of them are
-                    // observable through it.
-                    AggregateExpression::CountStar { .. } => {
-                        collect_all_variables(inner, names);
-                    }
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        collect_expression_variables(expression, names);
+                if aggregate.args().is_empty() {
+                    // `COUNT(*)` — the spec's empty exprlist, and (per
+                    // `AggregateExpression::new`'s invariant) the ONLY aggregate that
+                    // can ever have an empty `args`. It names no variable and returns
+                    // row MULTIPLICITY, which every variable of the grouped pattern
+                    // contributes to — so all of them are observable through it.
+                    collect_all_variables(inner, names);
+                } else {
+                    for arg in aggregate.args() {
+                        collect_expression_variables(arg, names);
                     }
                 }
             }
@@ -985,41 +1011,49 @@ fn restrict_witness_bindings(query: &Query, surrogates: &BTreeSet<String>) -> Qu
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Select {
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Construct {
             template,
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Construct {
             template: template.clone(),
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Describe {
             pattern,
             targets,
             dataset,
             base_iri,
+            version,
         } => Query::Describe {
             pattern: restrict(pattern),
             targets: targets.clone(),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
         Query::Ask {
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Ask {
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
+            version: version.clone(),
         },
     }
 }
@@ -1534,6 +1568,7 @@ mod tests {
                 substitutions: &[],
             },
             mode,
+            QueryOptions::EMPTY,
         )
         .unwrap()
     }
@@ -1584,6 +1619,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::D,
+            QueryOptions::EMPTY,
         )
         .unwrap();
         // `dt-type1` is premise-free, so every supported datatype is typed in every closure.
@@ -1601,6 +1637,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryEntailment::Simple,
+                QueryOptions::EMPTY,
             )
             .unwrap()
             .0,
@@ -1624,6 +1661,88 @@ mod tests {
             let (_, report) = ask_reported(mode);
             assert_eq!(report.regime(), regime, "{regime:?}");
         }
+    }
+
+    /// `options` reaches the CLOSURE's query exactly as it reaches an ordinary one: a
+    /// caller-registered custom (here, statistical) aggregate resolves an `AGG(<iri>, …)`
+    /// call over the RDFS-entailed closure — not merely over the raw asserted dataset.
+    ///
+    /// Before `query_with_entailment` took a `QueryOptions` parameter, this query answered
+    /// the SAME unregistered-aggregate refusal an ordinary custom aggregate gets when no
+    /// registry is supplied, regardless of what the caller passed — because there was
+    /// nowhere to pass it. Threading `options` through the parse and the evaluation is what
+    /// closes that: the closure computed here is provably non-trivial (three individuals
+    /// typed `Cat` are entailed `Animal` only through the `rdfs:subClassOf` axiom), and the
+    /// statistical aggregate folds a plain numeric predicate over it.
+    #[test]
+    fn a_statistical_aggregate_resolves_over_the_entailed_closure() {
+        use purrdf_sparql_eval::AggregateRegistry;
+
+        const VALUES_TTL: &str = concat!(
+            "@prefix ex: <https://example.org/> .\n",
+            "ex:s1 ex:value 1 .\n",
+            "ex:s2 ex:value 2 .\n",
+            "ex:s3 ex:value 3 .\n",
+        );
+        let dataset = purrdf_rdf::parse_dataset(VALUES_TTL.as_bytes(), "text/turtle", None)
+            .expect("the fixture parses");
+
+        let mut registry = AggregateRegistry::new();
+        registry.register_statistical_aggregates("https://example.org/agg#");
+
+        let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                     WHERE { ?s <https://example.org/value> ?v }";
+        let (result, report) = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::Rdfs,
+            QueryOptions {
+                aggregates: &registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .expect("the registered aggregate resolves over the entailed closure");
+        assert_eq!(report.regime(), Regime::Rdfs);
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected a solution sequence");
+        };
+        assert_eq!(
+            rows[0][0].as_ref().expect("?m is bound"),
+            &TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#decimal"),
+            "MEDIAN of {{1, 2, 3}} is 2, computed over the closure query_with_entailment answers"
+        );
+    }
+
+    /// Omitting the aggregate registry (`QueryOptions::EMPTY`) over an entailment-regime
+    /// query leaves an `AGG(<iri>, …)` call unregistered — exactly the ordinary refusal,
+    /// unaffected by which regime the call is evaluated under. The counterpart regression
+    /// to the positive case above: threading `options` through must not make an
+    /// unregistered IRI silently succeed.
+    #[test]
+    fn an_unregistered_aggregate_still_refuses_under_entailment() {
+        let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?x) AS ?m) \
+                     WHERE { ?x a <https://example.org/Animal> }";
+        let error = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &hierarchy(),
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::Rdfs,
+            QueryOptions::EMPTY,
+        )
+        .expect_err("an unregistered custom aggregate must be refused, entailed or not");
+        assert!(
+            matches!(error, ReasoningError::Query(_)),
+            "an unregistered aggregate is a QUERY failure, not an entailment one: {error}"
+        );
     }
 
     /// The `Simple` report is EXACTLY the one `materialize` returns for that regime —
@@ -1651,6 +1770,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdf,
+            QueryOptions::EMPTY,
         )
         .unwrap();
         assert!(matches!(result, SparqlResult::Boolean(true)));
@@ -1737,6 +1857,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
+            QueryOptions::EMPTY,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -1780,6 +1901,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
+            QueryOptions::EMPTY,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -1820,6 +1942,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
+            QueryOptions::EMPTY,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -1872,6 +1995,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
+            QueryOptions::EMPTY,
         )
         .expect("owl-direct answers")
     }

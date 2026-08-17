@@ -135,9 +135,202 @@ fn first_party_suite_inventory() {
     );
 }
 
+/// Case-count and kind-breakdown tripwire for `purrdf-extend/manifest.ttl`.
+///
+/// `manifest::load` groups rows through a SPARQL `SELECT` whose `?type`/`?name`/
+/// `?act` are all MANDATORY (not `OPTIONAL`), so an `mf:entries` member missing any
+/// one of `rdf:type`/`mf:name`/`mf:action` produces no row and would otherwise
+/// vanish from the loaded case set with no trace whatsoever — the manifest would
+/// keep advertising the cases it declares while the harness quietly ran fewer of
+/// them, and the scoreboard would stay green. `manifest::load` now asserts this
+/// itself (a declared-vs-loaded count check that fails the load), but this test
+/// pins the SPECIFIC count and kind breakdown this suite is supposed to carry, so
+/// a change to the loader, the manifest, or a fixture that silently drops a case —
+/// while still leaving `load` itself succeeding — still turns this test red rather
+/// than just quietly reporting fewer cases through the datatest tally line.
+///
+/// This suite mixes `mf:action` shapes on purpose (a blank node carrying
+/// `qt:query`/`qt:data` for most `mf:QueryEvaluationTest` cases, and a bare IRI
+/// action for the `mf:PositiveSyntaxTest`/`mf:NegativeSyntaxTest` cases), which is
+/// exactly the shape that would silently skip cases if the loader ever started
+/// requiring one shape unconditionally.
+#[test]
+fn purrdf_extend_case_count_and_kinds() {
+    use purrdf_sparql_conformance::manifest::TestKind;
+
+    let manifest = suite_root().join("purrdf-extend").join("manifest.ttl");
+    let cases = purrdf_sparql_conformance::manifest::load(&manifest)
+        .unwrap_or_else(|e| panic!("purrdf-extend/manifest.ttl failed to load: {e}"));
+
+    assert_eq!(
+        cases.len(),
+        32,
+        "purrdf-extend/manifest.ttl must load exactly 32 cases (its mf:entries list \
+         count); got {} — a case silently stopped loading",
+        cases.len()
+    );
+
+    let query_eval = cases
+        .iter()
+        .filter(|c| c.kind == TestKind::QueryEval)
+        .count();
+    let positive_syntax = cases
+        .iter()
+        .filter(|c| c.kind == TestKind::PositiveSyntax)
+        .count();
+    let negative_syntax = cases
+        .iter()
+        .filter(|c| c.kind == TestKind::NegativeSyntax)
+        .count();
+    let unmodeled = cases.iter().filter(|c| c.kind == TestKind::Unknown).count();
+
+    assert_eq!(
+        unmodeled, 0,
+        "purrdf-extend must carry no unmodeled (TestKind::Unknown) cases"
+    );
+    assert_eq!(
+        query_eval, 29,
+        "purrdf-extend's mf:QueryEvaluationTest count drifted (blank-node \
+         qt:query/qt:data actions) — expected 29, got {query_eval}"
+    );
+    assert_eq!(
+        positive_syntax, 1,
+        "purrdf-extend's mf:PositiveSyntaxTest count drifted (bare-IRI action) — \
+         expected 1, got {positive_syntax}"
+    );
+    assert_eq!(
+        negative_syntax, 2,
+        "purrdf-extend's mf:NegativeSyntaxTest count drifted (bare-IRI action) — \
+         expected 2, got {negative_syntax}"
+    );
+    assert_eq!(
+        query_eval + positive_syntax + negative_syntax + unmodeled,
+        cases.len(),
+        "kind breakdown must account for every loaded case"
+    );
+}
+
 /// The `suite/` directory of this crate.
 fn suite_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
+}
+
+/// The `tests/fixtures/` directory of this crate — deliberately NOT under `suite/`,
+/// so nothing here is ever discovered as a live conformance case by
+/// `sparql_conformance.rs`'s `datatest_stable::harness!` (rooted at `suite/` only).
+fn fixtures_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+/// Prove the manifest loader's silent-skip completeness guard actually FIRES,
+/// rather than merely existing unexercised (it was previously verified only by
+/// hand-breaking a manifest locally — never by a committed regression).
+///
+/// `tests/fixtures/broken-manifests/undescribed-entry/manifest.ttl` declares one
+/// `mf:entries` member with no `rdf:type`/`mf:name`/`mf:action` triples at all — the
+/// loader's row-grouping SELECT requires all three to bind, so that entry produces
+/// no row and would otherwise vanish from the loaded case set with no trace. The
+/// completeness check in `crate::manifest::load` (see its doc comment, around the
+/// `list_entry_iris`/`missing` logic) must catch exactly this and name the offending
+/// entry in its error, rather than returning a manifest that silently advertises
+/// fewer cases than it declares.
+#[test]
+fn broken_manifest_with_an_undescribed_entry_is_rejected() {
+    let manifest = fixtures_root()
+        .join("broken-manifests")
+        .join("undescribed-entry")
+        .join("manifest.ttl");
+    assert!(
+        manifest.is_file(),
+        "negative fixture missing: {}",
+        manifest.display()
+    );
+
+    let error = purrdf_sparql_conformance::manifest::load(&manifest)
+        .expect_err("a manifest with a declared-but-undescribed mf:entries member must be refused");
+
+    assert!(
+        error.contains("silent-skip"),
+        "the guard's error must name what it caught, got: {error}"
+    );
+    assert!(
+        error.contains("#undescribedEntry"),
+        "the guard's error must name the OFFENDING entry, got: {error}"
+    );
+    assert!(
+        error.contains("1 of 1"),
+        "the guard's error must state the declared-vs-loaded count, got: {error}"
+    );
+}
+
+/// Guards the PLACEMENT invariant `broken_manifest_with_an_undescribed_entry_is_rejected`
+/// (and its positive control immediately below) both rely on: the negative fixture
+/// directory lives under `tests/fixtures/`, never under `suite/`, so it is never
+/// discovered as a real (and permanently failing) conformance case by
+/// `sparql_conformance.rs`'s `datatest_stable::harness!`, which is rooted at
+/// `suite/` only.
+///
+/// This is a directory-existence check, not the positive control the module doc
+/// for the test above once claimed to be here — see
+/// `broken_manifest_with_a_described_entry_loads_cleanly` for that.
+#[test]
+fn broken_manifest_fixture_directory_does_not_leak_into_the_live_suite() {
+    let leaked = suite_root().join("broken-manifests");
+    assert!(
+        !leaked.exists(),
+        "the negative fixture must live under tests/fixtures/, not suite/, or the \
+         datatest harness would pick it up as a real (and permanently failing) case"
+    );
+}
+
+/// The ACTUAL positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
+/// `tests/fixtures/broken-manifests/described-entry/manifest.ttl` is the exact sibling
+/// shape of `undescribed-entry/manifest.ttl` — same `mf:Manifest`/single-entry
+/// `mf:entries` list, same bare-IRI `mf:action` style — except its sole entry DOES
+/// carry `rdf:type`/`mf:name`/`mf:action`, the three triples the loader's
+/// row-grouping SELECT requires to bind a row at all.
+///
+/// If this manifest failed to load, or loaded with a different case count than 1,
+/// the negative test's rejection could not be attributed specifically to the missing
+/// description — it could equally be some other structural defect the two fixtures
+/// happen to share (a malformed `mf:entries` list, an unresolvable base IRI, a Turtle
+/// parse error). This test rules that out: the only difference between the two
+/// fixtures is the presence of the description triples, and only the one missing
+/// them is rejected.
+#[test]
+fn broken_manifest_with_a_described_entry_loads_cleanly() {
+    let manifest = fixtures_root()
+        .join("broken-manifests")
+        .join("described-entry")
+        .join("manifest.ttl");
+    assert!(
+        manifest.is_file(),
+        "positive-control fixture missing: {}",
+        manifest.display()
+    );
+
+    let cases = purrdf_sparql_conformance::manifest::load(&manifest).unwrap_or_else(|e| {
+        panic!("a manifest whose sole entry IS fully described must load cleanly, got: {e}")
+    });
+
+    assert_eq!(
+        cases.len(),
+        1,
+        "the manifest declares exactly one mf:entries member; it must load exactly \
+         one case, got {}",
+        cases.len()
+    );
+    assert_eq!(
+        cases[0].iri, "http://purrdf.test/manifest/#describedEntry",
+        "the loaded case must be the described entry, not some other IRI"
+    );
+    assert_eq!(
+        cases[0].kind,
+        purrdf_sparql_conformance::manifest::TestKind::PositiveSyntax,
+        "the loaded case's kind must reflect its declared rdf:type"
+    );
 }
 
 /// Assert every `<tree>/<group>/manifest.ttl` is on disk.

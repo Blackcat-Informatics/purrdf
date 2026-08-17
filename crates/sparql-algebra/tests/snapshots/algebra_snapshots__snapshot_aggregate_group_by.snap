@@ -1,5 +1,6 @@
 ---
 source: crates/sparql-algebra/tests/algebra_snapshots.rs
+assertion_line: 52
 expression: "parse(\"SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t\")"
 ---
 Select {
@@ -27,11 +28,14 @@ Select {
                 aggregates: [
                     (
                         ?__purrdf_agg_0,
-                        FunctionCall {
+                        AggregateExpression {
                             function: Count,
-                            expression: Variable(
-                                ?x,
-                            ),
+                            args: [
+                                Variable(
+                                    ?x,
+                                ),
+                            ],
+                            scalarvals: [],
                             distinct: false,
                         },
                     ),
@@ -52,4 +56,5 @@ Select {
         named: [],
     },
     base_iri: None,
+    version: None,
 }

@@ -39,10 +39,11 @@ BINARYEN_VERSION := 130
 # membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
 # nine OWL reasoner services, the concrete domain, the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
-# map AND the governed query/update lane with its typed outcome — measures
-# 10_458_685 bytes against the 12_112_500 ceiling, which is 13.654% headroom. That
-# figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
-# enforced; the ceiling is the check that fails.
+# map, the governed query/update lane with its typed outcome, the first-party
+# statistical aggregate namespace, AND the SPARQL-results provenance extension —
+# measures 10_969_188 bytes against the 12_112_500 ceiling, which is 9.439%
+# headroom. That figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED
+# rather than enforced; the ceiling is the check that fails.
 #
 # The ceiling moved 9_690_000 -> 12_112_500 (+25%) as a deliberate decision to
 # stop measuring the wrong thing. The recorded byte count had been an EQUALITY
@@ -261,11 +262,30 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 #
 # The increase 10_456_984 -> 10_458_685 makes governed OWL reverse mapping poll the
 # caller's stop signal before and throughout its dataset-sized construction passes,
-# including high-fanout role expansion. The ceiling remains unchanged; the current
-# artifact leaves 13.654% headroom beneath it.
+# including high-fanout role expansion. The ceiling remains unchanged.
+#
+# The increase 10_458_685 -> 10_969_188 threads the statistical-aggregate namespace and
+# result provenance through this host: a new `aggregate_namespace` parameter on
+# `queryGoverned`/`explainQuery` and their siblings registers purrdf's first-party
+# statistical aggregate set (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`,
+# `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`), the aggregate-registry builder and the
+# dual-registry explain path it reaches were already in the workspace and reachable
+# from no wasm-exported symbol, so the linker dead-code-eliminated all of them — the
+# same shape of growth `query_governed`/`update_governed`/`explain_query` caused above.
+# The new `provenanceFromJson`/`provenanceFromXml` free functions and `queryRaw`'s new
+# `provenance_prefix`/`provenance_iri` parameters carry the additive SPARQL-results
+# provenance extension the rest of the way. The ceiling was unchanged, so this was a
+# measurement update and NOT a ceiling raise.
+#
+# The increase 10_969_188 -> 10_971_207 came from refusing command-line flag
+# combinations by name rather than accepting and ignoring them, and from the
+# scalar-parameter grammar accepting signed numerals and bare booleans: both add
+# rejection paths and their diagnostic strings to code the wasm entry points
+# already reach. The ceiling was again unchanged; the artifact now measures
+# 10_971_207 bytes, 9.422% headroom beneath it.
 #
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 10458685
+WASM_SIZE_MEASURED_BYTES := 10971207
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

@@ -29,8 +29,9 @@ use std::time::Duration;
 
 use purrdf::entail::{Regime, materialize_combined};
 use purrdf::sparql::{
-    CancellationFlag, GovernedOutcome, NativeSparqlEngine, PartialAnswers, QueryGovernors,
-    ResourceDimension, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    AggregateRegistry, CancellationFlag, GovernedOutcome, NativeSparqlEngine, PartialAnswers,
+    QueryGovernors, QueryOptions, ResourceDimension, StopCause, StopSignal, TrippedGovernor,
+    WallDeadline,
 };
 use purrdf::{BlankScope, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf::{GovernedEntailment, QueryEntailment, query_with_entailment};
@@ -84,6 +85,7 @@ fn query_with_entailment_governed_(
             substitutions: &[],
         },
         entailment,
+        QueryOptions::EMPTY,
         governors,
     )
 }
@@ -199,6 +201,7 @@ fn an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does() {
             substitutions: &[],
         },
         QueryEntailment::Rdfs,
+        QueryOptions::EMPTY,
     )
     .expect("the ungoverned lane answers");
 
@@ -249,6 +252,7 @@ fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
                 substitutions: &[],
             },
             mode,
+            QueryOptions::EMPTY,
         )
         .expect("the ungoverned lane answers");
         assert_eq!(report.regime(), regime, "{regime:?}");
@@ -275,6 +279,66 @@ fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
             "{regime:?}"
         );
     }
+}
+
+/// `QueryOptions` REACHES THE GOVERNED ENTAILMENT LANE, not only the ungoverned one: a
+/// caller-registered custom (statistical) aggregate resolves an `AGG(<iri>, …)` call over the
+/// closure `query_with_entailment_governed` computes, under an ordinary ceiling nothing here
+/// trips.
+///
+/// Before `query_with_entailment_governed` took a `QueryOptions` parameter, this call had no
+/// registry seam to pass one through at all — the same gap the ungoverned lane's
+/// `a_statistical_aggregate_resolves_over_the_entailed_closure` (in the library's own test
+/// module) closes for `query_with_entailment`.
+#[test]
+fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
+    let mut b = RdfDatasetBuilder::new();
+    let value = b.intern_iri("https://example.org/value");
+    for (subject, lexical) in [("s1", "1"), ("s2", "2"), ("s3", "3")] {
+        let s = b.intern_iri(&format!("https://example.org/{subject}"));
+        let literal = b.intern_literal(purrdf::RdfLiteral::typed(
+            lexical,
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        b.push_quad(s, value, literal, None);
+    }
+    let dataset = b.freeze().expect("the fixture freezes");
+
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates("https://example.org/agg#");
+
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <https://example.org/value> ?v }";
+    let outcome = purrdf::query_with_entailment_governed(
+        &NativeSparqlEngine::new(),
+        &dataset,
+        SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        },
+        QueryEntailment::Rdfs,
+        QueryOptions {
+            aggregates: &registry,
+            ..QueryOptions::EMPTY
+        },
+        &QueryGovernors::UNBOUNDED,
+    )
+    .expect("the registered aggregate resolves over the governed entailed closure");
+    let GovernedEntailment::Answered { outcome, .. } = outcome else {
+        panic!("UNBOUNDED names no signal, so nothing can stop the closure");
+    };
+    let GovernedOutcome::Complete { result, .. } = outcome else {
+        panic!("UNBOUNDED sets no ceiling, so nothing can trip the evaluation");
+    };
+    assert_eq!(
+        bindings(&result),
+        vec![TermValue::typed_literal(
+            "2",
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        )],
+        "MEDIAN of {{1, 2, 3}} is 2, computed over the closure the governed entry point answers"
+    );
 }
 
 /// THE CERTIFICATE TRAVELS WITH A TRUNCATED ANSWER, and it is the closure's own.
@@ -455,6 +519,7 @@ fn a_signal_that_never_fires_changes_no_closure() {
                 substitutions: &[],
             },
             mode,
+            QueryOptions::EMPTY,
         )
         .expect("the ungoverned lane answers");
 

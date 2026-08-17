@@ -95,41 +95,49 @@ fn map_patterns_in_query(query: Query, mut f: impl FnMut(GraphPattern) -> GraphP
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Select {
             pattern: f(pattern),
             dataset,
             base_iri,
+            version,
         },
         Query::Construct {
             template,
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Construct {
             template,
             pattern: f(pattern),
             dataset,
             base_iri,
+            version,
         },
         Query::Describe {
             pattern,
             targets,
             dataset,
             base_iri,
+            version,
         } => Query::Describe {
             pattern: f(pattern),
             targets,
             dataset,
             base_iri,
+            version,
         },
         Query::Ask {
             pattern,
             dataset,
             base_iri,
+            version,
         } => Query::Ask {
             pattern: f(pattern),
             dataset,
             base_iri,
+            version,
         },
     }
 }
@@ -441,18 +449,16 @@ fn substitute_in_aggregate(
     agg: AggregateExpression,
     expr_subs: &HashMap<String, Option<Expression>>,
 ) -> AggregateExpression {
-    match agg {
-        AggregateExpression::CountStar { distinct } => AggregateExpression::CountStar { distinct },
-        AggregateExpression::FunctionCall {
-            function,
-            expression,
-            distinct,
-        } => AggregateExpression::FunctionCall {
-            function,
-            expression: Box::new(substitute_in_expression(*expression, expr_subs)),
-            distinct,
-        },
-    }
+    let (function, args, scalarvals, distinct) = agg.into_parts();
+    let args = args
+        .into_iter()
+        .map(|e| substitute_in_expression(e, expr_subs))
+        .collect();
+    // `substitute_in_expression` rewrites each argument in place and never
+    // changes the argument COUNT, so this can never turn a valid `agg` into
+    // an invalid one.
+    AggregateExpression::new(function, args, scalarvals, distinct)
+        .expect("substitution preserves argument count, so arity stays valid")
 }
 
 /// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).

@@ -1,0 +1,17 @@
+PREFIX : <https://example.org/gc#>
+# GROUP_CONCAT folds in inner-operator order (see purrdf_sparql_eval::modifier's
+# module docs and the SPARQL book's "GROUP_CONCAT ordering" section). §18.6.1.7
+# leaves the concatenation's own order unspecified, so pinning it to an exact
+# string is only a real determinism proof when the row order it rests on is
+# itself guaranteed by something other than this store's internal scan order —
+# which carries NO documented insertion-order guarantee. The inner ORDER BY
+# DESC(?s) supplies that guarantee: SPARQL's ORDER BY total order (§15.1) over
+# distinct IRIs is spec-defined, so the subquery's row order — and therefore
+# GROUP_CONCAT's fold order over it — is fixed independent of any store detail.
+# DESC (rather than ASC) additionally distinguishes this from the store's
+# incidental scan order, so a regression that silently ignored the subquery's
+# ORDER BY would produce a different, detectably wrong string instead of
+# coincidentally passing.
+SELECT (GROUP_CONCAT(?v; SEPARATOR="-") AS ?g) WHERE {
+  SELECT ?v WHERE { ?s :item ?v } ORDER BY DESC(?s)
+}

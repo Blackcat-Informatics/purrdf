@@ -9,3 +9,5 @@ remote-row-ingested	0
 update-mutated-quad	0
 property-function-invocation	3
 property-function-row	6
+aggregate-invocation	0
+aggregate-accumulation	0

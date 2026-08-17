@@ -1041,20 +1041,12 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
         } => {
             walk_graph_pattern(inner, out);
             for (_var, agg_expr) in aggregates {
-                use purrdf_sparql_algebra::AggregateExpression as AE;
                 use purrdf_sparql_algebra::AggregateFunction as AF;
-                match agg_expr {
-                    AE::CountStar { .. } => {}
-                    AE::FunctionCall {
-                        function,
-                        expression,
-                        ..
-                    } => {
-                        if let AF::Custom(n) = function {
-                            insert_oxiri(n, out);
-                        }
-                        walk_expression(expression, out);
-                    }
+                if let AF::Custom(n) = agg_expr.function() {
+                    insert_oxiri(n, out);
+                }
+                for arg in agg_expr.args() {
+                    walk_expression(arg, out);
                 }
             }
         }

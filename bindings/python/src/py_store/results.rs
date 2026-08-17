@@ -17,13 +17,14 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use super::query::term_value_to_rdf;
 use super::term::{extract_term, term_to_py};
 use crate::sparql::{
-    ParsedSolutions, ResultProvenance, SparqlResultsFormat, from_json, from_json_boolean, from_xml,
-    from_xml_boolean, serialize as serialize_results,
+    ParsedSolutions, ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, from_json,
+    from_json_boolean, from_xml, from_xml_boolean, provenance_from_json, provenance_from_xml,
+    serialize as serialize_results,
 };
 use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue};
 
@@ -71,19 +72,52 @@ fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
     }
 }
 
+/// Decode `provenance_namespace` (nullable `(prefix, iri)`) into an optional
+/// [`ProvenanceNamespace`] anchoring the additive `purrdf` provenance extension.
+/// `None` (the default) emits pure-W3C output, exactly as before this parameter
+/// existed. When supplied, `query_hash` fills the query-identity slot: this Python
+/// surface serializes an already-materialized `Result` object (RDFLib parity), which
+/// carries no query text of its own to hash, so a caller supplies whatever opaque
+/// query identity they hold.
+fn decode_provenance(
+    namespace: Option<(String, String)>,
+    query_hash: Option<String>,
+) -> PyResult<(ResultProvenance, Option<ProvenanceNamespace>)> {
+    let Some((prefix, iri)) = namespace else {
+        return Ok((ResultProvenance::default(), None));
+    };
+    let namespace = ProvenanceNamespace::new(prefix, iri)
+        .map_err(|e| PyValueError::new_err(format!("provenance_namespace: {e}")))?;
+    let provenance = ResultProvenance {
+        query_hash,
+        engine: Some("purrdf-sparql-eval".to_owned()),
+        solutions: Vec::new(),
+    };
+    Ok((provenance, Some(namespace)))
+}
+
 /// Serialize a SELECT result (variables + dense rows of native terms) to the
 /// requested SPARQL Results `format`.
 ///
 /// Each cell is either `None` (unbound) or a native term object
 /// (`NamedNode`/`BlankNode`/`Literal`/`Triple`). Returns the encoded document
 /// bytes; the emitter is byte-deterministic.
+///
+/// `provenance_namespace` (nullable `(prefix, iri)`) anchors the additive `purrdf`
+/// provenance extension on a JSON/XML `format` under that namespace; `query_hash`
+/// (nullable) supplies the caller's own opaque query identity for it. `None` for
+/// either leaves pure-W3C output / an unpopulated field, exactly as before these
+/// parameters existed. Read the extension back with
+/// [`provenance_from_json_py`]/[`provenance_from_xml_py`] under the SAME namespace.
 #[pyfunction]
-#[pyo3(signature = (format, variables, rows))]
+#[pyo3(signature = (format, variables, rows, *, provenance_namespace=None, query_hash=None))]
 pub(crate) fn serialize_sparql_solutions<'py>(
     py: Python<'py>,
     format: &str,
     variables: Vec<String>,
     rows: Vec<Vec<Option<Py<PyAny>>>>,
+    provenance_namespace: Option<(String, String)>,
+    query_hash: Option<String>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let fmt = parse_format(format)?;
     let mut native_rows: Vec<Vec<Option<TermValue>>> = Vec::with_capacity(rows.len());
@@ -108,10 +142,10 @@ pub(crate) fn serialize_sparql_solutions<'py>(
         rows: native_rows,
         aux,
     };
-    let prov = ResultProvenance::default();
+    let (prov, namespace) = decode_provenance(provenance_namespace, query_hash)?;
     // The native serialization runs detached (GIL released).
     let outcome = py
-        .detach(|| serialize_results(&result, fmt, &prov))
+        .detach(|| serialize_results(&result, fmt, &prov, namespace.as_ref()))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;
     Ok(PyBytes::new(py, &outcome.bytes))
 }
@@ -120,20 +154,72 @@ pub(crate) fn serialize_sparql_solutions<'py>(
 ///
 /// Only JSON and XML carry a boolean; CSV/TSV reject it (the crate enforces the
 /// support matrix), surfacing a `ValueError`.
+///
+/// `provenance_namespace`/`query_hash` behave exactly as on
+/// [`serialize_sparql_solutions`].
 #[pyfunction]
-#[pyo3(signature = (format, value))]
+#[pyo3(signature = (format, value, *, provenance_namespace=None, query_hash=None))]
 pub(crate) fn serialize_sparql_boolean<'py>(
     py: Python<'py>,
     format: &str,
     value: bool,
+    provenance_namespace: Option<(String, String)>,
+    query_hash: Option<String>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let fmt = parse_format(format)?;
     let result = SparqlResult::Boolean(value);
-    let prov = ResultProvenance::default();
+    let (prov, namespace) = decode_provenance(provenance_namespace, query_hash)?;
     let outcome = py
-        .detach(|| serialize_results(&result, fmt, &prov))
+        .detach(|| serialize_results(&result, fmt, &prov, namespace.as_ref()))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;
     Ok(PyBytes::new(py, &outcome.bytes))
+}
+
+/// Decode the additive `purrdf` provenance extension a SPARQL-results JSON document
+/// carries under the namespace `prefix`/`iri` — the inverse of
+/// [`serialize_sparql_solutions`]'s/[`serialize_sparql_boolean`]'s `provenance_namespace`.
+/// Returns a `{"query_hash": str | None, "engine": str | None}` dict; a document with
+/// no member under `prefix` (never written, or written under a different namespace)
+/// decodes to both fields `None` rather than erroring.
+#[pyfunction(name = "provenance_from_json")]
+#[pyo3(signature = (data, prefix, iri))]
+pub(crate) fn provenance_from_json_py<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    prefix: &str,
+    iri: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let namespace = ProvenanceNamespace::new(prefix, iri)
+        .map_err(|e| PyValueError::new_err(format!("invalid provenance namespace: {e}")))?;
+    let provenance = provenance_from_json(data, &namespace)
+        .map_err(|e| PyValueError::new_err(format!("provenance decode error: {e}")))?;
+    provenance_to_py_dict(py, &provenance)
+}
+
+/// The XML twin of [`provenance_from_json_py`].
+#[pyfunction(name = "provenance_from_xml")]
+#[pyo3(signature = (data, prefix, iri))]
+pub(crate) fn provenance_from_xml_py<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    prefix: &str,
+    iri: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let namespace = ProvenanceNamespace::new(prefix, iri)
+        .map_err(|e| PyValueError::new_err(format!("invalid provenance namespace: {e}")))?;
+    let provenance = provenance_from_xml(data, &namespace)
+        .map_err(|e| PyValueError::new_err(format!("provenance decode error: {e}")))?;
+    provenance_to_py_dict(py, &provenance)
+}
+
+fn provenance_to_py_dict<'py>(
+    py: Python<'py>,
+    provenance: &ResultProvenance,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("query_hash", provenance.query_hash.as_deref())?;
+    dict.set_item("engine", provenance.engine.as_deref())?;
+    Ok(dict)
 }
 
 /// Parse a SPARQL Results document (`json` or `xml`) into a Python tuple the

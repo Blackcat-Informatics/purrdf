@@ -15,6 +15,8 @@ import {
   type ProjectionPackage,
   QueryEngine,
   governorDimensions,
+  provenanceFromJson,
+  type ProvenanceInfo,
   type DirectionalLanguage,
   type GovernorEvidence,
   type EntailmentQueryOutcome,
@@ -161,6 +163,17 @@ const graph: Dataset = engine.construct(
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
 );
 const rawResults: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", { format: "json" });
+const rawResultsWithProvenance: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", {
+  format: "json",
+  provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
+});
+const decodedProvenance: ProvenanceInfo = provenanceFromJson(
+  rawResultsWithProvenance,
+  "prov",
+  "https://example.org/ns/prov#",
+);
+const decodedEngine: string | undefined = decodedProvenance.engine;
+void decodedEngine;
 const rawGraph: string = engine.queryRaw(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",

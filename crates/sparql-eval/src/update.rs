@@ -96,7 +96,9 @@ use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
 use crate::engine::{QueryOptions, apply_query_options};
-use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
+use crate::eval::{
+    AdmittedRequest, BgpOrderCache, EvalCtx, StandpointPredicates, admit_version, eval_evaluated,
+};
 use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
@@ -273,15 +275,30 @@ pub trait GraphResolver {
 /// Apply a parsed [`Update`] to `m` in request order.
 ///
 /// Returns `Ok(())` on success and an [`UpdateAbort`] otherwise: a specific
-/// [`RdfDiagnostic`] code on the boundary conditions (`LOAD` with no resolver, a bad re-key
-/// destination, an internal eval error), or the [`TrippedGovernor`] that stopped the
-/// request. `resolver` supplies the `LOAD` host seam (see [`GraphResolver`]); pass `None`
-/// to make any non-`SILENT` `LOAD` a hard error.
+/// [`RdfDiagnostic`] code on the boundary conditions (an unrecognized `VERSION`, `LOAD`
+/// with no resolver, a bad re-key destination, an internal eval error), or the
+/// [`TrippedGovernor`] that stopped the request. `resolver` supplies the `LOAD` host seam
+/// (see [`GraphResolver`]); pass `None` to make any non-`SILENT` `LOAD` a hard error.
 ///
 /// On **either** abort, `m` is left in whatever state the operations reached and is
 /// expected to be dropped rather than frozen — that discard is the request's rollback, and
 /// the module docs explain why it is the whole of it.
-// The in-crate callers are the engine UPDATE seams (`engine::update` and
+///
+/// # This is the update-side `VERSION` admission chokepoint
+///
+/// [`admit_version`] runs FIRST, before `m` is touched at all (not even the blank-mint
+/// counter is initialized yet) and before the operation loop starts: an update whose
+/// prologue names an unrecognized `VERSION` is refused with no mutation applied, exactly
+/// mirroring [`crate::eval::evaluate_query_evaluated`]'s admission of the same declaration
+/// on the query side. This function is the single place every UPDATE entry point converges
+/// on — [`crate::engine::NativeSparqlEngine::update_with_options`] (the ungoverned seam,
+/// which [`crate::engine::NativeSparqlEngine::update`] and the `SparqlEngine::update` trait
+/// impl delegate to) and
+/// [`crate::engine::NativeSparqlEngine::update_governed`] both call it and nothing else —
+/// so admission cannot be bypassed by choosing a different entry point, including the CLI,
+/// the C ABI, wasm, and the Python bindings, all of which route through one of those two
+/// seams.
+// The in-crate callers are the engine UPDATE seams (`engine::update_with_options` and
 // `NativeSparqlEngine::update_governed`).
 pub(crate) fn eval_update(
     update: &Update,
@@ -289,6 +306,8 @@ pub(crate) fn eval_update(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), UpdateAbort> {
+    admit_version(AdmittedRequest::Update(update))
+        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
     // A single monotonic counter threaded across EVERY operation in this request, so
     // a synthetic blank label minted by operation N can never collide with one minted
     // by operation N+1 — even though each operation's own `_:b` → label map starts
@@ -472,9 +491,12 @@ fn delete_insert(
     // governed `SELECT` — before this operation's mutation, or its governor charges,
     // read a single cell of it. `Ok(None)` (no call node in this pattern — every
     // pattern on a host that has not configured the seam) leaves `pattern` as parsed.
-    let planned =
-        crate::property_fn_plan::plan_where_pattern(pattern, cfg.options.property_functions)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    let planned = crate::property_fn_plan::plan_where_pattern(
+        pattern,
+        cfg.options.property_functions,
+        cfg.options.aggregates,
+    )
+    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
     let ctx = EvalCtx::new(&*snap).with_order_cache(cfg.order_cache);
@@ -646,7 +668,7 @@ fn admit_where(
     snap: &RdfDataset,
     active_dataset: &ActiveDataset<purrdf_core::TermId>,
     governors: Option<&Arc<GovernorState>>,
-    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
 ) -> Result<(), UpdateAbort> {
     let Some(state) = governors else {
         return Ok(());
@@ -666,7 +688,8 @@ fn admit_where(
         // `pattern` against this same registry through `plan_where_pattern` before
         // this survey runs), so the survey must price the call the same way a
         // governed `SELECT`'s admission does — `relations` is `cfg.options
-        // .property_functions`, `None` on a request that configured no registry.
+        // .property_functions`, [`PropertyFunctionRegistry::EMPTY`] on a request
+        // that configured no registry.
         relations,
         &mut survey,
     )
@@ -1228,6 +1251,7 @@ mod tests {
                 destination: GraphTarget::All,
             }],
             base_iri: None,
+            version: None,
         };
         let cache = BgpOrderCache::default();
         let cfg = ungoverned(&cache);
@@ -1235,6 +1259,86 @@ mod tests {
         assert_eq!(code, "native-sparql-update-bad-destination");
         // The base is untouched (the error aborts before any mutation lands here, and
         // the engine seam's branch/freeze guarantees atomicity at the request level).
+        assert_eq!(quad_set(&m).len(), 1);
+    }
+
+    // ── VERSION admission ───────────────────────────────────────────────────
+
+    #[test]
+    fn unrecognized_version_refused_and_leaves_dataset_unchanged() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let code = failure_code(
+            eval_update(
+                &parse("VERSION \"9.9\" INSERT DATA { ex:x ex:y ex:z }"),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-update-eval");
+        // The chokepoint runs before the blank-mint counter is even initialized, let
+        // alone before any operation applies — the store must be exactly what it was.
+        assert_eq!(quad_set(&m), before, "no mutation applied");
+    }
+
+    #[test]
+    fn recognized_versions_still_apply() {
+        for version in ["1.2", "1.2-basic"] {
+            let mut m = mut_with(&[]);
+            let cache = BgpOrderCache::default();
+            let cfg = ungoverned(&cache);
+            eval_update(
+                &parse(&format!(
+                    "VERSION \"{version}\" INSERT DATA {{ ex:x ex:y ex:z }}"
+                )),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_or_else(|_| panic!("VERSION {version:?} must apply"));
+            assert_eq!(quad_set(&m).len(), 1);
+        }
+    }
+
+    #[test]
+    fn basic_profile_gate_refuses_triple_term_and_leaves_dataset_unchanged() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let code = failure_code(
+            eval_update(
+                &parse(
+                    "VERSION \"1.2-basic\" INSERT DATA { ex:x ex:reifies <<( ex:a ex:p ex:b )>> }",
+                ),
+                &mut m,
+                None,
+                &cfg,
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-update-eval");
+        // Same admission chokepoint as the unrecognized-VERSION case: it runs before any
+        // operation applies, so the store is exactly what it was.
+        assert_eq!(quad_set(&m), before, "no mutation applied");
+    }
+
+    #[test]
+    fn basic_profile_gate_admits_a_within_profile_update() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        let cfg = ungoverned(&cache);
+        eval_update(
+            &parse("VERSION \"1.2-basic\" INSERT DATA { ex:x ex:y ex:z }"),
+            &mut m,
+            None,
+            &cfg,
+        )
+        .expect("a within-profile update must still apply");
         assert_eq!(quad_set(&m).len(), 1);
     }
 
@@ -1422,5 +1526,129 @@ mod tests {
             quad_set(&m).is_empty(),
             "the second op saw the first's insert"
         );
+    }
+
+    // ── property-function / custom-aggregate admission (an UPDATE's WHERE is a
+    //    triple-pattern context exactly like a query's — see `delete_insert`'s
+    //    `plan_where_pattern` call) ────────────────────────────────────────────
+
+    /// An unregistered `AGG(<iri>, …)` reached through an UPDATE's `WHERE` (nested
+    /// inside a sub-`SELECT`'s `GROUP BY`) must be refused at PREPARE time —
+    /// before `m.freeze()`'s snapshot is even evaluated — under the AGGREGATE
+    /// diagnostic code, and it must spend
+    /// EXACTLY ZERO of a governed request's budget: every dimension `QueryGovernors
+    /// ::METERED` engages is asserted at zero, not merely "the request failed",
+    /// because a coarse assertion would not catch an admission failure that ran
+    /// after a charge had already landed.
+    #[test]
+    fn unregistered_aggregate_in_update_where_is_refused_with_the_aggregate_code_and_zero_charge() {
+        let mut m = mut_with(&[]);
+        let before = quad_set(&m);
+        let cache = BgpOrderCache::default();
+        let state = Arc::new(GovernorState::new(
+            &crate::governor::QueryGovernors::METERED,
+        ));
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: Some(&state),
+            options: QueryOptions::EMPTY,
+        };
+        let upd = parse(
+            "INSERT { ex:x ex:p ?a } WHERE { \
+                 SELECT (AGG(<http://example.org/agg#nope>, ?v) AS ?a) \
+                 WHERE { ex:s ex:val ?v } GROUP BY ?v \
+             }",
+        );
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-aggregate-function");
+        // Nothing applied.
+        assert_eq!(
+            quad_set(&m),
+            before,
+            "an admission refusal must apply nothing"
+        );
+        // And nothing was CHARGED: a refusal that ran after any charge point would
+        // still leave the store untouched (mutation is applied only at the very
+        // end), so the zero-mutation assertion above cannot by itself distinguish
+        // "refused before evaluation" from "refused after the WHERE was fully
+        // evaluated, metered, and then discarded". The governor ledger can.
+        for dimension in ResourceDimension::ALL {
+            assert_eq!(
+                state.consumed_in(dimension),
+                0,
+                "an admission refusal consumed {dimension:?}, so evaluation ran after all"
+            );
+        }
+    }
+
+    /// The regression control for the test above: an unregistered PROPERTY-FUNCTION
+    /// call reached through the identical UPDATE `WHERE` position must still report
+    /// the property-function code, not the aggregate code the fix above introduces.
+    #[test]
+    fn unregistered_property_function_in_update_where_still_reports_the_property_function_code() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        // A namespace-declared relation with NOTHING registered under it: the
+        // specific IRI still parses as a call node (the namespace claims it), and
+        // is refused as unregistered — see
+        // `property_fn_eval::an_unregistered_iri_under_a_configured_namespace_is_refused_before_evaluation`
+        // for the query-path twin this mirrors.
+        let registry = crate::property_fn::PropertyFunctionRegistry::new();
+        let options = QueryOptions {
+            property_functions: &registry,
+            ..QueryOptions::EMPTY
+        };
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: None,
+            options,
+        };
+        let parser_options = purrdf_sparql_algebra::ParserOptions {
+            extension_fn_namespaces: vec![],
+            property_fn_namespaces: vec!["http://ex/pf/".to_owned()],
+            property_fn_iris: Vec::new(),
+        };
+        let upd = SparqlParser::new()
+            .parse_update_with(
+                "PREFIX ex: <http://ex/>\n\
+                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://ex/pf/split> ?a }",
+                &parser_options,
+            )
+            .expect("update parses: the namespace claims the predicate as a call node");
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-property-function");
+    }
+
+    /// A custom aggregate that IS registered, called with the wrong argument count,
+    /// through an UPDATE's `WHERE` — the arity-mismatch admission failure must
+    /// carry the aggregate code too, not just the unregistered-IRI case.
+    #[test]
+    fn custom_aggregate_arity_mismatch_in_update_where_carries_the_aggregate_code() {
+        let mut m = mut_with(&[]);
+        let cache = BgpOrderCache::default();
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates("http://ex/agg#");
+        let options = QueryOptions {
+            aggregates: &registry,
+            ..QueryOptions::EMPTY
+        };
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: None,
+            options,
+        };
+        // MEDIAN is declared `Arity::Exact(1)`; supplying two positional arguments
+        // is an arity mismatch, not an unregistered IRI.
+        let upd = parse(
+            "INSERT { ex:x ex:p ?a } WHERE { \
+                 SELECT (AGG(<http://ex/agg#MEDIAN>, ?v, ?w) AS ?a) \
+                 WHERE { ex:s ex:val ?v . ex:s ex:val2 ?w } GROUP BY ?v ?w \
+             }",
+        );
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-aggregate-function");
     }
 }

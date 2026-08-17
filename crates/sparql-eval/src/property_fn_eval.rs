@@ -82,7 +82,8 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
 use purrdf_sparql_algebra::{
-    GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
+    AggregateFunction, Function, GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern,
+    TriplePattern, Variable,
 };
 
 use crate::DetHashMap;
@@ -282,7 +283,7 @@ fn compile_arg(
 ) -> Result<Arg, EvalError> {
     match term {
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(Arg::Constant(
-            crate::convert::ground_term_pattern_to_value(term)?,
+            crate::convert::ground_term_pattern_to_value(term, "a property-function call")?,
         )),
         TermPattern::Variable(variable) => Ok(Arg::Slot(slot_for(
             variable.clone(),
@@ -308,7 +309,10 @@ fn compile_arg(
         TermPattern::Triple(triple) => {
             if triple_is_ground(triple) {
                 return Ok(Arg::Constant(
-                    crate::convert::ground_triple_pattern_to_value(triple)?,
+                    crate::convert::ground_triple_pattern_to_value(
+                        triple,
+                        "a property-function call",
+                    )?,
                 ));
             }
             let predicate = match &triple.predicate {
@@ -554,7 +558,7 @@ fn eval_call_over<D: DatasetView + Sync>(
 
 /// Resolve a call's predicate IRI to its registered relation.
 ///
-/// An unregistered IRI is a hard [`EvalError::Function`], and an absent registry is the
+/// An unregistered IRI is a hard [`EvalError::Function`], and an EMPTY registry is the
 /// same failure spelled differently: the parser only ever mints this node under a
 /// caller-configured namespace, so reaching it with nothing to resolve against is a
 /// host misconfiguration, never an empty relation. The engine's prepare step raises
@@ -565,7 +569,7 @@ fn resolve<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Result<Arc<dyn PropertyFunction>, EvalError> {
     ctx.property_functions
-        .and_then(|registry| registry.resolve(&call.iri))
+        .resolve(&call.iri)
         .map(Arc::clone)
         .ok_or_else(|| {
             EvalError::function(format!(
@@ -722,6 +726,124 @@ pub(crate) fn expression_reaches_property_function(
     found
 }
 
+/// Whether `pattern` reaches a `GROUP BY` with an [`AggregateFunction::Custom`]
+/// aggregate anywhere — including inside an expression-embedded `EXISTS`.
+///
+/// Shares the soundness-visitor idiom [`pattern_reaches_property_function`]
+/// establishes, but for a different reason at each of its two call sites:
+///
+/// * `crate::property_fn_plan::plan_query`'s prepare-time walk uses it to decide
+///   whether a query needs planning AT ALL when it carries no property-function
+///   call either — without this check, a query with a `Custom` aggregate and NO
+///   property function would skip `plan_query`'s whole walk via its
+///   `pattern_reaches_property_function`-only short-circuit, and the unregistered-
+///   IRI/arity admission [`crate::property_fn_plan::plan_aggregate`] performs
+///   would never run.
+/// * `crate::remote::eval_service` uses it for the SAME reason
+///   [`pattern_reaches_property_function`] exists: a `Custom` aggregate inside a
+///   `SERVICE` body would serialize as an ordinary `AGG`-shaped call the endpoint
+///   cannot know, or worse, an `AGG(<iri>, …)` textual form it silently mishandles
+///   — either way a wrong answer with no local symptom.
+pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
+    if let GraphPattern::Group { aggregates, .. } = pattern
+        && aggregates
+            .iter()
+            .any(|(_, aggregate)| matches!(aggregate.function(), AggregateFunction::Custom(_)))
+    {
+        return true;
+    }
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_custom_aggregate(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_custom_aggregate(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_custom_aggregate`] through an expression's embedded patterns
+/// (an `EXISTS`'s inner `GROUP BY`, e.g. `FILTER EXISTS { SELECT (AGG(<iri>,?x)
+/// AS ?v) WHERE {...} GROUP BY ?g }`).
+///
+/// `pub(crate)`: also read directly by `crate::property_fn_plan::plan_expression`'s
+/// own short-circuit, for the identical reason `plan_where_pattern` reads
+/// [`pattern_reaches_custom_aggregate`] — an expression containing an `EXISTS`
+/// whose inner pattern has a `Custom` aggregate but no property-function call
+/// must not skip the walk that reaches that aggregate's prepare-time admission.
+pub(crate) fn expression_reaches_custom_aggregate(
+    expr: &purrdf_sparql_algebra::Expression,
+) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_custom_aggregate(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_custom_aggregate(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Call(_) => false,
+        };
+        found
+    });
+    found
+}
+
+/// Whether `pattern` reaches a [`Function::Custom`] scalar-function call anywhere
+/// — including inside an expression-embedded `EXISTS`.
+///
+/// Used ONLY at the `SERVICE` forwarding boundary
+/// ([`crate::remote::eval_service`]): a `Custom` call serializes as an ordinary
+/// function-call syntax the remote endpoint does not define, so `SILENT` would
+/// launder a request that could never mean what it meant locally into an
+/// endpoint-side syntax error (best case) or a same-spelled-but-different builtin
+/// on the remote engine (worst case, and silent). Unlike
+/// [`pattern_reaches_custom_aggregate`], prepare-time admission has no analogous
+/// need for this walk: an unresolved [`Function::Custom`] IRI already fails
+/// LOUDLY at evaluation time (an XSD-cast attempt or a typed "undefined function"
+/// error — see `crate::expr`), so there is no silent-empty-answer hazard for
+/// `crate::property_fn_plan` to close the way there is for a relation's predicate
+/// or a `Custom` aggregate's registry mismatch.
+pub(crate) fn pattern_reaches_custom_function(pattern: &GraphPattern) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_custom_function(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_custom_function(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_custom_function`] through an expression's embedded patterns.
+fn expression_reaches_custom_function(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_custom_function(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_custom_function(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Call(f) => matches!(f, Function::Custom(_)),
+        };
+        found
+    });
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -818,14 +940,17 @@ mod tests {
     ) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_with_property_functions(
-                dataset,
+            .query_with_options_view(
+                &**dataset,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                registry,
+                crate::engine::QueryOptions {
+                    property_functions: registry,
+                    ..crate::engine::QueryOptions::EMPTY
+                },
             )
             .map_err(|e| e.to_string())?;
         match result {
@@ -1483,8 +1608,9 @@ mod tests {
 
     /// THE GAP-3 regression, at the registry-injection layer this module owns:
     /// registering `PF_SPLIT` must not hijack the DIFFERENT, merely
-    /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_property_functions`
-    /// (unlike the test above) configures NO caller namespace — the only seam in
+    /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_options_view` with
+    /// only `property_functions` populated (unlike the test above) configures NO
+    /// caller namespace — the only seam in
     /// scope is the registry-derived exact-IRI set — so `PF_SPLIT`+`x` stays an
     /// ordinary triple pattern and the query evaluates against the graph, which
     /// holds no such predicate, rather than hard-erroring as unregistered.
@@ -1813,7 +1939,7 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::QueryOptions {
-                    property_functions: Some(registry),
+                    property_functions: registry,
                     ..crate::QueryOptions::EMPTY
                 },
                 &state,
@@ -2034,7 +2160,14 @@ mod tests {
         };
         let rows_under = |registry: &PropertyFunctionRegistry| {
             let result = engine
-                .query_with_property_functions(&dataset, request(&query), registry)
+                .query_with_options_view(
+                    &*dataset,
+                    request(&query),
+                    crate::engine::QueryOptions {
+                        property_functions: registry,
+                        ..crate::engine::QueryOptions::EMPTY
+                    },
+                )
                 .expect("evaluates");
             let SparqlResult::Solutions { rows, .. } = result else {
                 panic!("expected solutions");

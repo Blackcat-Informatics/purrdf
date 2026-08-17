@@ -751,7 +751,7 @@ fn query_fallible_view_dispatches_a_registered_relation_with_options() {
     let engine = NativeSparqlEngine::new();
     let registry = pair_relation();
     let options = QueryOptions {
-        property_functions: Some(&registry),
+        property_functions: &registry,
         ..QueryOptions::EMPTY
     };
 
@@ -780,7 +780,7 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     let engine = NativeSparqlEngine::new();
     let registry = pair_relation();
     let options = QueryOptions {
-        property_functions: Some(&registry),
+        property_functions: &registry,
         ..QueryOptions::EMPTY
     };
 

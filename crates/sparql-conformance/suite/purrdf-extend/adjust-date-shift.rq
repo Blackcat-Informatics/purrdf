@@ -1,0 +1,8 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# `$timezone` is the ABSOLUTE target offset (fn:adjust-date-to-timezone): the
+# date's own midnight is shifted by (target - source), and a negative delta
+# can roll the date back a day (00:00+01:00 = 23:00Z the prior day; at the
+# new -01:00 offset that is 22:00 the prior local date).
+SELECT ?adjusted WHERE {
+  BIND(ADJUST("2024-03-15+01:00"^^xsd:date, "-PT1H"^^xsd:dayTimeDuration) AS ?adjusted)
+}

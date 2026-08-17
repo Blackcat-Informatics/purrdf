@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 4
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 6
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -180,6 +180,8 @@ units mean nothing outside this build.
 | `update-mutated-quad` | 1 | quad inserted into, or removed from, the store by SPARQL `UPDATE` |
 | `property-function-invocation` | 1 | invocation of a host-supplied property-function relation (one `open`, over one driving row) |
 | `property-function-row` | 1 | row a property-function relation emitted and this engine accepted |
+| `aggregate-invocation` | 1 | `(group, aggregate expression)` pair folded — the fold's init/finish overhead |
+| `aggregate-accumulation` | 1 | value folded into a group's running aggregate state |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -229,6 +231,37 @@ Where the fuel went is readable per algebra node: `explain_query` runs under
 `METERED` and returns a `QueryExplanation` whose ledger decomposes the single fuel
 total per node and per charge point, beside the cost planner's estimate for each
 basic graph pattern.
+
+The two `aggregate-*` points are the third half of the same argument, for the third
+producer whose per-group work an outside party — the data, not the plan — sizes: an
+aggregate, built-in or a registered custom aggregate alike, folds a group's rows into
+one answer, and without a dedicated pair of points that fold rode the generic
+per-node accounting exactly as an unpriced property-function call once did — one
+`algebra-node-entry` in and one `committed-output-row` per group out, which prices a
+`GROUP_CONCAT` folding a million rows into one group exactly as it prices one folding
+ten.
+
+* `aggregate-invocation` is charged once per `(group, aggregate expression)` pair,
+  from the one dispatch site in the evaluator that decides whether a given aggregate
+  expression folds through a built-in's internal state machine or through a
+  registered custom aggregate's accumulator — so a caller's budget prices the two
+  identically, and a `SELECT` naming several aggregate expressions over the same
+  `GROUP BY` charges this point once per expression per group, independent of how
+  many rows any group holds.
+* `aggregate-accumulation` is charged once per value the fold path would pass to its
+  `step` — a built-in's argument expression evaluating to a bound term, or every
+  position of a custom aggregate's argument tuple being bound — charged **before**
+  the `DISTINCT` deduplication check that may go on to discard it. Producing and
+  inspecting the value is the work this point prices, and that work already happened
+  by the time a duplicate is discarded; `COUNT(DISTINCT ?x)` folding a million
+  duplicates of one value therefore charges this point a million times even though
+  the underlying accumulator's `step` runs once. `COUNT(*)` takes no argument
+  expression at all and so charges this point once per row unconditionally, rather
+  than never.
+
+A row whose argument expression is honestly unbound is not a value either point
+counts beyond the invocation that already ran: no expression evaluated to nothing,
+so no value existed for `aggregate-accumulation` to price.
 
 ## 5. The stop signal, and the one clock read
 
@@ -463,7 +496,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `5` |
+| `GOVERNOR_PROFILE_VERSION` | `6` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -480,13 +513,14 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n5\n'
+{ printf 'purrdf-sparql-governors\n6\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
-    property-function-invocation property-function-row
+    property-function-invocation property-function-row \
+    aggregate-invocation aggregate-accumulation
 } | sha256sum
-# 1e8e8f2b340bf85addaa55e3e4b323ca75325ad9465b9846cf96ac13b557317e
+# 8857d03631fc533881ccad603cdf7f82786c581a8bf0ee9f1637d227fb36290a
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -515,11 +549,11 @@ Each reproducible case pins **three** records, and keeping them apart is deliber
    `unknown`, plus the positional-prefix bit);
 3. **what the execution spent**, recorded independently of the rows.
 
-A property-function case pins a **fourth**: the metered fuel decomposed *per charge
-point*, read off the per-node ledger. Fuel is one number and v5 put two charge points
-inside it, so an aggregate band alone cannot tell a schedule that moved
-`property-function-invocation` from one that moved `property-function-row` the other
-way.
+A property-function or aggregate case pins a **fourth**: the metered fuel decomposed
+*per charge point*, read off the per-node ledger. Fuel is one number and v5 put two
+charge points inside it for the property-function seam, and v6 put two more inside it
+for the aggregate fold, so a band alone cannot tell a schedule that moved one point in
+a pair from one that moved the other.
 
 The third is the one easy to omit and impossible to reconstruct afterwards: a corpus
 pinning only rows could not detect a charge-schedule change that happened to cut in
@@ -529,8 +563,8 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 41 cases total, of which 34 form zero, boundary, or over-bound lanes and the
-remaining seven are transport, relation, charge-seam, and wall-clock cases.
+are 49 cases total, of which 42 form zero, boundary, or over-bound lanes and the
+remaining 7 are transport, relation, charge-seam, and wall-clock cases.
 
 Boundaries are **measured, never authored**. For each caller-settable dimension the
 corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost (must
@@ -549,10 +583,21 @@ fuel alone and takes the parallel one. A boundary that is exactly the sequential
 measurement, and an over-bound one unit below it that must trip, is the statement that
 the two drivers charge the same items in the same order.
 
+Two more band lanes separate the two aggregate charge points from each other the same
+way: `aggregate-invocation-fuel-*` folds twelve aggregate expressions over one implicit
+group whose input matches nothing (so its band carries zero accumulation charges), and
+`aggregate-accumulation-fuel-*` folds one aggregate expression over one implicit group
+holding twelve rows (so its band carries exactly one invocation charge). Both fixtures
+fold their single group to completion well inside the boundary ceiling, so the
+over-bound ceiling — one unit below it — lands on the generic per-node
+`committed-output-row` charge for the group's own already-computed row rather than
+inside the fold itself: the row is reported at both boundary and over-bound, `complete`
+at the former and a certified positional-prefix `budget-exhausted` at the latter.
+
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = cde71eb36c54cb9b09ebb419827d6214d35dd8110b93e8cad9589584c090d51a
+GOVERNOR_CORPUS_DIGEST = 2f7daf6abb6ac960a76e260b59e79d76c8d1ab2be6fa17efaf50d0acf6ee7282
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -593,20 +638,23 @@ increment it. That restraint is what makes the number worth pinning.
 | 2 | schedule byte-identical; an expression-embedded `EXISTS` stopped being re-evaluated once per rayon chunk, so its fuel stopped depending on the machine's thread count |
 | 3 | schedule byte-identical; the answer cap and `LIMIT` are pushed down the certified prefix-monotone spine, so a leaf under a row ceiling stops scanning at the ceiling instead of materialising its whole output. Also adds `Refused` and applies the answer cap to `CONSTRUCT`/`DESCRIBE` output statements |
 | 4 | the first version whose schedule is **not** byte-identical: `update-mutated-quad` is appended, because SPARQL `UPDATE` became governable and a mutation is work a budget must be able to bound. No *query* charges it |
-| **5** | `property-function-invocation` and `property-function-row` are appended, because the evaluator gained a second producer whose bag size an outside party picks: a host-supplied relation invoked from predicate position. Admission control also learns to price a call from the relation's declared row bound. No query without a registered property function charges either point |
+| 5 | `property-function-invocation` and `property-function-row` are appended, because the evaluator gained a second producer whose bag size an outside party picks: a host-supplied relation invoked from predicate position. Admission control also learns to price a call from the relation's declared row bound. No query without a registered property function charges either point |
+| **6** | `aggregate-invocation` and `aggregate-accumulation` are appended, because the evaluator's third such producer — an aggregate, built-in or a registered custom aggregate alike — folds a group's rows into one answer, and that fold's init/finish and per-value work rode the generic per-node accounting until now. Both points are charged from the one dispatch site that decides which kind of fold a given aggregate expression names, so a built-in and a custom aggregate over the same group shape cost the same fuel. No query without an aggregate charges either point |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `6` — the version
+   this section describes, and the one every other step below re-verifies against —
+   then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3) or may now do (v4, v5). Do not scale
-   the old number.
+   against work this build may no longer do (v3) or may now do (v4, v5, v6). Do not
+   scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
    short.
@@ -628,7 +676,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `5` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `6` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

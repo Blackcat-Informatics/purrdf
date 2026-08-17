@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
     GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
-    PropertyPathExpression, Query, QueryDataset, Update, UsingClause,
+    PropertyPathExpression, Query, QueryDataset, SparqlVersion, Update, UsingClause,
 };
 use crate::ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
@@ -233,6 +233,7 @@ impl SparqlParser {
             end: text.len(),
             prefixes: HashMap::new(),
             base: self.base_iri.clone(),
+            version: None,
             agg_counter: 0,
             anon_counter: 0,
             group_counter: 0,
@@ -248,6 +249,9 @@ struct Parser<'a, 'o> {
     end: usize,
     prefixes: HashMap<String, String>,
     base: Option<String>,
+    /// The most recently parsed prologue `VERSION` declaration (last-wins across
+    /// repeated declarations — see [`SparqlVersion`]).
+    version: Option<SparqlVersion>,
     agg_counter: usize,
     anon_counter: usize,
     group_counter: usize,
@@ -323,6 +327,7 @@ impl<'a> Parser<'a, '_> {
             end: self.end,
             prefixes: self.prefixes.clone(),
             base: self.base.clone(),
+            version: self.version.clone(),
             agg_counter: self.agg_counter,
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
@@ -430,10 +435,18 @@ impl<'a> Parser<'a, '_> {
                 let iri = self.expect_iriref()?;
                 self.prefixes.insert(prefix, iri);
             } else if self.eat_kw("VERSION") {
-                // SPARQL 1.2 version declaration: `VERSION <string>`. Recorded and
-                // otherwise inert — it declares the query's target spec version.
+                // SPARQL 1.2 version declaration: `VERSION <string>` (SPARQL 1.2 Query
+                // specification §4.4). Retained as `self.version`, last-wins across
+                // repeated declarations (the grammar permits `Version*`); see
+                // `SparqlVersion` for what evaluation does with each spelling. Parsing
+                // itself is syntax-only — ANY string is accepted here (vendored W3C
+                // `w3c-sparql12` `version-04.rq` declares `"1.1"` and is a
+                // `PositiveSyntaxTest`); an unrecognized version is refused only at
+                // evaluation admission, not at parse time.
                 match self.bump() {
-                    Some(Token::StringLit(_)) => {}
+                    Some(Token::StringLit(s)) => {
+                        self.version = Some(SparqlVersion::parse(&s));
+                    }
                     other => {
                         return Err(ParseError::syntax(
                             format!("expected a version string after VERSION, found {other:?}"),
@@ -708,6 +721,7 @@ impl<'a> Parser<'a, '_> {
             pattern: p,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -781,6 +795,7 @@ impl<'a> Parser<'a, '_> {
                 pattern: p,
                 dataset,
                 base_iri,
+                version: self.version.clone(),
             });
         }
         // Long form: CONSTRUCT { template } WHERE { ... }
@@ -815,6 +830,7 @@ impl<'a> Parser<'a, '_> {
             pattern: p,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -834,6 +850,7 @@ impl<'a> Parser<'a, '_> {
             pattern,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -874,6 +891,7 @@ impl<'a> Parser<'a, '_> {
             targets,
             dataset,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -970,6 +988,7 @@ impl<'a> Parser<'a, '_> {
         Ok(Update {
             operations,
             base_iri,
+            version: self.version.clone(),
         })
     }
 
@@ -2281,14 +2300,12 @@ impl<'a> Parser<'a, '_> {
                 | Token::LongStringLit(_)
                 | Token::Integer(_)
                 | Token::Decimal(_)
-                | Token::Double(_),
+                | Token::Double(_)
+                | Token::Minus
+                | Token::Plus,
             ) => Ok(TermPattern::Literal(self.parse_literal()?)),
             Some(Token::Word(w)) if *w == "true" || *w == "false" => {
-                let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
-                Ok(TermPattern::Literal(Literal::new_typed(
-                    if b { "true" } else { "false" },
-                    NamedNode::new_unchecked(XSD_BOOLEAN),
-                )))
+                Ok(TermPattern::Literal(self.parse_literal()?))
             }
             Some(Token::TripleOpen) => {
                 let t = self.parse_quoted_triple()?;
@@ -2340,18 +2357,56 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// Parse any SPARQL literal: a numeral (optionally signed), a boolean, or a
+    /// string (optionally `@lang`- or `^^`-typed) — the full `RDFLiteral |
+    /// BooleanLiteral | NumericLiteral` production, not just its unsigned-numeral
+    /// subset.
+    ///
+    /// A leading `+`/`-` folds into the numeral here: SPARQL's
+    /// `NumericLiteralPositive`/`NumericLiteralNegative` productions tokenize as a
+    /// single unit, but this lexer emits the sign as its own
+    /// [`Token::Plus`]/[`Token::Minus`] — the shape `UnaryExpression` needs to
+    /// distinguish `-?x` from a signed numeral. Every call site reached through
+    /// this function (a triple pattern's object, `VALUES`' ground terms, an `AGG`
+    /// scalarval) has no unary operator standing between the sign and the
+    /// numeral, so the sign is folded back into the literal's lexical form
+    /// instead of being left for a caller that does not exist at these
+    /// positions. [`Self::parse_primary_with_aggs`] is the one call site where a
+    /// leading sign IS a unary operator ([`Self::parse_unary`] consumes it
+    /// first), so this function never observes one there.
     fn parse_literal(&mut self) -> Result<Literal> {
+        let sign = match self.peek() {
+            Some(Token::Minus) => {
+                self.pos += 1;
+                Some("-")
+            }
+            Some(Token::Plus) => {
+                self.pos += 1;
+                Some("+")
+            }
+            _ => None,
+        };
+        let signed = |s: &str| match sign {
+            Some(sign) => format!("{sign}{s}"),
+            None => s.to_owned(),
+        };
         match self.bump() {
-            Some(Token::Integer(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_INTEGER)))
+            Some(Token::Integer(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_INTEGER),
+            )),
+            Some(Token::Decimal(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_DECIMAL),
+            )),
+            Some(Token::Double(s)) => Ok(Literal::new_typed(
+                signed(s),
+                NamedNode::new_unchecked(XSD_DOUBLE),
+            )),
+            Some(Token::Word(w)) if sign.is_none() && (w == "true" || w == "false") => {
+                Ok(Literal::new_typed(w, NamedNode::new_unchecked(XSD_BOOLEAN)))
             }
-            Some(Token::Decimal(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_DECIMAL)))
-            }
-            Some(Token::Double(s)) => {
-                Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_DOUBLE)))
-            }
-            Some(Token::StringLit(s) | Token::LongStringLit(s)) => {
+            Some(Token::StringLit(s) | Token::LongStringLit(s)) if sign.is_none() => {
                 if let Some(Token::LangTag(_)) = self.peek() {
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
@@ -2366,7 +2421,11 @@ impl<'a> Parser<'a, '_> {
                 }
             }
             other => Err(ParseError::syntax(
-                format!("expected a literal, found {other:?}"),
+                if sign.is_some() {
+                    format!("expected a numeral after the sign, found {other:?}")
+                } else {
+                    format!("expected a literal, found {other:?}")
+                },
                 self.span(),
             )),
         }
@@ -2463,13 +2522,9 @@ impl<'a> Parser<'a, '_> {
                 let t = self.parse_ground_triple()?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
-            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
-                let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
-                Ok(GroundTerm::Literal(Literal::new_typed(
-                    if b { "true" } else { "false" },
-                    NamedNode::new_unchecked(XSD_BOOLEAN),
-                )))
-            }
+            // Every other legal ground term — a string, a boolean, or a numeral
+            // (optionally signed: `-1`, `+0.5`) — is `parse_literal`'s grammar;
+            // an illegal token surfaces through its own catch-all error.
             _ => Ok(GroundTerm::Literal(self.parse_literal()?)),
         }
     }
@@ -2855,11 +2910,10 @@ impl<'a> Parser<'a, '_> {
             Some(Token::Word(w)) => {
                 let w = *w;
                 if w == "true" || w == "false" {
-                    self.pos += 1;
-                    Ok(Expression::Literal(Literal::new_typed(
-                        if w == "true" { "true" } else { "false" },
-                        NamedNode::new_unchecked(XSD_BOOLEAN),
-                    )))
+                    // No sign precedes a bare boolean word here: `parse_unary` already
+                    // intercepts a leading `+`/`-` before a bare boolean word is ever
+                    // reached, so `parse_literal` observes none and takes its boolean arm.
+                    Ok(Expression::Literal(self.parse_literal()?))
                 } else {
                     self.parse_builtin_or_aggregate(w, aggs)
                 }
@@ -2921,7 +2975,15 @@ impl<'a> Parser<'a, '_> {
         let upper = name.to_ascii_uppercase();
         // Aggregates lift to a synthetic Group variable.
         if let Some(func) = aggregate_function(&upper) {
-            return self.parse_aggregate(func, aggs);
+            return self.parse_aggregate(func, &upper, aggs);
+        }
+        // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate surface;
+        // also lifts to a synthetic Group variable, exactly like a named built-in
+        // aggregate. Checked here (rather than added to `aggregate_function`)
+        // because it does not follow the `NAME(...)` dispatch table shape: its
+        // first token inside the parens is an IRI, not an expression.
+        if upper == "AGG" {
+            return self.parse_agg_call(aggs);
         }
         match upper.as_str() {
             "BOUND" => {
@@ -2973,6 +3035,12 @@ impl<'a> Parser<'a, '_> {
                 if let Some(func) = builtin_function(&upper) {
                     self.pos += 1;
                     let args = self.parse_arg_list(aggs)?;
+                    // `builtin_function`'s generic dispatch path does not arity-check;
+                    // ADJUST(value, timezone) is fixed at 2 (SEP-0002's sole documented
+                    // signature — see the `Function::Adjust` rustdoc).
+                    if func == Function::Adjust {
+                        expect_arity(&args, 2, "ADJUST", self.span())?;
+                    }
                     Ok(Expression::FunctionCall(func, args))
                 } else {
                     Err(ParseError::unsupported(format!(
@@ -2986,40 +3054,127 @@ impl<'a> Parser<'a, '_> {
     fn parse_aggregate(
         &mut self,
         func: AggregateFunction,
+        name: &str,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
         self.pos += 1; // function name
         self.expect(&Token::LParen)?;
         // DISTINCT precedes `*` in `COUNT(DISTINCT *)`; consume it first so the
-        // star form carries the flag (the `*` arm previously hid the DISTINCT,
-        // making CountStar { distinct: true } unreachable).
+        // star form carries the flag (an earlier shape hid the DISTINCT behind a
+        // separate CountStar variant, making `distinct: true` on the star form
+        // unreachable).
         let distinct = self.eat_kw("DISTINCT");
         let agg = if self.eat(&Token::Star) {
-            // COUNT(*) / COUNT(DISTINCT *)
-            AggregateExpression::CountStar { distinct }
+            // `*` is the spec's empty exprlist, and the grammar admits it in
+            // exactly one production: `Count` (SPARQL 1.1 §18.5.1 / SPARQL 1.2
+            // §19.8). `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/
+            // `GROUP_CONCAT(*)` — and, symmetrically, a zero-arity custom
+            // aggregate — are hard syntax errors, never a silent row count.
+            if func != AggregateFunction::Count {
+                return Err(ParseError::syntax(
+                    format!(
+                        "`*` is only valid inside COUNT(...); {name} does not accept an empty \
+                         exprlist"
+                    ),
+                    self.span(),
+                ));
+            }
+            AggregateExpression::new(func, Vec::new(), Vec::new(), distinct)
+                .expect("COUNT accepts an empty exprlist")
         } else {
             let inner = self.parse_expression()?;
-            let separator = if let AggregateFunction::GroupConcat { .. } = func {
-                self.parse_optional_separator()?
-            } else {
-                None
-            };
-            let function = match func {
-                AggregateFunction::GroupConcat { .. } => {
-                    AggregateFunction::GroupConcat { separator }
-                }
-                other => other,
-            };
-            AggregateExpression::FunctionCall {
-                function,
-                expression: Box::new(inner),
-                distinct,
+            let mut scalarvals = Vec::new();
+            if matches!(func, AggregateFunction::GroupConcat)
+                && let Some(sep) = self.parse_optional_separator()?
+            {
+                scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
             }
+            AggregateExpression::new(func, vec![inner], scalarvals, distinct)
+                .expect("a one-element args list is always a valid AggregateExpression")
         };
         self.expect(&Token::RParen)?;
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
+    }
+
+    /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
+    /// custom-aggregate surface (the normative spelling for a custom-aggregate
+    /// call — no `ParserOptions` gate, since it introduces no ambiguity with any
+    /// other production). `<iri>` may be any IRI, including a prefixed name, resolved
+    /// and retained byte-exact via [`Self::expect_iri_node`]. `DISTINCT`, if
+    /// present, precedes the first positional argument. At least one positional
+    /// argument is required — an empty argument list is a hard syntax error: the
+    /// positional surface is one or more arguments (there is no `AGG(<iri>)`
+    /// zero-arity form).
+    ///
+    /// After the positional arguments, zero or more trailing `; NAME=value`
+    /// scalarval clauses are admitted — see [`Self::parse_agg_scalarvals`] for
+    /// the grammar and its precedent. This is a purely STRUCTURAL parse: any
+    /// `NAME` is accepted here, and any literal `value`; whether a given custom
+    /// aggregate accepts a given name (and whether its value's type is right) is
+    /// validated at prepare time by the evaluator, against the registered
+    /// aggregate's own declaration — never by this parser.
+    fn parse_agg_call(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Expression> {
+        self.pos += 1; // `AGG`
+        self.expect(&Token::LParen)?;
+        let iri = self.expect_iri_node()?;
+        self.expect(&Token::Comma)?;
+        let distinct = self.eat_kw("DISTINCT");
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_expression()?);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        let scalarvals = self.parse_agg_scalarvals()?;
+        self.expect(&Token::RParen)?;
+        let agg =
+            AggregateExpression::new(AggregateFunction::Custom(iri), args, scalarvals, distinct)
+                .expect("the `args.push` loop above always runs at least once");
+        let synth = self.fresh_agg_var();
+        aggs.push((synth.clone(), agg));
+        Ok(Expression::Variable(synth))
+    }
+
+    /// Parse the `AGG(<iri>, …)` surface's optional trailing named
+    /// scalar-value clauses: zero or more `; NAME=value` pairs, generalizing
+    /// `GROUP_CONCAT`'s own `; SEPARATOR="…"` — SPARQL's existing precedent for
+    /// a named scalar aggregate parameter (see
+    /// [`AggregateExpression::scalarvals`]'s docs) — to an arbitrary custom
+    /// aggregate's own named parameters (`AGG(<{NS}PERCENTILE>, ?v; P=0.95)`,
+    /// `AGG(<{NS}TOPK>, ?v; K=3)`). `NAME` is any [`Token::Word`], matched
+    /// case-insensitively and stored UPPER-CASED, so `; separator="…"` and
+    /// `; SEPARATOR="…"` would normalize to the same key (this grammar itself
+    /// is reached only for [`AggregateFunction::Custom`] — a built-in aggregate
+    /// keeps its own dedicated `; SEPARATOR="…."` production, unaffected).
+    /// `value` is any SPARQL literal via [`Self::parse_literal`] — a numeric
+    /// scalarval (`P=0.95`, `K=3`) parses to its natural numeric datatype
+    /// rather than being forced through a string the way `SEPARATOR`'s value
+    /// is. Duplicate names and names a specific aggregate does not recognize
+    /// are accepted here (this is a structural parse only) and refused later,
+    /// at prepare time, by the evaluator.
+    fn parse_agg_scalarvals(&mut self) -> Result<Vec<(String, Literal)>> {
+        let mut scalarvals = Vec::new();
+        while self.eat(&Token::Semicolon) {
+            let name = match self.bump() {
+                Some(Token::Word(w)) => w.to_ascii_uppercase(),
+                other => {
+                    return Err(ParseError::syntax(
+                        format!("expected a scalarval name, found {other:?}"),
+                        self.span(),
+                    ));
+                }
+            };
+            self.expect(&Token::Eq)?;
+            let value = self.parse_literal()?;
+            scalarvals.push((name, value));
+        }
+        Ok(scalarvals)
     }
 
     fn parse_optional_separator(&mut self) -> Result<Option<String>> {
@@ -3494,7 +3649,7 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
         "MIN" => AggregateFunction::Min,
         "MAX" => AggregateFunction::Max,
         "SAMPLE" => AggregateFunction::Sample,
-        "GROUP_CONCAT" => AggregateFunction::GroupConcat { separator: None },
+        "GROUP_CONCAT" => AggregateFunction::GroupConcat,
         _ => return None,
     })
 }
@@ -3541,6 +3696,7 @@ fn builtin_function(upper: &str) -> Option<Function> {
         "SECONDS" => Function::Seconds,
         "TIMEZONE" => Function::Timezone,
         "TZ" => Function::Tz,
+        "ADJUST" => Function::Adjust,
         "NOW" => Function::Now,
         "UUID" => Function::Uuid,
         "STRUUID" => Function::StrUuid,
@@ -3814,7 +3970,7 @@ mod tests {
         assert_eq!(aggregates.len(), 1);
         assert!(matches!(
             aggregates[0].1,
-            AggregateExpression::FunctionCall {
+            AggregateExpression {
                 function: AggregateFunction::Count,
                 ..
             }
@@ -3871,7 +4027,7 @@ mod tests {
         );
         assert!(aggregates.iter().any(|(_, ae)| matches!(
             ae,
-            AggregateExpression::FunctionCall {
+            AggregateExpression {
                 function: AggregateFunction::Count,
                 ..
             }
@@ -3955,6 +4111,44 @@ mod tests {
     }
 
     #[test]
+    fn version_basic_parses_to_typed_and_byte_exact_raw() {
+        let q = "PREFIX : <http://example/>\nVERSION \"1.2-basic\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        let version = query.version().expect("VERSION declared");
+        assert_eq!(*version, SparqlVersion::V12Basic);
+        assert_eq!(version.raw(), "1.2-basic");
+        assert!(version.is_recognized());
+    }
+
+    #[test]
+    fn version_repeated_declarations_last_wins() {
+        // Mirrors the vendored W3C `w3c-sparql12` `version-06.rq` shape: three
+        // `VERSION` declarations interleaved with `PREFIX`.
+        let q = "VERSION \"1.2\"\nPREFIX : <http://example/>\nVERSION \"1.2-basic\"\nVERSION \"1.2\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        assert_eq!(query.version(), Some(&SparqlVersion::V12));
+    }
+
+    #[test]
+    fn version_arbitrary_string_is_a_syntax_only_accept() {
+        // Mirrors the vendored W3C `w3c-sparql12` `version-04.rq` shape: an
+        // unrecognized version string is a `PositiveSyntaxTest` — parsing accepts
+        // any string; recognition is enforced only at evaluation admission.
+        let q = "PREFIX : <http://example/>\nVERSION \"1.1\"\n\nSELECT * { ?s ?p ?o . }";
+        let query = SparqlParser::new().parse_query(q).expect("parse");
+        let version = query.version().expect("VERSION declared");
+        assert_eq!(*version, SparqlVersion::Other("1.1".to_owned()));
+        assert_eq!(version.raw(), "1.1");
+        assert!(!version.is_recognized());
+    }
+
+    #[test]
+    fn version_absent_is_none() {
+        let q = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        assert_eq!(parse(&q).version(), None);
+    }
+
+    #[test]
     fn undeclared_prefix_is_syntax_error() {
         let err = SparqlParser::new()
             .parse_query("SELECT ?a WHERE { ?a a nope:T }")
@@ -4022,7 +4216,7 @@ mod tests {
         assert!(
             matches!(
                 &aggregates[0].1,
-                AggregateExpression::FunctionCall {
+                AggregateExpression {
                     function: AggregateFunction::Count,
                     ..
                 }
@@ -4041,6 +4235,331 @@ mod tests {
             matches!(err, ParseError::Unsupported(_)),
             "expected Unsupported for aggregate in filter position, got {err:?}"
         );
+    }
+
+    // ── AGG(<iri>, …) custom-aggregate surface ──────────────────────────────
+
+    #[test]
+    fn agg_call_single_arg_parses_to_custom_aggregate() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?x) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert!(
+            matches!(&agg.function, AggregateFunction::Custom(n) if n.as_str() == "http://ex/myAgg"),
+            "expected Custom(<http://ex/myAgg>), got {:?}",
+            agg.function
+        );
+        assert_eq!(agg.args.len(), 1);
+        assert!(!agg.distinct);
+        assert!(agg.scalarvals.is_empty());
+    }
+
+    #[test]
+    fn agg_call_distinct_multi_arg_parses() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, DISTINCT ?x, ?y) AS ?a) \
+             WHERE {{ ?x a ?t . ?x purrdf:vantage ?y }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert!(
+            matches!(&agg.function, AggregateFunction::Custom(n) if n.as_str() == "http://ex/myAgg")
+        );
+        assert_eq!(agg.args.len(), 2);
+        assert!(agg.distinct);
+    }
+
+    #[test]
+    fn agg_call_accepts_a_prefixed_name_iri() {
+        // `<iri>` may be any IRI, including a prefixed name resolved against the
+        // query's prologue, retained byte-exact via `expect_iri_node`.
+        let q =
+            format!("{GM}SELECT ?t (AGG(purrdf:myAgg, ?x) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert!(matches!(
+            &aggregates[0].1.function,
+            AggregateFunction::Custom(n) if n.as_str() == "https://x/myAgg"
+        ));
+    }
+
+    #[test]
+    fn agg_call_requires_at_least_one_argument() {
+        let q =
+            format!("{GM}SELECT ?t (AGG(<http://ex/myAgg>) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        assert!(SparqlParser::new().parse_query(&q).is_err());
+    }
+
+    /// `AGG(<iri>, arg; NAME=value)` — the named scalarval clause — populates
+    /// [`AggregateExpression::scalarvals`] with the upper-cased name and the
+    /// literal's natural (here, decimal) datatype, exactly the surface
+    /// `PERCENTILE`'s `p`/`TOPK`'s `k` are meant to reach the evaluator through.
+    #[test]
+    fn agg_call_named_scalarval_populates_scalarvals() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; PERCENTILE = 0.95) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        let agg = &aggregates[0].1;
+        assert_eq!(
+            agg.args.len(),
+            1,
+            "PERCENTILE=0.95 is a scalarval, not a positional arg"
+        );
+        assert_eq!(agg.scalarvals.len(), 1);
+        assert_eq!(agg.scalarvals[0].0, "PERCENTILE");
+        assert_eq!(agg.scalarvals[0].1.value(), "0.95");
+        assert_eq!(
+            agg.scalarvals[0].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        );
+    }
+
+    /// The scalarval NAME is matched case-insensitively and stored upper-cased —
+    /// mirroring `SEPARATOR`'s own case-insensitive keyword match.
+    #[test]
+    fn agg_call_scalarval_name_is_upper_cased() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; p=1) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates[0].1.scalarvals[0].0, "P");
+    }
+
+    /// Multiple `; NAME=value` clauses all parse, in the order written.
+    #[test]
+    fn agg_call_multiple_scalarvals_parse_in_order() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; K=3; LABEL=\"x\") AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        let scalarvals = &aggregates[0].1.scalarvals;
+        assert_eq!(scalarvals.len(), 2);
+        assert_eq!(scalarvals[0].0, "K");
+        assert_eq!(scalarvals[0].1.value(), "3");
+        assert_eq!(scalarvals[1].0, "LABEL");
+        assert_eq!(scalarvals[1].1.value(), "x");
+    }
+
+    /// `value` in `; NAME=value` is any SPARQL literal (§20.3), including the
+    /// signed halves of the numeric tower and the boolean literals — not just
+    /// the unsigned-numeral/string subset `parse_literal` used to accept.
+    #[test]
+    fn agg_call_scalarval_accepts_signed_numerals_and_booleans() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; Q=-1; P=+0.5; B=true) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        let scalarvals = &aggregates[0].1.scalarvals;
+        assert_eq!(scalarvals.len(), 3);
+        assert_eq!(scalarvals[0].0, "Q");
+        assert_eq!(scalarvals[0].1.value(), "-1");
+        assert_eq!(
+            scalarvals[0].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#integer"
+        );
+        assert_eq!(scalarvals[1].0, "P");
+        assert_eq!(scalarvals[1].1.value(), "+0.5");
+        assert_eq!(
+            scalarvals[1].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        );
+        assert_eq!(scalarvals[2].0, "B");
+        assert_eq!(scalarvals[2].1.value(), "true");
+        assert_eq!(
+            scalarvals[2].1.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#boolean"
+        );
+    }
+
+    /// A bare sign with nothing numeric behind it is refused, not silently
+    /// dropped or mis-parsed.
+    #[test]
+    fn agg_call_scalarval_bare_sign_is_a_syntax_error() {
+        let q = format!(
+            "{GM}SELECT ?t (AGG(<http://ex/myAgg>, ?v; Q=-true) AS ?a) \
+             WHERE {{ ?x a ?t ; purrdf:vantage ?v }} GROUP BY ?t"
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(matches!(err, ParseError::Syntax { .. }));
+    }
+
+    /// `VALUES` ground terms admit the same signed-numeral/boolean grammar as
+    /// any other literal position — the class this fix closes, not just the
+    /// `AGG` scalarval instance of it.
+    #[test]
+    fn values_ground_terms_accept_signed_numerals_and_booleans() {
+        let q = format!("{GM}SELECT ?x WHERE {{ ?s ?p ?o }} VALUES ?x {{ -1 +0.5 true false }}");
+        let where_pat = select_pattern(&q);
+        let GraphPattern::Project { inner, .. } = where_pat else {
+            panic!("expected Project, got {where_pat:?}");
+        };
+        let GraphPattern::Join { right, .. } = *inner else {
+            panic!("expected the trailing VALUES joined in, got {inner:?}");
+        };
+        let GraphPattern::Values { bindings, .. } = *right else {
+            panic!("expected Values, got {right:?}");
+        };
+        assert_eq!(bindings.len(), 4);
+        let Some(GroundTerm::Literal(l0)) = &bindings[0][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[0][0]);
+        };
+        assert_eq!(l0.value(), "-1");
+        let Some(GroundTerm::Literal(l1)) = &bindings[1][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[1][0]);
+        };
+        assert_eq!(l1.value(), "+0.5");
+        let Some(GroundTerm::Literal(l2)) = &bindings[2][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[2][0]);
+        };
+        assert_eq!(l2.value(), "true");
+        assert_eq!(
+            l2.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#boolean"
+        );
+        let Some(GroundTerm::Literal(l3)) = &bindings[3][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[3][0]);
+        };
+        assert_eq!(l3.value(), "false");
+    }
+
+    /// A triple pattern's object is the same ground-literal grammar too: a
+    /// signed numeral parses exactly as it does inside `VALUES`.
+    #[test]
+    fn triple_pattern_object_accepts_a_signed_numeral() {
+        let q = format!("{GM}SELECT ?s WHERE {{ ?s purrdf:p -3 }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 1);
+        let TermPattern::Literal(l) = &patterns[0].object else {
+            panic!("expected a literal object, got {:?}", patterns[0].object);
+        };
+        assert_eq!(l.value(), "-3");
+        assert_eq!(
+            l.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#integer"
+        );
+    }
+
+    #[test]
+    fn count_star_has_empty_args() {
+        let q = format!("{GM}SELECT ?t (COUNT(*) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        assert!(
+            aggregates[0].1.args.is_empty(),
+            "COUNT(*) must have the spec's empty exprlist, got {:?}",
+            aggregates[0].1.args
+        );
+        assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
+    }
+
+    /// `'*'` is the spec's empty exprlist, and the grammar admits it in exactly one
+    /// production: `Count` (SPARQL 1.1 §18.5.1 / SPARQL 1.2 §19.8). Every other
+    /// built-in aggregate is fixed-arity one, so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/
+    /// `SAMPLE(*)`/`GROUP_CONCAT(*)` must all be hard syntax errors — never a silent
+    /// row count (the shipped-CLI regression this guards against).
+    #[test]
+    fn star_is_rejected_for_every_non_count_aggregate() {
+        for name in ["SUM", "AVG", "MIN", "MAX", "SAMPLE", "GROUP_CONCAT"] {
+            let q = format!("{GM}SELECT ?t ({name}(*) AS ?a) WHERE {{ ?x a ?t }} GROUP BY ?t");
+            let err = SparqlParser::new().parse_query(&q).unwrap_err();
+            assert!(
+                matches!(err, ParseError::Syntax { .. }),
+                "{name}(*) must be a syntax error, got {err:?}"
+            );
+        }
+    }
+
+    /// `COUNT(DISTINCT *)` is the star form; `COUNT(*)` is covered by
+    /// `count_star_has_empty_args`.
+    #[test]
+    fn count_distinct_star_still_parses() {
+        let q = format!("{GM}SELECT ?t (COUNT(DISTINCT *) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates.len(), 1);
+        assert!(aggregates[0].1.args.is_empty());
+        assert!(aggregates[0].1.distinct);
+        assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
+    }
+
+    #[test]
+    fn group_concat_separator_is_a_scalarval() {
+        let q = format!(
+            "{GM}SELECT ?t (GROUP_CONCAT(?x; SEPARATOR=\"|\") AS ?g) WHERE {{ ?x a ?t }} GROUP BY ?t"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Group { aggregates, .. } = *inner else {
+            panic!("expected Group under Extend");
+        };
+        assert_eq!(aggregates[0].1.separator(), Some("|"));
     }
 
     // ── Bounded repetition {n,m} + predicate wildcard (PurRDF extensions) ──
@@ -4252,6 +4771,24 @@ mod tests {
         SparqlParser::new()
             .parse_update(&format!("{GM}{u}"))
             .expect_err("update should fail")
+    }
+
+    #[test]
+    fn update_retains_version_declaration() {
+        // The prologue-parsing path is shared with queries (`parse_prologue`); an
+        // Update request's own `VERSION` declaration is retained the same way.
+        let u = SparqlParser::new()
+            .parse_update(&format!(
+                "VERSION \"1.2-basic\"\n{GM}INSERT DATA {{ purrdf:s purrdf:p purrdf:o }}"
+            ))
+            .expect("update parse");
+        assert_eq!(u.version(), Some(&SparqlVersion::V12Basic));
+    }
+
+    #[test]
+    fn update_with_no_version_is_none() {
+        let u = parse_update("INSERT DATA { purrdf:s purrdf:p purrdf:o }");
+        assert_eq!(u.version(), None);
     }
 
     #[test]
@@ -5726,5 +6263,46 @@ mod tests {
                 "https://example.org/other/anything".to_owned()
             ]
         );
+    }
+
+    // ---- ADJUST() ----------------------------------------------------------
+
+    #[test]
+    fn adjust_parses_as_a_two_arg_function_call() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . \
+                  BIND(ADJUST(?o, \"PT1H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>) \
+                  AS ?h) }";
+        let Expression::FunctionCall(func, args) = bound_expr(q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Adjust);
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn adjust_with_one_argument_is_a_syntax_error() {
+        // ADJUST has exactly one documented (2-argument) signature (SEP-0002);
+        // the generic builtin-call path does not arity-check on its own, so
+        // this pins the dedicated `expect_arity` gate added for it.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(ADJUST(?o) AS ?h) }";
+        let error = SparqlParser::new()
+            .parse_query(q)
+            .expect_err("ADJUST with one argument must be refused at parse time");
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "expected a typed syntax error, got {error:?}"
+        );
+        assert!(error.to_string().contains("ADJUST"));
+    }
+
+    #[test]
+    fn adjust_with_three_arguments_is_a_syntax_error() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . \
+                  BIND(ADJUST(?o, \"PT1H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>, ?o) \
+                  AS ?h) }";
+        let error = SparqlParser::new()
+            .parse_query(q)
+            .expect_err("ADJUST with three arguments must be refused at parse time");
+        assert!(matches!(error, ParseError::Syntax { .. }));
     }
 }

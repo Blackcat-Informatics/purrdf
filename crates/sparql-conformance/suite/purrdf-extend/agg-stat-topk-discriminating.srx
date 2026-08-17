@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="top"/>
+  </head>
+  <results>
+    <result>
+      <binding name="top"><literal>50 40 30</literal></binding>
+    </result>
+  </results>
+</sparql>

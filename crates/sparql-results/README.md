@@ -20,8 +20,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 canonical authority for turning a `SparqlResult` (SELECT solutions, ASK
 boolean, or CONSTRUCT graph) into the four W3C SPARQL Results formats — JSON
 (SRJ), XML, CSV, and TSV — plus an additive, provenance-carrying PurRDF
-extension where the format can carry one. JSON and XML documents can also be
-read back (`from_json`, `from_xml`).
+extension where the format can carry one, anchored under a caller-supplied
+`ProvenanceNamespace` (PurRDF mints no vocabulary IRIs of its own). JSON and
+XML documents can also be read back (`from_json`, `from_xml`), and the
+additive extension itself round-trips too (`provenance_from_json`,
+`provenance_from_xml`) given the same namespace it was written under.
 
 Behavior worth knowing before you pick a format:
 
@@ -50,15 +53,16 @@ use purrdf_sparql_results::{serialize, ResultProvenance, SparqlResultsFormat};
 
 // `result` is the SparqlResult produced by purrdf-sparql-eval (or any engine
 // implementing the purrdf-core SparqlEngine seam).
-let outcome = serialize(&result, SparqlResultsFormat::Json, &ResultProvenance::default())
+let outcome = serialize(&result, SparqlResultsFormat::Json, &ResultProvenance::default(), None)
     .expect("SELECT serializes to SRJ");
 
 assert!(!outcome.provenance_dropped);
 let json = String::from_utf8(outcome.bytes).unwrap();
 ```
 
-Per-format writers (`to_json`, `to_xml`, `to_csv`, `to_tsv`) and readers
-(`from_json`, `from_json_boolean`, `from_xml`, `from_xml_boolean`) are also
+Per-format writers (`to_json`, `to_xml`, `to_csv`, `to_tsv`), result readers
+(`from_json`, `from_json_boolean`, `from_xml`, `from_xml_boolean`), and
+provenance readers (`provenance_from_json`, `provenance_from_xml`) are also
 exported directly.
 
 ## Part of PurRDF

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# The purrdf EXTEND conformance suite: six RDF-1.2 / purrdf
+# The purrdf EXTEND conformance suite: seven RDF-1.2 / purrdf
 # capabilities that incumbent SPARQL engines (rdflib, oxigraph) cannot express,
 # all PASSING on the native NativeSparqlEngine.
 #
@@ -13,7 +13,69 @@
 #                               ext:ProjectionLoss declaration (+ no-loss control)
 #   6. world × standpoint     — a named-graph world triple joins a standpoint-held
 #                               reifier, proving both scoping axes in one query
+#   7. ADJUST() timezone math — SPARQL 1.2's ADJUST(value, timezone) over
+#                               xsd:dateTime/xsd:date/xsd:time: an existing-offset
+#                               shift (including an xsd:date day rollover), the
+#                               empty-string timezone-removal encoding, the
+#                               inclusive +-PT14H boundary, and an out-of-range
+#                               offset left unbound (a SPARQL expression error)
 #
+# Beyond the seven capabilities above, this manifest also carries a handful of
+# admission/surface proofs for other branch work that a vendored suite cannot
+# exercise:
+#
+#   * VERSION "1.2" — a positive EVALUATION case (not merely syntax): proves
+#     the version prologue is not just parsed but actually ADMITTED, letting
+#     the query run to completion.
+#   * VERSION "1.2-basic" — the Basic profile (SPARQL 1.2 Query specification
+#     §4.3.1) is ENFORCED, not merely parsed: a within-profile query still
+#     answers (:versionBasicEval), while a query using an RDF 1.2 triple term
+#     (:versionBasicTripleTerm), a reifying triple that desugars onto one
+#     (:versionBasicReifyingTriple), a ground triple term in VALUES
+#     (:versionBasicValuesTripleTerm), or one of the "Functions on Triple
+#     Terms" (:versionBasicTripleFunction) is refused at evaluation admission,
+#     naming the offending construct.
+#   * AGG(<iri>, args…) — the custom-aggregate call surface. Syntax: a
+#     positive case for the one-or-more-args call shape, and a negative case
+#     for the zero-args form (a genuine parse-time arity rule — SPARQL 1.2's
+#     "positional args only, one-or-more" — not a registry-dependent
+#     admission check). A third negative case, `:aggStarNonCount`, pins the
+#     sibling rule for the OTHER aggregate surface: `'*'` is the spec's empty
+#     exprlist, and the grammar admits it in exactly one production
+#     (`Count`) — `SUM(*)` and friends are hard syntax errors, not a silent
+#     row count.
+#
+#     EVALUATION, for the closed first-party statistical set (`MEDIAN`,
+#     `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+#     `FIRST`, `LAST`, `TOPK` — `purrdf_sparql_eval::stat_agg`), is a per-case
+#     concern via the harness-loader-only `purrdf:aggregateNamespace`
+#     predicate (`SparqlTestCase::aggregate_namespace`, decoded by
+#     `crate::manifest::load` and registered by `crate::run::run` for exactly
+#     the cases that declare it — see both files' doc comments for why this
+#     is PER-CASE rather than a harness-wide constant like `EXT_NS`/`REL_NS`).
+#     `:aggStatMedianPercentile`/`:aggStatMoments`/`:aggStatFirstLast`/
+#     `:aggStatTopk`/`:aggStatMode` below compute real answers for all ten
+#     names, cross-checked against the same fixture shapes
+#     `crates/sparql-eval/tests/aggregate_function_e2e.rs` already covers at
+#     the Rust-engine level — this closes the SAME set at the conformance-
+#     manifest level, the surface a namespace-is-just-a-string harness has no
+#     structural reason to leave uncovered.
+#   * GROUP_CONCAT determinism — an exact-string pin of the row-order-dependent
+#     concatenation (see `purrdf_sparql_eval::modifier`'s "Aggregate
+#     semantics" docs), exercised through this harness's own
+#     Turtle-load/evaluate path rather than only the in-process engine tests.
+#   * RDF 1.2 base direction in SRX (:baseDirection) — a `STRLANGDIR(...)`
+#     query whose expected `.srx` is constructed directly from the SPARQL 1.2
+#     Query Results XML Format spec's own §2.3.1 worked example (the قطة/`ar`/
+#     `rtl` literal, and the spec's DEFAULT root-declared `xmlns:its`/
+#     `its:version` style — see `crates/sparql-results/src/xml.rs`'s module
+#     docs). No vendored W3C `.srx` fixture carries a directional literal at
+#     all (upstream `w3c/rdf-tests` only exercises base direction via `.srj`),
+#     so this closes that fixture gap end to end: engine → writer → this
+#     spec-derived expected file, byte-pinned further in
+#     `crates/sparql-conformance/tests/results_spec_byte_pins.rs`.
+#
+
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
 # graph dimension — reifier_quads always yields g: None (default graph). Reifiers
 # are scoped by the standpoint POSET, not by named graphs. The genuine end-to-end
@@ -22,9 +84,10 @@
 # ext:heldIn. The harness loads qt:graphData into named graphs to support this
 # case. See :standpointWorld below.
 
-@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
-@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
-@prefix :    <http://purrdf.test/extend#> .
+@prefix mf:     <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:     <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix purrdf: <https://example.org/conformance-manifest#> .
+@prefix :       <http://purrdf.test/extend#> .
 
 :manifest a mf:Manifest ;
     mf:entries (
@@ -36,6 +99,30 @@
         :lossAwareConstruct
         :lossControlConstruct
         :standpointWorld
+        :adjustDatetimeShift
+        :adjustTimezoneRemoval
+        :adjustOutOfRangeUnbound
+        :adjustDateShift
+        :adjustTimeShift
+        :adjustTimeRemoval
+        :adjustBoundaryPt14h
+        :versionEval
+        :versionBasicEval
+        :versionBasicTripleTerm
+        :versionBasicReifyingTriple
+        :versionBasicValuesTripleTerm
+        :versionBasicTripleFunction
+        :aggCallSyntax
+        :aggCallNoArgs
+        :aggStarNonCount
+        :aggStatMedianPercentile
+        :aggStatMoments
+        :aggStatFirstLast
+        :aggStatTopk
+        :aggStatMode
+        :aggStatTopkDiscriminating
+        :groupConcatOrder
+        :baseDirection
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -77,3 +164,144 @@
     mf:name "world × standpoint: a named-graph world triple joins a standpoint-held reifier" ;
     mf:action [ qt:query <standpoint-world.rq> ; qt:data <standpoint.ttl> ; qt:graphData <world.ttl> ] ;
     mf:result <standpoint-world.srx> .
+
+:adjustDatetimeShift a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() shifts an xsd:dateTime with an existing timezone to a new offset" ;
+    mf:action [ qt:query <adjust-datetime-shift.rq> ] ;
+    mf:result <adjust-datetime-shift.srx> .
+
+:adjustTimezoneRemoval a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() removes a timezone via the empty-simple-literal second argument" ;
+    mf:action [ qt:query <adjust-timezone-removal.rq> ] ;
+    mf:result <adjust-timezone-removal.srx> .
+
+:adjustOutOfRangeUnbound a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() with an out-of-range (>PT14H) timezone is a type error, leaving BIND's target unbound" ;
+    mf:action [ qt:query <adjust-out-of-range-unbound.rq> ] ;
+    mf:result <adjust-out-of-range-unbound.srx> .
+
+:adjustDateShift a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() shifts an xsd:date, rolling the date backward across midnight" ;
+    mf:action [ qt:query <adjust-date-shift.rq> ] ;
+    mf:result <adjust-date-shift.srx> .
+
+:adjustTimeShift a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() shifts an xsd:time with an existing timezone to a new offset" ;
+    mf:action [ qt:query <adjust-time-shift.rq> ] ;
+    mf:result <adjust-time-shift.srx> .
+
+:adjustTimeRemoval a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() removes an xsd:time's timezone via the empty-simple-literal second argument" ;
+    mf:action [ qt:query <adjust-time-removal.rq> ] ;
+    mf:result <adjust-time-removal.srx> .
+
+:adjustBoundaryPt14h a mf:QueryEvaluationTest ;
+    mf:name "ADJUST() accepts the inclusive +-PT14H timezone boundary" ;
+    mf:action [ qt:query <adjust-boundary-pt14h.rq> ] ;
+    mf:result <adjust-boundary-pt14h.srx> .
+
+:versionEval a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2\" is admitted, not merely parsed: the prologue-carrying query evaluates" ;
+    mf:action [ qt:query <version-eval.rq> ] ;
+    mf:result <version-eval.srx> .
+
+:versionBasicEval a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" is enforced, not merely admitted: a within-profile query still evaluates" ;
+    mf:action [ qt:query <version-basic-eval.rq> ] ;
+    mf:result <version-basic-eval.srx> .
+
+:versionBasicTripleTerm a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses an RDF 1.2 triple term (<<( s p o )>>) in a triple pattern" ;
+    mf:action [ qt:query <version-basic-triple-term.rq> ] ;
+    mf:result <version-basic-triple-term.err> .
+
+:versionBasicReifyingTriple a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses a reifying triple (<< s p o >>), which desugars onto a triple term" ;
+    mf:action [ qt:query <version-basic-reifying-triple.rq> ] ;
+    mf:result <version-basic-reifying-triple.err> .
+
+:versionBasicValuesTripleTerm a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses a ground triple term in a VALUES data block" ;
+    mf:action [ qt:query <version-basic-values-triple-term.rq> ] ;
+    mf:result <version-basic-values-triple-term.err> .
+
+:versionBasicTripleFunction a mf:QueryEvaluationTest ;
+    mf:name "VERSION \"1.2-basic\" refuses isTRIPLE(), one of the Functions on Triple Terms (§17.4.6)" ;
+    mf:action [ qt:query <version-basic-triple-function.rq> ] ;
+    mf:result <version-basic-triple-function.err> .
+
+:aggCallSyntax a mf:PositiveSyntaxTest ;
+    mf:name "AGG(<iri>, args…) parses: the custom-aggregate call surface, one-or-more positional args" ;
+    mf:action <agg-call-syntax.rq> .
+
+:aggCallNoArgs a mf:NegativeSyntaxTest ;
+    mf:name "AGG(<iri>) with zero positional args is a hard syntax error (one-or-more, not zero-or-more)" ;
+    mf:action <agg-call-no-args.rq> .
+
+:aggStarNonCount a mf:NegativeSyntaxTest ;
+    mf:name "SUM(*) is a hard syntax error: '*' is COUNT-only (COUNT(*)/COUNT(DISTINCT *)), never another aggregate's empty exprlist" ;
+    mf:action <agg-star-non-count.rq> .
+
+:aggStatMedianPercentile a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) MEDIAN and the named-scalarval PERCENTILE(P=0.5) form agree, and PERCENTILE(P=0.1)/PERCENTILE(P=0.9) prove a genuinely INTERPOLATED rank, not merely the P=0.5 fraction MEDIAN's own path already covers at zero interpolation" ;
+    mf:action [
+        qt:query <agg-stat-median-percentile.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-median-percentile.srx> .
+
+:aggStatMoments a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) VARIANCE/VAR_POP/STDDEV/STDDEV_POP compute the sample and population moments" ;
+    mf:action [
+        qt:query <agg-stat-moments.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-moments.srx> .
+
+:aggStatFirstLast a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) FIRST/LAST fold over a spec-ordered (ORDER BY DESC) row sequence, exactly like :groupConcatOrder's determinism proof, over a permutation deliberately uncorrelated with subject order so FIRST/LAST cannot coincide with MIN/MAX or with scan order" ;
+    mf:action [
+        qt:query <agg-stat-first-last.rq> ;
+        qt:data <agg-stat-first-last.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-first-last.srx> .
+
+:aggStatTopk a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) TOPK(K=3) returns the three largest values, space-joined, descending" ;
+    mf:action [
+        qt:query <agg-stat-topk.rq> ;
+        qt:data <agg-stat.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-topk.srx> .
+
+:aggStatMode a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) MODE finds the genuinely repeated value, over data where that value is deliberately neither the minimum, the maximum, the first row, nor the last row, so this case cannot pass by coincidentally reading off any of those instead" ;
+    mf:action [
+        qt:query <agg-stat-mode.rq> ;
+        qt:data <agg-stat-mode.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-mode.srx> .
+
+:aggStatTopkDiscriminating a mf:QueryEvaluationTest ;
+    mf:name "AGG(...) TOPK(K=3) sorts by VALUE, over a permutation uncorrelated with subject/insertion order, so it cannot pass by coincidentally returning the last K rows seen instead" ;
+    mf:action [
+        qt:query <agg-stat-topk-discriminating.rq> ;
+        qt:data <agg-stat-first-last.ttl> ;
+        purrdf:aggregateNamespace "https://example.org/agg-stat-fn#"
+    ] ;
+    mf:result <agg-stat-topk-discriminating.srx> .
+
+:groupConcatOrder a mf:QueryEvaluationTest ;
+    mf:name "GROUP_CONCAT concatenates in inner-operator row order, proved via a spec-guaranteed ORDER BY DESC subquery rather than incidental store scan order — an exact-string pin through this harness's own load/evaluate path" ;
+    mf:action [ qt:query <group-concat-order.rq> ; qt:data <group-concat-order.ttl> ] ;
+    mf:result <group-concat-order.srx> .
+
+:baseDirection a mf:QueryEvaluationTest ;
+    mf:name "STRLANGDIR() produces an RDF 1.2 directional literal, serialized per the SPARQL 1.2 Query Results XML Format spec's own example" ;
+    mf:action [ qt:query <basedir.rq> ] ;
+    mf:result <basedir.srx> .

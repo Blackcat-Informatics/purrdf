@@ -334,3 +334,64 @@ def test_oracle_parses_purrdf_tsv_output(
         (f"{EX}s2", "42"),
         (f"{EX}s3", "bonjour"),
     ]
+
+
+# ── the additive `purrdf` provenance extension, reachable and readable back ───────
+
+
+@pytest.mark.parametrize("fmt", ["json", "xml"])
+def test_provenance_namespace_populates_and_round_trips(
+    compat: ModuleType, fmt: str
+) -> None:
+    """`Result.serialize(provenance_namespace=..., query_hash=...)` anchors a
+    populated additive extension, and what purrdf writes, `provenance_from_json`/
+    `provenance_from_xml` read back — closing the "writer emits something nothing
+    can read back" gap."""
+    import purrdf
+
+    data = _select(compat).serialize(
+        format=fmt,
+        encoding="utf-8",
+        provenance_namespace=("prov", "https://example.org/ns/prov#"),
+        query_hash="deadbeef",
+    )
+    reader = purrdf.provenance_from_json if fmt == "json" else purrdf.provenance_from_xml
+    decoded = reader(data, "prov", "https://example.org/ns/prov#")
+    assert decoded == {"query_hash": "deadbeef", "engine": "purrdf-sparql-eval"}
+
+
+def test_omitting_provenance_namespace_emits_pure_w3c_output(compat: ModuleType) -> None:
+    """No `provenance_namespace`: the output is byte-identical to before the
+    parameter existed (the golden-pinned tests above already prove this, this
+    test states the contract explicitly for the ASK form too)."""
+    data = _ask(compat).serialize(format="json", encoding="utf-8")
+    assert b'"prov"' not in data
+
+
+def test_provenance_without_namespace_but_with_query_hash_is_dropped_and_signalled(
+    compat: ModuleType,
+) -> None:
+    """`query_hash` alone (no `provenance_namespace`) populates `ResultProvenance`
+    but has nowhere to go: the extension is dropped, exactly like CSV/TSV drop any
+    populated provenance regardless of namespace."""
+    data = _ask(compat).serialize(format="json", encoding="utf-8", query_hash="deadbeef")
+    assert b"deadbeef" not in data
+    assert b'"prov"' not in data
+
+
+def test_provenance_from_json_on_a_document_with_no_member_decodes_to_none() -> None:
+    """A document nothing populated decodes to both fields `None`, not an error."""
+    import purrdf
+
+    plain = purrdf.serialize_sparql_boolean("json", True)
+    decoded = purrdf.provenance_from_json(plain, "prov", "https://example.org/ns/prov#")
+    assert decoded == {"query_hash": None, "engine": None}
+
+
+def test_invalid_provenance_namespace_is_a_value_error(compat: ModuleType) -> None:
+    """An invalid prefix (e.g. containing `:`) is rejected, not silently spliced."""
+    with pytest.raises(ValueError):
+        _ask(compat).serialize(
+            format="json",
+            provenance_namespace=("not:a:prefix", "https://example.org/ns/prov#"),
+        )

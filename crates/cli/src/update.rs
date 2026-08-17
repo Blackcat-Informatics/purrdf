@@ -3,7 +3,7 @@
 
 //! The `update` subcommand: COW-atomic SPARQL UPDATE followed by RDF serialization.
 
-use purrdf_core::{SparqlEngine, SparqlRequest};
+use purrdf_core::SparqlRequest;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{GovernedUpdateOutcome, NativeSparqlEngine, QueryOptions};
 
@@ -11,6 +11,7 @@ use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
+use crate::query::build_aggregate_registry;
 use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
@@ -23,6 +24,11 @@ pub(crate) struct UpdateOptions<'a> {
     pub(crate) update: &'a str,
     pub(crate) governors: GovernorFlags,
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
+    /// `--aggregate-namespace`: registers purrdf's first-party statistical aggregate
+    /// set under this IRI namespace, reachable from a `DELETE`/`INSERT … WHERE` clause
+    /// through a nested `SELECT … GROUP BY`. `None` leaves the set unregistered,
+    /// exactly as before this flag existed.
+    pub(crate) aggregate_namespace: Option<&'a str>,
 }
 
 /// Apply the request and emit the new dataset only after the whole request commits.
@@ -39,12 +45,25 @@ pub(crate) fn run(
         base_iri: options.base,
         substitutions: &[],
     };
+    // `AggregateRegistry::register_statistical_aggregates` takes only a namespace
+    // string; `None` here reproduces `QueryOptions::EMPTY` byte-for-byte, so an
+    // omitted `--aggregate-namespace` changes nothing about existing behaviour.
+    let aggregates = build_aggregate_registry(options.aggregate_namespace);
+    // `QueryOptions::EMPTY` for every axis but `aggregates`: the CLI wires no SHACL-AF
+    // function table and no property-function registry.
+    // `static`, not a bare `&AggregateRegistry::EMPTY` temporary: `query_options` below
+    // outlives this statement, and a `HashMap`-backed registry's drop glue blocks Rust's
+    // rvalue static promotion for a reference that must live that long.
+    static EMPTY_AGGREGATES: purrdf_sparql_eval::AggregateRegistry =
+        purrdf_sparql_eval::AggregateRegistry::EMPTY;
+    let query_options = QueryOptions {
+        aggregates: aggregates.as_ref().unwrap_or(&EMPTY_AGGREGATES),
+        ..QueryOptions::EMPTY
+    };
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors();
-        // `QueryOptions::EMPTY`: the CLI wires no SHACL-AF function table and no
-        // property-function registry.
-        match engine.update_governed(&mut dataset, request, QueryOptions::EMPTY, &governors)? {
+        match engine.update_governed(&mut dataset, request, query_options, &governors)? {
             GovernedUpdateOutcome::Applied { .. } => {}
             GovernedUpdateOutcome::BudgetExhausted {
                 tripped, evidence, ..
@@ -54,7 +73,11 @@ pub(crate) fn run(
             }
         }
     } else {
-        engine.update(&mut dataset, request)?;
+        // `update_with_options(.., QueryOptions::EMPTY)` is the trait-level
+        // `SparqlEngine::update` this call replaces, byte-for-byte (see
+        // `NativeSparqlEngine`'s `SparqlEngine` impl) — switching to it unconditionally
+        // does not change behaviour when `aggregates` is `None`.
+        engine.update_with_options(&mut dataset, request, query_options)?;
     }
 
     let loss = sink::write_rdf(

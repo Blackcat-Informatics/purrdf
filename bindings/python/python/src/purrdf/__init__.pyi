@@ -455,6 +455,33 @@ class Store:
     # reading, in which an UNREGISTERED IRI under the namespace is a hard error
     # instead of a triple pattern that matches nothing. A duplicate IRI, a ragged
     # table, or a torn `rdf:List` raises `ValueError`.
+    #
+    # SPARQL 1.2's ADJUST(value, timezone) and the VERSION prologue declaration
+    # need no kwarg here: both are ordinary grammar the parser and evaluator
+    # handle unconditionally, unlike the extension seams above.
+    #
+    # `aggregate_namespace` registers purrdf's first-party statistical aggregate set
+    # (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+    # `FIRST`, `LAST`, `TOPK` — `AggregateRegistry::register_statistical_aggregates`)
+    # under that IRI, so the query text can call `AGG(<{NAMESPACE}NAME>, args…)`, e.g.:
+    #
+    #   store.query(
+    #       "PREFIX ex: <https://ex.example/> "
+    #       "SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) "
+    #       "WHERE { ?s ex:value ?v }",
+    #       aggregate_namespace="https://ex.example/agg#",
+    #   )
+    #
+    # Unset (the default) leaves every one of the ten names an ordinary unregistered
+    # custom-aggregate IRI, refused at prepare time exactly as any other unregistered
+    # `AGG(<iri>, …)` call. `AggregateRegistry::register_statistical_aggregates` takes
+    # only a namespace string — no host Rust closure to marshal — which is what makes
+    # this kwarg possible: it crosses the Python boundary exactly the way
+    # `property_fn_namespaces` does. The GENERAL custom-aggregate seam
+    # (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an arbitrary
+    # `init`/`step`/`combine`/`finish` closure) remains Rust-host-only — a fold has no
+    # data-only reduction the way a property-function relation does — and this binding
+    # exposes no surface for it, not even a namespace-only one.
     def query(
         self,
         query: str,
@@ -465,6 +492,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -480,6 +508,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -489,7 +518,13 @@ class Store:
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
     # Governed two-phase entailment query. `outcome` and `report` are absent only
-    # when the closure phase itself was stopped.
+    # when the closure phase itself was stopped. `aggregate_namespace` behaves
+    # exactly as on `query_governed` above. `property_fn_namespaces` / `relations` /
+    # `relations_from_graph` behave exactly as on `query_governed`, too: a
+    # registered relation is reachable from the closure query exactly as it is from
+    # an ordinary one, so registering one here and omitting it there cannot silently
+    # change which rows the SAME predicate position yields. `relations_from_graph`
+    # reads its table from this store's PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -498,7 +533,11 @@ class Store:
         program: str = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -507,6 +546,9 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
+    # `aggregate_namespace` behaves exactly as on `query` above, and is reachable
+    # from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` —
+    # the only place SPARQL UPDATE's grammar admits an aggregate.
     def update(
         self,
         update: str,
@@ -516,6 +558,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -528,6 +571,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -604,7 +648,8 @@ class MutableDataset:
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
     ) -> bytes: ...
-    # Engine configuration kwargs: as on `Store.query` / `Store.update`.
+    # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
+    # `aggregate_namespace` (see `Store.query`).
     def query(
         self,
         query: str,
@@ -615,6 +660,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
     # `Store.query_governed` / `Store.update_governed`.
@@ -628,6 +674,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -636,6 +683,10 @@ class MutableDataset:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
+    # `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly
+    # as on `query_governed` above: a registered relation is reachable from the
+    # closure query exactly as it is from an ordinary one. `relations_from_graph`
+    # reads its table from this dataset's PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -644,7 +695,11 @@ class MutableDataset:
         program: str = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -662,6 +717,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> None: ...
     def update_governed(
         self,
@@ -672,6 +728,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -717,14 +774,38 @@ def xsd_normalize_whitespace(lexical: str, datatype: str) -> str | None: ...
 #: A SELECT row: one cell per projected variable, `None` for an unbound binding.
 _ResultRow = list[_Term | None]
 
+#: `(prefix, iri)` anchoring the additive `purrdf` provenance extension. PurRDF
+#: mints no vocabulary IRIs of its own — there is no default namespace.
+_ProvenanceNamespace = tuple[str, str]
+
 def serialize_sparql_solutions(
-    format: str, variables: list[str], rows: list[_ResultRow]
+    format: str,
+    variables: list[str],
+    rows: list[_ResultRow],
+    *,
+    provenance_namespace: _ProvenanceNamespace | None = ...,
+    query_hash: str | None = ...,
 ) -> bytes: ...
-def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
+def serialize_sparql_boolean(
+    format: str,
+    value: bool,
+    *,
+    provenance_namespace: _ProvenanceNamespace | None = ...,
+    query_hash: str | None = ...,
+) -> bytes: ...
 
 # A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
 # — a heterogeneous tuple discriminated by its first element.
 def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
+
+#: Decoded provenance: `{"query_hash": str | None, "engine": str | None}`.
+_ProvenanceDict = dict[str, str | None]
+
+# The inverse of `serialize_sparql_solutions`'s/`serialize_sparql_boolean`'s
+# `provenance_namespace`: a document with no member under `prefix` decodes to
+# both fields `None` rather than raising.
+def provenance_from_json(data: bytes, prefix: str, iri: str) -> _ProvenanceDict: ...
+def provenance_from_xml(data: bytes, prefix: str, iri: str) -> _ProvenanceDict: ...
 
 # ── RDF → GTS producer (bindings/python/src/py_gts.rs) ──────────────────────────
 

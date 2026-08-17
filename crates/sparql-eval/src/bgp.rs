@@ -955,12 +955,12 @@ fn compile_term<D: DatasetView>(
                     None => Ok(None),
                 }
             } else {
-                let value = ground_term_pattern_to_value(term)?;
+                let value = ground_term_pattern_to_value(term, "a BGP")?;
                 Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
             }
         }
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
-            let value = ground_term_pattern_to_value(term)?;
+            let value = ground_term_pattern_to_value(term, "a BGP")?;
             Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
         }
     }
@@ -1356,7 +1356,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     match pattern {
@@ -1529,10 +1529,10 @@ fn record_call_estimate(
     call: &PropertyFunctionCall,
     bound: &DetHashSet<Variable>,
     driving_rows: u64,
-    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
-    let Some(relation) = relations.and_then(|registry| registry.resolve(&call.iri)) else {
+    let Some(relation) = relations.resolve(&call.iri) else {
         return Ok(());
     };
     let mode = crate::property_fn_plan::invocation_mode(call, bound);

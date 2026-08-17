@@ -2,24 +2,82 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! SPARQL Results XML (SRX) serializer plus the additive, provenance-carrying
-//! `purrdf` extension.
+//! extension.
 //!
-//! Document shape follows <https://www.w3.org/TR/rdf-sparql-XMLres/>: a
+//! Document shape follows the SPARQL 1.2 Query Results XML Format
+//! specification (<https://www.w3.org/TR/sparql12-results-xml/>; the SPARQL 1.1
+//! predecessor is <https://www.w3.org/TR/rdf-sparql-XMLres/>): a
 //! `<sparql xmlns="http://www.w3.org/2005/sparql-results#">` root with a
 //! `<head>` of `<variable>`s, then either `<results>` (SELECT) or `<boolean>`
 //! (ASK). The CONSTRUCT (`Graph`) kind is undefined for SRX and hard-fails with
 //! [`Error::Format`].
 //!
-//! Two additive, namespaced extensions are emitted only when present, so the
-//! default output stays pure W3C: a `purrdf:dir` attribute on `<literal>` carries
-//! an RDF-1.2 base direction, and a `<purrdf:provenance>` element (after
-//! `</results>`/`<boolean>`) carries a non-empty [`ResultProvenance`]. Both
-//! inline the `xmlns:purrdf="https://purrdf.dev/ns/results#"` declaration so the
-//! document needs no fixed prologue namespace.
+//! # RDF 1.2 base direction — the `its:dir` spelling
+//!
+//! A directional literal's base direction is carried as `its:dir="…"` on
+//! `<literal>`, using the ITS (Internationalization Tag Set) namespace
+//! `http://www.w3.org/2005/11/its`. This is the spelling the SPARQL 1.2 Query
+//! Results XML Format specification itself specifies
+//! (<https://www.w3.org/TR/sparql12-results-xml/#example>, §2.3.1): its
+//! "Variable Binding Results" encoding-template table gives, for "RDF Literal
+//! *S* with language *L* with base direction *B*":
+//! `<binding><literal xml:lang="L" its:dir="B">S</literal></binding>`.
+//! No vendored `.srx` fixture under `crates/sparql-conformance/suite/` happens
+//! to carry a directional literal (the base-direction W3C cases in
+//! `w3c-sparql12/lang-basedir/` are `.srj`-only, per upstream
+//! `w3c/rdf-tests`'s own manifest), so the spec quote above is the evidence
+//! trail for the attribute name/namespace, recorded here per the "no
+//! draft/provisional" contract: this is the SPARQL 1.2 Query Results
+//! specification, not a working draft. `crates/sparql-conformance/suite/
+//! purrdf-extend/basedir.{rq,srx}` closes the fixture gap: a
+//! `STRLANGDIR(...)`-producing query, constructed directly from this same
+//! spec section's own worked example content (the قطة/`ar`/`rtl` literal),
+//! whose expected `.srx` pins this writer's exact spelling end to end.
+//!
+//! ## Where the `xmlns:its` declaration lives — the root, not the literal
+//!
+//! Every full-document example in §2.1 ("Document Element"), §2.2 ("Header"),
+//! and the bulk of §2.3.1 ("Variable Binding Results") declares
+//! `xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0"` on the
+//! **root** `<sparql>` element — repeated verbatim across seven separate
+//! worked examples in that document. The spec's §2.1 also gives the inverse
+//! rule explicitly: "If no literals with base direction appear in the
+//! results, the `sparql` document element may be simplified" to drop the
+//! `xmlns:its`/`its:version` attributes entirely. Only ONE example in §2.3.1 —
+//! introduced by the spec's own words "As an alternative to including the
+//! `xml:its` declaration in every result set, the namespace can be declared on
+//! specific elements as needed" — shows the namespace declared inline on
+//! individual `<literal>` elements instead; the spec frames this as a
+//! secondary option, not the default.
+//!
+//! This writer follows the spec's DEFAULT (root-declared) style, which is also
+//! the repo's only other vendored precedent for this attribute pair:
+//! `suite/w3c-sparql12/eval-triple-terms/results-reifiedtriples-1.srx:2`
+//! declares `xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0"` on
+//! its root `<sparql>` element (that particular fixture happens to carry no
+//! directional literal at all, so the upstream W3C test generator clearly
+//! treats the root declaration as the unconditional default style, not
+//! something added only when needed). Concretely: `write_srx` scans the whole
+//! result for any directional literal up front and, only when at least one is
+//! present, emits `xmlns:its="…" its:version="2.0"` on `<sparql>` — the spec's
+//! own "simplified" root form applies whenever none is present, so a document
+//! with no directional literals never carries an unused namespace
+//! declaration. `its:version="2.0"` is emitted alongside `xmlns:its` because
+//! every one of the spec's worked examples pairs the two (ITS 2.0's own
+//! `its:version` convention for host formats, like SRX, that are not
+//! themselves ITS-aware).
+//!
+//! # The additive provenance extension
+//!
+//! A `<{prefix}:provenance>` element (after `</results>`/`<boolean>`) carries a
+//! non-empty [`ResultProvenance`] when a caller supplies a
+//! [`crate::model::ProvenanceNamespace`]. PurRDF mints no vocabulary IRIs of its
+//! own, so without a caller-supplied namespace no such element is ever emitted,
+//! however populated `provenance` is — see [`crate::model::ProvenanceNamespace`].
 
 use crate::SerializeOutcome;
 use crate::error::Error;
-use crate::model::ResultProvenance;
+use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
 
@@ -27,14 +85,47 @@ use purrdf_core::{SparqlResult, TermValue};
 /// bare (no `datatype` attribute), matching the JSON/Turtle abbreviation.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
-/// The `purrdf` results-extension namespace IRI.
-const PURRDF_NS: &str = "https://purrdf.dev/ns/results#";
+/// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
+/// Results specification uses for the `dir` attribute — see the module docs.
+const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+
+/// Whether `result` carries at least one directional literal anywhere in its
+/// bound terms (recursing into triple-term components). Determines whether
+/// the SRX root `<sparql>` element needs the ITS namespace declaration — see
+/// the module docs' "Where the `xmlns:its` declaration lives" section.
+fn result_has_directional_literal(result: &SparqlResult) -> bool {
+    match result {
+        SparqlResult::Solutions { rows, .. } => rows
+            .iter()
+            .flatten()
+            .flatten()
+            .any(term_has_directional_literal),
+        SparqlResult::Boolean(_) | SparqlResult::Graph(_) => false,
+    }
+}
+
+/// Whether `value` is, or recursively contains (as a triple-term component),
+/// a directional literal.
+fn term_has_directional_literal(value: &TermValue) -> bool {
+    match value {
+        TermValue::Literal { direction, .. } => direction.is_some(),
+        TermValue::Triple { s, p, o } => {
+            term_has_directional_literal(s)
+                || term_has_directional_literal(p)
+                || term_has_directional_literal(o)
+        }
+        TermValue::Iri(_) | TermValue::Blank { .. } => false,
+    }
+}
 
 /// Serialize a [`SparqlResult`] to SPARQL Results XML, appending the additive
-/// `purrdf` extensions when present.
+/// provenance extension — under `namespace`'s prefix/IRI — when `provenance` is
+/// non-empty and `namespace` is supplied.
 ///
-/// XML carries everything that is requested, so the returned
-/// [`SerializeOutcome::provenance_dropped`] is always `false`.
+/// XML carries everything that is requested PROVIDED a namespace is supplied to
+/// anchor it under (PurRDF mints no vocabulary IRIs of its own — see
+/// [`crate::model::ProvenanceNamespace`]). [`SerializeOutcome::provenance_dropped`]
+/// is `true` only when `provenance` is non-empty but no `namespace` was given.
 ///
 /// # Errors
 ///
@@ -48,12 +139,13 @@ const PURRDF_NS: &str = "https://purrdf.dev/ns/results#";
 pub fn to_xml(
     result: &SparqlResult,
     provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
 ) -> Result<SerializeOutcome, Error> {
     let mut out = String::new();
-    write_srx(result, provenance, &mut out)?;
+    write_srx(result, provenance, namespace, &mut out)?;
     Ok(SerializeOutcome {
         bytes: out.into_bytes(),
-        provenance_dropped: false,
+        provenance_dropped: !provenance.is_empty() && namespace.is_none(),
     })
 }
 
@@ -61,10 +153,20 @@ pub fn to_xml(
 fn write_srx(
     result: &SparqlResult,
     provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
     out: &mut String,
 ) -> Result<(), Error> {
     out.push_str("<?xml version=\"1.0\"?>\n");
-    out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n");
+    if result_has_directional_literal(result) {
+        // The spec's DEFAULT (root-declared) style — see the module docs.
+        out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"");
+        out.push_str(ITS_NS);
+        out.push_str("\" its:version=\"2.0\">\n");
+    } else {
+        // The spec's own "simplified" root form when no directional literal
+        // appears anywhere in the result.
+        out.push_str("<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n");
+    }
 
     match result {
         SparqlResult::Solutions {
@@ -88,8 +190,10 @@ fn write_srx(
         }
     }
 
-    if !provenance.is_empty() {
-        write_provenance(result, provenance, out)?;
+    if !provenance.is_empty()
+        && let Some(namespace) = namespace
+    {
+        write_provenance(result, provenance, namespace, out)?;
     }
 
     out.push_str("</sparql>\n");
@@ -179,10 +283,11 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
                 out.push('"');
             }
             if let Some(direction) = direction {
-                out.push_str(" purrdf:dir=\"");
+                // No inline `xmlns:its` declaration here — it is declared
+                // once on the document root when needed (see the module
+                // docs' "Where the `xmlns:its` declaration lives" section).
+                out.push_str(" its:dir=\"");
                 out.push_str(direction.as_str());
-                out.push_str("\" xmlns:purrdf=\"");
-                out.push_str(PURRDF_NS);
                 out.push('"');
             }
             out.push('>');
@@ -209,41 +314,70 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
     Ok(())
 }
 
-/// Write the additive `<purrdf:provenance>` element (only present fields).
+/// Write the additive `<{prefix}:provenance>` element (only present fields),
+/// under the caller-supplied [`ProvenanceNamespace`].
 fn write_provenance(
     result: &SparqlResult,
     provenance: &ResultProvenance,
+    namespace: &ProvenanceNamespace,
     out: &mut String,
 ) -> Result<(), Error> {
-    out.push_str("  <purrdf:provenance xmlns:purrdf=\"");
-    out.push_str(PURRDF_NS);
+    let prefix = namespace.prefix();
+    out.push_str("  <");
+    out.push_str(prefix);
+    out.push_str(":provenance xmlns:");
+    out.push_str(prefix);
+    out.push_str("=\"");
+    xml_escape_attr(namespace.iri(), out)?;
     out.push_str("\">\n");
 
-    out.push_str("    <purrdf:queryForm>");
+    out.push_str("    <");
+    out.push_str(prefix);
+    out.push_str(":queryForm>");
     out.push_str(query_form(result));
-    out.push_str("</purrdf:queryForm>\n");
+    out.push_str("</");
+    out.push_str(prefix);
+    out.push_str(":queryForm>\n");
 
     if let Some(query_hash) = &provenance.query_hash {
-        out.push_str("    <purrdf:queryHash>");
+        out.push_str("    <");
+        out.push_str(prefix);
+        out.push_str(":queryHash>");
         xml_escape_text(query_hash, out)?;
-        out.push_str("</purrdf:queryHash>\n");
+        out.push_str("</");
+        out.push_str(prefix);
+        out.push_str(":queryHash>\n");
     }
     if let Some(engine) = &provenance.engine {
-        out.push_str("    <purrdf:engine>");
+        out.push_str("    <");
+        out.push_str(prefix);
+        out.push_str(":engine>");
         xml_escape_text(engine, out)?;
-        out.push_str("</purrdf:engine>\n");
+        out.push_str("</");
+        out.push_str(prefix);
+        out.push_str(":engine>\n");
     }
     for solution in &provenance.solutions {
-        out.push_str("    <purrdf:solution>\n");
+        out.push_str("    <");
+        out.push_str(prefix);
+        out.push_str(":solution>\n");
         for source in &solution.sources {
-            out.push_str("      <purrdf:source>");
+            out.push_str("      <");
+            out.push_str(prefix);
+            out.push_str(":source>");
             xml_escape_text(source, out)?;
-            out.push_str("</purrdf:source>\n");
+            out.push_str("</");
+            out.push_str(prefix);
+            out.push_str(":source>\n");
         }
-        out.push_str("    </purrdf:solution>\n");
+        out.push_str("    </");
+        out.push_str(prefix);
+        out.push_str(":solution>\n");
     }
 
-    out.push_str("  </purrdf:provenance>\n");
+    out.push_str("  </");
+    out.push_str(prefix);
+    out.push_str(":provenance>\n");
     Ok(())
 }
 
@@ -335,9 +469,30 @@ mod tests {
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
+    /// A namespace used by the populated-provenance tests below — caller-chosen,
+    /// `example.org`-scoped per repository convention (never a fabricated
+    /// default; the crate itself mints nothing).
+    fn test_namespace() -> ProvenanceNamespace {
+        ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+            .expect("test namespace is a valid NCName prefix + absolute IRI")
+    }
+
     fn xml_text(result: &SparqlResult, prov: &ResultProvenance) -> String {
-        let outcome = to_xml(result, prov).expect("serialization succeeds");
-        assert!(!outcome.provenance_dropped, "xml never drops provenance");
+        let outcome = to_xml(result, prov, None).expect("serialization succeeds");
+        assert!(
+            !outcome.provenance_dropped,
+            "empty provenance is never dropped"
+        );
+        String::from_utf8(outcome.bytes).expect("UTF-8 output")
+    }
+
+    fn xml_text_ns(
+        result: &SparqlResult,
+        prov: &ResultProvenance,
+        namespace: &ProvenanceNamespace,
+    ) -> String {
+        let outcome = to_xml(result, prov, Some(namespace)).expect("serialization succeeds");
+        assert!(!outcome.provenance_dropped, "namespace was supplied");
         String::from_utf8(outcome.bytes).expect("UTF-8 output")
     }
 
@@ -466,6 +621,41 @@ mod tests {
         );
     }
 
+    /// BYTE PIN — the FULL document for a single-row, single-variable
+    /// triple-term SELECT result, pinned exactly (not just a substring).
+    #[test]
+    fn triple_term_document_exact_bytes() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let text = xml_text(&result, &ResultProvenance::default());
+        let expected = concat!(
+            "<?xml version=\"1.0\"?>\n",
+            "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n",
+            "  <head>\n",
+            "    <variable name=\"t\"/>\n",
+            "  </head>\n",
+            "  <results>\n",
+            "    <result>\n",
+            "      <binding name=\"t\"><triple>",
+            "<subject><uri>http://example.org/s</uri></subject>",
+            "<predicate><uri>http://example.org/p</uri></predicate>",
+            "<object><uri>http://example.org/o</uri></object>",
+            "</triple></binding>\n",
+            "    </result>\n",
+            "  </results>\n",
+            "</sparql>\n",
+        );
+        assert_eq!(text, expected);
+    }
+
     #[test]
     fn non_iri_triple_predicate_is_malformed_error() {
         // A triple-term whose predicate is a plain literal (not an IRI) must
@@ -481,7 +671,7 @@ mod tests {
             rows: vec![vec![Some(triple)]],
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
-        let err = to_xml(&result, &ResultProvenance::default())
+        let err = to_xml(&result, &ResultProvenance::default(), None)
             .expect_err("non-IRI predicate must be rejected");
         assert!(
             matches!(err, Error::MalformedTerm(_)),
@@ -505,7 +695,7 @@ mod tests {
             rows: vec![vec![Some(triple)]],
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
-        let err = to_xml(&result, &ResultProvenance::default())
+        let err = to_xml(&result, &ResultProvenance::default(), None)
             .expect_err("bnode predicate must be rejected");
         assert!(
             matches!(err, Error::MalformedTerm(_)),
@@ -514,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn directional_literal_carries_dir_and_ns() {
+    fn directional_literal_carries_its_dir_and_root_ns() {
         let result = SparqlResult::Solutions {
             variables: vec!["d".to_string()],
             rows: vec![vec![Some(TermValue::Literal {
@@ -526,17 +716,23 @@ mod tests {
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
         let text = xml_text(&result, &ResultProvenance::default());
-        assert!(text.contains("purrdf:dir=\"ltr\""), "missing dir: {text}");
-        assert!(
-            text.contains("xmlns:purrdf=\"https://purrdf.dev/ns/results#\""),
-            "missing inline ns: {text}"
-        );
-        // xml:lang precedes the purrdf ns+dir on the literal element.
+        assert!(text.contains("its:dir=\"ltr\""), "missing dir: {text}");
+        // BYTE PIN — the ITS namespace + its:version are declared ONCE on the
+        // document root (the spec's default style — see the module docs),
+        // NOT inline on the literal.
         assert!(
             text.contains(
-                "<literal xml:lang=\"en\" purrdf:dir=\"ltr\" xmlns:purrdf=\"https://purrdf.dev/ns/results#\">hello</literal>"
+                "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"http://www.w3.org/2005/11/its\" its:version=\"2.0\">"
             ),
+            "missing root ns decl: {text}"
+        );
+        assert!(
+            text.contains("<literal xml:lang=\"en\" its:dir=\"ltr\">hello</literal>"),
             "unexpected directional literal: {text}"
+        );
+        assert!(
+            !text.contains("<literal xml:lang=\"en\" xmlns:its"),
+            "must not redeclare xmlns:its inline on the literal: {text}"
         );
     }
 
@@ -548,7 +744,8 @@ mod tests {
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
         let text = xml_text(&result, &ResultProvenance::default());
-        assert!(!text.contains("purrdf:dir"), "must stay clean: {text}");
+        assert!(!text.contains("its:dir"), "must stay clean: {text}");
+        assert!(!text.contains("xmlns:its"), "must stay clean: {text}");
     }
 
     #[test]
@@ -570,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn populated_provenance_present() {
+    fn populated_provenance_with_namespace_present() {
         let result = SparqlResult::Solutions {
             variables: vec!["s".to_string()],
             rows: vec![vec![Some(TermValue::Iri(
@@ -585,33 +782,173 @@ mod tests {
                 sources: vec!["http://example.org/g1".to_string()],
             }],
         };
-        let text = xml_text(&result, &provenance);
+        let namespace = test_namespace();
+        let text = xml_text_ns(&result, &provenance, &namespace);
         assert!(
-            text.contains("<purrdf:provenance xmlns:purrdf=\"https://purrdf.dev/ns/results#\">"),
+            text.contains("<prov:provenance xmlns:prov=\"http://example.org/ns/prov#\">"),
             "missing provenance: {text}"
         );
         assert!(
-            text.contains("<purrdf:queryForm>select</purrdf:queryForm>"),
+            text.contains("<prov:queryForm>select</prov:queryForm>"),
             "missing queryForm: {text}"
         );
         assert!(
-            text.contains("<purrdf:queryHash>deadbeef</purrdf:queryHash>"),
+            text.contains("<prov:queryHash>deadbeef</prov:queryHash>"),
             "missing queryHash: {text}"
         );
         assert!(
-            text.contains("<purrdf:engine>purrdf-sparql-eval</purrdf:engine>"),
+            text.contains("<prov:engine>purrdf-sparql-eval</prov:engine>"),
             "missing engine: {text}"
         );
         assert!(
-            text.contains("<purrdf:source>http://example.org/g1</purrdf:source>"),
+            text.contains("<prov:source>http://example.org/g1</prov:source>"),
             "missing source: {text}"
         );
         // Provenance sits after </results>, before </sparql>.
         let after_results = text.split_once("</results>").map_or("", |(_, rest)| rest);
         assert!(
-            after_results.contains("<purrdf:provenance"),
+            after_results.contains("<prov:provenance"),
             "provenance must follow </results>: {text}"
         );
+    }
+
+    // ---- Namespace-prefix injection: unconstructible, not merely escaped ----
+
+    /// A prefix engineered to close the `xmlns:{prefix}="…"` attribute and the
+    /// `<{prefix}:provenance …>` start tag, splicing an attacker-controlled
+    /// element into the document, must never construct. Every character this
+    /// string needs (`"`, `<`, `>`, space) individually violates the XML
+    /// `NCName` grammar `ProvenanceNamespace::new` enforces, so there is no
+    /// path from caller input to this writer emitting it.
+    #[test]
+    fn crafted_breakout_prefix_cannot_be_constructed() {
+        let crafted = "prov\"><evil xmlns:x=\"http://evil.example/";
+        let err = ProvenanceNamespace::new(crafted, "http://example.org/ns/prov#")
+            .expect_err("a markup-breakout prefix must never construct");
+        assert!(
+            matches!(err, Error::InvalidNamespace(_)),
+            "expected InvalidNamespace, got: {err:?}"
+        );
+    }
+
+    /// Defence in depth: for every namespace `ProvenanceNamespace::new` DOES
+    /// accept (plain ASCII, a non-leading digit/hyphen/dot, a leading
+    /// underscore, and a non-ASCII `NCNameStartChar`), the XML this writer
+    /// emits still parses cleanly through this crate's own SRX reader
+    /// (`from_xml`) — the base SELECT document (variables + bindings) is
+    /// unaffected by the appended provenance element, exactly as the "the
+    /// writer must never emit a document it cannot itself read" contract
+    /// requires.
+    #[test]
+    fn accepted_namespaces_round_trip_through_the_crate_reader() {
+        let accepted = [
+            ("prov", "http://example.org/ns/prov#"),
+            ("_prov-1.thing_2", "http://example.org/ns/prov#"),
+            ("_leading_underscore", "http://example.org/ns/prov#"),
+            // A non-ASCII NCNameStartChar (Cyrillic Ze, U+0417) — the
+            // NCName production admits far more than ASCII letters.
+            ("\u{417}prov", "http://example.org/ns/prov#"),
+        ];
+        for (prefix, iri) in accepted {
+            let namespace =
+                ProvenanceNamespace::new(prefix, iri).expect("accepted shape must construct");
+            let result = SparqlResult::Solutions {
+                variables: vec!["s".to_string()],
+                rows: vec![vec![Some(TermValue::Iri(
+                    "http://example.org/s".to_string(),
+                ))]],
+                aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            };
+            let provenance = ResultProvenance {
+                engine: Some("purrdf-sparql-eval".to_string()),
+                ..Default::default()
+            };
+            let outcome = to_xml(&result, &provenance, Some(&namespace))
+                .unwrap_or_else(|e| panic!("prefix {prefix:?} must serialize: {e:?}"));
+            let parsed = crate::xml_read::from_xml(&outcome.bytes)
+                .unwrap_or_else(|e| panic!("prefix {prefix:?} document must re-parse: {e:?}"));
+            assert_eq!(parsed.variables, ["s"]);
+            assert_eq!(
+                parsed.rows,
+                [vec![Some(TermValue::Iri(
+                    "http://example.org/s".to_string()
+                ))]]
+            );
+        }
+    }
+
+    /// The legitimate custom-prefix surface stays fully usable end to end: a
+    /// caller-chosen prefix serializes, and the base document (bindings) reads
+    /// back correctly via this crate's own reader — the fix must not break the
+    /// happy path while closing the injection hole.
+    #[test]
+    fn valid_custom_prefix_write_then_read_back() {
+        let namespace = ProvenanceNamespace::new("myProv", "https://example.org/ns/my-prov#")
+            .expect("custom prefix is a valid NCName + absolute IRI");
+        let result = SparqlResult::Solutions {
+            variables: vec!["s".to_string(), "label".to_string()],
+            rows: vec![vec![
+                Some(TermValue::Iri("http://example.org/s".to_string())),
+                Some(lit("hello", XSD_STRING)),
+            ]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let provenance = ResultProvenance {
+            query_hash: Some("deadbeef".to_string()),
+            ..Default::default()
+        };
+        let outcome = to_xml(&result, &provenance, Some(&namespace)).expect("serializes");
+        assert!(!outcome.provenance_dropped, "namespace was supplied");
+        let text = String::from_utf8(outcome.bytes.clone()).expect("UTF-8");
+        assert!(
+            text.contains("<myProv:provenance xmlns:myProv=\"https://example.org/ns/my-prov#\">"),
+            "missing provenance element: {text}"
+        );
+
+        let parsed = crate::xml_read::from_xml(&outcome.bytes).expect("document re-parses");
+        assert_eq!(parsed.variables, ["s", "label"]);
+        assert_eq!(
+            parsed.rows,
+            [vec![
+                Some(TermValue::Iri("http://example.org/s".to_string())),
+                Some(TermValue::Literal {
+                    lexical_form: "hello".to_string(),
+                    datatype: XSD_STRING.to_string(),
+                    language: None,
+                    direction: None,
+                }),
+            ]]
+        );
+    }
+
+    /// DE-MINTING — populated provenance with NO namespace supplied emits no
+    /// `<…:provenance>` element at all (PurRDF mints no vocabulary IRIs of its
+    /// own) and the drop is signalled, exactly like the CSV/TSV exit gate.
+    #[test]
+    fn populated_provenance_without_namespace_is_dropped_and_signalled() {
+        let result = SparqlResult::Boolean(true);
+        let provenance = ResultProvenance {
+            engine: Some("e".to_string()),
+            ..Default::default()
+        };
+        let outcome = to_xml(&result, &provenance, None).expect("serializes");
+        assert!(
+            outcome.provenance_dropped,
+            "non-empty provenance with no namespace must be signalled as dropped"
+        );
+        let text = String::from_utf8(outcome.bytes).expect("UTF-8");
+        assert!(
+            !text.contains("provenance"),
+            "no fabricated provenance element without a namespace: {text}"
+        );
+        let expected = concat!(
+            "<?xml version=\"1.0\"?>\n",
+            "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\n",
+            "  <head></head>\n",
+            "  <boolean>true</boolean>\n",
+            "</sparql>\n",
+        );
+        assert_eq!(text, expected, "base document must stay pure W3C");
     }
 
     #[test]
@@ -626,7 +963,7 @@ mod tests {
         });
         let dataset = builder.freeze().expect("dataset freezes");
         let result = SparqlResult::Graph(dataset);
-        let err = to_xml(&result, &ResultProvenance::default()).expect_err("graph rejected");
+        let err = to_xml(&result, &ResultProvenance::default(), None).expect_err("graph rejected");
         assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
     }
 
@@ -638,7 +975,7 @@ mod tests {
             rows: vec![vec![Some(lit("bad\u{1}value", XSD_STRING))]],
             aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
         };
-        let err = to_xml(&result, &ResultProvenance::default())
+        let err = to_xml(&result, &ResultProvenance::default(), None)
             .expect_err("illegal C0 control char must be rejected");
         match &err {
             Error::Format(msg) => {

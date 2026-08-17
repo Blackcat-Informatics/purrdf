@@ -140,6 +140,24 @@ fn regression_cases() -> Vec<RegressionCase> {
 "#,
             ),
         },
+        RegressionCase {
+            name: "equal_treats_cross_type_nan_as_sameValue",
+            data: CORE_DATA_TTL,
+            format: NativeRdfFormat::Turtle,
+            // SPARQL 1.2 §17.4.2.2 `sameValue` (the function `=` is defined in terms
+            // of, replacing SPARQL 1.1's `RDFterm-equal`), step 5, verbatim: "NaN"^^
+            // xsd:double and "NaN"^^xsd:float are the SAME value even though they are
+            // different RDF terms (different datatype IRIs) and IEEE 754 `NaN` is
+            // otherwise unordered/unequal-to-itself. `sameValue` itself cannot be
+            // called directly (its own spec text says so — see
+            // `purrdf_sparql_eval::basic_profile`'s module docs); `=` is the only
+            // surface this semantics is observable through.
+            query: r#"
+                ASK { FILTER("NaN"^^<http://www.w3.org/2001/XMLSchema#double>
+                            = "NaN"^^<http://www.w3.org/2001/XMLSchema#float>) }
+            "#,
+            expected: Expected::Ask(true),
+        },
     ]
 }
 

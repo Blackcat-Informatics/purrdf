@@ -847,3 +847,586 @@ fn a_sub_property_axiom_falls_back_and_still_answers() {
         stderr(&out)
     );
 }
+
+/// Numeric fixture for the statistical-aggregate end-to-end tests: three values
+/// (1, 2, 3) on distinct subjects — `MEDIAN` folds this to `2`.
+const NUMBERS_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:s1 ex:value 1 .\n",
+    "ex:s2 ex:value 2 .\n",
+    "ex:s3 ex:value 3 .\n",
+);
+
+/// End-to-end: `--aggregate-namespace` actually COMPUTES `MEDIAN` through the built
+/// CLI binary — not merely that the flag parses. This is the reachability gap the
+/// flag closes: before it existed, `AggregateRegistry::register_statistical_aggregates`
+/// was reachable only by embedding the Rust engine directly.
+#[test]
+fn aggregate_namespace_computes_median_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the aggregate-namespace query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let json = stdout(&out);
+    assert!(
+        json.contains("\"value\":\"2\""),
+        "MEDIAN of {{1, 2, 3}} is 2:\n{json}"
+    );
+}
+
+/// Regression: the namespace stays caller-supplied with no fabricated default —
+/// omitting `--aggregate-namespace` leaves the ten statistical names unregistered,
+/// and the SAME typed error an ordinary unregistered custom-aggregate IRI already
+/// produces surfaces here, unchanged (existing behaviour with the parameter absent
+/// is unchanged).
+#[test]
+fn omitted_aggregate_namespace_leaves_the_statistical_set_unregistered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&["query", "--data", &ttl, "--results-format", "json", query]);
+    assert!(
+        !out.status.success(),
+        "an unregistered custom aggregate must be refused"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("aggregate") || err.contains("regist"),
+        "the refusal must name the unregistered aggregate:\n{err}"
+    );
+}
+
+/// End-to-end: `purrdf update`'s `--aggregate-namespace` reaches `MEDIAN` from a
+/// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` — the only
+/// place SPARQL UPDATE's grammar admits an aggregate.
+#[test]
+fn aggregate_namespace_computes_median_through_a_cli_update() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let update = "PREFIX ex: <http://example.org/> \
+                  INSERT { ex:summary ex:median ?m } \
+                  WHERE { SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                          WHERE { ?s ex:value ?v } }";
+
+    let out = run(&[
+        "update",
+        "--data",
+        &ttl,
+        "--to",
+        "ntriples",
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        update,
+    ]);
+    assert!(
+        out.status.success(),
+        "the aggregate-namespace update must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let ntriples = stdout(&out);
+    assert!(
+        ntriples.contains("<http://example.org/summary> <http://example.org/median> \"2\""),
+        "MEDIAN of {{1, 2, 3}} inserted as 2:\n{ntriples}"
+    );
+}
+
+/// End-to-end: `--aggregate-namespace` combined with `--entailment` COMPUTES `MEDIAN`
+/// over the ENTAILED CLOSURE, not merely over the raw asserted data. The RDFS closure
+/// entails `ex:s1`/`ex:s2`/`ex:s3` are `ex:Thing` (their only common ancestor beyond
+/// `ex:value`'s domain assertion), so a query that could only match through the closure
+/// pins that the closure — not the raw view — is what the aggregate folds over.
+///
+/// Before `query_with_entailment_governed` took a `QueryOptions` parameter, this exact
+/// combination was refused BY NAME rather than silently doing nothing; it now runs.
+#[test]
+fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    const VALUES_WITH_DOMAIN_TTL: &str = concat!(
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+        "ex:value rdfs:domain ex:Thing .\n",
+        "ex:s1 ex:value 1 .\n",
+        "ex:s2 ex:value 2 .\n",
+        "ex:s3 ex:value 3 .\n",
+    );
+    let ttl = write_file(dir, "numbers.ttl", VALUES_WITH_DOMAIN_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s a <http://example.org/Thing> . ?s <http://example.org/value> ?v }";
+
+    // Without --entailment: `rdfs:domain` is not applied, so no ?s is typed `ex:Thing` and
+    // the aggregate folds an empty group (unbound, per this build's `MEDIAN` over no rows).
+    let without = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(without.status.success(), "stderr:\n{}", stderr(&without));
+    assert!(
+        !stdout(&without).contains("\"value\":\"2\""),
+        "without --entailment no ?s is typed ex:Thing, so MEDIAN must not see the rows:\n{}",
+        stdout(&without)
+    );
+
+    let with = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(
+        with.status.success(),
+        "the aggregate-namespace + entailment query must exit 0; stderr:\n{}",
+        stderr(&with)
+    );
+    let json = stdout(&with);
+    assert!(
+        json.contains("\"value\":\"2\""),
+        "MEDIAN of {{1, 2, 3}} over the RDFS-entailed ex:Thing group is 2:\n{json}"
+    );
+}
+
+/// End-to-end: `--explain` combined with `--aggregate-namespace` renders the plan WITH the
+/// registered custom aggregate named in the receipt's `aggregates` block, rather than
+/// refusing the combination by name.
+///
+/// Before the engine had an aggregate-registry-aware explain entry, this exact
+/// combination was refused: `--explain` would have described a run in which the
+/// query's own `Custom` aggregate call was refused as unregistered.
+#[test]
+fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
+                 WHERE { ?s <http://example.org/value> ?v }";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--aggregate-namespace",
+        "https://example.org/agg#",
+        "--explain",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "--explain with --aggregate-namespace must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\naggregates\n"),
+        "the explanation must carry the `aggregates` section: {body}"
+    );
+    assert!(
+        body.contains("https://example.org/agg#MEDIAN"),
+        "the registered aggregate must be named in the receipt: {body}"
+    );
+    // The answers are replaced, not accompanied: an EXPLAIN returns a plan, not rows.
+    assert!(
+        !body.contains("\"value\":\"2\""),
+        "--explain prints the explanation INSTEAD of the answers: {body}"
+    );
+}
+
+// ── `--provenance-namespace`: reachable AND readable back ─────────────────────────
+
+/// End-to-end: `--provenance-namespace PREFIX=IRI` actually anchors a populated
+/// `purrdf` provenance extension in the emitted SPARQL-results JSON, and what this
+/// binary writes, `purrdf_sparql_results::provenance_from_json` reads back — closing
+/// the "writer emits something nothing can read back" gap.
+#[test]
+fn provenance_namespace_populates_and_round_trips_through_json() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "json",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the provenance-namespace query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let json = stdout(&out);
+    assert!(
+        json.contains("\"prov\":{"),
+        "the additive prov member must appear: {json}"
+    );
+    assert!(
+        json.contains("\"queryForm\":\"select\""),
+        "queryForm must name the result kind: {json}"
+    );
+    assert!(
+        json.contains("\"engine\":\"purrdf-sparql-eval\""),
+        "engine must be populated: {json}"
+    );
+    assert!(
+        json.contains("\"queryHash\":\"sha256:"),
+        "queryHash must be a sha256 content hash of the query text: {json}"
+    );
+
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+    let decoded = purrdf_sparql_results::provenance_from_json(json.as_bytes(), &namespace)
+        .expect("the CLI's own output decodes back");
+    assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+    assert!(
+        decoded
+            .query_hash
+            .as_deref()
+            .is_some_and(|h| h.starts_with("sha256:")),
+        "decoded query_hash: {:?}",
+        decoded.query_hash
+    );
+}
+
+/// The same round trip through XML.
+#[test]
+fn provenance_namespace_populates_and_round_trips_through_xml() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "xml",
+        query,
+    ]);
+    assert!(
+        out.status.success(),
+        "the provenance-namespace XML query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let xml = stdout(&out);
+    assert!(
+        xml.contains("<prov:provenance"),
+        "the additive prov:provenance element must appear: {xml}"
+    );
+
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+            .expect("valid namespace");
+    let decoded = purrdf_sparql_results::provenance_from_xml(xml.as_bytes(), &namespace)
+        .expect("the CLI's own XML output decodes back");
+    assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+}
+
+/// Regression: the namespace stays caller-supplied with no fabricated default —
+/// omitting `--provenance-namespace` emits pure-W3C output, byte-unchanged from
+/// before the flag existed.
+#[test]
+fn omitting_provenance_namespace_emits_pure_w3c_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
+
+    let out = run(&["query", "--data", &ttl, "--results-format", "json", query]);
+    assert!(out.status.success(), "stderr:\n{}", stderr(&out));
+    let json = stdout(&out);
+    assert!(
+        !json.contains("\"prov\""),
+        "no namespace was supplied: no additive member may appear: {json}"
+    );
+}
+
+/// A malformed `--provenance-namespace` value (no `=`) is a usage error at parse
+/// time, before the query even runs.
+#[test]
+fn malformed_provenance_namespace_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "not-a-prefix-iri-pair",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "a missing `=` must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside `--explain` is refused rather than silently
+/// dropped: `--explain` prints the plan INSTEAD of the answers, so the extension it
+/// would anchor is never emitted.
+#[test]
+fn provenance_namespace_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside a CONSTRUCT query is refused: a graph result has
+/// no SPARQL-results provenance extension to carry it.
+#[test]
+fn provenance_namespace_with_a_construct_result_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--provenance-namespace",
+        "prov=https://example.org/ns/prov#",
+        "--results-format",
+        "turtle",
+        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert!(
+        stderr(&out).contains("--provenance-namespace"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--provenance-namespace` beside `--results-format csv`/`tsv` is refused rather than
+/// silently accepted and trimmed: CSV/TSV are pure-W3C value-only formats with no
+/// extension point at all, unlike JSON/XML.
+#[test]
+fn provenance_namespace_with_csv_or_tsv_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    for fmt in ["csv", "tsv"] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--provenance-namespace",
+            "prov=https://example.org/ns/prov#",
+            "--results-format",
+            fmt,
+            "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+        ]);
+        assert!(
+            !out.status.success(),
+            "--provenance-namespace with --results-format {fmt} must be refused"
+        );
+        assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+        assert!(
+            stderr(&out).contains("--provenance-namespace"),
+            "the error must name the flag for {fmt}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// `--explain` never reaches [`emit_result`](crate::query::emit_result): it prints the
+/// plan as plain text and returns before any serializer runs. A named
+/// `--results-format` used to be accepted and silently ignored there (identical
+/// output for every choice); it is refused by name instead.
+#[test]
+fn results_format_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+
+    for fmt in ["json", "xml", "csv", "tsv", "turtle"] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--explain",
+            "--results-format",
+            fmt,
+            "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+        ]);
+        assert!(
+            !out.status.success(),
+            "--explain with --results-format {fmt} must be refused"
+        );
+        assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+        assert!(
+            stderr(&out).contains("--results-format"),
+            "the error must name the flag for {fmt}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// `--explain` never runs the serializer that produces a loss ledger: a bare
+/// `--loss-ledger` used to be accepted, exit 0, and write nothing. It is refused by
+/// name instead, and `--loss-ledger=PATH` leaves no file behind either.
+#[test]
+fn loss_ledger_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let ledger_path = dir.join("ledger.json");
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "--loss-ledger",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--loss-ledger"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+
+    let out = run(&[
+        &format!("--loss-ledger={}", ledger_path.display()),
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(
+        !out.status.success(),
+        "the combination must be refused with a PATH value too"
+    );
+    assert!(
+        !ledger_path.exists(),
+        "a refused run must not write the ledger file"
+    );
+}
+
+/// `--explain` never reaches the results serializer, so a configured
+/// `--jsonld-options` document never reaches a serializer either: a bare
+/// `--explain --jsonld-options FILE` used to be accepted, exit 0, and render the plan
+/// as if the flag had never been named. It is refused by name instead.
+#[test]
+fn jsonld_options_with_explain_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"expanded"}"#,
+    );
+
+    let out = run(&[
+        "--jsonld-options",
+        &options,
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(!out.status.success(), "the combination must be refused");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--jsonld-options"),
+        "the error must name the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--rules FILE` names the rule document `--entailment rif` runs; without
+/// `--entailment` at all it would otherwise be accepted by clap and silently do
+/// nothing (`options.rules` is read only inside the `--entailment` lane) — refused by
+/// name instead.
+#[test]
+fn rules_without_entailment_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
+    let rules = write_file(dir, "unused.rif", "<rdf:RDF xmlns:rdf=\"x\"></rdf:RDF>");
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--rules",
+        &rules,
+        "SELECT ?v WHERE { ?s <http://example.org/value> ?v }",
+    ]);
+    assert!(
+        !out.status.success(),
+        "--rules with no --entailment must be refused"
+    );
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("--rules"),
+        "the refusal must name --rules: {}",
+        stderr(&out)
+    );
+}

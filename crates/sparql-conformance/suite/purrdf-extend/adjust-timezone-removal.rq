@@ -1,0 +1,8 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# ADJUST()'s second argument types as xsd:dayTimeDuration; SPARQL has no XPath
+# empty sequence to spell fn:adjust-dateTime-to-timezone's "remove the
+# timezone" case, so the empty simple literal stands in for it (see
+# `adjust_timezone_arg` in purrdf-sparql-eval).
+SELECT ?adjusted WHERE {
+  BIND(ADJUST("2024-06-15T10:00:00+05:00"^^xsd:dateTime, "") AS ?adjusted)
+}

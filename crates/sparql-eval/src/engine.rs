@@ -66,6 +66,15 @@ pub struct PreparedQuery {
     /// [`NativeSparqlEngine::query_prepared_governed_view`]), which turns the one
     /// remaining way to reach that wrong answer into a diagnostic.
     relations: String,
+    /// The identity of the custom-aggregate registry this plan was parsed and
+    /// admitted against — empty when there was none. The exact twin of
+    /// [`Self::relations`], for the exact same reason: a plan admitted a
+    /// `Custom` aggregate call against ONE registry (its arity checked, its
+    /// registration confirmed) must not silently run against ANOTHER registry
+    /// that happens to resolve the same IRI to a DIFFERENT aggregate — see
+    /// `check_plan_matches_relations`, which now checks this alongside
+    /// [`Self::relations`].
+    aggregates: String,
 }
 
 impl PreparedQuery {
@@ -83,14 +92,20 @@ impl PreparedQuery {
     /// # Errors
     ///
     /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a relation in
-    /// `options.property_functions` panics while its declaration is read to compute the
-    /// registry's fingerprint.
+    /// `options.property_functions`, or an aggregate in `options.aggregates`, panics
+    /// while its declaration is read to compute its registry's fingerprint.
     pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Result<Self, RdfDiagnostic> {
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions)
             .map_err(|e| {
             RdfDiagnostic::error("native-sparql-property-function", e.to_string())
         })?;
-        Ok(Self { query, relations })
+        let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+        Ok(Self {
+            query,
+            relations,
+            aggregates,
+        })
     }
 }
 
@@ -136,45 +151,64 @@ impl PlanCache {
         base_iri: Option<&str>,
         options: &ParserOptions,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_with_relations(query, base_iri, options, None)
+        self.prepare_with_relations(
+            query,
+            base_iri,
+            options,
+            &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+            &crate::agg_fn::AggregateRegistry::EMPTY,
+        )
     }
 
-    /// [`Self::prepare_with`], resolving any property-function call against `relations`.
+    /// [`Self::prepare_with`], resolving any property-function call against `relations`
+    /// and any custom-aggregate call against `aggregates`.
     ///
     /// This is where a call's **admission** happens, and it happens here rather than at
     /// evaluation time on purpose: an unregistered IRI, an arity mismatch, and a chain
     /// no relation can serve are all configuration errors, and a caller's governor
     /// budget is for the work its query does, not for discovering the query could never
-    /// have run. `relations` of `None` (or an empty registry) does not soften any of
-    /// them — a call node with nothing to resolve against IS the unregistered case.
+    /// have run. An empty `relations`/`aggregates` (including
+    /// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY)/[`AggregateRegistry::EMPTY`](crate::agg_fn::AggregateRegistry::EMPTY),
+    /// the canonical "no registry" value) does not soften any of them — a call node
+    /// with nothing to resolve against IS the unregistered case.
     ///
     /// # Errors
     ///
-    /// An [`RdfDiagnostic`] if the query text does not parse (`native-sparql-query-parse`)
-    /// or if a property-function call cannot be admitted
-    /// (`native-sparql-property-function`).
+    /// An [`RdfDiagnostic`] if the query text does not parse (`native-sparql-query-parse`),
+    /// if a property-function call cannot be admitted (`native-sparql-property-function`),
+    /// or if a custom-aggregate call cannot be admitted (`native-sparql-aggregate-function`).
     pub fn prepare_with_relations(
         &mut self,
         query: &str,
         base_iri: Option<&str>,
         options: &ParserOptions,
-        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The cache key must include the base IRI AND the extension-function
         // namespace set: the same text under a different base or namespace
         // configuration parses to a different algebra. The property-function
-        // namespace set, the property-function exact-IRI set, and the registry
-        // fingerprint join it for the same reason one step later: together they
-        // decide which triples become calls, and how those calls are ordered.
+        // namespace set, the property-function exact-IRI set, and the two registry
+        // fingerprints join it for the same reason one step later: together they
+        // decide which triples become calls, how those calls are ordered, and which
+        // `Custom` aggregate IRIs are admitted at all. Without the aggregate
+        // fingerprint in the key, two callers configuring DIFFERENT aggregate
+        // registries but sharing every other cache-key component would receive the
+        // SAME cached `PreparedQuery` — whichever caller populated the cache first —
+        // and the second caller's evaluation would then fail
+        // `check_plan_matches_relations` against a plan it never actually prepared.
         let fingerprint = crate::property_fn_plan::registry_fingerprint(relations)
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
         let key = format!(
-            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
+            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
             base_iri.unwrap_or(""),
             options.extension_fn_namespaces.join("\u{1}"),
             options.property_fn_namespaces.join("\u{1}"),
             options.property_fn_iris.join("\u{1}"),
             fingerprint,
+            agg_fingerprint,
             query
         );
         if let Some(prepared) = self.entries.get(&key) {
@@ -187,11 +221,12 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let planned = crate::property_fn_plan::plan_query(&parsed, relations)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        let planned = crate::property_fn_plan::plan_query(&parsed, relations, aggregates)
+            .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
         let prepared = Arc::new(PreparedQuery {
             query: planned.unwrap_or(parsed),
             relations: fingerprint,
+            aggregates: agg_fingerprint,
         });
         self.entries.insert(key, prepared.clone());
         Ok(prepared)
@@ -298,7 +333,12 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_for(query, base_iri, options.property_functions)
+        self.prepare_for(
+            query,
+            base_iri,
+            options.property_functions,
+            options.aggregates,
+        )
     }
 
     /// Evaluate a plan returned by [`Self::prepare_query`] or
@@ -434,11 +474,15 @@ impl NativeSparqlEngine {
         D: FallibleDatasetView + Sync,
     {
         preflight_fallible_view(dataset)?;
-        let prepared =
-            match self.prepare_for(request.query, request.base_iri, options.property_functions) {
-                Ok(prepared) => prepared,
-                Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
-            };
+        let prepared = match self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        ) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
+        };
         self.query_prepared_fallible_view(dataset, &prepared, request.substitutions, options)
     }
 
@@ -485,8 +529,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared =
-            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
         self.query_prepared_governed_view(
             &**dataset,
             &prepared,
@@ -621,8 +669,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared =
-            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
         let state = Arc::new(GovernorState::new(governors));
         self.query_governed_prepared_in_state(
             dataset,
@@ -673,8 +725,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared =
-            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
         self.query_governed_prepared_in_state(
             dataset,
             &prepared,
@@ -781,13 +837,17 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let prepared =
-            match self.prepare_for(request.query, request.base_iri, options.property_functions) {
-                Ok(prepared) => prepared,
-                Err(diagnostic) => {
-                    return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
-                }
-            };
+        let prepared = match self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        ) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => {
+                return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
+            }
+        };
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             self.query_governed_prepared_in_state(
@@ -927,7 +987,7 @@ impl NativeSparqlEngine {
     fn parse_update(
         &self,
         request: &SparqlRequest<'_>,
-        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
         let mut parser = SparqlParser::new();
         if let Some(base) = request.base_iri {
@@ -1076,13 +1136,13 @@ impl NativeSparqlEngine {
         &self,
         query: &str,
         base_iri: Option<&str>,
-        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        let relations = relations.filter(|registry| !registry.is_empty());
         let options = self.parser_options_for(relations)?;
         self.cache
             .borrow_mut()
-            .prepare_with_relations(query, base_iri, &options, relations)
+            .prepare_with_relations(query, base_iri, &options, relations, aggregates)
     }
 
     /// This engine's [`ParserOptions`], augmented with `registry`'s exact predicate
@@ -1110,11 +1170,11 @@ impl NativeSparqlEngine {
     /// relation's declaration methods panic.
     fn parser_options_for(
         &self,
-        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<Cow<'_, ParserOptions>, RdfDiagnostic> {
-        let Some(registry) = registry.filter(|r| !r.is_empty()) else {
+        if registry.is_empty() {
             return Ok(Cow::Borrowed(&self.parser_options));
-        };
+        }
         let mut options = self.parser_options.clone();
         let described = registry
             .describe()
@@ -1183,48 +1243,6 @@ impl NativeSparqlEngine {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
-    /// [`Self::explain_query`] with a property-function registry injected, so a query
-    /// whose predicates resolve to relations can be explained at all — and so the
-    /// explanation NAMES them.
-    ///
-    /// A relation is host code whose rows no index sized and no dataset holds, which
-    /// makes it part of what produced the answer in exactly the way the charge schedule
-    /// is: [`QueryExplanation::relations`] carries the registered IRIs, sorted, and
-    /// [`QueryExplanation::render`] prints them. Two hosts that ran the same query text
-    /// over the same dataset under two different registries therefore hold two receipts
-    /// that say so.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_property_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query_text: &str,
-        base_iri: Option<&str>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_query_with_property_functions_view(&**dataset, query_text, base_iri, registry)
-    }
-
-    /// [`Self::explain_query_with_property_functions`] over any [`DatasetView`] backend
-    /// whose id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
-    /// fails.
-    pub fn explain_query_with_property_functions_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query_text: &str,
-        base_iri: Option<&str>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_for(dataset, query_text, base_iri, Some(registry))
-    }
-
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
     /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
@@ -1239,23 +1257,89 @@ impl NativeSparqlEngine {
         query_text: &str,
         base_iri: Option<&str>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        self.explain_for(dataset, query_text, base_iri, None)
+        self.explain_query_with_options_view(dataset, query_text, base_iri, QueryOptions::EMPTY)
     }
 
-    /// The one explain body, parameterized by the property-function registry in scope.
+    /// [`Self::explain_query`] with the full [`QueryOptions`] a query evaluation takes —
+    /// the SHACL-AF function registry, the property-function registry, AND the
+    /// custom-aggregate registry together in one call, so a query that calls into more
+    /// than one of them can be explained AT ALL, correctly, in one shot.
     ///
-    /// `relations` is threaded everywhere it changes the answer: into the parse (which is
-    /// where a predicate becomes a call node and the plan is feasibility-ordered), into
-    /// the survey (a relation's declared row bound is the only prediction a call has), and
-    /// into the receipt (which names the registered IRIs).
+    /// This is the entry [`Self::explain_query`] is defined in terms of, with every
+    /// field at [`QueryOptions::EMPTY`]. There is no narrower per-registry explain
+    /// entry to fall into instead: a single-registry entry could under-declare a
+    /// query that needs more than one registry and silently explain a narrower query
+    /// than the one that was asked about (see [`QueryOptions`]'s own documentation),
+    /// so every caller holding a property-function registry, a custom-aggregate
+    /// registry, or both names them here, exactly as [`Self::query_with_options_view`]
+    /// is the non-explain twin that already requires this for [`SparqlEngine::query`]'s
+    /// extension seams.
+    ///
+    /// `options.prebinding` and `options.bnode_mint_prefix` are accepted for shape
+    /// parity with [`QueryOptions`] but have no observable effect here: EXPLAIN neither
+    /// applies a SHACL pre-binding substitution nor mints blank nodes into a caller-
+    /// visible result the receipt reports on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_options(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+        options: QueryOptions<'_>,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_query_with_options_view(&**dataset, query_text, base_iri, options)
+    }
+
+    /// [`Self::explain_query_with_options`] over any [`DatasetView`] backend whose id
+    /// type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_options_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        options: QueryOptions<'_>,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for(
+            dataset,
+            query_text,
+            base_iri,
+            options.functions,
+            options.property_functions,
+            options.aggregates,
+        )
+    }
+
+    /// The one explain body, parameterized by the SHACL-AF function registry, the
+    /// property-function registry, AND the custom-aggregate registry in scope.
+    ///
+    /// All three are threaded everywhere they change the answer: into the parse (which is
+    /// where a relation's predicate becomes a call node and a `Custom` aggregate's IRI is
+    /// admitted, and where the plan is feasibility-ordered), into the survey (a relation's
+    /// declared row bound is the only prediction a call has — an aggregate contributes no
+    /// survey prediction, since it is ordinary algebra rather than an injected row
+    /// source), into the evaluation context (so a registered aggregate and a
+    /// registered/native user function actually resolve rather than exploding at
+    /// `AGG(<iri>, …)`/`<iri>(…)`), and into the receipt (which names the registered
+    /// IRIs of the relation and aggregate registries).
     fn explain_for<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
-        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        functions: &crate::user_fn::UserFunctionRegistry,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        let prepared = self.prepare_for(query_text, base_iri, relations)?;
+        let prepared = self.prepare_for(query_text, base_iri, relations, aggregates)?;
         let survey = self.survey_plan(dataset, &prepared.query, relations)?;
         // The ledger's node table is fixed against the plan that is about to be evaluated.
         // No substitutions are applied on this path, so the addresses the ledger records
@@ -1268,10 +1352,10 @@ impl NativeSparqlEngine {
         let mut ctx = self
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
-            .with_charge_ledger(Arc::clone(&ledger));
-        if let Some(registry) = relations {
-            ctx = ctx.with_property_functions(registry);
-        }
+            .with_charge_ledger(Arc::clone(&ledger))
+            .with_user_functions(functions)
+            .with_property_functions(relations)
+            .with_aggregates(aggregates);
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
@@ -1280,14 +1364,17 @@ impl NativeSparqlEngine {
         // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
         // must render as two different receipts.
         let registered = relations
-            .map(crate::property_fn::PropertyFunctionRegistry::describe)
-            .transpose()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
-            .unwrap_or_default();
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        // The exact twin, for the custom-aggregate registry.
+        let registered_aggregates = aggregates
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
             registered,
+            registered_aggregates,
             state.evidence(),
         ))
     }
@@ -1306,7 +1393,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
-        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
         let _ = self;
         let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
@@ -1368,7 +1455,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
-        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
         state: &GovernorState,
         identity: &RelationIdentity,
     ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
@@ -1404,108 +1491,6 @@ impl NativeSparqlEngine {
         })))
     }
 
-    /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
-    ///
-    /// Pre-bound variables are substituted into FILTER/EXISTS expressions and
-    /// `BOUND($v)` is rewritten to `true` for pre-bound variables, while
-    /// triple-pattern positions still receive the VALUES-join rewrite. This is
-    /// a convenience wrapper equivalent to [`Self::query_with_options_view`] with
-    /// [`ShaclPrebinding::Applied`] and no registry or mint prefix; the SHACL
-    /// validator itself drives [`Self::query_with_options_view`] directly. Normal
-    /// SPARQL evaluation uses [`SparqlEngine::query`].
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_shacl_prebinding_view(&**dataset, query, base_iri, substitutions)
-    }
-
-    /// [`Self::query_with_shacl_prebinding`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri,
-                substitutions,
-            },
-            QueryOptions {
-                prebinding: ShaclPrebinding::Applied,
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
-    /// Like [`NativeSparqlEngine::query_with_shacl_prebinding`], but with a SHACL-AF
-    /// function registry in scope so `sh:sparql` bodies can call declared functions.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-        registry: &crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_shacl_prebinding_and_functions_view(
-            &**dataset,
-            query,
-            base_iri,
-            substitutions,
-            registry,
-        )
-    }
-
-    /// [`Self::query_with_shacl_prebinding_and_functions`] over any [`DatasetView`]
-    /// backend whose id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-        registry: &'d crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri,
-                substitutions,
-            },
-            QueryOptions {
-                prebinding: ShaclPrebinding::Applied,
-                functions: Some(registry),
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
     /// The one **ungoverned** options-carrying query entry, parameterized by
     /// [`QueryOptions`]: selects the substitution rewrite
     /// ([`QueryOptions::prebinding`]), optionally injects a SHACL-AF function
@@ -1528,8 +1513,12 @@ impl NativeSparqlEngine {
         request: SparqlRequest<'_>,
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared =
-            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -1559,7 +1548,7 @@ impl NativeSparqlEngine {
     /// registered relation's predicate as an ordinary triple pattern and answer the
     /// empty bag, silently, for every call whose `SERVICE` body is federated. The
     /// query's OUTER pattern resolves against `options.property_functions` exactly
-    /// as [`Self::query_with_property_functions`] resolves it; a call node inside the
+    /// as [`Self::query_with_options_view`] resolves it; a call node inside the
     /// `SERVICE` body itself is refused at forwarding regardless (see
     /// [`crate::remote::RemoteQuerySource`]).
     ///
@@ -1589,8 +1578,12 @@ impl NativeSparqlEngine {
         source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared =
-            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
         let ctx = self.eval_ctx(dataset).with_remote(source);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -1602,101 +1595,6 @@ impl NativeSparqlEngine {
             }
         };
         Ok(materialize(outcome, &ctx))
-    }
-
-    /// Like [`SparqlEngine::query`], but with a caller-supplied SHACL-AF function
-    /// registry (`sh:SPARQLFunction`) injected so a call-position IRI resolving to a
-    /// declared function evaluates its body at eval time. This is the entry the
-    /// shapes validator uses; the registry is built once per shapes graph and
-    /// borrowed for the call. An empty registry behaves exactly like [`Self::query`].
-    ///
-    /// This is [`Self::query_with_options_view`] with one field set. A caller that also
-    /// has a property-function registry, a pre-binding rewrite, or a blank-mint prefix in
-    /// scope names them together there rather than reaching for a narrower entry that
-    /// would drop them.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        request: SparqlRequest<'_>,
-        registry: &crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_user_functions_view(&**dataset, request, registry)
-    }
-
-    /// [`Self::query_with_user_functions`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        registry: &'d crate::user_fn::UserFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            request,
-            QueryOptions {
-                functions: Some(registry),
-                ..QueryOptions::EMPTY
-            },
-        )
-    }
-
-    /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
-    /// registry injected, so a predicate IRI the parser lowered to a
-    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
-    /// — which it does only for an IRI that EXACTLY matches a registered relation
-    /// (via [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions),
-    /// derived from `registry`) or that falls under a caller-declared
-    /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
-    /// entry — resolves to a registered relation. The registry is built once per host
-    /// configuration and borrowed for the call. An empty registry behaves exactly like
-    /// [`Self::query`].
-    ///
-    /// This is [`Self::query_with_options_view`] with one field set, and
-    /// [`Self::query_governed`] under [`QueryGovernors::UNBOUNDED`] is its governed
-    /// sibling. A caller that also has a SHACL-AF function registry or a blank-mint
-    /// prefix in scope names them together at the options entry.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_property_functions(
-        &self,
-        dataset: &Arc<RdfDataset>,
-        request: SparqlRequest<'_>,
-        registry: &crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_property_functions_view(&**dataset, request, registry)
-    }
-
-    /// [`Self::query_with_property_functions`] over any [`DatasetView`] backend whose
-    /// id type is the production [`TermId`](purrdf_core::TermId).
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_property_functions_view<'d, D: DatasetView + Sync>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        registry: &'d crate::property_fn::PropertyFunctionRegistry,
-    ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_options_view(
-            dataset,
-            request,
-            QueryOptions {
-                property_functions: Some(registry),
-                ..QueryOptions::EMPTY
-            },
-        )
     }
 }
 
@@ -1865,18 +1763,34 @@ pub enum ShaclPrebinding {
 /// entries had before the seam existed.
 ///
 /// Construct with struct-update syntax over the empty value, e.g.
-/// `QueryOptions { property_functions: Some(&registry), ..QueryOptions::EMPTY }`.
+/// `QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY }`.
 #[derive(Debug, Clone, Copy)]
 pub struct QueryOptions<'a> {
     /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
     pub prebinding: ShaclPrebinding,
-    /// The SHACL-AF function registry in scope, if any; `None` behaves exactly
-    /// like the registry-free entries.
-    pub functions: Option<&'a crate::user_fn::UserFunctionRegistry>,
-    /// The property-function registry in scope, if any; `None` behaves exactly
-    /// like an empty registry (see
-    /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions)).
-    pub property_functions: Option<&'a crate::property_fn::PropertyFunctionRegistry>,
+    /// The SHACL-AF function registry in scope.
+    /// [`UserFunctionRegistry::EMPTY`](crate::user_fn::UserFunctionRegistry::EMPTY) —
+    /// the default — behaves exactly like the registry-free entries; there is no
+    /// separate "no registry" spelling to disagree with it.
+    pub functions: &'a crate::user_fn::UserFunctionRegistry,
+    /// The property-function registry in scope.
+    /// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY) —
+    /// the default — behaves exactly like every other empty registry (see
+    /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions));
+    /// there is no separate "no registry" spelling to disagree with it.
+    pub property_functions: &'a crate::property_fn::PropertyFunctionRegistry,
+    /// The custom-aggregate registry in scope.
+    /// [`AggregateRegistry::EMPTY`](crate::agg_fn::AggregateRegistry::EMPTY) — the
+    /// default — behaves exactly like every other empty registry (see
+    /// [`EvalCtx::with_aggregates`](crate::eval::EvalCtx::with_aggregates)); there
+    /// is no separate "no registry" spelling to disagree with it. Like
+    /// [`Self::property_functions`], this is *admission* configuration as much as
+    /// evaluation configuration: an `AggregateFunction::Custom(iri)` call is
+    /// admitted (registered, correct arity) against THIS registry at prepare time
+    /// (see `crate::property_fn_plan::plan_aggregate`), and the prepared plan is
+    /// refused at evaluation if a different registry is supplied later (see
+    /// `check_plan_matches_relations`).
+    pub aggregates: &'a crate::agg_fn::AggregateRegistry,
     /// A deterministic prefix for every blank-node label the evaluation mints;
     /// `None` (the pre-existing behavior) leaves minted labels unprefixed. The
     /// prefix is caller-supplied data — the SHACL rules engine passes a
@@ -1886,13 +1800,14 @@ pub struct QueryOptions<'a> {
 }
 
 impl QueryOptions<'_> {
-    /// Configure nothing: the ordinary substitution rewrite, no function registry,
-    /// no property-function registry, unprefixed blank mints. What every entry did
-    /// before it took options.
+    /// Configure nothing: the ordinary substitution rewrite, every registry the
+    /// canonical empty value, unprefixed blank mints. What every entry did before
+    /// it took options.
     pub const EMPTY: Self = Self {
         prebinding: ShaclPrebinding::None,
-        functions: None,
-        property_functions: None,
+        functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
+        property_functions: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+        aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
         bnode_mint_prefix: None,
     };
 }
@@ -1903,8 +1818,8 @@ impl Default for QueryOptions<'_> {
     }
 }
 
-/// Refuse a plan that was prepared against a different property-function registry than
-/// the one it is about to be evaluated under.
+/// Refuse a plan that was prepared against a different property-function registry, OR a
+/// different custom-aggregate registry, than the ones it is about to be evaluated under.
 ///
 /// The last way to reach a silently-empty answer from a registered relation, closed. A
 /// plan prepared with no registry lowered the relation's predicate to an ORDINARY triple
@@ -1914,27 +1829,59 @@ impl Default for QueryOptions<'_> {
 /// ([`PreparedQuery::relations`]), so the disagreement is a fact rather than an
 /// inference, and it is reported as a configuration error — which is what it is.
 ///
+/// The identical hazard exists for a custom aggregate — admitted at prepare time (its
+/// registration and arity checked, see `crate::property_fn_plan::plan_aggregate`) against
+/// [`PreparedQuery::aggregates`] — but with a SHARPER failure mode than an unregistered
+/// relation's: two DIFFERENT registries can both resolve the SAME IRI to two DIFFERENT
+/// aggregates, so a plan admitted under registry A and evaluated under registry B would
+/// not fail loudly at all — it would silently compute registry B's aggregate's answer
+/// under a plan that was only ever checked against registry A's arity. Checking here
+/// closes exactly that: a prepared plan is admitted under registry A is never silently
+/// executed under registry B, for either registry.
+///
+/// The function-registry pair ([`QueryOptions::functions`]) is deliberately NOT checked
+/// here: a mismatched `UserFunctionRegistry` has no analogous silent-wrong-answer channel
+/// — `Function::Custom` is resolved dynamically at evaluation time (never at parse time,
+/// unlike a property-function predicate or a `Custom` aggregate's admission), so an
+/// IRI unknown to the supplied registry fails LOUDLY there (an XSD-cast attempt or a typed
+/// "undefined function" error), and a resolved-but-different-under-registry-B function
+/// call is exactly the risk every caller of [`QueryOptions`] already accepts by supplying
+/// registries at every governed call rather than once at prepare time.
+///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function`) when the identities differ,
-/// or when a relation panics while its declaration is read to compute the supplied
-/// registry's fingerprint.
+/// An [`RdfDiagnostic`] (`native-sparql-property-function` or
+/// `native-sparql-aggregate-function`) when either identity differs, or when a relation or
+/// an aggregate panics while its declaration is read to compute the supplied registry's
+/// fingerprint.
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions)
         .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-    if supplied == prepared.relations {
-        return Ok(());
+    if supplied != prepared.relations {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-property-function",
+            "this plan was prepared against a different property-function registry than the \
+             one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what decides which predicates are calls",
+        ));
     }
-    Err(RdfDiagnostic::error(
-        "native-sparql-property-function",
-        "this plan was prepared against a different property-function registry than the one \
-         supplied for its evaluation; prepare it with \
-         `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
-         evaluation uses, because the registry is what decides which predicates are calls",
-    ))
+    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    if supplied_aggregates != prepared.aggregates {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-aggregate-function",
+            "this plan was prepared against a different custom-aggregate registry than the \
+             one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what a `Custom` aggregate IRI resolves \
+             against",
+        ));
+    }
+    Ok(())
 }
 
 /// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
@@ -1954,16 +1901,17 @@ fn check_plan_matches_relations(
 /// declaration methods panic.
 fn relation_identity(
     prepared: &PreparedQuery,
-    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
 ) -> Result<RelationIdentity, RdfDiagnostic> {
-    let iris = match relations.filter(|registry| !registry.is_empty()) {
-        None => Vec::new(),
-        Some(registry) => registry
+    let iris = if relations.is_empty() {
+        Vec::new()
+    } else {
+        relations
             .describe()
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
             .into_iter()
             .map(|descriptor| descriptor.iri)
-            .collect(),
+            .collect()
     };
     Ok(RelationIdentity {
         fingerprint: prepared.relations.clone(),
@@ -1971,11 +1919,13 @@ fn relation_identity(
     })
 }
 
-/// Apply the independently-optional [`QueryOptions`] pieces to a freshly built
-/// evaluation context: the SHACL-AF function registry
-/// ([`EvalCtx::with_user_functions`]), the property-function registry
-/// ([`EvalCtx::with_property_functions`]), and the deterministic blank-mint prefix
-/// ([`EvalCtx::with_bnode_mint_prefix`]).
+/// Apply the [`QueryOptions`] pieces to a freshly built evaluation context: the
+/// SHACL-AF function registry ([`EvalCtx::with_user_functions`]), the
+/// property-function registry ([`EvalCtx::with_property_functions`]), the
+/// custom-aggregate registry ([`EvalCtx::with_aggregates`]), and the deterministic
+/// blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]) — the first three
+/// unconditionally (each is always a valid registry reference now, `EMPTY` standing
+/// in for "none" rather than an `Option` this function would need to branch on).
 ///
 /// The ONE application seam — every options-carrying entry, governed and ungoverned,
 /// routes through here, so a future [`QueryOptions`] field is wired once instead of
@@ -1991,12 +1941,10 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
-    if let Some(registry) = options.functions {
-        ctx = ctx.with_user_functions(registry);
-    }
-    if let Some(registry) = options.property_functions {
-        ctx = ctx.with_property_functions(registry);
-    }
+    ctx = ctx
+        .with_user_functions(options.functions)
+        .with_property_functions(options.property_functions)
+        .with_aggregates(options.aggregates);
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx
             .with_bnode_mint_prefix(prefix)
@@ -2444,7 +2392,18 @@ mod tests {
         let ds = subst_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_with_shacl_prebinding(&ds, query, None, substitutions)
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions,
+                },
+                QueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect("shacl prebinding query");
         col0(result)
     }
@@ -2546,7 +2505,7 @@ mod tests {
 
     /// An EMPTY property-function registry is indistinguishable from none: the same
     /// query over the same data returns byte-identical results through
-    /// [`NativeSparqlEngine::query_with_property_functions`] and through the plain
+    /// [`NativeSparqlEngine::query_with_options_view`] and through the plain
     /// registry-free entry.
     ///
     /// This pins the equivalence the registry's `None` handling rests on. Without it,
@@ -2569,7 +2528,14 @@ mod tests {
         let registry = crate::property_fn::PropertyFunctionRegistry::new();
         assert!(registry.is_empty());
         let with_empty = engine
-            .query_with_property_functions(&ds, request(), &registry)
+            .query_with_options_view(
+                &*ds,
+                request(),
+                QueryOptions {
+                    property_functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
             .expect("empty-registry query");
 
         let (
@@ -2630,7 +2596,15 @@ mod tests {
 
         let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
             engine
-                .explain_query_with_property_functions(&ds, query, None, registry)
+                .explain_query_with_options(
+                    &ds,
+                    query,
+                    None,
+                    QueryOptions {
+                        property_functions: registry,
+                        ..QueryOptions::EMPTY
+                    },
+                )
                 .expect("explain")
         };
         let left_receipt = explain(&left);
@@ -2677,11 +2651,319 @@ mod tests {
             left_receipt.render()
         );
 
-        // With no registry the block is present and empty — "nothing was in scope",
+        // With no registry EITHER block is present and empty — "nothing was in scope",
         // not "this build does not report what was".
         let bare = engine.explain_query(&ds, query, None).expect("explain");
         assert!(bare.relations().is_empty());
-        assert!(bare.render().contains("relations\njoin-orders"));
+        assert!(bare.aggregates().is_empty());
+        assert!(bare.render().contains("relations\naggregates\njoin-orders"));
+    }
+
+    /// A minimal `Commutative` `SUM`-alike over a single `xsd:integer`-lexical argument,
+    /// for [`the_explain_receipt_names_the_registered_aggregates`] alone. Merges through
+    /// `other.finish()` because the running total already IS the accumulator's whole
+    /// mergeable state (see [`crate::agg_fn::AggregateAccumulator::combine`]'s doc
+    /// comment on when that shortcut is sound).
+    struct ExplainTestSumAccumulator {
+        total: i64,
+    }
+
+    impl crate::agg_fn::AggregateAccumulator for ExplainTestSumAccumulator {
+        fn step(&mut self, args: &[TermValue]) -> Result<(), crate::error::EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn combine(
+            &mut self,
+            other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        ) -> Result<(), crate::error::EvalError> {
+            if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
+                && let Ok(n) = lexical_form.parse::<i64>()
+            {
+                self.total += n;
+            }
+            Ok(())
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, crate::error::EvalError> {
+            Ok(Some(TermValue::typed_literal(
+                self.total.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            )))
+        }
+    }
+
+    struct ExplainTestSumAggregate;
+
+    impl crate::agg_fn::CustomAggregate for ExplainTestSumAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(1)
+        }
+        fn volatility(&self) -> crate::user_fn::Volatility {
+            crate::user_fn::Volatility::Stable
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(
+            &self,
+            _scalarvals: &[(String, TermValue)],
+        ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+            Box::new(ExplainTestSumAccumulator { total: 0 })
+        }
+    }
+
+    /// The exact twin of [`the_explain_receipt_names_the_registered_relations`], for the
+    /// custom-aggregate registry [`NativeSparqlEngine::explain_query_with_options`]
+    /// takes: [`QueryExplanation::aggregates`] lists every registered IRI, IRI-sorted
+    /// rather than registration-ordered, with its full declaration (arity, volatility,
+    /// algebraic class, state bound, scalarvals) riding along.
+    #[test]
+    fn the_explain_receipt_names_the_registered_aggregates() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT (AGG(<http://example.org/agg/first>, ?o) AS ?f) \
+                     WHERE { ?s <http://ex/p> ?o }";
+
+        // Registered in the reverse of their sorted order, so a receipt that echoed
+        // registration order would disagree with one that sorted.
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register(
+            "http://example.org/agg/second",
+            Arc::new(ExplainTestSumAggregate),
+        );
+        registry.register(
+            "http://example.org/agg/first",
+            Arc::new(ExplainTestSumAggregate),
+        );
+
+        let receipt = engine
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    aggregates: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("explain");
+        let iris: Vec<&str> = receipt
+            .aggregates()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
+        assert_eq!(
+            iris,
+            [
+                "http://example.org/agg/first",
+                "http://example.org/agg/second"
+            ],
+            "the receipt lists every registered IRI, sorted"
+        );
+        assert!(
+            receipt.render().contains("http://example.org/agg/first"),
+            "the rendering names the registered aggregate: {}",
+            receipt.render()
+        );
+        // The `relations` block is unaffected — this seam is aggregates-only.
+        assert!(receipt.relations().is_empty());
+    }
+
+    /// A query that needs BOTH a registered relation and a registered custom aggregate
+    /// at once — the shape that under-declaring either registry answers wrong for
+    /// rather than refuses. The engine declares the relation's namespace once via
+    /// [`NativeSparqlEngine::with_parser_options`] (see
+    /// [`purrdf_sparql_algebra::ParserOptions::property_fn_namespaces`]'s own
+    /// documentation on why: "so that spelling one is a hard error rather than a
+    /// silent data triple"), so the predicate is recognized as a call REGARDLESS of
+    /// which registries a given [`QueryOptions`] value carries — the one variable
+    /// across [`explain_query_with_options_reports_a_correct_receipt_for_a_query_needing_both_registries`]
+    /// and its refusal siblings below.
+    fn dual_registry_explain_fixture() -> (
+        Arc<RdfDataset>,
+        NativeSparqlEngine,
+        &'static str,
+        crate::property_fn::PropertyFunctionRegistry,
+        crate::agg_fn::AggregateRegistry,
+    ) {
+        const REL_NS: &str = "https://example.org/dual-registry-explain/rel/";
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+            property_fn_namespaces: vec![REL_NS.to_owned()],
+            ..ParserOptions::default()
+        });
+        let query = "SELECT (AGG(<http://example.org/agg/dual>, ?v) AS ?s) \
+                     WHERE { ?x <https://example.org/dual-registry-explain/rel/emit> ?v }";
+        let mut relations = crate::property_fn::PropertyFunctionRegistry::new();
+        relations.register(
+            format!("{REL_NS}emit"),
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        TermValue::iri("http://example.org/a"),
+                        TermValue::typed_literal("5", "http://www.w3.org/2001/XMLSchema#integer"),
+                    ]],
+                )
+                .expect("a one-row two-column table"),
+            ),
+        );
+        let mut aggregates = crate::agg_fn::AggregateRegistry::new();
+        aggregates.register(
+            "http://example.org/agg/dual",
+            Arc::new(ExplainTestSumAggregate),
+        );
+        (ds, engine, query, relations, aggregates)
+    }
+
+    /// The dual-registry entry gives a CORRECT receipt for a query that needs
+    /// both a registered relation and a registered custom aggregate — populated
+    /// `relations` and `aggregates` blocks, and the actual row the relation fires
+    /// materializes (matching what [`SparqlEngine::query`]/`query_with_options` would
+    /// return for the same query under the same two registries).
+    #[test]
+    fn explain_query_with_options_reports_a_correct_receipt_for_a_query_needing_both_registries() {
+        let (ds, engine, query, relations, aggregates) = dual_registry_explain_fixture();
+        let receipt = engine
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    property_functions: &relations,
+                    aggregates: &aggregates,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("a query naming both registries at the combined entry must explain");
+        assert_eq!(
+            receipt
+                .relations()
+                .iter()
+                .map(|d| d.iri.as_str())
+                .collect::<Vec<_>>(),
+            ["https://example.org/dual-registry-explain/rel/emit"],
+            "the relation actually in scope is named"
+        );
+        assert_eq!(
+            receipt
+                .aggregates()
+                .iter()
+                .map(|d| d.iri.as_str())
+                .collect::<Vec<_>>(),
+            ["http://example.org/agg/dual"],
+            "the aggregate actually in scope is named"
+        );
+        let rendered = receipt.render();
+        assert!(
+            rendered.contains("property-function-invocation"),
+            "the relation's charge point fired at least once, proving the row-producing \
+             call actually ran rather than being silently dropped: {rendered}"
+        );
+        // Cross-check against the real, non-explain evaluation of the identical query
+        // under the identical two registries: the explain receipt and the query it
+        // describes must agree on the row count the relation actually produced.
+        let real = engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    property_functions: &relations,
+                    aggregates: &aggregates,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("the same query, evaluated directly under the same two registries");
+        let SparqlResult::Solutions { rows, .. } = real else {
+            panic!("a SELECT evaluates to Solutions");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "the relation fires exactly once, so AGG sees exactly one input row"
+        );
+    }
+
+    /// A [`QueryOptions`] value that carries the aggregate registry but leaves
+    /// `property_functions` at its `EMPTY` default REFUSES the dual-need query rather
+    /// than silently answering a receipt for the narrower query "no relation fired".
+    /// The predicate is recognized as a call (the engine declared the namespace), so
+    /// admission finds nothing in the EMPTY relations registry to resolve it against
+    /// and reports that as an error, exactly the outcome [`crate::property_fn_plan`]'s
+    /// `resolve` documents: "a call with nothing to resolve against is a host
+    /// configuration that names a relation it never supplied — never a silently empty
+    /// one."
+    #[test]
+    fn explain_query_with_options_refuses_a_query_that_also_needs_a_relation() {
+        let (ds, engine, query, _relations, aggregates) = dual_registry_explain_fixture();
+        let err = engine
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    aggregates: &aggregates,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect_err(
+                "options that omit the property-function registry must refuse rather than \
+                 report a receipt for a query with its relation silently dropped",
+            );
+        let message = err.to_string();
+        assert!(
+            message.contains("no property function is registered")
+                || message.contains("property-function"),
+            "the refusal must name the property-function seam as the cause: {message}"
+        );
+    }
+
+    /// The exact symmetric case: a [`QueryOptions`] value that carries the
+    /// property-function registry but leaves `aggregates` at its `EMPTY` default also
+    /// refuses the SAME dual-need query, because `AGG(<iri>, …)` is fixed syntax
+    /// admitted against the aggregate registry at prepare time regardless of which
+    /// registry is empty. Asserted here, on the identical fixture, so the two refusal
+    /// paths are proven symmetric rather than merely asserted so in prose.
+    #[test]
+    fn explain_query_with_options_refuses_a_query_that_also_needs_an_aggregate() {
+        let (ds, engine, query, relations, _aggregates) = dual_registry_explain_fixture();
+        let err = engine
+            .explain_query_with_options(
+                &ds,
+                query,
+                None,
+                QueryOptions {
+                    property_functions: &relations,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect_err(
+                "options that omit the aggregate registry must refuse rather than report a \
+                 receipt for a query with its aggregate silently dropped",
+            );
+        let message = err.to_string();
+        assert!(
+            message.contains("aggregate") || message.contains("unregistered"),
+            "the refusal must name the aggregate seam as the cause: {message}"
+        );
     }
 
     #[test]
@@ -2837,6 +3119,51 @@ mod tests {
                 },
             )
             .expect("query")
+    }
+
+    /// `ORDER BY ADJUST(?dt, timezone)` orders by the ADJUSTed *value* (the
+    /// underlying instant), proving `ADJUST` reached `is_builtin_function`'s
+    /// `ORDER BY` lookahead (`order_key_ahead`) and evaluates without hitting
+    /// the `Unsupported` fallback. Three same-local-clock-reading dateTimes at
+    /// three different offsets denote three different UTC instants; ordering
+    /// them normalizes every row to a fixed offset first, so the visible
+    /// order is exactly the instant order, not the lexical order.
+    #[test]
+    fn order_by_adjust_orders_by_the_adjusted_instant() {
+        let mut b = RdfDatasetBuilder::new();
+        let dt = b.intern_iri("http://ex/dt");
+        let a = b.intern_iri("http://ex/a"); // 09:00-05:00 = 14:00Z (latest)
+        let bb = b.intern_iri("http://ex/b"); // 09:00+05:00 = 04:00Z (earliest)
+        let c = b.intern_iri("http://ex/c"); // 09:00Z (middle)
+        let xsd_datetime = "http://www.w3.org/2001/XMLSchema#dateTime";
+        let a_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00-05:00", xsd_datetime));
+        let b_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00+05:00", xsd_datetime));
+        let c_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00Z", xsd_datetime));
+        b.push_quad(a, dt, a_dt, None);
+        b.push_quad(bb, dt, b_dt, None);
+        b.push_quad(c, dt, c_dt, None);
+        let ds = b.freeze().expect("freeze");
+        let query = "SELECT ?s WHERE { ?s <http://ex/dt> ?dt } \
+                     ORDER BY ADJUST(?dt, \"PT0H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>)";
+        let SparqlResult::Solutions { rows, .. } = run_on(&ds, query) else {
+            panic!("expected solutions");
+        };
+        let subjects: Vec<String> = rows
+            .iter()
+            .map(|r| match &r[0] {
+                Some(TermValue::Iri(s)) => s.clone(),
+                other => panic!("expected an IRI, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![
+                "http://ex/b".to_owned(),
+                "http://ex/c".to_owned(),
+                "http://ex/a".to_owned(),
+            ],
+            "earliest-to-latest UTC instant order, not lexical order"
+        );
     }
 
     /// The first-column values of a solutions result, as sorted debug strings.
@@ -3302,6 +3629,91 @@ mod tests {
     }
 
     #[test]
+    fn update_unrecognized_version_refused_and_applies_nothing() {
+        // The mutating counterpart of the query-side admission refusal
+        // (`crate::eval::tests`, or the query test just above): an UPDATE whose
+        // prologue declares a `VERSION` this evaluator does not recognize must be
+        // refused through the SAME `native-sparql-update-eval` diagnostic code the
+        // WHERE-eval failure tests above use, and — the load-bearing half — must
+        // leave the dataset byte-for-byte unchanged. `Arc::ptr_eq` proves the handle
+        // was never even re-frozen to an equal value.
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        let before = Arc::clone(&ds);
+        let before_quads = quad_set(&ds);
+        let err = engine
+            .update(
+                &mut ds,
+                SparqlRequest {
+                    query: "VERSION \"9.9\" INSERT DATA { <http://ex/x> <http://ex/y> <http://ex/z> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(err.message.contains("VERSION \"9.9\""));
+        assert!(
+            Arc::ptr_eq(&before, &ds),
+            "an unrecognized VERSION must not even re-freeze the dataset"
+        );
+        assert_eq!(quad_set(&ds), before_quads, "no mutation applied");
+    }
+
+    #[test]
+    fn update_governed_unrecognized_version_refused_and_applies_nothing() {
+        // The governed sibling: `update_governed` reports the SAME admission
+        // refusal as an `Err`, not as a `GovernedUpdateOutcome::BudgetExhausted` —
+        // an unrecognized `VERSION` is a request the evaluator does not know how to
+        // honor at all, never a resource ceiling.
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        let before = Arc::clone(&ds);
+        let before_quads = quad_set(&ds);
+        let err = engine
+            .update_governed(
+                &mut ds,
+                SparqlRequest {
+                    query: "VERSION \"9.9\" INSERT DATA { <http://ex/x> <http://ex/y> <http://ex/z> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(err.message.contains("VERSION \"9.9\""));
+        assert!(
+            Arc::ptr_eq(&before, &ds),
+            "an unrecognized VERSION must not even re-freeze the dataset"
+        );
+        assert_eq!(quad_set(&ds), before_quads, "no mutation applied");
+    }
+
+    #[test]
+    fn update_recognized_versions_still_execute() {
+        // Both spellings this evaluator recognizes must run exactly as an
+        // undeclared-version UPDATE would — admission only refuses `Other`.
+        for version in ["1.2", "1.2-basic"] {
+            let engine = NativeSparqlEngine::new();
+            let mut ds = empty();
+            update(
+                &engine,
+                &mut ds,
+                &format!(
+                    "VERSION \"{version}\" INSERT DATA {{ <http://ex/x> <http://ex/y> <http://ex/z> }}"
+                ),
+            );
+            assert_eq!(
+                ds.quad_count(),
+                1,
+                "VERSION {version:?} must evaluate the update normally"
+            );
+        }
+    }
+
+    #[test]
     fn engine_has_no_resolver_by_default() {
         assert!(NativeSparqlEngine::new().resolver.is_none());
         assert!(NativeSparqlEngine::default().resolver.is_none());
@@ -3458,11 +3870,23 @@ mod tests {
             property_fn_iris: vec![iri],
         };
         let a = cache
-            .prepare_with_relations(&q, None, &with_exact_iri, Some(&registry))
+            .prepare_with_relations(
+                &q,
+                None,
+                &with_exact_iri,
+                &registry,
+                &crate::agg_fn::AggregateRegistry::EMPTY,
+            )
             .expect("parse with the exact IRI recognized and resolved against the registry");
         // Under the DEFAULT options the same predicate is an ordinary triple.
         let b = cache
-            .prepare_with_relations(&q, None, &ParserOptions::default(), Some(&registry))
+            .prepare_with_relations(
+                &q,
+                None,
+                &ParserOptions::default(),
+                &registry,
+                &crate::agg_fn::AggregateRegistry::EMPTY,
+            )
             .expect("parse without the exact IRI configured");
         assert!(
             !Arc::ptr_eq(&a, &b),
@@ -3493,6 +3917,72 @@ mod tests {
         assert!(
             matches!(&**a_inner, GraphPattern::PropertyFunction(_)),
             "with property_fn_iris configured the predicate becomes a call: {a_inner:?}"
+        );
+    }
+
+    /// Pins that `QueryOptions`'s three registries being non-optional
+    /// (`&Registry`, `AggregateRegistry::EMPTY`/`PropertyFunctionRegistry::EMPTY`
+    /// standing in for an absent registry) does not weaken
+    /// [`check_plan_matches_relations`]'s plan-identity guard. Three cases:
+    ///
+    /// 1. A plan prepared under no registry at all, evaluated under
+    ///    [`QueryOptions::EMPTY`] (the canonical empty registries): must MATCH —
+    ///    this is the ordinary registry-free path every query has always taken.
+    /// 2. The SAME plan, evaluated under INDEPENDENTLY constructed, still-empty
+    ///    registries (a different instance than the `EMPTY` constant): must ALSO
+    ///    match — an empty registry resolves no IRI regardless of which instance
+    ///    is asked, so no plan's admitted behavior can depend on which one it was
+    ///    prepared against (see [`crate::registry_id::RegistryId::EMPTY`]'s docs).
+    /// 3. The SAME plan, evaluated under a REGISTERED (non-empty) relation: must
+    ///    be REFUSED — sharing `EMPTY`'s reserved instance id across every empty
+    ///    registry must never let a genuinely different, non-empty registry be
+    ///    mistaken for it.
+    #[test]
+    fn h12_empty_registries_are_interchangeable_but_a_real_one_is_still_distinct() {
+        let query = "SELECT ?s WHERE { ?s <http://example.org/p> ?o }";
+        let mut cache = PlanCache::new();
+        let prepared = cache
+            .prepare_with(query, None, &ParserOptions::default())
+            .expect("parses under no registry at all");
+
+        assert!(
+            check_plan_matches_relations(&prepared, QueryOptions::EMPTY).is_ok(),
+            "a plan prepared registry-free must match QueryOptions::EMPTY"
+        );
+
+        let fresh_relations = crate::property_fn::PropertyFunctionRegistry::new();
+        let fresh_aggregates = crate::agg_fn::AggregateRegistry::new();
+        assert!(
+            check_plan_matches_relations(
+                &prepared,
+                QueryOptions {
+                    property_functions: &fresh_relations,
+                    aggregates: &fresh_aggregates,
+                    ..QueryOptions::EMPTY
+                }
+            )
+            .is_ok(),
+            "an independently constructed EMPTY registry must be interchangeable with EMPTY"
+        );
+
+        let mut real_relations = crate::property_fn::PropertyFunctionRegistry::new();
+        real_relations.register(
+            "http://example.org/rel",
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(1, 1, vec![])
+                    .expect("an empty table is a valid one-in-one-out relation"),
+            ),
+        );
+        assert!(
+            check_plan_matches_relations(
+                &prepared,
+                QueryOptions {
+                    property_functions: &real_relations,
+                    ..QueryOptions::EMPTY
+                }
+            )
+            .is_err(),
+            "plan identity must still refuse a genuinely different, non-empty registry"
         );
     }
 
@@ -3583,16 +4073,28 @@ mod tests {
         );
 
         assert_ne!(
-            crate::property_fn_plan::registry_fingerprint(Some(&stable)).expect("no panic"),
-            crate::property_fn_plan::registry_fingerprint(Some(&volatile)).expect("no panic"),
+            crate::property_fn_plan::registry_fingerprint(&stable).expect("no panic"),
+            crate::property_fn_plan::registry_fingerprint(&volatile).expect("no panic"),
             "the fingerprint itself must be sensitive to volatility"
         );
 
         let a = cache
-            .prepare_with_relations(&q, None, &options, Some(&stable))
+            .prepare_with_relations(
+                &q,
+                None,
+                &options,
+                &stable,
+                &crate::agg_fn::AggregateRegistry::EMPTY,
+            )
             .expect("the stable registry admits and plans the call");
         let b = cache
-            .prepare_with_relations(&q, None, &options, Some(&volatile))
+            .prepare_with_relations(
+                &q,
+                None,
+                &options,
+                &volatile,
+                &crate::agg_fn::AggregateRegistry::EMPTY,
+            )
             .expect("the volatile registry admits and plans the call");
         assert!(
             !Arc::ptr_eq(&a, &b),
@@ -3633,7 +4135,7 @@ mod tests {
                     &ds,
                     request(),
                     QueryOptions {
-                        property_functions: Some(registry),
+                        property_functions: registry,
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::METERED,
@@ -3658,7 +4160,15 @@ mod tests {
         // The explain surface must disagree the same way.
         let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
             engine
-                .explain_query_with_property_functions(&ds, &query, None, registry)
+                .explain_query_with_options(
+                    &ds,
+                    &query,
+                    None,
+                    QueryOptions {
+                        property_functions: registry,
+                        ..QueryOptions::EMPTY
+                    },
+                )
                 .expect("explain")
         };
         assert_ne!(
@@ -3752,6 +4262,11 @@ mod tests {
         assert_eq!(sorted_rows(r), vec![vec!["1"], vec!["2"]]);
     }
 
+    /// GROUP_CONCAT's deterministic reading (see `crate::modifier`'s "Aggregate
+    /// semantics" docs): concatenation follows INPUT ROW ORDER, not "some
+    /// order" — `numbers()` pushes `r1`(?a=1), `r2`(?a=1), `r3`(?a=2), in that
+    /// order, and a single-pattern BGP scan visits them in insertion order, so
+    /// the exact result is pinned to `"1|1|2"`.
     #[test]
     fn group_concat_with_separator() {
         let r = run_on(
@@ -3759,16 +4274,191 @@ mod tests {
             "SELECT (GROUP_CONCAT(?a; SEPARATOR=\"|\") AS ?g) \
              WHERE { ?r <http://ex/a> ?a }",
         );
-        // Implicit single group; lexical values of ?a joined by '|', some order.
         match r {
             SparqlResult::Solutions { rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][0] else {
                     panic!("expected a literal");
                 };
-                let mut parts: Vec<&str> = lexical_form.split('|').collect();
-                parts.sort_unstable();
-                assert_eq!(parts, vec!["1", "1", "2"]);
+                assert_eq!(lexical_form, "1|1|2", "input-row-order concatenation");
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// `DISTINCT` keeps the FIRST occurrence in row order (§18.6.1's `Dedup`):
+    /// `numbers()`'s ?a sequence is `1, 1, 2` — the duplicate second `1` is
+    /// dropped, leaving `"1|2"`, never `"2|1"`.
+    #[test]
+    fn group_concat_distinct_keeps_first_occurrence_in_row_order() {
+        let r = run_on(
+            &numbers(),
+            "SELECT (GROUP_CONCAT(DISTINCT ?a; SEPARATOR=\"|\") AS ?g) \
+             WHERE { ?r <http://ex/a> ?a }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][0] else {
+                    panic!("expected a literal");
+                };
+                assert_eq!(lexical_form, "1|2", "first occurrence per distinct value");
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// Multi-group exact-string pin: two categories, each with its own row
+    /// order, each group's GROUP_CONCAT concatenates ONLY its own rows in
+    /// THEIR first-seen/inner-operator order — groups themselves in
+    /// first-seen order (`cat/A` before `cat/B`, since `A`'s first row
+    /// precedes `B`'s first row in the insertion order below).
+    #[test]
+    fn group_concat_multi_group_exact_order() {
+        use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("http://ex/cat");
+        let item = b.intern_iri("http://ex/item");
+        let a = b.intern_iri("http://ex/A");
+        let bb = b.intern_iri("http://ex/B");
+        // Row order: (A,"x"),(B,"p"),(A,"y"),(B,"q"),(A,"z").
+        for (subj, catv, val) in [
+            ("s1", a, "x"),
+            ("s2", bb, "p"),
+            ("s3", a, "y"),
+            ("s4", bb, "q"),
+            ("s5", a, "z"),
+        ] {
+            let s = b.intern_iri(&format!("http://ex/{subj}"));
+            b.push_quad(s, cat, catv, None);
+            let v = b.intern_literal(RdfLiteral::simple(val));
+            b.push_quad(s, item, v, None);
+        }
+        let ds = b.freeze().expect("freeze");
+        let r = run_on(
+            &ds,
+            "SELECT ?c (GROUP_CONCAT(?v; SEPARATOR=\",\") AS ?g) \
+             WHERE { ?s <http://ex/cat> ?c . ?s <http://ex/item> ?v } \
+             GROUP BY ?c",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+                let render = |cell: &Option<TermValue>| match cell {
+                    Some(TermValue::Iri(iri)) => iri.clone(),
+                    Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
+                    other => format!("{other:?}"),
+                };
+                let mut got: Vec<(String, String)> = rows
+                    .iter()
+                    .map(|r| (render(&r[0]), render(&r[1])))
+                    .collect();
+                got.sort();
+                assert_eq!(
+                    got,
+                    vec![
+                        ("http://ex/A".to_owned(), "x,y,z".to_owned()),
+                        ("http://ex/B".to_owned(), "p,q".to_owned()),
+                    ]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// A group containing a blank node poisons GROUP_CONCAT to unbound — a
+    /// blank node has no lexical form, and `STR()` of one is a SPARQL type
+    /// error, so this crate's owned reading treats it like SUM/AVG's poison-
+    /// on-non-numeric rather than silently dropping the value (see
+    /// `crate::modifier::lexical_of`'s docs). No W3C conformance case exercises
+    /// GROUP_CONCAT over a blank node (verified against the frozen corpus), so
+    /// this decision has no upstream evidence to reconcile against.
+    #[test]
+    fn group_concat_over_blank_node_poisons_to_unbound() {
+        use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+        let mut b = RdfDatasetBuilder::new();
+        let item = b.intern_iri("http://ex/item");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple("lit1"));
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
+        b.push_quad(s, item, lit, None);
+        b.push_quad(s, item, bn, None);
+        let ds = b.freeze().expect("freeze");
+        let r = run_on(
+            &ds,
+            "SELECT (GROUP_CONCAT(?v; SEPARATOR=\"|\") AS ?g) WHERE { <http://ex/s> <http://ex/item> ?v }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert!(
+                    rows[0][0].is_none(),
+                    "GROUP_CONCAT over a blank node must be unbound, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// A group containing an RDF-star triple term likewise poisons
+    /// GROUP_CONCAT to unbound — same reasoning as the blank-node case above.
+    #[test]
+    fn group_concat_over_triple_term_poisons_to_unbound() {
+        let ds = numbers();
+        let r = run_on(
+            &ds,
+            "PREFIX ex: <http://ex/> \
+             SELECT (GROUP_CONCAT(?v; SEPARATOR=\"|\") AS ?g) WHERE { \
+               VALUES ?v { \"lit1\" <<ex:s ex:p ex:o>> } \
+             }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert!(
+                    rows[0][0].is_none(),
+                    "GROUP_CONCAT over a triple term must be unbound, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// `MIN`/`MAX` over a group mixing every term kind — a plain literal, an
+    /// `xsd:integer`, an IRI, and an RDF-star triple term — order per the
+    /// SPARQL `ORDER BY` total order (§15.1), exactly as SPARQL 1.2 §18.6.1.5
+    /// (`Min`) / §18.6.1.6 (`Max`) define them ("ordered as per the ORDER BY
+    /// ASC/DESC clause" then take the first element): kind rank blank < IRI <
+    /// literal < triple, so `MIN` (ascending) picks the IRI (the lowest-ranked
+    /// bound kind present) and `MAX` (descending) picks the triple term (the
+    /// highest-ranked). See `crate::modifier`'s "Aggregate semantics" docs,
+    /// `MIN`/`MAX` section, for the spec citation and why this crate's
+    /// `term_value_order` needs no change to match it.
+    #[test]
+    fn min_max_over_mixed_kind_group_follow_order_by_total_order() {
+        let ds = numbers();
+        let r = run_on(
+            &ds,
+            "PREFIX ex: <http://ex/> \
+             SELECT (MIN(?v) AS ?mn) (MAX(?v) AS ?mx) WHERE { \
+               VALUES ?v { \"plain\" 5 ex:iri <<ex:s ex:p ex:o>> } \
+             }",
+        );
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                match &rows[0][0] {
+                    Some(TermValue::Iri(iri)) => assert_eq!(iri, "http://ex/iri"),
+                    other => panic!("MIN over a mixed-kind group must be the IRI, got {other:?}"),
+                }
+                match &rows[0][1] {
+                    Some(TermValue::Triple { .. }) => {}
+                    other => {
+                        panic!("MAX over a mixed-kind group must be the triple term, got {other:?}")
+                    }
+                }
             }
             other => panic!("expected solutions, got {other:?}"),
         }

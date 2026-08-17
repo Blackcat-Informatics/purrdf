@@ -54,6 +54,7 @@
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 
+use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::governor::ItemCharge;
 use crate::governor::soundness::{
@@ -70,17 +71,27 @@ use crate::user_fn::{UserFunctionRegistry, Volatility};
 ///
 /// Carried as one `Copy` value rather than as two arguments so a future third table is
 /// threaded through the recursion once instead of at every call site — and so a call
-/// site cannot pass the two in the wrong order. `None` in either slot means "no such
-/// table was configured", which the two classifications read DIFFERENTLY and
-/// deliberately: an unresolvable function IRI is a deterministic XSD cast or a hard
-/// error (safe), while an unresolvable relation is a callee whose volatility is
-/// unknown (unsafe). See [`function_is_unsafe`] and [`property_function_is_unsafe`].
-#[derive(Debug, Clone, Copy, Default)]
+/// site cannot pass the two in the wrong order. Every field is non-optional
+/// (`Registry::EMPTY` — the canonical "no such table" value — stands in for the old
+/// `None` spelling); the two classifications below still read an EMPTY function table
+/// and an EMPTY relation table DIFFERENTLY, and deliberately: an unresolvable function
+/// IRI is a deterministic XSD cast or a hard error (safe), while an unresolvable
+/// relation is a callee whose volatility is unknown (unsafe). See
+/// [`function_is_unsafe`] and [`property_function_is_unsafe`].
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyRegistries<'a> {
     /// The SHACL-AF / native function table (`EvalCtx::user_functions`).
-    pub(crate) functions: Option<&'a UserFunctionRegistry>,
+    pub(crate) functions: &'a UserFunctionRegistry,
     /// The property-function table (`EvalCtx::property_functions`).
-    pub(crate) relations: Option<&'a PropertyFunctionRegistry>,
+    pub(crate) relations: &'a PropertyFunctionRegistry,
+    /// The custom-aggregate table (`EvalCtx::aggregates`), consulted by
+    /// [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
+    /// expression/pattern walks above — a `Custom` aggregate is not an
+    /// `Expression` node, so it never reaches [`function_is_unsafe`] or
+    /// [`property_function_is_unsafe`]. Carried here anyway so this struct stays
+    /// the ONE place every registry the fork-join safety decision needs is
+    /// paired, per the type's own doc.
+    pub(crate) aggregates: &'a AggregateRegistry,
 }
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
@@ -95,15 +106,26 @@ pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 /// the parser's chunk geometry, just in item-count terms.
 const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 
-/// The chunk size for a [`par_chunk_map`]/[`par_chunk_try_map_init`] run over
-/// `len` items: aim for roughly four chunks per rayon worker thread, so
-/// work-stealing has enough slices to balance ragged per-item costs (a BGP
-/// pattern whose candidate count varies row to row, a GROUP BY group whose
-/// size varies group to group) without handing every thread only one
-/// coarse-grained slice. Clamped below by [`PARALLEL_MIN_CHUNK_ITEMS`] so a
-/// small-but-still-parallel input (just over [`PARALLEL_MIN_ROWS`]) on a
-/// many-thread machine never degenerates into chunks of a handful of items
-/// each — mirrors the parser's `len / (threads * 4)` geometry.
+/// The chunk size for a [`par_chunk_map`]/[`par_chunk_map_metered`]/
+/// [`par_chunk_try_map_init`]/[`par_retain`] run over `len` items: aim for
+/// roughly four chunks per rayon worker thread, so work-stealing has enough
+/// slices to balance ragged per-item costs (a BGP pattern whose candidate
+/// count varies row to row, a GROUP BY group whose size varies group to
+/// group) without handing every thread only one coarse-grained slice. Clamped
+/// below by [`PARALLEL_MIN_CHUNK_ITEMS`] so a small-but-still-parallel input
+/// (just over [`PARALLEL_MIN_ROWS`]) on a many-thread machine never
+/// degenerates into chunks of a handful of items each — mirrors the parser's
+/// `len / (threads * 4)` geometry.
+///
+/// **Not** used by [`par_chunk_reduce_init`] — see [`aggregate_chunk_size_for`]
+/// for why the within-group aggregate fold needs a chunk plan that does NOT
+/// track the live thread count. Every caller this function DOES serve is safe
+/// to scale with `rayon::current_num_threads()` because none of them folds
+/// chunk-local state back together: [`par_chunk_map`]/[`par_chunk_try_map_init`]/
+/// [`par_retain`] each emit one independent output row per input item (a chunk
+/// boundary changes scheduling, never the result), and [`par_chunk_map_metered`]
+/// charges its governor **per item**, not per chunk (see that function's docs),
+/// so a chunk boundary never moves where a ceiling trips either.
 fn chunk_size_for(len: usize) -> usize {
     #[cfg(test)]
     if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
@@ -111,6 +133,64 @@ fn chunk_size_for(len: usize) -> usize {
     }
     let threads = rayon::current_num_threads().max(1);
     (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+}
+
+/// The fixed reference parallelism [`aggregate_chunk_size_for`] assumes in place of
+/// `rayon::current_num_threads()`. Chosen, not measured — any constant makes the plan a
+/// pure function of `len`, and this one keeps the chunk COUNT in the same rough range
+/// [`chunk_size_for`]'s live-thread-count formula already produced on a modestly
+/// parallel host, so admission behaviour for an existing deployment does not jump.
+const AGGREGATE_CHUNK_REFERENCE_THREADS: usize = 8;
+
+/// The chunk size for a [`par_chunk_reduce_init`] within-GROUP aggregate fold over `len`
+/// already-DISTINCT-resolved survivor values.
+///
+/// # Why this is a separate function from [`chunk_size_for`]
+///
+/// [`chunk_size_for`] deliberately tracks the live host's `rayon::current_num_threads()`.
+/// That is harmless for its own callers (see its doc comment) because none of them folds
+/// chunk-local state back together. [`par_chunk_reduce_init`] is exactly that: it reduces
+/// every chunk's partial accumulator into one final accumulator through
+/// [`crate::agg_fn::AggregateAccumulator::combine`] — every built-in aggregate in
+/// [`crate::modifier`] implements that SAME trait now, so this applies identically
+/// whether the accumulator is a built-in's or a registered custom aggregate's — strictly
+/// in chunk order. That makes the chunk COUNT part of the observable computation rather
+/// than merely its schedule, in two ways `crate::modifier::eval_custom_aggregate` and
+/// `crate::modifier::NumericFold` both rely on being fixed:
+///
+/// - a custom accumulator's declared [`crate::agg_fn::CustomAggregate::state_bound`] is
+///   charged once per LIVE chunk accumulator (`chunk_count - 1` beyond the first,
+///   admitted separately) — [`par_chunk_reduce_init`] really does collect every chunk's
+///   finished accumulator into one `Vec` before folding them down (see its own doc
+///   comment), so a bigger chunk count is a bigger real peak allocation, not an
+///   approximation of one;
+/// - a bounded-arithmetic fold (`SUM`/`AVG`, or any other accumulator whose `combine` is
+///   not exactly reassociation-proof) sees a different sequence of intermediate values
+///   depending on exactly where the chunk boundaries fall.
+///
+/// A chunk count that tracked `rayon::current_num_threads()` therefore made both the
+/// governor's CHARGE and, for some accumulators, the query's ANSWER depend on the machine
+/// the query happened to run on — the same (query, data, ceiling) triple could be admitted
+/// on a small box and refused on a big one. That is a portability break `.goals`' MAXIMAL
+/// PORTABILITY forbids, so this planner assumes a FIXED reference parallelism
+/// ([`AGGREGATE_CHUNK_REFERENCE_THREADS`]) instead of reading the live thread count: the
+/// chunk size (hence the chunk count, hence the exact `combine` sequence, hence the
+/// charge) becomes a pure function of `len` alone — identical on a 1-thread host, a
+/// 32-thread host, and wasm32 (which has no threads at all, and so already computed
+/// today's formula's `threads == 1` case every time — this makes every OTHER host match
+/// wasm32's plan instead of the other way around).
+///
+/// Real parallelism is unaffected: [`par_chunk_reduce_init`] still hands the resulting
+/// chunks to `rayon::par_chunks`, which work-steals them across however many threads the
+/// host actually has. A fixed PLAN is a fixed grouping of rows into the partials that
+/// execution folds — it says nothing about how many of those partials run concurrently,
+/// which is exactly what a work-stealing scheduler is for.
+fn aggregate_chunk_size_for(len: usize) -> usize {
+    #[cfg(test)]
+    if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
+        return forced.max(1);
+    }
+    (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
 }
 
 std::thread_local! {
@@ -177,15 +257,18 @@ impl Drop for ForceParallelGuard {
 
 #[cfg(test)]
 std::thread_local! {
-    /// Test-only override for [`chunk_size_for`]'s result, so a test can pin an
-    /// exact chunk size (hence an exact chunk count) regardless of
-    /// `rayon::current_num_threads()`, which varies by machine/CI runner.
-    /// Never consulted outside `cfg(test)`.
+    /// Test-only override for [`chunk_size_for`]'s AND [`aggregate_chunk_size_for`]'s
+    /// result, so a test can pin an exact chunk size (hence an exact chunk count)
+    /// regardless of `rayon::current_num_threads()` (which varies by machine/CI runner)
+    /// or of [`AGGREGATE_CHUNK_REFERENCE_THREADS`]. Shared between the two functions
+    /// rather than given a second cell, because a test that wants an exact chunk count
+    /// never cares which of the two chunked primitives it is pinning. Never consulted
+    /// outside `cfg(test)`.
     static FORCE_CHUNK_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Force [`chunk_size_for`] to always return `size` for the current thread
-/// until the returned guard is dropped (restores the prior override).
+/// Force [`chunk_size_for`] and [`aggregate_chunk_size_for`] to always return `size` for
+/// the current thread until the returned guard is dropped (restores the prior override).
 /// Test-only — lets a test span an exact number of chunks deterministically.
 #[cfg(test)]
 #[must_use]
@@ -205,6 +288,28 @@ impl Drop for ForceChunkSizeGuard {
     fn drop(&mut self) {
         FORCE_CHUNK_SIZE.with(|cell| cell.set(self.previous));
     }
+}
+
+/// The exact number of chunks a [`par_chunk_reduce_init`] call over `len` items will
+/// actually create: `1` when [`should_parallelize`] declines (the sequential fallback —
+/// `init` runs exactly once), else `len.div_ceil(aggregate_chunk_size_for(len))`.
+///
+/// Exposed so a caller that must METER a per-chunk cost BEFORE folding — a custom
+/// aggregate's declared per-accumulator [`crate::agg_fn::CustomAggregate::state_bound`],
+/// charged once per accumulator chunking actually creates — charges the exact count
+/// rather than an estimate that could drift from what [`par_chunk_reduce_init`] does at
+/// runtime (both read the same [`should_parallelize`]/[`aggregate_chunk_size_for`] pair,
+/// so there is only one source of truth for "how many chunks"). Named for the ONE caller
+/// of [`par_chunk_reduce_init`] this crate has — the within-group aggregate fold — rather
+/// than generically: [`aggregate_chunk_size_for`]'s doc comment is where the reasoning for
+/// a fixed, host-independent plan lives, and this function must never drift onto
+/// [`chunk_size_for`]'s live-thread-count formula, which every OTHER fork-join primitive
+/// still correctly uses.
+pub(crate) fn planned_aggregate_chunk_count(len: usize) -> usize {
+    if !should_parallelize(len) {
+        return 1;
+    }
+    len.div_ceil(aggregate_chunk_size_for(len))
 }
 
 /// Whether a batch of `work_items` (rows, groups, branches) should run in
@@ -369,7 +474,7 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
 ///   `crate::user_fn::eval_user_function`'s state merge-back) rather than the
 ///   real `ctx` — silently diverging from the sequential stream exactly like
 ///   the builtins above. A sequential fallback is always correct.
-fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> bool {
+fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
     match f {
         Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
         Function::Purrdf(call) => matches!(
@@ -378,8 +483,11 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
                 | purrdf_sparql_algebra::PurrdfFn::ListConcat
         ),
         Function::Custom(iri) => {
-            let Some(reg) = registry else { return false };
-            if let Some(native) = reg.resolve_native(iri.as_str()) {
+            // An EMPTY registry resolves neither kind, naturally falling through to
+            // `false` below — exactly the old "no registry configured" fallback,
+            // with no separate absent-registry branch needed now that there is only
+            // one spelling of "nothing registered".
+            if let Some(native) = registry.resolve_native(iri.as_str()) {
                 // Native fn: unsafe iff declared Volatile; Stable is
                 // deterministic-within-query, hence fork-join safe. (Wildcard
                 // arm — Volatility is `#[non_exhaustive]`.)
@@ -391,7 +499,7 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
             // Classify it UNSAFE (conservative + correct; sequential is always
             // right). An IRI resolving to neither custom kind is an XSD cast or
             // a hard error — both deterministic — so it stays safe.
-            reg.resolve(iri.as_str()).is_some()
+            registry.resolve(iri.as_str()).is_some()
         }
         _ => false,
     }
@@ -447,16 +555,40 @@ fn pattern_reaches_unsafe_builtin(
 /// meaning yet, and classifying an unknown callee's volatility as `Stable` would be a
 /// guess in the one direction that can silently change an answer. A sequential fallback
 /// is always correct, so "when in doubt, UNSAFE".
-fn property_function_is_unsafe(iri: &str, relations: Option<&PropertyFunctionRegistry>) -> bool {
-    let Some(registry) = relations else {
-        return true;
-    };
-    let Some(relation) = registry.resolve(iri) else {
+fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) -> bool {
+    let Some(relation) = relations.resolve(iri) else {
         return true;
     };
     // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
     // later must be unsafe here until it is deliberately admitted.
     !matches!(relation.volatility(), Volatility::Stable)
+}
+
+/// Whether a `Custom` aggregate call on `iri` is unsafe to fold from a forked
+/// per-GROUP worker — the aggregate twin of [`property_function_is_unsafe`], read
+/// by [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
+/// expression/pattern walks above (an `AggregateFunction` is not an `Expression`
+/// node, so it never reaches [`function_is_unsafe`]).
+///
+/// Safe in exactly one case: `aggregates` resolves `iri`, and the resolved
+/// aggregate declares [`Volatility::Stable`] — deterministic for the lifetime of
+/// the query, hence identical whichever worker folds the group.
+///
+/// Every other case is UNSAFE, including an EMPTY registry (which resolves
+/// nothing) — the SAME conservative treatment [`property_function_is_unsafe`]
+/// gives an unresolved relation, and the DELIBERATE OPPOSITE of
+/// [`function_is_unsafe`]'s treatment of
+/// an unresolved scalar `Custom` function IRI: an unresolved scalar function has
+/// a defined deterministic meaning (an XSD cast, or a hard error), so nothing can
+/// diverge, while an unresolved aggregate's volatility is simply unknown, and
+/// guessing `Stable` would be a guess in the one direction that can silently
+/// change an answer. A sequential fallback is always correct, so "when in doubt,
+/// UNSAFE".
+pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> bool {
+    let Some(aggregate) = aggregates.resolve(iri) else {
+        return true;
+    };
+    !matches!(aggregate.volatility(), Volatility::Stable)
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
@@ -821,6 +953,95 @@ where
     Ok(out)
 }
 
+/// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
+/// every chunk's pushed items into one `Vec<R>`, each chunk folds down to
+/// exactly ONE accumulator `S` (`init` once per chunk, `step` once per item),
+/// and the per-chunk accumulators are then **reduced left-to-right, strictly
+/// in chunk-index order**, via `combine` — never reassociated, never merged
+/// out of order. That fixed order is what makes this primitive safe for a
+/// NON-commutative fold (string concatenation, "first value wins", a running
+/// extreme under a non-total order): the result is byte-identical to a plain
+/// sequential `init(); for item in items { step(&mut s, item); }` fold over
+/// the same `items` in source order, for every accumulator regardless of its
+/// algebraic class — see `crate::agg_fn::AlgebraicClass`'s module docs, whose
+/// `combine`-in-chunk-order contract this primitive is the evaluator-side
+/// counterpart of.
+///
+/// Used by `modifier::eval_aggregate`/`eval_custom_aggregate` to fold ONE
+/// `GROUP BY` group's (already-evaluated, already-`DISTINCT`-deduped) values
+/// in parallel when the group itself is large — the fork [`par_chunk_try_map_init`]
+/// drives in `modifier::eval_group` parallelizes ACROSS groups; this
+/// primitive parallelizes WITHIN one group's fold, the case a single huge
+/// group (one `GROUP BY` key, millions of rows) never benefits from the
+/// across-groups fork at all. Deliberately given NO [`crate::eval::EvalCtx`]
+/// access: every item this primitive folds is already a plain, dataset-
+/// independent value (a [`crate::scratch::SolutionTerm`] minted by the
+/// UNCHANGED sequential row-evaluation loop that runs before chunking even
+/// begins), so `step`/`combine` here touch no governor, no scratch interner,
+/// no `EXISTS` re-entrancy — none of [`par_chunk_try_map_init`]'s fork-per-
+/// chunk `EvalCtx` machinery is needed, because nothing here evaluates an
+/// expression or charges a fuel point. That is also why charging stays
+/// byte-identical between the sequential and chunked fold: every charge this
+/// aggregate's row loop makes happens in that unchanged pre-chunking pass,
+/// never in here.
+///
+/// Internally gated on [`should_parallelize`], mirroring [`par_chunk_try_map_init`]
+/// exactly: at or below [`PARALLEL_MIN_ROWS`], `init` runs once and every item
+/// folds directly into that one state (`combine` is never called) — bit-
+/// identical to a hand-written sequential loop; above it, `items.par_chunks(..)`
+/// folds each chunk independently and the results are reduced in chunk order.
+/// `items.is_empty()` is `init()`'s state with no `step` at all, exactly the
+/// same empty-group answer either branch gives.
+///
+/// The chunk size is [`aggregate_chunk_size_for`], NOT [`chunk_size_for`] — see the
+/// former's doc comment for why this one primitive needs a chunk plan that is a pure
+/// function of `items.len()` rather than of the live host's thread count.
+pub(crate) fn par_chunk_reduce_init<T, S>(
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    step: impl Fn(&mut S, &T) -> Result<(), EvalError> + Sync,
+    combine: impl Fn(&mut S, S) -> Result<(), EvalError>,
+) -> Result<S, EvalError>
+where
+    T: Sync,
+    S: Send,
+{
+    if !should_parallelize(items.len()) {
+        let mut state = init()?;
+        for item in items {
+            step(&mut state, item)?;
+        }
+        return Ok(state);
+    }
+
+    use rayon::prelude::*;
+
+    let size = aggregate_chunk_size_for(items.len());
+    let per_chunk: Vec<Result<S, EvalError>> = items
+        .par_chunks(size)
+        .map(|chunk| {
+            let mut state = init()?;
+            for item in chunk {
+                step(&mut state, item)?;
+            }
+            Ok(state)
+        })
+        .collect();
+
+    // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
+    // wins (via `?` on the sequential `for` below), regardless of which worker
+    // finished first — mirrors `par_chunk_try_map_init`'s reduce exactly.
+    let mut iter = per_chunk.into_iter();
+    let mut acc = match iter.next() {
+        Some(first) => first?,
+        None => init()?,
+    };
+    for chunk_result in iter {
+        combine(&mut acc, chunk_result?)?;
+    }
+    Ok(acc)
+}
+
 /// An order-stable, internally-gated parallel filter-clone: keep every item of
 /// `items` for which `keep` returns `true`, cloning it into the output in
 /// source order. Sequential at/below [`PARALLEL_MIN_ROWS`] (a plain retain);
@@ -1031,25 +1252,30 @@ mod tests {
 
     // ---- is_parallel_safe ----------------------------------------------------
 
-    /// No caller-injected table of either kind.
+    /// No caller-injected table of either kind — every registry the canonical
+    /// `EMPTY` value, exactly what [`crate::eval::EvalCtx::new`] carries before any
+    /// `with_*` setter runs.
     const NONE: SafetyRegistries<'static> = SafetyRegistries {
-        functions: None,
-        relations: None,
+        functions: &UserFunctionRegistry::EMPTY,
+        relations: &PropertyFunctionRegistry::EMPTY,
+        aggregates: &AggregateRegistry::EMPTY,
     };
 
     /// Only a function table configured.
     fn fns(registry: &UserFunctionRegistry) -> SafetyRegistries<'_> {
         SafetyRegistries {
-            functions: Some(registry),
-            relations: None,
+            functions: registry,
+            relations: NONE.relations,
+            aggregates: NONE.aggregates,
         }
     }
 
     /// Only a relation table configured.
     fn relations(registry: &PropertyFunctionRegistry) -> SafetyRegistries<'_> {
         SafetyRegistries {
-            functions: None,
-            relations: Some(registry),
+            functions: NONE.functions,
+            relations: registry,
+            aggregates: NONE.aggregates,
         }
     }
 
@@ -1373,6 +1599,96 @@ mod tests {
         let stable = registry_with(Volatility::Stable);
         assert!(is_parallel_safe_pattern(&union, relations(&stable)));
         assert!(is_parallel_safe(&exists, relations(&stable)));
+    }
+
+    // ---- aggregate_is_unsafe: custom-aggregate fork-gate volatility --------
+
+    const AGG_IRI: &str = "http://example.org/agg#custom";
+
+    /// A no-op accumulator — never actually driven by these gate-classification
+    /// tests, which read only [`crate::agg_fn::CustomAggregate::volatility`].
+    struct NoOpAccumulator;
+    impl crate::agg_fn::AggregateAccumulator for NoOpAccumulator {
+        fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
+            Ok(())
+        }
+        fn combine(
+            &mut self,
+            _other: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        ) -> Result<(), EvalError> {
+            Ok(())
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    /// A custom aggregate whose declared volatility is `volatility`.
+    struct DeclaredAggregate {
+        volatility: Volatility,
+    }
+
+    impl crate::agg_fn::CustomAggregate for DeclaredAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(1)
+        }
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(
+            &self,
+            _scalarvals: &[(String, TermValue)],
+        ) -> Box<dyn crate::agg_fn::AggregateAccumulator> {
+            Box::new(NoOpAccumulator)
+        }
+    }
+
+    fn agg_registry_with(volatility: Volatility) -> AggregateRegistry {
+        let mut registry = AggregateRegistry::new();
+        registry.register(
+            AGG_IRI,
+            std::sync::Arc::new(DeclaredAggregate { volatility }),
+        );
+        registry
+    }
+
+    #[test]
+    fn stable_custom_aggregate_is_parallel_safe() {
+        let registry = agg_registry_with(Volatility::Stable);
+        assert!(!aggregate_is_unsafe(AGG_IRI, &registry));
+    }
+
+    #[test]
+    fn volatile_custom_aggregate_is_parallel_unsafe() {
+        let registry = agg_registry_with(Volatility::Volatile);
+        assert!(aggregate_is_unsafe(AGG_IRI, &registry));
+    }
+
+    /// `aggregate_is_unsafe` takes `&AggregateRegistry`, never
+    /// `Option<&AggregateRegistry>` — there is no "absent registry" call this could
+    /// exercise as a case DISTINCT from an empty one, which makes "a `None`-shaped
+    /// call and a `Some(&AggregateRegistry::new())`-shaped call behave identically"
+    /// structurally impossible to violate rather than merely tested: the type
+    /// system admits only the one spelling. [`AggregateRegistry::EMPTY`]
+    /// and a freshly built, still-empty [`AggregateRegistry::new`] both resolve
+    /// `AGG_IRI` to nothing, so the gate refuses under either — the SAME
+    /// conservative treatment an unresolved property function gets
+    /// (`property_function_without_a_registry_is_parallel_unsafe`), never the
+    /// scalar-function treatment (`unknown_custom_without_registry_stays_safe`).
+    #[test]
+    fn custom_aggregate_without_a_registry_is_parallel_unsafe() {
+        assert!(aggregate_is_unsafe(AGG_IRI, &AggregateRegistry::EMPTY));
+        let empty = AggregateRegistry::new();
+        assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
     // ---- par_chunk_map ----------------------------------------------------

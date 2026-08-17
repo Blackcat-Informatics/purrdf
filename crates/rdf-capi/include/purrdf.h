@@ -29,7 +29,7 @@
 /**
  * ABI minor version.
  */
-#define PURRDF_ABI_MINOR 3
+#define PURRDF_ABI_MINOR 6
 
 /**
  * ABI patch version.
@@ -834,7 +834,7 @@ typedef struct {
      */
     uint8_t query_ran;
     /**
-     * Reserved for ABI-compatible extension; always zero in ABI 0.3.
+     * Reserved for ABI-compatible extension; must be zero.
      */
     uint8_t reserved[7];
     /**
@@ -1939,13 +1939,23 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
  * CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
  * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
  *
+ * `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
+ * additive `purrdf` provenance extension on a SELECT/ASK emission under that
+ * `PREFIX`/`IRI`. Null leaves the output pure W3C SRJ, exactly as before these
+ * parameters existed; a CONSTRUCT/DESCRIBE result never carries the extension
+ * (it is not a SPARQL-results document). Read the extension back with
+ * `purrdf_sparql_results::provenance_from_json` under the SAME namespace.
+ *
  * # Safety
  * `dataset` must be a live handle; `query` must be a NUL-terminated C string;
- * the out-params must be writable.
+ * the out-params must be writable. `provenance_prefix`/`provenance_iri`, if non-null,
+ * must be NUL-terminated UTF-8 C strings live for the call.
  */
 int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           const char *query,
                           const char *base_iri,
+                          const char *provenance_prefix,
+                          const char *provenance_iri,
                           PurrdfBuffer **out_buffer,
                           PurrdfError **out_error);
 
@@ -1958,15 +1968,24 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
  * certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
  * Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
  *
+ * `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
+ * set under that IRI namespace, so the query text can call
+ * `AGG(<{NAMESPACE}NAME>, args…)` for `MEDIAN`/`PERCENTILE`/`STDDEV`/`STDDEV_POP`/
+ * `VARIANCE`/`VAR_POP`/`MODE`/`FIRST`/`LAST`/`TOPK`. Null leaves every one of the ten
+ * names an ordinary unregistered custom-aggregate IRI, exactly as before this parameter
+ * existed.
+ *
  * # Safety
  * `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
  * `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
  * result pointer must be writable when that shape is returned. Any enabled cancellation
- * handle must remain live until the call returns.
+ * handle must remain live until the call returns. `aggregate_namespace`, if non-null,
+ * must be a NUL-terminated UTF-8 C string live for the call.
  */
 int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               const char *query,
                               const char *base_iri,
+                              const char *aggregate_namespace,
                               const PurrdfQueryGovernors *governors,
                               int32_t *out_outcome,
                               int32_t *out_kind,
@@ -1987,16 +2006,25 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
  * the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
  * query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
  *
+ * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
+ * it registers purrdf's first-party statistical aggregate set under that IRI namespace
+ * for the closure query's PARSE and its evaluation, so `AGG(<{NAMESPACE}NAME>, args…)`
+ * reaches the entailment-aware lane exactly as it reaches the ordinary one. Null leaves
+ * every one of the ten names an ordinary unregistered custom-aggregate IRI.
+ *
  * # Safety
  * All input strings and handles must remain live for the synchronous call. Required
  * out-pointers must be writable; any enabled cancellation handle must remain live until
  * return. Shape-specific result pointers are required when that shape is returned.
+ * `aggregate_namespace`, if non-null, must be a NUL-terminated UTF-8 C string live for
+ * the call.
  */
 int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const char *query,
                                          const char *base_iri,
                                          const char *regime,
                                          const char *program,
+                                         const char *aggregate_namespace,
                                          const PurrdfQueryGovernors *governors,
                                          int32_t *out_outcome,
                                          int32_t *out_kind,
@@ -2016,14 +2044,20 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
  * `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
  * enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
  *
+ * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`],
+ * reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
+ * `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
+ *
  * # Safety
  * `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
  * string; `governors` live for the call; and both output pointers writable. Any enabled
- * cancellation handle must remain live until the call returns.
+ * cancellation handle must remain live until the call returns. `aggregate_namespace`, if
+ * non-null, must be a NUL-terminated UTF-8 C string live for the call.
  */
 int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *request,
                                const char *base_iri,
+                               const char *aggregate_namespace,
                                const PurrdfQueryGovernors *governors,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,

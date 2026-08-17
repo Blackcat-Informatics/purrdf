@@ -1,0 +1,4 @@
+PREFIX ex: <http://example.org/>
+
+SELECT (AGG(<http://example.org/agg/customSum>, ?val) AS ?total)
+WHERE { ?s ex:val ?val }

@@ -1,0 +1,11 @@
+# `:aggStatTopk` (agg-stat.ttl, {1,2,3,4,5} in ascending subject/insertion order)
+# proves TOPK sorts descending and truncates to K, but its "3 largest" (5, 4, 3)
+# coincides EXACTLY with "the last 3 rows seen, reversed" — so it cannot
+# discriminate a genuine value-sorted top-K from a position-based stand-in (e.g. a
+# bounded most-recently-seen buffer with no value comparison at all). This case
+# reuses `agg-stat-first-last.ttl`'s permutation ({30, 10, 50, 20, 40}, uncorrelated
+# with subject/insertion order): the correct top-3 by VALUE is {50, 40, 30}, which
+# is neither the file's insertion order nor any suffix of it in any direction.
+PREFIX : <https://example.org/agg-stat#>
+SELECT (AGG(<https://example.org/agg-stat-fn#TOPK>, ?v; K=3) AS ?top)
+WHERE { ?s :value ?v }

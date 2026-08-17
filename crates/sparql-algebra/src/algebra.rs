@@ -26,6 +26,89 @@ use crate::ast::{
     Variable,
 };
 
+/// The SPARQL version an in-prologue `VERSION "<string>"` declaration named
+/// (SPARQL 1.2 Query specification §4.4 / grammar production `Version`).
+///
+/// Two spellings are recognized and get their own variant; anything else is
+/// retained verbatim in [`Self::Other`] rather than rejected — the `VERSION`
+/// clause is **syntax-only** (parsing never rejects an unrecognized string; see
+/// vendored W3C `w3c-sparql12` `version-04.rq`, which declares `"1.1"` and is a
+/// `PositiveSyntaxTest`). [`Self::raw`] returns the declared string byte-exactly
+/// for every variant, including the two recognized ones, whose raw spelling is
+/// always identical to their canonical one (recognition is an exact match).
+///
+/// A prologue may repeat the declaration (the grammar's own `Version*`); the
+/// parser records the LAST one when several appear (an owned reading — the
+/// SPARQL 1.2 Query specification does not itself state a tie-breaking rule for
+/// a request that legally re-declares the clause).
+///
+/// # What evaluation does with each
+///
+/// Recognition is enforced at evaluation ADMISSION, not at parse time — by
+/// `purrdf-sparql-eval`'s `admit_version`, the ONE function both the query-evaluation
+/// entry point and the update-evaluation entry point call, so a query and an UPDATE
+/// declaring the same unrecognized version are refused identically (an UPDATE's
+/// refusal, in particular, applies no mutation):
+///
+/// - [`Self::V12`] evaluates normally on the full engine.
+/// - [`Self::V12Basic`] is admitted, then walked: the SPARQL 1.2 Query
+///   specification's §4.3.1 "Version Labels" table defines `1.2-basic` as
+///   `1.2` syntax "without triple terms and without triple patterns that have
+///   a triple pattern in their subject or object position" — the RDF 1.2
+///   triple-term/reification feature area (`<<( s p o )>>`, `<< s p o >>`,
+///   `{| ... |}`, and the `TRIPLE`/`isTRIPLE`/`SUBJECT`/`PREDICATE`/`OBJECT`
+///   functions on triple terms, §17.4.6). `purrdf-sparql-eval`'s
+///   `basic_profile` module enforces exactly that restriction (see its docs
+///   for the full spec citation and the gated construct set); a `1.2-basic`
+///   request that uses none of those constructs evaluates exactly as a `1.2`
+///   one would, and one that does use one of them is refused at admission,
+///   naming the offending construct.
+/// - [`Self::Other`] is refused at admission with a typed error naming the
+///   declared version — an unrecognized `VERSION` names a spec this evaluator
+///   does not know how to honor, so admitting it would silently evaluate (or,
+///   for an UPDATE, silently mutate) under the wrong (or an unknown) semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SparqlVersion {
+    /// `VERSION "1.2"` — the SPARQL 1.2 Query specification, full profile.
+    V12,
+    /// `VERSION "1.2-basic"` — the SPARQL 1.2 Query specification's Basic profile.
+    V12Basic,
+    /// Any other declared string, retained verbatim. Refused at evaluation
+    /// admission (see the type docs); never a parse error.
+    Other(String),
+}
+
+impl SparqlVersion {
+    /// Classify a declared `VERSION` string, recognizing `"1.2"` and
+    /// `"1.2-basic"`; anything else becomes [`Self::Other`] verbatim.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "1.2" => Self::V12,
+            "1.2-basic" => Self::V12Basic,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// The declared version string, byte-exactly as it appeared in the
+    /// `VERSION "<string>"` declaration — including for the two recognized
+    /// variants, whose raw spelling is always their canonical one.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        match self {
+            Self::V12 => "1.2",
+            Self::V12Basic => "1.2-basic",
+            Self::Other(s) => s,
+        }
+    }
+
+    /// Is this a version this evaluator recognizes and evaluates normally?
+    #[must_use]
+    pub fn is_recognized(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
 /// A parsed SPARQL query. The four query forms differ only in their head; the
 /// `WHERE` clause and all solution modifiers live inside `pattern` as algebra.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -38,6 +121,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if the prologue declared one.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `CONSTRUCT` query. `template` is the output triple template.
     Construct {
@@ -49,6 +134,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `DESCRIBE` query.
     Describe {
@@ -60,6 +147,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
     /// `ASK` query.
     Ask {
@@ -69,6 +158,8 @@ pub enum Query {
         dataset: QueryDataset,
         /// An explicit `BASE` IRI, if any.
         base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
     },
 }
 
@@ -93,6 +184,17 @@ impl Query {
             | Self::Construct { base_iri, .. }
             | Self::Describe { base_iri, .. }
             | Self::Ask { base_iri, .. } => base_iri.as_ref(),
+        }
+    }
+
+    /// The query's `VERSION` declaration, if the prologue declared one (last-wins
+    /// across repeated declarations; see [`SparqlVersion`]).
+    pub fn version(&self) -> Option<&SparqlVersion> {
+        match self {
+            Self::Select { version, .. }
+            | Self::Construct { version, .. }
+            | Self::Describe { version, .. }
+            | Self::Ask { version, .. } => version.as_ref(),
         }
     }
 }
@@ -131,6 +233,19 @@ pub struct Update {
     pub operations: Vec<GraphUpdateOperation>,
     /// An explicit `BASE` IRI, if the prologue declared one.
     pub base_iri: Option<NamedNode>,
+    /// The prologue's `VERSION` declaration, if any (last-wins across repeated
+    /// declarations, including one that follows a `;` operation separator; see
+    /// [`SparqlVersion`]).
+    pub version: Option<SparqlVersion>,
+}
+
+impl Update {
+    /// The request's `VERSION` declaration, if the prologue declared one
+    /// (last-wins across repeated declarations; see [`SparqlVersion`]).
+    #[must_use]
+    pub fn version(&self) -> Option<&SparqlVersion> {
+        self.version.as_ref()
+    }
 }
 
 /// The target of a graph-management operation
@@ -895,6 +1010,16 @@ pub enum Function {
     Seconds,
     Timezone,
     Tz,
+    /// `ADJUST(value, timezone)` — SPARQL 1.2 timezone adjustment for
+    /// `xsd:dateTime`/`xsd:date`/`xsd:time`, mapping to XPath and XQuery
+    /// Functions and Operators §9.6 `fn:adjust-*-to-timezone` (SEP-0002's
+    /// "Add Support Durations, Dates, and Times" addition to the SPARQL 1.2
+    /// Query specification's Functions on Dates and Times table). `timezone`
+    /// is an `xsd:dayTimeDuration` in `[-PT14H, PT14H]`, or the empty simple
+    /// literal `""` — SPARQL's stand-in for XPath's empty-sequence "remove
+    /// the timezone" case (SPARQL itself has no empty sequence). See the
+    /// eval arm in `purrdf-sparql-eval` for the full domain-error contract.
+    Adjust,
     Now,
     Uuid,
     StrUuid,
@@ -1055,24 +1180,376 @@ pub enum OrderExpression {
     Desc(Expression),
 }
 
-/// A `GROUP BY` aggregate.
+/// A `GROUP BY` aggregate — SPARQL 1.1 §18.5.1's algebra node
+/// `Aggregation(exprlist, func, scalarvals, G)`, carried 1:1 rather than as the
+/// ad hoc `CountStar`/`FunctionCall` split this replaces.
+///
+/// * [`Self::function`] — the aggregate operator: one of the SPARQL 1.1
+///   built-ins, or [`AggregateFunction::Custom`] for an extension aggregate
+///   parsed from the `AGG(<iri>, …)` surface.
+/// * [`Self::args`] — the spec's `exprlist`. Every built-in aggregate except
+///   `COUNT` is fixed-arity ONE (`SUM(?x)`, `GROUP_CONCAT(?x)`, `AVG(?x)`, …).
+///   `COUNT` is the one variable-shape built-in: `COUNT(?x)` has
+///   `args == [?x]`; `COUNT(*)` has the spec's EMPTY exprlist —
+///   `args == []` — with NO separate "count-star" variant, exactly mirroring
+///   §18.5.1's algebra (a bare `function: Count` with an empty `args` IS
+///   `COUNT(*)`; a non-empty `args` is `COUNT(expr)`). A
+///   [`AggregateFunction::Custom`] aggregate's arity is whatever the query
+///   supplied via the positional `AGG(<iri>, arg, arg, …)` surface — one or
+///   more expressions; there is no fixed arity to check structurally, only the
+///   parser's "at least one" rule.
+/// * [`Self::scalarvals`] — the spec's scalar-values map. An ORDERED
+///   `Vec<(key, value)>` — deliberately never a hash map, so serialization and
+///   any diagnostic built from it stay byte-deterministic.
+///   * A built-in's `scalarvals` uses only the keys the SPARQL grammar itself
+///     defines: today, `"separator"` for `GROUP_CONCAT`'s optional
+///     `SEPARATOR="…"` (absent — `scalarvals` empty — when no `SEPARATOR` was
+///     written). Every other built-in's `scalarvals` is empty.
+///   * A [`AggregateFunction::Custom`] aggregate's `scalarvals` holds every
+///     `NAME=value` clause the `AGG(<iri>, …; NAME=value; …)` surface's
+///     trailing scalarval clauses supplied (see that variant's docs) — empty
+///     when the call wrote none. The KEY is the parser's upper-cased spelling
+///     of `NAME`; it is NOT validated against any registry here — the parser
+///     accepts any name structurally, and whether a given custom aggregate
+///     accepts a given name (and whether its value's type is right) is a
+///     prepare-time host concern (see `purrdf_sparql_eval::agg_fn::CustomAggregate::scalarvals`),
+///     not a parser-level one, exactly as an unregistered `AGG(<iri>, …)` IRI
+///     itself is a prepare-time refusal rather than a parse error.
+/// * [`Self::distinct`] — whether `DISTINCT` preceded the arguments
+///   (`COUNT(DISTINCT *)` / `COUNT(DISTINCT ?x)` / `AGG(<iri>, DISTINCT ?a,
+///   ?b)` / …); recorded verbatim regardless of whether the function gives it
+///   meaning.
+///
+/// # Constructing one
+///
+/// [`Self::new`] is the ONLY way to build a value from scratch: it rejects an
+/// empty `args` for any `function` other than [`AggregateFunction::Count`],
+/// so `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/`GROUP_CONCAT(*)` — and a
+/// zero-arity [`AggregateFunction::Custom`] — cannot be built at all, from
+/// inside this crate or out. It also rejects a `scalarvals` key `function`
+/// does not admit: only [`AggregateFunction::GroupConcat`] accepts one (the
+/// key `"separator"`), every other BUILT-IN accepts none at all, and
+/// [`AggregateFunction::Custom`] accepts any key structurally (the closed
+/// check against a specific registered aggregate's own declaration is a
+/// prepare-time concern in `sparql-eval`, not this crate's). `args`,
+/// `function`, AND `scalarvals` are therefore all private outside this
+/// crate: [`Self::args`]/[`Self::function`]/[`Self::scalarvals`] (the
+/// accessor methods) give read access without opening a second, unchecked
+/// write path. A `pub function` field would have let a caller build a valid
+/// value through [`Self::new`] and then assign a DIFFERENT `function` into
+/// it — e.g. build `COUNT(*)` (empty `args`, legal) and reassign `function =
+/// Sum`, producing an in-memory `SUM` with zero args that `new` would have
+/// refused outright. A `pub scalarvals` field is the SAME hole one level
+/// over: build a legal `SUM(?v)` through [`Self::new`] and then push a
+/// `"separator"` entry onto it directly, and [`crate::serialize`]'s
+/// `SUM`-branch renderer — which writes every `scalarvals` entry it is
+/// handed, by key, for every function alike — emits `SUM(?v; SEPARATOR="…")`,
+/// which is not SPARQL grammar for anything: it is unparseable text a
+/// checked constructor exists specifically to make unreachable. `distinct`
+/// stays `pub`: no `bool` value it could hold makes the serializer emit
+/// anything ungrammatical (`SUM(DISTINCT ?v)` parses fine even though
+/// `DISTINCT` gives `SUM` no extra meaning), so hiding it would only add
+/// call-site friction with no matching safety gain. The three private fields
+/// are `pub(crate)` rather than fully private: `serialize.rs`'s formatter
+/// and `parser.rs`'s own tests read (and, in tests, pattern-match) them
+/// directly elsewhere in this crate, and this crate is small and
+/// disciplined enough that a `pub(crate)` seam is an honest tradeoff — the
+/// invariant only needs to hold at the crate's public boundary, which `new`
+/// alone already guarantees for every external caller (embedders
+/// included), since none of the three has a public setter.
+///
+/// An embedder outside this crate cannot reach past [`Self::new`] to mutate a
+/// checked-valid value into one [`crate::serialize`] cannot render — this fails
+/// to compile, the same way it would for `args`/`function`:
+///
+/// ```compile_fail,E0616
+/// use purrdf_sparql_algebra::{AggregateExpression, AggregateFunction, Expression, Literal, Variable};
+///
+/// let mut agg = AggregateExpression::new(
+///     AggregateFunction::Sum,
+///     vec![Expression::Variable(Variable::new("v"))],
+///     Vec::new(),
+///     false,
+/// )
+/// .expect("SUM(?v) is a valid one-argument call");
+/// // `scalarvals` is private outside this crate — this line does not compile.
+/// agg.scalarvals.push(("separator".to_owned(), Literal::new_simple("|")));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum AggregateExpression {
-    /// `COUNT(*)`.
-    CountStar {
-        /// Whether `DISTINCT` was present.
-        distinct: bool,
-    },
-    /// An aggregate over an expression, e.g. `SUM(?x)` or `COUNT(DISTINCT ?x)`.
-    FunctionCall {
-        /// Which aggregate function.
-        function: AggregateFunction,
-        /// The aggregated expression.
-        expression: Box<Expression>,
-        /// Whether `DISTINCT` was present.
-        distinct: bool,
-    },
+pub struct AggregateExpression {
+    /// Which aggregate function. Private outside this crate — go through
+    /// [`Self::new`] to build one, [`Self::function`] to read it back; see
+    /// the struct docs for why a public setter would reopen the arity hole
+    /// [`Self::new`] closes.
+    pub(crate) function: AggregateFunction,
+    /// The aggregate's expression list (the spec's `exprlist`). Empty only for
+    /// `COUNT(*)`; see the struct docs. Private outside this crate — go
+    /// through [`Self::new`] to build one, [`Self::args`] to read it back.
+    pub(crate) args: Vec<Expression>,
+    /// The spec's scalar-values map — an ordered, deterministic
+    /// `(key, value)` list; see the struct docs. Private outside this crate —
+    /// go through [`Self::new`] to build one, [`Self::scalarvals`] to read it
+    /// back; see the struct docs for why a public setter would let a
+    /// checked-valid value be mutated into one the serializer cannot render.
+    pub(crate) scalarvals: Vec<(String, Literal)>,
+    /// Whether `DISTINCT` was present.
+    pub distinct: bool,
 }
+
+impl AggregateExpression {
+    /// The checked constructor: the ONLY way to build an [`AggregateExpression`]
+    /// from its parts.
+    ///
+    /// # Errors
+    ///
+    /// [`AggregateExpressionError::Arity`] if `args` is empty and `function` is
+    /// anything other than [`AggregateFunction::Count`] — SPARQL's `'*'`
+    /// exprlist shorthand names only `COUNT(*)`/`COUNT(DISTINCT *)`; every
+    /// other built-in is fixed-arity one, and every
+    /// [`AggregateFunction::Custom`] call is positional-only, one-or-more
+    /// (see that variant's docs). This is what makes a re-founded "empty
+    /// exprlist" bug like the one this constructor replaces unrepresentable:
+    /// the shape that used to be read off `args.is_empty()` — with the
+    /// reader trusting an un-enforced comment — is now enforced once, here,
+    /// at the only place a value comes into existence.
+    ///
+    /// [`AggregateExpressionError::Scalarval`] if `scalarvals` carries a key
+    /// `function` does not admit — every built-in but
+    /// [`AggregateFunction::GroupConcat`] (whose one admitted key is
+    /// `"separator"`) admits none at all, so a `scalarvals` entry there is
+    /// always refused. [`AggregateFunction::Custom`] admits any key
+    /// structurally (the closed check against a specific registered
+    /// aggregate's own declaration happens at prepare time, in
+    /// `sparql-eval`, against data this crate does not have). This is what
+    /// makes handing [`crate::serialize`]'s renderer a value it cannot
+    /// render back out — e.g. a `SUM` carrying a `"separator"` entry, which
+    /// would emit `SUM(?v; SEPARATOR="…")`, not SPARQL grammar for anything
+    /// — unrepresentable, the same way the arity check makes `SUM(*)`
+    /// unrepresentable.
+    pub fn new(
+        function: AggregateFunction,
+        args: Vec<Expression>,
+        scalarvals: Vec<(String, Literal)>,
+        distinct: bool,
+    ) -> Result<Self, AggregateExpressionError> {
+        if args.is_empty() && !matches!(function, AggregateFunction::Count) {
+            return Err(AggregateExpressionError::Arity(AggregateArityError {
+                function,
+            }));
+        }
+        if let Some((key, _)) = scalarvals
+            .iter()
+            .find(|(key, _)| !scalarval_key_is_admitted(&function, key))
+        {
+            return Err(AggregateExpressionError::Scalarval(
+                AggregateScalarvalError {
+                    function,
+                    key: key.clone(),
+                },
+            ));
+        }
+        Ok(Self {
+            function,
+            args,
+            scalarvals,
+            distinct,
+        })
+    }
+
+    /// The aggregate's expression list (the spec's `exprlist`); see the
+    /// struct docs. Empty iff [`Self::function`] is
+    /// [`AggregateFunction::Count`] (`COUNT(*)`/`COUNT(DISTINCT *)`) —
+    /// [`Self::new`] enforces that for every value that exists.
+    #[must_use]
+    pub fn args(&self) -> &[Expression] {
+        &self.args
+    }
+
+    /// Which aggregate function this is; see the struct docs. There is no
+    /// public setter — mutating `function` after construction without
+    /// re-checking `args`'/`scalarvals`' validity is exactly the hole
+    /// [`Self::new`] closes, so changing which function a value names means
+    /// building a new one through [`Self::new`] (or [`Self::into_parts`]
+    /// plus [`Self::new`]).
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+
+    /// The spec's scalar-values map; see the struct docs. Every key is one
+    /// [`Self::function`] admits — [`Self::new`] enforces that for every
+    /// value that exists. There is no public setter — mutating `scalarvals`
+    /// after construction without re-checking each key against `function` is
+    /// exactly the hole [`Self::new`] closes.
+    #[must_use]
+    pub fn scalarvals(&self) -> &[(String, Literal)] {
+        &self.scalarvals
+    }
+
+    /// Decompose into `(function, args, scalarvals, distinct)`, consuming
+    /// `self`. The inverse of [`Self::new`] minus its checks — for a caller
+    /// (an expression-substitution or query-planning rewrite) that only ever
+    /// replaces `args` with a same-length transform of itself and leaves
+    /// `function`/`scalarvals` untouched, so neither invariant this type
+    /// protects can be disturbed by the round trip: feed the tuple back
+    /// through [`Self::new`] and the call cannot fail.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        AggregateFunction,
+        Vec<Expression>,
+        Vec<(String, Literal)>,
+        bool,
+    ) {
+        (self.function, self.args, self.scalarvals, self.distinct)
+    }
+
+    /// `GROUP_CONCAT`'s `SEPARATOR` scalarval, if present (looked up by key in
+    /// [`Self::scalarvals`]). `None` for a bare `GROUP_CONCAT(?x)` with no
+    /// `; SEPARATOR="…"`, or for any other aggregate.
+    #[must_use]
+    pub fn separator(&self) -> Option<&str> {
+        self.scalarvals
+            .iter()
+            .find(|(k, _)| k == "separator")
+            .map(|(_, v)| v.value())
+    }
+}
+
+/// Whether `key` is a `scalarvals` entry [`AggregateExpression::new`] admits for
+/// `function` — the single source of truth the constructor's validation and this
+/// module's docs both describe. [`AggregateFunction::Custom`] admits any key
+/// structurally; every other (built-in) function admits none, except
+/// [`AggregateFunction::GroupConcat`], which admits exactly `"separator"`.
+fn scalarval_key_is_admitted(function: &AggregateFunction, key: &str) -> bool {
+    match function {
+        AggregateFunction::Custom(_) => true,
+        AggregateFunction::GroupConcat => key == "separator",
+        AggregateFunction::Count
+        | AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Sample => false,
+    }
+}
+
+/// Why [`AggregateExpression::new`] refused to build a value: either an
+/// [`AggregateArityError`] (an empty `args` for a `function` that requires at
+/// least one argument) or an [`AggregateScalarvalError`] (a `scalarvals` key
+/// `function` does not admit). See [`AggregateExpression::new`]'s `# Errors`
+/// section for exactly when each arm fires.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AggregateExpressionError {
+    /// See [`AggregateArityError`].
+    Arity(AggregateArityError),
+    /// See [`AggregateScalarvalError`].
+    Scalarval(AggregateScalarvalError),
+}
+
+impl AggregateExpressionError {
+    /// The function that was refused, regardless of which arm this is —
+    /// [`AggregateArityError::function`]/[`AggregateScalarvalError::function`]
+    /// under the hood.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        match self {
+            Self::Arity(error) => error.function(),
+            Self::Scalarval(error) => error.function(),
+        }
+    }
+}
+
+impl core::fmt::Display for AggregateExpressionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Arity(error) => core::fmt::Display::fmt(error, f),
+            Self::Scalarval(error) => core::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl std::error::Error for AggregateExpressionError {}
+
+impl From<AggregateArityError> for AggregateExpressionError {
+    fn from(error: AggregateArityError) -> Self {
+        Self::Arity(error)
+    }
+}
+
+impl From<AggregateScalarvalError> for AggregateExpressionError {
+    fn from(error: AggregateScalarvalError) -> Self {
+        Self::Scalarval(error)
+    }
+}
+
+/// Why [`AggregateExpression::new`] refused to build a value: `args` was
+/// empty for a `function` other than [`AggregateFunction::Count`]. SPARQL's
+/// `'*'` exprlist shorthand is defined only in the `Count` production
+/// (SPARQL 1.1/1.2 §18.5.1/§19.8); every other aggregate — built-in or
+/// [`AggregateFunction::Custom`] — requires at least one expression argument.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AggregateArityError {
+    function: AggregateFunction,
+}
+
+impl AggregateArityError {
+    /// The function that was refused an empty `args`.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+}
+
+impl core::fmt::Display for AggregateArityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "only COUNT accepts an empty exprlist ('*'); {:?} requires at least one argument",
+            self.function
+        )
+    }
+}
+
+impl std::error::Error for AggregateArityError {}
+
+/// Why [`AggregateExpression::new`] refused to build a value: `scalarvals`
+/// carried a key `function` does not admit. Every built-in but
+/// [`AggregateFunction::GroupConcat`] admits no `scalarvals` key at all;
+/// `GroupConcat` admits exactly `"separator"`; [`AggregateFunction::Custom`]
+/// admits any key (see [`AggregateExpression::new`]'s `# Errors` section).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AggregateScalarvalError {
+    function: AggregateFunction,
+    key: String,
+}
+
+impl AggregateScalarvalError {
+    /// The function that refused `key`.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+
+    /// The `scalarvals` key that was refused.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl core::fmt::Display for AggregateScalarvalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:?} does not admit a scalarval named {:?}",
+            self.function, self.key
+        )
+    }
+}
+
+impl std::error::Error for AggregateScalarvalError {}
 
 /// The named SPARQL aggregate functions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1089,12 +1566,49 @@ pub enum AggregateFunction {
     Max,
     /// `SAMPLE`.
     Sample,
-    /// `GROUP_CONCAT`, with an optional `SEPARATOR`.
-    GroupConcat {
-        /// The `SEPARATOR` string, if given.
-        separator: Option<String>,
-    },
-    /// A custom aggregate identified by IRI.
+    /// `GROUP_CONCAT`. The optional `SEPARATOR` lives on the owning
+    /// [`AggregateExpression::scalarvals`] (key `"separator"`), not here — the
+    /// spec's scalar-values map is a property of the aggregation node, not of
+    /// the function name.
+    GroupConcat,
+    /// A custom aggregate identified by an arbitrary IRI, parsed from
+    /// `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`: positional
+    /// expression arguments (`args`, evaluated PER ROW like any built-in
+    /// aggregate's arguments), followed by zero or more trailing NAMED
+    /// scalar-value clauses (landing in the owning
+    /// [`AggregateExpression::scalarvals`]) — ONE value for the whole
+    /// aggregation, never re-evaluated per row. `<iri>` may be any IRI,
+    /// including a prefixed name resolved against the query's prologue; it is
+    /// retained byte-exact so serialization re-emits exactly what the query
+    /// author wrote (PurRDF fabricates no vocabulary IRI of its own on
+    /// output).
+    ///
+    /// This is a deliberate divergence from Jena's ARQ, which spells a custom
+    /// aggregate as `AGG <iri>(args)` (the IRI directly prefixing the call,
+    /// not as the first positional argument); PurRDF places the IRI as the
+    /// first positional argument so the call form needs no grammar beyond an
+    /// ordinary argument list.
+    ///
+    /// # The `; NAME=value` scalarval clause
+    ///
+    /// Generalizes SPARQL's own precedent for a named scalar aggregate
+    /// parameter — `GROUP_CONCAT`'s `; SEPARATOR="…"` — to an arbitrary custom
+    /// aggregate's own named parameters: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`,
+    /// `AGG(<{NS}TOPK>, ?v; K=3)`. `NAME` is matched case-insensitively by the
+    /// parser and stored upper-cased in [`AggregateExpression::scalarvals`], so
+    /// `; p=0.95` and `; P=0.95` normalize to the same key; `value` is any
+    /// SPARQL literal, so a numeric scalarval parses to its natural numeric
+    /// datatype rather than being forced through a string the way
+    /// `GROUP_CONCAT`'s own `SEPARATOR` is. See
+    /// [`crate::parser::SparqlParser`]'s module docs for the grammar and
+    /// `purrdf_sparql_eval::agg_fn::CustomAggregate::scalarvals` for how a
+    /// registered aggregate declares which names it accepts.
+    ///
+    /// Evaluation resolves the IRI against a caller-supplied aggregate
+    /// registry in `sparql-eval`; an unregistered IRI, an unrecognized
+    /// scalarval name, a duplicate scalarval name, a missing required
+    /// scalarval, or a wrong-typed scalarval value is refused with a typed
+    /// error when the query is prepared, before any evaluation work is spent.
     Custom(NamedNode),
 }
 
@@ -1276,6 +1790,7 @@ mod tests {
                 },
             ],
             base_iri: None,
+            version: None,
         };
         assert_eq!(
             upd.to_string(),
@@ -1291,6 +1806,7 @@ mod tests {
                 target: GraphTarget::All,
             }],
             base_iri: Some(nn("http://ex/base")),
+            version: None,
         };
         assert_eq!(upd.to_string(), "BASE <http://ex/base> CLEAR ALL");
     }

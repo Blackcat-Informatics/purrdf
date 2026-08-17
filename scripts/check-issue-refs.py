@@ -3,20 +3,38 @@
 
 """Reject development-process references in PurRDF comments and docs.
 
-Two token families are rejected, over exactly the same scanned surface.
+Four token families are rejected, over exactly the same scanned surface.
 
 **Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
 and misleading, so we do not allow new ones.
 
-**Process references** — ``Task 28``, ``EPIC``, ``this branch``. These name the
-*development effort* that produced the code rather than the code itself. They go
-stale the moment the branch merges: "this branch" has no referent in a merged
-history, and a reader who meets "task 29" in a test file cannot look it up.
-``#NNN`` was banned for exactly this reason and these are the same debt spelled
+**Process references** — ``Task 28``, ``EPIC``, ``this branch``, and a phrase
+that locates something in the repository's own history (``on origin/main``,
+`` on `origin/main` ``). These name the *development effort* that produced the
+code rather than the code itself. They go stale the moment the branch merges:
+"this branch" has no referent in a merged history, "Pre-existing on
+`origin/main`" answers a question only the reviewer who wrote it was asking,
+and a reader who meets "task 29" in a test file cannot look it up. ``#NNN``
+was banned for exactly this reason and these are the same debt spelled
 differently — which is why ``// --- task 28: the reasoner façade ---`` sailed
 through a lint that was already meant to stop it.
 
-Process references carry two frozen registers, both of which may only SHRINK:
+**Hazard / finding labels** — a bare ``H12``, or an ``F6``/``N3``-shaped token
+used AS A LABEL (``F6:`` at the start of a clause, or wrapped alone in
+parentheses, ``(F1)``). These are identifiers from a review thread — meaningful
+only to the reviewer who assigned them, not to the codebase. A bare ``H<N>`` is
+banned outright (no legitimate first-party use collides with that shape); an
+``F<N>``/``N<N>`` shape is only banned in the specific label positions above,
+because those two letters are also legitimate technical vocabulary elsewhere
+(``F32``/``F64`` float widths, ``N3`` the RDF serialization, ``N802`` a linter
+code) that must not be flagged.
+
+**Issue-normative spelling** — the phrase "issue-normative", which describes a
+grammar choice by pointing at the tracker discussion that settled it rather
+than by describing the choice itself.
+
+Process and hazard-label references carry two frozen registers, both of which
+may only SHRINK:
 
 * ``PRE_EXISTING_PROCESS_REFERENCES`` — the debt that predates this rule, one
   entry per ``(file, token)``. A live occurrence with no entry is a hard failure,
@@ -61,7 +79,21 @@ and markdown anchors while still catching references like ``#16`` or ``#123``.
 The process token patterns are ``Task``/``task`` followed by an optional ``#``
 and a number, the bare uppercase acronym ``EPIC`` (so ``EPIC #906`` and
 ``(EPIC \\`text_parse\\`)`` are both caught, while the ordinary English word
-"epic" in a changelog entry is not), and the phrase "this branch" in any case.
+"epic" in a changelog entry is not), the phrase "this branch" in any case, and
+"on origin/main" / "on `origin/main`" (release documentation that says a
+branch is *synchronized with* `origin/main` is unaffected — only the "on"
+collocation that locates a piece of code in history is banned).
+
+The hazard-label token patterns are a bare ``H`` followed by 1-3 digits
+(``H12``), and an ``F``/``N`` followed by 1-3 digits either immediately
+followed by a colon (``F6:``) or wrapped alone in parentheses (``(F1)``,
+``(N3)``) — the two shapes every real finding label in this repository's
+history has taken. The narrower ``F``/``N`` shape leaves every other use of
+those letters (a float width, a serialization name, a linter code) alone.
+
+The "issue-normative" pattern is that literal phrase, case-sensitive, since it
+has exactly one spelling in this repository's history and any capitalized
+variant would already read as a proper noun rather than as this phrase.
 """
 
 from __future__ import annotations
@@ -83,6 +115,10 @@ TOKEN_RE = re.compile(
     r"|(?P<task>\b[Tt]ask\s+#?\d+\b)"
     r"|(?P<epic>\bEPIC\b)"
     r"|(?P<branch>(?i:\bthis\ branch\b))"
+    r"|(?P<history_ref>\bon\s+`?origin/main`?\b)"
+    r"|(?P<issue_normative>\bissue-normative\b)"
+    r"|(?P<hazard>\bH\d{1,3}\b)"
+    r"|(?P<hazard_label>\b[FN]\d{1,3}:|\([FHN]\d{1,3}\))"
 )
 
 # The prose fix each process family's message suggests.
@@ -93,13 +129,25 @@ PROCESS_REMEDY: dict[str, str] = {
         'say "this arm" / "this case" for a control-flow branch, and state the '
         "constraint itself rather than the branch that imposed it"
     ),
+    "history_ref": (
+        "state the constraint or behaviour itself rather than where in the "
+        "repository's history it was introduced, fixed, or scoped"
+    ),
+    "issue_normative": (
+        "restate as the grammar/behaviour choice itself, with no reference to the "
+        "review thread that settled it"
+    ),
+    "hazard": "restate as the behaviour it describes, with no review-thread hazard id",
+    "hazard_label": (
+        "restate as the behaviour it describes, with no review-thread finding label"
+    ),
 }
 
-# Process references that predate this rule, as ``(path, matched token)``. Every
-# occurrence of that token in that file is covered by one entry. THIS REGISTER
-# MAY ONLY SHRINK: an entry whose token no longer appears in its file is
-# reported as stale, so paying a debt down forces the line to be deleted here
-# rather than leaving a permanent licence behind.
+# Process and hazard-label references that predate this rule, as ``(path,
+# matched token)``. Every occurrence of that token in that file is covered by
+# one entry. THIS REGISTER MAY ONLY SHRINK: an entry whose token no longer
+# appears in its file is reported as stale, so paying a debt down forces the
+# line to be deleted here rather than leaving a permanent licence behind.
 PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
     {
         ("bindings/python/src/py_gts.rs", "Task 8"),
@@ -111,6 +159,7 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf-core/src/diagnostic.rs", "Task 12"),
         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
         ("crates/rdf-core/src/sssom.rs", "Task 7"),
+        ("crates/rdf-core/tests/paged_backend.rs", "(F1)"),
         ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
         ("crates/rdf-wasm/src/factory.rs", "Task 5"),
         ("crates/rdf/src/bin/capture_sparql_goldens.rs", "Task 2"),
@@ -124,6 +173,7 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/shapes/src/instance.rs", "Task 6"),
+        ("crates/shapes/src/json_schema.rs", "F6:"),
         ("crates/shapes/src/json_schema.rs", "Task 3"),
         ("crates/shapes/src/json_schema.rs", "Task 4"),
         ("crates/shapes/src/json_schema.rs", "Task 6"),
@@ -281,6 +331,12 @@ def rust_comments_and_literals(
     literals: list[tuple[int, int, str]] = []
     n = len(src)
     i = 0
+    # Seeded so a source whose first token of interest is a literal rather than a
+    # comment still has a position to report. Every file in this tree opens with a
+    # licence header, so the comment arm has always run first and bound these — but
+    # that is a property of the corpus, not of the scanner, and a file without one
+    # would otherwise abort the whole hygiene run.
+    line, col = 1, 1
 
     while i < n:
         c = src[i]

@@ -28,7 +28,8 @@ use purrdf_core::{
     ViewTermId,
 };
 use purrdf_sparql_algebra::{
-    GraphPattern, NamedNodePattern, Query, TermPattern, TriplePattern, Variable,
+    GraphPattern, NamedNodePattern, Query, SparqlVersion, TermPattern, TriplePattern, Update,
+    Variable,
 };
 
 use crate::DetHashMap;
@@ -380,22 +381,35 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
     /// relative argument cannot be resolved and the call is a type error.
     pub(crate) base_iri: Option<String>,
-    /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`), if any.
-    /// `None` (the default) means no user functions are declared: a call-position
-    /// IRI unknown to the closed `PurrdfFn` set then falls through to the XSD-cast /
-    /// unsupported path exactly as before. Borrowed for the dataset lifetime (like
+    /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`).
+    /// [`crate::user_fn::UserFunctionRegistry::EMPTY`] (the default) means no user
+    /// functions are declared: a call-position IRI unknown to the closed `PurrdfFn`
+    /// set then falls through to the XSD-cast / unsupported path exactly as before.
+    /// Borrowed for the dataset lifetime (like
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
-    pub(crate) user_functions: Option<&'d crate::user_fn::UserFunctionRegistry>,
-    /// The caller-injected property-function table, if any. `None` (the default)
-    /// means no relation is registered, which is exactly equivalent to an empty
-    /// registry: a predicate IRI only reaches this table when the parser already
-    /// lowered it to a
+    pub(crate) user_functions: &'d crate::user_fn::UserFunctionRegistry,
+    /// The caller-injected property-function table.
+    /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
+    /// no relation is registered: a predicate IRI only reaches this table when the
+    /// parser already lowered it to a
     /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
     /// under a caller-configured namespace, and an unresolved call is the same
-    /// failure either way. Borrowed for the dataset lifetime like
-    /// [`Self::user_functions`], so carrying it is a `Copy` pointer, never a clone.
-    pub(crate) property_functions: Option<&'d crate::property_fn::PropertyFunctionRegistry>,
+    /// failure regardless of whether the empty table was ever explicitly attached.
+    /// Borrowed for the dataset lifetime like [`Self::user_functions`], so carrying
+    /// it is a `Copy` pointer, never a clone.
+    pub(crate) property_functions: &'d crate::property_fn::PropertyFunctionRegistry,
+    /// The caller-injected custom-aggregate table.
+    /// [`crate::agg_fn::AggregateRegistry::EMPTY`] (the default) means no aggregate
+    /// is registered: an `AggregateFunction::Custom(iri)` call only reaches this
+    /// table at evaluation time after `crate::property_fn_plan::plan_query`'s
+    /// prepare-time walk has already admitted it against the SAME registry (see
+    /// `crate::engine::check_plan_matches_relations`'s aggregate-identity check),
+    /// so an unresolved call here is a defense-in-depth repeat of that refusal,
+    /// never the normal path. Borrowed for the dataset lifetime like
+    /// [`Self::property_functions`], so carrying it is a `Copy` pointer, never a
+    /// clone.
+    pub(crate) aggregates: &'d crate::agg_fn::AggregateRegistry,
     /// The current SHACL-AF function call depth, incremented by
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
@@ -487,6 +501,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         let now_val = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
         let rng_seed: u64 = crate::clock::entropy_seed();
 
+        // `static`, not a bare `&Registry::EMPTY` temporary: the returned `Self` must
+        // outlive this function body, and a `HashMap`-backed registry's drop glue
+        // blocks Rust's rvalue static promotion for a reference that has to live that
+        // long (see `crate::agg_fn::AggregateRegistry::EMPTY`'s docs for why sharing
+        // this one instance is the correct, not merely convenient, choice).
+        static EMPTY_FUNCTIONS: crate::user_fn::UserFunctionRegistry =
+            crate::user_fn::UserFunctionRegistry::EMPTY;
+        static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry =
+            crate::property_fn::PropertyFunctionRegistry::EMPTY;
+        static EMPTY_AGGREGATES: crate::agg_fn::AggregateRegistry =
+            crate::agg_fn::AggregateRegistry::EMPTY;
+
         Self {
             dataset,
             scratch: ScratchInterner::new(),
@@ -512,8 +538,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             constructed: Vec::new(),
             in_substituted_exists: false,
             base_iri: None,
-            user_functions: None,
-            property_functions: None,
+            user_functions: &EMPTY_FUNCTIONS,
+            property_functions: &EMPTY_RELATIONS,
+            aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -826,12 +853,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// The caller-injected tables the fork-join safety walk consults — the one place
-    /// this context's two registries are paired, so a call site cannot pass one and
-    /// forget the other.
+    /// this context's three registries are paired, so a call site cannot pass one and
+    /// forget the others.
     pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
         crate::parallel::SafetyRegistries {
             functions: self.user_functions,
             relations: self.property_functions,
+            aggregates: self.aggregates,
         }
     }
 
@@ -858,6 +886,52 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return false;
         }
         !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+    }
+
+    /// Whether one `GROUP BY` group's aggregate compute may be forked across
+    /// parallel workers (`modifier::eval_group`'s per-group fork gate).
+    ///
+    /// Two conditions, both about a forked worker computing this ONE aggregate for
+    /// this ONE group in isolation from every other group:
+    ///
+    /// 1. Every argument expression must pass [`Self::may_fork_row_loop`], exactly
+    ///    as before this aggregate seam existed.
+    /// 2. If `agg` is [`purrdf_sparql_algebra::AggregateFunction::Custom`], the
+    ///    IRI must resolve against [`Self::aggregates`] to an aggregate declaring
+    ///    [`crate::user_fn::Volatility::Stable`] — see
+    ///    [`crate::parallel::aggregate_is_unsafe`] for why an UNRESOLVED custom
+    ///    aggregate is conservatively UNSAFE here (the property-function
+    ///    treatment, not the scalar-function one: an unresolved relation's
+    ///    volatility is unknown, where an unresolved scalar function IRI has a
+    ///    defined deterministic meaning).
+    ///
+    /// This governs WHICH GROUP runs on which worker, gating [`crate::modifier::eval_group`]'s
+    /// across-groups fork. It does NOT gate whether the fold WITHIN one group
+    /// chunks: `eval_aggregate`/`eval_custom_aggregate` decide that separately —
+    /// a built-in's within-group chunked fold never touches `EvalCtx` (see
+    /// `crate::parallel::par_chunk_reduce_init`'s docs) so it needs no
+    /// volatility check at all, and a custom aggregate's within-group chunking
+    /// re-reads [`crate::agg_fn::CustomAggregate::volatility`] itself at that
+    /// finer grain rather than reusing this method's answer, because a query
+    /// with SEVERAL aggregates in one `GROUP BY` list — one `Custom` and
+    /// `Volatile`, one built-in — must let the built-in chunk within its own
+    /// group even on a query where [`Self::may_fork_aggregate`] returns `false`
+    /// for the `Volatile` one (which only blocks that aggregate's own
+    /// ACROSS-groups fork, not the built-in's within-group one).
+    pub(crate) fn may_fork_aggregate(
+        &self,
+        agg: &purrdf_sparql_algebra::AggregateExpression,
+    ) -> bool {
+        if !agg.args().iter().all(|e| self.may_fork_row_loop(e)) {
+            return false;
+        }
+        if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = agg.function() {
+            return !crate::parallel::aggregate_is_unsafe(
+                iri.as_str(),
+                self.safety_registries().aggregates,
+            );
+        }
+        true
     }
 
     /// Whether this execution carries a governor that actually enforces something.
@@ -1253,6 +1327,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
             property_functions: self.property_functions,
+            // Read-only shared registry (a `Copy` pointer), for the same reason: a
+            // worker computing one group's fold through a registered custom
+            // aggregate must resolve its IRI against the same table its parent
+            // would.
+            aggregates: self.aggregates,
             udf_depth: self.udf_depth,
             // SHARED, not fresh: one live accounting state across every worker, so the
             // budget is not multiplied by the thread count.
@@ -1281,7 +1360,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Self {
-        self.user_functions = Some(registry);
+        self.user_functions = registry;
         self
     }
 
@@ -1298,7 +1377,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         registry: &'d crate::property_fn::PropertyFunctionRegistry,
     ) -> Self {
-        self.property_functions = Some(registry);
+        self.property_functions = registry;
+        self
+    }
+
+    /// Attach a caller-injected custom-aggregate registry for this evaluation, so
+    /// an `AggregateFunction::Custom(iri)` call resolves to a registered
+    /// aggregate. The borrow shares the dataset lifetime `'d`.
+    ///
+    /// Attaching an EMPTY registry is exactly equivalent to attaching none — the
+    /// resolution path asks the same question of both and gets the same answer,
+    /// the same pin [`Self::with_property_functions`] states for its registry.
+    #[must_use]
+    pub fn with_aggregates(mut self, registry: &'d crate::agg_fn::AggregateRegistry) -> Self {
+        self.aggregates = registry;
         self
     }
 
@@ -1384,6 +1476,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
             property_functions: self.property_functions,
+            // Inherited for the same reason: a function body's own `GROUP BY` (it is
+            // SPARQL like any other) resolves a `Custom` aggregate against the same
+            // registry the calling query sees.
+            aggregates: self.aggregates,
             udf_depth: next_depth,
             // SHARED: a function body's evaluation spends the caller's budget, not a
             // fresh one — otherwise a query could evade its ceiling by calling a
@@ -2002,6 +2098,69 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut E
     }
 }
 
+/// What is being admitted at the `VERSION` boundary: a full query or an update
+/// request. Both [`Query`] and [`Update`] carry an optional [`SparqlVersion`]
+/// declared by their prologue (last-wins across repeated declarations); this is the
+/// one type [`admit_version`] reads, so there is one admission function rather than
+/// a query-shaped copy and an update-shaped copy of the same check.
+///
+/// Carrying the parsed request itself — not merely its declared version string — is
+/// deliberate: a future SPARQL 1.2 Basic-profile admission check must inspect the
+/// *algebra* a `VERSION "1.2-basic"` request declared over (a query pattern or an
+/// update's operations), and this seam already hands `admit_version` that algebra
+/// for both request shapes, so the profile check can land inside `admit_version`
+/// once and apply to queries and updates alike instead of being wired twice.
+#[derive(Clone, Copy)]
+pub(crate) enum AdmittedRequest<'a> {
+    /// A parsed query, admitted before [`evaluate_query_evaluated`] walks it.
+    Query(&'a Query),
+    /// A parsed update request, admitted before `crate::update::eval_update`
+    /// applies it.
+    Update(&'a Update),
+}
+
+impl AdmittedRequest<'_> {
+    /// The request's `VERSION` declaration, if its prologue declared one.
+    pub(crate) fn version(&self) -> Option<&SparqlVersion> {
+        match self {
+            Self::Query(query) => query.version(),
+            Self::Update(update) => update.version(),
+        }
+    }
+}
+
+/// Admit a parsed request's `VERSION` declaration (SPARQL 1.2 Query specification
+/// §4.4) — the SOLE enforcement site for both the query evaluator
+/// ([`evaluate_query_evaluated`]) and the update evaluator
+/// (`crate::update::eval_update`), so a request that names an unrecognized version
+/// is refused identically regardless of which evaluator would otherwise run it.
+///
+/// Parsing is syntax-only for `VERSION` (see [`SparqlVersion`]): any string parses.
+/// Evaluation is the admission boundary — a version this evaluator does not
+/// recognize names a spec it does not know how to honor, so admitting it would
+/// silently evaluate (or, for an update, silently *mutate*) under the wrong (or
+/// unknown) semantics. [`SparqlVersion::V12`] falls through and evaluates
+/// normally on the full engine. [`SparqlVersion::V12Basic`] ALSO falls through
+/// here (it is a recognized version), but is then walked by
+/// [`crate::basic_profile::admit`], which refuses any construct outside the
+/// Basic profile the SPARQL 1.2 Query specification §4.3.1 defines (see that
+/// module's docs for the spec citation and the gated construct set) — so a
+/// `1.2-basic` request that stays inside the profile evaluates exactly as a
+/// `1.2` one would, and one that does not is refused here, before any work is
+/// spent.
+pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalError> {
+    match request.version() {
+        Some(SparqlVersion::Other(raw)) => {
+            return Err(EvalError::unsupported(format!(
+                "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
+            )));
+        }
+        Some(SparqlVersion::V12Basic) => crate::basic_profile::admit(request)?,
+        Some(SparqlVersion::V12) | None => {}
+    }
+    Ok(())
+}
+
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
@@ -2019,6 +2178,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Criterion and differential tests can hold the operation on the sequential branch;
     // production keeps the ordered parallel fold. The guard is operation-scoped so every
@@ -2235,6 +2395,113 @@ mod tests {
             .with_bnode_mint_prefix("f2d616263-2d_")
             .expect("shapes-style prefix must be accepted");
         assert_eq!(ctx.bnode_mint_prefix.as_deref(), Some("f2d616263-2d_"));
+    }
+
+    #[test]
+    fn unrecognized_version_is_refused_at_evaluation_admission() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query("VERSION \"0.9\"\nSELECT * WHERE { ?s ?p ?o }")
+            .expect("VERSION is syntax-only; any string parses");
+        let mut ctx = EvalCtx::new(&ds);
+        let err = evaluate_query(&query, &mut ctx).expect_err("unrecognized VERSION is refused");
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("0.9"),
+            "error should name the declared version: {err}"
+        );
+    }
+
+    #[test]
+    fn recognized_versions_evaluate_normally() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        for version in ["1.2", "1.2-basic"] {
+            let query = SparqlParser::new()
+                .parse_query(&format!(
+                    "VERSION \"{version}\"\nSELECT * WHERE {{ ?s ?p ?o }}"
+                ))
+                .expect("parse");
+            let mut ctx = EvalCtx::new(&ds);
+            let outcome = evaluate_query(&query, &mut ctx)
+                .unwrap_or_else(|e| panic!("VERSION {version:?} must evaluate: {e}"));
+            assert!(
+                matches!(outcome, Outcome::Solutions(seq) if seq.is_empty()),
+                "empty dataset yields no solutions"
+            );
+        }
+    }
+
+    #[test]
+    fn basic_profile_refuses_a_triple_term_and_names_it() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2-basic\"\n\
+                 PREFIX : <http://example.org/>\n\
+                 SELECT * WHERE { ?r :reifies <<( ?s ?p ?o )>> }",
+            )
+            .expect("triple terms parse under any VERSION (syntax-only)");
+        let mut ctx = EvalCtx::new(&ds);
+        let err = evaluate_query(&query, &mut ctx)
+            .expect_err("a triple term outside the Basic profile is refused");
+        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains("triple term"),
+            "error should name the offending construct: {err}"
+        );
+    }
+
+    #[test]
+    fn basic_profile_answers_a_within_profile_query() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2-basic\"\n\
+                 SELECT * WHERE { ?s ?p ?o . FILTER(BOUND(?s)) }",
+            )
+            .expect("parse");
+        let mut ctx = EvalCtx::new(&ds);
+        let outcome = evaluate_query(&query, &mut ctx)
+            .expect("a query that stays inside the Basic profile still answers");
+        assert!(
+            matches!(outcome, Outcome::Solutions(seq) if seq.len() == 1),
+            "expected the one matching solution"
+        );
+    }
+
+    #[test]
+    fn full_profile_version_is_unaffected_by_the_basic_gate() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let query = SparqlParser::new()
+            .parse_query(
+                "VERSION \"1.2\"\n\
+                 PREFIX : <http://example.org/>\n\
+                 SELECT * WHERE { ?r :reifies <<( ?s ?p ?o )>> }",
+            )
+            .expect("parse");
+        let mut ctx = EvalCtx::new(&ds);
+        let outcome = evaluate_query(&query, &mut ctx)
+            .expect("VERSION \"1.2\" admits triple terms; the Basic gate never runs");
+        assert!(
+            matches!(outcome, Outcome::Solutions(seq) if seq.is_empty()),
+            "empty dataset yields no solutions"
+        );
     }
 
     #[test]

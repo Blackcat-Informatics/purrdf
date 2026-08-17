@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Five subjects s1..s5 carrying {30, 10, 50, 20, 40} — a permutation DELIBERATELY
+# uncorrelated with subject order in either direction, so neither ascending nor
+# descending `ORDER BY ?s` can coincide with the minimum/maximum by construction.
+# `agg-stat-first-last.rq`'s inner subquery orders `DESC(?s)` (mirroring
+# `:groupConcatOrder`'s own `ORDER BY DESC(?s)`, for the same reason: a regression
+# that silently fell back to load/scan order — ascending `s1..s5`, i.e. the file
+# order below — would read a DIFFERENT, wrong FIRST/LAST rather than coincidentally
+# passing). Under `DESC(?s)` the row sequence is s5,s4,s3,s2,s1, i.e. values
+# 40, 20, 50, 10, 30 — so FIRST = 40 and LAST = 30, each distinct from the group's
+# MIN (10), MAX (50), each other, and the file/ascending-scan order's own first (30)
+# and last (40) values.
+@prefix : <https://example.org/agg-stat#> .
+
+:s1 :value 30 .
+:s2 :value 10 .
+:s3 :value 50 .
+:s4 :value 20 .
+:s5 :value 40 .

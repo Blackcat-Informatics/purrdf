@@ -1,0 +1,7 @@
+# Every non-comment, non-blank line is text the failure diagnostic must contain.
+# A ground triple term in a VALUES data block (grammar TripleTermData) is the
+# ground-data counterpart of the pattern-position triple term, gated the same
+# way.
+native-sparql-query-eval
+ground triple term
+VALUES

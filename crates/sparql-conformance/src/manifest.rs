@@ -40,6 +40,13 @@ const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
 /// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
 const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
 
+/// This harness's own manifest-EXTENSION vocabulary, for fields the W3C `mf:`/`qt:`
+/// vocabulary has no slot for. Test-INFRASTRUCTURE metadata that configures this
+/// harness's own loader, under `example.org` exactly as `EXT_NS`/`REL_NS`/`LOSS_NS`
+/// in `crate::run` are: caller-supplied harness configuration, never a vocabulary
+/// PurRDF itself mints or ships.
+const MF_EXT_NS: &str = "https://example.org/conformance-manifest#";
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
@@ -126,6 +133,13 @@ pub struct SparqlTestCase {
     /// for a plain (Simple-entailment) test or one whose only regimes the native
     /// reasoner cannot materialize (OWL-Direct / D / RIF).
     pub regime: Option<purrdf_entail::Regime>,
+    /// `purrdf:aggregateNamespace` on the test's `mf:action` (`MF_EXT_NS`,
+    /// harness-loader vocabulary — see its doc comment): the IRI namespace this
+    /// case's `AGG(<{NAMESPACE}NAME>, args…)` calls resolve against. `None` (the
+    /// default, and every case but the ones that opt in) registers no statistical
+    /// aggregate registry for this case, exactly as before this field existed —
+    /// PurRDF mints no default namespace.
+    pub aggregate_namespace: Option<String>,
     /// The expected result.
     pub expected: ExpectedResult,
 }
@@ -149,13 +163,15 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         "PREFIX mf: <{MF}>\n\
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
-         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result WHERE {{\n\
+         PREFIX purrdf: <{MF_EXT_NS}>\n\
+         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\
          OPTIONAL {{ ?act qt:query ?query }}\n\
          OPTIONAL {{ ?act qt:data ?data }}\n\
          OPTIONAL {{ ?act qt:graphData ?graphData }}\n\
          OPTIONAL {{ ?act qt:serviceData ?sd . ?sd qt:endpoint ?serviceEp ; qt:data ?serviceData }}\n\
+         OPTIONAL {{ ?act purrdf:aggregateNamespace ?aggNs }}\n\
          OPTIONAL {{ ?test mf:result ?result }}\n\
          }}"
     );
@@ -178,6 +194,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
                 graph_data: Vec::new(),
                 service_data: Vec::new(),
                 regime: None,
+                aggregate_namespace: None,
                 expected: ExpectedResult::None,
             });
         // A test may carry several rdf:type values; prefer a recognized kind.
@@ -212,6 +229,40 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         if let Some(result) = iri_of(row, "result") {
             entry.expected = classify_result(&local_path(&dir, &result));
         }
+        if entry.aggregate_namespace.is_none()
+            && let Some(ns) = lexical_of(row, "aggNs")
+        {
+            entry.aggregate_namespace = Some(ns);
+        }
+    }
+
+    // Completeness check: the row-grouping SELECT above requires ?type, ?name, AND
+    // ?act to all bind (none are OPTIONAL), so an `mf:entries` member missing any one
+    // of `rdf:type`/`mf:name`/`mf:action` produces NO row at all and would otherwise
+    // vanish from `by_test` with no trace — a silent skip, not a modeled failure. List
+    // every `mf:entries` member directly (no mandatory triple beyond list membership)
+    // and fail loudly on any member that did not turn into a loaded case, naming it,
+    // rather than letting the manifest quietly advertise fewer cases than it declares.
+    let declared_list = list_entry_iris(&dataset)?;
+    let declared: std::collections::BTreeSet<String> = declared_list.into_iter().collect();
+    let missing: Vec<&String> = declared
+        .iter()
+        .filter(|t| !by_test.contains_key(*t))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{}: {} of {} declared mf:entries member(s) produced no loaded test case \
+             (missing rdf:type, mf:name, and/or mf:action — a silent-skip hole, not a \
+             modeled result): {}",
+            manifest_path.display(),
+            missing.len(),
+            declared.len(),
+            missing
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     let mut cases: Vec<SparqlTestCase> = by_test.into_values().collect();
@@ -225,7 +276,48 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
     // Entailment tests declare an `sd:entailmentRegime` list; select the regime
     // the native reasoner should materialize before the query runs.
     load_entailment_regimes(&dataset, &mut cases)?;
+
+    // Belt-and-braces: the count that will actually be EXECUTED (`cases.len()`) must
+    // equal what the manifest declares. This is the same fact the `missing` check
+    // above already establishes (each declared IRI maps 1:1 into `by_test`, which
+    // `cases` is built from), stated as an executed-count assertion so a future
+    // refactor of the loader that changes the loading strategy — not just this
+    // query's OPTIONAL/mandatory shape — still cannot silently drop a case without
+    // this function failing.
+    debug_assert_eq!(
+        cases.len(),
+        declared.len(),
+        "loaded case count must equal declared mf:entries count"
+    );
+    if cases.len() != declared.len() {
+        return Err(format!(
+            "{}: loaded {} test case(s) but the manifest declares {} mf:entries member(s)",
+            manifest_path.display(),
+            cases.len(),
+            declared.len()
+        ));
+    }
+
     Ok(cases)
+}
+
+/// Every `mf:entries` list member's test IRI, with NO further requirement beyond
+/// list membership — used only to detect a member the main loading query silently
+/// dropped (see the completeness check in [`load`]).
+fn list_entry_iris(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+) -> Result<Vec<String>, String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?test WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+    rows.iter()
+        .map(|row| iri_of(row, "test").ok_or_else(|| "mf:entries member is not an IRI".to_string()))
+        .collect()
 }
 
 /// Set `regime` for each test that declares an `sd:entailmentRegime` list,

@@ -4,6 +4,293 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [Unreleased]
+
+This release re-founds the aggregate algebra on the SPARQL specification's own shape, adds a
+caller-extensible aggregate registry (with a first-party statistical set), retains and enforces
+the `VERSION` declaration, adds RDF 1.2's `ADJUST` and the underlying F&O temporal operation
+table, and corrects several results-format spellings. It carries a large number of breaking
+surfaces; each is called out below with what a consumer must do.
+
+### Bug Fixes
+
+- **BREAKING** **sparql:** The `VERSION "1.2-basic"` declaration is now actually enforced as the
+  SPARQL 1.2 Basic profile (full 1.2 syntax minus RDF 1.2 triple terms), not merely retained and
+  round-tripped. Evaluation admission now refuses a triple term in any triple/quad pattern or path
+  endpoint, a ground triple term in `VALUES`, and the "Functions on Triple Terms" builtins, naming
+  the offending construct — for an update, with no mutation applied. Callers that declared
+  `1.2-basic` and relied on it silently running the full engine must drop the declaration or
+  remove those constructs from the request.
+- **BREAKING** **sparql-eval:** An `UPDATE` prologue declaring an unrecognized `VERSION` (anything
+  other than `"1.2"`/`"1.2-basic"`) now refuses at admission instead of mutating the store — the
+  byte-identical read-only query form was already refused. Callers issuing such requests must
+  stop, declare a recognized version, or omit the declaration.
+- **BREAKING** **sparql-algebra:** `'*'` is refused for every aggregate but `COUNT` (it was
+  previously accepted everywhere and silently answered the group's row count for `SUM(*)`,
+  `AVG(*)`, `MIN(*)`, `MAX(*)`, `SAMPLE(*)`, and `GROUP_CONCAT(*)`). `AggregateExpression::new` is
+  now the sole, checked constructor — it returns a `Result` and refuses `*`/an empty argument list
+  for any aggregate but `COUNT` — and `args` is no longer a public field; callers that built the
+  node with struct-literal syntax or read `args` directly must switch to `AggregateExpression::new`
+  and the `args()`/`into_parts()` accessors.
+- **BREAKING** **sparql-eval:** The aggregate accumulator trait gained a required `into_any`
+  downcast (used to merge partial fold states by concrete type instead of recovering only the
+  finished term) and its `combine` method now returns `Result<(), EvalError>` instead of `()`, so
+  a host contract violation (a partial state of the wrong concrete type) is a typed refusal rather
+  than a panic — which matters on `wasm32-unknown-unknown`, where a panic aborts the whole
+  instance. Every implementor of `AggregateAccumulator`, including any host-registered
+  `CustomAggregate`, must add `into_any` and update `combine`'s return type and propagate the
+  downcast helper's error.
+- **BREAKING** **sparql-eval:** A prepared plan's aggregate/property-function admission now keys
+  on registry INSTANCE identity (a process-monotonic `RegistryId`), not declared metadata alone —
+  two independently built registries that declare identically for a shared IRI but resolve it to
+  different implementations previously produced the same plan fingerprint, so a plan prepared
+  against one registry could execute unrefused against the other. A caller relying on two
+  distinctly constructed registries with identical declarations being interchangeable at execution
+  time now gets a typed refusal instead of a silently wrong answer; cloning a registry still
+  shares its source's identity.
+- **BREAKING** **sparql-eval:** Planner admission failures are now attributed to the extension
+  seam that actually raised them. An unregistered custom aggregate or an aggregate arity violation
+  previously reported the property-function diagnostic code; callers matching on the documented
+  aggregate diagnostic code must now handle those failures there instead of under the
+  property-function code.
+- **BREAKING** **sparql-eval:** The within-group parallel aggregate fold now sizes its chunks from
+  the group's row count alone instead of the live host's thread count, so governed outcomes for
+  large aggregate folds no longer vary with worker-pool size. Governed outcomes for large
+  within-group aggregate folds change on any host whose worker count differs from the new fixed
+  reference parallelism; a consumer pinning `GOVERNOR_CORPUS_DIGEST` or `GOVERNOR_PROFILE_DIGEST`
+  must re-pin both.
+- **BREAKING** **xsd,sparql-eval:** Integer `SUM`/`AVG` now accumulate at arbitrary precision
+  instead of a fixed-width accumulator, so a running total that used to overflow into an unbound
+  answer now answers exactly (for example, a large positive, a one, and the matching large
+  negative now sum to `1` instead of unbound). This changes only the answering direction — a query
+  that previously received `unbound` for an overflowing integer `SUM`/`AVG` now receives a value —
+  and needs no caller action beyond expecting an answer where one is now owed.
+- **BREAKING** **shapes:** `Shapes` gains a public `aggregates: Arc<AggregateRegistry>` field,
+  installed at every SHACL-SPARQL validation entry point (including the parallel focus-node chunk
+  fork, which previously dropped the aggregate scope across the thread boundary, making a
+  registered aggregate's resolution depend on the number of focus nodes). Callers constructing
+  `Shapes` via struct literal must now supply `aggregates`, or use `Shapes::default()` / the
+  parser's constructor, both of which populate it with an empty registry.
+- **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
+  views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
+  clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the
+  property-function arm already applied — these depend on a registry or endpoint the classifier
+  cannot inspect, so a view using them is not byte-reproducible. Callers who relied on such views
+  being accepted must configure them without those constructs, or accept the resulting refusal.
+  Built-in aggregates and built-in functions are unaffected.
+- **rdf:** The byte-reproducibility refusal above, and the planner's two admission seams, now name
+  the CONSTRUCT rejection's actual cause (a custom aggregate call, a custom scalar-function call,
+  or a `SERVICE` clause) instead of funnelling every rejection through one message that named only
+  the nondeterministic-builtin/blank-minting causes, which none of the three later-added causes
+  appears in.
+- **xsd,sparql-eval:** Integer `AVG`'s arbitrary-precision quotient is now taken on the same
+  arbitrary-precision path its sum already uses, so an average that used to answer nothing whenever
+  the exact running total escaped `i128` — even when the quotient itself was ordinary — now
+  answers exactly (for example, `AVG` of two copies of the largest representable integer now
+  answers that integer, rather than unbound).
+- **sparql-eval:** `SERVICE` bodies forward custom scalar-function calls again unless `SILENT` is
+  present. A prior fix closed a real silent-wrong-answer hazard for `Function::Custom` calls
+  inside `SERVICE`, but the refusal it added was unconditional rather than scoped to the
+  hazard it described — so a plain (non-`SILENT`) `SERVICE` body containing a call to the
+  endpoint's own extension function (e.g. `FILTER(<http://example.org/fn>(?x) > 0)`) now
+  hard-failed even though a non-silent `SERVICE` already turns any endpoint-side failure
+  into an honest error. Callers who worked around the regression by dropping `SILENT` need
+  no further change; callers who still need `SILENT` and hit the refusal should read the
+  error message, which now names the same workaround (drop `SILENT`) directly.
+- **sparql:** Let aggregate partial states merge by their concrete type (see the `into_any`
+  entry above for the resulting trait break).
+- **BREAKING** **sparql-eval:** The three extension registries (custom aggregates, property
+  functions, SHACL-AF functions) move from `Option<&Registry>` to plain `&Registry`, with a
+  canonical `Registry::EMPTY` constant replacing the `None` case. `QueryOptions`'s three registry
+  fields and `PlanCache::prepare_with_relations`'s registry parameters change type accordingly
+  across the core engine, all four host surfaces (CLI, C ABI, wasm, Python), the shapes crate, and
+  the conformance harness; callers pass `&Registry::EMPTY` where they previously passed `None`.
+  Decimal division's zero-divisor guard was corrected in the same change: it now returns the
+  crate's typed error in release builds instead of a debug-only assertion that could panic.
+- **BREAKING** **results:** The JSON/XML results writers now spell RDF 1.2 base direction as
+  `its:dir` (were `dir`/`purrdf:dir` under a namespace this crate minted for itself), and the
+  always-on purrdf-branded provenance extension is gone: `to_json`/`to_xml`/`serialize` take an
+  `Option<&ProvenanceNamespace>`, and emission requires a caller-supplied prefix and IRI —
+  omitting one emits no extension member and reports the drop, matching the CSV/TSV contract.
+  `ProvenanceNamespace` separately moves to private fields and a fallible constructor,
+  `ProvenanceNamespace::new(prefix, iri)`: the prior public fields let an unvalidated `prefix`
+  splice unescaped into XML element/attribute names (a markup-injection hole), so `prefix` is now
+  validated as an XML Namespaces `NCName` and `iri` as an absolute IRI. Callers constructing
+  `ProvenanceNamespace` via struct literal must switch to the constructor and handle the `Result`.
+  The TSV writer now hard-fails (`Error::Format`) on a variable name containing a tab or line
+  break instead of silently corrupting the column/record structure.
+- **BREAKING** **results:** The XML writer now declares the `its:` namespace once on the document
+  root (with an `its:version` attribute) when any directional literal appears anywhere in the
+  result set, instead of inline on every directional literal, matching the spec's worked examples;
+  the JSON writer no longer emits an explicit `"datatype"` member on a plain (simple) literal, per
+  the results-format's own encoding table. Both are byte-level output changes: a consumer pinning
+  writer bytes must re-pin.
+- **BREAKING** **sparql-results:** `ProvenanceNamespace` gained the validated, fallible
+  constructor described above; unvalidated construction is no longer possible (see the results
+  writer-spelling entry).
+- **BREAKING** **rdf-core:** Replay delta-added quads in insertion order, not hash order. The
+  copy-on-write delta layer kept its added/suppressed keys in standard hash sets (a fresh random
+  seed per process), so freezing and pattern scanning walked them in per-process hash-iteration
+  order rather than a reproducible one — the same query over the same data mutated the same way
+  could return rows in a different order from one run to the next, which broke the documented
+  ordering guarantee for `GROUP_CONCAT` and the first/last aggregates. Those sets now use the
+  crate's fixed-key hasher and carry each key's insertion ordinal, so a delta replays in call
+  order. The CLI was never affected (it parses straight into a builder and never uses the delta
+  layer); the Python, WebAssembly, and C interfaces all wrap the delta layer directly and were all
+  fixed by this one kernel change. Callers that happened to rely on the previous arbitrary order
+  may observe a different, now-stable order.
+
+### Features
+
+- **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
+  timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
+  arithmetic with month-end clamping, instant subtraction, and duration add/subtract/
+  multiply/divide computed in exact `Decimal`. No behavior change to parsing, canonical forms,
+  or the existing partial order.
+- **sparql:** Add the `ADJUST` builtin over `dateTime`, `date`, and `time` (SEP-0002's
+  two-argument signature over the new F&O adjust-to-timezone family): shifts a timezoned value,
+  annotates an untimezoned one, and treats the empty simple literal as timezone removal.
+- **BREAKING** **sparql:** Retain the `VERSION` declaration as a typed value. `Query` and
+  `Update` gain a `version` field (`SparqlVersion`) on every variant, exposed via a new
+  `version()` accessor beside `dataset()`/`base_iri()`; construction sites using struct-literal
+  syntax without struct-update (`..`) must add the field. Evaluation admits only `"1.2"` and
+  `"1.2-basic"`; anything else is refused at the evaluation chokepoint before any work is spent,
+  naming the declared string, while parsing itself stays syntax-only.
+- **BREAKING** **sparql:** Re-found the aggregate algebra on the specification's own shape:
+  `AggregateExpression` is a struct (`function`, `args`, `scalarvals`, `distinct`) rather than a
+  lossy simplification, `CountStar` is gone (`COUNT(*)` is the empty argument list), and
+  `GroupConcat` carries no separator payload (the separator is the `"separator"` scalarval). See
+  the matching `sparql-algebra` bug-fix entry above for the resulting constructor break.
+- **sparql:** Evaluate custom aggregates through a fold-algebra registry: a caller registers an
+  `init`/`step`/`combine`/`finish` accumulator under an IRI, reached from query text as
+  `AGG(<iri>, [DISTINCT] arg, arg, …)`; an unregistered IRI or wrong-arity call is refused at
+  prepare time, before any budget is spent, and the prepared plan carries the registry's
+  fingerprint (see the registry-instance-identity bug-fix entry above).
+- **BREAKING** **sparql:** Price the aggregate fold in the governor profile. Profile v6 adds two
+  charge points — `aggregate-invocation` (once per group per aggregate expression) and
+  `aggregate-accumulation` (once per value inspected) — shared by built-in and custom aggregates.
+  `GOVERNOR_PROFILE_VERSION` is 6 and the profile/corpus digests a consumer pins have moved.
+- **BREAKING** **sparql-eval,xsd:** Charge the aggregate fold's retained per-group row buffer to
+  the scratch-bytes governor as it is buffered, on both the built-in and registered-aggregate
+  paths; that real, group-size-proportional memory was previously unpriced by any resource
+  dimension. Only the scratch-bytes figures move — fuel is byte-identical, so
+  `GOVERNOR_PROFILE_VERSION` and its digest correctly stay put — but a governed query near a
+  scratch-bytes ceiling may now be refused where it previously completed, and a consumer pinning
+  the frozen governor corpus's byte-frozen expectations must re-pin against the new figures.
+- **sparql:** Fold single large groups in parallel: rows fold in chunks whose partial states
+  combine strictly in chunk order, byte-identical to the sequential fold for every algebraic
+  class. `GROUP_CONCAT`'s row order is now pinned by exact strings (see the SPARQL querying book
+  chapter's "GROUP_CONCAT ordering" section for the guaranteed reading), and a blank node or
+  triple term in its input now poisons the fold to unbound — the same reading `SUM`/`AVG` already
+  use for a non-numeric running total — where it was previously silently dropped. This is a
+  behavior change to `GROUP_CONCAT` over non-literal input, not an API break: a query that used to
+  get a partial concatenation silently omitting a blank-node/triple-term value now gets unbound.
+- **sparql:** Ship a statistical aggregate set under caller configuration: ten exact statistical
+  aggregates (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+  `FIRST`, `LAST`, `TOPK`) register as fold instances under a namespace the caller supplies (no
+  default), reached one call away via `AggregateRegistry::register_statistical_aggregates`.
+- **BREAKING** **sparql:** Thread an aggregate namespace through every host surface — a keyword
+  argument on the Python query/update entry points, a flag on the CLI query/update subcommands, a
+  parameter on the governed wasm entry points, and a nullable string on the governed C ABI entry
+  points — so the statistical aggregate set is reachable from every binding, not only the embedded
+  Rust engine. The C ABI's version moves `0.3.0` -> `0.4.0` to reflect the additive surface, and
+  its header is regenerated; at this point in the series, the entailment and explain CLI lanes,
+  and the ungoverned/entailment wasm calls, refuse the parameter outright since they structurally
+  cannot honour it — closed by the entry below, which carries the C ABI to `0.6.0`.
+- **BREAKING** **sparql-eval,purrdf:** The entailment-aware query lanes
+  (`purrdf::query_with_entailment`/`query_with_entailment_governed`) hardcoded empty query
+  options, so no scalar-function, property-function, or aggregate registry could reach a query
+  evaluated over an entailed closure — `AGG(<{NS}MEDIAN>, …)` over an inferred closure was simply
+  refused. Both lanes now take a `QueryOptions` and thread it through closure parsing, the
+  witness-restriction rewrite, and evaluation. `QueryExplanation` gains an `aggregates()` accessor
+  and a rendered block naming each resolved aggregate with its arity, volatility, algebraic class,
+  state bound, and scalar parameters, mirroring how resolved relations are already reported. The
+  CLI's prior refusal of `--aggregate-namespace` beside `--entailment` is removed. This closes the
+  gap at the Rust engine layer; the C ABI, wasm, and Python bindings did not yet expose the
+  parameter on their entailment-aware entries until the entry below.
+- **sparql,capi,wasm:** Accept the aggregate namespace on the entailment-aware governed query lane
+  everywhere it previously took no `QueryOptions` seam at all: the C interface, the WebAssembly
+  binding, and the Python binding gain the same namespace parameter their ordinary governed
+  entries already had, so `AGG(<{NS}MEDIAN>, ?x)` resolves over an entailed closure exactly as it
+  resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.6.0` (`0.5.0` is skipped —
+  one commit carries both the host-surface change and the version bump) and its header is
+  regenerated.
+- **BREAKING** **sparql-eval,cli:** Give the engine one options-carrying explain entry,
+  `NativeSparqlEngine::explain_query_with_options`/`_view`, that carries the SHACL-AF function,
+  property-function, and aggregate registries together, and remove the narrower single-registry
+  explain and query entries (`explain_query_with_aggregates`, `explain_query_with_property_functions`,
+  `query_with_property_functions`, `query_with_user_functions`, and their `_view` twins). A query
+  needing a registered relation and a registered aggregate together previously got a receipt (or
+  an answer) for a different, narrower query through a narrower entry — a silent wrong report
+  rather than a refusal — because an entry that could not be handed every registry in scope has no
+  registry-independent way to know a call it did not recognize was ever meant to resolve against
+  one it was not given. A caller of any removed entry now calls
+  `explain_query_with_options`/`_view` or `query_with_options_view` with the same registry set on
+  `QueryOptions`; the CLI's `--explain`, its ordinary query/update lanes, and every other in-tree
+  caller already went through the options-carrying entries and need no change. `--aggregate-namespace`
+  with `--entailment` or `--explain` is no longer refused (see the two entries above); `--explain`
+  with `--aggregate-namespace` now prints the plan with the registered aggregates named in the
+  receipt's `aggregates` block.
+- **sparql-conformance:** Respell the conformance harness's manifest-extension predicate namespace
+  under `example.org`; it was minted under this suite's own project-branded namespace, the same
+  mistake a prior change fixed for the SPARQL-XML results writer. A new hygiene test
+  (`no_purrdf_dev_iri_is_minted_outside_the_closed_exemption_list`) fails on any occurrence of
+  that branded namespace found in the tracked tree outside a closed, stale-checked allowlist of
+  two reader-tolerance fixtures. A sibling manifest fixture proves the guard's negative case is
+  triggered by the missing description specifically, not by some other structural defect.
+- **BREAKING** **sparql:** Accept named scalar-value parameters on aggregate calls: `AGG(<iri>,
+  …)` now admits trailing `; NAME=value` clauses, generalizing `GROUP_CONCAT`'s own
+  `; SEPARATOR="…"` clause to any custom aggregate (e.g. `AGG(<{NS}PERCENTILE>, ?x; P=0.95)`).
+  `CustomAggregate::init` now takes the call site's resolved named scalar-value parameters
+  (`&[(String, TermValue)]`) alongside `self`; every implementor of the trait must add the
+  parameter (an aggregate declaring no scalar parameters via the new default
+  `CustomAggregate::scalarvals` may ignore it). The first-party `PERCENTILE` and `TOPK`
+  aggregates now take their fraction/bound through the named clause instead of as trailing
+  positional arguments; callers passing them positionally must move them to named form.
+- **sparql-algebra:** `parse_literal` — the grammar behind an `AGG(<iri>, …; NAME=value)`
+  scalarval, a `VALUES` ground term, and a triple pattern's literal object — now accepts the
+  full SPARQL literal grammar it always claimed to: the signed halves of the numeric tower
+  (`Q=-1`, `P=+0.5`) and the boolean literals (`B=true`), not only unsigned numerals and
+  strings. `VALUES ?x { -1 true }` and `?s :p -3` parse for the same reason: both routed
+  through the same unsigned-only `parse_literal`, so the gap was one production, not one call
+  site.
+- **cli:** `purrdf query --explain` refuses `--results-format`, `--loss-ledger`, and
+  `--jsonld-options` by name instead of accepting and silently ignoring them — `--explain`
+  returns before any serializer or loss-ledger surface runs, so a named `--results-format`
+  never selected a serialization, a named `--loss-ledger` never had a transcode to report, and
+  a configured `--jsonld-options` document never reached a serializer. `--results-format` is
+  now `Option<QueryFormat>` (defaulting to `json` only when the flag is genuinely absent) so
+  "not named" and "named `json`" are distinguishable, which is what the refusal needs.
+- **cli:** `purrdf convert --canonical` refuses `--to` by name instead of silently overriding
+  it — canonical output is always RDFC-1.0 N-Quads, so a `--to` naming a different target
+  format was accepted and never read. `--to` may still be omitted under `--canonical`, exactly
+  as before.
+
+### Refactor
+
+- **sparql-eval:** Drive built-in aggregates through the same `AggregateAccumulator` fold trait
+  as caller-registered ones — each built-in is now a concrete accumulator monomorphized through
+  one generic driver, rather than a hand-rolled counter plus a per-function enum. No behavior
+  change; governor charging and the frozen corpus are untouched.
+
+### Testing
+
+- **results:** Pin its:dir precedence over legacy spellings in SRX
+- **sparql,conformance:** Pin the newly-added SPARQL evaluation surface in the conformance
+  corpus: the `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's
+  grammar, and `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
+
+### Documentation
+
+- **sparql:** Document the aggregate seam and the SPARQL 1.2 remainder: the book's query chapter
+  gains `ADJUST`, the `VERSION` declaration, the custom-aggregate seam with a worked registration
+  example, and the ten statistical aggregates; the results chapter documents the `its:dir`
+  spelling and the caller-named provenance extension.
+- **sparql:** Correct the book's query chapter, which still described the entailment-aware query
+  lane as refusing `aggregate_namespace` on every host — a paragraph an earlier fix removed from
+  the Python stub and one book location but left standing in a second. It now shows the
+  combination working, with a worked `--entailment`/`--aggregate-namespace` CLI example.
+
 ## [0.12.0] - 2026-08-02
 
 ### Bug Fixes
@@ -55,7 +342,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **docs:** Compose the ban patterns around their markers, rather than checking they contain one
 - **BREAKING** **entail:** A deep input must be an error, not a dead process
 - **BREAKING** **rdf:** Bound term nesting where it is parsed, and survey every position the merge writes
-- **entail:** Five reviewer findings — a lossy diagnostic, a split precedence, and three claims nothing checked
+- **entail:** Five entailment-diagnostic fixes — a lossy diagnostic, a split precedence, and three claims nothing checked
 
 ### Documentation
 

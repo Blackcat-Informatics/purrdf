@@ -21,8 +21,8 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, GovernorState, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
-    ShaclPrebinding, UserFunctionRegistry,
+    AggregateRegistry, GovernedOutcome, GovernorState, NativeSparqlEngine,
+    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry,
 };
 
 use crate::model::xsd;
@@ -473,6 +473,17 @@ thread_local! {
     /// rather than by reading this thread-local.
     static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry>>> = const { RefCell::new(None) };
 
+    /// The custom-aggregate registry in scope for the current validation, set by
+    /// [`enter_aggregate_scope`]. [`run_query_view`] snapshots it into the query
+    /// options so a `sh:select`/`sh:ask` body whose `GROUP BY` uses `AGG(<iri>, …)`
+    /// resolves to a registered aggregate. The exact twin of
+    /// [`CURRENT_PROPERTY_FUNCTIONS`], for the exact same reasons: one guard per
+    /// focus chunk, so every rayon worker sees the same registry without shared
+    /// mutation, and the evaluator's own parallel per-group workers receive it
+    /// through `EvalCtx` (propagated in `fork_for_worker`) rather than by reading
+    /// this thread-local.
+    static CURRENT_AGGREGATES: RefCell<Option<Arc<AggregateRegistry>>> = const { RefCell::new(None) };
+
     /// The execution governors in force for the current validation, set by
     /// [`enter_governor_scope`]. Every SPARQL query this module runs charges the state
     /// found here, and a validation with nothing installed runs exactly as it always did
@@ -556,11 +567,26 @@ fn run_query_view<D: DatasetView + Sync>(
     // immutable borrow were still live.
     let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
     let relations = current_property_functions();
+    let aggregates = current_aggregates();
     let governors = current_governors();
-    let registry = functions.as_deref().filter(|reg| !reg.is_empty());
-    // An empty table is indistinguishable from no table at the resolution point, so it
-    // is dropped here rather than carried — the same treatment `registry` gets above.
-    let property_functions = relations.as_deref().filter(|reg| !reg.is_empty());
+    // The ambient thread-local scope is genuinely optional (no `sh:sparql` body has
+    // ever installed one); an absent scope and the canonical `EMPTY` registry are the
+    // SAME value for every purpose `QueryOptions` cares about (see
+    // `AggregateRegistry::EMPTY`'s docs), so there is no longer a separate
+    // "empty but present" case to normalize away here — the old `.filter(|reg|
+    // !reg.is_empty())` step this replaced existed only to collapse that redundant
+    // second spelling, which the non-optional field no longer has.
+    //
+    // `static`, not a bare `&Registry::EMPTY` temporary: a `HashMap`-backed registry
+    // carries drop glue, which blocks Rust's rvalue static promotion for a reference
+    // that must outlive this one statement (it is read again below, once per branch),
+    // so it needs a genuine `'static` place to borrow from.
+    static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
+    static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+    static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
+    let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
+    let property_functions = relations.as_deref().unwrap_or(&EMPTY_RELATIONS);
+    let agg_registry = aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES);
     let request = SparqlRequest {
         query,
         base_iri: None,
@@ -570,6 +596,7 @@ fn run_query_view<D: DatasetView + Sync>(
         prebinding: prebind,
         functions: registry,
         property_functions,
+        aggregates: agg_registry,
         bnode_mint_prefix,
     };
 
@@ -661,6 +688,46 @@ pub fn enter_property_function_scope(
 #[must_use]
 pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry>> {
     CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow().clone())
+}
+
+/// An RAII scope that installs `registry` as the current custom-aggregate table for
+/// the duration of a validation, restoring the previous value on drop (so nested
+/// validations compose). The exact twin of [`PropertyFunctionScope`].
+#[must_use]
+#[derive(Debug)]
+pub struct AggregateScope {
+    previous: Option<Arc<AggregateRegistry>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for AggregateScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_AGGREGATES.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `registry` as the current custom-aggregate table, returning a guard that
+/// restores the previous table when dropped.
+pub fn enter_aggregate_scope(registry: Arc<AggregateRegistry>) -> AggregateScope {
+    let previous = CURRENT_AGGREGATES.with(|slot| slot.borrow_mut().replace(registry));
+    AggregateScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The custom-aggregate table installed on this thread, if a validation installed
+/// one.
+///
+/// Read on the orchestrating thread and handed to each focus worker's
+/// [`enter_aggregate_scope`], because a thread-local is not visible from the
+/// threads a worker pool forks — the same reason [`current_governors`] exists.
+#[must_use]
+pub fn current_aggregates() -> Option<Arc<AggregateRegistry>> {
+    CURRENT_AGGREGATES.with(|slot| slot.borrow().clone())
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path

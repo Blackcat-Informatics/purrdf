@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
+# the exact sibling shape of `../undescribed-entry/manifest.ttl`, except this
+# manifest's sole `mf:entries` member carries the `rdf:type`/`mf:name`/
+# `mf:action` triples the row-grouping SELECT in `crate::manifest::load`
+# requires. It must load cleanly, with exactly one case, proving the negative
+# fixture's rejection is triggered specifically by the missing description —
+# not by some other structural defect (a malformed list, an unresolvable base,
+# a parse error) common to both fixtures.
+#
+# Deliberately placed OUTSIDE `suite/`, for the same reason as its sibling:
+# `crates/sparql-conformance/tests/sparql_conformance.rs`'s
+# `datatest_stable::harness!` only discovers `suite/**/manifest.ttl`, so this
+# file is never picked up as a live conformance case — it exists ONLY to be
+# fed to `manifest::load` directly by `crates/sparql-conformance/tests/
+# suite_inventory.rs`'s `broken_manifest_with_a_described_entry_loads_cleanly`
+# test.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<#manifest> a mf:Manifest ;
+    mf:entries ( <#describedEntry> ) .
+
+# Unlike <#undescribedEntry> in the sibling fixture, this entry carries all
+# three triples the loader's row-grouping SELECT requires to bind a row:
+# rdf:type, mf:name, and mf:action (a bare-IRI action, the same shape
+# purrdf-extend's own PositiveSyntaxTest/NegativeSyntaxTest cases use — see
+# `purrdf_extend_case_count_and_kinds` in `suite_inventory.rs`).
+<#describedEntry> a mf:PositiveSyntaxTest ;
+    mf:name "describedEntry" ;
+    mf:action <describedEntry.rq> .

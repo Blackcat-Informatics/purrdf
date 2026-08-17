@@ -83,41 +83,49 @@ impl Query {
                 pattern,
                 dataset,
                 base_iri,
+                version,
             } => Self::Select {
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,
+                version,
             },
             Self::Construct {
                 template,
                 pattern,
                 dataset,
                 base_iri,
+                version,
             } => Self::Construct {
                 template,
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,
+                version,
             },
             Self::Describe {
                 pattern,
                 targets,
                 dataset,
                 base_iri,
+                version,
             } => Self::Describe {
                 pattern: map_core_pattern(pattern, f),
                 targets,
                 dataset,
                 base_iri,
+                version,
             },
             Self::Ask {
                 pattern,
                 dataset,
                 base_iri,
+                version,
             } => Self::Ask {
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,
+                version,
             },
         }
     }

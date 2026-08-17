@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
+    AggregateFunction, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
     PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
@@ -290,12 +290,84 @@ fn validate_reproducible_construct(query: &Query) -> Result<(), ProjectionError>
             "dataset-description CONSTRUCT templates must not mint blank nodes",
         ));
     }
-    if pattern_reaches_non_reproducible_builtin(pattern) {
-        return Err(ProjectionError::configuration(
-            "dataset-description CONSTRUCT must not call NOW, RAND, UUID, STRUUID, BNODE, or blank-minting list functions",
-        ));
+    if let Some(cause) = pattern_reaches_non_reproducible_builtin(pattern) {
+        return Err(ProjectionError::configuration(format!(
+            "dataset-description CONSTRUCT must not {}",
+            cause.reason()
+        )));
     }
     Ok(())
+}
+
+/// Which non-reproducible SPARQL construct a CONSTRUCT WHERE pattern/expression walk
+/// found, reachable from [`pattern_reaches_non_reproducible_builtin`] or
+/// [`expression_reaches_non_reproducible_builtin`].
+///
+/// This replaces a plain `bool` the two walk functions used to return: every refusal
+/// was funnelled through ONE message naming only `NOW`, `RAND`, `UUID`, `STRUUID`,
+/// `BNODE`, and the blank-minting list functions — accurate for those five/two causes,
+/// but three later-added causes (a custom aggregate call, a custom scalar-function
+/// call, a `SERVICE` clause) reused the same boolean and inherited that message even
+/// though none of them appears in it, so a caller was told the wrong reason for the
+/// refusal. Each variant here names exactly one concrete construct, and
+/// [`validate_reproducible_construct`] reports it directly instead of restating the
+/// whole historical list. Mirrors the same fix already applied to the planner's two
+/// admission seams (`crate::property_fn_plan`'s `PlanSeam`, in `purrdf-sparql-eval`):
+/// a typed cause the raiser attaches, read at the one call site that turns it into a
+/// message, instead of a boolean every call site has to reinterpret from scratch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NonReproducibleCause {
+    /// `NOW()` — the result depends on wall-clock time.
+    Now,
+    /// `RAND()` — the result depends on the evaluator's RNG state.
+    Rand,
+    /// `UUID()` — mints a fresh, non-reproducible IRI.
+    Uuid,
+    /// `STRUUID()` — mints a fresh, non-reproducible literal.
+    StrUuid,
+    /// `BNODE()` — mints a fresh blank node identity.
+    BNode,
+    /// `purrdf:listSlice`/`purrdf:listConcat` — both mint a fresh `rdf:List` (a chain
+    /// of fresh blank nodes) rather than returning an existing term.
+    ListFunction(PurrdfFn),
+    /// `AGG(<iri>, …)` — a host-supplied reduction whose reproducibility is a
+    /// property of the registry the *evaluation* carries, unknowable here at
+    /// shape-validation time — see `pattern_reaches_non_reproducible_builtin`'s
+    /// `Group` arm for the full reasoning.
+    CustomAggregate,
+    /// `<iri>(args…)` outside every configured extension-function namespace — a
+    /// host-supplied scalar function, the identical unknowable-reproducibility
+    /// situation as [`Self::CustomAggregate`].
+    CustomFunction,
+    /// A property-function call recognized under the caller's configured
+    /// `ParserOptions` — a host-supplied relation, the identical
+    /// unknowable-reproducibility situation as [`Self::CustomAggregate`].
+    PropertyFunction,
+    /// A `SERVICE` (or `SERVICE SILENT`) clause — forwards to a live external
+    /// endpoint whose data can change between calls.
+    Service,
+}
+
+impl NonReproducibleCause {
+    /// The clause embedded after `"dataset-description CONSTRUCT must not "` —
+    /// names the exact construct this cause represents, never a restatement of every
+    /// possible cause.
+    fn reason(self) -> String {
+        match self {
+            Self::Now => "call NOW".to_owned(),
+            Self::Rand => "call RAND".to_owned(),
+            Self::Uuid => "call UUID".to_owned(),
+            Self::StrUuid => "call STRUUID".to_owned(),
+            Self::BNode => "call BNODE".to_owned(),
+            Self::ListFunction(kind) => {
+                format!("call the blank-minting list function {}", kind.local_name())
+            }
+            Self::CustomAggregate => "call a custom aggregate function".to_owned(),
+            Self::CustomFunction => "call a custom scalar function".to_owned(),
+            Self::PropertyFunction => "use a property-function call".to_owned(),
+            Self::Service => "use a SERVICE clause".to_owned(),
+        }
+    }
 }
 
 fn triple_pattern_contains_blank(pattern: &TriplePattern) -> bool {
@@ -310,68 +382,75 @@ fn term_pattern_contains_blank(term: &TermPattern) -> bool {
     }
 }
 
-fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
+fn pattern_reaches_non_reproducible_builtin(
+    pattern: &GraphPattern,
+) -> Option<NonReproducibleCause> {
     match pattern {
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => None,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right } => {
-            pattern_reaches_non_reproducible_builtin(left)
-                || pattern_reaches_non_reproducible_builtin(right)
-        }
+        | GraphPattern::Minus { left, right } => pattern_reaches_non_reproducible_builtin(left)
+            .or_else(|| pattern_reaches_non_reproducible_builtin(right)),
         GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Project { inner, .. } => pattern_reaches_non_reproducible_builtin(inner),
-        GraphPattern::Filter { expr, inner } => {
-            expression_reaches_non_reproducible_builtin(expr)
-                || pattern_reaches_non_reproducible_builtin(inner)
-        }
+        GraphPattern::Filter { expr, inner } => expression_reaches_non_reproducible_builtin(expr)
+            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
         GraphPattern::Extend {
             inner, expression, ..
-        } => {
-            expression_reaches_non_reproducible_builtin(expression)
-                || pattern_reaches_non_reproducible_builtin(inner)
-        }
+        } => expression_reaches_non_reproducible_builtin(expression)
+            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
-        } => {
-            pattern_reaches_non_reproducible_builtin(left)
-                || pattern_reaches_non_reproducible_builtin(right)
-                || expression
+        } => pattern_reaches_non_reproducible_builtin(left)
+            .or_else(|| pattern_reaches_non_reproducible_builtin(right))
+            .or_else(|| {
+                expression
                     .as_ref()
-                    .is_some_and(expression_reaches_non_reproducible_builtin)
-        }
+                    .and_then(expression_reaches_non_reproducible_builtin)
+            }),
         GraphPattern::OrderBy { inner, expression } => {
-            pattern_reaches_non_reproducible_builtin(inner)
-                || expression.iter().any(|order| match order {
+            pattern_reaches_non_reproducible_builtin(inner).or_else(|| {
+                expression.iter().find_map(|order| match order {
                     OrderExpression::Asc(expression) | OrderExpression::Desc(expression) => {
                         expression_reaches_non_reproducible_builtin(expression)
                     }
                 })
+            })
         }
         GraphPattern::Group {
             inner, aggregates, ..
-        } => {
-            pattern_reaches_non_reproducible_builtin(inner)
-                || aggregates.iter().any(|(_, aggregate)| match aggregate {
-                    AggregateExpression::CountStar { .. } => false,
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        expression_reaches_non_reproducible_builtin(expression)
-                    }
-                })
-        }
+        } => pattern_reaches_non_reproducible_builtin(inner).or_else(|| {
+            aggregates.iter().find_map(|(_, aggregate)| {
+                // A `Custom` aggregate invokes a HOST-supplied reduction, and whether
+                // that reduction is reproducible is a property of the registry the
+                // *evaluation* carries — the exact unknowable-at-shape-validation-time
+                // situation the `PropertyFunction` arm below documents. Unlike a
+                // property-function call, `AGG(<iri>, …)` needs no `ParserOptions` seam
+                // to parse (`parser.rs`'s `parse_agg_call` recognizes it unconditionally),
+                // so this check cannot lean on a caller-configured gate the way the
+                // `PropertyFunction` arm's doc explains its own dead-under-default case —
+                // a `Custom` aggregate is reachable under `ParserOptions::default`, always.
+                if matches!(aggregate.function(), AggregateFunction::Custom(_)) {
+                    Some(NonReproducibleCause::CustomAggregate)
+                } else {
+                    aggregate
+                        .args()
+                        .iter()
+                        .find_map(expression_reaches_non_reproducible_builtin)
+                }
+            })
+        }),
         // A property-function call invokes a HOST-supplied relation, and whether that
         // relation is reproducible is a property of the registry the *evaluation*
         // carries — which is not available here, at shape-validation time, and cannot
         // be inferred from the IRI. A dataset description must be byte-reproducible, so
-        // the unknowable case is refused: `true` conservatively classifies every call as
-        // non-reproducible.
+        // the unknowable case is refused conservatively.
         //
         // Reaching this arm at all requires the caller to have recognized the
         // predicate as a call in the first place: `parse_construct` parses under
@@ -380,16 +459,28 @@ fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
         // `property_fn_iris` produces `GraphPattern::PropertyFunction` rather than an
         // ordinary triple pattern. Under [`ParserOptions::default`] (what
         // [`ConstructViewConfig::new`] uses) this arm never fires.
-        GraphPattern::PropertyFunction(_) => true,
+        GraphPattern::PropertyFunction(_) => Some(NonReproducibleCause::PropertyFunction),
+        // `SERVICE` forwards `inner` to a remote endpoint resolved through a
+        // `RemoteQuerySource` the *evaluation* carries (`purrdf-sparql-eval`'s
+        // `EvalCtx::remote`) — not visible here, at shape-validation time, and not
+        // inferrable from the endpoint IRI (even a fixed, non-variable endpoint names a
+        // live external service whose data can change between calls). The identical
+        // "unknowable registry" reasoning the `PropertyFunction` arm states applies
+        // one-for-one, so `SERVICE` gets the same unconditional refusal regardless of
+        // `inner`'s own content or of `silent` — a swallowed remote failure is still a
+        // remote dependency, just one that fails quietly instead of loudly.
+        GraphPattern::Service { .. } => Some(NonReproducibleCause::Service),
     }
 }
 
-fn expression_reaches_non_reproducible_builtin(expression: &Expression) -> bool {
+fn expression_reaches_non_reproducible_builtin(
+    expression: &Expression,
+) -> Option<NonReproducibleCause> {
     match expression {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
-        | Expression::Bound(_) => false,
+        | Expression::Bound(_) => None,
         Expression::Or(left, right)
         | Expression::And(left, right)
         | Expression::Equal(left, right)
@@ -401,39 +492,50 @@ fn expression_reaches_non_reproducible_builtin(expression: &Expression) -> bool 
         | Expression::Add(left, right)
         | Expression::Subtract(left, right)
         | Expression::Multiply(left, right)
-        | Expression::Divide(left, right) => {
-            expression_reaches_non_reproducible_builtin(left)
-                || expression_reaches_non_reproducible_builtin(right)
-        }
+        | Expression::Divide(left, right) => expression_reaches_non_reproducible_builtin(left)
+            .or_else(|| expression_reaches_non_reproducible_builtin(right)),
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
             expression_reaches_non_reproducible_builtin(inner)
         }
         Expression::In(head, list) => {
-            expression_reaches_non_reproducible_builtin(head)
-                || list.iter().any(expression_reaches_non_reproducible_builtin)
+            expression_reaches_non_reproducible_builtin(head).or_else(|| {
+                list.iter()
+                    .find_map(expression_reaches_non_reproducible_builtin)
+            })
         }
         Expression::If(condition, then_value, else_value) => {
             expression_reaches_non_reproducible_builtin(condition)
-                || expression_reaches_non_reproducible_builtin(then_value)
-                || expression_reaches_non_reproducible_builtin(else_value)
+                .or_else(|| expression_reaches_non_reproducible_builtin(then_value))
+                .or_else(|| expression_reaches_non_reproducible_builtin(else_value))
         }
-        Expression::Coalesce(list) => list.iter().any(expression_reaches_non_reproducible_builtin),
-        Expression::FunctionCall(function, arguments) => {
-            matches!(
-                function,
-                Function::Now
-                    | Function::Rand
-                    | Function::Uuid
-                    | Function::StrUuid
-                    | Function::BNode
-            ) || matches!(
-                function,
-                Function::Purrdf(call)
-                    if matches!(call.fn_kind, PurrdfFn::ListSlice | PurrdfFn::ListConcat)
-            ) || arguments
+        Expression::Coalesce(list) => list
+            .iter()
+            .find_map(expression_reaches_non_reproducible_builtin),
+        Expression::FunctionCall(function, arguments) => match function {
+            Function::Now => Some(NonReproducibleCause::Now),
+            Function::Rand => Some(NonReproducibleCause::Rand),
+            Function::Uuid => Some(NonReproducibleCause::Uuid),
+            Function::StrUuid => Some(NonReproducibleCause::StrUuid),
+            Function::BNode => Some(NonReproducibleCause::BNode),
+            Function::Purrdf(call)
+                if matches!(call.fn_kind, PurrdfFn::ListSlice | PurrdfFn::ListConcat) =>
+            {
+                Some(NonReproducibleCause::ListFunction(call.fn_kind))
+            }
+            // A `Custom` scalar call invokes a HOST-supplied function, and whether
+            // that function is reproducible is a property of the registry the
+            // *evaluation* carries — the same unknowable-at-shape-validation-time
+            // situation `pattern_reaches_non_reproducible_builtin`'s `PropertyFunction`
+            // arm documents. `<iri>(args…)` needs no `ParserOptions` seam either: any
+            // call-position IRI outside every *configured* extension-function
+            // namespace falls through to `Function::Custom` unconditionally (see
+            // `parser.rs`'s `parse_iri_or_function`), so this is reachable under
+            // `ParserOptions::default`, always.
+            Function::Custom(_) => Some(NonReproducibleCause::CustomFunction),
+            _ => arguments
                 .iter()
-                .any(expression_reaches_non_reproducible_builtin)
-        }
+                .find_map(expression_reaches_non_reproducible_builtin),
+        },
         Expression::Exists(pattern) => pattern_reaches_non_reproducible_builtin(pattern),
     }
 }
@@ -911,17 +1013,91 @@ mod tests {
 
     #[test]
     fn construct_rejects_non_reproducible_and_blank_minting_queries() {
-        for query in [
-            "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(NOW() AS ?value) }",
-            "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(RAND() AS ?value) }",
-            "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(UUID() AS ?value) }",
-            "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(STRUUID() AS ?value) }",
-            "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(BNODE() AS ?value) }",
-            "CONSTRUCT { _:generated <https://example.org/p> <https://example.org/o> } WHERE {}",
+        // Each builtin's own name must appear in the message the production parse
+        // path produces — not a restatement of the whole non-reproducible-builtin
+        // list regardless of which one actually fired (that used to be the ONE
+        // message every refusal here returned).
+        for (query, own_name) in [
+            (
+                "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(NOW() AS ?value) }",
+                "NOW",
+            ),
+            (
+                "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(RAND() AS ?value) }",
+                "RAND",
+            ),
+            (
+                "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(UUID() AS ?value) }",
+                "UUID",
+            ),
+            (
+                "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(STRUUID() AS ?value) }",
+                "STRUUID",
+            ),
+            (
+                "CONSTRUCT { <https://example.org/s> <https://example.org/p> ?value } WHERE { BIND(BNODE() AS ?value) }",
+                "BNODE",
+            ),
         ] {
+            let error = ConstructViewConfig::new(query, None, limits(), 1_000, 10, 10)
+                .expect_err(&format!("query must be rejected: {query}"));
             assert!(
-                ConstructViewConfig::new(query, None, limits(), 1_000, 10, 10).is_err(),
-                "query must be rejected: {query}"
+                error.message().contains(own_name),
+                "message must name its own construct {own_name:?}, got {:?}",
+                error.message()
+            );
+        }
+
+        // Blank-minting templates are rejected under a separate message entirely
+        // (they never reach the non-reproducible-builtin walk at all).
+        let blank_error = ConstructViewConfig::new(
+            "CONSTRUCT { _:generated <https://example.org/p> <https://example.org/o> } WHERE {}",
+            None,
+            limits(),
+            1_000,
+            10,
+            10,
+        )
+        .expect_err("blank-minting template must be rejected");
+        assert!(blank_error.message().contains("blank"));
+    }
+
+    #[test]
+    fn list_functions_are_refused_and_name_their_own_construct() {
+        // `purrdf:listSlice`/`purrdf:listConcat` mint fresh blank nodes (a fresh
+        // `rdf:List`), so both are refused like the other blank-minting builtins —
+        // each naming its OWN local name, not the other's.
+        for (call, own_name) in [
+            ("purrdf:listSlice(?list, 0, 1)", "listSlice"),
+            ("purrdf:listConcat(?list, ?list)", "listConcat"),
+        ] {
+            let query = format!(
+                "PREFIX purrdf: <https://example.org/fn/> \
+                 CONSTRUCT {{ <https://example.org/s> <https://example.org/p> ?value }} WHERE {{ \
+                 ?s <https://example.org/source-predicate> ?list . BIND({call} AS ?value) }}"
+            );
+            let options = ParserOptions {
+                extension_fn_namespaces: vec!["https://example.org/fn/".to_owned()],
+                ..ParserOptions::default()
+            };
+            let error = ConstructViewConfig::new_with_parser_options(
+                &query,
+                None,
+                limits(),
+                1_000,
+                10,
+                10,
+                &options,
+            )
+            .expect_err(&format!("{call} must be rejected"));
+            assert_eq!(
+                error.kind(),
+                super::super::ProjectionErrorKind::Configuration
+            );
+            assert!(
+                error.message().contains(own_name),
+                "message must name its own construct {own_name:?}, got {:?}",
+                error.message()
             );
         }
     }
@@ -963,6 +1139,11 @@ mod tests {
             error.kind(),
             super::super::ProjectionErrorKind::Configuration
         );
+        assert!(
+            error.message().contains("property-function"),
+            "message must name the property-function construct, got {:?}",
+            error.message()
+        );
 
         // An ordinary predicate that the configured options do NOT recognize is
         // still accepted even with the seam configured for a different IRI.
@@ -980,6 +1161,113 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn custom_aggregate_call_is_refused_but_builtin_aggregates_stay_reproducible() {
+        // A `Custom` aggregate (the `AGG(<iri>, …)` surface) invokes host-supplied
+        // reduction code reachable through the aggregate registry the *evaluation*
+        // carries — unlike a property-function call, this needs no `ParserOptions`
+        // seam at all (`parser.rs`'s `parse_agg_call` recognizes `AGG` unconditionally),
+        // so it must be refused even under `ParserOptions::default`.
+        let custom_query = "CONSTRUCT { ?s <https://example.org/copied> ?agg } WHERE { \
+             SELECT ?s (AGG(<https://example.org/agg/custom>, ?o) AS ?agg) WHERE { \
+             ?s <https://example.org/source-predicate> ?o } GROUP BY ?s }";
+        let error = ConstructViewConfig::new(custom_query, None, limits(), 1_000, 10, 10)
+            .expect_err("a custom aggregate call must be refused");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::Configuration
+        );
+        assert!(
+            error.message().contains("custom aggregate"),
+            "message must name the custom-aggregate construct, not the historical \
+             NOW/RAND/UUID/STRUUID/BNODE/list-function text; got {:?}",
+            error.message()
+        );
+
+        // Built-in aggregates carry no host dependency and must remain accepted —
+        // the fix above must not over-correct into refusing every aggregate.
+        for builtin in [
+            "COUNT(?o)",
+            "SUM(?o)",
+            "AVG(?o)",
+            "MIN(?o)",
+            "MAX(?o)",
+            "SAMPLE(?o)",
+        ] {
+            let builtin_query = format!(
+                "CONSTRUCT {{ ?s <https://example.org/copied> ?agg }} WHERE {{ \
+                 SELECT ?s ({builtin} AS ?agg) WHERE {{ \
+                 ?s <https://example.org/source-predicate> ?o }} GROUP BY ?s }}"
+            );
+            assert!(
+                ConstructViewConfig::new(&builtin_query, None, limits(), 1_000, 10, 10).is_ok(),
+                "built-in aggregate must stay reproducible: {builtin}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_scalar_function_call_is_refused_as_non_reproducible() {
+        // A `Function::Custom` call (any call-position IRI outside every configured
+        // extension-function namespace) invokes host-supplied code reachable through
+        // the function registry the *evaluation* carries, exactly like a `Custom`
+        // aggregate or a property function — and, like the aggregate surface, needs
+        // no `ParserOptions` seam to parse (`parser.rs`'s `parse_iri_or_function`
+        // falls through to `Function::Custom` unconditionally).
+        let query = "CONSTRUCT { ?s <https://example.org/copied> ?value } WHERE { \
+             ?s <https://example.org/source-predicate> ?o . \
+             BIND(<https://example.org/fn/custom>(?o) AS ?value) }";
+        let error = ConstructViewConfig::new(query, None, limits(), 1_000, 10, 10)
+            .expect_err("a custom scalar-function call must be refused");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::Configuration
+        );
+        assert!(
+            error.message().contains("custom scalar function"),
+            "message must name the custom-scalar-function construct, not the historical \
+             NOW/RAND/UUID/STRUUID/BNODE/list-function text; got {:?}",
+            error.message()
+        );
+
+        // An ordinary built-in scalar function call stays accepted.
+        let builtin_query = "CONSTRUCT { ?s <https://example.org/copied> ?value } WHERE { \
+             ?s <https://example.org/source-predicate> ?o . \
+             BIND(STR(?o) AS ?value) }";
+        assert!(ConstructViewConfig::new(builtin_query, None, limits(), 1_000, 10, 10).is_ok());
+    }
+
+    #[test]
+    fn service_clause_is_refused_as_non_reproducible() {
+        // `SERVICE` forwards its inner pattern to a remote endpoint resolved through
+        // a `RemoteQuerySource` the *evaluation* carries — not visible at this
+        // shape-validation point, and not inferrable from even a fixed endpoint IRI
+        // (a live external service's data can change between calls). It needs no
+        // `ParserOptions` seam either: `SERVICE` is ordinary SPARQL 1.1 syntax.
+        let query = "CONSTRUCT { ?s <https://example.org/copied> ?o } WHERE { \
+             SERVICE <https://example.org/endpoint> { \
+             ?s <https://example.org/source-predicate> ?o } }";
+        let error = ConstructViewConfig::new(query, None, limits(), 1_000, 10, 10)
+            .expect_err("a SERVICE clause must be refused");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::Configuration
+        );
+        assert!(
+            error.message().contains("SERVICE"),
+            "message must name the SERVICE construct, not the historical \
+             NOW/RAND/UUID/STRUUID/BNODE/list-function text; got {:?}",
+            error.message()
+        );
+
+        // `SERVICE SILENT` is refused identically — a swallowed remote failure is
+        // still a remote dependency, just one that fails quietly instead of loudly.
+        let silent_query = "CONSTRUCT { ?s <https://example.org/copied> ?o } WHERE { \
+             SERVICE SILENT <https://example.org/endpoint> { \
+             ?s <https://example.org/source-predicate> ?o } }";
+        assert!(ConstructViewConfig::new(silent_query, None, limits(), 1_000, 10, 10).is_err());
     }
 
     #[test]

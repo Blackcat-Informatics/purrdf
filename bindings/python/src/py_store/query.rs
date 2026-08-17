@@ -33,10 +33,10 @@ use std::time::{Duration, Instant};
 
 use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
-    BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorEvidence,
-    MemoryRelation, NativeSparqlEngine, ParserOptions, PartialAnswers, PropertyFunctionRegistry,
-    QueryGovernors, ResourceDimension, StandpointPredicates, StopCause, StopSignal,
-    TrippedGovernor, WallDeadline,
+    AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
+    GovernorEvidence, MemoryRelation, NativeSparqlEngine, ParserOptions, PartialAnswers,
+    PropertyFunctionRegistry, QueryGovernors, ResourceDimension, StandpointPredicates, StopCause,
+    StopSignal, TrippedGovernor, WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -295,6 +295,32 @@ pub(super) fn build_relations(
         registry.register(iri, Arc::new(table));
     }
     Ok(Some(registry))
+}
+
+/// Build the [`AggregateRegistry`] for one query/update call from the caller's
+/// `aggregate_namespace` keyword, or `None` when it is unset.
+///
+/// This is the ENTIRE Python surface for purrdf's first-party statistical aggregate set
+/// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`,
+/// `FIRST`, `LAST`, `TOPK` — see `purrdf_sparql_eval::stat_agg`):
+/// [`AggregateRegistry::register_statistical_aggregates`] takes only an IRI namespace
+/// string, so it crosses the Python boundary exactly the way `property_fn_namespaces`
+/// does, with no per-aggregate marshaling and no Python callable involved. The GENERAL
+/// custom-aggregate seam (`purrdf_sparql_eval::agg_fn::AggregateRegistry::register`, an
+/// arbitrary `init`/`step`/`combine`/`finish` closure) is Rust-host-only — a fold has no
+/// data-only reduction the way a property-function relation does — and this binding
+/// exposes no surface for it, not even a namespace-only one, because there is no
+/// namespace-only ENTRY POINT for an arbitrary aggregate the way there is for the
+/// closed statistical set.
+///
+/// `namespace` is caller configuration, never a purrdf-owned vocabulary: omitting the
+/// keyword leaves every one of the ten names an ordinary unregistered custom-aggregate
+/// IRI, refused at prepare time exactly as any other unregistered `AGG(<iri>, …)` call.
+pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
+    let namespace = namespace?;
+    let mut registry = AggregateRegistry::new();
+    registry.register_statistical_aggregates(&namespace);
+    Some(registry)
 }
 
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
