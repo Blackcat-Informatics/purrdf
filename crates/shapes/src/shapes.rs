@@ -368,11 +368,19 @@ pub struct Shapes {
     /// [`AggregateRegistry`], registers its aggregates, and assigns it to this
     /// PUBLIC field after parsing (`shapes.aggregates = Arc::new(registry)`),
     /// exactly the way it would replace [`Self::functions`] with a hand-built
-    /// table. Every validation entry point installs whatever is here for the
-    /// query bodies it evaluates — sequential and parallel focus-chunk workers
-    /// alike — via [`crate::sparql::enter_aggregate_scope`]. Empty by default,
-    /// in which case `AGG(<iri>, …)` calls fail with the usual "no custom
-    /// aggregate is registered" error.
+    /// table. Every validation entry point reads THIS field directly — not a
+    /// caller-installed thread-local scope — to build the aggregate scope for
+    /// the query bodies it evaluates, sequential and parallel focus-chunk
+    /// workers alike, via [`crate::sparql::enter_aggregate_scope`]. That holds
+    /// for every public surface that reaches a focus node, including
+    /// [`crate::engine::PreparedValidator::validate`],
+    /// [`crate::engine::PreparedValidator::validate_focus_nodes`], and
+    /// [`crate::engine::PreparedValidator::validate_focus_node_ids`], each of
+    /// which validates on a prepared validator long after the scope
+    /// [`crate::engine::PreparedValidator::new`] installed for its own target
+    /// resolution has already been dropped. Empty by default, in which case
+    /// `AGG(<iri>, …)` calls fail with the usual "no custom aggregate is
+    /// registered" error.
     pub aggregates: Arc<AggregateRegistry>,
     /// SHACL-AF `sh:SPARQLTargetType` declarations declared in the shapes graph,
     /// keyed by target-type IRI string. Empty when the graph declares no custom

@@ -266,13 +266,23 @@ pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
 ///
 /// This is the inverse of [`crate::json::to_json`]'s additive extension (see
 /// [`crate::model::ProvenanceNamespace`]'s module docs): the writer emits the
-/// member keyed under the caller-supplied namespace's `prefix` ONLY when both
-/// the source `provenance` was non-empty and a namespace was supplied, so a
-/// reader must be told the SAME namespace to know which top-level member to
-/// decode — this crate cannot guess it, because PurRDF mints no vocabulary
-/// IRIs of its own. A document with no member under `namespace.prefix()`
-/// (never written, or written under a different namespace) decodes to the
-/// empty provenance, exactly like a document nothing ever populated.
+/// member keyed under the caller-supplied namespace's `prefix`, but the KEY
+/// SPELLING is not what identifies the member as this caller's own — a bare
+/// string like `"prov"` has no uniqueness guarantee (the actual W3C PROV
+/// namespace, `http://www.w3.org/ns/prov#`, is commonly bound to exactly that
+/// prefix). Identity is the `"namespace"` field the writer records INSIDE the
+/// member (the JSON twin of the XML writer's `xmlns:{prefix}="{iri}"`
+/// declaration): every top-level object-valued member is scanned, and the
+/// first one whose own `"namespace"` field equals `namespace.iri()` is
+/// decoded — regardless of which key it happens to be spelled under. This
+/// mirrors [`crate::xml_read::provenance_from_xml`]'s namespace-URI match
+/// exactly: a document that writes this caller's IRI under a DIFFERENT
+/// top-level key still decodes correctly, and a document that reuses this
+/// caller's PREFIX spelling for an unrelated namespace is correctly not read
+/// as this caller's extension. A document with no member recording
+/// `namespace.iri()` (never written, or written under a different namespace)
+/// decodes to the empty provenance, exactly like a document nothing ever
+/// populated.
 ///
 /// The `queryForm` field is read to VALIDATE the member's shape but is not
 /// itself carried in [`ResultProvenance`] (it is derived from the result kind
@@ -281,7 +291,7 @@ pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
 /// # Errors
 ///
 /// Returns [`Error::Format`] on malformed JSON, a non-object document, or a
-/// member present under `namespace.prefix()` whose shape does not match the
+/// member recording `namespace.iri()` whose shape does not match the
 /// writer's (`queryForm`/`queryHash`/`engine`/`solutions[].sources[]`, all
 /// strings).
 pub fn provenance_from_json(
@@ -292,12 +302,14 @@ pub fn provenance_from_json(
     let obj = doc
         .as_object()
         .ok_or_else(|| fmt("top level is not an object"))?;
-    let Some(member) = obj_get(obj, namespace.prefix()) else {
+    let iri = namespace.iri();
+    let Some(member_obj) = obj.iter().find_map(|(_, value)| {
+        let candidate = value.as_object()?;
+        let recorded = obj_get(candidate, "namespace").and_then(Json::as_str)?;
+        (recorded == iri).then_some(candidate)
+    }) else {
         return Ok(ResultProvenance::default());
     };
-    let member_obj = member
-        .as_object()
-        .ok_or_else(|| fmt("provenance member is not an object"))?;
     let query_hash = obj_get(member_obj, "queryHash")
         .and_then(Json::as_str)
         .map(str::to_owned);
@@ -972,24 +984,58 @@ mod tests {
         assert!(decoded.is_empty());
     }
 
-    /// Reading under a DIFFERENT namespace than the one the document was
-    /// written with also decodes to empty (the member is keyed by prefix; a
-    /// mismatched prefix finds nothing rather than mis-decoding another key).
+    /// Namespace-by-IRI pin (false NEGATIVE, mirroring
+    /// [`crate::xml_read::tests::provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace`]):
+    /// a document that records the caller's OWN namespace IRI under a top-level
+    /// key spelled with a DIFFERENT prefix than this crate's own writer happens
+    /// to use (`p` instead of `prov`) must still decode — JSON provenance
+    /// identity is IRI-based (the `"namespace"` field), not top-level-key-based.
     #[test]
-    fn provenance_under_a_different_namespace_is_not_found() {
-        let result = SparqlResult::Boolean(true);
-        let provenance = ResultProvenance {
-            engine: Some("e".to_owned()),
-            ..Default::default()
-        };
-        let namespace = ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+    fn provenance_reads_correctly_under_an_alternate_prefix_for_the_same_namespace() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
             .expect("valid namespace");
-        let outcome = to_json(&result, &provenance, Some(&namespace)).expect("serializes");
+        let doc = br#"{"head":{},"boolean":true,"p":{
+            "namespace":"https://example.org/ns/prov#",
+            "queryForm":"ask",
+            "queryHash":"deadbeef",
+            "engine":"purrdf-sparql-eval"
+        }}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes");
+        assert_eq!(
+            decoded,
+            ResultProvenance {
+                query_hash: Some("deadbeef".to_owned()),
+                engine: Some("purrdf-sparql-eval".to_owned()),
+                solutions: Vec::new(),
+            }
+        );
+    }
 
-        let other = ProvenanceNamespace::new("other", "http://example.org/ns/other#")
+    /// Namespace-by-IRI pin (false POSITIVE, mirroring
+    /// [`crate::xml_read::tests::foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance`]):
+    /// a document that reuses this crate's writer's OWN prefix spelling
+    /// (`prov`) as its top-level key, but records an UNRELATED namespace IRI —
+    /// here the actual W3C PROV namespace (`http://www.w3.org/ns/prov#`), the
+    /// single most common real-world `prov:` binding — must NOT be read as the
+    /// caller's provenance extension just because the top-level key spelling
+    /// matches; only the recorded `"namespace"` IRI identifies it. This is the
+    /// direction the old, tautological `provenance_under_a_different_namespace_is_not_found`
+    /// test (which varied prefix AND iri together) could never actually observe.
+    #[test]
+    fn foreign_namespace_under_the_writers_own_prefix_is_not_read_as_provenance() {
+        let namespace = ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
             .expect("valid namespace");
-        let decoded = provenance_from_json(&outcome.bytes, &other).expect("decodes without error");
-        assert!(decoded.is_empty());
+        let doc = br#"{"head":{},"boolean":true,"prov":{
+            "namespace":"http://www.w3.org/ns/prov#",
+            "queryForm":"ask",
+            "queryHash":"deadbeef"
+        }}"#;
+        let decoded = provenance_from_json(doc, &namespace).expect("decodes without error");
+        assert!(
+            decoded.is_empty(),
+            "a `prov`-keyed member recording the W3C PROV namespace must not be mistaken \
+             for this caller's own `prov` namespace extension"
+        );
     }
 
     #[test]

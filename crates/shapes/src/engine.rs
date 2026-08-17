@@ -528,15 +528,18 @@ fn evaluate_shape_focus_nodes(
         return Ok(out);
     }
 
-    // All three caller-injected tables travel to the workers together. A thread-local is
-    // invisible from the threads a chunk fork creates, so the property-function and
-    // custom-aggregate registries are snapshotted HERE, on the orchestrating thread, and
-    // re-installed per chunk beside the function registry — otherwise a `sh:select` body
-    // whose predicate is a property function, or whose `GROUP BY` uses `AGG(<iri>, …)`,
-    // would resolve on the sequential path and fail to resolve on the parallel one, which
-    // is a scheduling-dependent verdict.
+    // `functions` and `aggregates` are OWNED by the `Shapes` value (the caller installs
+    // them once, on `Shapes::functions` / `Shapes::aggregates`, before validation ever
+    // runs), so every focus-chunk worker gets its own scope built directly from `shapes`
+    // — no thread-local read, no dependency on which entry point happened to install an
+    // ambient scope before reaching here. `relations` (property functions) has no
+    // `Shapes`-owned home: it is a genuinely call-scoped, caller-injected table, so it is
+    // still snapshotted from the orchestrating thread's ambient scope. A thread-local is
+    // invisible from the threads a chunk fork creates, so that snapshot is taken HERE and
+    // re-installed per chunk — otherwise a `sh:select` body whose predicate is a property
+    // function would resolve on the sequential path and fail to resolve on the parallel
+    // one, which is a scheduling-dependent verdict.
     let relations = crate::sparql::current_property_functions();
-    let aggregates = crate::sparql::current_aggregates();
     crate::parallel::try_map_chunks(
         focus_nodes,
         || {
@@ -545,7 +548,7 @@ fn evaluate_shape_focus_nodes(
                 relations
                     .clone()
                     .map(crate::sparql::enter_property_function_scope),
-                aggregates.clone().map(crate::sparql::enter_aggregate_scope),
+                crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates)),
             )
         },
         |_scopes, out, focus| {
@@ -2557,6 +2560,319 @@ mod tests {
             "above-threshold error must name the refusal: {above_err}"
         );
         assert!(above_err.contains(AGG_IRI), "got: {above_err}");
+    }
+
+    /// [`PreparedValidator`] must source `aggregates` from the `Shapes` value exactly as
+    /// it already does `functions` — not from the caller's ambient thread-local scope,
+    /// which `PreparedValidator::new` installs only for its OWN target-resolution pass
+    /// and drops the moment `new` returns. Every later call on the SAME prepared
+    /// validator — `validate`, `validate_focus_nodes`, `validate_focus_node_ids` — must
+    /// still resolve the registered aggregate with NO scope installed anywhere in this
+    /// test, at both a focus-node count below `crate::parallel::PARALLEL_MIN_FOCUS_NODES`
+    /// (the serial path) and above it (the forked path), because
+    /// `evaluate_shape_focus_nodes` now builds the aggregate scope for every focus chunk
+    /// directly from `shapes`, the same way it already built the function scope.
+    #[test]
+    fn custom_aggregate_resolves_across_every_prepared_validator_route() {
+        let shapes = Arc::new({
+            let mut shapes = load_shapes_ttl(&aggregate_shapes_ttl());
+            shapes.aggregates = Arc::new(sum_aggregate_registry());
+            shapes
+        });
+
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+        let v0 = NamedNode::new_unchecked("http://example.org/ns#v0").into_term();
+
+        for (label, n) in [("below-threshold", 10usize), ("above-threshold", above_n)] {
+            let data = load_data_nt(&aggregate_data_nt(n));
+            pool.install(|| {
+                let projected = project_dataset(data.as_ref()).expect("projection must succeed");
+                let prepared = PreparedValidator::from_projected_dataset(
+                    Arc::clone(&projected),
+                    Arc::clone(&shapes),
+                )
+                .unwrap_or_else(|error| panic!("{label}: preparation must succeed: {error}"));
+
+                let whole = prepared.validate().unwrap_or_else(|error| {
+                    panic!("{label}: PreparedValidator::validate: {error}")
+                });
+                assert_eq!(
+                    whole.results.len(),
+                    1,
+                    "{label}: PreparedValidator::validate must resolve the registered \
+                     aggregate: {:?}",
+                    whole.results
+                );
+                assert!(!whole.conforms, "{label}: PreparedValidator::validate");
+
+                let bounded = prepared
+                    .validate_focus_nodes(std::slice::from_ref(&v0))
+                    .unwrap_or_else(|error| {
+                        panic!("{label}: PreparedValidator::validate_focus_nodes: {error}")
+                    });
+                assert_eq!(
+                    bounded.results.len(),
+                    1,
+                    "{label}: validate_focus_nodes must resolve the registered aggregate"
+                );
+                assert!(!bounded.conforms, "{label}: validate_focus_nodes");
+
+                let v0_id = projected
+                    .term_id_by_iri("http://example.org/ns#v0")
+                    .expect("v0 must be interned");
+                let bounded_ids =
+                    prepared
+                        .validate_focus_node_ids(&[v0_id])
+                        .unwrap_or_else(|error| {
+                            panic!("{label}: PreparedValidator::validate_focus_node_ids: {error}")
+                        });
+                assert_eq!(
+                    bounded_ids.results.len(),
+                    1,
+                    "{label}: validate_focus_node_ids must resolve the registered aggregate"
+                );
+                assert!(!bounded_ids.conforms, "{label}: validate_focus_node_ids");
+            });
+        }
+    }
+
+    /// The GOVERNED branch of `evaluate_shape_focus_nodes` already sourced `aggregates`
+    /// from the `Shapes` value before this fix — it never depended on a thread-local
+    /// snapshot — but nothing proved that end-to-end. Close that gap: both
+    /// `validate_with_governors` and `validate_dataset_with_governors` must resolve the
+    /// SAME registered aggregate an ungoverned validation does.
+    #[test]
+    fn custom_aggregate_resolves_under_governed_validation() {
+        let mut shapes = load_shapes_ttl(&aggregate_shapes_ttl());
+        shapes.aggregates = Arc::new(sum_aggregate_registry());
+        let data = load_data_nt(&aggregate_data_nt(10));
+
+        let outcome = validate_dataset_with_governors(
+            data.as_ref(),
+            &shapes,
+            None,
+            &QueryGovernors::UNBOUNDED,
+        )
+        .expect("governed validation must resolve the registered aggregate");
+        let GovernedValidation::Complete { report, .. } = outcome else {
+            panic!("an unbounded governor budget must not exhaust");
+        };
+        assert_eq!(
+            report.results.len(),
+            1,
+            "governed validation must resolve the registered aggregate: {:?}",
+            report.results
+        );
+        assert!(!report.conforms);
+    }
+
+    // ── property functions: a caller-scoped ambient contract, not a `Shapes` field ────
+
+    /// A property-function relation reporting `"flagged"` for a literal whose lexical
+    /// form is exactly `"bad"`. The SHACL-facing analog of `crate::sparql`'s own
+    /// `DenyListRelation` test fixture (private to that module).
+    #[derive(Debug)]
+    struct PfFlagged {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+    }
+
+    impl PfFlagged {
+        fn new() -> Self {
+            Self {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
+            }
+        }
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for PfFlagged {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            1
+        }
+
+        fn open(
+            &self,
+            args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            let flagged = matches!(
+                args.get(0),
+                Some(::purrdf::TermValue::Literal { lexical_form, .. }) if lexical_form == "bad"
+            );
+            let rows = if flagged {
+                let subject = args.get(0).cloned().expect("the bound subject");
+                vec![vec![
+                    subject,
+                    ::purrdf::TermValue::typed_literal(
+                        "flagged",
+                        "http://www.w3.org/2001/XMLSchema#string",
+                    ),
+                ]]
+            } else {
+                Vec::new()
+            };
+            Ok(Box::new(PfFlaggedCursor { rows, next: 0 }))
+        }
+    }
+
+    struct PfFlaggedCursor {
+        rows: Vec<purrdf_sparql_eval::PfRow>,
+        next: usize,
+    }
+
+    impl purrdf_sparql_eval::PfCursor for PfFlaggedCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            let row = self.rows.get(self.next).cloned();
+            self.next += 1;
+            Ok(row)
+        }
+    }
+
+    /// A fresh registry with [`PfFlagged`] registered under `ex:pfFlagged`.
+    fn pf_flagged_registry() -> purrdf_sparql_eval::PropertyFunctionRegistry {
+        let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
+        registry.register(
+            "http://example.org/ns#pfFlagged",
+            Arc::new(PfFlagged::new()),
+        );
+        registry
+    }
+
+    /// Shapes carrying a `sh:sparql` constraint whose body calls the `ex:pfFlagged`
+    /// property function against each focus node's `ex:status` value.
+    fn pf_shapes_ttl() -> String {
+        format!(
+            r#"{PREFIXES}
+            ex:PfShape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:PfConstraint .
+            ex:PfConstraint sh:select """
+                SELECT $this ?status WHERE {{
+                    $this <http://example.org/ns#status> ?status .
+                    ?status <http://example.org/ns#pfFlagged> ?why
+                }}
+            """ .
+            "#
+        )
+    }
+
+    /// `n` `ex:Thing` focus nodes: `ex:v0` carries `ex:status "bad"` (the relation flags
+    /// it, so it must violate), every other `ex:v{i}` carries `"ok"` (must conform).
+    fn pf_data_nt(n: usize) -> String {
+        use std::fmt::Write as _;
+        assert!(n >= 1, "at least the flagged node is required");
+        let mut nt = String::new();
+        nt.push_str(
+            "<http://example.org/ns#v0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/ns#Thing> .\n\
+             <http://example.org/ns#v0> <http://example.org/ns#status> \"bad\" .\n",
+        );
+        for i in 1..n {
+            writeln!(
+                nt,
+                "<http://example.org/ns#v{i}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                 <http://example.org/ns#Thing> .\n\
+                 <http://example.org/ns#v{i}> <http://example.org/ns#status> \"ok\" ."
+            )
+            .expect("writing to a String cannot fail");
+        }
+        nt
+    }
+
+    /// Property functions have no `Shapes`-owned field — unlike `functions` and
+    /// `aggregates`, a registered relation is a genuinely call-scoped, caller-injected
+    /// table (`crate::sparql::enter_property_function_scope`'s own docs call it the
+    /// "exact twin" of the aggregate scope, but there is no `Shapes::relations` for it to
+    /// live in). The documented contract is: install the scope around the call that
+    /// NEEDS it, not merely around `PreparedValidator::new`. This is deliberately NOT the
+    /// F10-2 shape (a value silently sourced from whichever caller happened to install a
+    /// scope first): here every route resolves correctly as long as the scope wraps THAT
+    /// route's own call, proven at both scheduling geometries.
+    #[test]
+    fn property_function_resolves_across_every_prepared_validator_route_when_the_caller_wraps_the_call()
+     {
+        let shapes = Arc::new(load_shapes_ttl(&pf_shapes_ttl()));
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+        let v0 = NamedNode::new_unchecked("http://example.org/ns#v0").into_term();
+
+        for (label, n) in [("below-threshold", 10usize), ("above-threshold", above_n)] {
+            let data = load_data_nt(&pf_data_nt(n));
+            let projected =
+                pool.install(|| project_dataset(data.as_ref()).expect("projection must succeed"));
+            let prepared = pool.install(|| {
+                PreparedValidator::from_projected_dataset(
+                    Arc::clone(&projected),
+                    Arc::clone(&shapes),
+                )
+                .unwrap_or_else(|error| panic!("{label}: preparation must succeed: {error}"))
+            });
+
+            let whole = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate()
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate: {error}"));
+            assert_eq!(
+                whole.results.len(),
+                1,
+                "{label}: validate: {:?}",
+                whole.results
+            );
+            assert!(!whole.conforms, "{label}: validate");
+
+            let bounded = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate_focus_nodes(std::slice::from_ref(&v0))
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate_focus_nodes: {error}"));
+            assert_eq!(bounded.results.len(), 1, "{label}: validate_focus_nodes");
+            assert!(!bounded.conforms, "{label}: validate_focus_nodes");
+
+            let v0_id = projected
+                .term_id_by_iri("http://example.org/ns#v0")
+                .expect("v0 must be interned");
+            let bounded_ids = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate_focus_node_ids(&[v0_id])
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate_focus_node_ids: {error}"));
+            assert_eq!(
+                bounded_ids.results.len(),
+                1,
+                "{label}: validate_focus_node_ids"
+            );
+            assert!(!bounded_ids.conforms, "{label}: validate_focus_node_ids");
+        }
     }
 
     #[test]

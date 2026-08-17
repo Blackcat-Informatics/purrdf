@@ -75,8 +75,12 @@ pub struct ProvenanceNamespace {
     /// top-level JSON member key, and the XML namespace prefix (bound via
     /// `xmlns:{prefix}="{iri}"` on the `<{prefix}:provenance>` element).
     prefix: String,
-    /// The XML namespace IRI bound to `prefix`. The JSON writer has no
-    /// namespace mechanism to bind it into and uses only `prefix`.
+    /// The namespace IRI bound to `prefix`: an XML `xmlns:{prefix}="{iri}"`
+    /// declaration on the `<{prefix}:provenance>` element, and — since JSON has
+    /// no binding-attribute mechanism of its own — a `"namespace"` field the
+    /// JSON writer records inside the `{prefix}`-keyed member. Both readers
+    /// resolve the extension by matching THIS field, not by the bare `prefix`
+    /// spelling the member/element happens to be keyed under.
     iri: String,
 }
 

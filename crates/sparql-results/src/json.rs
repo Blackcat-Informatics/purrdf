@@ -128,7 +128,7 @@ fn write_srj(
     out.push(',');
     json_string(namespace.prefix(), out);
     out.push(':');
-    write_provenance_body(result, provenance, out);
+    write_provenance_body(result, provenance, namespace, out);
     out.push('}');
     Ok(())
 }
@@ -200,8 +200,23 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
 /// Write the additive provenance extension object (the value of the caller's
 /// namespaced top-level member). Only present fields are emitted, in a fixed
 /// order.
-fn write_provenance_body(result: &SparqlResult, provenance: &ResultProvenance, out: &mut String) {
-    out.push_str("{\"queryForm\":");
+///
+/// The `"namespace"` member records `namespace.iri()` — JSON has no `xmlns`-style
+/// binding mechanism, so this is the JSON twin of the XML writer's
+/// `xmlns:{prefix}="{iri}"` declaration on `<{prefix}:provenance>`. Writing the
+/// caller's IRI INTO the document is what lets [`crate::json_read::provenance_from_json`]
+/// resolve this member by namespace identity instead of trusting that the
+/// top-level key it happens to be spelled under (`namespace.prefix()`, a bare
+/// string with no uniqueness guarantee) was never reused by an unrelated caller.
+fn write_provenance_body(
+    result: &SparqlResult,
+    provenance: &ResultProvenance,
+    namespace: &ProvenanceNamespace,
+    out: &mut String,
+) {
+    out.push_str("{\"namespace\":");
+    json_string(namespace.iri(), out);
+    out.push_str(",\"queryForm\":");
     json_string(query_form(result), out);
     if let Some(query_hash) = &provenance.query_hash {
         out.push_str(",\"queryHash\":");
