@@ -30,9 +30,9 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
-    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_add, numeric_ceil,
-    numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub, numeric_unary_minus,
-    numeric_unary_plus, parse_by_iri, parse_xsd10, value_cmp,
+    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
+    numeric_round, numeric_unary_plus, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div,
+    value_equal, value_mul, value_sub, value_unary_minus,
 };
 use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
 
@@ -142,15 +142,16 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         }
 
         // ---- arithmetic ---------------------------------------------------
-        // SPARQL three-valued contract: type errors (non-numeric operands,
-        // overflow, divide-by-zero) → Ok(None), NOT Err. A hard EvalError would
+        // SPARQL three-valued contract: type errors (non-numeric/non-temporal
+        // operands, overflow, divide-by-zero, and the indeterminate-timezone
+        // instant-difference case) → Ok(None), NOT Err. A hard EvalError would
         // propagate out of FILTER and break the query; Ok(None) just drops the row.
-        Expression::Add(a, b) => binary_numeric(a, b, row, schema, ctx, numeric_add),
-        Expression::Subtract(a, b) => binary_numeric(a, b, row, schema, ctx, numeric_sub),
-        Expression::Multiply(a, b) => binary_numeric(a, b, row, schema, ctx, numeric_mul),
-        Expression::Divide(a, b) => binary_numeric(a, b, row, schema, ctx, numeric_div),
+        Expression::Add(a, b) => binary_value(a, b, row, schema, ctx, value_add),
+        Expression::Subtract(a, b) => binary_value(a, b, row, schema, ctx, value_sub),
+        Expression::Multiply(a, b) => binary_value(a, b, row, schema, ctx, value_mul),
+        Expression::Divide(a, b) => binary_value(a, b, row, schema, ctx, value_div),
         Expression::UnaryPlus(a) => unary_numeric(a, row, schema, ctx, numeric_unary_plus),
-        Expression::UnaryMinus(a) => unary_numeric(a, row, schema, ctx, numeric_unary_minus),
+        Expression::UnaryMinus(a) => unary_numeric(a, row, schema, ctx, value_unary_minus),
 
         // ---- functions -----------------------------------------------------
         Expression::FunctionCall(function, args) => eval_function(function, args, row, schema, ctx),
@@ -745,7 +746,7 @@ pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
     if is_xsd_nan(ax) && is_xsd_nan(bx) {
         return Some(true);
     }
-    value_cmp(ax, bx).map(|o| o == Ordering::Equal)
+    value_equal(ax, bx)
 }
 
 /// Componentwise `=` over two triple terms (SPARQL §17.4.1.7 extended to RDF 1.2
@@ -2801,10 +2802,11 @@ pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
     typed(&v.canonical_lexical(), v.datatype().iri())
 }
 
-/// Evaluate a binary numeric expression: resolve both operands to [`XsdValue`], call
-/// `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
-/// error, overflow, divide-by-zero — all SPARQL expression errors).
-fn binary_numeric<D: DatasetView + Sync>(
+/// Evaluate a binary value-space expression: resolve both operands to [`XsdValue`],
+/// call `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
+/// error, overflow, divide-by-zero, indeterminate timezone mix — all SPARQL
+/// expression errors).
+fn binary_value<D: DatasetView + Sync>(
     a: &Expression,
     b: &Expression,
     row: &[Option<SolutionTerm<D::Id>>],
@@ -2820,7 +2822,7 @@ fn binary_numeric<D: DatasetView + Sync>(
     };
     let (va, vb) = (value_of(ctx, ta), value_of(ctx, tb));
     let (Some(xa), Some(xb)) = (xsd_of(&va), xsd_of(&vb)) else {
-        return Ok(None); // non-numeric operand → SPARQL type error
+        return Ok(None); // operand with no XSD value
     };
     match op(&xa, &xb) {
         Ok(result) => Ok(Some(xsd_to_term(ctx, &result))),
@@ -3904,6 +3906,222 @@ mod tests {
         let ds = empty_ds();
         let e = adjust(lit("not a date"), typed_lit("PT1H", XSD_DAYTIME_DURATION));
         assert_eq!(lex(&ds, &e), None);
+    }
+
+    // ---- SEP-0002 date/time/duration arithmetic, wired through `+ - * /` --
+
+    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+
+    #[test]
+    fn datetime_plus_year_month_duration_clamps_to_month_end() {
+        let ds = empty_ds();
+        // 2024-01-31 + P1M must clamp to the TARGET month's last day AND land
+        // on that month's leap day — "add 30 days" would give 2024-03-02,
+        // which passes neither.
+        let e = Expression::Add(
+            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
+            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("dateTime + yearMonthDuration");
+        assert_eq!(lex, "2024-02-29T00:00:00");
+        assert_eq!(dt, XSD_DATETIME);
+    }
+
+    #[test]
+    fn duration_plus_datetime_is_commuted() {
+        let ds = empty_ds();
+        let dt = typed_lit("2024-01-31T00:00:00", XSD_DATETIME);
+        let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
+        let forward = Expression::Add(Box::new(dt.clone()), Box::new(dur.clone()));
+        let commuted = Expression::Add(Box::new(dur), Box::new(dt));
+        let (flex, fdt) = lex_and_dt(&ds, &forward).expect("dateTime + duration");
+        let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("duration + dateTime");
+        assert_eq!(flex, "2024-02-01T00:00:00");
+        assert_eq!(clex, flex);
+        assert_eq!(fdt, XSD_DATETIME);
+        assert_eq!(cdt, fdt);
+    }
+
+    #[test]
+    fn datetime_minus_duration_is_not_commutative() {
+        let ds = empty_ds();
+        // `-` has no commuted row: `duration - instant` is meaningless, even
+        // though `instant - duration` (not tested here) is well-defined.
+        let e = Expression::Subtract(
+            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
+            Box::new(typed_lit("2024-01-31T00:00:00", XSD_DATETIME)),
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    #[test]
+    fn instant_difference_is_signed() {
+        let ds = empty_ds();
+        // earlier - later must be NEGATIVE; a `|a - b|` implementation would
+        // pass an unsigned variant of this test but not this one.
+        let e = Expression::Subtract(
+            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
+            Box::new(typed_lit("2001-01-10T10:00:00Z", XSD_DATETIME)),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("instant difference");
+        assert_eq!(lex, "-P9D");
+        assert_eq!(dt, XSD_DAYTIME_DURATION);
+    }
+
+    #[test]
+    fn timezone_mix_is_indeterminate() {
+        let ds = empty_ds();
+        let e = Expression::Subtract(
+            Box::new(typed_lit("2001-01-01T10:00:00Z", XSD_DATETIME)),
+            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    /// The positive control for `timezone_mix_is_indeterminate`: without this,
+    /// an unbound result there could mean "untimezoned instants never
+    /// subtract" rather than "a timezone MIX is indeterminate".
+    #[test]
+    fn two_untimezoned_instants_still_subtract() {
+        let ds = empty_ds();
+        let e = Expression::Subtract(
+            Box::new(typed_lit("2001-01-10T10:00:00", XSD_DATETIME)),
+            Box::new(typed_lit("2001-01-01T10:00:00", XSD_DATETIME)),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("untimezoned difference");
+        assert_eq!(lex, "P9D");
+        assert_eq!(dt, XSD_DAYTIME_DURATION);
+    }
+
+    #[test]
+    fn zero_result_keeps_the_operand_subtype() {
+        let ds = empty_ds();
+        // Dual discriminator A: a zero-valued yearMonthDuration result must
+        // canonicalize as "P0M", not the general-duration "PT0S".
+        let e = Expression::Subtract(
+            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
+            Box::new(typed_lit("P1Y", XSD_YEARMONTH_DURATION)),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("P1Y - P1Y");
+        assert_eq!(lex, "P0M");
+        assert_eq!(dt, XSD_YEARMONTH_DURATION);
+    }
+
+    #[test]
+    fn mixed_subtype_sum_is_the_general_duration() {
+        let ds = empty_ds();
+        // Dual discriminator B: the components alone look exactly like a
+        // pure yearMonthDuration ("P1M"); only the declared tags differ, and
+        // that must be enough to force the general xsd:duration result.
+        let e = Expression::Add(
+            Box::new(typed_lit("P1M", XSD_YEARMONTH_DURATION)),
+            Box::new(typed_lit("PT0S", XSD_DAYTIME_DURATION)),
+        );
+        let (lex, dt) = lex_and_dt(&ds, &e).expect("P1M + PT0S");
+        assert_eq!(lex, "P1M");
+        assert_eq!(dt, XSD_DURATION);
+    }
+
+    #[test]
+    fn integer_times_duration_commuted() {
+        let ds = empty_ds();
+        // The two-discriminant case: a numeric LEFT operand inside a
+        // temporal domain routes through the same op as the numeric-first
+        // form, not through a plain single-discriminant numeric dispatch.
+        let n = typed_lit("3", XINT);
+        let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
+        let forward = Expression::Multiply(Box::new(n.clone()), Box::new(dur.clone()));
+        let commuted = Expression::Multiply(Box::new(dur), Box::new(n));
+        let (flex, fdt) = lex_and_dt(&ds, &forward).expect("3 * P1D");
+        let (clex, cdt) = lex_and_dt(&ds, &commuted).expect("P1D * 3");
+        assert_eq!(flex, "P3D");
+        assert_eq!(clex, flex);
+        assert_eq!(fdt, XSD_DAYTIME_DURATION);
+        assert_eq!(cdt, fdt);
+    }
+
+    #[test]
+    fn duration_times_a_double_factor_is_a_type_error() {
+        let ds = empty_ds();
+        const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        // The exact-tier rule: an inexact binary factor cannot scale an exact
+        // duration without silent rounding, so this is a type error, not a
+        // coerced multiplication.
+        let dur = typed_lit("P1D", XSD_DAYTIME_DURATION);
+        let by_double = Expression::Multiply(
+            Box::new(dur.clone()),
+            Box::new(typed_lit("1.5", XSD_DOUBLE)),
+        );
+        assert_eq!(lex(&ds, &by_double), None);
+        // A NaN factor must stay a type error too, never coerce to zero.
+        let by_nan = Expression::Multiply(Box::new(dur), Box::new(typed_lit("NaN", XSD_DOUBLE)));
+        assert_eq!(lex(&ds, &by_nan), None);
+    }
+
+    #[test]
+    fn numeric_divided_by_a_duration_is_a_type_error() {
+        let ds = empty_ds();
+        // Unlike `*`, `/` is not symmetric: `Nx / DUR` has no valid row even
+        // though `DUR / Nx` does.
+        let e = Expression::Divide(
+            Box::new(typed_lit("3", XINT)),
+            Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+        );
+        assert_eq!(lex(&ds, &e), None);
+    }
+
+    #[test]
+    fn unary_minus_on_a_duration_round_trips() {
+        let ds = empty_ds();
+        let d = typed_lit("P1Y2M", XSD_YEARMONTH_DURATION);
+        let neg = Expression::UnaryMinus(Box::new(d));
+        let (lex1, dt1) = lex_and_dt(&ds, &neg).expect("-(P1Y2M)");
+        assert_eq!(lex1, "-P1Y2M");
+        assert_eq!(dt1, XSD_YEARMONTH_DURATION);
+        // -(-d) == d, evaluated as one nested expression.
+        let double_neg = Expression::UnaryMinus(Box::new(neg));
+        let (lex2, dt2) = lex_and_dt(&ds, &double_neg).expect("-(-(P1Y2M))");
+        assert_eq!(lex2, "P1Y2M");
+        assert_eq!(dt2, XSD_YEARMONTH_DURATION);
+    }
+
+    #[test]
+    fn duration_equality_is_total_while_ordering_stays_indeterminate() {
+        let ds = empty_ds();
+        // "P1M" and "P30D" are value-incommensurable, so `<`/`>` stay
+        // unbound — but `=` is total over the general xsd:duration and must
+        // answer a bound `false`. An `=`-only test could pass even if the
+        // fix landed in `value_cmp` instead of `sparql_value_eq`; this test
+        // pins both outcomes side by side.
+        let a = typed_lit("P1M", XSD_DURATION);
+        let b = typed_lit("P30D", XSD_DURATION);
+        let eq = Expression::Equal(Box::new(a.clone()), Box::new(b.clone()));
+        assert_eq!(ebv(&ds, &eq), Some(false));
+        let lt = Expression::Less(Box::new(a), Box::new(b));
+        assert_eq!(ebv(&ds, &lt), None);
+    }
+
+    #[test]
+    fn time_plus_duration_wraps_midnight() {
+        let ds = empty_ds();
+        // The only pin of `time`'s CyclicDay second-action through this
+        // dispatch: crossing midnight in either direction must wrap, not
+        // error or clamp.
+        let forward = Expression::Add(
+            Box::new(typed_lit("23:00:00", XSD_TIME)),
+            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        );
+        let (flex, fdt) = lex_and_dt(&ds, &forward).expect("23:00:00 + PT2H");
+        assert_eq!(flex, "01:00:00");
+        assert_eq!(fdt, XSD_TIME);
+
+        let backward = Expression::Subtract(
+            Box::new(typed_lit("01:00:00", XSD_TIME)),
+            Box::new(typed_lit("PT2H", XSD_DAYTIME_DURATION)),
+        );
+        let (blex, bdt) = lex_and_dt(&ds, &backward).expect("01:00:00 - PT2H");
+        assert_eq!(blex, "23:00:00");
+        assert_eq!(bdt, XSD_TIME);
     }
 
     // ---- Gap 4: NOW() with fixed ctx.now ----------------------------------
