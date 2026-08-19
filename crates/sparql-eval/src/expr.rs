@@ -2820,8 +2820,7 @@ fn binary_value<D: DatasetView + Sync>(
     ) else {
         return Ok(None);
     };
-    let (va, vb) = (value_of(ctx, ta), value_of(ctx, tb));
-    let (Some(xa), Some(xb)) = (xsd_of(&va), xsd_of(&vb)) else {
+    let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) else {
         return Ok(None); // operand with no XSD value
     };
     match op(&xa, &xb) {
@@ -2842,8 +2841,7 @@ fn unary_numeric<D: DatasetView + Sync>(
     let Some(ta) = eval_expr(a, row, schema, ctx)? else {
         return Ok(None);
     };
-    let va = value_of(ctx, ta);
-    let Some(xa) = xsd_of(&va) else {
+    let Some(xa) = xsd_of_term(ctx, ta) else {
         return Ok(None);
     };
     match op(&xa) {
