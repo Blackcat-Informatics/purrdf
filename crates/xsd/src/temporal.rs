@@ -1308,11 +1308,11 @@ struct Instant {
 /// the XSD partial order's tz-indeterminacy rule (see [`cmp_timeline`]): mixing a
 /// timezoned and an untimezoned operand has no well-defined instant difference, so —
 /// rather than guessing an implicit timezone this crate has no execution context to
-/// supply — that case is a hard `TypeMismatch`, not a best-effort answer.
+/// supply — that case is a hard `Indeterminate`, not a best-effort answer.
 /// Both-timezoned and both-untimezoned pairs are always determinate.
 fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Duration, XsdError> {
     if a.tz.is_some() != b.tz.is_some() {
-        return Err(XsdError::TypeMismatch {
+        return Err(XsdError::Indeterminate {
             reason: "subtract: indeterminate timezone mix (one operand has a timezone, the other does not)",
         });
     }
@@ -2644,10 +2644,11 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
 /// A `Shape::Zero` divisor is `Err(DivisionByZero)`, checked first so it takes
 /// priority over a `Shape::Zero` dividend. An incommensurable pair (e.g. a
 /// `Shape::Months` dividend against a `Shape::Seconds` divisor, or either operand
-/// [`Shape::Mixed`]) reports `XsdError::TypeMismatch` with the reason
-/// `"incommensurable duration operands"` — a dedicated indeterminate-division
-/// error variant belongs to this crate's error taxonomy, not to this function, and
-/// is intentionally not introduced here.
+/// [`Shape::Mixed`]) reports `XsdError::Indeterminate` with the reason
+/// `"incommensurable duration operands"` — the operand *types* are both
+/// `xsd:duration`, so a type error would misclassify this; the under-
+/// determination arises from the *values*, which is exactly what
+/// `XsdError::Indeterminate` exists to name.
 ///
 /// # Examples
 ///
@@ -2678,7 +2679,7 @@ pub fn divide_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError>
             &Decimal::from_parts(i128::from(b.months), 0),
         ),
         (Shape::Seconds, Shape::Seconds) => decimal_div_raw(&a.seconds, &b.seconds),
-        (Shape::Months | Shape::Seconds | Shape::Mixed, _) => Err(XsdError::TypeMismatch {
+        (Shape::Months | Shape::Seconds | Shape::Mixed, _) => Err(XsdError::Indeterminate {
             reason: "incommensurable duration operands",
         }),
     }
@@ -3773,7 +3774,7 @@ mod tests {
         assert_eq!(d.seconds().canonical_lexical(), "1.5");
     }
 
-    /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `TypeMismatch`
+    /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `Indeterminate`
     /// when exactly one side carries a timezone — see `instant_diff`'s docs), pinned
     /// independently of `subtract_datetimes_indeterminate_mix_is_error`: the dateTime
     /// form is not the only caller of the shared `instant_diff` helper, and a defect
@@ -3962,7 +3963,7 @@ mod tests {
         let one_day = ymd(XsdDatatype::Duration, "P1D");
         assert!(matches!(
             divide_durations(&one_year, &one_day),
-            Err(XsdError::TypeMismatch {
+            Err(XsdError::Indeterminate {
                 reason: "incommensurable duration operands"
             })
         ));

@@ -165,7 +165,10 @@ pub use numeric::{
     numeric_ceil, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
     numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
 };
-pub use ops::{effective_boolean_value, value_cmp, value_eq, value_equal};
+pub use ops::{
+    effective_boolean_value, value_add, value_cmp, value_div, value_eq, value_equal, value_mul,
+    value_sub, value_unary_minus,
+};
 pub use range::{
     Cardinality, DataRange, Facet, Known, Satisfiability, cardinality, contains,
     is_exactly_decided, same_value, satisfiability,

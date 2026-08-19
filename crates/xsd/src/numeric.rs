@@ -521,14 +521,24 @@ pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
     }
 }
 
-/// Promote an `Integer` to a `Decimal` with scale 0.
-fn integer_to_decimal(value: i128) -> Decimal {
+/// Promote an `Integer` to a `Decimal` with scale 0. `pub(crate)` so `ops.rs` can
+/// build the exact factor `value_mul`/`value_div` pass to the duration-scaling
+/// primitives (`temporal::multiply_duration`/`divide_duration`) without widening
+/// `Decimal::from_parts` beyond `pub(crate)`.
+pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
     Decimal::from_parts(value, 0)
 }
 
-/// SPARQL `op:numeric-add` (`+`). Follows the numeric promotion tower:
-/// `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is exact (`i128`);
-/// decimal addition is exact within the representable range; float/double are IEEE.
+/// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
+/// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
+/// exact (`i128`); decimal addition is exact within the representable range;
+/// float/double are IEEE.
+///
+/// This is a narrower contract than [`crate::ops::value_add`], the SPARQL-
+/// facing `+`: every call site over an `XsdValue` of unknown family should go
+/// through `value_add`, which also accepts SEP-0002's temporal operand pairs;
+/// call this function directly only where the operands are already known
+/// numeric.
 ///
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
@@ -598,7 +608,10 @@ fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
     Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
-/// SPARQL `op:numeric-subtract` (`-`). Same promotion tower as `numeric_add`.
+/// `op:numeric-subtract` — the numeric-TIER `-` operator only. Same promotion
+/// tower as [`numeric_add`]; see its doc for why [`crate::ops::value_sub`],
+/// not this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family.
 ///
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
@@ -645,7 +658,11 @@ fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
     Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
-/// SPARQL `op:numeric-multiply` (`*`). Same promotion tower as `numeric_add`.
+/// `op:numeric-multiply` — the numeric-TIER `*` operator only. Same promotion
+/// tower as [`numeric_add`]; see its doc for why [`crate::ops::value_mul`],
+/// not this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family (it also accepts `xsd:duration × xsd:integer|xsd:decimal`,
+/// which this function does not).
 ///
 /// Decimal multiplication: `new_mantissa = a.mantissa × b.mantissa`,
 /// `new_scale = a.scale + b.scale`. If `new_scale > MAX_DECIMAL_SCALE`, the result
@@ -719,9 +736,14 @@ pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdEr
     }
 }
 
-/// SPARQL `op:numeric-divide` (`/`). Integer ÷ integer returns **decimal** (not
-/// integer), per XPath `op:numeric-divide` semantics. All other pairs follow the
-/// numeric promotion tower.
+/// `op:numeric-divide` — the numeric-TIER `/` operator only. Integer ÷ integer
+/// returns **decimal** (not integer), per XPath `op:numeric-divide` semantics.
+/// All other pairs follow the numeric promotion tower.
+///
+/// See [`numeric_add`]'s doc for why [`crate::ops::value_div`], not this
+/// function, is the SPARQL-facing entry point for an `XsdValue` of unknown
+/// family (it also accepts `xsd:duration ÷ xsd:integer|xsd:decimal|xsd:duration`,
+/// which this function does not).
 ///
 /// Division by zero:
 /// - `xsd:integer` or `xsd:decimal` divisor = 0 → `Err(DivisionByZero)` (hard error).
@@ -965,7 +987,13 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
     quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
 }
 
-/// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.
+/// `op:numeric-unary-minus` — the numeric-TIER unary `-` only. Negates the
+/// value, preserving its type.
+///
+/// See [`numeric_add`]'s doc for why [`crate::ops::value_unary_minus`], not
+/// this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family (it also accepts `xsd:duration`, a purrdf extension this
+/// function does not implement).
 ///
 /// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →
 /// `Err(OutOfRange)`. For float/double, IEEE negation (−0.0 negates to +0.0 and

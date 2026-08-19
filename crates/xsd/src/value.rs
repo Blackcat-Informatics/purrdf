@@ -296,6 +296,20 @@ pub enum XsdError {
         /// A short description of what was expected vs. what was received.
         reason: &'static str,
     },
+    /// The result of an operation is genuinely **under-determined by the data** —
+    /// distinct from [`Self::TypeMismatch`] (the operand *types* are fine; a
+    /// static check cannot reject the expression) and from [`Self::OutOfRange`]
+    /// (the value exists but this crate cannot represent it). Examples: instant
+    /// subtraction where exactly one operand carries a timezone (XSD's partial
+    /// order has no defined answer for the mix), or dividing two value-
+    /// incommensurable `xsd:duration`s (a months-shaped dividend against a
+    /// seconds-shaped divisor). The crate already treats indeterminacy as
+    /// first-class elsewhere (`value_cmp`'s `None`, `range::TemporalBounds::Indeterminate`);
+    /// this variant gives it the same status inside `Result`.
+    Indeterminate {
+        /// A short, stable explanation of what is indeterminate and why.
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for XsdError {
@@ -323,6 +337,7 @@ impl std::fmt::Display for XsdError {
                 write!(f, "division by zero for <{}>", datatype.iri())
             }
             Self::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
+            Self::Indeterminate { reason } => write!(f, "indeterminate: {reason}"),
         }
     }
 }
