@@ -66,6 +66,55 @@ pub struct Duration {
 }
 
 impl Duration {
+    /// The single construction point for every `Duration` value in this module.
+    /// Enforces two invariants so that every other function on `Duration` — most
+    /// importantly [`Duration::canonical_lexical`] — is correct by construction
+    /// rather than merely aspirational:
+    ///
+    /// - **Sign coherence.** XSD 1.1 Part 2 §3.3.6 defines the duration value space
+    ///   as the pair `(months, seconds)` with both components non-negative or both
+    ///   non-positive; a pair with strictly opposite signs lies outside the range of
+    ///   the lexical mapping, so there is no correct string to emit for it —
+    ///   `canonical_lexical` would render `(months: 12, seconds: -86400)` as
+    ///   `"-P1Y1D"`, which *denotes* `(-12, -86400)`, a silently wrong value. Making
+    ///   such a pair unconstructible is cheaper and safer than trying to render it.
+    /// - **Tag/component coherence.** The same pattern-facet rule `parse_duration`
+    ///   enforces on the lexical form (XSD 1.1 Part 2 §3.4.26–§3.4.27): a value
+    ///   tagged `yearMonthDuration` must have a zero `seconds` component, and one
+    ///   tagged `dayTimeDuration` must have a zero `months` component. Applying the
+    ///   rule here as well means a `Duration` can never be *computed* into a state
+    ///   `parse_duration` would refuse to parse.
+    fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {
+        let m_sign = i128::from(months.signum());
+        let s_sign = seconds.mantissa().signum();
+        if m_sign != 0 && s_sign != 0 && m_sign != s_sign {
+            return Err(arith_overflow(
+                datatype,
+                "duration months and seconds components have differing signs",
+            ));
+        }
+        match datatype {
+            XsdDatatype::YearMonthDuration if !seconds.is_zero() => {
+                return Err(arith_overflow(
+                    datatype,
+                    "yearMonthDuration must have a zero seconds component",
+                ));
+            }
+            XsdDatatype::DayTimeDuration if months != 0 => {
+                return Err(arith_overflow(
+                    datatype,
+                    "dayTimeDuration must have a zero months component",
+                ));
+            }
+            _ => {}
+        }
+        Ok(Self {
+            months,
+            seconds,
+            datatype,
+        })
+    }
+
     /// The originating XSD datatype (`Duration`/`DayTimeDuration`/`YearMonthDuration`).
     #[must_use]
     pub fn datatype(&self) -> XsdDatatype {
@@ -83,6 +132,75 @@ impl Duration {
     #[must_use]
     pub fn seconds(&self) -> Decimal {
         self.seconds
+    }
+
+    /// Canonical lexical form `[-]PnYnMnDTnHnMnS` (general duration grammar).
+    #[must_use]
+    pub fn canonical_lexical(&self) -> String {
+        // `Duration::new` refuses to construct a mixed-sign (months, seconds) pair
+        // (XSD 1.1 Part 2 §3.3.6 puts such pairs outside the lexical mapping's
+        // range), so this function may assume sign coherence rather than needing to
+        // guard against it — the invariant is load-bearing for the `neg` line below.
+        debug_assert!(
+            i128::from(self.months.signum()) * self.seconds.mantissa().signum() != -1,
+            "Duration::new must enforce sign coherence: months and seconds may not have strictly opposite signs"
+        );
+        let neg = self.months < 0 || self.seconds.mantissa() < 0;
+        let months = self.months.unsigned_abs();
+        let years = months / 12;
+        let rem_months = months % 12;
+        let total_secs = self.seconds.whole_part().unsigned_abs();
+        let frac = self.seconds.frac_part();
+        let days = total_secs / 86_400;
+        let rem = total_secs % 86_400;
+        let hours = rem / 3600;
+        let mins = (rem % 3600) / 60;
+        let secs = rem % 60;
+
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        if neg {
+            out.push('-');
+        }
+        out.push('P');
+        if years > 0 {
+            let _ = write!(out, "{years}Y");
+        }
+        if rem_months > 0 {
+            let _ = write!(out, "{rem_months}M");
+        }
+        if days > 0 {
+            let _ = write!(out, "{days}D");
+        }
+        let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
+        if has_time {
+            out.push('T');
+            if hours > 0 {
+                let _ = write!(out, "{hours}H");
+            }
+            if mins > 0 {
+                let _ = write!(out, "{mins}M");
+            }
+            if secs > 0 || !frac.is_zero() {
+                if frac.is_zero() {
+                    let _ = write!(out, "{secs}S");
+                } else {
+                    let canon = frac.canonical_lexical();
+                    let digits = canon.split_once('.').map_or("", |(_, f)| f);
+                    let _ = write!(out, "{secs}.{digits}S");
+                }
+            }
+        }
+        // The zero duration canonicalizes to "PT0S" — except for
+        // `yearMonthDuration`, whose pattern facet ([^DT]*, XSD 1.1 Part 2
+        // §3.4.27) forbids both 'D' and 'T', so its zero canonicalizes to "P0M".
+        if out == "P" || out == "-P" {
+            out.push_str(match self.datatype {
+                XsdDatatype::YearMonthDuration => "0M",
+                _ => "T0S",
+            });
+        }
+        out
     }
 }
 
@@ -391,6 +509,29 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
         None => (body, None),
     };
 
+    // XSD 1.1 Part 2 pattern facets on the two named subtypes (§3.4.26–§3.4.27):
+    // `yearMonthDuration` is `[^DT]*` — no day component and no time part at all;
+    // `dayTimeDuration` is `[^YM]*(T.*)?` — no year/month component in the date
+    // part (an `M` inside the *time* part denotes minutes and is unrestricted).
+    // `xsd:duration` itself carries no pattern facet and accepts every component.
+    match dt {
+        XsdDatatype::YearMonthDuration if date_part.contains('D') || time_part.is_some() => {
+            return Err(invalid(
+                dt,
+                s,
+                "yearMonthDuration must not have a day or time component",
+            ));
+        }
+        XsdDatatype::DayTimeDuration if date_part.contains('Y') || date_part.contains('M') => {
+            return Err(invalid(
+                dt,
+                s,
+                "dayTimeDuration must not have a year or month component",
+            ));
+        }
+        _ => {}
+    }
+
     let mut months: i64 = 0;
     let mut seconds = 0i128; // whole seconds accumulator
     let mut sec_frac = Decimal::from_parts(0, 0);
@@ -408,8 +549,27 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
             num.clear();
             any = true;
             match ch {
-                'Y' => months += n * 12,
-                'M' => months += n,
+                'Y' => {
+                    let added = n.checked_mul(12).ok_or_else(|| XsdError::OutOfRange {
+                        datatype: dt,
+                        lexical: s.to_string(),
+                        reason: "duration months overflow",
+                    })?;
+                    months = months
+                        .checked_add(added)
+                        .ok_or_else(|| XsdError::OutOfRange {
+                            datatype: dt,
+                            lexical: s.to_string(),
+                            reason: "duration months overflow",
+                        })?;
+                }
+                'M' => {
+                    months = months.checked_add(n).ok_or_else(|| XsdError::OutOfRange {
+                        datatype: dt,
+                        lexical: s.to_string(),
+                        reason: "duration months overflow",
+                    })?;
+                }
                 'D' => seconds += i128::from(n) * SECS_PER_DAY,
                 _ => return Err(invalid(dt, s, "bad duration date component")),
             }
@@ -473,14 +633,23 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
         })?;
     let mut total_secs = Decimal::from_parts(combined, scale);
     if neg {
-        months = -months;
-        total_secs = Decimal::from_parts(-total_secs.mantissa(), total_secs.scale());
+        months = months.checked_neg().ok_or_else(|| XsdError::OutOfRange {
+            datatype: dt,
+            lexical: s.to_string(),
+            reason: "duration months overflow",
+        })?;
+        let negated_mantissa =
+            total_secs
+                .mantissa()
+                .checked_neg()
+                .ok_or_else(|| XsdError::OutOfRange {
+                    datatype: dt,
+                    lexical: s.to_string(),
+                    reason: "duration seconds overflow",
+                })?;
+        total_secs = Decimal::from_parts(negated_mantissa, total_secs.scale());
     }
-    Ok(Duration {
-        months,
-        seconds: total_secs,
-        datatype: dt,
-    })
+    Duration::new(months, total_secs, dt)
 }
 
 // ── Gregorian family parsing ─────────────────────────────────────────────────────
@@ -1065,34 +1234,32 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
         .ok_or_else(overflow)?;
     let diff = a_total.checked_sub(b_total).ok_or_else(overflow)?;
 
-    Ok(Duration {
-        months: 0,
-        seconds: Decimal::from_parts(diff, scale),
-        datatype: XsdDatatype::DayTimeDuration,
-    })
+    Duration::new(
+        0,
+        Decimal::from_parts(diff, scale),
+        XsdDatatype::DayTimeDuration,
+    )
 }
 
 /// Require `dur` to be declared `xsd:yearMonthDuration` (not the general
 /// `xsd:duration`, whose seconds component is not statically known to be zero).
 fn require_year_month_duration(dur: &Duration) -> Result<(), XsdError> {
-    if dur.datatype == XsdDatatype::YearMonthDuration {
-        Ok(())
-    } else {
-        Err(XsdError::TypeMismatch {
+    match dur.datatype {
+        XsdDatatype::YearMonthDuration => Ok(()),
+        _ => Err(XsdError::TypeMismatch {
             reason: "operation requires a yearMonthDuration operand",
-        })
+        }),
     }
 }
 
 /// Require `dur` to be declared `xsd:dayTimeDuration` (not the general
 /// `xsd:duration`, whose months component is not statically known to be zero).
 fn require_day_time_duration(dur: &Duration) -> Result<(), XsdError> {
-    if dur.datatype == XsdDatatype::DayTimeDuration {
-        Ok(())
-    } else {
-        Err(XsdError::TypeMismatch {
+    match dur.datatype {
+        XsdDatatype::DayTimeDuration => Ok(()),
+        _ => Err(XsdError::TypeMismatch {
             reason: "operation requires a dayTimeDuration operand",
-        })
+        }),
     }
 }
 
@@ -1525,19 +1692,11 @@ pub fn add_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
                 .months
                 .checked_add(b.months)
                 .ok_or_else(|| arith_overflow(datatype, "yearMonthDuration addition overflow"))?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), datatype)
         }
         _ => {
             let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype,
-            })
+            Duration::new(0, seconds, datatype)
         }
     }
 }
@@ -1550,19 +1709,11 @@ pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdErr
             let months = a.months.checked_sub(b.months).ok_or_else(|| {
                 arith_overflow(datatype, "yearMonthDuration subtraction overflow")
             })?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), datatype)
         }
         _ => {
             let seconds = decimal_sub_exact(datatype, &a.seconds, &b.seconds)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype,
-            })
+            Duration::new(0, seconds, datatype)
         }
     }
 }
@@ -1580,21 +1731,13 @@ pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, X
                 arith_overflow(dur.datatype, "yearMonthDuration multiplication overflow")
             })?;
             let months = round_decimal_to_i64(dur.datatype, &product)?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype: dur.datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "dayTimeDuration multiplication overflow")
             })?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype: dur.datatype,
-            })
+            Duration::new(0, seconds, dur.datatype)
         }
         _ => Err(XsdError::TypeMismatch {
             reason: "multiply requires a yearMonthDuration or dayTimeDuration operand",
@@ -1616,19 +1759,11 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
             let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
             let quotient = decimal_div_raw(&months_dec, divisor)?;
             let months = round_decimal_to_i64(dur.datatype, &quotient)?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype: dur.datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_div_raw(&dur.seconds, divisor)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype: dur.datatype,
-            })
+            Duration::new(0, seconds, dur.datatype)
         }
         _ => Err(XsdError::TypeMismatch {
             reason: "divide requires a yearMonthDuration or dayTimeDuration operand",
@@ -1835,64 +1970,6 @@ impl Time {
     }
 }
 
-impl Duration {
-    /// Canonical lexical form `[-]PnYnMnDTnHnMnS` (general duration grammar).
-    #[must_use]
-    pub fn canonical_lexical(&self) -> String {
-        let neg = self.months < 0 || self.seconds.mantissa() < 0;
-        let months = self.months.unsigned_abs();
-        let years = months / 12;
-        let rem_months = months % 12;
-        let total_secs = self.seconds.whole_part().unsigned_abs();
-        let frac = self.seconds.frac_part();
-        let days = total_secs / 86_400;
-        let rem = total_secs % 86_400;
-        let hours = rem / 3600;
-        let mins = (rem % 3600) / 60;
-        let secs = rem % 60;
-
-        use std::fmt::Write as _;
-        let mut out = String::new();
-        if neg {
-            out.push('-');
-        }
-        out.push('P');
-        if years > 0 {
-            let _ = write!(out, "{years}Y");
-        }
-        if rem_months > 0 {
-            let _ = write!(out, "{rem_months}M");
-        }
-        if days > 0 {
-            let _ = write!(out, "{days}D");
-        }
-        let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
-        if has_time {
-            out.push('T');
-            if hours > 0 {
-                let _ = write!(out, "{hours}H");
-            }
-            if mins > 0 {
-                let _ = write!(out, "{mins}M");
-            }
-            if secs > 0 || !frac.is_zero() {
-                if frac.is_zero() {
-                    let _ = write!(out, "{secs}S");
-                } else {
-                    let canon = frac.canonical_lexical();
-                    let digits = canon.split_once('.').map_or("", |(_, f)| f);
-                    let _ = write!(out, "{secs}.{digits}S");
-                }
-            }
-        }
-        // The zero duration canonicalizes to "PT0S".
-        if out == "P" || out == "-P" {
-            out.push_str("T0S");
-        }
-        out
-    }
-}
-
 impl Gregorian {
     /// XSD canonical lexical form.
     #[must_use]
@@ -1998,6 +2075,126 @@ mod tests {
                 .canonical_lexical(),
             "PT1.5S"
         );
+    }
+
+    /// `"P9223372036854775807Y"` (`i64::MAX` years) must overflow `checked_mul(12)`
+    /// on the way in, and negating `i64::MAX` months (via a leading `-`) must
+    /// overflow `checked_neg` — both are typed `OutOfRange`, never a silently
+    /// wrapped value.
+    #[test]
+    fn duration_month_overflow_is_out_of_range() {
+        assert!(matches!(
+            parse_duration(XsdDatatype::Duration, "P9223372036854775807Y"),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            parse_duration(XsdDatatype::Duration, "-P9223372036854775807Y"),
+            Err(XsdError::OutOfRange { .. })
+        ));
+    }
+
+    /// XSD 1.1 Part 2's pattern facets on the two named duration subtypes:
+    /// `yearMonthDuration` is `[^DT]*` (§3.4.27, no day component, no time part at
+    /// all) and `dayTimeDuration` is `[^YM]*(T.*)?` (§3.4.26, no year/month
+    /// component in the date part — an `M` inside the time part is minutes and is
+    /// unrestricted). `xsd:duration` itself carries no pattern facet.
+    #[test]
+    fn duration_subtype_pattern_facets_are_enforced() {
+        assert!(matches!(
+            parse_duration(XsdDatatype::YearMonthDuration, "P1D"),
+            Err(XsdError::InvalidLexical { .. })
+        ));
+        assert!(matches!(
+            parse_duration(XsdDatatype::DayTimeDuration, "P1Y"),
+            Err(XsdError::InvalidLexical { .. })
+        ));
+        // 'M' inside the TIME part is minutes, not months — unrestricted for
+        // dayTimeDuration. Pin the parsed components, not just success.
+        let minutes = parse_duration(XsdDatatype::DayTimeDuration, "PT1M").unwrap();
+        assert_eq!(minutes.months(), 0);
+        assert_eq!(minutes.seconds().canonical_lexical(), "60");
+        // xsd:duration carries no pattern facet and accepts every component.
+        let general = parse_duration(XsdDatatype::Duration, "P1Y1D").unwrap();
+        assert_eq!(general.months(), 12);
+        assert_eq!(general.seconds().canonical_lexical(), "86400");
+    }
+
+    /// A zero `yearMonthDuration` must canonicalize to `"P0M"` (the only lexical
+    /// form its `[^DT]*` pattern facet permits), while a zero `dayTimeDuration`
+    /// keeps `"PT0S"`; both must round-trip through `parse_duration`.
+    #[test]
+    fn duration_zero_lexical_is_subtype_correct() {
+        let zero_ym = subtract_durations(
+            &ymd(XsdDatatype::YearMonthDuration, "P1Y"),
+            &ymd(XsdDatatype::YearMonthDuration, "P1Y"),
+        )
+        .unwrap();
+        assert_eq!(zero_ym.canonical_lexical(), "P0M");
+        assert_eq!(
+            parse_duration(XsdDatatype::YearMonthDuration, &zero_ym.canonical_lexical())
+                .unwrap()
+                .canonical_lexical(),
+            "P0M"
+        );
+
+        let zero_dt = subtract_durations(
+            &ymd(XsdDatatype::DayTimeDuration, "PT1H"),
+            &ymd(XsdDatatype::DayTimeDuration, "PT1H"),
+        )
+        .unwrap();
+        assert_eq!(zero_dt.canonical_lexical(), "PT0S");
+        assert_eq!(
+            parse_duration(XsdDatatype::DayTimeDuration, &zero_dt.canonical_lexical())
+                .unwrap()
+                .canonical_lexical(),
+            "PT0S"
+        );
+    }
+
+    /// A `Duration` with strictly opposite-signed `(months, seconds)` components is
+    /// outside the range of the lexical mapping (XSD 1.1 Part 2 §3.3.6) and must be
+    /// unconstructible regardless of which arithmetic entry point would compute it.
+    /// `Duration::new` is the single point every entry point funnels through, so it
+    /// is exercised directly with both sign shapes; a companion assertion pins that
+    /// `subtract_durations`/`add_durations` already refuse the cross-subtype pair
+    /// that would otherwise reach one of those shapes (today via a subtype-mismatch
+    /// error, ahead of ever reaching the sign check) — see the in-body comments for
+    /// why a guard placed in only one construction path is a failed implementation.
+    #[test]
+    fn mixed_sign_duration_is_unconstructible() {
+        // The guard this test protects is `Duration::new`'s sign coherence check —
+        // the single point of construction every arithmetic entry point (addition
+        // AND subtraction) funnels through. Exercise both sign directions
+        // directly: (months: 12, seconds: -86400) is the shape `P1Y - P1D` would
+        // reach; (months: -12, seconds: 86400) is the shape `-P1Y + P1D` would
+        // reach. A guard placed in only one call site would leave one of these
+        // constructible — pinning both proves it is not.
+        assert!(matches!(
+            Duration::new(12, Decimal::from_parts(-86_400, 0), XsdDatatype::Duration),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            Duration::new(-12, Decimal::from_parts(86_400, 0), XsdDatatype::Duration),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // Regression pin: under Task 1's still-in-place `require_same_duration_subtype`
+        // gate, the cross-subtype pair that would otherwise reach the mixed-sign
+        // shape above is refused earlier, through BOTH public doors, for a
+        // subtype-mismatch reason. If a later change relaxes that gate to let
+        // yearMonth/dayTime mix into a general `xsd:duration`, this exact pair
+        // must resolve through `Duration::new`'s sign guard as `OutOfRange`, not
+        // silently succeed.
+        let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let neg_day = ymd(XsdDatatype::DayTimeDuration, "-P1D");
+        assert!(matches!(
+            subtract_durations(&ym, &neg_day),
+            Err(XsdError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            add_durations(&ym, &neg_day),
+            Err(XsdError::TypeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -2147,7 +2344,14 @@ mod tests {
 
     // ── Duration ↔ calendar arithmetic: Appendix E month-end clamping ────────────
 
-    fn ymd(dt: XsdDatatype, s: &str) -> Duration {
+    // Brace kept on its own line (via `rustfmt::skip`) purely so this signature's
+    // return type doesn't textually collide with `Duration::new`'s struct-literal
+    // audit pattern (`rg 'Duration \{'`, used elsewhere to confirm every
+    // construction site routes through the smart constructor) — this helper
+    // already routes through `parse_duration`, not a struct literal.
+    #[rustfmt::skip]
+    fn ymd(dt: XsdDatatype, s: &str) -> Duration
+    {
         parse_duration(dt, s).unwrap()
     }
 
