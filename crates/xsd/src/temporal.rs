@@ -1948,7 +1948,7 @@ fn drive_gregorian(
 }
 
 /// Negate a `Duration`'s months and seconds components together (unary minus).
-/// A `Duration` is always sign-coherent by construction ([`Duration::new`]), and
+/// A `Duration` is always sign-coherent by construction (`Duration::new`), and
 /// negating both components together preserves that — it can never produce a
 /// mixed-sign pair, so this function has exactly one arm. Subtraction throughout
 /// the general-duration primitives below, and [`subtract_durations`] itself, are
@@ -2103,7 +2103,7 @@ pub fn subtract_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, Xsd
 }
 
 /// Add any `xsd:duration` value to a `time`. The duration's months component must
-/// be zero — `xsd:time` has no months field ([`MonthAction::Absent`]) — while the
+/// be zero — `xsd:time` has no months field (`MonthAction::Absent`) — while the
 /// seconds component wraps across an implicit day boundary that is then discarded,
 /// leaving only the resulting time-of-day.
 ///
@@ -2156,7 +2156,7 @@ pub fn subtract_duration_from_time(t: &Time, dur: &Duration) -> Result<Time, Xsd
 
 /// Add any `xsd:duration` value to a Gregorian value (`gYearMonth`, `gYear`,
 /// `gMonth`, `gMonthDay`, `gDay`), through the calendar-action classifier
-/// ([`actions`]). Where the reference implementation would fabricate an
+/// (`actions`). Where the reference implementation would fabricate an
 /// absent field to force an answer (substituting year 0, January, or day 1
 /// via JAXP — e.g. `"2024-01"^^gYearMonth + P1D` returning `"2024-01"`
 /// unchanged, or `"---31"^^gDay + P1M` returning `"---29"` clamped against a
@@ -2514,9 +2514,9 @@ fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
 /// F&O's restriction to the two named subtypes (F&O's (months, seconds) pair for
 /// the general tag is not a mixing of incompatible units — it is exactly this
 /// module's own `D = Y ⊕ T` direct sum). Componentwise checked addition through
-/// [`Duration::new`], so a mixed-sign result is refused at construction regardless
-/// of which operator produced it — see [`Duration::new`]'s own doc for why the
-/// guard cannot live in either operator alone. See [`duration_result_datatype`] for
+/// `Duration::new`, so a mixed-sign result is refused at construction regardless
+/// of which operator produced it — see `Duration::new`'s own doc for why the
+/// guard cannot live in either operator alone. See `duration_result_datatype` for
 /// the result's tag.
 ///
 /// # Examples
@@ -2568,7 +2568,7 @@ pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdErr
 /// operand's declared tag. `factor` is a `Decimal` rather than F&O's `xs:double`:
 /// this crate keeps its stored values exact (no floats), so the multiplication
 /// stays exact too. Months results are always rounded to the nearest whole month,
-/// ties toward positive infinity ([`round_decimal_to_i64`], matching `fn:round`,
+/// ties toward positive infinity (`round_decimal_to_i64`, matching `fn:round`,
 /// since months cannot be fractional) — this is a deliberate, documented
 /// non-inverse: `(d ÷ 2) × 2` need not equal `d` for an odd month count.
 pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, XsdError> {
@@ -2637,14 +2637,14 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
 /// declared tag — the distinction [`divide_year_month_durations`] and
 /// [`divide_day_time_durations`] do not need to make, since they each gate on a
 /// single named subtype. Two durations are commensurable, and their ratio a plain
-/// `xs:decimal`, iff they occupy the same summand of `D = Y ⊕ T` ([`Shape`]):
-/// both [`Shape::Months`]-shaped, or both [`Shape::Seconds`]-shaped. A
-/// [`Shape::Zero`] dividend is compatible with either summand — it is the point
+/// `xs:decimal`, iff they occupy the same summand of `D = Y ⊕ T` (`Shape`):
+/// both `Shape::Months`-shaped, or both `Shape::Seconds`-shaped. A
+/// `Shape::Zero` dividend is compatible with either summand — it is the point
 /// where the two meet — so `0 ÷ nonzero` always succeeds with a ratio of `0`.
 /// A `Shape::Zero` divisor is `Err(DivisionByZero)`, checked first so it takes
 /// priority over a `Shape::Zero` dividend. An incommensurable pair (e.g. a
 /// `Shape::Months` dividend against a `Shape::Seconds` divisor, or either operand
-/// [`Shape::Mixed`]) reports `XsdError::Indeterminate` with the reason
+/// `Shape::Mixed`) reports `XsdError::Indeterminate` with the reason
 /// `"incommensurable duration operands"` — the operand *types* are both
 /// `xsd:duration`, so a type error would misclassify this; the under-
 /// determination arises from the *values*, which is exactly what
