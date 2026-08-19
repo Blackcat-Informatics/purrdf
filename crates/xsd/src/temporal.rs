@@ -11,6 +11,22 @@
 //! overlap. `duration` has a two-component (months, seconds) partial order: a pair
 //! like `P1M` vs `P30D` is genuinely incomparable. The hand-rolled calendar uses a
 //! proleptic Gregorian day count (valid for negative years), no external deps.
+//!
+//! # Duration ↔ calendar arithmetic: two call surfaces, one dispatch path
+//!
+//! This module exposes two surfaces for adding/subtracting a duration against a
+//! calendar value. The F&O-named single-component functions
+//! (`add_year_month_duration_to_datetime`, `add_day_time_duration_to_date`, and
+//! their seven siblings) stay published for callers who hold a duration statically
+//! known to be `yearMonthDuration`- or `dayTimeDuration`-shaped and want F&O's own
+//! operator names. The general `add_duration_to_{datetime,date,time}` /
+//! `subtract_duration_from_{datetime,date,time}` functions accept any
+//! `xsd:duration` value — including one whose months AND seconds components are
+//! both nonzero, which no single-component function can order correctly — and are
+//! the functions a caller dispatching on a bare `xsd:duration` tag should call.
+//! The single-component functions are deliberately kept even where nothing in this
+//! workspace calls them: they remain the published F&O surface of the crate, not
+//! dead code.
 
 use std::cmp::Ordering;
 
@@ -1241,25 +1257,34 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
     )
 }
 
-/// Require `dur` to be declared `xsd:yearMonthDuration` (not the general
-/// `xsd:duration`, whose seconds component is not statically known to be zero).
+/// Require `dur`'s seconds component to be zero — the value-level condition XSD
+/// 1.1 Part 2 §3.4.27's `[^DT]*` pattern facet guarantees for every
+/// `yearMonthDuration`. Parse-time facet enforcement makes the declared tag and
+/// the value's components coincide for the two named subtypes, so checking the
+/// component rather than the tag is a strict relaxation of the old tag-only guard:
+/// every `yearMonthDuration` still passes, and the general `xsd:duration` tag now
+/// passes too whenever its seconds component happens to be zero.
 fn require_year_month_duration(dur: &Duration) -> Result<(), XsdError> {
-    match dur.datatype {
-        XsdDatatype::YearMonthDuration => Ok(()),
-        _ => Err(XsdError::TypeMismatch {
-            reason: "operation requires a yearMonthDuration operand",
-        }),
+    if dur.seconds.is_zero() {
+        Ok(())
+    } else {
+        Err(XsdError::TypeMismatch {
+            reason: "operation requires a duration with a zero seconds component (yearMonthDuration-shaped)",
+        })
     }
 }
 
-/// Require `dur` to be declared `xsd:dayTimeDuration` (not the general
-/// `xsd:duration`, whose months component is not statically known to be zero).
+/// Require `dur`'s months component to be zero — the value-level condition XSD 1.1
+/// Part 2 §3.4.26's `[^YM]*(T.*)?` pattern facet guarantees for every
+/// `dayTimeDuration`. See [`require_year_month_duration`] for why checking the
+/// component rather than the tag is a strict relaxation of the old guard.
 fn require_day_time_duration(dur: &Duration) -> Result<(), XsdError> {
-    match dur.datatype {
-        XsdDatatype::DayTimeDuration => Ok(()),
-        _ => Err(XsdError::TypeMismatch {
-            reason: "operation requires a dayTimeDuration operand",
-        }),
+    if dur.months == 0 {
+        Ok(())
+    } else {
+        Err(XsdError::TypeMismatch {
+            reason: "operation requires a duration with a zero months component (dayTimeDuration-shaped)",
+        })
     }
 }
 
@@ -1411,7 +1436,396 @@ pub fn adjust_time_to_timezone(t: &Time, timezone: Option<i64>) -> Result<Time, 
     }
 }
 
+// ── Calendar-action classifier ────────────────────────────────────────────────────
+
+/// How a temporal sort receives a duration's MONTHS component (XML Schema Appendix
+/// E's addition table, generalized to the Gregorian family below it).
+///
+/// Durations form a partially ordered abelian group `D = Y ⊕ T`, the direct sum of
+/// a months summand and a seconds summand meeting only at zero. Instants are a
+/// genuine **torsor** under the seconds summand `T` — free, transitive, invertible,
+/// which is why `dateTime − dateTime` always yields a determinate `dayTimeDuration`
+/// — but only a **non-associative retraction** under the months summand `Y`:
+/// `(2024-01-31 + P1M) + P1M ≠ 2024-01-31 + P2M`. That non-associativity is the
+/// entire reason a duration must be applied months-first-then-seconds
+/// (XML Schema Appendix E) rather than either order being equally valid, and it is
+/// why the eight temporal sorts need a genuine classification of "how" a months
+/// component is received rather than one free action shared by all of them.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MonthAction {
+    /// The months component shifts the sort's absolute month count with no
+    /// reference month to clamp against (`ℤ` acts freely) — `xsd:gYearMonth`.
+    Free,
+    /// The months component shifts year+month, then the day-of-month is clamped to
+    /// the target month's last day if the original day does not exist there
+    /// (`dateTime`, `date`, `gMonthDay`).
+    Clamped,
+    /// The months component acts through the quotient map `ℤ → ℤ/12`, not a
+    /// dropped carry: XSD 1.1 Part 2 §3.3.13 makes `gMonth` a recurring month with
+    /// no year field, so there is no year to carry into and no field is fabricated
+    /// by reducing modulo 12 — `xsd:gMonth`.
+    Cyclic12,
+    /// The months component must lie in the subgroup `12ℤ` (a whole number of
+    /// years) — `xsd:gYear` has no month field to receive a fractional-year shift.
+    Divisible12,
+    /// The months component is accepted unchanged only when doing so cannot alter
+    /// the value's denotation — `xsd:gDay`, whose day exists in every month only
+    /// for `day <= 28`; larger days depend on a month this sort does not carry.
+    IdentityIfSafe,
+    /// The sort has no months field at all — a nonzero months component is a type
+    /// error (`xsd:time`).
+    Absent,
+}
+
+/// How a temporal sort receives a duration's SECONDS component. See
+/// [`MonthAction`]'s doc for the algebraic reason months and seconds need
+/// independent classification rather than one shared action.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SecondAction {
+    /// The seconds component shifts the full (date, time-of-day) point with no
+    /// truncation — `xsd:dateTime`.
+    Free,
+    /// The seconds component is applied at midnight and only the resulting date is
+    /// kept; a sub-day remainder never errors — `xsd:date`.
+    MidnightTruncating,
+    /// The seconds component shifts the time-of-day, wrapping across an implicit
+    /// day boundary that is discarded afterward — `xsd:time`.
+    CyclicDay,
+    /// The seconds component shifts a day count that is accepted only when the
+    /// shift's outcome does not depend on which year it starts in — `xsd:gMonthDay`.
+    YearIndependentDays,
+    /// The seconds component shifts a day count that is accepted only when the
+    /// shift's outcome does not depend on which month it starts in — `xsd:gDay`.
+    MonthIndependentDays,
+    /// The sort has no seconds field at all — a nonzero seconds component is a
+    /// type error (`xsd:gYearMonth`, `xsd:gYear`, `xsd:gMonth`).
+    Absent,
+}
+
+/// Classify `datatype`'s reception of a duration's months and seconds components
+/// (XML Schema Appendix E's addition table, generalized to the Gregorian family —
+/// see [`MonthAction`]/[`SecondAction`]).
+///
+/// The match is exhaustive over **every** [`XsdDatatype`] variant, not just the
+/// eight temporal sorts that receive a nonzero component: every non-temporal
+/// datatype genuinely has no months field and no seconds field, so it classifies
+/// as `(Absent, Absent)` — the same "no such field" answer `xsd:time` gives for
+/// months. `XsdDatatype` is `#[non_exhaustive]` to downstream crates only; this
+/// module is the defining crate, so the no-wildcard match is legal and total
+/// coverage means adding a new `XsdDatatype` variant anywhere in the crate is a
+/// compile error here until it is classified, not a silent gap.
+const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
+    match datatype {
+        XsdDatatype::DateTime => (MonthAction::Clamped, SecondAction::Free),
+        XsdDatatype::Date => (MonthAction::Clamped, SecondAction::MidnightTruncating),
+        XsdDatatype::Time => (MonthAction::Absent, SecondAction::CyclicDay),
+        XsdDatatype::GYearMonth => (MonthAction::Free, SecondAction::Absent),
+        XsdDatatype::GYear => (MonthAction::Divisible12, SecondAction::Absent),
+        XsdDatatype::GMonth => (MonthAction::Cyclic12, SecondAction::Absent),
+        XsdDatatype::GMonthDay => (MonthAction::Clamped, SecondAction::YearIndependentDays),
+        XsdDatatype::GDay => (
+            MonthAction::IdentityIfSafe,
+            SecondAction::MonthIndependentDays,
+        ),
+        XsdDatatype::Integer
+        | XsdDatatype::Long
+        | XsdDatatype::Int
+        | XsdDatatype::Short
+        | XsdDatatype::Byte
+        | XsdDatatype::UnsignedLong
+        | XsdDatatype::UnsignedInt
+        | XsdDatatype::UnsignedShort
+        | XsdDatatype::UnsignedByte
+        | XsdDatatype::NonNegativeInteger
+        | XsdDatatype::PositiveInteger
+        | XsdDatatype::NonPositiveInteger
+        | XsdDatatype::NegativeInteger
+        | XsdDatatype::Decimal
+        | XsdDatatype::Float
+        | XsdDatatype::Double
+        | XsdDatatype::Boolean
+        | XsdDatatype::String
+        | XsdDatatype::Duration
+        | XsdDatatype::DayTimeDuration
+        | XsdDatatype::YearMonthDuration
+        | XsdDatatype::HexBinary
+        | XsdDatatype::Base64Binary => (MonthAction::Absent, SecondAction::Absent),
+    }
+}
+
+/// Apply `dur` to `point`: the months component first (with the day-of-month
+/// clamped against the target month, XML Schema Appendix E), then the seconds
+/// component — the order is load-bearing, see [`MonthAction`]'s doc. A zero
+/// component is skipped entirely regardless of its action, which is what makes
+/// "zero duration → identity" uniform across every sort instead of a case worked
+/// out per sort, and what spares a pure-seconds duration `shift_year_month`'s
+/// multiplication for a no-op month step.
+///
+/// `month_action`/`second_action` come from [`actions`]. Only
+/// [`MonthAction::Clamped`]/[`MonthAction::Absent`] and [`SecondAction::Free`]/
+/// [`SecondAction::MidnightTruncating`]/[`SecondAction::CyclicDay`] are executed
+/// here, for `dateTime`/`date`/`time`; the remaining actions belong to the
+/// Gregorian family, whose values carry optional fields and no time-of-day, so
+/// they are not shaped like a `CalendarPoint` and are not driven through it.
+fn drive(
+    datatype: XsdDatatype,
+    month_action: MonthAction,
+    second_action: SecondAction,
+    point: CalendarPoint,
+    dur: &Duration,
+) -> Result<CalendarPoint, XsdError> {
+    let point = if dur.months == 0 {
+        point
+    } else {
+        match month_action {
+            MonthAction::Clamped => {
+                let (y, m) = shift_year_month(datatype, point.year, point.month, dur.months)?;
+                let day = point.day.min(days_in_month(y, m));
+                CalendarPoint {
+                    year: y,
+                    month: m,
+                    day,
+                    ..point
+                }
+            }
+            MonthAction::Absent => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this temporal sort has no months field to receive a duration's months component",
+                });
+            }
+            MonthAction::Free
+            | MonthAction::Cyclic12
+            | MonthAction::Divisible12
+            | MonthAction::IdentityIfSafe => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this calendar action applies only to the Gregorian family, which this driver does not carry a CalendarPoint for",
+                });
+            }
+        }
+    };
+    if dur.seconds.is_zero() {
+        return Ok(point);
+    }
+    match second_action {
+        SecondAction::Free | SecondAction::MidnightTruncating | SecondAction::CyclicDay => {
+            let (y, m, d, h, mi, s) = add_seconds_decimal(datatype, &point, &dur.seconds)?;
+            Ok(CalendarPoint {
+                year: y,
+                month: m,
+                day: d,
+                hour: h,
+                minute: mi,
+                second: s,
+            })
+        }
+        SecondAction::Absent
+        | SecondAction::YearIndependentDays
+        | SecondAction::MonthIndependentDays => Err(XsdError::TypeMismatch {
+            reason: "this temporal sort has no free-form seconds field for a duration's seconds component",
+        }),
+    }
+}
+
+/// Negate a `Duration`'s months and seconds components together. A `Duration` is
+/// always sign-coherent by construction ([`Duration::new`]), and negating both
+/// components together preserves that — it can never produce a mixed-sign pair.
+/// Subtraction throughout the general-duration primitives below is expressed as
+/// negate-then-add rather than as its own driver pass.
+fn negate_for_subtraction(dur: &Duration) -> Result<Duration, XsdError> {
+    let months = dur
+        .months
+        .checked_neg()
+        .ok_or_else(|| arith_overflow(dur.datatype, "duration negation overflow"))?;
+    let seconds = decimal_negate(dur.datatype, &dur.seconds)?;
+    Duration::new(months, seconds, dur.datatype)
+}
+
+/// Add any `xsd:duration` value — regardless of its declared subtype — to a
+/// `dateTime`, applying the months component first (clamping the day-of-month
+/// against the target month, XML Schema Appendix E) and the seconds component
+/// second. This is the general form of [`add_year_month_duration_to_datetime`] and
+/// [`add_day_time_duration_to_datetime`] combined: those two remain the F&O-named
+/// single-component entry points, but only this function (and its five siblings
+/// below) can correctly order a duration whose months and seconds are both
+/// nonzero.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_datetime, parse_datetime, parse_duration};
+///
+/// // Months are applied before days: Jan 30 clamps to Feb 29 (2024 is a leap
+/// // year), THEN one day is added, landing on Mar 1 — not Feb 29.
+/// let dt = parse_datetime("2024-01-30T00:00:00").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1M1D").unwrap();
+/// let result = add_duration_to_datetime(&dt, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2024-03-01T00:00:00");
+/// ```
+pub fn add_duration_to_datetime(dt: &DateTime, dur: &Duration) -> Result<DateTime, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::DateTime);
+    let point = CalendarPoint {
+        year: dt.year,
+        month: dt.month,
+        day: dt.day,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+    };
+    let point = drive(
+        XsdDatatype::DateTime,
+        month_action,
+        second_action,
+        point,
+        dur,
+    )?;
+    Ok(DateTime {
+        year: point.year,
+        month: point.month,
+        day: point.day,
+        hour: point.hour,
+        minute: point.minute,
+        second: point.second,
+        tz: dt.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `dateTime`. See
+/// [`add_duration_to_datetime`] for the accepted shapes and the months-before-
+/// seconds ordering; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_datetime, parse_duration, subtract_duration_from_datetime};
+///
+/// let dt = parse_datetime("2024-03-01T00:00:00").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1Y1D").unwrap();
+/// let result = subtract_duration_from_datetime(&dt, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2023-02-28T00:00:00");
+/// ```
+pub fn subtract_duration_from_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    add_duration_to_datetime(dt, &negate_for_subtraction(dur)?)
+}
+
+/// Add any `xsd:duration` value to a `date`. The seconds component is applied at
+/// midnight and only the resulting date is kept (matching
+/// [`add_day_time_duration_to_date`]) — a sub-day remainder never errors.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_date, parse_date, parse_duration};
+///
+/// let d = parse_date("2024-01-31").unwrap();
+/// // A sub-day remainder never errors and never changes the date.
+/// let unchanged =
+///     add_duration_to_date(&d, &parse_duration(XsdDatatype::Duration, "PT1H").unwrap()).unwrap();
+/// assert_eq!(unchanged.canonical_lexical(), "2024-01-31");
+/// // A whole day rolls the date forward.
+/// let rolled =
+///     add_duration_to_date(&d, &parse_duration(XsdDatatype::Duration, "P1D").unwrap()).unwrap();
+/// assert_eq!(rolled.canonical_lexical(), "2024-02-01");
+/// ```
+pub fn add_duration_to_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::Date);
+    let point = CalendarPoint::midnight(d.year, d.month, d.day);
+    let point = drive(XsdDatatype::Date, month_action, second_action, point, dur)?;
+    Ok(Date {
+        year: point.year,
+        month: point.month,
+        day: point.day,
+        tz: d.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `date`. See [`add_duration_to_date`]
+/// for the midnight-truncation rule; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_date, parse_duration, subtract_duration_from_date};
+///
+/// let d = parse_date("2024-02-01").unwrap();
+/// let result =
+///     subtract_duration_from_date(&d, &parse_duration(XsdDatatype::Duration, "P1D").unwrap())
+///         .unwrap();
+/// assert_eq!(result.canonical_lexical(), "2024-01-31");
+/// ```
+pub fn subtract_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    add_duration_to_date(d, &negate_for_subtraction(dur)?)
+}
+
+/// Add any `xsd:duration` value to a `time`. The duration's months component must
+/// be zero — `xsd:time` has no months field ([`MonthAction::Absent`]) — while the
+/// seconds component wraps across an implicit day boundary that is then discarded,
+/// leaving only the resulting time-of-day.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_time, parse_duration, parse_time};
+///
+/// let t = parse_time("23:00:00").unwrap();
+/// let result =
+///     add_duration_to_time(&t, &parse_duration(XsdDatatype::Duration, "PT2H").unwrap()).unwrap();
+/// assert_eq!(result.canonical_lexical(), "01:00:00");
+///
+/// // A duration with a nonzero months component is a type error: `time` has no
+/// // months field to receive it.
+/// let months = parse_duration(XsdDatatype::Duration, "P1M").unwrap();
+/// assert!(add_duration_to_time(&t, &months).is_err());
+/// ```
+pub fn add_duration_to_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::Time);
+    let point = CalendarPoint::on_reference_date(t.hour, t.minute, t.second);
+    let point = drive(XsdDatatype::Time, month_action, second_action, point, dur)?;
+    Ok(Time {
+        hour: point.hour,
+        minute: point.minute,
+        second: point.second,
+        tz: t.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `time`. See [`add_duration_to_time`]
+/// for the accepted shapes; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_duration, parse_time, subtract_duration_from_time};
+///
+/// let t = parse_time("01:00:00").unwrap();
+/// let result =
+///     subtract_duration_from_time(&t, &parse_duration(XsdDatatype::Duration, "PT2H").unwrap())
+///         .unwrap();
+/// assert_eq!(result.canonical_lexical(), "23:00:00");
+/// ```
+pub fn subtract_duration_from_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    add_duration_to_time(t, &negate_for_subtraction(dur)?)
+}
+
 // ── Duration ↔ calendar arithmetic (XPath F&O §9.7.5–9.7.14; XML Schema Appendix E) ─
+//
+// The ten functions below are the F&O-named single-component surface (each takes a
+// duration statically declared `yearMonthDuration` or `dayTimeDuration`). Nothing
+// inside this workspace calls them — the general `add_duration_to_*` /
+// `subtract_duration_from_*` functions above are what any caller dispatching on a
+// bare `xsd:duration` tag uses, because only they can order a duration whose
+// months and seconds are both nonzero. These ten stay published as the crate's
+// F&O-named public surface; they are not dead code.
 
 /// `op:add-yearMonthDuration-to-dateTime`. The day-of-month is clamped to the target
 /// month's last day when the original day does not exist there (XML Schema Appendix
@@ -2178,7 +2592,7 @@ mod tests {
             Err(XsdError::OutOfRange { .. })
         ));
 
-        // Regression pin: under Task 1's still-in-place `require_same_duration_subtype`
+        // Regression pin: under the still-in-place `require_same_duration_subtype`
         // gate, the cross-subtype pair that would otherwise reach the mixed-sign
         // shape above is refused earlier, through BOTH public doors, for a
         // subtype-mismatch reason. If a later change relaxes that gate to let
@@ -2501,6 +2915,143 @@ mod tests {
     #[test]
     fn duration_to_calendar_arithmetic_rejects_wrong_subtype() {
         let dt = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let general = ymd(XsdDatatype::Duration, "P1Y1D");
+        assert!(add_year_month_duration_to_datetime(&dt, &general).is_err());
+        assert!(add_day_time_duration_to_datetime(&dt, &general).is_err());
+    }
+
+    // ── Calendar-action classifier ─────────────────────────────────────────────────
+
+    #[test]
+    fn calendar_action_driver_matches_the_classifier_table_for_all_eight_sorts() {
+        assert_eq!(
+            actions(XsdDatatype::DateTime),
+            (MonthAction::Clamped, SecondAction::Free)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Date),
+            (MonthAction::Clamped, SecondAction::MidnightTruncating)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Time),
+            (MonthAction::Absent, SecondAction::CyclicDay)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GYearMonth),
+            (MonthAction::Free, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GYear),
+            (MonthAction::Divisible12, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GMonth),
+            (MonthAction::Cyclic12, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GMonthDay),
+            (MonthAction::Clamped, SecondAction::YearIndependentDays)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GDay),
+            (
+                MonthAction::IdentityIfSafe,
+                SecondAction::MonthIndependentDays
+            )
+        );
+        // Every non-temporal datatype genuinely has no months field and no
+        // seconds field, so it classifies the same way `time` does for months:
+        // `Absent`/`Absent`.
+        assert_eq!(
+            actions(XsdDatatype::Integer),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::String),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Duration),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+    }
+
+    /// THE load-bearing test for the two-component driver: XML Schema Appendix E
+    /// requires months to be applied before seconds. Applying them in the other
+    /// order produces a *different, wrong* result for this exact input, so this
+    /// test pins both the correct answer and the incorrect alternative a
+    /// days-first implementation would produce.
+    #[test]
+    fn component_order_is_months_before_seconds() {
+        let dt = parse_datetime("2024-01-30T00:00:00").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1M1D");
+        let result = add_duration_to_datetime(&dt, &dur).unwrap();
+        // Months-first: Jan 30 clamps to Feb 29 (2024 is a leap year), then +1D
+        // lands on Mar 1.
+        assert_eq!(result.canonical_lexical(), "2024-03-01T00:00:00");
+        // Days-first (wrong): Jan 30 + 1D = Jan 31, then +1M clamps to Feb 29.
+        assert_ne!(result.canonical_lexical(), "2024-02-29T00:00:00");
+    }
+
+    /// A general `xsd:duration` with both components nonzero is accepted by the
+    /// new primitive — impossible through either single-component function, both
+    /// of which reject it (`duration_to_calendar_arithmetic_rejects_wrong_subtype`).
+    #[test]
+    fn general_duration_applies_to_instants() {
+        let dt = parse_datetime("2024-01-01T00:00:00").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1Y1D");
+        let result = add_duration_to_datetime(&dt, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "2025-01-02T00:00:00");
+    }
+
+    /// `date`'s `MidnightTruncating` second action: the duration is applied at
+    /// midnight and only the resulting date is kept, so a sub-day remainder never
+    /// errors — matching the shipped `add_day_time_duration_to_date`.
+    #[test]
+    fn date_plus_subday_duration_truncates_at_midnight() {
+        let d = parse_date("2024-01-31").unwrap();
+        let sub_day = ymd(XsdDatatype::Duration, "PT1H");
+        let unchanged = add_duration_to_date(&d, &sub_day).unwrap();
+        assert_eq!(unchanged.canonical_lexical(), "2024-01-31");
+
+        let whole_day = ymd(XsdDatatype::Duration, "P1D");
+        let rolled = add_duration_to_date(&d, &whole_day).unwrap();
+        assert_eq!(rolled.canonical_lexical(), "2024-02-01");
+    }
+
+    /// `time` has no months field (`MonthAction::Absent`): a duration with a
+    /// nonzero months component is a type error, while a pure-seconds duration
+    /// still works.
+    #[test]
+    fn time_plus_months_is_a_type_error() {
+        let t = parse_time("12:00:00").unwrap();
+        let months = ymd(XsdDatatype::Duration, "P1M");
+        assert!(add_duration_to_time(&t, &months).is_err());
+
+        let hours = ymd(XsdDatatype::Duration, "PT2H");
+        assert!(add_duration_to_time(&t, &hours).is_ok());
+    }
+
+    /// The relaxed guards on the ten F&O-named single-component functions: a
+    /// general `xsd:duration` whose value happens to be pure-months or
+    /// pure-seconds now passes, while a genuinely mixed general duration is still
+    /// rejected by BOTH single-component forms (extending
+    /// `duration_to_calendar_arithmetic_rejects_wrong_subtype`).
+    #[test]
+    fn relaxed_guards_accept_pure_component_general_durations() {
+        let dt = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let pure_year = ymd(XsdDatatype::Duration, "P1Y");
+        assert!(add_year_month_duration_to_datetime(&dt, &pure_year).is_ok());
+
+        let pure_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(add_day_time_duration_to_datetime(&dt, &pure_day).is_ok());
+        let d = parse_date("2024-01-01").unwrap();
+        assert!(add_day_time_duration_to_date(&d, &pure_day).is_ok());
+        let t = parse_time("00:00:00").unwrap();
+        assert!(add_day_time_duration_to_time(&t, &pure_day).is_ok());
+
+        // A mixed general duration is still rejected by BOTH single-component
+        // forms — the guard relaxation is strict, not a wholesale acceptance.
         let general = ymd(XsdDatatype::Duration, "P1Y1D");
         assert!(add_year_month_duration_to_datetime(&dt, &general).is_err());
         assert!(add_day_time_duration_to_datetime(&dt, &general).is_err());
