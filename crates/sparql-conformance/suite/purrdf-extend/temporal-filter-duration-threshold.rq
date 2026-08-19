@@ -1,0 +1,9 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX ex: <http://ex/>
+# ex:e3's instant difference is spec-mandated indeterminate (timezone mix),
+# so it must be absent from the result — proving the FILTER excluded it
+# rather than it comparing false against the threshold.
+SELECT ?e WHERE {
+  ?e ex:start ?s ; ex:end ?d .
+  FILTER(?d - ?s > "P7D"^^xsd:dayTimeDuration)
+}

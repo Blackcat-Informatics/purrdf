@@ -1,0 +1,7 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# Duration divided by duration is value-commensurability, not tag matching:
+# both operands here declare the general xsd:duration, but their components
+# are pure-months, so the ratio is a plain xsd:decimal.
+SELECT ?r WHERE {
+  BIND("P1Y"^^xsd:duration / "P1M"^^xsd:duration AS ?r)
+}

@@ -19,8 +19,25 @@
 #                               empty-string timezone-removal encoding, the
 #                               inclusive +-PT14H boundary, and an out-of-range
 #                               offset left unbound (a SPARQL expression error)
+#   8. SEP-0002 temporal arithmetic — the date/time/duration operator table
+#                               through the shipped parser/algebra/engine/
+#                               results-serializer stack: instant - instant,
+#                               instant + yearMonthDuration with a Gregorian
+#                               month-end clamp, same-subtype and
+#                               mixed-subtype duration addition (the
+#                               result-datatype tag rule is syntactic on the
+#                               operand tags, not on the computed components),
+#                               duration x integer scaling, duration /
+#                               duration by value-commensurability, a
+#                               mixed-timezone instant difference left unbound
+#                               (the SRX writer omitting the binding
+#                               entirely), the total duration `=` alongside
+#                               the still-indeterminate `<`, and a FILTER over
+#                               a computed duration threshold excluding the
+#                               indeterminate row rather than comparing it
+#                               false
 #
-# Beyond the seven capabilities above, this manifest also carries a handful of
+# Beyond the eight capabilities above, this manifest also carries a handful of
 # admission/surface proofs for other branch work that a vendored suite cannot
 # exercise:
 #
@@ -123,6 +140,15 @@
         :aggStatTopkDiscriminating
         :groupConcatOrder
         :baseDirection
+        :temporalInstantDifference
+        :temporalInstantPlusYearMonth
+        :temporalDurationSumSubtype
+        :temporalDurationMixedSubtype
+        :temporalDurationScaled
+        :temporalDurationRatio
+        :temporalTimezoneMixUnbound
+        :temporalDurationEqualityTotality
+        :temporalFilterDurationThreshold
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -305,3 +331,48 @@
     mf:name "STRLANGDIR() produces an RDF 1.2 directional literal, serialized per the SPARQL 1.2 Query Results XML Format spec's own example" ;
     mf:action [ qt:query <basedir.rq> ] ;
     mf:result <basedir.srx> .
+
+:temporalInstantDifference a mf:QueryEvaluationTest ;
+    mf:name "instant - instant yields a signed dayTimeDuration through the shipped stack" ;
+    mf:action [ qt:query <temporal-instant-difference.rq> ] ;
+    mf:result <temporal-instant-difference.srx> .
+
+:temporalInstantPlusYearMonth a mf:QueryEvaluationTest ;
+    mf:name "dateTime + yearMonthDuration clamps against the target month's length (2024-01-31 + P1M = 2024-02-29)" ;
+    mf:action [ qt:query <temporal-instant-plus-year-month.rq> ] ;
+    mf:result <temporal-instant-plus-year-month.srx> .
+
+:temporalDurationSumSubtype a mf:QueryEvaluationTest ;
+    mf:name "yearMonthDuration + yearMonthDuration keeps the yearMonthDuration result-datatype tag" ;
+    mf:action [ qt:query <temporal-duration-sum-subtype.rq> ] ;
+    mf:result <temporal-duration-sum-subtype.srx> .
+
+:temporalDurationMixedSubtype a mf:QueryEvaluationTest ;
+    mf:name "yearMonthDuration + dayTimeDuration widens to the general xsd:duration tag even when the computed lexical form is identical to a pure yearMonthDuration sum — the tag rule is syntactic on the operand tags, never on the computed components" ;
+    mf:action [ qt:query <temporal-duration-mixed-subtype.rq> ] ;
+    mf:result <temporal-duration-mixed-subtype.srx> .
+
+:temporalDurationScaled a mf:QueryEvaluationTest ;
+    mf:name "a dayTimeDuration scaled by an integer factor keeps its subtype tag" ;
+    mf:action [ qt:query <temporal-duration-scaled.rq> ] ;
+    mf:result <temporal-duration-scaled.srx> .
+
+:temporalDurationRatio a mf:QueryEvaluationTest ;
+    mf:name "duration / duration is value-commensurability, not tag matching: two general-tagged pure-month durations divide to a plain xsd:decimal" ;
+    mf:action [ qt:query <temporal-duration-ratio.rq> ] ;
+    mf:result <temporal-duration-ratio.srx> .
+
+:temporalTimezoneMixUnbound a mf:QueryEvaluationTest ;
+    mf:name "a mixed-timezone instant difference is spec-mandated indeterminate: the SRX writer omits the binding entirely rather than serializing an error value" ;
+    mf:action [ qt:query <temporal-timezone-mix-unbound.rq> ] ;
+    mf:result <temporal-timezone-mix-unbound.srx> .
+
+:temporalDurationEqualityTotality a mf:QueryEvaluationTest ;
+    mf:name "duration = is total (op:duration-equal) while duration < stays indeterminate for incommensurable operands, in one query" ;
+    mf:action [ qt:query <temporal-duration-equality-totality.rq> ] ;
+    mf:result <temporal-duration-equality-totality.srx> .
+
+:temporalFilterDurationThreshold a mf:QueryEvaluationTest ;
+    mf:name "FILTER over a computed instant-difference duration threshold excludes an indeterminate (mixed-timezone) row rather than comparing it false" ;
+    mf:action [ qt:query <temporal-filter-duration-threshold.rq> ; qt:data <temporal.ttl> ] ;
+    mf:result <temporal-filter-duration-threshold.srx> .

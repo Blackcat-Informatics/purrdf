@@ -1,0 +1,9 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# A timezone-bearing dateTime minus a timezone-less one is spec-mandated
+# indeterminate, not merely a comparison, so ?len must be ABSENT from the
+# result's binding element entirely — this is a claim about the SRX writer,
+# which no unit test observes.
+SELECT ?ok ?len WHERE {
+  BIND(1 AS ?ok)
+  BIND("2024-03-01T00:00:00Z"^^xsd:dateTime - "2024-03-10T00:00:00"^^xsd:dateTime AS ?len)
+}

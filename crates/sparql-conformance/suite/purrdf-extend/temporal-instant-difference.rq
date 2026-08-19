@@ -1,0 +1,6 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# instant - instant is a torsor difference: it yields a signed dayTimeDuration,
+# never a plain numeric or an unbound result.
+SELECT ?len WHERE {
+  BIND("2024-03-10T00:00:00Z"^^xsd:dateTime - "2024-03-01T00:00:00Z"^^xsd:dateTime AS ?len)
+}

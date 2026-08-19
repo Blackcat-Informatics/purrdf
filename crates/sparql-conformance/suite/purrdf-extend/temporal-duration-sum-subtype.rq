@@ -1,0 +1,6 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# Both operands declare yearMonthDuration, so the result keeps that subtype
+# tag rather than widening to the general xsd:duration.
+SELECT ?d WHERE {
+  BIND("P1Y"^^xsd:yearMonthDuration + "P2M"^^xsd:yearMonthDuration AS ?d)
+}

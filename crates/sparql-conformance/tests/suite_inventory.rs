@@ -164,8 +164,8 @@ fn purrdf_extend_case_count_and_kinds() {
 
     assert_eq!(
         cases.len(),
-        32,
-        "purrdf-extend/manifest.ttl must load exactly 32 cases (its mf:entries list \
+        41,
+        "purrdf-extend/manifest.ttl must load exactly 41 cases (its mf:entries list \
          count); got {} — a case silently stopped loading",
         cases.len()
     );
@@ -189,9 +189,9 @@ fn purrdf_extend_case_count_and_kinds() {
         "purrdf-extend must carry no unmodeled (TestKind::Unknown) cases"
     );
     assert_eq!(
-        query_eval, 29,
+        query_eval, 38,
         "purrdf-extend's mf:QueryEvaluationTest count drifted (blank-node \
-         qt:query/qt:data actions) — expected 29, got {query_eval}"
+         qt:query/qt:data actions) — expected 38, got {query_eval}"
     );
     assert_eq!(
         positive_syntax, 1,
