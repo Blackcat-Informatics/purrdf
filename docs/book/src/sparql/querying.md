@@ -87,15 +87,201 @@ Anything outside this surface — and every malformed query — is a typed
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
-## SPARQL 1.2 temporal adjustment: `ADJUST`
+## SPARQL 1.2 temporal arithmetic and adjustment
+
+`+`, `-`, `*`, `/`, and unary `-` extend past the numeric tower to
+`xsd:dateTime`/`xsd:date`/`xsd:time` (instants), `xsd:duration` and its two
+subtypes `xsd:dayTimeDuration`/`xsd:yearMonthDuration`, and the five Gregorian
+partial-date types (`xsd:gYearMonth`, `xsd:gYear`, `xsd:gMonth`,
+`xsd:gMonthDay`, `xsd:gDay`). The SPARQL 1.2 Query specification's own text
+defines no arithmetic beyond the numeric tower; the one documented table is
+[SEP-0002](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0002/sep-0002.md)'s,
+which this section follows for coverage. `ADJUST` (below) is SEP-0002's
+remaining, non-arithmetic addition.
+
+### The operator table
+
+SEP-0002's table has 24 rows: 11 are comparisons (`<`/`>` between two
+`yearMonthDuration`s or two `dayTimeDuration`s, `=` between two `duration`s,
+and `=`/`<`/`>` between two `date`s or two `time`s), already covered by
+ordinary value comparison. The remaining 13 are arithmetic:
+
+| Operands | Result |
+|---|---|
+| `date - date` | `dayTimeDuration` |
+| `date + yearMonthDuration` | `date` |
+| `date - yearMonthDuration` | `date` |
+| `date + dayTimeDuration` | `date` |
+| `date - dayTimeDuration` | `date` |
+| `time - time` | `dayTimeDuration` |
+| `time + dayTimeDuration` | `time` |
+| `time - dayTimeDuration` | `time` |
+| `dateTime - dateTime` | `dayTimeDuration` |
+| `dateTime + yearMonthDuration` | `dateTime` |
+| `dateTime - yearMonthDuration` | `dateTime` |
+| `dateTime + dayTimeDuration` | `dateTime` |
+| `dateTime - dayTimeDuration` | `dateTime` |
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?diff WHERE {
+  BIND("2002-01-02T10:00:00"^^xsd:dateTime - "2001-01-01T10:00:00"^^xsd:dateTime AS ?diff)
+}
+```
+
+Beyond this table, `purrdf` also accepts the general `xsd:duration` on every
+row above (SEP-0002 names `xsd:duration` first among the types AC1 requires,
+and the general type's own value space subsumes both subtypes), duration `±`
+duration, duration `×`/`÷` an exact number, and Gregorian `±` duration for all
+five Gregorian types where the result does not require fabricating an absent
+field (see [Divergence](#divergence-from-other-implementations) below):
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?next WHERE {
+  BIND("2012-10"^^xsd:gYearMonth + "P1Y1M"^^xsd:yearMonthDuration AS ?next)
+}
+```
+
+### Result datatype
+
+A `+`/`-` between two durations, or between a duration and an instant/Gregorian
+value, resolves its result's datatype from the operands' **declared tags**,
+never from the computed component values: the result is `dayTimeDuration` iff
+every duration operand declares `dayTimeDuration`, `yearMonthDuration` iff
+every duration operand declares `yearMonthDuration`, and the general
+`xsd:duration` otherwise. Two cases make this rule concrete, because either
+one alone is satisfied just as well by a components-based rule that happens to
+agree at that one point:
+
+A zero-valued result keeps its operands' declared subtype rather than
+collapsing to a generic zero:
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?zero WHERE {
+  BIND("P1Y"^^xsd:yearMonthDuration - "P1Y"^^xsd:yearMonthDuration AS ?zero)
+}
+```
+
+`?zero` is `"P0M"^^xsd:yearMonthDuration` — a components-only rule that
+inspects the (zero) result rather than the (matching) declared tags would
+reach the same answer here, which is exactly why the second case is needed.
+Conversely, a sum whose *components* look exactly like a pure
+`yearMonthDuration` still widens to the general type the moment either
+operand's declared tag is the general one:
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?mixed WHERE {
+  BIND("P1M"^^xsd:yearMonthDuration + "PT0S"^^xsd:dayTimeDuration AS ?mixed)
+}
+```
+
+`?mixed` is `"P1M"^^xsd:duration`, not `"P1M"^^xsd:yearMonthDuration` — the
+zero `dayTimeDuration` operand contributes nothing to the components but still
+widens the result's declared type, because the rule reads tags, not values.
+
+### Divergence from other implementations
+
+Gregorian `±` duration can ask for a field the operand's type does not carry —
+adding a duration with a months component to an `xsd:gDay` needs a month to
+apply it to, and `xsd:gDay` has none; adding a year-crossing duration to an
+`xsd:gMonthDay` needs a year to decide whether the target month even exists.
+RDF4J answers these by fabricating the missing field (year 0, January, or day
+1) through its underlying JAXP calendar and returning a value built on that
+fabrication — for example `"---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration`
+answers `"---29"`, clamped against a fabricated leap year. `purrdf` matches
+RDF4J on every case whose answer does not depend on the fabricated field —
+including `"2012-10"^^xsd:gYearMonth + P1Y1M = "2013-11"`, the one Gregorian
+case RDF4J's own test suite pins — and returns a typed error exactly where the
+answer would depend on which fabricated value RDF4J's calendar happened to
+pick:
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?bound WHERE {
+  BIND("---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration AS ?maybe)
+  BIND(BOUND(?maybe) AS ?bound)
+}
+```
+
+`?bound` is `false`: the typed error `?maybe`'s `BIND` raises poisons to
+unbound, the engine's ordinary type-error discipline. That poisoning is also
+this divergence's limit: at the SPARQL surface, a typed error and a
+reference implementation that instead *discarded* its own fabricated answer
+(rather than returning it) would both leave the same variable unbound —
+identically. The visible difference between "refuses to fabricate" and
+"fabricates and returns a value" is real, but it lives at the value-space API
+boundary (an `Err` versus an `Ok` carrying a specific answer), not in a
+SPARQL query's own results, where both a refusal and a hypothetical discard
+render the same way.
+
+### Extensions beyond SEP-0002 and F&O
+
+`purrdf` adds three operators SEP-0002 and XPath and XQuery Functions and
+Operators (F&O) do not define, each grounded in an existing rule extended to a
+type F&O left out:
+
+- **`SUM`/`AVG` over durations.** SPARQL 1.1 §18.5.1.3 defines `SUM` by
+  repeated `op:numeric-add`, whose domain is the numeric tower only; `purrdf`
+  extends the same fold to the duration group, which is exact and associative
+  under componentwise addition.
+
+  ```sparql
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  SELECT (SUM(?d) AS ?total) WHERE {
+    VALUES ?d { "P1M"^^xsd:yearMonthDuration "P2M"^^xsd:yearMonthDuration }
+  }
+  ```
+
+  `?total` is `"P3M"^^xsd:yearMonthDuration`. A group mixing numeric and
+  duration values stays unbound — the extension does not widen `SUM`'s
+  existing numeric-only acceptance, it only adds a second, disjoint one.
+
+- **Unary minus on durations.** F&O's unary minus (§4.2.8) is numeric-only and
+  defines no duration form. `purrdf` negates a duration's two components
+  together, so `-(?duration)` never produces the mixed-sign value the type
+  cannot represent. Unary plus deliberately stays numeric-only, so
+  `+(?duration)` is a type error while `-(?duration)` is not:
+
+  ```sparql
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  SELECT ?neg WHERE {
+    BIND(-("P1Y2M"^^xsd:yearMonthDuration) AS ?neg)
+  }
+  ```
+
+  `?neg` is `"-P1Y2M"^^xsd:yearMonthDuration`.
+
+- **`duration ÷ duration` by value commensurability.** F&O defines only the
+  two same-subtype forms (`op:divide-yearMonthDuration-by-yearMonthDuration`,
+  `op:divide-dayTimeDuration-by-dayTimeDuration`). `purrdf` also accepts the
+  general `xsd:duration`, dispatching on whether the two operands' *values*
+  are commensurable (both purely months, or both purely seconds) rather than
+  on their declared tags, so a `dayTimeDuration` and a general `xsd:duration`
+  that happens to be purely day-shaped still divide:
+
+  ```sparql
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  SELECT ?ratio WHERE {
+    BIND("P30D"^^xsd:duration / "P1D"^^xsd:dayTimeDuration AS ?ratio)
+  }
+  ```
+
+  `?ratio` is `30`, typed `xsd:decimal`. Two operands whose values are not
+  commensurable (a purely-months value against a purely-seconds one, even
+  under matching declared tags) are a typed error, not an arbitrary answer.
+
+### `ADJUST`
 
 `ADJUST(value, timezone)` shifts an `xsd:dateTime`/`xsd:date`/`xsd:time` value to a
 given timezone offset, or attaches one to an untimezoned value. The SPARQL 1.2
 Query specification's own text carries no `ADJUST` section; the function's one
-documented definition is [SEP-0002](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0002/sep-0002.md)'s
-two-argument signature, which maps onto XPath and XQuery Functions and Operators
-§9.6's `fn:adjust-*-to-timezone` family (the same table `purrdf-xsd` implements
-for every other SPARQL 1.2 temporal builtin).
+documented definition is SEP-0002's two-argument signature, which maps onto
+XPath and XQuery Functions and Operators §9.6's `fn:adjust-*-to-timezone`
+family (the same table `purrdf-xsd` implements for every other SPARQL 1.2
+temporal builtin).
 
 ```sparql
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>

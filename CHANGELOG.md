@@ -139,6 +139,38 @@ surfaces; each is called out below with what a consumer must do.
   layer); the Python, WebAssembly, and C interfaces all wrap the delta layer directly and were all
   fixed by this one kernel change. Callers that happened to rely on the previous arbitrary order
   may observe a different, now-stable order.
+- **BREAKING** **xsd:** `parse_duration` now enforces the `yearMonthDuration`/`dayTimeDuration`
+  subtype pattern facets (XSD 1.1 Part 2 §3.4.26/§3.4.27) at parse time instead of accepting any
+  lexical form its caller's declared tag claims: a `D`/`T` component under a `yearMonthDuration`
+  tag, or a `Y`/`M` date component under a `dayTimeDuration` tag, is now a typed `InvalidLexical`
+  rather than a silently accepted value that violated its own declared subtype. A caller lexical
+  that relied on this laxity (e.g. `"P1D"^^xsd:yearMonthDuration`) now fails to parse instead of
+  succeeding with a value its own datatype's pattern facet forbids.
+- **BREAKING** **xsd:** A `Duration` whose months and seconds components carry opposing signs
+  (e.g. `+12` months against `-1` day) is no longer constructible — XSD 1.1 Part 2 §3.3.6 puts
+  mixed-sign values outside the lexical mapping's range, so there is no correct string to emit for
+  one. The guard now sits in the single smart constructor every construction site — parsing and
+  arithmetic alike — routes through, so it cannot be reached through one door (subtraction) while
+  missed through another (addition of an already-negated operand). A caller combining a
+  `yearMonthDuration` and a `dayTimeDuration` of opposing sign now gets a typed `OutOfRange`
+  instead of a value that could never round-trip through its own canonical lexical form.
+- **BREAKING** **xsd:** `duration =` (`op:duration-equal`) is now total, matching F&O: two
+  durations with equal months and equal seconds compare equal regardless of declared subtype,
+  where a cross-subtype comparison previously fell through to an incomparable/type-mismatched
+  result — the reading `<`/`>` correctly keeps, since F&O defines ordering only for the
+  `yearMonthDuration`/`dayTimeDuration` subtypes, not for the general type. A caller that treated
+  duration equality as raising an error must now expect a plain `bool`.
+- **xsd:** Two further `Duration` defects, both reachable only through extreme inputs, are closed
+  alongside the arithmetic surface below: month accumulation during duration parsing used
+  unchecked `i64` arithmetic (`"P9223372036854775807Y"` silently wrapped) and now reports a typed
+  `OutOfRange`; and a zero-valued `yearMonthDuration`'s canonical lexical form is now the
+  subtype-correct `"P0M"` rather than `"PT0S"`.
+- **xsd:** An unreachable branch in exact decimal division — a scale-down path that could fire
+  only if the crate-wide `scale <= 18` invariant were already broken, and whose own comment
+  incorrectly called that "unusual but possible" — is now a build-surviving `unreachable!()` in
+  place of a debug-only assertion, so a future violation of that invariant cannot ship a silent
+  truncation in a release build. `xsd:duration ÷ xsd:duration` still reports a typed `OutOfRange`
+  for the case that actually is reachable: scaling one operand's mantissa past `i128::MAX`.
 
 ### Features
 
@@ -265,6 +297,45 @@ surfaces; each is called out below with what a consumer must do.
   it — canonical output is always RDFC-1.0 N-Quads, so a `--to` naming a different target
   format was accepted and never read. `--to` may still be omitted under `--canonical`, exactly
   as before.
+- **BREAKING** **xsd:** Add a value-space arithmetic operator surface — `value_add`/`value_sub`/
+  `value_mul`/`value_div`/`value_unary_minus` — dispatching, in one call, over the full numeric
+  tower plus `xsd:dateTime`/`xsd:date`/`xsd:time`/`xsd:duration` (and its two subtypes) and the
+  five Gregorian partial-date types (`xsd:gYearMonth`/`xsd:gYear`/`xsd:gMonth`/`xsd:gMonthDay`/
+  `xsd:gDay`) ± duration arithmetic, covering SEP-0002's full temporal operator table plus
+  Gregorian ± duration, which has no SEP-0002 row of its own but matches the permissive reading
+  of another SPARQL engine's own duration handling everywhere the answer does not depend on a
+  fabricated calendar field (the book's SPARQL querying chapter carries the full table and that
+  divergence's record). `numeric_add`/`numeric_sub`/`numeric_mul`/`numeric_div` remain public but
+  are now documented as the narrower numeric-tier operators the value-space surface delegates to
+  for numeric operands, not as the SPARQL-facing entry point — a caller that depended on them
+  accepting a temporal operand and returning a type error there should switch to the `value_*`
+  surface, which accepts it and returns a value.
+- **BREAKING** **sparql-eval:** `+`, `-`, `*`, `/`, and unary `-` in `FILTER`/`BIND` now evaluate
+  over `xsd:dateTime`/`xsd:date`/`xsd:time`/`xsd:duration` (and its subtypes) and the five
+  Gregorian partial-date types through the new value-space operator surface, where they previously
+  fell through a numeric-only dispatch and folded every such operand pair to unbound. A query that
+  relied on a temporal arithmetic expression silently answering unbound now receives the computed
+  value instead; the result's datatype tag follows the operands' own declared tags (documented in
+  the book's SPARQL querying chapter), never the computed component values.
+- **sparql-eval:** `SUM`/`AVG` accept a group of `xsd:duration` values (any subtype) alongside
+  their existing numeric acceptance, summing componentwise in the duration group and rounding
+  `AVG`'s months component to the nearest whole month (ties toward positive infinity) — a purrdf
+  extension, since SPARQL 1.1 §18.5.1.3 defines `SUM` over the numeric tower only. A group mixing
+  numeric and duration values still folds to unbound; this widens acceptance, it does not narrow
+  the existing numeric one.
+- **xsd:** Add unary minus on `xsd:duration` — `-(?duration)` negates both components together,
+  so it can never produce the mixed-sign value the type cannot represent — a purrdf extension,
+  since F&O's unary minus (§4.2.8) is numeric-only and defines no duration form. Unary plus
+  deliberately stays numeric-only, so `+(?duration)` remains a type error while `-(?duration)`
+  is not.
+- **xsd:** `xsd:duration ÷ xsd:duration` now also accepts the general `xsd:duration` type on
+  either or both sides, not only the matching-subtype pairs F&O defines
+  (`op:divide-yearMonthDuration-by-yearMonthDuration`,
+  `op:divide-dayTimeDuration-by-dayTimeDuration`), dispatching on the operands' VALUE
+  commensurability — both purely months, or both purely seconds — rather than their declared
+  tags, so a `dayTimeDuration` and a general `xsd:duration` that happens to be purely day-shaped
+  still divide. Two values whose components are not commensurable, even under matching declared
+  tags, are a typed error rather than an arbitrary answer.
 
 ### Refactor
 

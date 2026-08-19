@@ -53,6 +53,16 @@
 //!   wall-clock win this case shows (if any, on a given machine) comes entirely from
 //!   spreading that fold's `step`/`combine` calls across rayon workers rather than
 //!   from doing less work.
+//! - `m_arithmetic_dense_filter` — a `FILTER` with several `+`/`-`/`*`/`/` operators
+//!   chained over the DATASET-bound `?age` variable (never a literal constant — see
+//!   the case's own doc comment for why). A **catastrophe tripwire only**: see
+//!   `value_dispatch` below for the bench that can actually resolve the dispatch
+//!   layer's cost.
+//!
+//! A second, separate criterion group — `value_dispatch` — isolates the value-space
+//! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
+//! resolution; see its own doc comment for why `m_arithmetic_dense_filter` above
+//! cannot do this.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
 //! `make bench` lane) — excluded from `make check`. Timings are not asserted;
@@ -275,6 +285,31 @@ SELECT (GROUP_CONCAT(?a; separator=\",\") AS ?ages) (MAX(?a) AS ?max) WHERE {
   ?p ex:age ?a .
 }";
 
+/// (m) Arithmetic-dense `FILTER` over a **dataset-bound** variable (`?age`), never
+/// a literal constant: `const_atom` memoization (`expr.rs`) caches a literal
+/// operand's parsed `XsdValue` per AST node on its first evaluation, so a FILTER
+/// built from literal constants would measure the (memoized) constant-folding
+/// path rather than the per-row extraction + dispatch path production traffic
+/// actually takes.
+///
+/// **Catastrophe tripwire only — not a resolution instrument.** Cost model from
+/// the code, per `+`/`-`/`*`/`/` over two dataset-bound operands: operand
+/// extraction (lexical + datatype-IRI lookup, a full lexical re-parse, an intern
+/// probe) is the dominant cost; the `value_*` family dispatch this issue adds is
+/// one compare-and-branch on an in-register discriminant — under 0.1% of one
+/// evaluation. This row, run whole-query with `sample_size(10)` on a possibly
+/// contended host, has percent-level sample variance, so it can resolve a
+/// 10-30%-class effect (e.g. accidental dynamic dispatch, a lost monomorphization)
+/// but the dispatch-layer delta itself sits below this row's noise floor and
+/// this row must NOT be read as measuring it — `value_dispatch` below is the
+/// bench built to resolve that at ns granularity.
+const Q_M: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p WHERE {
+  ?p ex:age ?a .
+  FILTER(((?a + 3) * 2 - (?a - 1)) / 2 > 20)
+}";
+
 /// The namespace the benchmark host configures for its one relation.
 const REL_NS: &str = "https://example.org/rel/";
 
@@ -311,6 +346,7 @@ const CASES: &[(&str, &str, usize)] = &[
     ("i_construct_blank_free", Q_I, PEOPLE),
     ("j_construct_blank_bearing", Q_J, PEOPLE),
     ("l_single_group_aggregate", Q_L, 1),
+    ("m_arithmetic_dense_filter", Q_M, 1),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.
@@ -402,5 +438,80 @@ fn bench_query_eval(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query_eval);
+/// Isolates the `value_*` operator dispatch layer (`purrdf_xsd::ops`) from
+/// operand extraction, at ns resolution — the resolution `m_arithmetic_dense_filter`
+/// above cannot reach (its own doc comment states why).
+///
+/// Operand pairs are parsed **once, outside the timed loop** — parsing cost must
+/// not appear inside a dispatch-layer measurement. `int_plus_int_numeric_add`
+/// is the CONTROL: it calls [`purrdf_xsd::numeric_add`] directly, on the exact
+/// same pre-parsed operands `int_plus_int_value_add` feeds to
+/// [`purrdf_xsd::value_add`]. `value_add`'s numeric arm does one discriminant
+/// range-test and then calls `numeric_add` unchanged, so the
+/// `int_plus_int_value_add` minus `int_plus_int_numeric_add` difference **is**
+/// the dispatch layer's own cost — nothing else can be structurally different
+/// between the two rows.
+///
+/// `black_box` on the **inputs**, not just the outputs, is mandatory: this
+/// workspace's release profile is `lto = "fat"` + `codegen-units = 1`, and a
+/// constant, un-blackboxed operand's `XsdValue` discriminant would const-fold
+/// at compile time — the loop would then measure a compile-time constant, not
+/// a call.
+fn bench_value_dispatch(c: &mut Criterion) {
+    use purrdf_xsd::{XsdDatatype, numeric_add, parse, value_add, value_sub};
+
+    let int_a = parse("17", XsdDatatype::Integer).expect("parse int_a");
+    let int_b = parse("25", XsdDatatype::Integer).expect("parse int_b");
+    let dec_a = parse("17.5", XsdDatatype::Decimal).expect("parse dec_a");
+    let dec_b = parse("25.25", XsdDatatype::Decimal).expect("parse dec_b");
+    let mixed_int = parse("17", XsdDatatype::Integer).expect("parse mixed_int");
+    let mixed_dec = parse("25.25", XsdDatatype::Decimal).expect("parse mixed_dec");
+    let dt_a = parse("2024-03-10T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_a");
+    let dt_b = parse("2024-03-01T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_b");
+
+    let mut group = c.benchmark_group("value_dispatch");
+    group.bench_function("int_plus_int_value_add", |bencher| {
+        bencher.iter(|| {
+            criterion::black_box(value_add(
+                criterion::black_box(&int_a),
+                criterion::black_box(&int_b),
+            ))
+        });
+    });
+    group.bench_function("int_plus_int_numeric_add_control", |bencher| {
+        bencher.iter(|| {
+            criterion::black_box(numeric_add(
+                criterion::black_box(&int_a),
+                criterion::black_box(&int_b),
+            ))
+        });
+    });
+    group.bench_function("dec_plus_dec_value_add", |bencher| {
+        bencher.iter(|| {
+            criterion::black_box(value_add(
+                criterion::black_box(&dec_a),
+                criterion::black_box(&dec_b),
+            ))
+        });
+    });
+    group.bench_function("int_plus_dec_value_add", |bencher| {
+        bencher.iter(|| {
+            criterion::black_box(value_add(
+                criterion::black_box(&mixed_int),
+                criterion::black_box(&mixed_dec),
+            ))
+        });
+    });
+    group.bench_function("datetime_minus_datetime_value_sub", |bencher| {
+        bencher.iter(|| {
+            criterion::black_box(value_sub(
+                criterion::black_box(&dt_a),
+                criterion::black_box(&dt_b),
+            ))
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_query_eval, bench_value_dispatch);
 criterion_main!(benches);

@@ -878,25 +878,28 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     let vs = i32::from(divisor.scale());
     let ds = i32::from(dividend.scale());
     let shift_exp: i32 = i32::from(target_scale) + vs - ds;
-    // Scale dm up (or down) by 10^shift_exp.
-    let scaled_dm: i128 = if shift_exp >= 0 {
-        // Scale up: dm × 10^shift_exp. Max shift is 18 + 18 - 0 = 36.
-        // 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38, so we can represent 10^36.
-        // dm itself can be up to i128::MAX / 10 (from multiplication), but in the
-        // typical case |dm| ≤ 10^18. If the scale-up overflows, return OutOfRange.
-        let factor = 10i128.pow(shift_exp as u32);
-        dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
-            datatype: XsdDatatype::Decimal,
-            lexical: String::new(),
-            reason: "decimal division intermediate overflow",
-        })?
-    } else {
-        // Scale down: dm / 10^(-shift_exp). Precision is lost; this only happens
-        // when the dividend has more fractional digits than target_scale + vs,
-        // which is unusual but possible.
-        let factor = 10i128.pow((-shift_exp) as u32);
-        dm / factor
+    // Scale dm up by 10^shift_exp. `shift_exp` is NEVER negative: both `vs` and
+    // `ds` are bounded by the crate-wide `scale <= MAX_DECIMAL_SCALE` (= 18)
+    // invariant (documented on `Decimal::cmp_exact` above, `debug_assert!`ed
+    // there, enforced at parse time by `parse_decimal`, and re-clamped by
+    // `decimal_mul_raw`), so `shift_exp = MAX_DECIMAL_SCALE + vs - ds >= 18 + 0
+    // - 18 = 0` for every reachable input. A scale-down arm here would be dead
+    // code; `unreachable!()` (not `debug_assert!`, which compiles out under
+    // `[profile.release]` and would ship a silent truncation) keeps that proof
+    // load-bearing in every build profile rather than merely in debug builds.
+    let Ok(shift) = u32::try_from(shift_exp) else {
+        unreachable!("decimal scale invariant (scale <= 18) keeps shift_exp non-negative")
     };
+    // Max shift is 18 + 18 - 0 = 36. 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38,
+    // so we can represent 10^36. dm itself can be up to i128::MAX / 10 (from
+    // multiplication), but in the typical case |dm| ≤ 10^18. If the scale-up
+    // overflows, return OutOfRange.
+    let factor = 10i128.pow(shift);
+    let scaled_dm: i128 = dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
+        datatype: XsdDatatype::Decimal,
+        lexical: String::new(),
+        reason: "decimal division intermediate overflow",
+    })?;
     Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
 }
 
@@ -1872,6 +1875,32 @@ mod tests {
                 datatype: XsdDatatype::Decimal
             })
         ));
+    }
+
+    /// `decimal_div_raw` used to branch on `shift_exp < 0` and scale the
+    /// dividend DOWN (losing precision by plain truncating division) in that
+    /// arm — provably unreachable, since `shift_exp = MAX_DECIMAL_SCALE + vs -
+    /// ds` with both scales bounded by the crate-wide `scale <= 18` invariant
+    /// is always `>= 0`. That arm is gone; this pins the boundary case
+    /// CLOSEST to it — the maximum reachable dividend scale (`ds == 18`)
+    /// against a whole-number divisor (`vs == 0`), so `shift_exp == 0`
+    /// exactly, the `>= 0` branch's own zero edge — with the exact correct
+    /// quotient, proving the surviving code path handles it rather than
+    /// merely not panicking.
+    ///
+    /// The branch's deletion itself is pinned as a shell acceptance check,
+    /// not here: a source grep for the negated `shift_exp` token that the
+    /// dead arm used to scale the dividend down (`10i128.pow(negated as
+    /// u32)`) reports zero hits in this file, where it used to report two
+    /// (the dead arm's cast plus its comment) before this change.
+    #[test]
+    fn decimal_div_has_no_dead_truncating_branch() {
+        let dividend = dec("0.000000000000000001"); // scale 18 (MAX_DECIMAL_SCALE)
+        let divisor = dec("1"); // scale 0
+        let result = decimal_div_raw(&dividend, &divisor).unwrap();
+        assert_eq!(result.mantissa(), 1);
+        assert_eq!(result.scale(), MAX_DECIMAL_SCALE);
+        assert_eq!(result.canonical_lexical(), "0.000000000000000001");
     }
 
     // -- unary minus --

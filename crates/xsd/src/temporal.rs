@@ -3969,6 +3969,27 @@ mod tests {
         ));
     }
 
+    /// The reachable overflow boundary `decimal_div_raw` guards with a typed
+    /// `Err` rather than a wrapping/truncating `i128` multiply: scaling
+    /// `86400` (one day, in seconds) up by `10^36` to align a divisor with 18
+    /// fractional digits overflows `i128` (`86400 × 10^36 ≈ 8.64 × 10^40 >
+    /// i128::MAX ≈ 1.7 × 10^38`). Documented here so the boundary is pinned,
+    /// not discovered — it is a different case from the dead `shift_exp < 0`
+    /// arm removed alongside this test, which was unreachable, not merely
+    /// untested.
+    #[test]
+    fn decimal_div_scale_overflow_is_out_of_range() {
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+        let attosecond = ymd(XsdDatatype::DayTimeDuration, "PT0.000000000000000001S");
+        assert!(matches!(
+            divide_durations(&one_day, &attosecond),
+            Err(XsdError::OutOfRange {
+                datatype: XsdDatatype::Decimal,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn duration_multiply_and_divide() {
         let d = ymd(XsdDatatype::DayTimeDuration, "PT1H");
