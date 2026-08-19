@@ -9,6 +9,7 @@
 use std::cmp::Ordering;
 
 use crate::numeric::numeric_cmp;
+use crate::temporal::duration_equal;
 use crate::value::XsdValue;
 
 /// SPARQL value-space comparison (`<` / `>` / `=` semantics).
@@ -95,10 +96,46 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
     }
 }
 
-/// SPARQL value-space equality (`=`). Convenience over [`value_cmp`]; returns
-/// `false` for incomparable operands. When the error-vs-false distinction matters
-/// (the SPARQL `=` operator raises a type error on incomparable operands), use
-/// [`value_cmp`] and treat `None` as the error.
+/// SPARQL value-space equality test (`Option<bool>` form).
+///
+/// For every pair except `xsd:duration`/`xsd:duration`, this is
+/// `value_cmp(a, b).map(|o| o == Ordering::Equal)` — equality read off the
+/// partial order, `None` for incomparable operands. **Duration pairs are the
+/// one exception**: XPath F&O's `op:duration-equal` is total over the general
+/// `xs:duration` (see [`crate::temporal::duration_equal`] for the full
+/// argument), so `value_equal` never returns `None` for two durations, even
+/// when [`value_cmp`] returns `None` for the same pair because `<`/`>` are only
+/// defined for the two named subtypes.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, parse, value_cmp, value_equal};
+///
+/// let p1m = parse("P1M", XsdDatatype::YearMonthDuration)?;
+/// let p30d = parse("P30D", XsdDatatype::DayTimeDuration)?;
+///
+/// // Total: duration equality always has an answer.
+/// assert_eq!(value_equal(&p1m, &p30d), Some(false));
+/// // Partial: value_cmp has no defined order for incommensurable durations.
+/// assert_eq!(value_cmp(&p1m, &p30d), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+#[must_use]
+pub fn value_equal(a: &XsdValue, b: &XsdValue) -> Option<bool> {
+    match (a, b) {
+        (XsdValue::Duration(x), XsdValue::Duration(y)) => Some(duration_equal(x, y)),
+        _ => value_cmp(a, b).map(|o| o == Ordering::Equal),
+    }
+}
+
+/// SPARQL value-space equality (`=`), as a plain `bool`. Built on [`value_equal`],
+/// which is total for durations and otherwise reads equality off [`value_cmp`]'s
+/// partial order; incomparable operands (of either kind — indeterminate duration
+/// order or cross-family mismatch) collapse to `false` here. When the
+/// error-vs-false distinction matters (the SPARQL `=` operator raises a type
+/// error on incomparable non-duration operands), use [`value_equal`] or
+/// [`value_cmp`] directly and treat `None` as the error.
 ///
 /// # Examples
 ///
@@ -116,7 +153,7 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// ```
 #[must_use]
 pub fn value_eq(a: &XsdValue, b: &XsdValue) -> bool {
-    value_cmp(a, b) == Some(Ordering::Equal)
+    value_equal(a, b) == Some(true)
 }
 
 /// SPARQL Effective Boolean Value (value-space rules).
@@ -213,6 +250,64 @@ mod tests {
         let nan = v("NaN", Double);
         assert!(!value_eq(&nan, &nan));
         assert_eq!(value_cmp(&nan, &nan), None);
+        // Duration: op:duration-equal is total, so `false`, not an error —
+        // even though value_cmp has no order for this pair (see the test below).
+        let p1m = v("P1M", crate::XsdDatatype::YearMonthDuration);
+        let p30d = v("P30D", crate::XsdDatatype::DayTimeDuration);
+        assert!(!value_eq(&p1m, &p30d));
+        assert_eq!(value_cmp(&p1m, &p30d), None);
+    }
+
+    /// `duration_equal`/`value_equal` are total; `cmp_duration`/`value_cmp` are only
+    /// a partial order. This is the artifact that pins the split side by side, so a
+    /// regression that re-derives `=` from `value_cmp` (collapsing the two) fails
+    /// here rather than silently reintroducing the type error op:duration-equal
+    /// forbids.
+    #[test]
+    fn duration_equality_is_total_while_ordering_is_partial() {
+        use crate::XsdDatatype::{DayTimeDuration, YearMonthDuration};
+        use crate::temporal::{cmp_duration, duration_equal};
+
+        let p1m = v("P1M", YearMonthDuration);
+        let p30d = v("P30D", DayTimeDuration);
+        let (XsdValue::Duration(p1m_d), XsdValue::Duration(p30d_d)) = (&p1m, &p30d) else {
+            unreachable!("parsed as Duration")
+        };
+        assert!(!duration_equal(p1m_d, p30d_d));
+        assert_eq!(cmp_duration(p1m_d, p30d_d), None);
+
+        // Zero is one value in both subtypes' value spaces.
+        let ym_zero = v("P0M", YearMonthDuration);
+        let dt_zero = v("PT0S", DayTimeDuration);
+        let (XsdValue::Duration(ym_zero_d), XsdValue::Duration(dt_zero_d)) = (&ym_zero, &dt_zero)
+        else {
+            unreachable!("parsed as Duration")
+        };
+        assert!(duration_equal(ym_zero_d, dt_zero_d));
+    }
+
+    /// `value_equal` at the surface `ops.rs` presents to `value_eq`: total for
+    /// durations, a passthrough of `value_cmp` for everything else.
+    #[test]
+    fn value_equal_is_total_for_durations_and_a_cmp_passthrough_otherwise() {
+        use crate::XsdDatatype::{DayTimeDuration, YearMonthDuration};
+
+        // Duration/Duration: total.
+        let p1m = v("P1M", YearMonthDuration);
+        let p30d = v("P30D", DayTimeDuration);
+        assert_eq!(value_equal(&p1m, &p30d), Some(false));
+        let ym_zero = v("P0M", YearMonthDuration);
+        let dt_zero = v("PT0S", DayTimeDuration);
+        assert_eq!(value_equal(&ym_zero, &dt_zero), Some(true));
+
+        // Non-duration incomparable pair: unchanged passthrough of value_cmp (None).
+        assert_eq!(value_equal(&v("1", Integer), &v("1", String)), None);
+
+        // Equal numeric cross-type pair: passthrough of value_cmp (Some(true)).
+        assert_eq!(
+            value_equal(&v("1", Integer), &v("1.0", Decimal)),
+            Some(true)
+        );
     }
 
     #[test]

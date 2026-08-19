@@ -165,11 +165,11 @@ pub use numeric::{
     numeric_ceil, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
     numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
 };
-pub use ops::{effective_boolean_value, value_cmp, value_eq};
+pub use ops::{effective_boolean_value, value_cmp, value_eq, value_equal};
 pub use range::{
     Cardinality, DataRange, Facet, Known, Satisfiability, cardinality, contains,
     is_exactly_decided, same_value, satisfiability,
 };
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
-pub use temporal::{datetime_epoch, datetime_from_unix_seconds};
+pub use temporal::{datetime_epoch, datetime_from_unix_seconds, duration_equal};
 pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

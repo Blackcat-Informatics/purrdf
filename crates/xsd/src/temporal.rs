@@ -1007,6 +1007,27 @@ pub fn cmp_time(a: &Time, b: &Time) -> Option<Ordering> {
 ///
 /// Non-zero cross-subtype pairs (e.g. `"P1Y"` vs `"P1D"`) disagree on at least
 /// one component → `None` (genuinely incomparable per XSD §3.6.5).
+///
+/// ## Why `<`/`>` is indeterminate but `=` is total (see [`duration_equal`])
+///
+/// This function and [`duration_equal`] answer two genuinely different questions
+/// over the same (months, seconds) pair, and the difference is not an oversight:
+///
+/// - XPath F&O defines `lt`/`gt` on durations **only for the two named
+///   subtypes** (`dayTimeDuration`, `yearMonthDuration`), each of which is
+///   totally ordered on its own. Comparing across incommensurable months/seconds
+///   — `"P1M"` vs `"P30D"` — has no defined order, so this function's `None` is a
+///   **spec-mandated outcome**, exactly like every other `None` this crate
+///   returns from a `cmp_*` function (see the crate-level docs).
+/// - XPath F&O's `op:duration-equal`, by contrast, is defined over the general
+///   `xs:duration` and is **total**: it compares months and seconds
+///   componentwise and always returns a boolean, never an error, even for
+///   incommensurable pairs. `"P1M" = "P30D"` is `false`, not indeterminate.
+///
+/// So `cmp_duration(a, b) == Some(Ordering::Equal)` and `duration_equal(a, b)`
+/// always agree (equality is the one relation both functions define the same
+/// way), but a `None` from this function does **not** imply `duration_equal`
+/// also has nothing to say — `duration_equal` always has an answer.
 #[must_use]
 pub fn cmp_duration(a: &Duration, b: &Duration) -> Option<Ordering> {
     let m = a.months.cmp(&b.months);
@@ -1017,6 +1038,40 @@ pub fn cmp_duration(a: &Duration, b: &Duration) -> Option<Ordering> {
         (a, b) if a == b => Some(a),
         _ => None,
     }
+}
+
+/// `xs:duration` value-space equality (XPath F&O `op:duration-equal`) — **total**,
+/// unlike [`cmp_duration`]'s partial order. See that function's doc comment for
+/// the full explanation of why `=` and `<`/`>` genuinely differ here.
+///
+/// Componentwise on `(months, seconds)`, with **no datatype-tag gate**:
+/// `op:duration-equal`'s parameter type is the general `xs:duration`, so
+/// cross-subtype pairs (e.g. a `yearMonthDuration` against a `dayTimeDuration`)
+/// are in scope and compare by value, exactly like [`cmp_duration`]'s zero-pair
+/// case. `"P1M" = "P30D"` is `false` — never an error.
+///
+/// Seconds equality goes through [`Decimal::cmp_exact`], never `==`: `Decimal`
+/// deliberately derives no `PartialEq` because two different `(mantissa, scale)`
+/// pairs (e.g. mantissa 10 scale 1, and mantissa 1 scale 0) denote the same
+/// value, and `cmp_exact` is the only correct equality over that representation.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, parse, value_cmp, value_equal};
+///
+/// let p1m = parse("P1M", XsdDatatype::YearMonthDuration)?;
+/// let p30d = parse("P30D", XsdDatatype::DayTimeDuration)?;
+///
+/// // Total: always an answer, never an error.
+/// assert_eq!(value_equal(&p1m, &p30d), Some(false));
+/// // Partial: incommensurable components have no defined order.
+/// assert_eq!(value_cmp(&p1m, &p30d), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+#[must_use]
+pub fn duration_equal(a: &Duration, b: &Duration) -> bool {
+    a.months == b.months && a.seconds.cmp_exact(&b.seconds).is_eq()
 }
 
 /// Compare two Gregorian values (XSD partial order).
