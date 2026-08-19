@@ -98,6 +98,27 @@ pub struct Duration {
     datatype: XsdDatatype,
 }
 
+/// Which of a `Duration`'s two components carry a nonzero value. `range.rs` states
+/// the fact this classification exists to encode once instead of scattering it:
+/// "The `duration` family is ONE space because the `xsd:dayTimeDuration` and
+/// `xsd:yearMonthDuration` value spaces overlap at the zero duration." A
+/// division-commensurability rule (or any other duration-group operator) that
+/// branches on `Shape` — via a `match` on `(Shape, Shape)`, never a derived `Ord` +
+/// `max` — cannot invent an ordering between `Months` and `Seconds`, which are
+/// genuinely incomparable summands of the direct sum `D = Y ⊕ T`.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Both components are zero — the point where the two summands meet.
+    Zero,
+    /// Only the months component is nonzero.
+    Months,
+    /// Only the seconds component is nonzero.
+    Seconds,
+    /// Both components are nonzero; no single summand describes the value.
+    Mixed,
+}
+
 impl Duration {
     /// The single construction point for every `Duration` value in this module.
     /// Enforces two invariants so that every other function on `Duration` — most
@@ -165,6 +186,18 @@ impl Duration {
     #[must_use]
     pub fn seconds(&self) -> Decimal {
         self.seconds
+    }
+
+    /// Classify which of `self`'s two components are nonzero. See [`Shape`].
+    /// `Decimal::is_zero` is mantissa-only and scale-insensitive, so this
+    /// classification is unaffected by which scale `self.seconds` happens to carry.
+    fn shape(&self) -> Shape {
+        match (self.months == 0, self.seconds.is_zero()) {
+            (true, true) => Shape::Zero,
+            (false, true) => Shape::Months,
+            (true, false) => Shape::Seconds,
+            (false, false) => Shape::Mixed,
+        }
     }
 
     /// Canonical lexical form `[-]PnYnMnDTnHnMnS` (general duration grammar).
@@ -1057,11 +1090,6 @@ fn decimal_negate(datatype: XsdDatatype, a: &Decimal) -> Result<Decimal, XsdErro
         })
 }
 
-/// Exact `a - b`, built from [`decimal_add_exact`] + [`decimal_negate`].
-fn decimal_sub_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
-    decimal_add_exact(datatype, a, &decimal_negate(datatype, b)?)
-}
-
 /// Round a `Decimal` to the nearest `i64`, ties toward positive infinity — the same
 /// rule `numeric::numeric_round` applies to `fn:round` (XPath §4.4.5), reused here for
 /// `xs:yearMonthDuration` multiply/divide, whose result must be an integer number of
@@ -1864,12 +1892,30 @@ fn drive_gregorian(
     }
 }
 
-/// Negate a `Duration`'s months and seconds components together. A `Duration` is
-/// always sign-coherent by construction ([`Duration::new`]), and negating both
-/// components together preserves that — it can never produce a mixed-sign pair.
-/// Subtraction throughout the general-duration primitives below is expressed as
-/// negate-then-add rather than as its own driver pass.
-fn negate_for_subtraction(dur: &Duration) -> Result<Duration, XsdError> {
+/// Negate a `Duration`'s months and seconds components together (unary minus).
+/// A `Duration` is always sign-coherent by construction ([`Duration::new`]), and
+/// negating both components together preserves that — it can never produce a
+/// mixed-sign pair, so this function has exactly one arm. Subtraction throughout
+/// the general-duration primitives below, and [`subtract_durations`] itself, are
+/// both expressed as negate-then-add rather than as their own driver passes.
+///
+/// **purrdf extension:** XPath F&O's unary minus is numeric-only
+/// (`op:numeric-unary-minus`, §4.2.8) — F&O defines no duration unary minus, and
+/// unary plus stays numeric-only in purrdf too (`+(?duration)` is a type error
+/// while `-(?duration)` is not; that asymmetry is deliberate, not an oversight).
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{negate_duration, parse_duration};
+///
+/// let d = parse_duration(XsdDatatype::YearMonthDuration, "P1Y2M").unwrap();
+/// let negated = negate_duration(&d).unwrap();
+/// assert_eq!(negated.canonical_lexical(), "-P1Y2M");
+/// assert_eq!(negate_duration(&negated).unwrap().canonical_lexical(), "P1Y2M");
+/// ```
+pub fn negate_duration(dur: &Duration) -> Result<Duration, XsdError> {
     let months = dur
         .months
         .checked_neg()
@@ -1947,7 +1993,7 @@ pub fn subtract_duration_from_datetime(
     dt: &DateTime,
     dur: &Duration,
 ) -> Result<DateTime, XsdError> {
-    add_duration_to_datetime(dt, &negate_for_subtraction(dur)?)
+    add_duration_to_datetime(dt, &negate_duration(dur)?)
 }
 
 /// Add any `xsd:duration` value to a `date`. The seconds component is applied at
@@ -1998,7 +2044,7 @@ pub fn add_duration_to_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> 
 /// assert_eq!(result.canonical_lexical(), "2024-01-31");
 /// ```
 pub fn subtract_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
-    add_duration_to_date(d, &negate_for_subtraction(dur)?)
+    add_duration_to_date(d, &negate_duration(dur)?)
 }
 
 /// Add any `xsd:duration` value to a `time`. The duration's months component must
@@ -2050,7 +2096,7 @@ pub fn add_duration_to_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> 
 /// assert_eq!(result.canonical_lexical(), "23:00:00");
 /// ```
 pub fn subtract_duration_from_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
-    add_duration_to_time(t, &negate_for_subtraction(dur)?)
+    add_duration_to_time(t, &negate_duration(dur)?)
 }
 
 /// Add any `xsd:duration` value to a Gregorian value (`gYearMonth`, `gYear`,
@@ -2126,7 +2172,7 @@ pub fn subtract_duration_from_gregorian(
     g: &Gregorian,
     dur: &Duration,
 ) -> Result<Gregorian, XsdError> {
-    add_duration_to_gregorian(g, &negate_for_subtraction(dur)?)
+    add_duration_to_gregorian(g, &negate_duration(dur)?)
 }
 
 // ── Duration ↔ calendar arithmetic (XPath F&O §9.7.5–9.7.14; XML Schema Appendix E) ─
@@ -2388,67 +2434,88 @@ pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
     instant_diff(XsdDatatype::Time, &a_inst, &b_inst)
 }
 
-// ── Duration arithmetic (XPath F&O §8.4) ─────────────────────────────────────────
+// ── Duration arithmetic (XPath F&O §8.4, extended to the general xsd:duration) ───
 
-/// The two duration values must be the *same declared* `yearMonthDuration`/
-/// `dayTimeDuration` subtype. F&O defines `+`/`-`/`*`//` only for those two
-/// subtypes (not the general `xsd:duration`, whose (months, seconds) pair mixes
-/// units that cannot be added component-wise without loss); mixing subtypes, or
-/// using the general `xsd:duration`, is a type error.
-fn require_same_duration_subtype(a: &Duration, b: &Duration) -> Result<XsdDatatype, XsdError> {
-    if a.datatype != b.datatype {
-        return Err(XsdError::TypeMismatch {
-            reason: "duration arithmetic requires matching yearMonthDuration/dayTimeDuration subtypes",
-        });
-    }
-    match a.datatype {
-        XsdDatatype::YearMonthDuration | XsdDatatype::DayTimeDuration => Ok(a.datatype),
-        _ => Err(XsdError::TypeMismatch {
-            reason: "duration arithmetic requires a yearMonthDuration or dayTimeDuration operand",
-        }),
+/// The result datatype for `a OP b` over the duration group: syntactic on the
+/// operands' own *declared* tags, never on their computed (months, seconds)
+/// components — `dayTimeDuration` iff both operands declare it, `yearMonthDuration`
+/// iff both do, else the general `xsd:duration`. This is a plain `match`, the same
+/// idiom [`Shape`]'s doc requires of it: durations do not carry a total order over
+/// tags for `Ord`/`max` to invent one from.
+fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
+    match (a, b) {
+        (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
+            XsdDatatype::YearMonthDuration
+        }
+        (XsdDatatype::DayTimeDuration, XsdDatatype::DayTimeDuration) => {
+            XsdDatatype::DayTimeDuration
+        }
+        _ => XsdDatatype::Duration,
     }
 }
 
-/// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`.
+/// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`, extended to accept any
+/// `xsd:duration` operand: purrdf follows RDF4J's permissiveness here rather than
+/// F&O's restriction to the two named subtypes (F&O's (months, seconds) pair for
+/// the general tag is not a mixing of incompatible units — it is exactly this
+/// module's own `D = Y ⊕ T` direct sum). Componentwise checked addition through
+/// [`Duration::new`], so a mixed-sign result is refused at construction regardless
+/// of which operator produced it — see [`Duration::new`]'s own doc for why the
+/// guard cannot live in either operator alone. See [`duration_result_datatype`] for
+/// the result's tag.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_durations, parse_duration};
+///
+/// let a = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let b = parse_duration(XsdDatatype::DayTimeDuration, "PT1H").unwrap();
+/// let sum = add_durations(&a, &b).unwrap();
+/// assert_eq!(sum.canonical_lexical(), "P1YT1H");
+/// assert_eq!(sum.datatype(), XsdDatatype::Duration);
+/// ```
 pub fn add_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
-    let datatype = require_same_duration_subtype(a, b)?;
-    match datatype {
-        XsdDatatype::YearMonthDuration => {
-            let months = a
-                .months
-                .checked_add(b.months)
-                .ok_or_else(|| arith_overflow(datatype, "yearMonthDuration addition overflow"))?;
-            Duration::new(months, Decimal::from_parts(0, 0), datatype)
-        }
-        _ => {
-            let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
-            Duration::new(0, seconds, datatype)
-        }
-    }
+    let datatype = duration_result_datatype(a.datatype, b.datatype);
+    let months = a
+        .months
+        .checked_add(b.months)
+        .ok_or_else(|| arith_overflow(datatype, "duration addition overflow (months)"))?;
+    let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
+    Duration::new(months, seconds, datatype)
 }
 
-/// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`.
+/// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`, extended the
+/// same way as [`add_durations`]. Expressed as negate-then-add through
+/// [`negate_duration`] rather than its own componentwise pass, matching this
+/// module's negate-then-add idiom for calendar subtraction.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{subtract_durations, parse_duration};
+///
+/// let a = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let b = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let diff = subtract_durations(&a, &b).unwrap();
+/// // Zero canonicalizes per the operand subtype ("P0M", not "PT0S").
+/// assert_eq!(diff.canonical_lexical(), "P0M");
+/// assert_eq!(diff.datatype(), XsdDatatype::YearMonthDuration);
+/// ```
 pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
-    let datatype = require_same_duration_subtype(a, b)?;
-    match datatype {
-        XsdDatatype::YearMonthDuration => {
-            let months = a.months.checked_sub(b.months).ok_or_else(|| {
-                arith_overflow(datatype, "yearMonthDuration subtraction overflow")
-            })?;
-            Duration::new(months, Decimal::from_parts(0, 0), datatype)
-        }
-        _ => {
-            let seconds = decimal_sub_exact(datatype, &a.seconds, &b.seconds)?;
-            Duration::new(0, seconds, datatype)
-        }
-    }
+    add_durations(a, &negate_duration(b)?)
 }
 
-/// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`. `factor` is a
-/// `Decimal` rather than F&O's `xs:double`: this crate keeps its stored values exact
-/// (no floats), so the multiplication stays exact too. `yearMonthDuration` results
-/// are rounded to the nearest whole month, ties toward positive infinity (matching
-/// `fn:round`, since months cannot be fractional).
+/// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`, extended with a
+/// general-`xsd:duration` arm that scales BOTH components, preserving the
+/// operand's declared tag. `factor` is a `Decimal` rather than F&O's `xs:double`:
+/// this crate keeps its stored values exact (no floats), so the multiplication
+/// stays exact too. Months results are always rounded to the nearest whole month,
+/// ties toward positive infinity ([`round_decimal_to_i64`], matching `fn:round`,
+/// since months cannot be fractional) — this is a deliberate, documented
+/// non-inverse: `(d ÷ 2) × 2` need not equal `d` for an odd month count.
 pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, XsdError> {
     match dur.datatype {
         XsdDatatype::YearMonthDuration => {
@@ -2465,15 +2532,25 @@ pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, X
             })?;
             Duration::new(0, seconds, dur.datatype)
         }
-        _ => Err(XsdError::TypeMismatch {
-            reason: "multiply requires a yearMonthDuration or dayTimeDuration operand",
-        }),
+        _ => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_product = decimal_mul_raw(&months_dec, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "duration multiplication overflow (months)")
+            })?;
+            let months = round_decimal_to_i64(dur.datatype, &months_product)?;
+            let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "duration multiplication overflow (seconds)")
+            })?;
+            Duration::new(months, seconds, dur.datatype)
+        }
     }
 }
 
-/// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`. `divisor` is a
-/// `Decimal` for the same exactness reason as [`multiply_duration`]; a zero divisor
-/// is `Err(DivisionByZero)`.
+/// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`, extended with a
+/// general-`xsd:duration` arm that scales BOTH components (see
+/// [`multiply_duration`], whose months-rounding rule and non-inverse note apply
+/// identically here). `divisor` is a `Decimal` for the same exactness reason as
+/// [`multiply_duration`]; a zero divisor is `Err(DivisionByZero)`.
 pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, XsdError> {
     if divisor.is_zero() {
         return Err(XsdError::DivisionByZero {
@@ -2491,8 +2568,63 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
             let seconds = decimal_div_raw(&dur.seconds, divisor)?;
             Duration::new(0, seconds, dur.datatype)
         }
-        _ => Err(XsdError::TypeMismatch {
-            reason: "divide requires a yearMonthDuration or dayTimeDuration operand",
+        _ => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_quotient = decimal_div_raw(&months_dec, divisor)?;
+            let months = round_decimal_to_i64(dur.datatype, &months_quotient)?;
+            let seconds = decimal_div_raw(&dur.seconds, divisor)?;
+            Duration::new(months, seconds, dur.datatype)
+        }
+    }
+}
+
+/// Divide one `xsd:duration` by another, by VALUE commensurability rather than by
+/// declared tag — the distinction [`divide_year_month_durations`] and
+/// [`divide_day_time_durations`] do not need to make, since they each gate on a
+/// single named subtype. Two durations are commensurable, and their ratio a plain
+/// `xs:decimal`, iff they occupy the same summand of `D = Y ⊕ T` ([`Shape`]):
+/// both [`Shape::Months`]-shaped, or both [`Shape::Seconds`]-shaped. A
+/// [`Shape::Zero`] dividend is compatible with either summand — it is the point
+/// where the two meet — so `0 ÷ nonzero` always succeeds with a ratio of `0`.
+/// A `Shape::Zero` divisor is `Err(DivisionByZero)`, checked first so it takes
+/// priority over a `Shape::Zero` dividend. An incommensurable pair (e.g. a
+/// `Shape::Months` dividend against a `Shape::Seconds` divisor, or either operand
+/// [`Shape::Mixed`]) reports `XsdError::TypeMismatch` with the reason
+/// `"incommensurable duration operands"` — a dedicated indeterminate-division
+/// error variant belongs to this crate's error taxonomy, not to this function, and
+/// is intentionally not introduced here.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{divide_durations, parse_duration};
+///
+/// // Cross-tag but value-commensurable: both are purely seconds-shaped.
+/// let thirty_days = parse_duration(XsdDatatype::Duration, "P30D").unwrap();
+/// let one_day = parse_duration(XsdDatatype::DayTimeDuration, "P1D").unwrap();
+/// assert_eq!(
+///     divide_durations(&thirty_days, &one_day).unwrap().canonical_lexical(),
+///     "30"
+/// );
+///
+/// // Same tag but value-incommensurable: months vs. seconds.
+/// let one_year = parse_duration(XsdDatatype::Duration, "P1Y").unwrap();
+/// assert!(divide_durations(&one_year, &one_day).is_err());
+/// ```
+pub fn divide_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+    match (a.shape(), b.shape()) {
+        (_, Shape::Zero) => Err(XsdError::DivisionByZero {
+            datatype: a.datatype,
+        }),
+        (Shape::Zero, _) => Ok(Decimal::from_parts(0, 0)),
+        (Shape::Months, Shape::Months) => decimal_div_raw(
+            &Decimal::from_parts(i128::from(a.months), 0),
+            &Decimal::from_parts(i128::from(b.months), 0),
+        ),
+        (Shape::Seconds, Shape::Seconds) => decimal_div_raw(&a.seconds, &b.seconds),
+        (Shape::Months | Shape::Seconds | Shape::Mixed, _) => Err(XsdError::TypeMismatch {
+            reason: "incommensurable duration operands",
         }),
     }
 }
@@ -2882,10 +3014,10 @@ mod tests {
     /// unconstructible regardless of which arithmetic entry point would compute it.
     /// `Duration::new` is the single point every entry point funnels through, so it
     /// is exercised directly with both sign shapes; a companion assertion pins that
-    /// `subtract_durations`/`add_durations` already refuse the cross-subtype pair
-    /// that would otherwise reach one of those shapes (today via a subtype-mismatch
-    /// error, ahead of ever reaching the sign check) — see the in-body comments for
-    /// why a guard placed in only one construction path is a failed implementation.
+    /// `add_durations`/`subtract_durations` — now that the general `xsd:duration`
+    /// tag is accepted and the old subtype gate is gone — reach that same
+    /// `Duration::new` refusal, as `OutOfRange`, through BOTH public doors, rather
+    /// than silently constructing a mixed-sign value.
     #[test]
     fn mixed_sign_duration_is_unconstructible() {
         // The guard this test protects is `Duration::new`'s sign coherence check —
@@ -2904,22 +3036,27 @@ mod tests {
             Err(XsdError::OutOfRange { .. })
         ));
 
-        // Regression pin: under the still-in-place `require_same_duration_subtype`
-        // gate, the cross-subtype pair that would otherwise reach the mixed-sign
-        // shape above is refused earlier, through BOTH public doors, for a
-        // subtype-mismatch reason. If a later change relaxes that gate to let
-        // yearMonth/dayTime mix into a general `xsd:duration`, this exact pair
-        // must resolve through `Duration::new`'s sign guard as `OutOfRange`, not
-        // silently succeed.
+        // Both-public-doors form: the yearMonthDuration/dayTimeDuration subtype
+        // gate that used to intercept a cross-subtype pair earlier, as a
+        // TypeMismatch, is gone — the general `xsd:duration` tag is accepted, and
+        // `Duration::new`'s sign guard is the one and only place left that can
+        // still refuse the resulting mixed-sign pair.
+        //
+        // `add_durations`: a positive-months operand plus a negative-seconds
+        // operand reaches (months: 12, seconds: -86400) directly.
         let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
         let neg_day = ymd(XsdDatatype::DayTimeDuration, "-P1D");
         assert!(matches!(
-            subtract_durations(&ym, &neg_day),
-            Err(XsdError::TypeMismatch { .. })
-        ));
-        assert!(matches!(
             add_durations(&ym, &neg_day),
-            Err(XsdError::TypeMismatch { .. })
+            Err(XsdError::OutOfRange { .. })
+        ));
+        // `subtract_durations`: two positive general-`xsd:duration` operands whose
+        // difference is mixed-sign reaches the same guard via negate-then-add.
+        let pos_year = ymd(XsdDatatype::Duration, "P1Y");
+        let pos_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(matches!(
+            subtract_durations(&pos_year, &pos_day),
+            Err(XsdError::OutOfRange { .. })
         ));
     }
 
@@ -3635,16 +3772,145 @@ mod tests {
         );
     }
 
+    /// Inverted from (and renamed from) a test that once pinned the opposite
+    /// behavior: F&O restricts `+`/`-`/`*`//` to the two named subtypes, but
+    /// purrdf's RDF4J-permissiveness ruling accepts the general `xsd:duration`
+    /// too, in both the mixed-subtype and the general-plus-general case. Both
+    /// assertions pin the exact result value AND its exact result datatype — a
+    /// bare `is_ok()` would not show the tag-join rule landed correctly.
     #[test]
-    fn duration_add_rejects_mixed_subtype() {
+    fn duration_add_mixes_subtypes_into_general_duration() {
+        // yearMonthDuration + dayTimeDuration: neither operand declares the same
+        // tag as the other, so the result is the general `xsd:duration`.
         let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
         let dt = ymd(XsdDatatype::DayTimeDuration, "PT1H");
-        assert!(add_durations(&ym, &dt).is_err());
-        // The general xsd:duration is also rejected — F&O defines +/-/*// only for
-        // the two named subtypes.
+        let sum = add_durations(&ym, &dt).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1YT1H");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+
+        // general + general: both operands already declare the general tag, and
+        // an already-general tag stays general.
         let general_a = ymd(XsdDatatype::Duration, "P1Y1D");
         let general_b = ymd(XsdDatatype::Duration, "P1D");
-        assert!(add_durations(&general_a, &general_b).is_err());
+        let sum = add_durations(&general_a, &general_b).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1Y2D");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+    }
+
+    /// Dual discriminator A: `P1Y - P1Y` computes the pair `(0, 0)`, which is indistinguishable
+    /// from a pure `dayTimeDuration` zero by VALUE alone — only the declared-tag
+    /// join rule (never a components-based one) keeps the result tagged
+    /// `yearMonthDuration`, which is why its canonical lexical is `"P0M"` and not
+    /// `"PT0S"`.
+    #[test]
+    fn zero_result_keeps_the_operand_subtype() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let b = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let diff = subtract_durations(&a, &b).unwrap();
+        assert_eq!(diff.canonical_lexical(), "P0M");
+        assert_eq!(diff.datatype(), XsdDatatype::YearMonthDuration);
+    }
+
+    /// Dual discriminator B: `P1M + PT0S` computes the pair `(1, 0)`, which looks
+    /// exactly like a pure `yearMonthDuration` value by VALUE alone — only the
+    /// declared-tag join rule (the operands' tags differ: `yearMonthDuration` vs.
+    /// `dayTimeDuration`) keeps the result tagged as the general `xsd:duration`
+    /// rather than `yearMonthDuration`. A+B together force the tag-join rule to be
+    /// syntactic on tags, never a function of the computed components.
+    #[test]
+    fn mixed_subtype_sum_is_the_general_duration() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        let b = ymd(XsdDatatype::DayTimeDuration, "PT0S");
+        let sum = add_durations(&a, &b).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1M");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+    }
+
+    /// The group inverse: negating both components together, and the round trip
+    /// back through a second negation.
+    #[test]
+    fn unary_minus_negates_both_components() {
+        let d = ymd(XsdDatatype::YearMonthDuration, "P1Y2M");
+        let negated = negate_duration(&d).unwrap();
+        assert_eq!(negated.canonical_lexical(), "-P1Y2M");
+        assert_eq!(negated.datatype(), XsdDatatype::YearMonthDuration);
+
+        let round_tripped = negate_duration(&negated).unwrap();
+        assert_eq!(round_tripped.canonical_lexical(), d.canonical_lexical());
+        assert_eq!(round_tripped.datatype(), d.datatype());
+    }
+
+    /// `multiply_duration`/`divide_duration` round the months component (ties
+    /// toward positive infinity, `round_decimal_to_i64`) rather than truncating —
+    /// and the documented consequence that rounding makes `(d ÷ 2) × 2` NOT an
+    /// inverse for an odd month count.
+    #[test]
+    fn duration_scale_rounds_months_not_truncates() {
+        let one_month = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        let half = parse_decimal("0.5").unwrap();
+        // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity) => "P1M".
+        assert_eq!(
+            multiply_duration(&one_month, &half)
+                .unwrap()
+                .canonical_lexical(),
+            "P1M"
+        );
+        let one_half = parse_decimal("1.5").unwrap();
+        // 1 month * 1.5 = 1.5, rounds to 2 (ties toward +infinity) => "P2M".
+        assert_eq!(
+            multiply_duration(&one_month, &one_half)
+                .unwrap()
+                .canonical_lexical(),
+            "P2M"
+        );
+
+        // Documented non-inverse: (P1M ÷ 2) × 2 rounds 1 month / 2 = 0.5 up to 1
+        // month at the division step, so multiplying that back by 2 gives P2M, not
+        // the original P1M.
+        let two = Decimal::from_parts(2, 0);
+        let halved = divide_duration(&one_month, &two).unwrap();
+        let doubled = multiply_duration(&halved, &two).unwrap();
+        assert_eq!(doubled.canonical_lexical(), "P2M");
+        assert_ne!(doubled.canonical_lexical(), one_month.canonical_lexical());
+    }
+
+    /// `divide_durations` dispatches on VALUE commensurability, not on declared
+    /// tags — three assertions, because a same-tag-only test cannot distinguish
+    /// value-based dispatch from a wrong tag-gated implementation that happens to
+    /// pass it verbatim.
+    #[test]
+    fn divide_durations_is_commensurability_not_tags() {
+        // Same tag, commensurable (both purely months-shaped).
+        let one_year = ymd(XsdDatatype::Duration, "P1Y");
+        let one_month = ymd(XsdDatatype::Duration, "P1M");
+        assert_eq!(
+            divide_durations(&one_year, &one_month)
+                .unwrap()
+                .canonical_lexical(),
+            "12"
+        );
+
+        // Cross tag, value-commensurable (both purely seconds-shaped) — must
+        // succeed despite the differing declared tags.
+        let thirty_days = ymd(XsdDatatype::Duration, "P30D");
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+        assert_eq!(
+            divide_durations(&thirty_days, &one_day)
+                .unwrap()
+                .canonical_lexical(),
+            "30"
+        );
+
+        // Same tag, value-incommensurable (months vs. seconds) — must fail even
+        // though the declared tags agree.
+        let one_year = ymd(XsdDatatype::Duration, "P1Y");
+        let one_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(matches!(
+            divide_durations(&one_year, &one_day),
+            Err(XsdError::TypeMismatch {
+                reason: "incommensurable duration operands"
+            })
+        ));
     }
 
     #[test]
