@@ -3561,6 +3561,98 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
+    /// A second FILTER fixture, alongside [`typed_graph`], for the SEP-0002
+    /// temporal operators.
+    ///
+    /// Unbound and `false` are indistinguishable in a `BIND` (both leave the
+    /// target unbound) and produce the *same* observable effect in a
+    /// `FILTER` (the row disappears). A `FILTER` test that only checks which
+    /// rows survive therefore asserts a discrimination it cannot make; every
+    /// `FILTER` test built over this fixture is a `FILTER(p)` / `FILTER(!p)`
+    /// **pair**, because `!false = true` but `!error = error` — only the
+    /// pair separates them.
+    ///
+    /// `:e1`/`:e2` are ordinary same-timezone instant pairs (9 days and 2
+    /// days apart). `:e3` mixes a timezone-bearing `:start` with a
+    /// timezone-less `:end` — its instant difference is spec-mandated
+    /// indeterminate, not merely "false", so it must be absent from a
+    /// `FILTER(p)`/`FILTER(!p)` pair over it in BOTH directions. `:p1`/`:p2`
+    /// each carry one general `xsd:duration`, value-equal to `"P30D"` only
+    /// for `:p2` (`P1M` and `P30D` are unequal, not incomparable — duration
+    /// `=` is total).
+    fn temporal_graph() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        const XDATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+        const XDURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+        let mut b = RdfDatasetBuilder::new();
+        let start = b.intern_iri("http://ex/start");
+        let end = b.intern_iri("http://ex/end");
+        let period = b.intern_iri("http://ex/period");
+        let e1 = b.intern_iri("http://ex/e1");
+        let e2 = b.intern_iri("http://ex/e2");
+        let e3 = b.intern_iri("http://ex/e3");
+        let p1 = b.intern_iri("http://ex/p1");
+        let p2 = b.intern_iri("http://ex/p2");
+        let e1_start = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let e1_end = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-10T00:00:00Z".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let e2_start = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let e2_end = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-03T00:00:00Z".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let e3_start = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        // No timezone — the row whose instant difference must be indeterminate.
+        let e3_end = b.intern_literal(RdfLiteral {
+            lexical_form: "2024-03-10T00:00:00".to_owned(),
+            datatype: Some(XDATETIME.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let p1_period = b.intern_literal(RdfLiteral {
+            lexical_form: "P1M".to_owned(),
+            datatype: Some(XDURATION.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let p2_period = b.intern_literal(RdfLiteral {
+            lexical_form: "P30D".to_owned(),
+            datatype: Some(XDURATION.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(e1, start, e1_start, None);
+        b.push_quad(e1, end, e1_end, None);
+        b.push_quad(e2, start, e2_start, None);
+        b.push_quad(e2, end, e2_end, None);
+        b.push_quad(e3, start, e3_start, None);
+        b.push_quad(e3, end, e3_end, None);
+        b.push_quad(p1, period, p1_period, None);
+        b.push_quad(p2, period, p2_period, None);
+        b.freeze().expect("freeze")
+    }
+
     fn bgp1(s: &str, p: &str, o: &str) -> GraphPattern {
         use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
         GraphPattern::Bgp {
@@ -3569,6 +3661,27 @@ mod tests {
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(p)),
                 object: TermPattern::Variable(Variable::new(o)),
             }],
+        }
+    }
+
+    /// A two-pattern BGP `{ ?s p1 ?o1 . ?s p2 ?o2 }`, joined on the shared
+    /// subject variable — [`temporal_graph`]'s start/end pairs need both
+    /// bound in one row so a FILTER can subtract them.
+    fn bgp2(s: &str, p1: &str, o1: &str, p2: &str, o2: &str) -> GraphPattern {
+        use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+        GraphPattern::Bgp {
+            patterns: vec![
+                TriplePattern {
+                    subject: TermPattern::Variable(Variable::new(s)),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(p1)),
+                    object: TermPattern::Variable(Variable::new(o1)),
+                },
+                TriplePattern {
+                    subject: TermPattern::Variable(Variable::new(s)),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(p2)),
+                    object: TermPattern::Variable(Variable::new(o2)),
+                },
+            ],
         }
     }
 
@@ -3655,6 +3768,216 @@ mod tests {
         .expect("not exists");
         assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/b".to_owned()]);
     }
+
+    // ---- FILTER coverage: SEP-0002 temporal operators over a real BGP -----
+    //
+    // Unbound and `false` are indistinguishable in a `BIND` and produce the
+    // same observable effect in a `FILTER` (the row disappears), so a
+    // `FILTER` test that only checks which rows survive asserts a
+    // discrimination it cannot make. Every test below is therefore built as
+    // a `FILTER(p)` / `FILTER(!p)` pair (or pins the pair explicitly),
+    // because `!false = true` but `!error = error` — only the pair
+    // separates a comparison that came out `false` from one that errored.
+
+    #[test]
+    fn filter_instant_difference_over_bgp() {
+        let ds = temporal_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // { ?s :start ?start ; :end ?end FILTER(?end - ?start > "P7D"^^xsd:dayTimeDuration) }
+        // :e1 is 9 days (> 7D, kept); :e2 is 2 days (not kept); :e3's
+        // difference is indeterminate (mixed timezone, not kept).
+        let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
+        let cond = Expression::Greater(
+            Box::new(Expression::Subtract(
+                Box::new(Expression::Variable(Variable::new("end"))),
+                Box::new(Expression::Variable(Variable::new("start"))),
+            )),
+            Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
+        );
+        let seq = eval(
+            &GraphPattern::Filter {
+                expr: cond,
+                inner: Box::new(inner),
+            },
+            &mut ctx,
+        )
+        .expect("filter");
+        assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/e1".to_owned()]);
+    }
+
+    #[test]
+    fn filter_negation_separates_false_from_error() {
+        // The discrimination `filter_instant_difference_over_bgp` cannot make
+        // on its own: `:e3`'s instant difference is a type error (mixed
+        // timezone), not a `false` comparison, so it must be absent from
+        // BOTH `FILTER(p)` and `FILTER(!p)` over the same predicate — a
+        // `false` comparison would instead surface `:e3` under the negated
+        // form. Both evaluations live in this one test so the discrimination
+        // is asserted in a single place.
+        let ds = temporal_graph();
+        let cond = Expression::Greater(
+            Box::new(Expression::Subtract(
+                Box::new(Expression::Variable(Variable::new("end"))),
+                Box::new(Expression::Variable(Variable::new("start"))),
+            )),
+            Box::new(typed_lit("P7D", XSD_DAYTIME_DURATION)),
+        );
+
+        let mut ctx_pos = EvalCtx::new(&ds);
+        let inner_pos = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
+        let seq_pos = eval(
+            &GraphPattern::Filter {
+                expr: cond.clone(),
+                inner: Box::new(inner_pos),
+            },
+            &mut ctx_pos,
+        )
+        .expect("filter positive");
+        let pos = subjects(&ds, &seq_pos, "s");
+
+        let mut ctx_neg = EvalCtx::new(&ds);
+        let inner_neg = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
+        let seq_neg = eval(
+            &GraphPattern::Filter {
+                expr: Expression::Not(Box::new(cond)),
+                inner: Box::new(inner_neg),
+            },
+            &mut ctx_neg,
+        )
+        .expect("filter negated");
+        let neg = subjects(&ds, &seq_neg, "s");
+
+        assert_eq!(pos, vec!["http://ex/e1".to_owned()]);
+        assert_eq!(neg, vec!["http://ex/e2".to_owned()]);
+        assert!(
+            !pos.contains(&"http://ex/e2".to_owned()) && !neg.contains(&"http://ex/e1".to_owned()),
+            "the positive and negated filters must be complementary over the errorless rows"
+        );
+        assert!(
+            !pos.contains(&"http://ex/e3".to_owned()) && !neg.contains(&"http://ex/e3".to_owned()),
+            ":e3 must be absent from BOTH results — its presence in neither is the proof \
+             its timezone mix errored rather than compared false"
+        );
+    }
+
+    #[test]
+    fn filter_instant_plus_duration_over_bgp() {
+        let ds = temporal_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // { ?s :start ?start ; :end ?end FILTER(?start + "P5D"^^xsd:dayTimeDuration > ?end) }
+        // pins that a COMPUTED dateTime (the sum) flows back into `compare`
+        // rather than only a literal or a bare variable.
+        // :e1: 2024-03-01 + 5D = 2024-03-06, not > 2024-03-10 end -> excluded.
+        // :e2: 2024-03-01 + 5D = 2024-03-06, > 2024-03-03 end -> included.
+        // :e3: same shifted start, compared against a timezone-less end that
+        // is unambiguously later -> determinate `false`, excluded.
+        let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
+        let cond = Expression::Greater(
+            Box::new(Expression::Add(
+                Box::new(Expression::Variable(Variable::new("start"))),
+                Box::new(typed_lit("P5D", XSD_DAYTIME_DURATION)),
+            )),
+            Box::new(Expression::Variable(Variable::new("end"))),
+        );
+        let seq = eval(
+            &GraphPattern::Filter {
+                expr: cond,
+                inner: Box::new(inner),
+            },
+            &mut ctx,
+        )
+        .expect("filter");
+        assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/e2".to_owned()]);
+    }
+
+    #[test]
+    fn filter_over_a_bound_duration_round_trips_through_interning() {
+        let ds = temporal_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // { ?s :start ?start ; :end ?end . BIND(?end - ?start AS ?len)
+        //   FILTER(?len / "P1D"^^xsd:dayTimeDuration >= 7) }
+        // The minted `?len` duration is interned as a term, read back,
+        // re-parsed, and fed to a second operator (`/`) — a lexical that
+        // emits correctly but does not re-parse fails ONLY here.
+        // :e1: 9D / 1D = 9 >= 7 -> included. :e2: 2D / 1D = 2 -> excluded.
+        // :e3: ?len is unbound (the subtraction errored), so the FILTER
+        // predicate is unbound too -> excluded.
+        let inner = bgp2("s", "http://ex/start", "start", "http://ex/end", "end");
+        let bound = GraphPattern::Extend {
+            inner: Box::new(inner),
+            variable: Variable::new("len"),
+            expression: Expression::Subtract(
+                Box::new(Expression::Variable(Variable::new("end"))),
+                Box::new(Expression::Variable(Variable::new("start"))),
+            ),
+        };
+        let cond = Expression::GreaterOrEqual(
+            Box::new(Expression::Divide(
+                Box::new(Expression::Variable(Variable::new("len"))),
+                Box::new(typed_lit("P1D", XSD_DAYTIME_DURATION)),
+            )),
+            Box::new(typed_lit("7", XINT)),
+        );
+        let seq = eval(
+            &GraphPattern::Filter {
+                expr: cond,
+                inner: Box::new(bound),
+            },
+            &mut ctx,
+        )
+        .expect("filter");
+        assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/e1".to_owned()]);
+    }
+
+    #[test]
+    fn filter_duration_equality_over_bgp() {
+        let ds = temporal_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // { ?s :period ?period FILTER(?period = "P30D"^^xsd:duration) }
+        // :p1's period is "P1M" — value-unequal to "P30D" (`P1M = P30D` is
+        // `false`, not an error: duration `=` is total). :p2's is "P30D"
+        // itself.
+        let inner = bgp1("s", "http://ex/period", "period");
+        let cond = Expression::Equal(
+            Box::new(Expression::Variable(Variable::new("period"))),
+            Box::new(typed_lit("P30D", XSD_DURATION)),
+        );
+        let seq = eval(
+            &GraphPattern::Filter {
+                expr: cond,
+                inner: Box::new(inner),
+            },
+            &mut ctx,
+        )
+        .expect("filter");
+        assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/p2".to_owned()]);
+    }
+
+    #[test]
+    fn filter_duration_equality_negated_over_bgp() {
+        // Before duration `=` was made total, this comparison errored for
+        // BOTH operands rather than answering `false` for the unequal pair —
+        // a type error here would exclude :p1 from both filters, so this
+        // negated form would have returned [] instead of [:p1].
+        let ds = temporal_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // { ?s :period ?period FILTER(!(?period = "P30D"^^xsd:duration)) }
+        let inner = bgp1("s", "http://ex/period", "period");
+        let cond = Expression::Not(Box::new(Expression::Equal(
+            Box::new(Expression::Variable(Variable::new("period"))),
+            Box::new(typed_lit("P30D", XSD_DURATION)),
+        )));
+        let seq = eval(
+            &GraphPattern::Filter {
+                expr: cond,
+                inner: Box::new(inner),
+            },
+            &mut ctx,
+        )
+        .expect("filter");
+        assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/p1".to_owned()]);
+    }
+
     // ---- Gap 4: ENCODE_FOR_URI ---------------------------------------------
 
     #[test]
