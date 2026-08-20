@@ -2954,36 +2954,11 @@ mod tests {
     }
 
     /// Evaluate a bare (no `GROUP BY`) `function(?n)` over `ex:v` and return the
-    /// result variable's lexical form, or `None` if unbound.
+    /// result variable's lexical form, or `None` if unbound. A thin lexical-only
+    /// projection of [`eval_numeric_fold_term`], which does the actual BGP +
+    /// `Group` evaluation and additionally returns the result's datatype IRI.
     fn eval_numeric_fold(ds: &Arc<RdfDataset>, function: AggregateFunction) -> Option<String> {
-        let mut ctx = EvalCtx::new(ds);
-        let bgp = GraphPattern::Bgp {
-            patterns: vec![TriplePattern {
-                subject: TermPattern::Variable(Variable::new("s")),
-                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
-                object: TermPattern::Variable(Variable::new("n")),
-            }],
-        };
-        let group = GraphPattern::Group {
-            inner: Box::new(bgp),
-            variables: vec![],
-            aggregates: vec![(
-                Variable::new("agg"),
-                AggregateExpression::new(
-                    function,
-                    vec![Expression::Variable(Variable::new("n"))],
-                    Vec::new(),
-                    false,
-                )
-                .expect("fixture: valid AggregateExpression"),
-            )],
-        };
-        let seq = eval(&group, &mut ctx).expect("eval");
-        let col = seq.schema.index_of(&Variable::new("agg")).unwrap();
-        seq.rows[0][col].map(|t| match ctx.scratch.value_of(ds, t) {
-            TermValue::Literal { lexical_form, .. } => lexical_form,
-            o => format!("{o:?}"),
-        })
+        eval_numeric_fold_term(ds, function).map(|(lexical_form, _datatype)| lexical_form)
     }
 
     /// The exact reproduction from the reported gap: `SUM` over
@@ -3251,11 +3226,12 @@ mod tests {
     const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
     const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
 
-    /// [`eval_numeric_fold`]'s twin: returns the result's lexical form AND its
-    /// datatype IRI, or `None` if unbound. The duration tests below pin the
-    /// datatype half as much as the lexical half — the tag-join rule is exactly
-    /// what [`sum_over_mixed_subtype_durations_is_the_general_duration`] exists
-    /// to catch, and a lexical-only assertion cannot see it.
+    /// [`eval_numeric_fold`]'s underlying twin: returns the result's lexical form
+    /// AND its datatype IRI, or `None` if unbound — [`eval_numeric_fold`] is a
+    /// lexical-only projection of this function. The duration tests below pin
+    /// the datatype half as much as the lexical half — the tag-join rule is
+    /// exactly what [`sum_over_mixed_subtype_durations_is_the_general_duration`]
+    /// exists to catch, and a lexical-only assertion cannot see it.
     fn eval_numeric_fold_term(
         ds: &Arc<RdfDataset>,
         function: AggregateFunction,
