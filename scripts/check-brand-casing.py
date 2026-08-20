@@ -9,17 +9,20 @@ lowercase ``purrdf`` used as an ordinary English word — "a purrdf extension",
 "purrdf follows RDF4J's permissiveness" — is a casing bug, not a citation of an
 identifier, and this gate rejects it wherever it appears as prose.
 
-A match is a BARE word: ``purrdf`` with no ``-``, ``_``, ``:``, ``/``, ``.``, or
-backtick immediately before or after it, and not inside a Markdown inline-code
-span or fenced code block. Every one of those adjacent characters marks the
-word as part of an identifier instead of prose: ``purrdf-xsd``/``purrdf_xsd``
-are crate/module names, ``purrdf::`` is a Rust path, ``purrdf/`` and
-``purrdf.h`` are filesystem/header paths, and a backtick-wrapped `` `purrdf` ``
-is a code span naming the crate. None of those are prose and none are
-rewritten. A bare match IS prose, and the fix depends on what it names: if it
-names the PROJECT/BRAND, capitalize it to ``PurRDF``; if it names the ``purrdf``
-FACADE CRATE specifically (a legitimate but unmarked mention), wrap it in
-backticks instead of capitalizing it — the crate's own name does not change.
+A match is a BARE word: ``purrdf`` with no ``-``, ``_``, ``:``, ``/``, ``.``,
+backtick, or alphanumeric character immediately before or after it, and not
+inside a Markdown inline-code span or fenced code block. Every one of those
+adjacent characters marks the word as part of a longer identifier instead of
+prose: ``purrdf-xsd``/``purrdf_xsd`` are crate/module names, ``purrdf::`` is a
+Rust path, ``purrdf/`` and ``purrdf.h`` are filesystem/header paths, a
+backtick-wrapped `` `purrdf` `` is a code span naming the crate, and an
+alphanumeric neighbour makes it a fragment of a longer identifier or plural —
+``libpurrdf``, ``purrdfs`` — not the bare word. None of those are prose and
+none are rewritten. A bare match IS prose, and the fix depends on what it
+names: if it names the PROJECT/BRAND, capitalize it to ``PurRDF``; if it names
+the ``purrdf`` FACADE CRATE specifically (a legitimate but unmarked mention),
+wrap it in backticks instead of capitalizing it — the crate's own name does
+not change.
 
 This lint scans:
 
@@ -93,18 +96,12 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/cli/tests/convert_cli.rs", 2),
         ("crates/iri/src/lib.rs", 1),
         ("crates/purrdf/README.md", 1),
-        ("crates/rdf-capi/README.md", 6),
-        ("crates/rdf-capi/src/error.rs", 2),
-        ("crates/rdf-capi/src/gts.rs", 1),
-        ("crates/rdf-capi/src/lib.rs", 3),
+        ("crates/rdf-capi/README.md", 2),
+        ("crates/rdf-capi/src/lib.rs", 2),
         ("crates/rdf-capi/src/query.rs", 4),
-        ("crates/rdf-capi/src/term.rs", 1),
-        ("crates/rdf-capi/src/version.rs", 1),
         ("crates/rdf-core/benches/mutable.rs", 1),
         ("crates/rdf-core/src/backend.rs", 2),
-        ("crates/rdf-core/src/blank_label.rs", 1),
         ("crates/rdf-core/src/dataset_view.rs", 3),
-        ("crates/rdf-core/src/ir/builder.rs", 1),
         ("crates/rdf-core/src/ir/canon.rs", 2),
         ("crates/rdf-core/src/ir/dataset.rs", 2),
         ("crates/rdf-core/src/ir/event_sink.rs", 1),
@@ -164,7 +161,6 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/validate/src/model.rs", 1),
         ("docs/BENCHMARKS.md", 1),
         ("docs/CUTOVER.md", 4),
-        ("docs/book/src/concepts/jsonld.md", 1),
         ("docs/book/src/interop/rdflib.md", 1),
         ("docs/book/src/project/design-rules.md", 1),
     }
@@ -175,7 +171,10 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
 SCAN_DIRS = ("crates", "bindings", "docs")
 
 # A bare-word match may not touch one of these characters on either side —
-# each one marks the word as part of an identifier rather than prose.
+# each one marks the word as part of an identifier rather than prose. An
+# alphanumeric neighbour is checked separately in ``is_bare`` (it marks a
+# longer identifier or plural, e.g. ``libpurrdf``/``purrdfs``, and cannot be
+# enumerated as a fixed character set).
 _ADJACENT_IDENTIFIER_CHARS = frozenset("-_:/.`")
 
 BRAND_RE = re.compile(r"purrdf")
@@ -384,11 +383,17 @@ def is_bare(text: str, start: int, end: int) -> bool:
     """Whether ``text[start:end]`` (a ``purrdf`` match) is a bare prose word.
 
     Not bare — i.e. an identifier fragment, not prose — if a ``-``, ``_``,
-    ``:``, ``/``, ``.``, or backtick sits immediately before or after it.
+    ``:``, ``/``, ``.``, or backtick sits immediately before or after it, or if
+    an alphanumeric character does: that shape is a longer identifier
+    (``libpurrdf``) or a plural/suffixed form (``purrdfs``), not the bare word.
     """
     before = text[start - 1] if start > 0 else " "
     after = text[end] if end < len(text) else " "
-    return before not in _ADJACENT_IDENTIFIER_CHARS and after not in _ADJACENT_IDENTIFIER_CHARS
+    if before in _ADJACENT_IDENTIFIER_CHARS or before.isalnum():
+        return False
+    if after in _ADJACENT_IDENTIFIER_CHARS or after.isalnum():
+        return False
+    return True
 
 
 def scan_rust(path: Path) -> list[tuple[int, int, str]]:

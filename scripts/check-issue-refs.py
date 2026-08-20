@@ -93,6 +93,8 @@ and a number, the bare uppercase acronym ``EPIC`` (so ``EPIC #906`` and
 "on origin/main" / "on `origin/main`" (release documentation that says a
 branch is *synchronized with* `origin/main` is unaffected — only the "on"
 collocation that locates a piece of code in history is banned), "the plan's"
+(the apostrophe matches either the ASCII ``'`` or the typographic U+2019
+``’`` form, since a prose editor or pasted review comment may use either)
 / "the plan §" (a possessive or section-anchored reference to an external
 planning document — matched literally, since every occurrence in this
 repository's history has been lowercase mid-sentence prose), and a standalone
@@ -135,7 +137,7 @@ TOKEN_RE = re.compile(
     r"|(?P<issue_normative>\bissue-normative\b)"
     r"|(?P<hazard>\bH\d{1,3}\b)"
     r"|(?P<hazard_label>\b[FN]\d{1,3}:|\([FHN]\d{1,3}\))"
-    r"|(?P<plan_ref>\bthe plan(?:'s\b|\s+§))"
+    r"|(?P<plan_ref>\bthe plan(?:[\'’]s\b|\s+§))"
     r"|(?P<ac_label>\bAC\d\b)"
 )
 
