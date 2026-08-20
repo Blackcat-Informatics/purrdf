@@ -749,8 +749,10 @@ mod tests {
     }
 
     /// The 18-datatype universe (`N ∪ instant ∪ DUR ∪ G ∪ {boolean, string,
-    /// hexBinary}`) and its one canonical witness lexical per datatype —
-    /// verbatim from the plan's §6.5, not re-derived: acceptance is
+    /// hexBinary}`) and its one canonical witness lexical per datatype — a
+    /// hand-enumerated literal, not derived from `value_add`/`value_sub`/
+    /// `value_mul`/`value_div`'s own dispatch logic, so the test stays
+    /// independent of the implementation it checks: acceptance is
     /// value-dependent (`gYear + P1Y` succeeds, `gYear + P1D` does not under
     /// `SecondAction::Absent`), so a `(left, op, right)` triple alone cannot
     /// classify a family and the witness choice IS the classification. The
@@ -1055,8 +1057,9 @@ mod tests {
     }
 
     /// Rejected pairs whose EXACT `XsdError` VARIANT is pinned (not merely
-    /// `.is_err()`), covering the plan's 8 named minimum pairs plus the three
-    /// witness-stability rows [`ACCEPTED`]'s own doc comment records: `duration
+    /// `.is_err()`), covering the minimum set of pairs needed to exercise
+    /// every distinct `TypeMismatch` rejection arm in the `value_*` dispatch,
+    /// plus the three witness-stability rows [`ACCEPTED`]'s own doc comment records: `duration
     /// ÷ duration` (`Indeterminate` — value-incommensurable, not a type error),
     /// `dayTimeDuration − yearMonthDuration` (`OutOfRange` — a mixed-sign
     /// result, not a type error), and `gYear + yearMonthDuration` (rejected,

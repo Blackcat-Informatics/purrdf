@@ -130,8 +130,9 @@ SELECT ?diff WHERE {
 ```
 
 Beyond this table, `purrdf` also accepts the general `xsd:duration` on every
-row above (SEP-0002 names `xsd:duration` first among the types AC1 requires,
-and the general type's own value space subsumes both subtypes), duration `±`
+row above (SEP-0002 lists `xsd:duration` among the operand types the operator
+table covers, and the general type's own value space subsumes both subtypes),
+duration `±`
 duration, duration `×`/`÷` an exact number, and Gregorian `±` duration for all
 five Gregorian types where the result does not require fabricating an absent
 field (see [Divergence](#divergence-from-other-implementations) below):
