@@ -1,0 +1,5 @@
+PREFIX : <https://example.org/lateral#>
+SELECT * WHERE {
+  ?s :p ?o
+  LATERAL { ?s :q ?qval }
+}

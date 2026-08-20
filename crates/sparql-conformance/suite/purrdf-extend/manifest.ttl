@@ -91,6 +91,17 @@
 #     so this closes that fixture gap end to end: engine → writer → this
 #     spec-derived expected file, byte-pinned further in
 #     `crates/sparql-conformance/tests/results_spec_byte_pins.rs`.
+#   * LATERAL (SEP-0006) — the specification's own text carries no LATERAL
+#     production; the one documented definition is SEP-0006's, implemented in
+#     Apache Jena 4.7.0. `:lateralSubselectStar`/`:lateralOptionalSubselect`/
+#     `:lateralSubselectScope` are the SEP's own three worked examples (the
+#     third is the scoping oracle: a right-hand sub-SELECT that does not
+#     project the correlating variable is NOT correlated, proving the
+#     Project-boundary narrowing rather than mere textual substitution).
+#     `:lateralSharedVarInjection` pins that a left-scope variable reused on
+#     the right is injected as a constant. `:lateralSyntaxBasic` and
+#     `:lateralSyntaxScopeViolation` (the SEP's own illegal BIND example)
+#     pin the SEP-0006 scope restriction at parse time.
 #
 
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
@@ -149,6 +160,12 @@
         :temporalTimezoneMixUnbound
         :temporalDurationEqualityTotality
         :temporalFilterDurationThreshold
+        :lateralSubselectStar
+        :lateralOptionalSubselect
+        :lateralSubselectScope
+        :lateralSharedVarInjection
+        :lateralSyntaxBasic
+        :lateralSyntaxScopeViolation
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -376,3 +393,31 @@
     mf:name "FILTER over a computed instant-difference duration threshold excludes an indeterminate (mixed-timezone) row rather than comparing it false" ;
     mf:action [ qt:query <temporal-filter-duration-threshold.rq> ; qt:data <temporal.ttl> ] ;
     mf:result <temporal-filter-duration-threshold.srx> .
+
+:lateralSubselectStar a mf:QueryEvaluationTest ;
+    mf:name "LATERAL (SEP-0006) evaluates its right-hand sub-SELECT once PER LEFT ROW: SELECT * projects the correlating ?s, so each subject gets its own top-1 label" ;
+    mf:action [ qt:query <lateral-subselect-star.rq> ; qt:data <lateral.ttl> ] ;
+    mf:result <lateral-subselect-star.srx> .
+
+:lateralOptionalSubselect a mf:QueryEvaluationTest ;
+    mf:name "LATERAL right-hand OPTIONAL pads the labelless subject :z rather than dropping its row" ;
+    mf:action [ qt:query <lateral-optional-subselect.rq> ; qt:data <lateral.ttl> ] ;
+    mf:result <lateral-optional-subselect.srx> .
+
+:lateralSubselectScope a mf:QueryEvaluationTest ;
+    mf:name "the scoping oracle: a sub-SELECT that does not project ?s is NOT correlated — every left row sees the same globally-smallest label" ;
+    mf:action [ qt:query <lateral-subselect-scope.rq> ; qt:data <lateral.ttl> ] ;
+    mf:result <lateral-subselect-scope.srx> .
+
+:lateralSharedVarInjection a mf:QueryEvaluationTest ;
+    mf:name "a left-scope variable reused (not re-bound) on the LATERAL right is injected as a constant, not left free" ;
+    mf:action [ qt:query <lateral-shared-var-injection.rq> ; qt:data <lateral.ttl> ] ;
+    mf:result <lateral-shared-var-injection.srx> .
+
+:lateralSyntaxBasic a mf:PositiveSyntaxTest ;
+    mf:name "LATERAL { ... } (SEP-0006) parses: a fresh BIND target on the right-hand side, no collision with the left scope" ;
+    mf:action <lateral-syntax-basic.rq> .
+
+:lateralSyntaxScopeViolation a mf:NegativeSyntaxTest ;
+    mf:name "SEP-0006's own illegal example: BIND(123 AS ?o) inside LATERAL is a hard syntax error when ?o is already bound on the left" ;
+    mf:action <lateral-syntax-scope-violation.rq> .
