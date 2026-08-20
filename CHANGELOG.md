@@ -319,12 +319,12 @@ surfaces; each is called out below with what a consumer must do.
   the book's SPARQL querying chapter), never the computed component values.
 - **sparql-eval:** `SUM`/`AVG` accept a group of `xsd:duration` values (any subtype) alongside
   their existing numeric acceptance, summing componentwise in the duration group and rounding
-  `AVG`'s months component to the nearest whole month (ties toward positive infinity) — a purrdf
+  `AVG`'s months component to the nearest whole month (ties toward positive infinity) — a PurRDF
   extension, since SPARQL 1.1 §18.5.1.3 defines `SUM` over the numeric tower only. A group mixing
   numeric and duration values still folds to unbound; this widens acceptance, it does not narrow
   the existing numeric one.
 - **xsd:** Add unary minus on `xsd:duration` — `-(?duration)` negates both components together,
-  so it can never produce the mixed-sign value the type cannot represent — a purrdf extension,
+  so it can never produce the mixed-sign value the type cannot represent — a PurRDF extension,
   since F&O's unary minus (§4.2.8) is numeric-only and defines no duration form. Unary plus
   deliberately stays numeric-only, so `+(?duration)` remains a type error while `-(?duration)`
   is not.

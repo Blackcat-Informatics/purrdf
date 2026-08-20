@@ -625,7 +625,7 @@ boundary as a string or any other FFI-shaped value — there is no callback
 protocol this project is willing to invent for it, and none of the four host
 surfaces below expose it.
 
-purrdf's first-party **statistical set** is different, precisely because it is
+PurRDF's first-party **statistical set** is different, precisely because it is
 NOT an arbitrary closure: `AggregateRegistry::register_statistical_aggregates`
 takes only a namespace **string** and wires ten pre-built Rust instances
 internally, so it crosses every host boundary this crate ships exactly the way

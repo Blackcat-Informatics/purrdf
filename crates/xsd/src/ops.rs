@@ -526,7 +526,7 @@ pub fn value_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// SPARQL value-space unary minus (`-x`, `op:numeric-unary-minus` extended to
 /// `xsd:duration`). Numeric operands follow
 /// [`crate::numeric::numeric_unary_minus`]; a duration negates both components
-/// together through [`crate::temporal::negate_duration`]. **This is a purrdf
+/// together through [`crate::temporal::negate_duration`]. **This is a PurRDF
 /// extension** — F&O's unary minus is numeric-only (§4.2.8) and defines no
 /// duration form; unary plus stays numeric-only in this crate too, so
 /// `+(?duration)` is a type error while `-(?duration)` is not.

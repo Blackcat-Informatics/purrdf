@@ -2148,9 +2148,9 @@ fn drive_gregorian(
 /// the general-duration primitives below, and [`subtract_durations`] itself, are
 /// both expressed as negate-then-add rather than as their own driver passes.
 ///
-/// **purrdf extension:** XPath F&O's unary minus is numeric-only
+/// **PurRDF extension:** XPath F&O's unary minus is numeric-only
 /// (`op:numeric-unary-minus`, §4.2.8) — F&O defines no duration unary minus, and
-/// unary plus stays numeric-only in purrdf too (`+(?duration)` is a type error
+/// unary plus stays numeric-only in PurRDF too (`+(?duration)` is a type error
 /// while `-(?duration)` is not; that asymmetry is deliberate, not an oversight).
 ///
 /// # Examples
@@ -2704,7 +2704,7 @@ fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
 }
 
 /// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`, extended to accept any
-/// `xsd:duration` operand: purrdf follows RDF4J's permissiveness here rather than
+/// `xsd:duration` operand: PurRDF follows RDF4J's permissiveness here rather than
 /// F&O's restriction to the two named subtypes (F&O's (months, seconds) pair for
 /// the general tag is not a mixing of incompatible units — it is exactly this
 /// module's own `D = Y ⊕ T` direct sum). Componentwise checked addition through
@@ -4266,7 +4266,7 @@ mod tests {
 
     /// Inverted from (and renamed from) a test that once pinned the opposite
     /// behavior: F&O restricts `+`/`-`/`*`//` to the two named subtypes, but
-    /// purrdf's RDF4J-permissiveness ruling accepts the general `xsd:duration`
+    /// PurRDF's RDF4J-permissiveness ruling accepts the general `xsd:duration`
     /// too, in both the mixed-subtype and the general-plus-general case. Both
     /// assertions pin the exact result value AND its exact result datatype — a
     /// bare `is_ok()` would not show the tag-join rule landed correctly.

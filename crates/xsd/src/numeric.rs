@@ -995,7 +995,7 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
 ///
 /// See [`numeric_add`]'s doc for why [`crate::ops::value_unary_minus`], not
 /// this function, is the SPARQL-facing entry point for an `XsdValue` of
-/// unknown family (it also accepts `xsd:duration`, a purrdf extension this
+/// unknown family (it also accepts `xsd:duration`, a PurRDF extension this
 /// function does not implement).
 ///
 /// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →

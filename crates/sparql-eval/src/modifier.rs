@@ -1268,7 +1268,7 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 /// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
 /// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
 ///
-/// ## `SUM`/`AVG` over `xsd:duration` — a purrdf extension
+/// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
 ///
 /// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
 /// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
@@ -1493,7 +1493,7 @@ impl NumericFold {
     /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1);
     /// otherwise the running total — exact for a pure-integer group (whatever
     /// its magnitude, via [`BigInt::to_decimal_string`] when it no longer fits
-    /// `i128`), the `decimal`/`float`/`double`-tower total, or (purrdf
+    /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
     /// extension) the group's duration total, rendered through the same
     /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
     /// group is never `Self::Empty` at finish: [`Self::step`] only creates
@@ -3244,7 +3244,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // `SUM`/`AVG` over `xsd:duration` — purrdf extension (`NumericFold::Dur`)
+    // `SUM`/`AVG` over `xsd:duration` — PurRDF extension (`NumericFold::Dur`)
     // -----------------------------------------------------------------------
 
     const XSD_YEAR_MONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
@@ -3294,7 +3294,7 @@ mod tests {
         })
     }
 
-    /// purrdf extension: `SUM` over a pure-`yearMonthDuration` group is the
+    /// PurRDF extension: `SUM` over a pure-`yearMonthDuration` group is the
     /// group's duration total. SPARQL 1.1 §18.5.1.3 defines `SUM` by repeated
     /// `op:numeric-add`, whose domain is the numeric tower alone — this widens
     /// the aggregate algebra to the duration group durations already form under

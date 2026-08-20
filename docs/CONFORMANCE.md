@@ -165,7 +165,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 - `crates/iri/tests/` — the IRI/URI validity vectors and RFC 3986 §5.4
   resolution examples.
 - `bindings/python/tests/rdflib_suite/vendor/` — rdflib 7.6's own tests,
-  vendored verbatim and run against the purrdf drop-in.
+  vendored verbatim and run against the PurRDF drop-in.
 - `vectors/*.gts` + subdirs — the GTS conformance corpus shared byte-exact
   with the other GTS engines (governed in
   [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)).
