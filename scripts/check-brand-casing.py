@@ -44,19 +44,20 @@ prose today. Widen this list the day one does.
 Like ``check-issue-refs.py``'s ``PRE_EXISTING_PROCESS_REFERENCES``, the debt
 that predates this rule is carried in a single frozen register,
 ``PRE_EXISTING_BRAND_CASING``, which may only SHRINK. It differs from that
-register's shape for one reason: every ``check-issue-refs.py`` token family has
-a distinguishing payload (``Task 6`` differs from ``Task 7``; ``the plan's``
-from a different file's own occurrence is still keyed separately), so a bare
-``(file, token)`` pair catches a genuinely NEW instance even in an
-already-registered file. This lint's token is always the same literal word —
-there is nothing to distinguish one ``purrdf`` from another — so a presence-only
-register would let an already-listed file accumulate unlimited NEW bare
-mentions for free. The register instead pairs each file with its pre-existing
-OCCURRENCE COUNT: a live count above the registered number is new debt (a hard
-failure, reported the same as an unregistered file), a live count below it
-means debt was paid down (also a hard failure — the entry must be edited down
-to match, exactly as a stale entry is elsewhere), and a live count matching the
-register is the only way a listed file passes silently.
+register's shape for one reason: every ``check-issue-refs.py`` token family
+carries a distinguishing payload, so its register keys are distinguishable
+per-token phrases — two occurrences in the same file with different payloads
+are still kept as separate entries, so a bare ``(file, token)`` pair catches a
+genuinely NEW instance even in an already-registered file. This lint's token
+is always the same literal word — there is nothing to distinguish one
+``purrdf`` from another — so a presence-only register would let an
+already-listed file accumulate unlimited NEW bare mentions for free. The
+register instead pairs each file with its pre-existing OCCURRENCE COUNT: a
+live count above the registered number is new debt (a hard failure, reported
+the same as an unregistered file), a live count below it means debt was paid
+down (also a hard failure — the entry must be edited down to match, exactly as
+a stale entry is elsewhere), and a live count matching the register is the
+only way a listed file passes silently.
 """
 
 from __future__ import annotations
