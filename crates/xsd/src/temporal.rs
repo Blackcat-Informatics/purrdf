@@ -1267,8 +1267,15 @@ fn shift_year_month(
         .ok_or_else(|| arith_overflow(datatype, "year-month arithmetic overflow"))?;
     let new_year = total.div_euclid(12);
     let new_month = (total.rem_euclid(12) + 1) as u8;
-    let new_year =
-        i64::try_from(new_year).map_err(|_| arith_overflow(datatype, "year overflow"))?;
+    // The lexical year domain is symmetric — `parse_ymd`/`parse_year_str` parse a
+    // sign-free magnitude into `i64`, so a lexical year ranges over
+    // `-i64::MAX..=i64::MAX`. `i64::MIN` (whose magnitude has no positive `i64`
+    // counterpart) is therefore not a representable year and must not be let
+    // through by arithmetic either.
+    let new_year = i64::try_from(new_year)
+        .ok()
+        .filter(|y| *y != i64::MIN)
+        .ok_or_else(|| arith_overflow(datatype, "year overflow"))?;
     Ok((new_year, new_month))
 }
 
@@ -1380,7 +1387,13 @@ fn add_seconds_decimal(
         .checked_add(day_delta)
         .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
     let (y, m, d) = civil_from_days(total_days);
-    let y = i64::try_from(y).map_err(|_| arith_overflow(datatype, "date overflow"))?;
+    // Same lexical-year-domain fact as `shift_year_month`: the lexical space is
+    // symmetric (`-i64::MAX..=i64::MAX`), so `i64::MIN` is not a representable
+    // year and this narrowing must reject it, not just genuine `i64` overflow.
+    let y = i64::try_from(y)
+        .ok()
+        .filter(|y| *y != i64::MIN)
+        .ok_or_else(|| arith_overflow(datatype, "date overflow"))?;
 
     Ok((y, m, d, hour_new, minute_new, second_new))
 }
@@ -2106,9 +2119,14 @@ fn drive_gregorian(
                         reason: "gYear has no month field: a duration's months component must be a whole number of years",
                     });
                 }
+                // Same lexical-year-domain fact as `shift_year_month`: the lexical
+                // space is symmetric (`-i64::MAX..=i64::MAX`), so `i64::MIN` is not
+                // a representable year. `checked_add` alone would let it through
+                // (it is a valid `i64`), so it is rejected explicitly here too.
                 let y = year
                     .unwrap_or(0)
                     .checked_add(dur.months / 12)
+                    .filter(|y| *y != i64::MIN)
                     .ok_or_else(|| arith_overflow(datatype, "gYear arithmetic overflow"))?;
                 (Some(y), None, day)
             }
@@ -2980,7 +2998,12 @@ pub fn divide_day_time_durations(a: &Duration, b: &Duration) -> Result<Decimal, 
 
 fn fmt_year(year: i64) -> String {
     if year < 0 {
-        format!("-{:04}", -year)
+        // `unsigned_abs` (not unary negation) so this is total for every `i64`,
+        // including `i64::MIN` — defense in depth: the narrowing sites that build
+        // `year` fields reject `i64::MIN` as non-representable in the lexical
+        // space, but this formatter must never panic or wrap even if that
+        // invariant is ever violated by a future caller.
+        format!("-{:04}", year.unsigned_abs())
     } else {
         format!("{year:04}")
     }
@@ -3269,6 +3292,106 @@ mod tests {
             parse_duration(XsdDatatype::Duration, "-P9223372036854775807Y"),
             Err(XsdError::OutOfRange { .. })
         ));
+    }
+
+    /// F3 regression: the lexical year domain is symmetric — `parse_ymd`/
+    /// `parse_year_str` parse a sign-free magnitude into `i64` and negate it, so a
+    /// lexical year ranges over `-i64::MAX..=i64::MAX`. `i64::MIN` (whose magnitude
+    /// has no positive `i64` counterpart) is therefore NOT a representable year.
+    /// Before this fix, `shift_year_month`, `add_seconds_decimal`, and the gYear
+    /// arm's `checked_add` all narrowed into a bare `i64` (or let `checked_add`
+    /// through) without excluding `i64::MIN`, so
+    /// `"-9223372036854775807"^^xsd:gYear + "-P1Y"` constructed year `i64::MIN`:
+    /// `fmt_year`'s unchecked `-year` then emitted the malformed lexical
+    /// `--9223372036854775808` in release (round-trip broken — this crate's own
+    /// parser rejects it) and panicked ("attempt to negate with overflow") in
+    /// debug. Every one of the six reachable operator families — gYear ± ym,
+    /// gYearMonth ± ym, date ± ym, dateTime ± ym, date − dt, dateTime − dt — must
+    /// instead answer a typed `OutOfRange`, never a value and never a panic.
+    #[test]
+    fn year_arithmetic_rejects_i64_min_construction() {
+        const MIN_YEAR: &str = "-9223372036854775807"; // -i64::MAX, the most negative representable year
+        let minus_one_year = ymd(XsdDatatype::YearMonthDuration, "-P1Y");
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+
+        // 1. gYear ± ym
+        let gy = parse_gregorian(XsdDatatype::GYear, MIN_YEAR).unwrap();
+        assert!(matches!(
+            add_duration_to_gregorian(&gy, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 2. gYearMonth ± ym
+        let gym = parse_gregorian(XsdDatatype::GYearMonth, &format!("{MIN_YEAR}-01")).unwrap();
+        assert!(matches!(
+            add_duration_to_gregorian(&gym, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 3. date ± ym
+        let d = parse_date(&format!("{MIN_YEAR}-01-01")).unwrap();
+        assert!(matches!(
+            add_year_month_duration_to_date(&d, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 4. dateTime ± ym
+        let dt = parse_datetime(&format!("{MIN_YEAR}-01-01T00:00:00")).unwrap();
+        assert!(matches!(
+            add_year_month_duration_to_datetime(&dt, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 5. date − dt: one day before Jan 1 of MIN_YEAR is Dec 31 of the year
+        // below it, i.e. `i64::MIN`.
+        assert!(matches!(
+            subtract_day_time_duration_from_date(&d, &one_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 6. dateTime − dt: same one-day-earlier crossing.
+        assert!(matches!(
+            subtract_day_time_duration_from_datetime(&dt, &one_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // The boundary year itself, `-i64::MAX`, is a genuinely representable
+        // year and a zero-shift (or any shift that stays inside `i64`) must
+        // still answer, not be swept up by an overly broad guard.
+        assert_eq!(
+            add_duration_to_gregorian(&gy, &ymd(XsdDatatype::YearMonthDuration, "P0M"))
+                .unwrap()
+                .canonical_lexical(),
+            MIN_YEAR
+        );
+    }
+
+    /// Defense-in-depth companion to the arithmetic-side guard above: `fmt_year`
+    /// itself must be total over every `i64`, including `i64::MIN`, and the
+    /// boundary year that IS representable (`-i64::MAX`) must format and
+    /// round-trip through `parse_gregorian`/`canonical_lexical` unchanged.
+    #[test]
+    fn fmt_year_is_total_and_boundary_year_round_trips() {
+        // `fmt_year` is private; exercise it through `canonical_lexical`, which is
+        // the only way any caller ever observes its output. `i64::MIN` cannot be
+        // constructed as a `year` field by any public arithmetic entry point
+        // (pinned above), but `fmt_year` must not panic even if it somehow were —
+        // reach it directly via a `Gregorian` built from `parse_gregorian` at the
+        // one year that IS representable, `-i64::MAX`, plus a direct unit check
+        // that `unsigned_abs` (not unary negation) is what backs the negative
+        // branch.
+        assert_eq!(i64::MIN.unsigned_abs(), 9_223_372_036_854_775_808u64);
+        assert_eq!(fmt_year(i64::MIN), "-9223372036854775808"); // total: no panic, no wrap
+
+        let g = parse_gregorian(XsdDatatype::GYear, "-9223372036854775807").unwrap();
+        let lex = g.canonical_lexical();
+        assert_eq!(lex, "-9223372036854775807");
+        assert_eq!(
+            parse_gregorian(XsdDatatype::GYear, &lex)
+                .unwrap()
+                .canonical_lexical(),
+            lex
+        );
     }
 
     /// XSD 1.1 Part 2's pattern facets on the two named duration subtypes:
