@@ -1616,13 +1616,23 @@ enum MonthAction {
     /// reference month to clamp against (`ℤ` acts freely) — `xsd:gYearMonth`.
     Free,
     /// The months component shifts year+month, then the day-of-month is
-    /// reconciled against the target month: `dateTime`/`date` clamp the day
-    /// to the target month's last day (a real calendar year is known, so the
-    /// clamp is a real value, not a fabrication); `gMonthDay` carries no
-    /// year, so instead of clamping — which would silently pick a year — it
-    /// accepts only when the day exists in **every** year's version of the
-    /// target month, and errors otherwise.
+    /// clamped to the target month's last day: a real calendar year is
+    /// known, so the clamp is always a real value, never a fabrication —
+    /// `dateTime`/`date`, the two instant sorts, driven through [`drive`].
     Clamped,
+    /// The months component shifts a month with no year attached
+    /// (`gMonthDay`), so — unlike [`MonthAction::Clamped`] — there is no real
+    /// calendar year to clamp the day-of-month against, and picking one to
+    /// clamp against would silently fabricate a year the value never
+    /// carried. Instead, the shift is accepted, with the day clamped to the
+    /// target month's last day exactly as [`MonthAction::Clamped`] would,
+    /// only when that clamped result is the same from **every** year the
+    /// source `(month, day)` can be anchored at; a target month whose
+    /// clamped result would depend on the anchor year is refused outright
+    /// rather than guessed. Driven through [`drive_gregorian`], never
+    /// through [`drive`] — no Gregorian sort has a `CalendarPoint` to clamp
+    /// within.
+    ClampIfYearIndependent,
     /// The months component acts through the quotient map `ℤ → ℤ/12`, not a
     /// dropped carry: XSD 1.1 Part 2 §3.3.13 makes `gMonth` a recurring month with
     /// no year field, so there is no year to carry into and no field is fabricated
@@ -1686,7 +1696,10 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
         XsdDatatype::GYearMonth => (MonthAction::Free, SecondAction::Absent),
         XsdDatatype::GYear => (MonthAction::Divisible12, SecondAction::Absent),
         XsdDatatype::GMonth => (MonthAction::Cyclic12, SecondAction::Absent),
-        XsdDatatype::GMonthDay => (MonthAction::Clamped, SecondAction::YearIndependentDays),
+        XsdDatatype::GMonthDay => (
+            MonthAction::ClampIfYearIndependent,
+            SecondAction::YearIndependentDays,
+        ),
         XsdDatatype::GDay => (
             MonthAction::IdentityIfSafe,
             SecondAction::MonthIndependentDays,
@@ -1728,9 +1741,14 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
 /// `month_action`/`second_action` come from [`actions`]. Only
 /// [`MonthAction::Clamped`]/[`MonthAction::Absent`] and [`SecondAction::Free`]/
 /// [`SecondAction::MidnightTruncating`]/[`SecondAction::CyclicDay`] are executed
-/// here, for `dateTime`/`date`/`time`; the remaining actions belong to the
-/// Gregorian family, whose values carry optional fields and no time-of-day, so
-/// they are not shaped like a `CalendarPoint` and are not driven through it.
+/// here, for `dateTime`/`date`/`time`; the remaining actions — including
+/// [`MonthAction::ClampIfYearIndependent`], `gMonthDay`'s own month-end action
+/// — belong to the Gregorian family, whose values carry optional fields and no
+/// time-of-day, so they are not shaped like a `CalendarPoint` and are not
+/// driven through it; [`actions`] never pairs a `CalendarPoint` sort with
+/// [`MonthAction::ClampIfYearIndependent`], so this function structurally
+/// never receives it in practice, and the match arm below exists only to keep
+/// the match total.
 fn drive(
     datatype: XsdDatatype,
     month_action: MonthAction,
@@ -1760,7 +1778,8 @@ fn drive(
             MonthAction::Free
             | MonthAction::Cyclic12
             | MonthAction::Divisible12
-            | MonthAction::IdentityIfSafe => {
+            | MonthAction::IdentityIfSafe
+            | MonthAction::ClampIfYearIndependent => {
                 return Err(XsdError::TypeMismatch {
                     reason: "this calendar action applies only to the Gregorian family, which this driver does not carry a CalendarPoint for",
                 });
@@ -1826,8 +1845,10 @@ type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 /// function returns the mirror-image permanent `TypeMismatch` for the three
 /// [`SecondAction`] variants ([`SecondAction::Free`],
 /// [`SecondAction::MidnightTruncating`], [`SecondAction::CyclicDay`]) and the
-/// one [`MonthAction`] variant ([`MonthAction::Absent`]) that no Gregorian
-/// sort's classification ever selects.
+/// two [`MonthAction`] variants ([`MonthAction::Absent`], and
+/// [`MonthAction::Clamped`] — `dateTime`/`date`'s own instant-only clamp,
+/// distinct from `gMonthDay`'s [`MonthAction::ClampIfYearIndependent`] below)
+/// that no Gregorian sort's classification ever selects.
 ///
 /// Months are applied first, then days — the order is load-bearing, see
 /// [`MonthAction`]'s doc — and a zero component is skipped entirely, which is
@@ -1898,7 +1919,7 @@ fn drive_gregorian(
                     });
                 }
             }
-            MonthAction::Clamped => {
+            MonthAction::ClampIfYearIndependent => {
                 // gMonthDay. Recover the target month AND how many whole
                 // years the shift carries into. `dur.months`'s own
                 // div_euclid/rem_euclid split off the (unboundedly large but
@@ -2011,6 +2032,11 @@ fn drive_gregorian(
             MonthAction::Absent => {
                 return Err(XsdError::TypeMismatch {
                     reason: "this Gregorian sort has no months field to receive a duration's months component",
+                });
+            }
+            MonthAction::Clamped => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this calendar action applies only to dateTime/date, which this driver does not carry a CalendarPoint for",
                 });
             }
         }
@@ -3649,7 +3675,10 @@ mod tests {
         );
         assert_eq!(
             actions(XsdDatatype::GMonthDay),
-            (MonthAction::Clamped, SecondAction::YearIndependentDays)
+            (
+                MonthAction::ClampIfYearIndependent,
+                SecondAction::YearIndependentDays
+            )
         );
         assert_eq!(
             actions(XsdDatatype::GDay),
@@ -3788,7 +3817,7 @@ mod tests {
             (XsdDatatype::GMonth, "--05", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GMonth, "--05", "PT1H", None),        // sub-day
             (XsdDatatype::GMonth, "--05", "PT0S", Some("--05")), // zero
-            // ── gMonthDay (Clamped, YearIndependentDays): 15 rows ─────────────
+            // ── gMonthDay (ClampIfYearIndependent, YearIndependentDays): 15 rows ──
             (XsdDatatype::GMonthDay, "--01-15", "P1M", Some("--02-15")), // months-accepted
             (XsdDatatype::GMonthDay, "--01-31", "P1M", None), // Feb 31 exists in no year — the clamped result varies by target-year leapness
             (XsdDatatype::GMonthDay, "--03-31", "P1M", Some("--04-30")), // April's length never depends on the anchor year, even though April 31 exists in no year
@@ -3991,8 +4020,8 @@ mod tests {
         }
     }
 
-    /// The ground-truth oracle for `MonthAction::Clamped`'s gMonthDay
-    /// months-shift: anchor a `(month, day)` source at every year in
+    /// The ground-truth oracle for `MonthAction::ClampIfYearIndependent`'s
+    /// gMonthDay months-shift: anchor a `(month, day)` source at every year in
     /// `ANCHOR_YEARS` where that date is real, shift `months` (carrying years
     /// as needed), clamp the day down to the target month's actual length
     /// (XML Schema Appendix E), and collect the resulting `(month, day)`
