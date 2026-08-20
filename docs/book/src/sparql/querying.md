@@ -55,8 +55,9 @@ engines behind one seam; `NativeSparqlEngine` is the shipped implementation.
 - **Query** — all four query forms (SELECT/ASK/CONSTRUCT/DESCRIBE), basic
   graph patterns, `OPTIONAL`, `UNION`, `MINUS`, `GRAPH`,
   `FILTER`/`BIND`/`VALUES`, property paths, `GROUP BY`/aggregates,
-  `EXISTS`/`NOT EXISTS`, solution modifiers, and RDF 1.2 quoted triple terms
-  (`<<( s p o )>>`).
+  `EXISTS`/`NOT EXISTS`, solution modifiers, RDF 1.2 quoted triple terms
+  (`<<( s p o )>>`), and `LATERAL` (a SEP-0006 extension — see
+  [below](#lateral-sep-0006)).
 - **Update** — `INSERT DATA`/`DELETE DATA`, the `DELETE`/`INSERT … WHERE`
   family (`WITH`/`USING`, `DELETE WHERE`), `LOAD`, and
   `CLEAR`/`DROP`/`CREATE`/`ADD`/`MOVE`/`COPY`.
@@ -326,6 +327,101 @@ Every domain or type violation (a non-whole-minute offset, an out-of-range offse
 a non-temporal first argument) is a SPARQL type error, which — inside `BIND`,
 `FILTER`, or an aggregate argument — poisons to unbound rather than aborting the
 query, per the engine's ordinary type-error discipline.
+
+## LATERAL (SEP-0006)
+
+The SPARQL 1.2 Query specification's own text carries no `LATERAL` production;
+the one documented definition is
+[SEP-0006](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0006/sep-0006.md)'s,
+implemented in Apache Jena 4.7.0, which this section follows. `LATERAL` adds one
+production to `GroupGraphPatternSub`, positioned alongside `OPTIONAL`/`MINUS`/
+`GRAPH` and left-associative the same way:
+
+```
+GroupGraphPatternSub ::= ... | 'LATERAL' GroupGraphPattern
+```
+
+Unlike an ordinary join, `LATERAL`'s right-hand side is evaluated ONCE PER
+SOLUTION of its left-hand side, with that solution's bindings visible inside —
+the same relationship a SQL `LATERAL`/`CROSS APPLY` subquery has to its outer
+query. This makes a per-group "top N" query expressible in plain SPARQL: each
+subject on the left picks its own smallest label on the right, rather than one
+globally-smallest label being computed once and joined against every row.
+
+```sparql
+PREFIX : <https://example.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT * WHERE {
+  ?s :p ?o
+  LATERAL {
+    SELECT * WHERE { ?s rdfs:label ?label }
+    ORDER BY ?label LIMIT 1
+  }
+}
+```
+
+### The scope restriction
+
+`LATERAL`'s right-hand side may freely REUSE a variable already bound on the
+left (that is the whole point — it is how correlation happens), but it may not
+INTRODUCE a fresh binding for one: no variable target of a `BIND`, of a
+sub-`SELECT`'s `(expr AS ?v)` projection, of a `GROUP BY` aggregate's output, or
+a `VALUES` column, at the right-hand side's own scope level, may collide with a
+variable already visible on the left. The one construct that opens a fresh
+scope level is a sub-`SELECT`'s own projection — `OPTIONAL`/`UNION`/`GRAPH`/a
+nested group/a nested `LATERAL` are all transparent to it. The SEP's own legal
+and illegal pair:
+
+```sparql
+PREFIX : <https://example.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+# Legal: the sub-SELECT projects only ?label, so its own (unprojected) reuse
+# of ?s is correlation, not an introduction, and cannot collide.
+SELECT * WHERE {
+  ?s a :T
+  LATERAL { SELECT ?label WHERE { ?s rdfs:label ?label } LIMIT 1 }
+}
+```
+
+```
+# Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
+# the left-hand triple pattern, and BIND tries to give it a NEW value at the
+# LATERAL right-hand side's own scope level.
+SELECT * WHERE {
+  ?s ?p ?o
+  LATERAL { BIND(123 AS ?o) }
+}
+```
+
+### Divergence from Jena
+
+Two corners of the restriction deliberately disagree with Jena's own
+`SyntaxVarScope` check, each pinned by a named test rather than left to drift:
+
+- **Laxer.** `SELECT *` over a right-hand side whose only violation lives in a
+  `MINUS` right operand is ACCEPTED here; Jena rejects it. SPARQL §18.2.1 puts
+  `MINUS`-right variables out of scope, so `SELECT *`'s own projection list
+  never contains the colliding name in the first place — there is nothing
+  observable for the projection to carry across.
+- **Stricter.** A `SERVICE ?g { ... }` endpoint variable counts as left-hand
+  scope here; Jena omits it.
+
+### In `UPDATE`
+
+`INSERT`/`DELETE ... WHERE` and `WITH ... WHERE` route through the same
+group-graph-pattern grammar a `SELECT`'s `WHERE` clause uses, so `LATERAL` —
+scope-checked exactly the same way — is legal there too. A `DELETE WHERE` quad
+template is a different grammar production (`TriplesTemplate`, not a
+`GroupGraphPattern`) with no group-pattern operators of any kind, so `LATERAL`
+there is refused by name rather than misparsed as a subject term.
+
+### `SERVICE` forwarding
+
+A pattern containing `LATERAL` is never forwarded to a remote `SERVICE`
+endpoint — `LATERAL` is a Jena extension most remote endpoints do not
+implement, and under `SERVICE SILENT` a remote's rejection would otherwise be
+swallowed into the identity table, a silent wrong answer rather than a typed
+refusal.
 
 ## The `VERSION` declaration
 

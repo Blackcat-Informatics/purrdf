@@ -9,7 +9,8 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 This release re-founds the aggregate algebra on the SPARQL specification's own shape, adds a
 caller-extensible aggregate registry (with a first-party statistical set), retains and enforces
 the `VERSION` declaration, adds RDF 1.2's `ADJUST` and the underlying F&O temporal operation
-table, and corrects several results-format spellings. It carries a large number of breaking
+table, corrects several results-format spellings, and adds `LATERAL` (SEP-0006) surface syntax
+alongside a corrected correlated-evaluation substitution. It carries a large number of breaking
 surfaces; each is called out below with what a consumer must do.
 
 ### Bug Fixes
@@ -171,6 +172,35 @@ surfaces; each is called out below with what a consumer must do.
   place of a debug-only assertion, so a future violation of that invariant cannot ship a silent
   truncation in a release build. `xsd:duration ÷ xsd:duration` still reports a typed `OutOfRange`
   for the case that actually is reachable: scaling one operand's mantissa past `i128::MAX`.
+- **BREAKING** **sparql-algebra,rdf:** The serializer rendered a join's right operand bare
+  whenever it began with its own bare left, so a re-parse of the emitted text re-associated an
+  `OPTIONAL`/`MINUS`/`FILTER`/`BIND`/`LATERAL` right operand into a semantically different tree —
+  and this text is the `SERVICE` federation wire format, so a remote could receive a different
+  query than the plan it was chosen for. Every re-absorbable right operand is now braced, decided
+  by an exhaustive predicate; a plain join's right operand stays bare, since join associativity
+  makes the re-association semantics-preserving. A variable-endpoint `SERVICE` under `LATERAL` is
+  no longer double-wrapped in the keyword its own re-parse would re-wrap. The corpus round-trip
+  sweep that caught this also surfaced and fixed five further serializer defects, none of them
+  `LATERAL`-dependent: a multi-condition `HAVING` chain silently dropped its aggregate
+  reconstruction, a projection-less aggregate emitted an illegal `SELECT *` over `GROUP BY`, a
+  `FILTER` flattened as a left operand lost its group, property paths failed to parenthesize by
+  precedence (alternation under sequence), and a trailing `VALUES` failed to absorb into its body
+  group. A caller comparing serialized query bytes against a previous release should expect these
+  five constructs, and the right-operand-braced ones above, to serialize differently — and
+  correctly.
+- **BREAKING** **sparql-eval:** Correlated evaluation (`LATERAL`, and `EXISTS`/`NOT EXISTS`
+  correlated through an expression) substituted outer bindings by rewriting terms in place, which
+  could not place a literal or blank-node binding into a triple position, silently skipped path
+  and predicate positions, flipped `MINUS` into its disjoint-domain case by erasing the shared
+  variables that make the two sides comparable, and crossed sub-select projection boundaries —
+  correlating a variable the SEP-0006 scope example says is explicitly NOT correlated.
+  Substitution now joins each pattern leaf with a one-row `VALUES` table carrying that leaf's own
+  bindings, narrowed at every projection boundary to the variables it actually projects;
+  expression positions keep value substitution unchanged. This is a strictly corrective behavior
+  change: `MINUS` inside a correlated `LATERAL`/`EXISTS` now answers correctly instead of a
+  domain-flipped wrong answer, and a `LATERAL`-bearing pattern is now refused rather than silently
+  forwarded to a `SERVICE` endpoint (a remote rejecting the extension under `SILENT` would
+  otherwise have contributed the identity table as a silent wrong answer).
 
 ### Features
 
@@ -342,6 +372,23 @@ surfaces; each is called out below with what a consumer must do.
   tags, so a `dayTimeDuration` and a general `xsd:duration` that happens to be purely day-shaped
   still divide. Two values whose components are not commensurable, even under matching declared
   tags, are a typed error rather than an arbitrary answer.
+- **sparql-algebra:** Add `LATERAL { GroupGraphPattern }` surface syntax (SEP-0006, implemented in
+  Apache Jena 4.7.0 — the SPARQL 1.2 Query specification's own text defines no `LATERAL`
+  production). The parser enforces the SEP's scope restriction: no variable introduced by a
+  `BIND`, a sub-`SELECT` projection expression, a `GROUP BY` aggregate output, or `VALUES` at the
+  right-hand side's own scope level may collide with a variable already visible on the left;
+  correlated USE of a left-hand variable, and a sub-`SELECT`'s legitimate shadowing, both stay
+  legal. `LATERAL` is also now legal (and scope-checked) inside `INSERT`/`DELETE … WHERE` and
+  `WITH … WHERE`, while a `DELETE WHERE` quad template refuses it by name instead of misparsing it
+  as a subject term.
+
+### Performance
+
+- **sparql-algebra:** Parsing no longer re-walks the whole accumulated pattern for every
+  `BIND`/`SELECT *`/`LATERAL` scope check. The group-pattern loop maintains its in-scope variable
+  set incrementally (an ordered set, not a hash, to stay a zero-dependency wasm-clean leaf),
+  removing a quadratic parse-time cost on adversarial input; debug builds assert the incremental
+  set against a fresh walk at every consultation.
 
 ### Refactor
 
@@ -356,6 +403,17 @@ surfaces; each is called out below with what a consumer must do.
 - **sparql,conformance:** Pin the newly-added SPARQL evaluation surface in the conformance
   corpus: the `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's
   grammar, and `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
+- **sparql-algebra:** Pin the whole serializer with a corpus round-trip sweep: parse, serialize,
+  re-parse, and compare (modulo left-linearized join spines) over every vendored W3C, first-party,
+  and doc-example query text — the empty exception ledger is the point; every disagreement it
+  found is fixed above, not ledgered.
+- **rdf:** Reduce the golden-capture deferred-construct classifier to the engine's actual typed
+  residue — `LATERAL`, `SERVICE`, `DESCRIBE`, and property paths no longer misroute into expected
+  deferral now that they are implemented.
+- **sparql-conformance:** Add the `purrdf-extend` `LATERAL` manifest cases: the SEP-0006 worked
+  examples (including the scoping oracle, proving Project-boundary narrowing rather than mere
+  textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal syntax
+  pair.
 
 ### Documentation
 
@@ -367,6 +425,10 @@ surfaces; each is called out below with what a consumer must do.
   lane as refusing `aggregate_namespace` on every host — a paragraph an earlier fix removed from
   the Python stub and one book location but left standing in a second. It now shows the
   combination working, with a worked `--entailment`/`--aggregate-namespace` CLI example.
+- **sparql:** Document `LATERAL` (SEP-0006) in the book's query chapter: the production, a
+  top-1-per-group worked example, the scope restriction with the SEP's own legal/illegal pair,
+  the two deliberate divergences from Jena, the `UPDATE WHERE` status, and the `SERVICE`-forwarding
+  refusal. The front-end surface enumeration now names it as a SEP extension.
 
 ## [0.12.0] - 2026-08-02
 

@@ -7,9 +7,9 @@
 //! `parse(pattern_to_select_query(p))` reproduces `p` "for every
 //! `GraphPattern`/`Expression` variant the parser emits" — a claim a handful
 //! of hand-authored `roundtrip_*` unit tests in `serialize.rs` itself can
-//! gesture at but never PROVE, and Task 2's own investigation (the
-//! `fmt_join_right_operand` re-association class, and the variable-endpoint
-//! `SERVICE` double-wrap) found it FALSE. This sweep is the proof, run over
+//! gesture at but never PROVE — and the discovery of the
+//! `fmt_join_right_operand` re-association class and the variable-endpoint
+//! `SERVICE` double-wrap showed it FALSE. This sweep is the proof, run over
 //! every real SPARQL query text this repository ships or vendors.
 //!
 //! # Corpus
@@ -389,12 +389,13 @@ fn corpus_round_trips_through_the_serializer() {
         rq_files.len(),
         doc_examples.len()
     );
-    // Measured at authoring time: 352 w3c-sparql11 + 242 w3c-sparql12 + 41
-    // purrdf-extend .rq files, plus 9 fenced ```sparql blocks in the book's
-    // temporal-arithmetic section (the only file under docs/ that has any) —
-    // 644 total. A corpus that stops loading (a moved suite root, a broken
-    // walk) silently sweeps far less than this and must fail loudly instead.
-    const N: usize = 644;
+    // Measured at authoring time: 352 w3c-sparql11 + 242 w3c-sparql12 + 47
+    // purrdf-extend .rq files, plus 11 fenced ```sparql blocks in the book's
+    // temporal-arithmetic and LATERAL (SEP-0006) sections (the only file
+    // under docs/ that has any) — 652 total. A corpus that stops loading (a
+    // moved suite root, a broken walk) silently sweeps far less than this
+    // and must fail loudly instead.
+    const N: usize = 652;
     assert!(
         seen >= N,
         "the corpus round-trip sweep saw only {seen} items, expected at least {N} — a corpus \
