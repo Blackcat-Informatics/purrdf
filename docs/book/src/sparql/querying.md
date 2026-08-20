@@ -196,7 +196,12 @@ months-then-days computation at every year in one full 400-year Gregorian
 period (the calendar's leap rule is exactly periodic at that length, so one
 period is every anchor that could ever matter) and checking whether every
 anchor agrees on the answer. `purrdf` answers exactly when they do, and
-returns a typed error exactly when they don't. The computation is judged as
+returns a typed error exactly when they don't — for a duration of any
+magnitude, not only a bounded/ordinary one: the months and days carries are
+reduced by the calendar's exact periodicity (400 years, 146,097 days) before
+any anchor's arithmetic runs, so an astronomically large `yearMonthDuration`
+or `dayTimeDuration` component decides the same way, in the same bounded
+work, as a small one. The computation is judged as
 a whole, not component by component: a duration's months half can land on an
 intermediate day whose clamp is itself year-dependent even though the
 *finished* answer, after the days half also runs, is not — `"--01-31"^^xsd:gMonthDay

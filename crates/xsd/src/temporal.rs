@@ -337,25 +337,54 @@ impl Gregorian {
 
 // ── Proleptic Gregorian calendar (Howard Hinnant's algorithm) ────────────────────
 
-/// Days since 1970-01-01 for a proleptic-Gregorian civil date (valid for any year,
-/// including negative). `m` in 1..=12, `d` in 1..=31.
-fn days_from_civil(y: i64, m: u8, d: u8) -> i64 {
+/// Days since 1970-01-01 for a proleptic-Gregorian civil date — TRULY valid for any
+/// `i64` year, including negative, in every build profile. `m` in 1..=12, `d` in
+/// 1..=31.
+///
+/// Computed entirely in `i128`: at the extremes of the `i64` year domain,
+/// `era * 146_097` reaches roughly `3.4e21` in magnitude, which overflows `i64`
+/// (max `~9.2e18`) but is comfortably inside `i128::MAX` (`~1.7e38`) — over sixteen
+/// orders of magnitude of headroom, so no `i128` operation in this function is
+/// reachably close to its own overflow boundary and none of them are `checked_*`.
+/// This is the fix for a real, reachable defect (not a hypothetical one): the prior
+/// `i64` version's unchecked `era * 146_097` multiply wrapped silently in a release
+/// build and panicked in a debug/overflow-checks build for well-formed large-year
+/// input reachable straight from the public arithmetic surface — e.g.
+/// `"<huge-year>-01-01"^^xsd:date + "P1D"` (`op:add-dayTimeDuration-to-date`, via
+/// [`add_seconds_decimal`]) with no `gMonthDay`/duration exotica involved at all.
+///
+/// Callers that need an `i64` (to populate a `DateTime`/`Date`/`Gregorian` field)
+/// narrow the *final* day-count arithmetic with a checked conversion at the point
+/// where it is actually used, so a result that is truly out of `i64` range is a
+/// typed `OutOfRange` error, never a silent wrap or a panic.
+fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
+    let y = i128::from(y);
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
     let yoe = y - era * 400; // [0, 399]
-    let m = i64::from(m);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(d) - 1; // [0,365]
+    let m = i128::from(m);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i128::from(d) - 1; // [0,365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     era * 146_097 + doe - 719_468
 }
 
 /// Howard Hinnant's `civil_from_days`: the inverse of [`days_from_civil`]. `days` is
-/// the day count relative to 1970-01-01 (may be negative). Shared by
-/// [`datetime_from_unix_seconds`] and the duration/timezone arithmetic below, which
-/// all need to turn an exact day count back into a proleptic-Gregorian date.
+/// the day count relative to 1970-01-01 (may be negative), given — and computed —
+/// in `i128` for the identical overflow-safety reason [`days_from_civil`]'s doc
+/// spells out (the two functions are inverses of each other and share the same
+/// `era * 146_097`-shaped arithmetic, so they share the same hazard and the same
+/// fix). Shared by [`datetime_from_unix_seconds`] and the duration/timezone
+/// arithmetic below, which all need to turn an exact day count back into a
+/// proleptic-Gregorian date.
+///
+/// The returned year is `i128` too, deliberately not narrowed here: narrowing is
+/// the caller's job, at the point where an `i64` field is actually populated, so
+/// that a genuinely out-of-`i64`-range result surfaces as a typed `OutOfRange`
+/// there instead of this shared primitive having to guess which callers can afford
+/// to fail and which cannot.
 ///
 /// Algorithm reference: <https://howardhinnant.github.io/date_algorithms.html>
-fn civil_from_days(days: i64) -> (i64, u8, u8) {
+fn civil_from_days(days: i128) -> (i128, u8, u8) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -386,7 +415,15 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
     };
     let tod = secs - days * SECS_PER_DAY_I64; // 0 .. 86399
 
-    let (y, m, d) = civil_from_days(days);
+    let (y, m, d) = civil_from_days(i128::from(days));
+    // `days` is bounded by `i64::MIN/86_400 ..= i64::MAX/86_400` (roughly
+    // ±1.07e14), so the resulting year is bounded by roughly ±(400 * 1.07e14 /
+    // 146_097) — many orders of magnitude inside `i64`. This narrowing cannot
+    // fail for any `i64` `secs`, unlike the general case `civil_from_days`
+    // documents (see its doc) — it is safe specifically because this function's
+    // input is seconds, not an arbitrary duration-shifted year.
+    let y = i64::try_from(y)
+        .expect("civil_from_days(i128::from(i64 seconds / 86_400)) always fits i64");
 
     let hour = (tod / 3600) as u8;
     let minute = ((tod % 3600) / 60) as u8;
@@ -940,8 +977,11 @@ pub fn parse_gregorian(datatype: XsdDatatype, lexical: &str) -> Result<Gregorian
 // ── Comparison (XSD partial order) ───────────────────────────────────────────────
 
 /// The naive whole-seconds offset (timezone NOT applied) on the proleptic timeline.
-fn naive_secs(days: i64, hour: u8, minute: u8, sec_whole: i128) -> i128 {
-    i128::from(days) * SECS_PER_DAY + i128::from(hour) * 3600 + i128::from(minute) * 60 + sec_whole
+/// `days` is `i128` (matching [`days_from_civil`]) so a comparison — unlike
+/// arithmetic that must build a concrete `i64`-typed calendar value — never has to
+/// narrow at all, and so can never fail for any `i64` year on either side.
+fn naive_secs(days: i128, hour: u8, minute: u8, sec_whole: i128) -> i128 {
+    days * SECS_PER_DAY + i128::from(hour) * 3600 + i128::from(minute) * 60 + sec_whole
 }
 
 /// Compare two `(whole_secs, frac)` points.
@@ -1327,21 +1367,29 @@ fn add_seconds_decimal(
     let sec_of_minute_scaled = remainder % (unit * 60);
     let second_new = Decimal::from_parts(sec_of_minute_scaled, scale);
 
-    let base_days = i128::from(days_from_civil(year, month, day));
+    // `days_from_civil` and `civil_from_days` are `i128`-internal and cannot
+    // overflow for any `i64` year (see their docs) — this is exactly the F2
+    // regression's reachable case: `year` here can be an astronomically large
+    // `i64` (e.g. from a prior `yearMonthDuration` shift, or straight from a
+    // wide-lexical `xsd:date`/`xsd:dateTime` literal), and the day-count math
+    // below must not wrap or panic for it. Only the FINAL result — an actual
+    // `i64` calendar year — is narrowed, with a typed `OutOfRange` if it
+    // genuinely does not fit.
+    let base_days = days_from_civil(year, month, day);
     let total_days = base_days
         .checked_add(day_delta)
         .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
-    let total_days =
-        i64::try_from(total_days).map_err(|_| arith_overflow(datatype, "date overflow"))?;
     let (y, m, d) = civil_from_days(total_days);
+    let y = i64::try_from(y).map_err(|_| arith_overflow(datatype, "date overflow"))?;
 
     Ok((y, m, d, hour_new, minute_new, second_new))
 }
 
 /// One side of an [`instant_diff`] subtraction: days-since-epoch, time-of-day, and
-/// timezone.
+/// timezone. `days` is `i128` (matching [`days_from_civil`]'s return), so
+/// constructing an `Instant` from a wide-year `DateTime`/`Date` can never overflow.
 struct Instant {
-    days: i64,
+    days: i128,
     hour: u8,
     minute: u8,
     second: Decimal,
@@ -1379,11 +1427,9 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
     let a_tz_secs = i128::from(a.tz.unwrap_or(0)) * 60;
     let b_tz_secs = i128::from(b.tz.unwrap_or(0)) * 60;
     let a_naive =
-        i128::from(a.days) * SECS_PER_DAY + i128::from(a.hour) * 3600 + i128::from(a.minute) * 60
-            - a_tz_secs;
+        a.days * SECS_PER_DAY + i128::from(a.hour) * 3600 + i128::from(a.minute) * 60 - a_tz_secs;
     let b_naive =
-        i128::from(b.days) * SECS_PER_DAY + i128::from(b.hour) * 3600 + i128::from(b.minute) * 60
-            - b_tz_secs;
+        b.days * SECS_PER_DAY + i128::from(b.hour) * 3600 + i128::from(b.minute) * 60 - b_tz_secs;
     let a_total = a_naive
         .checked_mul(unit)
         .and_then(|v| v.checked_add(a_second_scaled))
@@ -1837,8 +1883,11 @@ type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 /// scanning every anchor year that could ever exist for the source date —
 /// sound and complete BY CONSTRUCTION, not by a curated set of probe years or
 /// a closed-form leap-rule argument that has to be independently proven
-/// correct. This replaces, and SUBSUMES, everything the earlier per-arm
-/// implementation needed to decide the same question:
+/// correct — TRUE for any `dur_months`/`whole_days` magnitude, not just the
+/// ones a bounded test grid happens to try (see the reduce-first argument
+/// ahead of the anchor loop below, which is what makes that true in code, not
+/// only in this paragraph). This replaces, and SUBSUMES, everything the
+/// earlier per-arm implementation needed to decide the same question:
 ///
 /// - the three-probe day-shift unanimity check (probing every reachable
 ///   adjacent-year leap pattern) — every anchor's own walk already realizes
@@ -1850,9 +1899,12 @@ type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 ///   re-agree by 4-year-cycle coincidence while still being century-dependent
 ///   (`P1461D`, four years plus a day). A full-period anchor walk cannot be
 ///   fooled that way for any magnitude: every anchor gets its own complete
-///   walk, so an enormous `whole_days` just walks further per anchor, still
-///   `O(1)` checked-arithmetic work per anchor, not a wider probe set to
-///   maintain;
+///   walk, so an enormous `whole_days` (or `dur_months`) never widens the
+///   probe set, only the reduce-first step ahead of the loop below, which
+///   collapses it back to a fixed `0..400`/`0..146_097` window before any
+///   anchor arithmetic runs — genuinely `O(1)` checked-arithmetic work per
+///   anchor, independent of the input magnitude, not merely bounded by a
+///   wide-enough integer type;
 /// - the per-arm ordering defect this fix was written for: because this one
 ///   function decides the FINISHED `(month, day)` — months, then days, both
 ///   inside the same per-anchor walk — a composite `PnMmD` duration's
@@ -1873,9 +1925,67 @@ type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 /// each locally sound, whose composition was not).
 ///
 /// Cost: [`GMONTHDAY_ANCHOR_YEARS`] has exactly 400 years, so this is at most
-/// 400 iterations of `i64` civil-day/month arithmetic — a cold-path cost
-/// (Gregorian duration arithmetic is never a hot loop) of low single-digit
-/// microseconds, negligible next to the correctness it buys.
+/// 400 iterations of small, fixed-width `i64`/`i128` civil-day/month
+/// arithmetic — a cold-path cost (Gregorian duration arithmetic is never a
+/// hot loop) of low single-digit microseconds, negligible next to the
+/// correctness it buys, and INDEPENDENT of `dur_months`/`whole_days`'s
+/// magnitude (see the reduce-first step below).
+///
+/// ## Reduce first, by exact periodicity (an F2 fix)
+///
+/// `dur_months`/`whole_days` are full `i64`s — a duration can carry
+/// `P400000000000000000M`, i.e. a ~3.3e16-year month carry. Anchoring THAT
+/// carry directly (`anchor_year + dur_months/12`) hands
+/// [`days_from_civil`]/[`civil_from_days`] a year far outside any calendar a
+/// caller could mean, and previously (before those two functions were made
+/// `i128`-internal — see their docs) that reached an UNCHECKED `i64` multiply
+/// on the hot path of every anchor, wrapping silently in release and
+/// panicking in a debug/overflow-checks build for a well-formed literal — a
+/// real regression, not a hypothetical one (`--01-15 + P400000000000000000M`
+/// used to answer `--05-15` via a closed form; the per-arm rewrite this
+/// function replaced made it either wrap to a wrong refusal or panic).
+///
+/// `days_from_civil`/`civil_from_days` being `i128`-internal already closes
+/// that hole generically (any `i64` year is safe there now). This function
+/// ALSO reduces first, belt-and-suspenders, for the same reason
+/// `MonthAction::Cyclic12` (`drive_gregorian`'s gMonth arm) reduces before
+/// touching an anchor: the finished `(month, day)` this function decides
+/// depends on an anchor's year ONLY through that year's position in the
+/// 400-year Gregorian cycle. `days_from_civil`'s own `era * 146_097` term is
+/// exactly the statement that `days_from_civil(y + 400, m, d) ==
+/// days_from_civil(y, m, d) + 146_097` for EVERY `y` (only `era` changes by
+/// exactly 1 per 400 years; `yoe`/`doy`/`doe` are unchanged, since they are
+/// computed modulo the 400-year offset). Symmetrically,
+/// `civil_from_days(x + 146_097)` names the same `(month, day)` as
+/// `civil_from_days(x)` for every `x` (only the returned year differs, by
+/// exactly 400). Two consequences, each independently sound:
+///
+/// - Splitting `dur_months` into `(carry_years, month_offset) =
+///   (dur_months.div_euclid(12), dur_months.rem_euclid(12))` and then
+///   reducing `carry_years.rem_euclid(400)` before it ever reaches an
+///   anchor's year shifts every anchor's target year by some exact multiple
+///   of 400 relative to the true (unreduced) target year — which shifts that
+///   anchor's `base` day count by the SAME multiple of 146_097 (the identity
+///   above) and leaves `days_in_month`/the finished `(month, day)` completely
+///   unchanged (`days_in_month` is itself 400-year-periodic, by the same leap
+///   rule [`GMONTHDAY_ANCHOR_YEARS`]'s doc gives).
+/// - Reducing `whole_days.rem_euclid(146_097)` before adding it to `base`
+///   changes the total by some exact multiple of 146_097, which — by the
+///   identity above — cannot change `civil_from_days`'s `(month, day)`
+///   output either.
+///
+/// Both reductions together permute the (already exhaustive) 400-anchor set
+/// within an equivalent window and cannot change the agreement verdict or the
+/// agreed `(month, day)` — only the (never-returned) year differs from the
+/// true, unreduced computation. `bounded_months_delta` therefore lands in
+/// `0..=4799` and `bounded_whole_days` in `0..=146_096` for ANY `i64`
+/// `dur_months`/`whole_days`, so `y1` stays within roughly
+/// `GMONTHDAY_ANCHOR_YEARS`'s own window plus 400 years and one month carry —
+/// nowhere near any overflow boundary, checked or not — restoring every
+/// pre-regression large-carry answer with NO ceiling at all (there is none in
+/// the true value space either): `--01-15 + P303032819133169872M` (the
+/// bisected wrap point) answers instead of refusing, and
+/// `--01-15 + P400000000000000000M` answers `--05-15` again.
 fn gmonthday_shift(
     datatype: XsdDatatype,
     month: u8,
@@ -1883,16 +1993,27 @@ fn gmonthday_shift(
     dur_months: i64,
     whole_days: i64,
 ) -> Result<(u8, u8), XsdError> {
+    // `div_euclid`/`rem_euclid` never panic for these operands (only division by
+    // zero or by -1 at `i64::MIN` can, and the divisors here are the constants 12,
+    // 400, and 146_097), so this decomposition is total over every `i64`
+    // `dur_months`/`whole_days` — see the doc above for why it is also SOUND.
+    let carry_years = dur_months.div_euclid(12);
+    let month_offset = dur_months.rem_euclid(12); // 0..=11
+    let carry_years_mod400 = carry_years.rem_euclid(400); // 0..=399
+    let bounded_months_delta = carry_years_mod400 * 12 + month_offset; // 0..=4799
+
+    let bounded_whole_days = whole_days.rem_euclid(146_097); // 0..=146_096
+
     let mut agreed: Option<(u8, u8)> = None;
     for anchor_year in GMONTHDAY_ANCHOR_YEARS {
         if day > days_in_month(anchor_year, month) {
             continue; // not a real anchor for this source date (matters only for --02-29)
         }
-        let (y1, m1) = shift_year_month(datatype, anchor_year, month, dur_months)?;
+        let (y1, m1) = shift_year_month(datatype, anchor_year, month, bounded_months_delta)?;
         let d1 = day.min(days_in_month(y1, m1));
         let base = days_from_civil(y1, m1, d1);
         let shifted = base
-            .checked_add(whole_days)
+            .checked_add(i128::from(bounded_whole_days))
             .ok_or_else(|| arith_overflow(datatype, "gMonthDay arithmetic overflow"))?;
         let (_, m2, d2) = civil_from_days(shifted);
         match agreed {
@@ -3723,7 +3844,7 @@ mod tests {
     /// be rejected as `XsdError::TypeMismatch`.
     #[test]
     fn gregorian_duration_matrix() {
-        let rows: [(XsdDatatype, &str, &str, Option<&str>); 37] = [
+        let rows: [(XsdDatatype, &str, &str, Option<&str>); 40] = [
             // ── gYearMonth (Free, Absent): 4 rows — Free never rejects ────────
             (XsdDatatype::GYearMonth, "2012-10", "P1Y1M", Some("2013-11")), // RDF4J's own pinned case
             (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
@@ -3796,6 +3917,49 @@ mod tests {
             // leapness since every leap year's next year is non-leap), then
             // the day (Feb 28 + 1d = Mar 1) — invariant from every anchor.
             (XsdDatatype::GMonthDay, "--02-29", "P1Y1D", Some("--03-01")),
+            // ── F2 regression rows: huge-magnitude carries that used to wrap
+            // (release) or panic (debug/overflow-checks) inside
+            // `days_from_civil`'s unchecked `era * 146_097` before the
+            // reduce-first fix in `gmonthday_shift` and the `i128`-internal
+            // hardening of `days_from_civil`/`civil_from_days` — see both
+            // functions' docs. Expected values computed independently in
+            // Python from the same anchored-oracle definition the tests
+            // above use (shift-then-clamp from every anchor in
+            // `GMONTHDAY_ANCHOR_YEARS`), not from this crate's code.
+            //
+            // The pre-fix closed form answered this one correctly too
+            // (`--01-15 + P4e17M -> --05-15`); the per-arm rewrite this
+            // module replaced made it wrap to a false refusal or panic.
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P400000000000000000M",
+                Some("--05-15"),
+            ),
+            // The exact bisected wrap point of the F2 regression: one era
+            // past this magnitude, `days_from_civil`'s `era * 146_097` term
+            // first exceeds `i64::MAX`. Unambiguous from every anchor.
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P303032819133169872M",
+                Some("--01-15"),
+            ),
+            // A huge-magnitude day walk: `876_582_000_000 == 146_097 *
+            // 6_000_000`, an exact multiple of the day-count period, so by
+            // the periodicity argument `civil_from_days`'s own doc gives,
+            // walking it from ANY anchor lands on the identical (month, day)
+            // — provably identity, not merely "whatever the oracle happens
+            // to say" — while still exercising the full `i128` civil-day
+            // walk at a magnitude the old `i64` version could not have
+            // survived (`~8.8e11` days is itself unremarkable, but every
+            // anchor's `days_from_civil` result it is added to is not).
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P876582000000D",
+                Some("--01-15"),
+            ),
             // ── gDay (IdentityIfSafe, MonthIndependentDays): 6 rows ───────────
             (XsdDatatype::GDay, "---15", "P1M", Some("---15")), // months-accepted: day <= 28
             (XsdDatatype::GDay, "---31", "P1M", None),          // months-rejected: day >= 29
@@ -3804,7 +3968,7 @@ mod tests {
             (XsdDatatype::GDay, "---15", "PT1H", None),         // sub-day
             (XsdDatatype::GDay, "---15", "PT0S", Some("---15")), // zero
         ];
-        assert_eq!(rows.len(), 37);
+        assert_eq!(rows.len(), 40);
         for (datatype, g_lex, dur_lex, expected) in rows {
             let g = parse_gregorian(datatype, g_lex).unwrap();
             let dur = ymd(XsdDatatype::Duration, dur_lex);
@@ -3896,7 +4060,7 @@ mod tests {
                 // date, expressed as a civil day count — computed once per
                 // (month, day), then reused (incrementally, not re-walked)
                 // across all 729 shift magnitudes below.
-                let bases: Vec<i64> = ANCHOR_YEARS
+                let bases: Vec<i128> = ANCHOR_YEARS
                     .clone()
                     .filter(|&y| day <= days_in_month(y, month))
                     .map(|y| days_from_civil(y, month, day))
@@ -3926,7 +4090,7 @@ mod tests {
                     let mut oracle_first: Option<(u8, u8)> = None;
                     let mut oracle_ambiguous = false;
                     for &base in &bases {
-                        let (_, nm, nd) = civil_from_days(base + whole_days);
+                        let (_, nm, nd) = civil_from_days(base + i128::from(whole_days));
                         match oracle_first {
                             None => oracle_first = Some((nm, nd)),
                             Some(first) if first != (nm, nd) => {
@@ -4107,13 +4271,20 @@ mod tests {
     /// accidentally miss, only less exhaustive):
     /// - every `(month, day)` valid in some year — 366 pairs, the same full
     ///   sweep both oracle tests above already do;
-    /// - `months` densely over `-5..=5` plus four sparse deep carries
-    ///   (`±100` months ≈ 8 years, and `±4800` months = exactly one full
-    ///   400-year Gregorian period, where a Feb-29 carry becomes
-    ///   unambiguous again);
+    /// - `months` densely over `-5..=5` plus sparse deep carries: `±100`
+    ///   months (≈8 years), `±4800` months (exactly one full 400-year
+    ///   Gregorian period, where a Feb-29 carry becomes unambiguous again),
+    ///   and — the F2 regression grid extension — `±4×10¹⁷` and two
+    ///   magnitudes beyond `3×10¹⁸`, all comfortably inside `i64`, but each
+    ///   one FAR past the point where `days_from_civil`'s old unchecked
+    ///   `era * 146_097` `i64` multiply would have wrapped (release) or
+    ///   panicked (debug/overflow-checks) — see [`gmonthday_shift`]'s doc;
     /// - `whole_days` densely over `-10..=10` plus the eight magnitudes the
     ///   deleted `±364`-day guard used to treat specially (`±364`, `±365`,
-    ///   `±366`, `±730`).
+    ///   `±366`, `±730`), plus — the same F2 extension — `±10⁸` and two
+    ///   `±146_097·k` forms (exact multiples of the day-count period, so
+    ///   they also cross-check the periodicity argument
+    ///   [`gmonthday_shift`]'s doc makes for its own `whole_days` reduction).
     ///
     /// (The two oracle tests above sweep their single nonzero component far
     /// more densely — up to `±364` whole days, or `-48..=48` months — because
@@ -4128,9 +4299,42 @@ mod tests {
     /// oracle's coverage.
     #[test]
     fn gmonthday_composite_shift_agrees_with_the_anchored_oracle() {
-        let months_grid: Vec<i64> = (-5i64..=5).chain([100, -100, 4800, -4800]).collect();
+        let months_grid: Vec<i64> = (-5i64..=5)
+            .chain([
+                100,
+                -100,
+                4800,
+                -4800,
+                // F2 regression: magnitudes past the old bisected wrap point
+                // (`era * 146_097` first exceeds `i64::MAX` around
+                // `2.5e16` years, i.e. `~3.03e17` months).
+                400_000_000_000_000_000,
+                -400_000_000_000_000_000,
+                3_500_000_000_000_000_000,
+                -3_500_000_000_000_000_000,
+                5_000_000_000_000_000_000,
+                -5_000_000_000_000_000_000,
+            ])
+            .collect();
         let days_grid: Vec<i64> = (-10i64..=10)
-            .chain([364, -364, 365, -365, 366, -366, 730, -730])
+            .chain([
+                364,
+                -364,
+                365,
+                -365,
+                366,
+                -366,
+                730,
+                -730,
+                // F2 regression: a plain huge magnitude and two exact
+                // multiples of the 146_097-day period.
+                100_000_000,
+                -100_000_000,
+                146_097 * 2,
+                -(146_097 * 2),
+                146_097 * 1_000_000,
+                -(146_097 * 1_000_000),
+            ])
             .collect();
 
         for month in 1u8..=12 {
@@ -4167,7 +4371,7 @@ mod tests {
                             let target_month = (total.rem_euclid(12) + 1) as u8;
                             let clamped_day = day.min(days_in_month(target_year, target_month));
                             let base = days_from_civil(target_year, target_month, clamped_day);
-                            let shifted = base + whole_days;
+                            let shifted = base + i128::from(whole_days);
                             let (_, nm, nd) = civil_from_days(shifted);
                             match oracle_first {
                                 None => oracle_first = Some((nm, nd)),
