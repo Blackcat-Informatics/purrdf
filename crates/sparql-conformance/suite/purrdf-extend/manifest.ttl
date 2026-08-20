@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# The purrdf EXTEND conformance suite: seven RDF-1.2 / purrdf
+# The PurRDF EXTEND conformance suite: eight RDF-1.2 / PurRDF
 # capabilities that incumbent SPARQL engines (rdflib, oxigraph) cannot express,
 # all PASSING on the native NativeSparqlEngine.
 #
