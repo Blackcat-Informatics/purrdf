@@ -953,6 +953,167 @@ fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     }
 }
 
+/// Whether `pattern` contains, anywhere in its tree, a node whose EVALUATED
+/// ANSWER depends on more than the unconstrained relation it computes over —
+/// `Lateral`, `Slice`, `Distinct`, `Reduced`, `Minus`, and `Group` all qualify:
+/// each can give a DIFFERENT answer depending on which specific outer row
+/// drove the evaluation that produced its input (a `LIMIT`, an aggregate, or
+/// `MINUS`'s own domain-disjointness test all read the shape of the row, not
+/// just whether it exists). `Bgp`/`Path`/`Values`/an ordinary `Join`/`Union`
+/// are NOT row-sensitive: evaluating them once, unconstrained, and probing the
+/// result for compatibility (the memoized fast path in [`exists`]) is sound
+/// for them regardless of which outer row is being tested.
+///
+/// This is what makes SEP-0006's `LATERAL` reachable inside `FILTER EXISTS`
+/// through a bare TRIPLE position (no expression position at all) a
+/// correctness hazard the fast path cannot see on its own:
+/// [`pattern_expr_vars`] only reports variables occurring in expression
+/// positions, so a `LATERAL` correlated solely through a shared triple-pattern
+/// variable was invisible to the OLD correlation test — this predicate, paired
+/// with [`pattern_all_vars`], is the widened test. A bare `Project` (a plain
+/// sub-`SELECT` with no `LIMIT`/`DISTINCT`/`GROUP BY` of its own) is a pure
+/// column restriction and is NOT independently row-sensitive; wherever a
+/// `Project` sits beneath one of the six listed constructs, that construct's
+/// own arm already reports `true` for the whole subtree.
+fn is_row_sensitive(pattern: &GraphPattern) -> bool {
+    match pattern {
+        GraphPattern::Lateral { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Group { .. } => true,
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => false,
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            is_row_sensitive(left) || is_row_sensitive(right)
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. } => is_row_sensitive(inner),
+    }
+}
+
+/// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
+/// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, and
+/// every expression position [`pattern_expr_vars`] already covers — plus every
+/// variable a construct itself INTRODUCES (`BIND`/`GROUP BY`/a projection
+/// list), which is a safe over-approximation for this predicate's one use:
+/// widened `EXISTS` correlation detection ([`is_row_sensitive`]'s doc). Used
+/// ONLY for a row-sensitive inner pattern, where an outer-bound variable
+/// occurring in ANY position — not just an expression one — makes the fast
+/// (evaluate-once, probe-per-row) path unsound, so the substituted per-row
+/// path must run instead.
+fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    use purrdf_sparql_algebra::NamedNodePattern;
+
+    match pattern {
+        GraphPattern::Bgp { patterns } => {
+            for tp in patterns {
+                term_pattern_vars(&tp.subject, out);
+                if let NamedNodePattern::Variable(v) = &tp.predicate {
+                    out.insert(v.clone());
+                }
+                term_pattern_vars(&tp.object, out);
+            }
+        }
+        GraphPattern::Path {
+            subject, object, ..
+        } => {
+            term_pattern_vars(subject, out);
+            term_pattern_vars(object, out);
+        }
+        GraphPattern::Values { variables, .. } => {
+            out.extend(variables.iter().cloned());
+        }
+        GraphPattern::PropertyFunction(call) => {
+            for term in call.subject_args.iter().chain(&call.object_args) {
+                term_pattern_vars(term, out);
+            }
+        }
+        GraphPattern::Graph { name, inner } => {
+            if let NamedNodePattern::Variable(v) = name {
+                out.insert(v.clone());
+            }
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Service { name, inner, .. } => {
+            if let NamedNodePattern::Variable(v) = name {
+                out.insert(v.clone());
+            }
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::Lateral { left, right } => {
+            pattern_all_vars(left, out);
+            pattern_all_vars(right, out);
+        }
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            if let Some(e) = expression {
+                expr_vars(e, out);
+            }
+            pattern_all_vars(left, out);
+            pattern_all_vars(right, out);
+        }
+        GraphPattern::Filter { expr, inner } => {
+            expr_vars(expr, out);
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            out.insert(variable.clone());
+            expr_vars(expression, out);
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::OrderBy { inner, expression } => {
+            for oe in expression {
+                match oe {
+                    purrdf_sparql_algebra::OrderExpression::Asc(e)
+                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, out),
+                }
+            }
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
+            out.extend(variables.iter().cloned());
+            for (v, agg) in aggregates {
+                out.insert(v.clone());
+                for arg in agg.args() {
+                    expr_vars(arg, out);
+                }
+            }
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => pattern_all_vars(inner, out),
+        GraphPattern::Project { inner, variables } => {
+            out.extend(variables.iter().cloned());
+            pattern_all_vars(inner, out);
+        }
+    }
+}
+
 /// Evaluate `EXISTS { pattern }` for the current solution.
 ///
 /// Two evaluation paths are used depending on whether any outer-bound variable
@@ -1016,34 +1177,35 @@ fn exists<D: DatasetView + Sync>(
             .clone()
     };
 
-    let is_expression_correlated = inner_expr_vars.iter().any(|v| outer_bound.contains(v));
+    // Widened per SEP-0006 reachability (see `is_row_sensitive`'s doc): an
+    // outer-bound variable occurring ONLY in a triple position (never an
+    // expression position) still needs the per-row substituted path whenever
+    // the inner pattern is row-sensitive — evaluating a `Lateral`/`Slice`/
+    // `Distinct`/`Reduced`/`Minus`/`Group` once, unconstrained, and probing
+    // per outer row is sound only when the inner's answer does not itself
+    // depend on which row drove it, and each of those constructs' answer CAN.
+    // `LATERAL`'s parser is what first makes such an inner reachable through a
+    // bare triple position inside `EXISTS` (previously unwritable surface
+    // syntax). The row-sensitivity/all-vars walk is deliberately NOT cached
+    // (unlike `inner_expr_vars` above): row-sensitive inners are the rare
+    // case, so the memoized fast path below is what carries the common-case
+    // performance, not this check.
+    let is_expression_correlated = inner_expr_vars.iter().any(|v| outer_bound.contains(v))
+        || (is_row_sensitive(pattern) && {
+            let mut all_vars = DetHashSet::default();
+            pattern_all_vars(pattern, &mut all_vars);
+            all_vars.iter().any(|v| outer_bound.contains(v))
+        });
 
     if is_expression_correlated {
         // Correct per-row path: substitute the outer row's bound variable values
-        // into the inner pattern's expression positions before evaluating.
+        // into the inner pattern before evaluating (expression positions per
+        // SPARQL §18.6; triple/leaf positions via Values Insertion — see
+        // `crate::binop::eval_correlated`, this crate's one substitution seam).
         //
-        // This implements the W3C SPARQL §18.6 EXISTS substitution semantics:
-        // every reference to an outer-bound variable inside an expression (FILTER
-        // condition, BIND, aggregate, etc.) is replaced with the corresponding
-        // constant, so the inner evaluation sees the outer bindings as ground
-        // constants rather than unbound variables that would error in expressions.
-        //
-        // After substitution, the resulting pattern is a valid (all-ground-expression)
-        // pattern whose result is specific to this outer row; it is NOT memoized.
-        let bindings = outer_bindings_for_substitution(row, schema, ctx);
-        let substituted = substitute_pattern(pattern, &bindings);
-        // `substituted` is a fresh heap allocation, specific to this outer row,
-        // that is dropped at the end of this call — its node addresses do NOT
-        // outlive the query. Flag the window so address-keyed memoization
-        // (`const_atom`, `exists_expr_vars_cache`, `exists_inner_cache`) is
-        // bypassed while it is evaluated, and restore the prior value afterward
-        // (even on error) so a doubly-nested correlated EXISTS is handled
-        // correctly.
-        let prev_in_substituted_exists = ctx.in_substituted_exists;
-        ctx.in_substituted_exists = true;
-        let inner = eval_evaluated(&substituted, ctx);
-        ctx.in_substituted_exists = prev_in_substituted_exists;
-        let inner = inner?;
+        // After substitution, the resulting pattern's result is specific to this
+        // outer row; it is NOT memoized.
+        let inner = crate::binop::eval_correlated(pattern, row, schema, ctx)?;
         if let Evaluated::Truncated(truncation) = &inner {
             // A truncated `EXISTS` inner bag can only turn its boolean from true to
             // false, and a truncated `NOT EXISTS` one from false to true — a fabricated
@@ -1122,90 +1284,207 @@ fn exists<D: DatasetView + Sync>(
     }
 }
 
-/// Substitute outer-bound variables into expression positions within a graph pattern.
+/// The per-row μ used by pattern substitution — SEP-0007's `Replace` mechanism,
+/// PurRDF's evaluation-side construction of it (see [`substitute_pattern`]).
 ///
-/// This implements the W3C SPARQL EXISTS substitution semantics (§18.6): for each
-/// variable `v` in `bindings`, every `Expression::Variable(v)` occurrence inside
-/// the pattern's expression positions (FILTER conditions, BIND expressions, etc.)
-/// is replaced with the corresponding constant expression. Triple-pattern term
-/// positions are also substituted when the bound value is representable as a
-/// `NamedNode` (blank nodes and triple terms cannot appear as triple-pattern
-/// constants in a `Bgp`, so those positions are left as variables — the later
-/// seed-join in the uncorrelated path handles them instead).
-pub(crate) fn substitute_pattern(
-    pattern: &GraphPattern,
-    bindings: &[(Variable, Expression)],
-) -> GraphPattern {
-    match pattern {
-        GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
-            patterns: patterns
+/// The outer solution's bound variables are carried in the two forms
+/// substitution needs, built together (once per outer row) by
+/// [`outer_bindings_for_substitution`]:
+///
+/// * `expr` — IRI/literal-representable bindings for **expression positions**
+///   (`substitute_expr`, unchanged since before this construct): `Expression`
+///   has no constant spelling for a blank node or a quoted triple, so those two
+///   term kinds are absent here. SPARQL §18.6's EXISTS substitution rewrites a
+///   FILTER/BIND's syntax, and neither term kind has one.
+/// * `term` — EVERY bound variable, IRI/literal/blank-node/quoted-triple alike,
+///   as a [`purrdf_sparql_algebra::GroundTerm`]: the row Values Insertion joins
+///   onto a `Bgp`/`Path` leaf (see [`substitute_pattern`]'s doc), total over
+///   every term kind a syntactic term-rewrite could never place.
+pub(crate) struct SubstitutionRow {
+    pub(crate) expr: Vec<(Variable, Expression)>,
+    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+}
+
+impl SubstitutionRow {
+    /// Restrict μ to exactly `variables`, preserving each side's original
+    /// (schema) order — the walk's response to a `Project` boundary, the ONLY
+    /// scope boundary the surface language has (SEP-0006's rule, restated in
+    /// [`substitute_pattern`]'s doc). The walk already deep-clones the tree
+    /// once per outer row, so the narrowed copy here is noise against that
+    /// cost, not a new per-row allocation class (AGENTS.md's hot-path rule).
+    fn narrow_to(&self, variables: &[Variable]) -> Self {
+        Self {
+            expr: self
+                .expr
                 .iter()
-                .map(|tp| substitute_triple_pattern(tp, bindings))
+                .filter(|(v, _)| variables.contains(v))
+                .cloned()
                 .collect(),
-        },
-        // A property function's argument vectors are term positions, substituted on
-        // exactly the rule `substitute_triple_pattern` applies to a BGP's: an
-        // outer-bound variable becomes a constant when the binding is an IRI, and stays
-        // a variable otherwise. Literal, blank-node and quoted-triple bindings are
-        // handled by the dispatch, which reads each argument's value from the outer row
-        // rather than from the rewritten node — the same division of labour that lets
-        // this helper stay IRI-only for triple patterns.
+            term: self
+                .term
+                .iter()
+                .filter(|(v, _)| variables.contains(v))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// Substitute outer-bound variables into a graph pattern for a correlated
+/// per-row evaluation (a `LATERAL` right operand or an expression-correlated
+/// `EXISTS` inner — see [`crate::binop::eval_correlated`], this walk's sole
+/// caller).
+///
+/// # Values Insertion (SEP-0007's `Replace` mechanism)
+///
+/// A `Bgp` or `Path` leaf whose variables intersect `row.term` is wrapped as
+/// `Join(leaf, Values { vars ∩ leaf-vars, [row] })` instead of being
+/// term-rewritten. This is uniform over every term kind a `GroundTerm` can
+/// carry — IRI, literal, blank node, quoted triple — because the row reaches
+/// the dataset through the SAME evaluation path real `VALUES` data uses
+/// (`crate::modifier::eval_values` → interning), not through a syntactic
+/// rewrite that can only synthesize the term kinds a `TriplePattern` constant
+/// slot admits *textually* reachable from an `Expression`. It also fixes the
+/// MINUS disjoint-domain flip: because the leaf keeps its variable (only
+/// gaining a joined `VALUES` row below it), `MINUS`'s both sides keep the
+/// SAME schema column for that variable, so §18.5's domain-disjointness test
+/// reads the truth instead of being fooled by a rewrite that erased the
+/// column into a baked-in constant.
+///
+/// `Graph`/`Service` names keep their pre-existing treatment (a `Service`
+/// variable endpoint resolves directly — the sole reason `LATERAL` ever needs
+/// per-row re-evaluation at all, since a joined `VALUES` row cannot supply the
+/// constant a federated call must be dispatched with; a `Graph` variable name
+/// is left unresolved, exactly as before — an unconstrained `GRAPH ?g`
+/// enumeration is already sound because the caller's own compatibility check
+/// against μ, run after this substituted pattern is evaluated, filters it).
+///
+/// # The theorem
+///
+/// This walk and the parser's `LATERAL` scope-conflict check
+/// (`purrdf_sparql_algebra::parser`) satisfy one theorem together: the parser
+/// rejects exactly those programs in which injecting bindings across the
+/// RHS's top scope level would be observable as a rebinding; this walk's
+/// injection never crosses a `Project` boundary the projection does not
+/// carry (`SubstitutionRow::narrow_to`, applied when descending through
+/// `GraphPattern::Project`). Together: a parsed `LATERAL` evaluates per
+/// SEP-0006's `Lateral(Ω,P) = ⋃ eval(inject(P, μ))` with `inject` this walk.
+///
+/// # Expression positions
+///
+/// Unchanged: `substitute_expr` still rewrites `Expression::Variable`/`Bound`
+/// occurrences directly (SPARQL §18.6), including through a nested `EXISTS`.
+///
+/// # Property-function arguments
+///
+/// Unchanged: still IRI-only value substitution via `substitute_term_pattern`
+/// — the fusion contract a joined `VALUES` row cannot satisfy (see that
+/// function's doc).
+pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) -> GraphPattern {
+    match pattern {
+        GraphPattern::Bgp { patterns } => {
+            let mut vars = DetHashSet::default();
+            for tp in patterns {
+                term_pattern_vars(&tp.subject, &mut vars);
+                if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &tp.predicate {
+                    vars.insert(v.clone());
+                }
+                term_pattern_vars(&tp.object, &mut vars);
+            }
+            join_leaf_with_values(
+                GraphPattern::Bgp {
+                    patterns: patterns.clone(),
+                },
+                &vars,
+                &row.term,
+            )
+        }
+        GraphPattern::Path {
+            subject,
+            path,
+            object,
+        } => {
+            let mut vars = DetHashSet::default();
+            term_pattern_vars(subject, &mut vars);
+            term_pattern_vars(object, &mut vars);
+            join_leaf_with_values(
+                GraphPattern::Path {
+                    subject: subject.clone(),
+                    path: path.clone(),
+                    object: object.clone(),
+                },
+                &vars,
+                &row.term,
+            )
+        }
+        // A property function's argument vectors are term positions, but — unlike a
+        // `Bgp`/`Path` leaf, which now receives its row via a joined `VALUES` above —
+        // the relation's invocation contract needs the argument itself constant, not
+        // merely join-compatible with one (`substitute_term_pattern`'s fusion-contract
+        // doc). This is that helper's one remaining client.
         GraphPattern::PropertyFunction(call) => {
             GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
                 iri: call.iri.clone(),
                 subject_args: call
                     .subject_args
                     .iter()
-                    .map(|term| substitute_term_pattern(term, bindings))
+                    .map(|term| substitute_term_pattern(term, &row.expr))
                     .collect(),
                 object_args: call
                     .object_args
                     .iter()
-                    .map(|term| substitute_term_pattern(term, bindings))
+                    .map(|term| substitute_term_pattern(term, &row.expr))
                     .collect(),
             })
         }
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: substitute_expr(expr, bindings),
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            expr: substitute_expr(expr, row),
+            inner: Box::new(substitute_pattern(inner, row)),
         },
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => GraphPattern::Extend {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
             variable: variable.clone(),
-            expression: substitute_expr(expression, bindings),
+            expression: substitute_expr(expression, row),
         },
         GraphPattern::Join { left, right } => GraphPattern::Join {
-            left: Box::new(substitute_pattern(left, bindings)),
-            right: Box::new(substitute_pattern(right, bindings)),
+            left: Box::new(substitute_pattern(left, row)),
+            right: Box::new(substitute_pattern(right, row)),
         },
         GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(substitute_pattern(left, bindings)),
-            right: Box::new(substitute_pattern(right, bindings)),
+            left: Box::new(substitute_pattern(left, row)),
+            right: Box::new(substitute_pattern(right, row)),
         },
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => GraphPattern::LeftJoin {
-            left: Box::new(substitute_pattern(left, bindings)),
-            right: Box::new(substitute_pattern(right, bindings)),
-            expression: expression.as_ref().map(|e| substitute_expr(e, bindings)),
+            left: Box::new(substitute_pattern(left, row)),
+            right: Box::new(substitute_pattern(right, row)),
+            expression: expression.as_ref().map(|e| substitute_expr(e, row)),
         },
+        // Both sides receive the SAME row (see this function's doc on the MINUS
+        // disjoint-domain fix): the right side is NOT excluded from substitution here,
+        // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
+        // evaluation-time injection).
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(substitute_pattern(left, bindings)),
-            right: Box::new(substitute_pattern(right, bindings)),
+            left: Box::new(substitute_pattern(left, row)),
+            right: Box::new(substitute_pattern(right, row)),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(substitute_pattern(left, bindings)),
-            right: Box::new(substitute_pattern(right, bindings)),
+            left: Box::new(substitute_pattern(left, row)),
+            right: Box::new(substitute_pattern(right, row)),
         },
+        // The graph name is left unresolved even when it is a bound variable — see this
+        // function's doc for why that is sound (the caller's post-hoc compatibility
+        // check against μ is what makes it sound, not a substitution here).
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
         },
         GraphPattern::Service {
             name,
@@ -1214,9 +1493,11 @@ pub(crate) fn substitute_pattern(
         } => GraphPattern::Service {
             // A variable endpoint (`SERVICE ?g`) bound to an IRI by the enclosing
             // solution becomes a concrete named endpoint, so the substituted
-            // pattern federates against the resolved IRI (the LATERAL seam).
+            // pattern federates against the resolved IRI (the LATERAL seam) — a
+            // joined `VALUES` row cannot supply the constant a dispatch needs.
             name: match name {
-                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => bindings
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => row
+                    .expr
                     .iter()
                     .find(|(bv, _)| bv == v)
                     .and_then(|(_, e)| match e {
@@ -1228,19 +1509,19 @@ pub(crate) fn substitute_pattern(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             },
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
             silent: *silent,
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
             expression: expression
                 .iter()
                 .map(|oe| match oe {
                     purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                        purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, bindings))
+                        purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
                     }
                     purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                        purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(e, bindings))
+                        purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(e, row))
                     }
                 })
                 .collect(),
@@ -1250,16 +1531,12 @@ pub(crate) fn substitute_pattern(
             variables,
             aggregates,
         } => GraphPattern::Group {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
             variables: variables.clone(),
             aggregates: aggregates
                 .iter()
                 .map(|(v, agg)| {
-                    let args = agg
-                        .args()
-                        .iter()
-                        .map(|e| substitute_expr(e, bindings))
-                        .collect();
+                    let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
                     // `substitute_expr` rewrites each argument in place and never
                     // changes the argument COUNT, so this can never turn a valid
                     // `agg` into an invalid one.
@@ -1276,54 +1553,83 @@ pub(crate) fn substitute_pattern(
         },
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: Box::new(substitute_pattern(inner, bindings)),
+            inner: Box::new(substitute_pattern(inner, row)),
             start: *start,
             length: *length,
         },
-        GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(substitute_pattern(inner, bindings)),
-            variables: variables.clone(),
-        },
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } => pattern.clone(),
+        // The Project-boundary narrowing this walk's theorem depends on: only the
+        // projected variables survive to the inner pattern's substitution.
+        GraphPattern::Project { inner, variables } => {
+            let narrowed = row.narrow_to(variables);
+            GraphPattern::Project {
+                inner: Box::new(substitute_pattern(inner, &narrowed)),
+                variables: variables.clone(),
+            }
+        }
+        GraphPattern::Values { .. } => pattern.clone(),
     }
 }
 
-/// Substitute outer-bound variables into a triple pattern's term positions.
-/// Only IRI-valued bindings can replace a variable in triple-pattern subject/object
-/// position (blank nodes and literals are not valid there in the algebra). Predicate
-/// positions are `NamedNodePattern` which cannot be a free variable — left unchanged.
-fn substitute_triple_pattern(
-    tp: &purrdf_sparql_algebra::TriplePattern,
-    bindings: &[(Variable, Expression)],
-) -> purrdf_sparql_algebra::TriplePattern {
-    use purrdf_sparql_algebra::TriplePattern;
-
-    // Predicate is NamedNodePattern — it can be a variable but rarely is in practice;
-    // leave as-is (IRI substitution there is uncommon and the Filter handles equality).
-    TriplePattern {
-        subject: substitute_term_pattern(&tp.subject, bindings),
-        predicate: tp.predicate.clone(),
-        object: substitute_term_pattern(&tp.object, bindings),
+/// Wrap a `Bgp`/`Path` leaf in `Join(leaf, Values { .. })` when its variables
+/// intersect the injected row (Values Insertion — see [`substitute_pattern`]'s
+/// doc). The joined `VALUES` carries exactly `leaf_vars ∩ row-vars`, in the
+/// row's own (schema) order — a single row, so the join can only narrow, never
+/// multiply, the leaf's solutions. A leaf sharing nothing with the row is
+/// returned unchanged: no join is worth adding, and the pattern stays
+/// leaf-shaped for every operator that inspects it structurally (e.g. the
+/// property-function fusion check in `crate::property_fn_eval`).
+fn join_leaf_with_values(
+    leaf: GraphPattern,
+    leaf_vars: &DetHashSet<Variable>,
+    term_row: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
+) -> GraphPattern {
+    let restricted: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = term_row
+        .iter()
+        .filter(|(v, _)| leaf_vars.contains(v))
+        .collect();
+    if restricted.is_empty() {
+        return leaf;
+    }
+    let mut variables = Vec::with_capacity(restricted.len());
+    let mut values_row = Vec::with_capacity(restricted.len());
+    for (v, g) in restricted {
+        variables.push(v.clone());
+        values_row.push(Some(g.clone()));
+    }
+    GraphPattern::Join {
+        left: Box::new(leaf),
+        right: Box::new(GraphPattern::Values {
+            variables,
+            bindings: vec![values_row],
+        }),
     }
 }
 
-/// Substitute outer-bound variables into ONE term position — the rule shared by a
-/// triple pattern's subject/object and a property function's argument vectors.
+/// Substitute outer-bound variables into a property-function argument term —
+/// the ONLY remaining client of this substitution style, since Values
+/// Insertion (`substitute_pattern`'s `Bgp`/`Path` arms) took over triple-pattern
+/// positions.
 ///
-/// IRI-valued bindings only: a literal, blank-node or quoted-triple binding leaves the
-/// variable in place, and the substituted expression in the enclosing `FILTER` (for a
-/// triple pattern) or the per-row argument read (for a property function) supplies the
-/// value instead.
+/// IRI-valued bindings only, by the fusion contract: a property-function
+/// argument is an INVOCATION INPUT the relation reads directly from the row
+/// (`crate::property_fn_eval`), not a join key a `VALUES` row could supply —
+/// joining a literal/blank-node/quoted-triple binding in would hand the
+/// relation a FREE argument position it may refuse to be invoked with, where a
+/// rewritten IRI constant is a position the relation can read exactly as if
+/// the caller had written it literally. A literal, blank-node, or quoted-triple
+/// binding therefore leaves the argument as the original variable, and the
+/// per-row argument read supplies the value instead — see
+/// `property_function_arg_with_a_literal_binding_behaves_unchanged`.
 fn substitute_term_pattern(
     term: &purrdf_sparql_algebra::TermPattern,
     bindings: &[(Variable, Expression)],
@@ -1343,8 +1649,11 @@ fn substitute_term_pattern(
 }
 
 /// Substitute outer-bound variables in expression positions by replacing
-/// `Expression::Variable(v)` with the corresponding constant expression.
-fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Expression {
+/// `Expression::Variable(v)` with the corresponding constant expression
+/// (`row.expr`). A nested `EXISTS`'s inner pattern gets the FULL row (`row`,
+/// not just `row.expr`), so Values Insertion reaches its leaves too.
+fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
+    let bindings = &row.expr;
     match expr {
         Expression::Variable(v) => {
             for (bv, replacement) in bindings {
@@ -1368,121 +1677,172 @@ fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Ex
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
         Expression::Or(a, b) => Expression::Or(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::And(a, b) => Expression::And(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Equal(a, b) => Expression::Equal(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::SameTerm(a, b) => Expression::SameTerm(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Greater(a, b) => Expression::Greater(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Less(a, b) => Expression::Less(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Add(a, b) => Expression::Add(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Subtract(a, b) => Expression::Subtract(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Multiply(a, b) => Expression::Multiply(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
         Expression::Divide(a, b) => Expression::Divide(
-            Box::new(substitute_expr(a, bindings)),
-            Box::new(substitute_expr(b, bindings)),
+            Box::new(substitute_expr(a, row)),
+            Box::new(substitute_expr(b, row)),
         ),
-        Expression::UnaryPlus(a) => Expression::UnaryPlus(Box::new(substitute_expr(a, bindings))),
-        Expression::UnaryMinus(a) => Expression::UnaryMinus(Box::new(substitute_expr(a, bindings))),
-        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, bindings))),
+        Expression::UnaryPlus(a) => Expression::UnaryPlus(Box::new(substitute_expr(a, row))),
+        Expression::UnaryMinus(a) => Expression::UnaryMinus(Box::new(substitute_expr(a, row))),
+        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row))),
         Expression::If(c, t, e) => Expression::If(
-            Box::new(substitute_expr(c, bindings)),
-            Box::new(substitute_expr(t, bindings)),
-            Box::new(substitute_expr(e, bindings)),
+            Box::new(substitute_expr(c, row)),
+            Box::new(substitute_expr(t, row)),
+            Box::new(substitute_expr(e, row)),
         ),
         Expression::In(needle, haystack) => Expression::In(
-            Box::new(substitute_expr(needle, bindings)),
-            haystack
-                .iter()
-                .map(|h| substitute_expr(h, bindings))
-                .collect(),
+            Box::new(substitute_expr(needle, row)),
+            haystack.iter().map(|h| substitute_expr(h, row)).collect(),
         ),
         Expression::Coalesce(items) => {
-            Expression::Coalesce(items.iter().map(|i| substitute_expr(i, bindings)).collect())
+            Expression::Coalesce(items.iter().map(|i| substitute_expr(i, row)).collect())
         }
         Expression::FunctionCall(f, args) => Expression::FunctionCall(
             f.clone(),
-            args.iter().map(|a| substitute_expr(a, bindings)).collect(),
+            args.iter().map(|a| substitute_expr(a, row)).collect(),
         ),
         Expression::Exists(inner_pat) => {
-            Expression::Exists(Box::new(substitute_pattern(inner_pat, bindings)))
+            Expression::Exists(Box::new(substitute_pattern(inner_pat, row)))
         }
     }
 }
 
-/// Build the binding list for substitution from the outer row's bound variables,
-/// materializing each `SolutionTerm` to a constant `Expression`.
+/// Build the [`SubstitutionRow`] μ from the outer row's bound variables,
+/// materializing each `SolutionTerm` to both a constant `Expression` (when
+/// representable — IRI/literal) and a total `GroundTerm` (every term kind).
 pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &EvalCtx<'_, D>,
-) -> Vec<(Variable, Expression)> {
-    use purrdf_core::TermValue;
-    use purrdf_sparql_algebra::{Literal, NamedNode};
+) -> SubstitutionRow {
+    use purrdf_sparql_algebra::GroundTerm;
 
-    let mut bindings = Vec::new();
+    let mut expr = Vec::new();
+    let mut term = Vec::new();
     for (i, var) in schema.vars().iter().enumerate() {
-        if let Some(term) = row[i] {
-            let value = ctx.scratch.value_of(ctx.dataset, term);
-            let expr: Option<Expression> = match value {
-                TermValue::Iri(iri) => Some(Expression::NamedNode(NamedNode::new_unchecked(iri))),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    ..
-                } => {
-                    let lit = if let Some(lang) = language {
-                        Literal::new_lang(lexical_form, lang, None)
-                    } else {
-                        Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
-                    };
-                    Some(Expression::Literal(lit))
+        if let Some(t) = row[i] {
+            let value = ctx.scratch.value_of(ctx.dataset, t);
+            let ground = ground_term_from_term_value(&value);
+            match &ground {
+                GroundTerm::NamedNode(n) => {
+                    expr.push((var.clone(), Expression::NamedNode(n.clone())));
                 }
-                // Blank nodes and triple terms: leave the variable unbound in
-                // expression positions (uncommon in practice; the seed-join
-                // handles them in triple-pattern positions).
-                TermValue::Blank { .. } | TermValue::Triple { .. } => None,
-            };
-            if let Some(e) = expr {
-                bindings.push((var.clone(), e));
+                GroundTerm::Literal(l) => expr.push((var.clone(), Expression::Literal(l.clone()))),
+                // Blank nodes and quoted triples have no `Expression` constant
+                // form; the leaf join (`row.term`, populated below regardless)
+                // is what carries them.
+                GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => {}
             }
+            term.push((var.clone(), ground));
         }
     }
-    bindings
+    SubstitutionRow { expr, term }
+}
+
+/// Convert an interned term's dataset-independent value to the algebra's
+/// [`purrdf_sparql_algebra::GroundTerm`] — the constant a `VALUES` row cell
+/// carries. Total: every IRI/datatype IRI reaching this function was already
+/// validated when the engine interned it (this function only ever sees a
+/// value read back out of `ctx.scratch`), so `NamedNode::new_unchecked` is
+/// exactly as safe here as it already is in `outer_bindings_for_substitution`'s
+/// sibling `Expression` construction.
+fn ground_term_from_term_value(value: &TermValue) -> purrdf_sparql_algebra::GroundTerm {
+    use purrdf_sparql_algebra::{
+        BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
+    };
+
+    match value {
+        TermValue::Iri(iri) => GroundTerm::NamedNode(NamedNode::new_unchecked(iri)),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            let lit = if let Some(lang) = language {
+                // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
+                // the same two-value RDF 1.2 base-direction enum in two crates;
+                // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
+                // for a query-authored literal reaching the dataset lookup key), so
+                // this direction gets the mirrored match inline.
+                let dir = direction.map(|d| match d {
+                    RdfTextDirection::Ltr => BaseDirection::Ltr,
+                    RdfTextDirection::Rtl => BaseDirection::Rtl,
+                });
+                Literal::new_lang(lexical_form, lang, dir)
+            } else {
+                Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
+            };
+            GroundTerm::Literal(lit)
+        }
+        // The algebra's blank-node slot carries a scope-qualified spelling (the
+        // same single-slot convention `GroundTerm::BlankNode`'s own doc and
+        // `crate::convert::ground_term_to_value` use), so a blank bound by an
+        // earlier evaluation round-trips to that SAME node through the `VALUES`
+        // join rather than to a fresh, unrelated one.
+        TermValue::Blank { label, scope } => {
+            GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
+        }
+        TermValue::Triple { s, p, o } => {
+            let subject = ground_term_from_term_value(s);
+            let TermValue::Iri(p_iri) = p.as_ref() else {
+                unreachable!(
+                    "a quoted triple's predicate is always interned as an IRI \
+                     (purrdf-core's own invariant); this function only ever sees \
+                     already-interned values"
+                )
+            };
+            let predicate = NamedNode::new_unchecked(p_iri);
+            let object = ground_term_from_term_value(o);
+            GroundTerm::Triple(Box::new(GroundTriple {
+                subject,
+                predicate,
+                object,
+            }))
+        }
+    }
 }
 
 /// Dispatch a built-in (or custom) function call.
@@ -5452,5 +5812,278 @@ mod tests {
         );
         assert_eq!(labels_par, labels_seq);
         assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);
+    }
+
+    // ── Values Insertion and Project-boundary narrowing ──────
+
+    fn ex_iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("https://example.org/lateral-substitution#{local}"))
+    }
+
+    fn ex_pred(local: &str) -> purrdf_sparql_algebra::NamedNodePattern {
+        purrdf_sparql_algebra::NamedNodePattern::NamedNode(ex_iri(local))
+    }
+
+    fn ex_vp(name: &str) -> purrdf_sparql_algebra::TermPattern {
+        purrdf_sparql_algebra::TermPattern::Variable(Variable::new(name))
+    }
+
+    /// A `SubstitutionRow` binding a single variable `var` to the IRI
+    /// `https://example.org/lateral-substitution#{local}`, present in BOTH
+    /// forms (`expr` and `term`) exactly as `outer_bindings_for_substitution`
+    /// would build it for an IRI-valued row cell.
+    fn row_binding_iri(var: &str, local: &str) -> SubstitutionRow {
+        SubstitutionRow {
+            expr: vec![(Variable::new(var), Expression::NamedNode(ex_iri(local)))],
+            term: vec![(
+                Variable::new(var),
+                purrdf_sparql_algebra::GroundTerm::NamedNode(ex_iri(local)),
+            )],
+        }
+    }
+
+    #[test]
+    fn substitute_joins_a_values_row_at_bgp_leaves() {
+        // Values Insertion (SEP-0007's `Replace` mechanism): a `Bgp` leaf
+        // whose variable intersects the row becomes `Join(leaf, Values{..})`
+        // rather than a term-rewrite — the leaf's own triple pattern is
+        // untouched, still carrying the ORIGINAL variable.
+        use purrdf_sparql_algebra::{GroundTerm, TriplePattern};
+
+        let bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: ex_vp("s"),
+                predicate: ex_pred("knows"),
+                object: ex_vp("o"),
+            }],
+        };
+        let row = row_binding_iri("s", "alice");
+
+        let substituted = substitute_pattern(&bgp, &row);
+        let GraphPattern::Join { left, right } = substituted else {
+            panic!("expected a Join, got {bgp:?} -> not a Join");
+        };
+        assert_eq!(
+            *left, bgp,
+            "the leaf itself must be untouched — Values Insertion joins a row \
+             onto it rather than rewriting its terms"
+        );
+        let GraphPattern::Values {
+            variables,
+            bindings,
+        } = *right
+        else {
+            panic!("expected the joined right operand to be a Values node");
+        };
+        assert_eq!(variables, vec![Variable::new("s")]);
+        assert_eq!(
+            bindings,
+            vec![vec![Some(GroundTerm::NamedNode(ex_iri("alice")))]]
+        );
+    }
+
+    #[test]
+    fn minus_under_substitution_keeps_its_domain() {
+        // The MINUS disjoint-domain fix: BOTH sides of a `Minus` keep
+        // their shared variable as a real schema column (a `Join(leaf, Values)`
+        // beneath each side) rather than losing it to a term-rewrite, so
+        // §18.5's domain-disjointness test reads the truth. Tree-shape first,
+        // then the end-to-end correctness this shape exists to fix.
+        use purrdf_sparql_algebra::TriplePattern;
+
+        let side = || GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: ex_vp("s"),
+                predicate: ex_pred("q"),
+                object: purrdf_sparql_algebra::TermPattern::NamedNode(ex_iri("c")),
+            }],
+        };
+        let minus = GraphPattern::Minus {
+            left: Box::new(side()),
+            right: Box::new(side()),
+        };
+        let row = row_binding_iri("s", "a");
+
+        let substituted = substitute_pattern(&minus, &row);
+        let GraphPattern::Minus { left, right } = substituted else {
+            panic!("Minus wrapper preserved");
+        };
+        for (label, wrapped) in [("left", *left), ("right", *right)] {
+            let GraphPattern::Join {
+                left: leaf,
+                right: values,
+            } = wrapped
+            else {
+                panic!(
+                    "{label}: expected a Join(leaf, Values), Minus-right is NOT excluded from substitution here"
+                );
+            };
+            assert_eq!(*leaf, side(), "{label}: the leaf keeps its ?s column");
+            assert!(
+                matches!(*values, GraphPattern::Values { .. }),
+                "{label}: the injected row is a Values join"
+            );
+        }
+
+        // End-to-end: `LATERAL { ?s :q :c MINUS { ?s :q :c } }` for a left row
+        // where `(?s, :q, :c)` holds must subtract itself to the EMPTY answer —
+        // the pre-fix term-rewrite erased the shared `?s` column on both sides,
+        // making §18.5 see disjoint domains and skip the subtraction (the
+        // "MINUS disjoint-domain flip").
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://example.org/lateral-substitution#s");
+        let q = b.intern_iri("https://example.org/lateral-substitution#q");
+        let c = b.intern_iri("https://example.org/lateral-substitution#c");
+        b.push_quad(s, q, c, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+        let outer = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: ex_vp("s"),
+                predicate: ex_pred("q"),
+                object: ex_vp("c"),
+            }],
+        };
+        let lateral = GraphPattern::Lateral {
+            left: Box::new(outer),
+            right: Box::new(minus),
+        };
+        let seq = eval(&lateral, &mut ctx).expect("eval");
+        assert!(
+            seq.rows.is_empty(),
+            "MINUS must remove the row it is subtracting from itself, not be \
+             fooled into keeping it by a domain the substitution erased"
+        );
+    }
+
+    #[test]
+    fn substitute_pattern_stops_at_unprojected_subselect_vars() {
+        // Project-boundary narrowing (the SEP-0006 flagship example): a
+        // sub-`SELECT` that does NOT project the outer-bound variable must not
+        // have it injected below the `Project` boundary, even though the
+        // variable NAME is shared and the inner `Bgp` mentions it.
+        use purrdf_sparql_algebra::TriplePattern;
+
+        let inner_bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: ex_vp("s"),
+                predicate: ex_pred("label"),
+                object: ex_vp("label"),
+            }],
+        };
+        let subselect = GraphPattern::Project {
+            inner: Box::new(inner_bgp.clone()),
+            variables: vec![Variable::new("label")], // does NOT project ?s
+        };
+        let row = row_binding_iri("s", "x1");
+
+        let substituted = substitute_pattern(&subselect, &row);
+        let GraphPattern::Project { inner, variables } = substituted else {
+            panic!("Project wrapper preserved");
+        };
+        assert_eq!(variables, vec![Variable::new("label")]);
+        assert_eq!(
+            *inner, inner_bgp,
+            "?s must not be injected past the Project boundary the sub-SELECT \
+             does not carry it across — no Values join, no rewrite"
+        );
+    }
+
+    #[test]
+    fn property_function_arg_with_a_literal_binding_behaves_unchanged() {
+        // The fusion contract: a property-function argument's
+        // substitution stays IRI-only. A literal-valued row binding must leave
+        // the argument as the bare variable — UNCHANGED from before Values
+        // Insertion — so the relation still reads the value from the per-row
+        // argument dispatch, never from a rewritten constant a joined `VALUES`
+        // could not have supplied either.
+        use purrdf_sparql_algebra::PropertyFunctionCall;
+
+        let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: ex_iri("split").as_str().to_owned(),
+            subject_args: vec![ex_vp("w")],
+            object_args: vec![ex_vp("parts")],
+        });
+        let literal = Literal::new_typed("hello world", NamedNode::new_unchecked(XSD_STRING));
+        let row = SubstitutionRow {
+            expr: vec![(Variable::new("w"), Expression::Literal(literal.clone()))],
+            term: vec![(
+                Variable::new("w"),
+                purrdf_sparql_algebra::GroundTerm::Literal(literal),
+            )],
+        };
+
+        let substituted = substitute_pattern(&call, &row);
+        let GraphPattern::PropertyFunction(c) = substituted else {
+            panic!("PropertyFunction node preserved");
+        };
+        assert_eq!(
+            c.subject_args[0],
+            ex_vp("w"),
+            "a literal binding must not rewrite the argument"
+        );
+    }
+
+    // ── Widened EXISTS correlation detection ───────────────────────────
+
+    /// Two subjects, each `:owns` exactly one node, and each owned node has
+    /// exactly one `:child` — chosen so their IRIs sort `x1`'s child before
+    /// `x2`'s. A GLOBAL (unconstrained) `ORDER BY ?c LIMIT 1` over every
+    /// `(?x, ?c)` pair in the dataset picks exactly one of the two — `x1`'s —
+    /// which is what the unwidened (expression-only) correlation test would
+    /// evaluate the `EXISTS` inner against, once, for every outer row alike.
+    fn lateral_limit_exists_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let owns = b.intern_iri("https://example.org/lateral-existswiden#owns");
+        let child = b.intern_iri("https://example.org/lateral-existswiden#child");
+        let a = b.intern_iri("https://example.org/lateral-existswiden#a");
+        let bb = b.intern_iri("https://example.org/lateral-existswiden#b");
+        let x1 = b.intern_iri("https://example.org/lateral-existswiden#x1");
+        let x2 = b.intern_iri("https://example.org/lateral-existswiden#x2");
+        let c1 = b.intern_iri("https://example.org/lateral-existswiden#c1");
+        let c2 = b.intern_iri("https://example.org/lateral-existswiden#c2");
+        b.push_quad(a, owns, x1, None);
+        b.push_quad(bb, owns, x2, None);
+        b.push_quad(x1, child, c1, None);
+        b.push_quad(x2, child, c2, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_over_a_lateral_limit_correlates_through_a_triple_position() {
+        // `?x` (outer-bound via `?s :owns ?x`) occurs ONLY in a triple position
+        // inside the EXISTS inner — never in an expression/FILTER/BIND position —
+        // so `pattern_expr_vars` alone (the pre-widening test) reports no
+        // correlation at all and the memoized evaluate-once-and-probe path would
+        // run. The `LATERAL`'s own left is the unit table (nothing precedes it,
+        // per SEP-0006), so it contributes nothing about `?x`: the ONLY place
+        // `?x` is bound per-row is the correlated `EXISTS` substitution this item
+        // widens detection for. The `LATERAL` right's `ORDER BY ?c LIMIT 1`
+        // sub-select is what makes the unwidened (fast) path actively WRONG
+        // rather than merely slow: evaluated once with `?x` free, the LIMIT
+        // picks a SINGLE global `(?x, ?c)` winner instead of one per `?x`.
+        let ds = lateral_limit_exists_ds();
+        let q = "PREFIX : <https://example.org/lateral-existswiden#> \
+                 SELECT ?s WHERE { \
+                   ?s :owns ?x \
+                   FILTER EXISTS { \
+                     LATERAL { SELECT ?x ?c WHERE { ?x :child ?c } ORDER BY ?c LIMIT 1 } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["<https://example.org/lateral-existswiden#a>".to_owned()],
+                vec!["<https://example.org/lateral-existswiden#b>".to_owned()],
+            ],
+            "both owners must satisfy EXISTS — each has a child, judged against \
+             its OWN children, not a single dataset-wide LIMIT winner"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree once correlation is correctly detected"
+        );
     }
 }

@@ -191,6 +191,72 @@ pub trait RemoteQuerySource {
     ) -> Result<ResolvedBindings, RemoteError>;
 }
 
+/// Whether `pattern` reaches a `GraphPattern::Lateral` node anywhere —
+/// including inside an expression-embedded `EXISTS` — shared by
+/// [`eval_service`]'s forward guard. Follows the same soundness-visitor idiom
+/// as `crate::property_fn_eval::pattern_reaches_property_function`.
+///
+/// A `Lateral` whose right operand is a property-function call or a
+/// variable-endpoint `SERVICE` is NOT counted: `purrdf_sparql_algebra::parser`
+/// wraps BOTH shapes in `Lateral` unconditionally as an internal
+/// representation detail (every property-function call, and every
+/// `SERVICE ?g`, is `Lateral`-wrapped even with no `LATERAL` keyword ever
+/// written), and its serializer's own `parser_rebuilds_the_lateral` mirrors
+/// this exact exclusion when deciding whether the `LATERAL` keyword needs to
+/// be emitted on re-parse. Forwarding either shape emits no `LATERAL` text at
+/// all — the property-function shape is refused on its own account just below
+/// (a call can never be forwarded), and a nested `SERVICE ?g` is the REMOTE
+/// endpoint's own concern to resolve, not this engine's.
+fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
+    if let GraphPattern::Lateral { left, right } = pattern {
+        let parser_reconstructs_it = matches!(
+            right.as_ref(),
+            GraphPattern::PropertyFunction(_)
+                | GraphPattern::Service {
+                    name: NamedNodePattern::Variable(_),
+                    ..
+                }
+        );
+        return if parser_reconstructs_it {
+            pattern_reaches_lateral(left)
+        } else {
+            true
+        };
+    }
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_lateral(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_lateral(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_lateral`] through an expression's embedded patterns
+/// (an `EXISTS`'s inner pattern, recursively).
+fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_lateral(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_lateral(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Call(_) => false,
+        };
+        found
+    });
+    found
+}
+
 /// Evaluate a `SERVICE [SILENT] name { inner }` node to the remote result bag.
 ///
 /// The surrounding `Join` performs the federation join, so this returns only the
@@ -217,6 +283,29 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let _ = node;
+    // A `LATERAL` clause inside a forwarded body is a HARD refusal — unconditional
+    // on `SILENT`, tested before it and before the endpoint, the same class as the
+    // property-function and custom-aggregate refusals just below rather than the
+    // `SILENT`-scoped custom-scalar-function one further down. `LATERAL` is a
+    // SEP-0006/Jena syntax extension most SPARQL 1.1/1.2-only endpoints do not
+    // implement, so a forwarded `LATERAL` is likely to be rejected by the remote —
+    // and under `SERVICE SILENT`, a rejection this engine could have refused
+    // LOCALLY instead degrades to the join identity: a result that looks complete
+    // and is wrong, for a construct the `LATERAL` surface syntax's parser is what
+    // first makes reachable inside a `SERVICE` body at all (previously unwritable
+    // surface syntax). Non-silent `SERVICE` would surface the endpoint's rejection
+    // honestly, but the refusal is unconditional anyway, matching the property-
+    // function/custom-aggregate treatment: this engine already knows better than
+    // to send it, so it never tries.
+    if pattern_reaches_lateral(inner) {
+        return Err(EvalError::unsupported(
+            "a LATERAL clause inside a SERVICE body: LATERAL is a SEP-0006/Jena syntax \
+             extension most remote SPARQL endpoints do not implement, and forwarding it \
+             risks a SILENT clause swallowing the endpoint's rejection into the join \
+             identity — a result that looks complete and is wrong; the query must not \
+             forward a LATERAL clause to a remote endpoint",
+        ));
+    }
     // A property-function call inside a forwarded body is a HARD refusal, and it is
     // tested before anything else — before `SILENT`, before the endpoint, before any
     // charge. The body is serialized and sent as SPARQL text, and a call serializes as
@@ -791,6 +880,37 @@ mod tests {
             "SILENT promises an empty result from a failed endpoint, never a wrong one from a \
              misread AGG(<iri>, …) call: {err}"
         );
+    }
+
+    // ── LATERAL / SERVICE forwarding guard ─────────────────────────────────────
+
+    #[test]
+    fn service_never_forwards_lateral_text() {
+        // A `LATERAL` clause inside a `SERVICE` body is refused UNCONDITIONALLY —
+        // both non-silent and `SILENT` — because `LATERAL` is a SEP-0006/Jena
+        // syntax extension most remote endpoints do not implement, and `SILENT`
+        // would otherwise turn the endpoint's honest rejection into the join
+        // identity: a result that looks complete and is wrong. Neither variant
+        // ever reaches the source (checked via the call counter): the refusal is
+        // typed and happens before dispatch.
+        let source = LocalRemoteQuerySource::new();
+        for (silent, label) in [("", "non-silent"), ("SILENT ", "SILENT")] {
+            let query = format!(
+                "SELECT ?s WHERE {{ SERVICE {silent}<https://example.org/lateral-forward#ep> {{ \
+                 ?s <https://example.org/lateral-forward#knows> ?o \
+                 LATERAL {{ ?o <https://example.org/lateral-forward#name> ?n }} }} }}"
+            );
+            let err = run_with_source(&local(), &source, &query).unwrap_err();
+            assert!(
+                matches!(err, EvalError::Unsupported(_)),
+                "{label}: got {err:?}"
+            );
+            assert!(
+                err.to_string()
+                    .contains("LATERAL clause inside a SERVICE body"),
+                "{label}: got {err}"
+            );
+        }
     }
 
     #[test]

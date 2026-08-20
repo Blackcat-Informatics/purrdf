@@ -75,6 +75,54 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     Ok(lift.finish(hash_join(&l, &r, ctx)))
 }
 
+/// Evaluate a graph pattern for ONE outer row μ, substituted in — the single seam
+/// shared by `LATERAL`'s per-left-row evaluation ([`eval_lateral`], below) and an
+/// expression-correlated `EXISTS`'s per-outer-row evaluation
+/// (`crate::expr::exists`'s correlated branch): both need "evaluate `pattern` as
+/// if μ's bindings had been joined in below every solution modifier, once, for
+/// THIS row alone, uncached" and nothing else. Replaces what were two textually
+/// identical blocks (a `bindings`/`substitute_pattern` call pair, a hand-rolled
+/// `ctx.in_substituted_exists` save/set/restore, and the guarded `eval_evaluated`
+/// call) with one function and one RAII guard
+/// ([`crate::eval::EvalCtx::enter_substituted_exists`]).
+///
+/// # The theorem
+///
+/// This seam and the parser's `LATERAL` scope-conflict check
+/// (`purrdf_sparql_algebra::parser`) satisfy one theorem together: the parser
+/// rejects exactly those programs in which injecting bindings across the RHS's
+/// top scope level would be observable as a rebinding; [`crate::expr::substitute_pattern`]'s
+/// injection never crosses a `Project` boundary the projection does not carry.
+/// Together: a parsed `LATERAL` evaluates per SEP-0006's
+/// `Lateral(Ω,P) = ⋃ eval(inject(P, μ))`, with `inject` this seam's substitution
+/// walk (SEP-0007's `Replace` mechanism — "Values Insertion" — for triple/leaf
+/// positions; ordinary constant substitution, unchanged, for expression
+/// positions).
+///
+/// # Errors
+///
+/// Propagates whatever `pattern`'s evaluation returns — including a truncation,
+/// which the caller decides how to fold into its own result (a `LATERAL` row is
+/// discarded whole; a correlated `EXISTS` records the truncation on the
+/// expression barrier and answers `false`). Neither caller may memoize this
+/// result: it is specific to `mu`.
+pub(crate) fn eval_correlated<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    mu: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    let substituted = crate::expr::substitute_pattern(pattern, &row);
+    // `substituted` is a per-row heap temporary whose node addresses do not
+    // outlive this call; the guard flags the window so address-keyed
+    // memoization is bypassed while it is evaluated, and restores the prior
+    // flag on drop — even on the `?` this function's caller applies to its
+    // result — so nested correlated evaluations compose correctly.
+    let mut guard = ctx.enter_substituted_exists();
+    eval_evaluated(&substituted, &mut guard)
+}
+
 /// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
 /// `right` with μ's bindings substituted in as ground constants, then merge each
 /// right solution ν with μ over the ordered-union schema.
@@ -82,8 +130,9 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
 /// Unlike `Join` (which evaluates `right` once, unconstrained), LATERAL evaluates
 /// `right` **once per left row** — required when `right`'s *evaluation* depends on
 /// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
-/// bound by μ. Reuses the correlated-EXISTS substitution machinery, including the
-/// address-keyed-cache ABA guard (`in_substituted_exists`) around the inner eval.
+/// bound by μ. Reuses the correlated-EXISTS substitution machinery via
+/// [`eval_correlated`], including the address-keyed-cache ABA guard
+/// (`in_substituted_exists`) around the inner eval.
 ///
 /// # Under a truncated child
 ///
@@ -155,16 +204,8 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
     for mu in &l.rows {
-        let bindings = crate::expr::outer_bindings_for_substitution(mu, &left_schema, ctx);
-        let substituted = crate::expr::substitute_pattern(right, &bindings);
-        // `substituted` is a per-row heap temporary whose node addresses do not
-        // outlive this call; flag the window so address-keyed memoization is
-        // bypassed, and restore afterwards (even on error) so nesting is correct.
-        let prev = ctx.in_substituted_exists;
-        ctx.in_substituted_exists = true;
-        let r = eval_evaluated(&substituted, ctx);
-        ctx.in_substituted_exists = prev;
-        let r = match r? {
+        let evaluated = eval_correlated(right, mu, &left_schema, ctx)?;
+        let r = match evaluated {
             Evaluated::Complete(seq) => seq,
             truncated @ Evaluated::Truncated(_) => {
                 // Commit granularity: this left row's block is incomplete, so it is
@@ -2113,7 +2154,13 @@ mod tests {
 
         let mut saw_truncated_with_rows = false;
         let mut saw_complete = false;
-        for budget in 1..=40_u64 {
+        // Upper end raised from the pre-Values-Insertion 40: `union_over_lateral`'s
+        // `LATERAL` arm now evaluates `Join(Bgp, Values)` per left row on its right
+        // side (Values Insertion's leaf join, `crate::expr::substitute_pattern`)
+        // instead of a single term-rewritten `Bgp`, so completing it costs a few
+        // more node-entry polls than before. The exact count is an implementation
+        // detail; the margin is generous rather than tight.
+        for budget in 1..=60_u64 {
             let sequential = {
                 let _sequential = crate::parallel::force_sequential_operation();
                 let evaluated = run_under_budget(&ds, &plan, budget);

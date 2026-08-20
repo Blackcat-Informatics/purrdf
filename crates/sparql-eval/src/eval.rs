@@ -495,6 +495,40 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
     }
 }
 
+/// RAII guard returned by [`EvalCtx::enter_substituted_exists`]; see there for
+/// why the flag it manages exists and what composes correctly because this is
+/// a guard rather than the two hand-rolled save/restore pairs it replaces
+/// (formerly one in `binop::eval_lateral`, one in `expr::exists`'s correlated
+/// branch — both now the single seam [`crate::binop::eval_correlated`]).
+///
+/// Derefs to the wrapped [`EvalCtx`] so the guarded evaluation call reads as
+/// ordinary `&mut EvalCtx` use; [`Drop::drop`] restores the PRIOR
+/// [`EvalCtx::in_substituted_exists`] value unconditionally, including when
+/// the guard is dropped during an early `?` return.
+pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
+    ctx: &'ctx mut EvalCtx<'d, D>,
+    prev: bool,
+}
+
+impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
+    type Target = EvalCtx<'d, D>;
+    fn deref(&self) -> &Self::Target {
+        self.ctx
+    }
+}
+
+impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '_, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ctx
+    }
+}
+
+impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
+    fn drop(&mut self) {
+        self.ctx.in_substituted_exists = self.prev;
+    }
+}
+
 impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// A fresh context over `dataset`, scoped to the default graph.
     pub fn new(dataset: &'d D) -> Self {
@@ -549,6 +583,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ledger: None,
             ledger_node: ChargeLedger::root_ordinal(),
         }
+    }
+
+    /// Enter a per-row substituted-pattern evaluation window (a `LATERAL` right
+    /// operand or an expression-correlated `EXISTS` inner — see
+    /// [`crate::binop::eval_correlated`], the seam this guard exists for),
+    /// returning an RAII guard that sets [`Self::in_substituted_exists`] and
+    /// restores the PRIOR value on drop — including on an early `?` return from
+    /// the guarded evaluation — so a doubly-nested correlated evaluation (a
+    /// `LATERAL` inside a correlated `EXISTS`'s substituted inner, or the
+    /// reverse) composes correctly instead of the inner scope's `Drop`
+    /// clobbering the outer scope's flag back to `false`.
+    pub(crate) fn enter_substituted_exists(&mut self) -> SubstitutedExistsGuard<'_, 'd, D> {
+        let prev = self.in_substituted_exists;
+        self.in_substituted_exists = true;
+        SubstitutedExistsGuard { ctx: self, prev }
     }
 
     /// Set the evaluation-time value of NOW(). Test-only: production callers get a
@@ -3069,7 +3118,13 @@ mod tests {
 
         let mut saw_partial_with_rows = false;
         let mut saw_complete = false;
-        for budget in 1..=30_u64 {
+        // Upper end raised from the pre-Values-Insertion 30: each `LATERAL` left row
+        // now evaluates `Join(Bgp, Values)` on the right (Values Insertion's leaf
+        // join, `crate::expr::substitute_pattern`) instead of a single term-rewritten
+        // `Bgp`, so completing the fixture's rows costs a few more node-entry polls
+        // than before. The exact count is an implementation detail; the margin is
+        // generous rather than tight.
+        for budget in 1..=40_u64 {
             let signal = Arc::new(StopOnPoll {
                 remaining: std::sync::atomic::AtomicU64::new(budget),
             });
