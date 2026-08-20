@@ -1468,6 +1468,30 @@ impl<'a> Parser<'a, '_> {
                     right: Box::new(right),
                     expression,
                 };
+            } else if self.eat_kw("LATERAL") {
+                // Position the error at the start of the RHS block rather than
+                // wherever the cursor lands after parsing it (the BIND-scope
+                // idiom above captures `self.span()` post hoc; here the RHS can
+                // be arbitrarily large, so the useful anchor is the keyword
+                // itself).
+                let at = self.span();
+                let right = self.parse_group_graph_pattern()?;
+                let lhs_scope = compute_lateral_left_scope(&g);
+                if let Some((var, intro)) = find_lateral_rhs_scope_conflict(&lhs_scope, &right) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "{} ?{} inside LATERAL is already in scope on the LATERAL \
+                             left-hand side",
+                            intro.as_str(),
+                            var.as_str()
+                        ),
+                        at,
+                    ));
+                }
+                g = GraphPattern::Lateral {
+                    left: Box::new(g),
+                    right: Box::new(right),
+                };
             } else if self.eat_kw("MINUS") {
                 let right = self.parse_group_graph_pattern()?;
                 g = GraphPattern::Minus {
@@ -1996,6 +2020,7 @@ impl<'a> Parser<'a, '_> {
             || self.peek_kw("FILTER")
             || self.peek_kw("BIND")
             || self.peek_kw("VALUES")
+            || self.peek_kw("LATERAL")
     }
 
     fn parse_predicate_object_list(
@@ -3550,6 +3575,227 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
             for (v, _) in aggregates {
                 push_var(v, out);
             }
+        }
+    }
+}
+
+/// Whether a construct that introduces a fresh binding inside a `LATERAL`
+/// right-hand side is a `BIND`/`(expr AS ?v)` target or a `VALUES` variable —
+/// the two shapes [`find_lateral_rhs_scope_conflict`] can report, matching the two
+/// message forms produced at its call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LateralIntro {
+    /// `BIND(expr AS ?v)`, a sub-`SELECT`'s `(expr AS ?v)` projection target,
+    /// a `GROUP BY (expr AS ?v)` condition, or a `GROUP BY` aggregate's output
+    /// variable — all lower to an `Extend`/`Group` introduction and share one
+    /// message form.
+    Bind,
+    /// A `VALUES` block's column variable.
+    Values,
+}
+
+impl LateralIntro {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bind => "BIND target",
+            Self::Values => "VALUES variable",
+        }
+    }
+}
+
+/// The `LATERAL` left-hand side's in-scope variable set, as consulted by
+/// [`find_lateral_rhs_scope_conflict`].
+///
+/// A thin delegating wrapper over [`visible_variables`] — same function,
+/// different name — so that the one deliberate Jena divergence it carries
+/// (below) is documented on the rule that owns it, rather than left as an
+/// unexplained side effect of reusing `visible_variables` directly. If
+/// `visible_variables` ever grows a caller-specific variant (e.g. a
+/// `SELECT *`-shaped pass-down some other engine carries), this is the one
+/// call site that would need to move to it — a change made for an unrelated
+/// caller cannot silently widen or narrow the LATERAL rule.
+///
+/// # Divergence: a `SERVICE ?g` endpoint variable counts as left scope
+///
+/// `visible_variables` (via [`collect_vars`]) includes a `SERVICE`/`GRAPH`
+/// name variable, pushed before it descends into the block. Jena's
+/// `SyntaxVarScope` does not add the `SERVICE` endpoint variable to its
+/// LATERAL left-scope set. This function follows `visible_variables`, which
+/// the rest of the parser already treats as the one definition of "in scope"
+/// (`SELECT *`'s projection, `BIND`'s §19.6 check) — so a `LATERAL`
+/// right-hand side here may not rebind a `SERVICE ?g` endpoint variable via
+/// `BIND`/`VALUES`, even though Jena permits it. Pinned by
+/// `lateral_left_scope_includes_a_service_endpoint_variable`.
+fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
+    visible_variables(p)
+}
+
+/// Find the first variable a `LATERAL` right-hand side introduces (via
+/// `BIND`, a sub-`SELECT`'s `(expr AS ?v)` projection target, a `GROUP BY`
+/// aggregate's output variable, or `VALUES`) that collides with a variable
+/// already in scope on the left-hand side (`lhs_scope`, from
+/// [`compute_lateral_left_scope`]).
+///
+/// # The theorem
+///
+/// SEP-0006 defines `Lateral(Ω, P) = ⋃_{μ∈Ω} eval(inject(P, μ))`, where
+/// `inject` — the corrected substitution the evaluator performs
+/// (`crates/sparql-eval`) — exposes the left row's bindings to `P` as
+/// ordinary, still-variable solutions rather than literal term substitution.
+/// This walker is the syntax half of the contract that makes that injection
+/// sound: **it rejects exactly the programs in which injecting a left-hand
+/// binding into the right-hand side would be observable as a rebinding** — a
+/// fresh `BIND`/`VALUES`/aggregate target at the RHS's own top scope level
+/// trying to give a NEW value to a variable the LHS already gave one. The
+/// evaluator's half of the same theorem is that injection never crosses a
+/// `Project` boundary the projection does not itself carry forward, so a
+/// sub-select that does not project a shadowed name never observes the outer
+/// value, and rebinding it inside is legal. The two halves are one design:
+/// this function decides parse-time legality by walking the same scope
+/// boundary the evaluator's substitution respects at run time.
+///
+/// # Scope-level argument
+///
+/// SPARQL §18.2.1 defines exactly one construct that opens a fresh variable
+/// scope: a sub-`SELECT`'s projection (`Project`). Every other construct —
+/// `OPTIONAL`, `UNION`, `GRAPH`, a nested group, even a nested `LATERAL` — is
+/// transparent to scope: its introductions sit at the *same* scope level as
+/// the group around it. That is why every binary/unary node below simply
+/// recurses (a nested `LATERAL`'s own left AND right operands are both at the
+/// outer scope level — they are not given a fresh boundary of their own),
+/// while only `Project` narrows the scope being checked, and `Group`
+/// (§18.2.4's aggregation boundary, which likewise hides the pattern it
+/// aggregates over behind grouping keys and aggregate outputs) is checked
+/// only for the fresh variables its OWN aggregates introduce.
+///
+/// # `Group`'s synthetic aggregate targets
+///
+/// A `GROUP BY` query's aggregate output variables (e.g. `?n` in
+/// `(COUNT(?x) AS ?n)`) are, like a `BIND` target, fresh bindings introduced
+/// at the `Group` node's own scope level — checked here the same way (mapped
+/// to [`LateralIntro::Bind`]) — while the pattern being grouped is never
+/// walked, because only the grouping keys and aggregate outputs escape a
+/// `Group` (mirrors [`collect_vars`]'s own non-descent into `Group`'s
+/// `inner`).
+///
+/// # Two deliberate divergences from Jena
+///
+/// * **Laxer.** `SELECT *` over a pattern whose only violation lives in a
+///   `MINUS` right operand is ACCEPTED here (Jena rejects it). §18.2.1 puts
+///   `MINUS`-right variables out of scope, so `SELECT *`'s own projection
+///   list — computed by [`visible_variables`], which already excludes
+///   them — never contains the colliding name; there is nothing for the
+///   projection to carry across, hence nothing observable to reject. Jena's
+///   walk instead passes the full unfiltered variable set down through a
+///   `SELECT *` expansion — declined here as a specification mismatch
+///   (§18.2.1 wins), not adopted. Pinned by
+///   `lateral_rhs_minus_right_bind_under_select_star_is_accepted`.
+/// * **Stricter.** A `SERVICE ?g` endpoint variable counts as left-hand scope
+///   here (documented on [`compute_lateral_left_scope`]); Jena omits it.
+///
+/// # Never descends into `Expression`
+///
+/// `Filter`'s and `Extend`'s expression operands are never visited — an
+/// `EXISTS { ... }` nested inside one binds nothing at the RHS's OWN scope
+/// level (it is its own nested query pattern), so a `BIND` inside an
+/// `EXISTS` can never trigger this rule. Pinned live, not just documented, by
+/// `lateral_rhs_exists_is_not_walked`.
+///
+/// # A property of the surface form, not of the algebra node
+///
+/// This function is only ever called from the parser's `LATERAL`-keyword
+/// dispatch arm. The pre-existing `SERVICE ?g { ... }` auto-wrap elsewhere in
+/// this module also produces a `GraphPattern::Lateral` node — for the
+/// unrelated reason that a variable-endpoint federated call must see the left
+/// row's bindings — but it is not user-written `LATERAL` syntax, so this
+/// restriction never runs over it. Pinned by
+/// `service_variable_endpoint_rhs_bind_is_not_scope_checked`.
+///
+/// # Determinism
+///
+/// `lhs_scope` is an order-preserving slice, never a hash container: the
+/// first collision in a pre-order, left-to-right walk (and, within one node,
+/// the introducing construct's own declaration order) is reported, so the
+/// variable named in the error is reproducible across runs.
+fn find_lateral_rhs_scope_conflict<'a>(
+    lhs_scope: &[Variable],
+    rhs: &'a GraphPattern,
+) -> Option<(&'a Variable, LateralIntro)> {
+    match rhs {
+        // Leaves: nothing is introduced.
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => None,
+        // Binary nodes are transparent to scope: recurse both operands at the
+        // SAME scope level (see the scope-level argument above).
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            find_lateral_rhs_scope_conflict(lhs_scope, left)
+                .or_else(|| find_lateral_rhs_scope_conflict(lhs_scope, right))
+        }
+        // Unary wrappers are transparent to scope; any expression operand is
+        // never visited.
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => find_lateral_rhs_scope_conflict(lhs_scope, inner),
+        // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
+        // condition all lower to `Extend` — a fresh binding at this scope
+        // level.
+        GraphPattern::Extend {
+            inner, variable, ..
+        } => {
+            if lhs_scope.contains(variable) {
+                Some((variable, LateralIntro::Bind))
+            } else {
+                find_lateral_rhs_scope_conflict(lhs_scope, inner)
+            }
+        }
+        // `VALUES`: the first declared column that collides, in declaration
+        // order.
+        GraphPattern::Values { variables, .. } => {
+            for v in variables {
+                if lhs_scope.contains(v) {
+                    return Some((v, LateralIntro::Values));
+                }
+            }
+            None
+        }
+        // A sub-SELECT's projection is the one scope boundary in the
+        // grammar: narrow to the variables it actually carries out,
+        // preserving `lhs_scope`'s own order, and stop once nothing survives
+        // the narrowing — nothing beneath an empty narrowed scope could ever
+        // be observed as a rebinding of an LHS variable. Projecting is not
+        // introducing: the projection's own `(expr AS ?v)` extends live
+        // beneath it and are caught, narrowed, by the `Extend` arm above.
+        GraphPattern::Project { inner, variables } => {
+            let narrowed: Vec<Variable> = lhs_scope
+                .iter()
+                .filter(|v| variables.contains(*v))
+                .cloned()
+                .collect();
+            if narrowed.is_empty() {
+                None
+            } else {
+                find_lateral_rhs_scope_conflict(&narrowed, inner)
+            }
+        }
+        // `GROUP BY`'s aggregate output variables are fresh bindings at this
+        // scope level (see "Group's synthetic aggregate targets" above); the
+        // pattern being grouped is never walked.
+        GraphPattern::Group { aggregates, .. } => {
+            for (v, _) in aggregates {
+                if lhs_scope.contains(v) {
+                    return Some((v, LateralIntro::Bind));
+                }
+            }
+            None
         }
     }
 }
@@ -5286,6 +5532,431 @@ mod tests {
             !names.contains(&"v") && !names.contains(&"x"),
             "MINUS-right-only vars must not be projected, got {names:?}"
         );
+    }
+
+    // ── LATERAL (SEP-0006 surface syntax) ───────────────────────────────────
+
+    #[test]
+    fn lateral_takes_the_preceding_pattern_as_its_left() {
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?o purrdf:q ?z }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        let GraphPattern::Bgp { patterns: lp } = *left else {
+            panic!("expected the left to be the preceding BGP");
+        };
+        assert_eq!(lp.len(), 1);
+        assert_eq!(lp[0].subject, TermPattern::Variable(Variable::new("s")));
+        assert_eq!(lp[0].object, TermPattern::Variable(Variable::new("o")));
+        let GraphPattern::Bgp { patterns: rp } = *right else {
+            panic!("expected the right to be the LATERAL body's BGP");
+        };
+        assert_eq!(rp.len(), 1);
+        assert_eq!(rp[0].subject, TermPattern::Variable(Variable::new("o")));
+    }
+
+    #[test]
+    fn lateral_chains_left_deep_in_textual_order() {
+        // Two consecutive `LATERAL`s at the same nesting level must chain
+        // LEFT-DEEP, each new one absorbing everything written before it.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?a purrdf:p ?b LATERAL {{ ?b purrdf:q ?c }} LATERAL {{ ?c purrdf:r ?d }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected the outermost node to be Lateral, got {where_pat:?}");
+        };
+        let GraphPattern::Bgp { patterns } = *right else {
+            panic!("expected the outermost right to be `?c purrdf:r ?d`");
+        };
+        assert_eq!(
+            patterns[0].subject,
+            TermPattern::Variable(Variable::new("c"))
+        );
+        let GraphPattern::Lateral {
+            left: inner_left,
+            right: inner_right,
+        } = *left
+        else {
+            panic!("expected the outermost left to itself be a Lateral");
+        };
+        assert!(matches!(*inner_left, GraphPattern::Bgp { .. }));
+        let GraphPattern::Bgp { patterns: irp } = *inner_right else {
+            panic!("expected the inner right to be `?b purrdf:q ?c`");
+        };
+        assert_eq!(irp[0].subject, TermPattern::Variable(Variable::new("b")));
+    }
+
+    #[test]
+    fn lateral_nests_on_the_right_when_written_nested() {
+        // A `LATERAL` written INSIDE another `LATERAL`'s body nests on the
+        // right, rather than flattening into the outer chain.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?a purrdf:p ?b LATERAL {{ ?b purrdf:q ?c LATERAL {{ ?c purrdf:r ?d }} }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert!(matches!(*left, GraphPattern::Bgp { .. }));
+        let GraphPattern::Lateral { .. } = *right else {
+            panic!("expected the outer right to itself be a Lateral");
+        };
+    }
+
+    #[test]
+    fn lateral_after_a_dot_separated_triples_block() {
+        // A `.` between the preceding triples and `LATERAL` must not confuse
+        // the triples-block loop into trying to parse `LATERAL` as a fresh
+        // subject (the `block_boundary` fix under test).
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . LATERAL {{ ?o purrdf:q ?z }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        assert!(
+            matches!(where_pat, GraphPattern::Lateral { .. }),
+            "got {where_pat:?}"
+        );
+    }
+
+    #[test]
+    fn lateral_with_no_left_pattern_is_the_unit_table() {
+        // `LATERAL` as the first element of a group has no preceding pattern;
+        // its left stays the identity table `Bgp { patterns: [] }`, exactly
+        // like `OPTIONAL`/`MINUS` written first.
+        let q = format!("{GM}SELECT * WHERE {{ LATERAL {{ ?s purrdf:p ?o }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, .. } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert_eq!(*left, GraphPattern::Bgp { patterns: vec![] });
+    }
+
+    #[test]
+    fn lateral_binds_looser_than_union() {
+        // `{A} UNION {B} LATERAL {C}` must attach `LATERAL` to the WHOLE
+        // union, not just `{B}` — the same looser-than-UNION precedence
+        // `OPTIONAL`/`MINUS` already have (structural: the outer loop only
+        // reaches the `LATERAL` arm after the `{...} UNION {...}` element has
+        // already been folded into `g`).
+        let q = format!(
+            "{GM}SELECT * WHERE {{ {{ ?a purrdf:p ?x }} UNION {{ ?a purrdf:q ?x }} LATERAL {{ ?x purrdf:r ?y }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, .. } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert!(
+            matches!(*left, GraphPattern::Union { .. }),
+            "LATERAL's left must be the whole UNION, got {left:?}"
+        );
+    }
+
+    #[test]
+    fn lateral_right_hand_side_inherits_the_depth_limit() {
+        // The RHS parses via `parse_group_graph_pattern` (not `_inner`), so it
+        // counts toward `MAX_GRAPH_PATTERN_DEPTH` exactly like every other
+        // braced construct.
+        fn nested_query(extra_depth: usize) -> String {
+            format!(
+                "SELECT * WHERE {{ ?s ?p ?o LATERAL {} ?x ?y ?z {} }}",
+                "{ ".repeat(extra_depth),
+                "} ".repeat(extra_depth)
+            )
+        }
+        SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH - 1))
+            .expect("depth budget reached exactly through a LATERAL right-hand side must parse");
+        let error = SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
+            .expect_err("one level beyond the limit through a LATERAL right-hand side must fail");
+        assert!(matches!(error, ParseError::Syntax { .. }));
+        assert!(error.to_string().contains("nesting exceeds"));
+    }
+
+    #[test]
+    fn lateral_is_positional_not_reserved() {
+        // `LATERAL` is a keyword only POSITIONALLY: it must not shadow
+        // `lateral` as an ordinary prefixed-name local part or variable name.
+        // Both dotted positions below are the ones that exercise the changed
+        // `block_boundary` arm — without it, the triples-block loop would
+        // continue past the `.` and try to parse a fresh subject where the
+        // keyword sits, since `peek_kw` alone (used by the outer dispatch
+        // loop) already never confuses a `PrefixedName`/`Variable` token with
+        // a `Word` keyword token.
+        let q = format!(
+            "{GM}PREFIX lateral: <https://l/>\nSELECT * WHERE {{ ?s purrdf:p ?o . lateral:x purrdf:p ?o }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!(
+                "a prefixed name in the `lateral:` namespace must parse as an \
+                 ordinary triple, not the LATERAL keyword: {where_pat:?}"
+            );
+        };
+        assert_eq!(patterns.len(), 2);
+
+        let q2 = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . ?lateral purrdf:p ?o }}");
+        let where_pat2 = unproject(select_pattern(&q2));
+        let GraphPattern::Bgp { patterns: p2 } = where_pat2 else {
+            panic!(
+                "a variable named `lateral` must parse as an ordinary variable, \
+                 not the LATERAL keyword: {where_pat2:?}"
+            );
+        };
+        assert_eq!(p2.len(), 2);
+    }
+
+    #[test]
+    fn sep0006_illegal_bind_example_is_rejected() {
+        // SEP-0006's own illegal example: `LATERAL { BIND(123 AS ?o) }` after
+        // `?s ?p ?o` — `?o` is already bound on the left.
+        let q = format!("{GM}SELECT * {{ ?s ?p ?o LATERAL {{ BIND(123 AS ?o) }} }}");
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("SEP-0006's own illegal example must be rejected");
+        println!("{err}");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn sep0006_legal_subselect_example_is_accepted() {
+        // SEP-0006's own legal example: a sub-`SELECT` that reuses the outer
+        // `?s` internally but projects only `?label` — the reused name is not
+        // an introduction, so it never collides.
+        let q = format!(
+            "{GM}SELECT * {{ ?s rdf:type purrdf:T LATERAL {{ SELECT ?label {{ ?s rdfs:label ?label }} LIMIT 1 }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("SEP-0006's own legal sub-select example must parse");
+    }
+
+    #[test]
+    fn sep0006_select_star_subselect_examples_are_accepted() {
+        // SEP-0006's own two `SELECT *` sub-select examples: a bare form and
+        // one wrapped in `OPTIONAL`. `SELECT *` projects the sub-select's own
+        // visible variables (here including the reused `?s`), so `Project`
+        // narrows to a non-empty scope but the sub-select body is a plain
+        // BGP — a leaf, never an introduction — so both accept.
+        for q in [
+            format!(
+                "{GM}SELECT * {{ ?s rdf:type purrdf:T LATERAL {{ SELECT * {{ ?s rdfs:label ?label }} LIMIT 1 }} }}"
+            ),
+            format!(
+                "{GM}SELECT * {{ ?s ?p ?o LATERAL {{ OPTIONAL {{ SELECT * {{ ?s rdfs:label ?label }} LIMIT 1 }} }} }}"
+            ),
+        ] {
+            SparqlParser::new()
+                .parse_query(&q)
+                .unwrap_or_else(|e| panic!("SEP-0006's own SELECT * example must parse: {e}\n{q}"));
+        }
+    }
+
+    #[test]
+    fn lateral_rhs_values_collision_is_rejected() {
+        let q =
+            format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ VALUES ?o {{ 1 2 }} }} }}");
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a VALUES column colliding with the left scope must be rejected");
+        assert!(
+            err.to_string()
+                .contains("VALUES variable ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_subselect_as_target_collision_is_rejected() {
+        // The sub-select projects exactly the colliding `(1+1 AS ?o)` target,
+        // so `Project`'s narrowing does not filter it away.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT (1 + 1 AS ?o) {{ ?x purrdf:q ?y }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a projected (expr AS ?v) target colliding with the left scope must fail");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_collision_below_optional_and_union_is_rejected() {
+        // `OPTIONAL`/`UNION` are transparent to scope: a BIND collision
+        // beneath either must still be found.
+        for body in [
+            "OPTIONAL { BIND(1 AS ?o) }",
+            "{ BIND(1 AS ?o) } UNION { ?x purrdf:q ?y }",
+        ] {
+            let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ {body} }} }}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err(&format!("expected a scope-conflict rejection for {body:?}"));
+            assert!(
+                err.to_string()
+                    .contains("BIND target ?o inside LATERAL is already in scope"),
+                "unexpected message for {body:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn lateral_rhs_collision_inside_a_nested_lateral_is_rejected() {
+        // A nested `LATERAL`'s own operands sit at the OUTER scope level —
+        // the walker must keep recursing into a nested Lateral rather than
+        // treating it as its own boundary.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?x purrdf:q ?y LATERAL {{ BIND(1 AS ?o) }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a collision inside a nested LATERAL must still be found");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_fresh_bind_is_accepted() {
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ BIND(1 AS ?fresh) }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh BIND target must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_reusing_a_left_variable_in_a_triple_is_accepted() {
+        // Using a left-hand variable inside an ordinary RHS triple is
+        // correlated USE, not an introduction — always legal.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?o purrdf:q ?z }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("reusing a left variable inside a triple must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_subselect_projecting_a_left_variable_is_accepted() {
+        // Projecting an EXISTING left variable back out is not introducing a
+        // fresh one.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o {{ ?o purrdf:q ?z }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("projecting a left variable back out must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_nested_subselect_rescopes_the_check() {
+        // Two nested sub-selects, each projecting exactly `?o`: the
+        // narrowing must be re-derived at EACH `Project` boundary (not
+        // computed once at the outer level) to still find the innermost
+        // `BIND(1 AS ?o)`.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o {{ SELECT ?o {{ ?x purrdf:q ?y . BIND(1 AS ?o) }} }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("the collision must survive two nested Project boundaries");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_left_scope_excludes_minus_right_only_variables() {
+        // §18.2.1: a variable occurring only in the right operand of MINUS is
+        // not in scope on the LATERAL left-hand side, so binding it inside
+        // LATERAL is fresh.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} LATERAL {{ BIND(1 AS ?v) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a MINUS-right-only variable must not be in LATERAL's left scope");
+    }
+
+    #[test]
+    fn lateral_left_scope_excludes_filter_only_variables() {
+        // A variable occurring only inside a FILTER expression is never
+        // collected by `collect_vars` (FILTER's expression is not walked),
+        // so it is not part of the LATERAL left scope either.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o FILTER(?w > 5) LATERAL {{ BIND(1 AS ?w) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a FILTER-only variable must not be in LATERAL's left scope");
+    }
+
+    #[test]
+    fn lateral_rhs_minus_right_bind_under_select_star_is_accepted() {
+        // Deliberate divergence from Jena: `SELECT *`'s own projection list is
+        // computed from `visible_variables`, which already excludes a
+        // MINUS-right-only BIND target, so the narrowed scope is empty before
+        // the walker ever reaches it — nothing observable can shadow.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT * {{ ?x purrdf:q ?y MINUS {{ ?z purrdf:r ?w . BIND(1 AS ?o) }} }} }} }}"
+        );
+        SparqlParser::new().parse_query(&q).expect(
+            "a MINUS-right BIND under a SELECT * sub-select must be accepted (Jena diverges here)",
+        );
+    }
+
+    #[test]
+    fn lateral_left_scope_includes_a_service_endpoint_variable() {
+        // Divergence from Jena: `visible_variables` (the parser's one
+        // definition of "in scope") includes a SERVICE endpoint variable, so
+        // LATERAL's left scope does too, even though Jena's SyntaxVarScope
+        // omits it.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?g . SERVICE ?g {{ ?x purrdf:q ?y }} LATERAL {{ BIND(1 AS ?g) }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a SERVICE ?g endpoint variable must be in LATERAL's left scope here");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?g inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn service_variable_endpoint_rhs_bind_is_not_scope_checked() {
+        // `SERVICE ?g { ... }` is auto-wrapped into a `Lateral` node by the
+        // pre-existing SERVICE dispatch arm (a representation detail of
+        // variable-endpoint federation), not by the user writing the
+        // `LATERAL` keyword — so SEP-0006's scope restriction, which only
+        // runs from the `LATERAL`-keyword dispatch arm, never walks its body.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?g . SERVICE ?g {{ BIND(1 AS ?g) }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a SERVICE ?g body is not scope-checked by the LATERAL restriction");
+    }
+
+    #[test]
+    fn lateral_rhs_exists_is_not_walked() {
+        // `Filter`'s expression operand is never visited by the walker, so an
+        // `EXISTS { BIND(1 AS ?o) }` nested inside a FILTER cannot trigger
+        // the LATERAL scope restriction, even though `?o` collides.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ FILTER EXISTS {{ BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a BIND nested inside an EXISTS expression must not be walked");
     }
 
     #[test]
