@@ -144,7 +144,22 @@ enum Shape {
 }
 
 impl Duration {
-    /// The single construction point for every `Duration` value in this module.
+    /// The single construction point for every `Duration` value, in this module
+    /// AND for any external caller that holds a `(months, seconds)` pair it
+    /// computed by hand. Public precisely so such a caller — the motivating one
+    /// being an aggregate fold that accumulates raw `(months, seconds)`
+    /// components across many rows before ever needing a `Duration` at all
+    /// (folding through this constructor at every intermediate row would wrongly
+    /// reject a running total that is momentarily mixed-sign even though the
+    /// FINAL total is not, since the value space's sign-coherence rule is a
+    /// property of the result, not of every partial sum on the way to it) — can
+    /// still validate its own final pair through the exact same two invariants
+    /// every other `Duration`, whether parsed or computed by this module's own
+    /// arithmetic, already goes through. There is no other way to build a
+    /// `Duration` from raw components: the fields stay private and this crate
+    /// exposes no raw-mantissa constructor for [`Decimal`] either, so an invalid
+    /// pair is simply unconstructible, from inside this module or out.
+    ///
     /// Enforces two invariants so that every other function on `Duration` — most
     /// importantly [`Duration::canonical_lexical`] — is correct by construction
     /// rather than merely aspirational:
@@ -162,7 +177,26 @@ impl Duration {
     ///   tagged `dayTimeDuration` must have a zero `months` component. Applying the
     ///   rule here as well means a `Duration` can never be *computed* into a state
     ///   `parse_duration` would refuse to parse.
-    fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_xsd::XsdDatatype;
+    /// use purrdf_xsd::numeric::parse_decimal;
+    /// use purrdf_xsd::temporal::Duration;
+    ///
+    /// // 12 months, zero seconds: sign-coherent (seconds is zero, so only the
+    /// // months sign matters), constructs fine.
+    /// let d = Duration::new(12, parse_decimal("0").unwrap(), XsdDatatype::Duration).unwrap();
+    /// assert_eq!(d.canonical_lexical(), "P1Y");
+    ///
+    /// // 1 month against -1 second: strictly opposite signs lie outside the
+    /// // value space's lexical mapping, so construction is refused outright
+    /// // rather than rendering a wrong string.
+    /// let neg_one_sec = parse_decimal("-1").unwrap();
+    /// assert!(Duration::new(1, neg_one_sec, XsdDatatype::Duration).is_err());
+    /// ```
+    pub fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {
         let m_sign = i128::from(months.signum());
         let s_sign = seconds.mantissa().signum();
         if m_sign != 0 && s_sign != 0 && m_sign != s_sign {
