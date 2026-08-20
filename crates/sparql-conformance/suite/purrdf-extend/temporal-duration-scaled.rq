@@ -1,0 +1,4 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?d WHERE {
+  BIND("P1D"^^xsd:dayTimeDuration * 3 AS ?d)
+}

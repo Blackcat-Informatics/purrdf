@@ -1267,6 +1267,22 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 /// never exact anyway). [`Self::Ok`]'s own arithmetic is untouched by this
 /// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
 /// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
+///
+/// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
+///
+/// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
+/// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
+/// [`Self::Dur`] extends the aggregate algebra to the duration group, which
+/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`is_numeric_xsd`]'s
+/// gate has to move to reach it (see [`NumericFold::step`]'s doc for the exact
+/// gate). The RAW `(months, seconds)` pair is an abelian group under
+/// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
+/// fold accumulates that raw pair (rather than folding through
+/// [`purrdf_xsd::temporal::add_durations`]'s validated `Duration` at every
+/// step, which is NOT closed under `+` and made an earlier revision of this
+/// fold order-dependent) — so the group sum is well-defined for any nonempty
+/// multiset, independent of fold order and chunk boundaries; `AVG` is that
+/// sum divided by the folded count.
 #[derive(Debug, Clone)]
 enum NumericFold {
     /// No value has been folded in yet.
@@ -1291,6 +1307,69 @@ enum NumericFold {
     /// monotonic (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold
     /// never returns to [`Self::Int`].
     Ok { acc: XsdValue, count: u64 },
+    /// A running duration sum, carried as its own RAW `(months, seconds)`
+    /// components rather than as an already-validated `XsdValue::Duration` —
+    /// this decomposition is the fix for a real nondeterminism defect, not a
+    /// stylistic choice; see the paragraph below for why.
+    ///
+    /// XSD 1.1 Part 2 §3.3.6's duration value space is the pair `(months,
+    /// seconds)` with BOTH components non-negative or BOTH non-positive
+    /// ([`purrdf_xsd::temporal::Duration::new`] enforces this — sign
+    /// coherence). That set is NOT closed under componentwise `+`: e.g.
+    /// `(12, 0) + (0, -86400) = (12, -86400)` is mixed-sign and therefore
+    /// unrepresentable, even though summing the SAME three durations in a
+    /// different order (or after a different chunk boundary) can land on a
+    /// representable total instead. An earlier revision of this variant
+    /// carried `acc: XsdValue::Duration` and folded through
+    /// [`purrdf_xsd::temporal::add_durations`]/`purrdf_xsd::value_add` at every
+    /// intermediate row — validating sign coherence at EVERY step, not just
+    /// the final one — which therefore poisoned or not depending on fold
+    /// order and on chunk boundaries: a genuine nondeterminism bug, since
+    /// [`crate::parallel::par_chunk_reduce_init`] chunks a large group
+    /// differently than a small one folds sequentially
+    /// (`crate::parallel::PARALLEL_MIN_ROWS`), and both are legitimate ways to
+    /// fold the identical multiset of rows to the identical answer.
+    ///
+    /// Sign coherence is a property of the RESULT, not of every partial sum on
+    /// the way to it: the (months, seconds) pair sums over the free abelian
+    /// group `ℤ × Decimal`, which IS totally order-independent (ordinary
+    /// integer/decimal addition — no partiality anywhere in the group itself).
+    /// So this variant accumulates the two components raw — `months` as a
+    /// `checked_add`ed running `i128`, never validated against sign coherence
+    /// mid-fold; `seconds` as an `XsdValue::Decimal` accumulated through
+    /// [`numeric_add`] (the SAME function [`Self::Ok`]'s own decimal SUM uses,
+    /// so duration seconds and a plain `xsd:decimal` SUM overflow identically)
+    /// — and defers the ONE sign-coherence check to [`Self::finish_sum`]/
+    /// [`Self::finish_avg`], on the fully-summed total. Because the raw
+    /// accumulation itself is now genuinely order-independent, that single
+    /// validation is order-independent too: sequential folding and every
+    /// chunking agree on the SAME raw total and therefore on the SAME
+    /// validation outcome — representable → the same value; unrepresentable →
+    /// unbound, deterministically, every time.
+    ///
+    /// `months` is `i128`, not the `i64` [`purrdf_xsd::temporal::Duration::new`]
+    /// itself requires: a running sum of `n` `i64`-bounded values cannot
+    /// overflow `i128` until `n` exceeds roughly `2^64` rows, which is not a
+    /// group size any real query reaches, so the accumulation is total in
+    /// practice — only the narrowing back to `i64` at `finish` can fail
+    /// (checked anyway, for honesty, not because it is expected to fire).
+    ///
+    /// `datatype` is the joined result tag ([`join_duration_datatype`]:
+    /// `dayTimeDuration` iff every folded value declared it, likewise
+    /// `yearMonthDuration`, else the general `xsd:duration`) — a genuine
+    /// semilattice join (associative, commutative, idempotent on its own), so
+    /// folding it per step, unlike the sign check, stays safe.
+    Dur {
+        /// Raw running months total — see this variant's own doc.
+        months: i128,
+        /// Raw running seconds total, always `XsdValue::Decimal(_)` — see this
+        /// variant's own doc.
+        seconds: XsdValue,
+        /// The joined result tag — see this variant's own doc.
+        datatype: XsdDatatype,
+        /// The folded row count (`AVG` reads it).
+        count: u64,
+    },
 }
 
 impl NumericFold {
@@ -1300,15 +1379,31 @@ impl NumericFold {
     /// own `None`, discarding this state permanently; `true` means `self` now
     /// reflects `value` folded in.
     ///
-    /// This match is exhaustive over `Empty`/`Int`/`Ok` alone: poisoning has
-    /// no variant of its own to (mis)match here, because the wrapper's
-    /// `Option<Self>` going from `Some` to `None` — never a fourth variant of
+    /// This match is exhaustive over `Empty`/`Int`/`Ok`/`Dur`: poisoning has no
+    /// variant of its own to (mis)match here, because the wrapper's
+    /// `Option<Self>` going from `Some` to `None` — never a fifth variant of
     /// THIS type — is where "poisoned" is expressed. There is therefore no
     /// state this match must defensively refuse to handle.
+    ///
+    /// The gate below accepts the numeric tower OR a duration, never both in
+    /// the same group: the duration check sits entirely on
+    /// [`is_numeric_xsd`]'s **failure path** (short-circuit `&&`), so a numeric
+    /// value executes exactly the branches it executed before [`Self::Dur`]
+    /// existed — [`is_numeric_xsd`] itself is unchanged and untouched by this
+    /// widening (see its own doc for why: widening THAT predicate, rather than
+    /// gating here, would let a mixed numeric+duration group silently coerce
+    /// through whichever other call site trusts it). A group that mixes the
+    /// two poisons: `Self::Int`/`Self::Ok` reject a duration value through
+    /// their own existing arithmetic (`int_sum_promote_base`'s `None` arm, or
+    /// `numeric_add`'s `TypeMismatch`, respectively — neither needed an edit),
+    /// and `Self::Dur` rejects a numeric value explicitly below.
     fn step(&mut self, value: &TermValue) -> bool {
-        let Some(xv) = xsd_of(value).filter(is_numeric_xsd) else {
+        let Some(xv) = xsd_of(value) else {
             return false;
         };
+        if !is_numeric_xsd(&xv) && !matches!(xv, XsdValue::Duration(_)) {
+            return false;
+        }
         match self {
             Self::Empty => {
                 *self = match xv {
@@ -1316,6 +1411,12 @@ impl NumericFold {
                         sum: BigInt::from_i128(value),
                         count: 1,
                         datatype,
+                    },
+                    XsdValue::Duration(dur) => Self::Dur {
+                        months: i128::from(dur.months()),
+                        seconds: XsdValue::Decimal(dur.seconds()),
+                        datatype: dur.datatype(),
+                        count: 1,
                     },
                     other => Self::Ok {
                         acc: other,
@@ -1357,21 +1458,78 @@ impl NumericFold {
                 }
                 Err(_) => false,
             },
+            Self::Dur {
+                months,
+                seconds,
+                datatype,
+                count,
+            } => {
+                // The top-of-function gate admits only the numeric tower or a
+                // duration; a numeric value reaching an already-`Dur` fold is
+                // exactly the mixed-group case, and poisons.
+                let XsdValue::Duration(dur) = &xv else {
+                    return false;
+                };
+                // Raw componentwise accumulation — no `Duration::new` call, no
+                // sign check, here. See `Self::Dur`'s own doc for why: the
+                // check belongs once, on the finished total, not on every
+                // partial sum along the way.
+                let Some(new_months) = months.checked_add(i128::from(dur.months())) else {
+                    return false;
+                };
+                let Ok(new_seconds) = numeric_add(seconds, &XsdValue::Decimal(dur.seconds()))
+                else {
+                    return false;
+                };
+                *months = new_months;
+                *seconds = new_seconds;
+                *datatype = join_duration_datatype(*datatype, dur.datatype());
+                *count += 1;
+                true
+            }
         }
     }
 
     /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1);
     /// otherwise the running total — exact for a pure-integer group (whatever
     /// its magnitude, via [`BigInt::to_decimal_string`] when it no longer fits
-    /// `i128`), or the `decimal`/`float`/`double`-tower total otherwise.
-    /// Infallible: unlike [`Self::finish_avg`], nothing past `step`'s own
-    /// poisoning (already handled by the wrapper, see [`SumAccumulator`]) can
-    /// make a `SUM` unrepresentable.
-    fn finish_sum(self) -> TermValue {
+    /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
+    /// extension) the group's duration total, rendered through the same
+    /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
+    /// group is never `Self::Empty` at finish: [`Self::step`] only creates
+    /// [`Self::Dur`] on the FIRST folded duration, so the empty-group `0` row
+    /// above is reached only when literally nothing was folded, exactly as
+    /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
+    /// type.
+    ///
+    /// Returns `None` — poisoning to SPARQL unbound — in exactly one case:
+    /// [`Self::Dur`]'s raw `(months, seconds)` total fails
+    /// [`purrdf_xsd::temporal::Duration::new`]'s validation (mixed-sign
+    /// components, or a months total that no longer fits `i64`) — see that
+    /// variant's own doc for why this single, order-independent check is
+    /// deferred all the way to here rather than applied at every fold step.
+    /// `Self::Empty`/`Self::Int`/`Self::Ok` remain unconditionally infallible,
+    /// exactly as before [`Self::Dur`]'s raw-component representation existed:
+    /// nothing past `step`'s own poisoning (already handled by the wrapper,
+    /// see [`SumAccumulator`]) can make one of those three unrepresentable.
+    fn finish_sum(self) -> Option<TermValue> {
         match self {
-            Self::Empty => integer_value(0),
-            Self::Int { sum, datatype, .. } => int_sum_value(&sum, datatype),
-            Self::Ok { acc, .. } => crate::expr::xsd_literal_value(&acc),
+            Self::Empty => Some(integer_value(0)),
+            Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
+            Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
+            Self::Dur {
+                months,
+                seconds,
+                datatype,
+                ..
+            } => {
+                let months = i64::try_from(months).ok()?;
+                let XsdValue::Decimal(seconds) = seconds else {
+                    unreachable!("NumericFold::Dur's seconds field is always XsdValue::Decimal");
+                };
+                let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
+                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+            }
         }
     }
 
@@ -1421,6 +1579,40 @@ impl NumericFold {
                     .ok()
                     .map(|avg| crate::expr::xsd_literal_value(&avg))
             }
+            Self::Dur {
+                months,
+                seconds,
+                datatype,
+                count,
+            } => {
+                // Mirrors `finish_sum`'s deferred-validation shape, but the
+                // MEAN — not the sum — is what must pass `Duration::new` here:
+                // a group whose raw SUM would be sign-incoherent can still
+                // have a representable MEAN (and vice versa), so this cannot
+                // simply divide `finish_sum`'s already-summed answer. Months
+                // divide with the same ties-toward-positive-infinity rule
+                // `purrdf_xsd::temporal::divide_duration` applies internally
+                // (its own private `round_decimal_to_i64`), replicated here as
+                // `round_i128_div_to_i64` because the numerator is the fold's
+                // raw `i128` accumulator, not a `Decimal` `divide_duration`
+                // could be handed directly. Seconds divide through
+                // `numeric_div` — the same function [`Self::Ok`]'s own AVG
+                // uses — for the identical truncated-to-18-fractional-digit
+                // `Decimal` result plain decimal AVG gets.
+                let divisor = i128::from(count);
+                let mean_months = round_i128_div_to_i64(months, divisor)?;
+                let count_val = XsdValue::Integer {
+                    value: divisor,
+                    datatype: XsdDatatype::Integer,
+                };
+                let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
+                else {
+                    unreachable!("numeric_div(Decimal, Integer) always answers XsdValue::Decimal");
+                };
+                let dur = purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
+                    .ok()?;
+                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+            }
         }
     }
 
@@ -1438,6 +1630,19 @@ impl NumericFold {
     /// `op:numeric-add` would folding the whole group sequentially — modulo
     /// `decimal`'s own documented `i128`-mantissa bound and `float`/`double`'s
     /// IEEE rounding, neither of which this module changes.
+    ///
+    /// [`Self::Dur`] is `Commutative` too, and — thanks to the raw-component
+    /// representation [`Self::Dur`]'s own doc describes — WITHOUT caveat:
+    /// componentwise `+` over the raw `(months, seconds)` pair is ordinary
+    /// integer/decimal addition over the free abelian group `ℤ × Decimal`,
+    /// genuinely associative/commutative with no partiality anywhere in the
+    /// accumulation itself (an earlier revision of this fold validated sign
+    /// coherence at every intermediate `step`/`combine`, which made the
+    /// answer depend on chunk boundaries — exactly the nondeterminism this
+    /// representation exists to rule out). Combining chunk partials in chunk
+    /// order therefore agrees with folding the whole group sequentially on
+    /// the RAW total, byte for byte, before the one sign-coherence check
+    /// either path defers to `finish`.
     ///
     /// [`crate::parallel::par_chunk_reduce_init`] chunks through
     /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
@@ -1496,8 +1701,85 @@ impl NumericFold {
                     acc: result,
                     count: count1 + count2,
                 }),
+            (
+                Self::Dur {
+                    months: months1,
+                    seconds: seconds1,
+                    datatype: datatype1,
+                    count: count1,
+                },
+                Self::Dur {
+                    months: months2,
+                    seconds: seconds2,
+                    datatype: datatype2,
+                    count: count2,
+                },
+            ) => months1.checked_add(months2).and_then(|months| {
+                numeric_add(&seconds1, &seconds2)
+                    .ok()
+                    .map(|seconds| Self::Dur {
+                        months,
+                        seconds,
+                        datatype: join_duration_datatype(datatype1, datatype2),
+                        count: count1 + count2,
+                    })
+            }),
+            // A duration chunk merged with a numeric chunk (either order) is
+            // the cross-group mixing `step` already refuses within one
+            // accumulator — a chunk boundary must not let it back in.
+            (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
+            | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
         }
     }
+}
+
+/// The joined result tag for two duration operands' declared datatypes, used
+/// per fold step by [`NumericFold::Dur`]. Mirrors `purrdf_xsd::temporal`'s own
+/// (private) `duration_result_datatype`: `dayTimeDuration` iff both declare
+/// it, `yearMonthDuration` iff both declare it, else the general
+/// `xsd:duration`. A plain match over the pair, never a derived `Ord` + `max`
+/// — `purrdf_xsd::temporal`'s own `Shape` doc explains why a duration tag has
+/// no total order for `max` to invent one from. This join is a genuine
+/// semilattice operation (associative, commutative, idempotent), unlike the
+/// sign-coherence check [`NumericFold::Dur`] defers to `finish` — see that
+/// variant's own doc.
+fn join_duration_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
+    match (a, b) {
+        (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
+            XsdDatatype::YearMonthDuration
+        }
+        (XsdDatatype::DayTimeDuration, XsdDatatype::DayTimeDuration) => {
+            XsdDatatype::DayTimeDuration
+        }
+        _ => XsdDatatype::Duration,
+    }
+}
+
+/// Round `numerator / denominator` (`denominator > 0`) to the nearest `i64`,
+/// ties toward positive infinity — replicates
+/// `purrdf_xsd::temporal::divide_duration`'s internal (private)
+/// `round_decimal_to_i64` rounding rule, used by [`NumericFold::finish_avg`]'s
+/// `Dur` arm to round the duration-AVG months MEAN. Reimplemented here rather
+/// than reused because the numerator is the fold's raw `i128` accumulator
+/// (see [`NumericFold::Dur`]'s own doc for why it stays raw through `finish`),
+/// not a `Decimal` `divide_duration` could be handed directly.
+///
+/// Derivation: round-half-up-toward-`+∞` of `N / D` is `floor(N/D + 1/2) =
+/// floor((2N + D) / (2D))`; `div_euclid` on a POSITIVE divisor is exactly
+/// floor division, which is why `denominator > 0` (always true here — the
+/// divisor is a nonzero folded row count) is load-bearing. `None` only on an
+/// `i128` overflow computing `2 × numerator` (unreachable for any realistic
+/// row count — see [`NumericFold::Dur`]'s own doc on why the raw accumulation
+/// itself cannot overflow `i128` in practice) or an out-of-`i64`-range mean.
+fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
+    debug_assert!(
+        denominator > 0,
+        "duration AVG divisor is a nonzero folded row count"
+    );
+    let doubled_numerator = numerator.checked_mul(2)?;
+    let doubled_denominator = denominator.checked_mul(2)?;
+    let biased = doubled_numerator.checked_add(denominator)?;
+    i64::try_from(biased.div_euclid(doubled_denominator)).ok()
 }
 
 /// Convert a pure-integer running sum into the `XsdValue` `numeric_add` needs
@@ -1662,12 +1944,12 @@ impl crate::agg_fn::AggregateAccumulator for SumAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(self.0.map(NumericFold::finish_sum))
+        Ok(self.0.and_then(NumericFold::finish_sum))
     }
 }
 
 /// `AVG` — the [`SumAccumulator`] twin, differing only in which
-/// [`NumericFold`] finish it calls (`finish_avg`, which — unlike `finish_sum`
+/// [`NumericFold`] finish it calls (`finish_avg`, which — like `finish_sum`
 /// — can still answer unbound at FINISH time even over a fold that never
 /// poisoned in `step`; see that method's docs).
 struct AvgAccumulator(Option<NumericFold>);
@@ -2672,36 +2954,11 @@ mod tests {
     }
 
     /// Evaluate a bare (no `GROUP BY`) `function(?n)` over `ex:v` and return the
-    /// result variable's lexical form, or `None` if unbound.
+    /// result variable's lexical form, or `None` if unbound. A thin lexical-only
+    /// projection of [`eval_numeric_fold_term`], which does the actual BGP +
+    /// `Group` evaluation and additionally returns the result's datatype IRI.
     fn eval_numeric_fold(ds: &Arc<RdfDataset>, function: AggregateFunction) -> Option<String> {
-        let mut ctx = EvalCtx::new(ds);
-        let bgp = GraphPattern::Bgp {
-            patterns: vec![TriplePattern {
-                subject: TermPattern::Variable(Variable::new("s")),
-                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
-                object: TermPattern::Variable(Variable::new("n")),
-            }],
-        };
-        let group = GraphPattern::Group {
-            inner: Box::new(bgp),
-            variables: vec![],
-            aggregates: vec![(
-                Variable::new("agg"),
-                AggregateExpression::new(
-                    function,
-                    vec![Expression::Variable(Variable::new("n"))],
-                    Vec::new(),
-                    false,
-                )
-                .expect("fixture: valid AggregateExpression"),
-            )],
-        };
-        let seq = eval(&group, &mut ctx).expect("eval");
-        let col = seq.schema.index_of(&Variable::new("agg")).unwrap();
-        seq.rows[0][col].map(|t| match ctx.scratch.value_of(ds, t) {
-            TermValue::Literal { lexical_form, .. } => lexical_form,
-            o => format!("{o:?}"),
-        })
+        eval_numeric_fold_term(ds, function).map(|(lexical_form, _datatype)| lexical_form)
     }
 
     /// The exact reproduction from the reported gap: `SUM` over
@@ -2959,6 +3216,374 @@ mod tests {
                 "SUM disagreed at {threads} worker(s): expected {sequential:?}, got {observed:?}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `SUM`/`AVG` over `xsd:duration` — PurRDF extension (`NumericFold::Dur`)
+    // -----------------------------------------------------------------------
+
+    const XSD_YEAR_MONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
+    const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+
+    /// [`eval_numeric_fold`]'s underlying twin: returns the result's lexical form
+    /// AND its datatype IRI, or `None` if unbound — [`eval_numeric_fold`] is a
+    /// lexical-only projection of this function. The duration tests below pin
+    /// the datatype half as much as the lexical half — the tag-join rule is
+    /// exactly what [`sum_over_mixed_subtype_durations_is_the_general_duration`]
+    /// exists to catch, and a lexical-only assertion cannot see it.
+    fn eval_numeric_fold_term(
+        ds: &Arc<RdfDataset>,
+        function: AggregateFunction,
+    ) -> Option<(String, String)> {
+        let mut ctx = EvalCtx::new(ds);
+        let bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
+                object: TermPattern::Variable(Variable::new("n")),
+            }],
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(bgp),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("agg"),
+                AggregateExpression::new(
+                    function,
+                    vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
+            )],
+        };
+        let seq = eval(&group, &mut ctx).expect("eval");
+        let col = seq.schema.index_of(&Variable::new("agg")).unwrap();
+        seq.rows[0][col].map(|t| match ctx.scratch.value_of(ds, t) {
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            } => (lexical_form, datatype),
+            o => (format!("{o:?}"), String::new()),
+        })
+    }
+
+    /// PurRDF extension: `SUM` over a pure-`yearMonthDuration` group is the
+    /// group's duration total. SPARQL 1.1 §18.5.1.3 defines `SUM` by repeated
+    /// `op:numeric-add`, whose domain is the numeric tower alone — this widens
+    /// the aggregate algebra to the duration group durations already form under
+    /// `+` (`purrdf_xsd::temporal::add_durations`). `P1M + P2M = P3M`, still
+    /// tagged `yearMonthDuration` since every folded value declared it.
+    #[test]
+    fn sum_over_durations_is_the_group_sum() {
+        let ds = numeric_fold_dataset(&[
+            ("a", "P1M", XSD_YEAR_MONTH_DURATION),
+            ("b", "P2M", XSD_YEAR_MONTH_DURATION),
+        ]);
+        let (lex, dt) =
+            eval_numeric_fold_term(&ds, AggregateFunction::Sum).expect("sum of durations");
+        assert_eq!(lex, "P3M");
+        assert_eq!(dt, XSD_YEAR_MONTH_DURATION);
+    }
+
+    /// A group mixing a numeric value and a duration poisons — `NumericFold`
+    /// never coerces across the numeric/duration boundary, regardless of which
+    /// kind the fold saw FIRST. The two orders drive different match arms:
+    /// numeric-first exercises `NumericFold::Int`'s existing promote-base path
+    /// (unedited by this change), duration-first exercises `NumericFold::Dur`'s
+    /// new, explicit numeric rejection — so only the pair together proves both
+    /// poisoning paths actually work, not just one of them.
+    #[test]
+    fn sum_over_mixed_numeric_and_duration_is_unbound() {
+        let numeric_first =
+            numeric_fold_dataset(&[("a", "1", XINT), ("b", "P1D", XSD_DAY_TIME_DURATION)]);
+        assert_eq!(
+            eval_numeric_fold(&numeric_first, AggregateFunction::Sum),
+            None,
+            "numeric-then-duration must poison to unbound"
+        );
+
+        let duration_first =
+            numeric_fold_dataset(&[("a", "P1D", XSD_DAY_TIME_DURATION), ("b", "1", XINT)]);
+        assert_eq!(
+            eval_numeric_fold(&duration_first, AggregateFunction::Sum),
+            None,
+            "duration-then-numeric must poison to unbound"
+        );
+    }
+
+    /// `AVG` over durations rounds the months component toward positive
+    /// infinity (`purrdf_xsd::temporal::divide_duration`'s existing
+    /// `round_decimal_to_i64` rule — see `NumericFold::Dur`'s `finish_avg` arm)
+    /// and divides seconds exactly.
+    #[test]
+    fn avg_over_durations_rounds_months() {
+        let months = numeric_fold_dataset(&[
+            ("a", "P1M", XSD_YEAR_MONTH_DURATION),
+            ("b", "P2M", XSD_YEAR_MONTH_DURATION),
+        ]);
+        let (lex, dt) =
+            eval_numeric_fold_term(&months, AggregateFunction::Avg).expect("avg of ym durations");
+        assert_eq!(lex, "P2M", "1.5 months rounds toward +infinity to 2");
+        assert_eq!(dt, XSD_YEAR_MONTH_DURATION);
+
+        let days = numeric_fold_dataset(&[
+            ("a", "P1D", XSD_DAY_TIME_DURATION),
+            ("b", "P2D", XSD_DAY_TIME_DURATION),
+        ]);
+        let (lex, dt) =
+            eval_numeric_fold_term(&days, AggregateFunction::Avg).expect("avg of dt durations");
+        assert_eq!(lex, "P1DT12H");
+        assert_eq!(dt, XSD_DAY_TIME_DURATION);
+    }
+
+    /// The aggregate-level result-tag rule mirrors the value-space one exactly:
+    /// a group mixing `yearMonthDuration` and `dayTimeDuration` operands sums
+    /// fine (durations form ONE group under `+`) but the result is stamped the
+    /// general `xsd:duration`, never either subtype —
+    /// `purrdf_xsd::temporal::add_durations`'s "both declare X, else general"
+    /// join rule, reached here through the fold's repeated calls rather than a
+    /// single one.
+    #[test]
+    fn sum_over_mixed_subtype_durations_is_the_general_duration() {
+        let ds = numeric_fold_dataset(&[
+            ("a", "P1M", XSD_YEAR_MONTH_DURATION),
+            ("b", "PT1H", XSD_DAY_TIME_DURATION),
+        ]);
+        let (lex, dt) = eval_numeric_fold_term(&ds, AggregateFunction::Sum)
+            .expect("sum of mixed-subtype durations");
+        assert_eq!(lex, "P1MT1H");
+        assert_eq!(dt, XSD_DURATION);
+    }
+
+    /// The overflow suite's thread-pool-size pattern
+    /// ([`sum_overflow_agrees_across_thread_pool_sizes`]), reproduced for
+    /// durations: a group large enough to force
+    /// `crate::parallel::par_chunk_reduce_init` into MANY chunks, summed
+    /// sequentially and under forced-parallel pools of 1/2/8/32 workers.
+    /// `NumericFold::Dur`'s `combine_owned` arm is `Commutative` (duration `+`
+    /// is associative/commutative — see that method's doc), so every pool size
+    /// must agree with the sequential answer byte for byte.
+    #[test]
+    fn sum_over_durations_agrees_across_thread_pool_sizes() {
+        const ROWS: usize = 2000;
+        let mut values: Vec<(String, &str, &str)> = Vec::with_capacity(ROWS);
+        for i in 0..ROWS {
+            values.push((format!("r{i}"), "P1D", XSD_DAY_TIME_DURATION));
+        }
+        let borrowed: Vec<(&str, &str, &str)> = values
+            .iter()
+            .map(|(s, lex, dt)| (s.as_str(), *lex, *dt))
+            .collect();
+        let ds = numeric_fold_dataset(&borrowed);
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(sequential.as_deref(), Some("P2000D"));
+
+        for threads in [1_usize, 2, 8, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("building a fixed-size pool");
+            let observed = pool.install(|| {
+                assert_eq!(rayon::current_num_threads(), threads);
+                let _guard = crate::parallel::force_parallel_for_test(true);
+                eval_numeric_fold(&ds, AggregateFunction::Sum)
+            });
+            assert_eq!(
+                observed, sequential,
+                "duration SUM disagreed at {threads} worker(s): expected {sequential:?}, got {observed:?}"
+            );
+        }
+    }
+
+    /// The exact defect this crate's `NumericFold::Dur` decomposition fixes:
+    /// `{P1Y^^yearMonthDuration, -P1D^^dayTimeDuration, P1D^^dayTimeDuration}`'s
+    /// true total, `(12 months, 0 s)`, is representable ("P1Y") — but a fold
+    /// that validates sign coherence at every intermediate `step`/`combine`
+    /// (rather than once, on the finished total) sees a mixed-sign
+    /// INTERMEDIATE the moment `P1Y` and `-P1D` combine, regardless of
+    /// whether that combination happens via a sequential `step` or via
+    /// `combine_owned` merging a chunk that has already folded `-P1D` and
+    /// `P1D` together. Forcing every row into its own chunk
+    /// (`force_chunk_size_for_test(1)`) drives `combine_owned` through every
+    /// possible adjacent pairing of this three-row group, so this is a
+    /// genuine stress of the fix, not merely a single lucky chunk boundary.
+    #[test]
+    fn sum_over_mixed_sign_durations_is_order_independent() {
+        let ds = numeric_fold_dataset(&[
+            ("a", "P1Y", XSD_YEAR_MONTH_DURATION),
+            ("b", "-P1D", XSD_DAY_TIME_DURATION),
+            ("c", "P1D", XSD_DAY_TIME_DURATION),
+        ]);
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold_term(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(
+            sequential,
+            Some(("P1Y".to_owned(), XSD_DURATION.to_owned())),
+            "the group's true total is representable regardless of fold order"
+        );
+
+        let chunked = {
+            let _parallel_guard = crate::parallel::force_parallel_for_test(true);
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(1);
+            eval_numeric_fold_term(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(
+            sequential, chunked,
+            "duration SUM over a mixed-sign group must not depend on chunk boundaries"
+        );
+    }
+
+    /// [`sum_over_mixed_sign_durations_is_order_independent`]'s three-row
+    /// fixture, reproduced at a scale that crosses
+    /// `crate::parallel::PARALLEL_MIN_ROWS` (1024) so the REAL
+    /// `crate::parallel::par_chunk_reduce_init` combine path — not merely the
+    /// sequential fallback — is exercised: 1 `P1Y`, then 511 `(P1D, -P1D)`
+    /// pairs (each returns the running seconds to exactly zero before the
+    /// next pair starts, so this whole stretch never goes mixed-sign no
+    /// matter how it is chunked), then one final REVERSED pair
+    /// `(-P1D, P1D)` — 1025 rows total.
+    ///
+    /// A forced chunk size of 1023 splits this at exactly the reversed
+    /// pair's boundary: chunk 0 is the leading 1023 rows (`P1Y` plus all 511
+    /// ordinary pairs), which stays representable the entire time it folds;
+    /// chunk 1 is the trailing `(-P1D, P1D)` pair alone, folded from a FRESH
+    /// accumulator that never sees `P1Y`'s months at all — its own transient
+    /// negative (`-P1D` applied while `months` is still zero) never
+    /// interacts with a nonzero months component, so a pre-fix, per-step
+    /// sign-coherence check never fires there either. Sequentially, by
+    /// contrast, that same `-P1D` lands on the already-`P1Y`-bearing running
+    /// total inherited from the preceding 1023 rows — the exact
+    /// chunk-boundary-dependent poisoning [`NumericFold::Dur`]'s own doc
+    /// describes.
+    #[test]
+    fn sum_over_mixed_sign_durations_agrees_across_a_forced_chunk_boundary() {
+        const PAIRS: usize = 511;
+        let mut values: Vec<(String, &str, &str)> = Vec::with_capacity(2 + 2 * PAIRS);
+        values.push(("y".to_owned(), "P1Y", XSD_YEAR_MONTH_DURATION));
+        for i in 0..PAIRS {
+            values.push((format!("p{i}"), "P1D", XSD_DAY_TIME_DURATION));
+            values.push((format!("n{i}"), "-P1D", XSD_DAY_TIME_DURATION));
+        }
+        values.push(("nf".to_owned(), "-P1D", XSD_DAY_TIME_DURATION));
+        values.push(("pf".to_owned(), "P1D", XSD_DAY_TIME_DURATION));
+        assert_eq!(
+            values.len(),
+            1025,
+            "fixture must cross PARALLEL_MIN_ROWS (1024) for the real chunking path"
+        );
+
+        let borrowed: Vec<(&str, &str, &str)> = values
+            .iter()
+            .map(|(s, lex, dt)| (s.as_str(), *lex, *dt))
+            .collect();
+        let ds = numeric_fold_dataset(&borrowed);
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold_term(&ds, AggregateFunction::Sum)
+        };
+        let chunked = {
+            let _chunk_guard = crate::parallel::force_chunk_size_for_test(1023);
+            eval_numeric_fold_term(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(
+            sequential, chunked,
+            "duration SUM must not depend on where a chunk boundary falls"
+        );
+        assert_eq!(
+            sequential,
+            Some(("P1Y".to_owned(), XSD_DURATION.to_owned())),
+            "the true total is representable regardless of fold order"
+        );
+    }
+
+    /// The other side of the same coin: a group whose true total genuinely
+    /// IS mixed-sign — `{P1Y^^yearMonthDuration, -P1D^^dayTimeDuration}` sums
+    /// to `(12 months, -86400 s)`, which XSD 1.1 Part 2 §3.3.6 places outside
+    /// the duration value space — must poison to unbound DETERMINISTICALLY,
+    /// never depending on whether the fold happened to run sequentially or
+    /// under a forced-parallel path.
+    #[test]
+    fn sum_whose_final_value_is_mixed_sign_is_unbound() {
+        let ds = numeric_fold_dataset(&[
+            ("a", "P1Y", XSD_YEAR_MONTH_DURATION),
+            ("b", "-P1D", XSD_DAY_TIME_DURATION),
+        ]);
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(
+            sequential, None,
+            "the group's true total, (12 months, -86400 s), is mixed-sign and unrepresentable"
+        );
+
+        let parallel = {
+            let _guard = crate::parallel::force_parallel_for_test(true);
+            eval_numeric_fold(&ds, AggregateFunction::Sum)
+        };
+        assert_eq!(
+            sequential, parallel,
+            "an unrepresentable total must poison to unbound identically in both paths"
+        );
+    }
+
+    /// `AVG`'s raw-component mean is validated independently of `SUM`'s raw
+    /// total (see `NumericFold::finish_avg`'s `Dur` arm doc) — proven here in
+    /// both directions: a group whose mean IS representable answers that
+    /// mean (reusing [`sum_over_mixed_sign_durations_is_order_independent`]'s
+    /// fixture, whose total `(12, 0)` divided by its count of 3 is `(4, 0)` =
+    /// `"P4M"`), and a group whose mean is NOT representable poisons to
+    /// unbound, deterministically, in both the sequential and the
+    /// forced-parallel path.
+    #[test]
+    fn avg_of_mixed_sign_durations() {
+        let representable_mean = numeric_fold_dataset(&[
+            ("a", "P1Y", XSD_YEAR_MONTH_DURATION),
+            ("b", "-P1D", XSD_DAY_TIME_DURATION),
+            ("c", "P1D", XSD_DAY_TIME_DURATION),
+        ]);
+        let (lex, dt) = eval_numeric_fold_term(&representable_mean, AggregateFunction::Avg)
+            .expect("avg of a mixed-sign group whose mean is representable");
+        assert_eq!(lex, "P4M");
+        assert_eq!(dt, XSD_DURATION);
+
+        // `(24 months, 0 s) + (0 months, -86400 s)`, divided by a count of
+        // 2, means `(12 months, -43200 s)` — itself mixed-sign, even though
+        // computing it never routes through `finish_sum` at all.
+        let unrepresentable_mean = numeric_fold_dataset(&[
+            ("a", "P2Y", XSD_YEAR_MONTH_DURATION),
+            ("b", "-P1D", XSD_DAY_TIME_DURATION),
+        ]);
+
+        let sequential = {
+            let _guard = crate::parallel::force_sequential_operation();
+            eval_numeric_fold(&unrepresentable_mean, AggregateFunction::Avg)
+        };
+        assert_eq!(
+            sequential, None,
+            "the group's mean, (12 months, -43200 s), is mixed-sign and unrepresentable"
+        );
+
+        let parallel = {
+            let _guard = crate::parallel::force_parallel_for_test(true);
+            eval_numeric_fold(&unrepresentable_mean, AggregateFunction::Avg)
+        };
+        assert_eq!(
+            sequential, parallel,
+            "an unrepresentable mean must poison to unbound identically in both paths"
+        );
     }
 
     #[test]
@@ -4023,6 +4648,61 @@ mod tests {
         assert_eq!(
             sequential, "1499.5",
             "median of 0..2999 is the mean of the two middle values 1499 and 1500"
+        );
+    }
+
+    /// `rows` `xsd:dayTimeDuration` literals `P0D, P2D, P4D, ..., P(2*(rows-1))D`
+    /// — [`stat_agg_integer_sequence_dataset`]'s duration counterpart, used by
+    /// the `crate::stat_agg`'s duration-extension forced-parallel test below.
+    /// The `2 *` step keeps the eventual `MEDIAN` midpoint an EXACT whole-day
+    /// value (see `crate::stat_agg`'s own
+    /// `median_over_pure_day_time_duration_even_group_is_the_midpoint` unit
+    /// test for the same reasoning at unit-test scale), so the pinned answer
+    /// does not depend on sub-day duration canonicalization.
+    fn stat_agg_dt_duration_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..rows {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: format!("P{}D", 2 * i),
+                datatype: Some(XSD_DAY_TIME_DURATION.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// `crate::stat_agg::MEDIAN`'s `xsd:duration` extension (see that module's
+    /// "The `xsd:duration` extension" doc section) over a group large enough
+    /// to cross `crate::parallel::PARALLEL_MIN_ROWS`, exercising the REAL
+    /// `crate::parallel::par_chunk_reduce_init` chunked fold — forced-parallel
+    /// and forced-sequential must agree byte-for-byte, the same determinism
+    /// pin [`stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree`]
+    /// makes for the numeric case.
+    #[test]
+    fn stat_agg_median_duration_chunked_fold_forced_parallel_and_sequential_agree() {
+        const ROWS: i64 = 3000;
+        const NS: &str = "http://example.org/agg/";
+
+        let ds = stat_agg_dt_duration_sequence_dataset(ROWS);
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (sequential, forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}MEDIAN"));
+        assert_eq!(
+            sequential, forced_parallel,
+            "MEDIAN's duration chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            sequential, "P2999D",
+            "median of P0D, P2D, .., P5998D is the midpoint of the two middle values P2998D and P3000D"
         );
     }
 

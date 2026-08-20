@@ -1,0 +1,8 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# duration `=` is total (op:duration-equal), while `<`/`>` stay indeterminate
+# for incommensurable operands: P1M and P30D are unequal, not incomparable,
+# so ?eq binds false; ordering them has no answer, so ?lt is absent.
+SELECT ?eq ?lt WHERE {
+  BIND(("P1M"^^xsd:duration = "P30D"^^xsd:duration) AS ?eq)
+  BIND(("P1M"^^xsd:duration < "P30D"^^xsd:duration) AS ?lt)
+}

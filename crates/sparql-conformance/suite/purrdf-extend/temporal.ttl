@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Fixture for the SEP-0002 temporal-arithmetic EXTEND cases. `ex:e1` and
+# `ex:e2` are ordinary same-timezone `ex:start`/`ex:end` pairs (9 days and 2
+# days apart, mirroring purrdf_sparql_eval::expr's own `temporal_graph` unit
+# fixture). `ex:e3` mixes a timezone-bearing `ex:start` with a
+# timezone-less `ex:end` — its instant difference is spec-mandated
+# indeterminate, not merely "false", so :temporalFilterDurationThreshold's
+# FILTER must exclude it rather than have it compare false.
+@prefix ex:  <http://ex/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:e1 ex:start "2024-03-01T00:00:00Z"^^xsd:dateTime ;
+      ex:end   "2024-03-10T00:00:00Z"^^xsd:dateTime .
+
+ex:e2 ex:start "2024-03-01T00:00:00Z"^^xsd:dateTime ;
+      ex:end   "2024-03-03T00:00:00Z"^^xsd:dateTime .
+
+ex:e3 ex:start "2024-03-01T00:00:00Z"^^xsd:dateTime ;
+      ex:end   "2024-03-10T00:00:00"^^xsd:dateTime .

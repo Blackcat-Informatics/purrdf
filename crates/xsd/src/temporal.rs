@@ -11,6 +11,29 @@
 //! overlap. `duration` has a two-component (months, seconds) partial order: a pair
 //! like `P1M` vs `P30D` is genuinely incomparable. The hand-rolled calendar uses a
 //! proleptic Gregorian day count (valid for negative years), no external deps.
+//!
+//! # Duration ↔ calendar arithmetic: two call surfaces, one dispatch path
+//!
+//! This module exposes two surfaces for adding/subtracting a duration against a
+//! calendar value. The F&O-named single-component functions
+//! (`add_year_month_duration_to_datetime`, `add_day_time_duration_to_date`, and
+//! their seven siblings) stay published for callers who hold a duration statically
+//! known to be `yearMonthDuration`- or `dayTimeDuration`-shaped and want F&O's own
+//! operator names. The general `add_duration_to_{datetime,date,time}` /
+//! `subtract_duration_from_{datetime,date,time}` functions accept any
+//! `xsd:duration` value — including one whose months AND seconds components are
+//! both nonzero, which no single-component function can order correctly — and are
+//! the functions a caller dispatching on a bare `xsd:duration` tag should call.
+//! The single-component functions are deliberately kept even where nothing in this
+//! workspace calls them: they remain the published F&O surface of the crate, not
+//! dead code.
+//!
+//! `add_duration_to_gregorian` / `subtract_duration_from_gregorian` complete the
+//! same general family for the five Gregorian types (`gYearMonth`, `gYear`,
+//! `gMonth`, `gMonthDay`, `gDay`), which F&O does not define single-component
+//! operators for at all. They refuse rather than fabricate an absent field —
+//! see [`add_duration_to_gregorian`]'s own doc for the one deliberate,
+//! spec-justified exception.
 
 use std::cmp::Ordering;
 
@@ -23,6 +46,26 @@ const MAX_TZ_MIN: i32 = 14 * 60;
 /// ±14:00 expressed in seconds, for the no-timezone comparison bound.
 const TZ_BOUND_SECS: i128 = 14 * 3600;
 const SECS_PER_DAY: i128 = 86_400;
+/// A leap year, used only by the test sweeps below to look up February's
+/// maximum length (29) via [`days_in_month`] when sizing a sweep — not a
+/// probe: `gMonthDay` year-independence is decided by [`gmonthday_shift`]'s
+/// full-period anchor walk, not by a curated set of probe years (see that
+/// function's doc for why a bounded probe set was retired outright).
+#[cfg(test)]
+const A_LEAP_YEAR: i64 = 2000;
+/// One full Gregorian leap cycle of candidate anchor years for
+/// [`gmonthday_shift`]'s year-independence oracle. The proleptic Gregorian
+/// leap rule (`year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)`) has an
+/// EXACT period of 400 years — `leap(Y) == leap(Y + 400)` for every `Y`,
+/// because 400 is a multiple of 4, of 100, and of 400 simultaneously — so
+/// scanning every anchor year in any one window of exactly 400 consecutive
+/// years is scanning every anchor year that exists: a disagreement produced
+/// by some anchor outside this window is, by periodicity, reproduced by the
+/// congruent anchor inside it. `2000..=2399` is one such window, chosen only
+/// to keep the walk's intermediate `i64` values small and distinct from any
+/// of this module's other named years; any other 400-consecutive-year window
+/// decides every case identically.
+const GMONTHDAY_ANCHOR_YEARS: std::ops::RangeInclusive<i64> = 2000..=2399;
 
 /// `xsd:dateTime`.
 #[derive(Debug, Clone)]
@@ -65,7 +108,111 @@ pub struct Duration {
     datatype: XsdDatatype,
 }
 
+/// Which of a `Duration`'s two components carry a nonzero value. `range.rs` states
+/// the fact this classification exists to encode once instead of scattering it:
+/// "The `duration` family is ONE space because the `xsd:dayTimeDuration` and
+/// `xsd:yearMonthDuration` value spaces overlap at the zero duration." A
+/// division-commensurability rule (or any other duration-group operator) that
+/// branches on `Shape` — via a `match` on `(Shape, Shape)`, never a derived `Ord` +
+/// `max` — cannot invent an ordering between `Months` and `Seconds`, which are
+/// genuinely incomparable summands of the direct sum `D = Y ⊕ T`.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Both components are zero — the point where the two summands meet.
+    Zero,
+    /// Only the months component is nonzero.
+    Months,
+    /// Only the seconds component is nonzero.
+    Seconds,
+    /// Both components are nonzero; no single summand describes the value.
+    Mixed,
+}
+
 impl Duration {
+    /// The single construction point for every `Duration` value, in this module
+    /// AND for any external caller that holds a `(months, seconds)` pair it
+    /// computed by hand. Public precisely so such a caller — the motivating one
+    /// being an aggregate fold that accumulates raw `(months, seconds)`
+    /// components across many rows before ever needing a `Duration` at all
+    /// (folding through this constructor at every intermediate row would wrongly
+    /// reject a running total that is momentarily mixed-sign even though the
+    /// FINAL total is not, since the value space's sign-coherence rule is a
+    /// property of the result, not of every partial sum on the way to it) — can
+    /// still validate its own final pair through the exact same two invariants
+    /// every other `Duration`, whether parsed or computed by this module's own
+    /// arithmetic, already goes through. There is no other way to build a
+    /// `Duration` from raw components: the fields stay private and this crate
+    /// exposes no raw-mantissa constructor for [`Decimal`] either, so an invalid
+    /// pair is simply unconstructible, from inside this module or out.
+    ///
+    /// Enforces two invariants so that every other function on `Duration` — most
+    /// importantly [`Duration::canonical_lexical`] — is correct by construction
+    /// rather than merely aspirational:
+    ///
+    /// - **Sign coherence.** XSD 1.1 Part 2 §3.3.6 defines the duration value space
+    ///   as the pair `(months, seconds)` with both components non-negative or both
+    ///   non-positive; a pair with strictly opposite signs lies outside the range of
+    ///   the lexical mapping, so there is no correct string to emit for it —
+    ///   `canonical_lexical` would render `(months: 12, seconds: -86400)` as
+    ///   `"-P1Y1D"`, which *denotes* `(-12, -86400)`, a silently wrong value. Making
+    ///   such a pair unconstructible is cheaper and safer than trying to render it.
+    /// - **Tag/component coherence.** The same pattern-facet rule `parse_duration`
+    ///   enforces on the lexical form (XSD 1.1 Part 2 §3.4.26–§3.4.27): a value
+    ///   tagged `yearMonthDuration` must have a zero `seconds` component, and one
+    ///   tagged `dayTimeDuration` must have a zero `months` component. Applying the
+    ///   rule here as well means a `Duration` can never be *computed* into a state
+    ///   `parse_duration` would refuse to parse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_xsd::XsdDatatype;
+    /// use purrdf_xsd::numeric::parse_decimal;
+    /// use purrdf_xsd::temporal::Duration;
+    ///
+    /// // 12 months, zero seconds: sign-coherent (seconds is zero, so only the
+    /// // months sign matters), constructs fine.
+    /// let d = Duration::new(12, parse_decimal("0").unwrap(), XsdDatatype::Duration).unwrap();
+    /// assert_eq!(d.canonical_lexical(), "P1Y");
+    ///
+    /// // 1 month against -1 second: strictly opposite signs lie outside the
+    /// // value space's lexical mapping, so construction is refused outright
+    /// // rather than rendering a wrong string.
+    /// let neg_one_sec = parse_decimal("-1").unwrap();
+    /// assert!(Duration::new(1, neg_one_sec, XsdDatatype::Duration).is_err());
+    /// ```
+    pub fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {
+        let m_sign = i128::from(months.signum());
+        let s_sign = seconds.mantissa().signum();
+        if m_sign != 0 && s_sign != 0 && m_sign != s_sign {
+            return Err(arith_overflow(
+                datatype,
+                "duration months and seconds components have differing signs",
+            ));
+        }
+        match datatype {
+            XsdDatatype::YearMonthDuration if !seconds.is_zero() => {
+                return Err(arith_overflow(
+                    datatype,
+                    "yearMonthDuration must have a zero seconds component",
+                ));
+            }
+            XsdDatatype::DayTimeDuration if months != 0 => {
+                return Err(arith_overflow(
+                    datatype,
+                    "dayTimeDuration must have a zero months component",
+                ));
+            }
+            _ => {}
+        }
+        Ok(Self {
+            months,
+            seconds,
+            datatype,
+        })
+    }
+
     /// The originating XSD datatype (`Duration`/`DayTimeDuration`/`YearMonthDuration`).
     #[must_use]
     pub fn datatype(&self) -> XsdDatatype {
@@ -83,6 +230,87 @@ impl Duration {
     #[must_use]
     pub fn seconds(&self) -> Decimal {
         self.seconds
+    }
+
+    /// Classify which of `self`'s two components are nonzero. See [`Shape`].
+    /// `Decimal::is_zero` is mantissa-only and scale-insensitive, so this
+    /// classification is unaffected by which scale `self.seconds` happens to carry.
+    fn shape(&self) -> Shape {
+        match (self.months == 0, self.seconds.is_zero()) {
+            (true, true) => Shape::Zero,
+            (false, true) => Shape::Months,
+            (true, false) => Shape::Seconds,
+            (false, false) => Shape::Mixed,
+        }
+    }
+
+    /// Canonical lexical form `[-]PnYnMnDTnHnMnS` (general duration grammar).
+    #[must_use]
+    pub fn canonical_lexical(&self) -> String {
+        // `Duration::new` refuses to construct a mixed-sign (months, seconds) pair
+        // (XSD 1.1 Part 2 §3.3.6 puts such pairs outside the lexical mapping's
+        // range), so this function may assume sign coherence rather than needing to
+        // guard against it — the invariant is load-bearing for the `neg` line below.
+        debug_assert!(
+            i128::from(self.months.signum()) * self.seconds.mantissa().signum() != -1,
+            "Duration::new must enforce sign coherence: months and seconds may not have strictly opposite signs"
+        );
+        let neg = self.months < 0 || self.seconds.mantissa() < 0;
+        let months = self.months.unsigned_abs();
+        let years = months / 12;
+        let rem_months = months % 12;
+        let total_secs = self.seconds.whole_part().unsigned_abs();
+        let frac = self.seconds.frac_part();
+        let days = total_secs / 86_400;
+        let rem = total_secs % 86_400;
+        let hours = rem / 3600;
+        let mins = (rem % 3600) / 60;
+        let secs = rem % 60;
+
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        if neg {
+            out.push('-');
+        }
+        out.push('P');
+        if years > 0 {
+            let _ = write!(out, "{years}Y");
+        }
+        if rem_months > 0 {
+            let _ = write!(out, "{rem_months}M");
+        }
+        if days > 0 {
+            let _ = write!(out, "{days}D");
+        }
+        let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
+        if has_time {
+            out.push('T');
+            if hours > 0 {
+                let _ = write!(out, "{hours}H");
+            }
+            if mins > 0 {
+                let _ = write!(out, "{mins}M");
+            }
+            if secs > 0 || !frac.is_zero() {
+                if frac.is_zero() {
+                    let _ = write!(out, "{secs}S");
+                } else {
+                    let canon = frac.canonical_lexical();
+                    let digits = canon.split_once('.').map_or("", |(_, f)| f);
+                    let _ = write!(out, "{secs}.{digits}S");
+                }
+            }
+        }
+        // The zero duration canonicalizes to "PT0S" — except for
+        // `yearMonthDuration`, whose pattern facet ([^DT]*, XSD 1.1 Part 2
+        // §3.4.27) forbids both 'D' and 'T', so its zero canonicalizes to "P0M".
+        if out == "P" || out == "-P" {
+            out.push_str(match self.datatype {
+                XsdDatatype::YearMonthDuration => "0M",
+                _ => "T0S",
+            });
+        }
+        out
     }
 }
 
@@ -109,25 +337,54 @@ impl Gregorian {
 
 // ── Proleptic Gregorian calendar (Howard Hinnant's algorithm) ────────────────────
 
-/// Days since 1970-01-01 for a proleptic-Gregorian civil date (valid for any year,
-/// including negative). `m` in 1..=12, `d` in 1..=31.
-fn days_from_civil(y: i64, m: u8, d: u8) -> i64 {
+/// Days since 1970-01-01 for a proleptic-Gregorian civil date — TRULY valid for any
+/// `i64` year, including negative, in every build profile. `m` in 1..=12, `d` in
+/// 1..=31.
+///
+/// Computed entirely in `i128`: at the extremes of the `i64` year domain,
+/// `era * 146_097` reaches roughly `3.4e21` in magnitude, which overflows `i64`
+/// (max `~9.2e18`) but is comfortably inside `i128::MAX` (`~1.7e38`) — over sixteen
+/// orders of magnitude of headroom, so no `i128` operation in this function is
+/// reachably close to its own overflow boundary and none of them are `checked_*`.
+/// This is the fix for a real, reachable defect (not a hypothetical one): the prior
+/// `i64` version's unchecked `era * 146_097` multiply wrapped silently in a release
+/// build and panicked in a debug/overflow-checks build for well-formed large-year
+/// input reachable straight from the public arithmetic surface — e.g.
+/// `"<huge-year>-01-01"^^xsd:date + "P1D"` (`op:add-dayTimeDuration-to-date`, via
+/// [`add_seconds_decimal`]) with no `gMonthDay`/duration exotica involved at all.
+///
+/// Callers that need an `i64` (to populate a `DateTime`/`Date`/`Gregorian` field)
+/// narrow the *final* day-count arithmetic with a checked conversion at the point
+/// where it is actually used, so a result that is truly out of `i64` range is a
+/// typed `OutOfRange` error, never a silent wrap or a panic.
+fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
+    let y = i128::from(y);
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
     let yoe = y - era * 400; // [0, 399]
-    let m = i64::from(m);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(d) - 1; // [0,365]
+    let m = i128::from(m);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i128::from(d) - 1; // [0,365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     era * 146_097 + doe - 719_468
 }
 
 /// Howard Hinnant's `civil_from_days`: the inverse of [`days_from_civil`]. `days` is
-/// the day count relative to 1970-01-01 (may be negative). Shared by
-/// [`datetime_from_unix_seconds`] and the duration/timezone arithmetic below, which
-/// all need to turn an exact day count back into a proleptic-Gregorian date.
+/// the day count relative to 1970-01-01 (may be negative), given — and computed —
+/// in `i128` for the identical overflow-safety reason [`days_from_civil`]'s doc
+/// spells out (the two functions are inverses of each other and share the same
+/// `era * 146_097`-shaped arithmetic, so they share the same hazard and the same
+/// fix). Shared by [`datetime_from_unix_seconds`] and the duration/timezone
+/// arithmetic below, which all need to turn an exact day count back into a
+/// proleptic-Gregorian date.
+///
+/// The returned year is `i128` too, deliberately not narrowed here: narrowing is
+/// the caller's job, at the point where an `i64` field is actually populated, so
+/// that a genuinely out-of-`i64`-range result surfaces as a typed `OutOfRange`
+/// there instead of this shared primitive having to guess which callers can afford
+/// to fail and which cannot.
 ///
 /// Algorithm reference: <https://howardhinnant.github.io/date_algorithms.html>
-fn civil_from_days(days: i64) -> (i64, u8, u8) {
+fn civil_from_days(days: i128) -> (i128, u8, u8) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -158,7 +415,15 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
     };
     let tod = secs - days * SECS_PER_DAY_I64; // 0 .. 86399
 
-    let (y, m, d) = civil_from_days(days);
+    let (y, m, d) = civil_from_days(i128::from(days));
+    // `days` is bounded by `i64::MIN/86_400 ..= i64::MAX/86_400` (roughly
+    // ±1.07e14), so the resulting year is bounded by roughly ±(400 * 1.07e14 /
+    // 146_097) — many orders of magnitude inside `i64`. This narrowing cannot
+    // fail for any `i64` `secs`, unlike the general case `civil_from_days`
+    // documents (see its doc) — it is safe specifically because this function's
+    // input is seconds, not an arbitrary duration-shifted year.
+    let y = i64::try_from(y)
+        .expect("civil_from_days(i128::from(i64 seconds / 86_400)) always fits i64");
 
     let hour = (tod / 3600) as u8;
     let minute = ((tod % 3600) / 60) as u8;
@@ -391,6 +656,29 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
         None => (body, None),
     };
 
+    // XSD 1.1 Part 2 pattern facets on the two named subtypes (§3.4.26–§3.4.27):
+    // `yearMonthDuration` is `[^DT]*` — no day component and no time part at all;
+    // `dayTimeDuration` is `[^YM]*(T.*)?` — no year/month component in the date
+    // part (an `M` inside the *time* part denotes minutes and is unrestricted).
+    // `xsd:duration` itself carries no pattern facet and accepts every component.
+    match dt {
+        XsdDatatype::YearMonthDuration if date_part.contains('D') || time_part.is_some() => {
+            return Err(invalid(
+                dt,
+                s,
+                "yearMonthDuration must not have a day or time component",
+            ));
+        }
+        XsdDatatype::DayTimeDuration if date_part.contains('Y') || date_part.contains('M') => {
+            return Err(invalid(
+                dt,
+                s,
+                "dayTimeDuration must not have a year or month component",
+            ));
+        }
+        _ => {}
+    }
+
     let mut months: i64 = 0;
     let mut seconds = 0i128; // whole seconds accumulator
     let mut sec_frac = Decimal::from_parts(0, 0);
@@ -408,8 +696,27 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
             num.clear();
             any = true;
             match ch {
-                'Y' => months += n * 12,
-                'M' => months += n,
+                'Y' => {
+                    let added = n.checked_mul(12).ok_or_else(|| XsdError::OutOfRange {
+                        datatype: dt,
+                        lexical: s.to_string(),
+                        reason: "duration months overflow",
+                    })?;
+                    months = months
+                        .checked_add(added)
+                        .ok_or_else(|| XsdError::OutOfRange {
+                            datatype: dt,
+                            lexical: s.to_string(),
+                            reason: "duration months overflow",
+                        })?;
+                }
+                'M' => {
+                    months = months.checked_add(n).ok_or_else(|| XsdError::OutOfRange {
+                        datatype: dt,
+                        lexical: s.to_string(),
+                        reason: "duration months overflow",
+                    })?;
+                }
                 'D' => seconds += i128::from(n) * SECS_PER_DAY,
                 _ => return Err(invalid(dt, s, "bad duration date component")),
             }
@@ -473,14 +780,23 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
         })?;
     let mut total_secs = Decimal::from_parts(combined, scale);
     if neg {
-        months = -months;
-        total_secs = Decimal::from_parts(-total_secs.mantissa(), total_secs.scale());
+        months = months.checked_neg().ok_or_else(|| XsdError::OutOfRange {
+            datatype: dt,
+            lexical: s.to_string(),
+            reason: "duration months overflow",
+        })?;
+        let negated_mantissa =
+            total_secs
+                .mantissa()
+                .checked_neg()
+                .ok_or_else(|| XsdError::OutOfRange {
+                    datatype: dt,
+                    lexical: s.to_string(),
+                    reason: "duration seconds overflow",
+                })?;
+        total_secs = Decimal::from_parts(negated_mantissa, total_secs.scale());
     }
-    Ok(Duration {
-        months,
-        seconds: total_secs,
-        datatype: dt,
-    })
+    Duration::new(months, total_secs, dt)
 }
 
 // ── Gregorian family parsing ─────────────────────────────────────────────────────
@@ -661,8 +977,11 @@ pub fn parse_gregorian(datatype: XsdDatatype, lexical: &str) -> Result<Gregorian
 // ── Comparison (XSD partial order) ───────────────────────────────────────────────
 
 /// The naive whole-seconds offset (timezone NOT applied) on the proleptic timeline.
-fn naive_secs(days: i64, hour: u8, minute: u8, sec_whole: i128) -> i128 {
-    i128::from(days) * SECS_PER_DAY + i128::from(hour) * 3600 + i128::from(minute) * 60 + sec_whole
+/// `days` is `i128` (matching [`days_from_civil`]) so a comparison — unlike
+/// arithmetic that must build a concrete `i64`-typed calendar value — never has to
+/// narrow at all, and so can never fail for any `i64` year on either side.
+fn naive_secs(days: i128, hour: u8, minute: u8, sec_whole: i128) -> i128 {
+    days * SECS_PER_DAY + i128::from(hour) * 3600 + i128::from(minute) * 60 + sec_whole
 }
 
 /// Compare two `(whole_secs, frac)` points.
@@ -772,6 +1091,27 @@ pub fn cmp_time(a: &Time, b: &Time) -> Option<Ordering> {
 ///
 /// Non-zero cross-subtype pairs (e.g. `"P1Y"` vs `"P1D"`) disagree on at least
 /// one component → `None` (genuinely incomparable per XSD §3.6.5).
+///
+/// ## Why `<`/`>` is indeterminate but `=` is total (see [`duration_equal`])
+///
+/// This function and [`duration_equal`] answer two genuinely different questions
+/// over the same (months, seconds) pair, and the difference is not an oversight:
+///
+/// - XPath F&O defines `lt`/`gt` on durations **only for the two named
+///   subtypes** (`dayTimeDuration`, `yearMonthDuration`), each of which is
+///   totally ordered on its own. Comparing across incommensurable months/seconds
+///   — `"P1M"` vs `"P30D"` — has no defined order, so this function's `None` is a
+///   **spec-mandated outcome**, exactly like every other `None` this crate
+///   returns from a `cmp_*` function (see the crate-level docs).
+/// - XPath F&O's `op:duration-equal`, by contrast, is defined over the general
+///   `xs:duration` and is **total**: it compares months and seconds
+///   componentwise and always returns a boolean, never an error, even for
+///   incommensurable pairs. `"P1M" = "P30D"` is `false`, not indeterminate.
+///
+/// So `cmp_duration(a, b) == Some(Ordering::Equal)` and `duration_equal(a, b)`
+/// always agree (equality is the one relation both functions define the same
+/// way), but a `None` from this function does **not** imply `duration_equal`
+/// also has nothing to say — `duration_equal` always has an answer.
 #[must_use]
 pub fn cmp_duration(a: &Duration, b: &Duration) -> Option<Ordering> {
     let m = a.months.cmp(&b.months);
@@ -782,6 +1122,40 @@ pub fn cmp_duration(a: &Duration, b: &Duration) -> Option<Ordering> {
         (a, b) if a == b => Some(a),
         _ => None,
     }
+}
+
+/// `xs:duration` value-space equality (XPath F&O `op:duration-equal`) — **total**,
+/// unlike [`cmp_duration`]'s partial order. See that function's doc comment for
+/// the full explanation of why `=` and `<`/`>` genuinely differ here.
+///
+/// Componentwise on `(months, seconds)`, with **no datatype-tag gate**:
+/// `op:duration-equal`'s parameter type is the general `xs:duration`, so
+/// cross-subtype pairs (e.g. a `yearMonthDuration` against a `dayTimeDuration`)
+/// are in scope and compare by value, exactly like [`cmp_duration`]'s zero-pair
+/// case. `"P1M" = "P30D"` is `false` — never an error.
+///
+/// Seconds equality goes through [`Decimal::cmp_exact`], never `==`: `Decimal`
+/// deliberately derives no `PartialEq` because two different `(mantissa, scale)`
+/// pairs (e.g. mantissa 10 scale 1, and mantissa 1 scale 0) denote the same
+/// value, and `cmp_exact` is the only correct equality over that representation.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, parse, value_cmp, value_equal};
+///
+/// let p1m = parse("P1M", XsdDatatype::YearMonthDuration)?;
+/// let p30d = parse("P30D", XsdDatatype::DayTimeDuration)?;
+///
+/// // Total: always an answer, never an error.
+/// assert_eq!(value_equal(&p1m, &p30d), Some(false));
+/// // Partial: incommensurable components have no defined order.
+/// assert_eq!(value_cmp(&p1m, &p30d), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+#[must_use]
+pub fn duration_equal(a: &Duration, b: &Duration) -> bool {
+    a.months == b.months && a.seconds.cmp_exact(&b.seconds).is_eq()
 }
 
 /// Compare two Gregorian values (XSD partial order).
@@ -855,11 +1229,6 @@ fn decimal_negate(datatype: XsdDatatype, a: &Decimal) -> Result<Decimal, XsdErro
         })
 }
 
-/// Exact `a - b`, built from [`decimal_add_exact`] + [`decimal_negate`].
-fn decimal_sub_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
-    decimal_add_exact(datatype, a, &decimal_negate(datatype, b)?)
-}
-
 /// Round a `Decimal` to the nearest `i64`, ties toward positive infinity — the same
 /// rule `numeric::numeric_round` applies to `fn:round` (XPath §4.4.5), reused here for
 /// `xs:yearMonthDuration` multiply/divide, whose result must be an integer number of
@@ -898,8 +1267,15 @@ fn shift_year_month(
         .ok_or_else(|| arith_overflow(datatype, "year-month arithmetic overflow"))?;
     let new_year = total.div_euclid(12);
     let new_month = (total.rem_euclid(12) + 1) as u8;
-    let new_year =
-        i64::try_from(new_year).map_err(|_| arith_overflow(datatype, "year overflow"))?;
+    // The lexical year domain is symmetric — `parse_ymd`/`parse_year_str` parse a
+    // sign-free magnitude into `i64`, so a lexical year ranges over
+    // `-i64::MAX..=i64::MAX`. `i64::MIN` (whose magnitude has no positive `i64`
+    // counterpart) is therefore not a representable year and must not be let
+    // through by arithmetic either.
+    let new_year = i64::try_from(new_year)
+        .ok()
+        .filter(|y| *y != i64::MIN)
+        .ok_or_else(|| arith_overflow(datatype, "year overflow"))?;
     Ok((new_year, new_month))
 }
 
@@ -998,21 +1374,35 @@ fn add_seconds_decimal(
     let sec_of_minute_scaled = remainder % (unit * 60);
     let second_new = Decimal::from_parts(sec_of_minute_scaled, scale);
 
-    let base_days = i128::from(days_from_civil(year, month, day));
+    // `days_from_civil` and `civil_from_days` are `i128`-internal and cannot
+    // overflow for any `i64` year (see their docs) — this is exactly the F2
+    // regression's reachable case: `year` here can be an astronomically large
+    // `i64` (e.g. from a prior `yearMonthDuration` shift, or straight from a
+    // wide-lexical `xsd:date`/`xsd:dateTime` literal), and the day-count math
+    // below must not wrap or panic for it. Only the FINAL result — an actual
+    // `i64` calendar year — is narrowed, with a typed `OutOfRange` if it
+    // genuinely does not fit.
+    let base_days = days_from_civil(year, month, day);
     let total_days = base_days
         .checked_add(day_delta)
         .ok_or_else(|| arith_overflow(datatype, "datetime arithmetic overflow"))?;
-    let total_days =
-        i64::try_from(total_days).map_err(|_| arith_overflow(datatype, "date overflow"))?;
     let (y, m, d) = civil_from_days(total_days);
+    // Same lexical-year-domain fact as `shift_year_month`: the lexical space is
+    // symmetric (`-i64::MAX..=i64::MAX`), so `i64::MIN` is not a representable
+    // year and this narrowing must reject it, not just genuine `i64` overflow.
+    let y = i64::try_from(y)
+        .ok()
+        .filter(|y| *y != i64::MIN)
+        .ok_or_else(|| arith_overflow(datatype, "date overflow"))?;
 
     Ok((y, m, d, hour_new, minute_new, second_new))
 }
 
 /// One side of an [`instant_diff`] subtraction: days-since-epoch, time-of-day, and
-/// timezone.
+/// timezone. `days` is `i128` (matching [`days_from_civil`]'s return), so
+/// constructing an `Instant` from a wide-year `DateTime`/`Date` can never overflow.
 struct Instant {
-    days: i64,
+    days: i128,
     hour: u8,
     minute: u8,
     second: Decimal,
@@ -1023,11 +1413,11 @@ struct Instant {
 /// the XSD partial order's tz-indeterminacy rule (see [`cmp_timeline`]): mixing a
 /// timezoned and an untimezoned operand has no well-defined instant difference, so —
 /// rather than guessing an implicit timezone this crate has no execution context to
-/// supply — that case is a hard `TypeMismatch`, not a best-effort answer.
+/// supply — that case is a hard `Indeterminate`, not a best-effort answer.
 /// Both-timezoned and both-untimezoned pairs are always determinate.
 fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Duration, XsdError> {
     if a.tz.is_some() != b.tz.is_some() {
-        return Err(XsdError::TypeMismatch {
+        return Err(XsdError::Indeterminate {
             reason: "subtract: indeterminate timezone mix (one operand has a timezone, the other does not)",
         });
     }
@@ -1050,11 +1440,9 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
     let a_tz_secs = i128::from(a.tz.unwrap_or(0)) * 60;
     let b_tz_secs = i128::from(b.tz.unwrap_or(0)) * 60;
     let a_naive =
-        i128::from(a.days) * SECS_PER_DAY + i128::from(a.hour) * 3600 + i128::from(a.minute) * 60
-            - a_tz_secs;
+        a.days * SECS_PER_DAY + i128::from(a.hour) * 3600 + i128::from(a.minute) * 60 - a_tz_secs;
     let b_naive =
-        i128::from(b.days) * SECS_PER_DAY + i128::from(b.hour) * 3600 + i128::from(b.minute) * 60
-            - b_tz_secs;
+        b.days * SECS_PER_DAY + i128::from(b.hour) * 3600 + i128::from(b.minute) * 60 - b_tz_secs;
     let a_total = a_naive
         .checked_mul(unit)
         .and_then(|v| v.checked_add(a_second_scaled))
@@ -1065,33 +1453,40 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
         .ok_or_else(overflow)?;
     let diff = a_total.checked_sub(b_total).ok_or_else(overflow)?;
 
-    Ok(Duration {
-        months: 0,
-        seconds: Decimal::from_parts(diff, scale),
-        datatype: XsdDatatype::DayTimeDuration,
-    })
+    Duration::new(
+        0,
+        Decimal::from_parts(diff, scale),
+        XsdDatatype::DayTimeDuration,
+    )
 }
 
-/// Require `dur` to be declared `xsd:yearMonthDuration` (not the general
-/// `xsd:duration`, whose seconds component is not statically known to be zero).
+/// Require `dur`'s seconds component to be zero — the value-level condition XSD
+/// 1.1 Part 2 §3.4.27's `[^DT]*` pattern facet guarantees for every
+/// `yearMonthDuration`. Parse-time facet enforcement makes the declared tag and
+/// the value's components coincide for the two named subtypes, so checking the
+/// component rather than the tag is a strict relaxation of the old tag-only guard:
+/// every `yearMonthDuration` still passes, and the general `xsd:duration` tag now
+/// passes too whenever its seconds component happens to be zero.
 fn require_year_month_duration(dur: &Duration) -> Result<(), XsdError> {
-    if dur.datatype == XsdDatatype::YearMonthDuration {
+    if dur.seconds.is_zero() {
         Ok(())
     } else {
         Err(XsdError::TypeMismatch {
-            reason: "operation requires a yearMonthDuration operand",
+            reason: "operation requires a duration with a zero seconds component (yearMonthDuration-shaped)",
         })
     }
 }
 
-/// Require `dur` to be declared `xsd:dayTimeDuration` (not the general
-/// `xsd:duration`, whose months component is not statically known to be zero).
+/// Require `dur`'s months component to be zero — the value-level condition XSD 1.1
+/// Part 2 §3.4.26's `[^YM]*(T.*)?` pattern facet guarantees for every
+/// `dayTimeDuration`. See [`require_year_month_duration`] for why checking the
+/// component rather than the tag is a strict relaxation of the old guard.
 fn require_day_time_duration(dur: &Duration) -> Result<(), XsdError> {
-    if dur.datatype == XsdDatatype::DayTimeDuration {
+    if dur.months == 0 {
         Ok(())
     } else {
         Err(XsdError::TypeMismatch {
-            reason: "operation requires a dayTimeDuration operand",
+            reason: "operation requires a duration with a zero months component (dayTimeDuration-shaped)",
         })
     }
 }
@@ -1244,7 +1639,1012 @@ pub fn adjust_time_to_timezone(t: &Time, timezone: Option<i64>) -> Result<Time, 
     }
 }
 
+// ── Calendar-action classifier ────────────────────────────────────────────────────
+
+/// How a temporal sort receives a duration's MONTHS component (XML Schema Appendix
+/// E's addition table, generalized to the Gregorian family below it).
+///
+/// Durations form a partially ordered abelian group `D = Y ⊕ T`, the direct sum of
+/// a months summand and a seconds summand meeting only at zero. Instants are a
+/// genuine **torsor** under the seconds summand `T` — free, transitive, invertible,
+/// which is why `dateTime − dateTime` always yields a determinate `dayTimeDuration`
+/// — but only a **non-associative retraction** under the months summand `Y`:
+/// `(2024-01-31 + P1M) + P1M ≠ 2024-01-31 + P2M`. That non-associativity is the
+/// entire reason a duration must be applied months-first-then-seconds
+/// (XML Schema Appendix E) rather than either order being equally valid, and it is
+/// why the eight temporal sorts need a genuine classification of "how" a months
+/// component is received rather than one free action shared by all of them.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MonthAction {
+    /// The months component shifts the sort's absolute month count with no
+    /// reference month to clamp against (`ℤ` acts freely) — `xsd:gYearMonth`.
+    Free,
+    /// The months component shifts year+month, then the day-of-month is
+    /// clamped to the target month's last day: a real calendar year is
+    /// known, so the clamp is always a real value, never a fabrication —
+    /// `dateTime`/`date`, the two instant sorts, driven through [`drive`].
+    Clamped,
+    /// `gMonthDay`'s months component. Unlike every other [`MonthAction`]
+    /// variant this is never evaluated on its own: `gMonthDay` always pairs
+    /// it with [`SecondAction::GMonthDayComposite`] (see [`actions`]), and
+    /// [`drive_gregorian`] intercepts that pair before the ordinary
+    /// months-then-seconds dispatch below and hands both components to
+    /// [`gmonthday_shift`] together. That function's doc explains why: a
+    /// composite `PnMmD` duration's year-independence is one question about
+    /// the FINISHED `(month, day)`, not two separate per-component
+    /// questions — deciding the months half alone (as this variant's name
+    /// might suggest) is the exact defect [`gmonthday_shift`] replaces. This
+    /// variant exists only so [`actions`]'s classification match stays total
+    /// and honest about which sort receives this behavior.
+    GMonthDayComposite,
+    /// The months component acts through the quotient map `ℤ → ℤ/12`, not a
+    /// dropped carry: XSD 1.1 Part 2 §3.3.13 makes `gMonth` a recurring month with
+    /// no year field, so there is no year to carry into and no field is fabricated
+    /// by reducing modulo 12 — `xsd:gMonth`.
+    Cyclic12,
+    /// The months component must lie in the subgroup `12ℤ` (a whole number of
+    /// years) — `xsd:gYear` has no month field to receive a fractional-year shift.
+    Divisible12,
+    /// `gDay`'s months component. Like [`MonthAction::GMonthDayComposite`], never
+    /// evaluated on its own: `gDay` always pairs it with
+    /// [`SecondAction::GDayComposite`] (see [`actions`]), and [`drive_gregorian`]
+    /// intercepts that pair before the ordinary months-then-seconds dispatch below
+    /// and hands both components to [`gday_shift`] together, one field narrower
+    /// than [`gmonthday_shift`] (`gDay` has no month field of its own to fix an
+    /// anchor's month at, so [`gday_shift`] anchors over every `(year, month)`
+    /// PAIR in one 400-year period instead of `gmonthday_shift`'s year-only
+    /// anchor set — see that function's doc). A composite `PnMmD` duration's
+    /// month-independence is one question about the FINISHED day, not two
+    /// separate per-component questions — deciding the months half alone by a
+    /// `day <= 28` sufficient condition (this variant's previous behavior, before
+    /// this composite conversion) is the exact defect [`gday_shift`] replaces: it
+    /// refused every determinate day-29/30/31 case (`---31 + P1D`, `---29 - P1D`,
+    /// `---31 + P1M1D`, the entire `±146,097·k`-day class) even though the
+    /// FINISHED answer is invariant from every real `(year, month)` anchor. This
+    /// variant exists only so [`actions`]'s classification match stays total and
+    /// honest about which sort receives this behavior.
+    GDayComposite,
+    /// The sort has no months field at all — a nonzero months component is a type
+    /// error (`xsd:time`).
+    Absent,
+}
+
+/// How a temporal sort receives a duration's SECONDS component. See
+/// [`MonthAction`]'s doc for the algebraic reason months and seconds need
+/// independent classification rather than one shared action.
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SecondAction {
+    /// The seconds component shifts the full (date, time-of-day) point with no
+    /// truncation — `xsd:dateTime`.
+    Free,
+    /// The seconds component is applied at midnight and only the resulting date is
+    /// kept; a sub-day remainder never errors — `xsd:date`.
+    MidnightTruncating,
+    /// The seconds component shifts the time-of-day, wrapping across an implicit
+    /// day boundary that is discarded afterward — `xsd:time`.
+    CyclicDay,
+    /// `gMonthDay`'s seconds (day-count) component. Always paired with
+    /// [`MonthAction::GMonthDayComposite`] — see that variant's doc for why
+    /// gMonthDay's months and days components are decided together, by
+    /// [`gmonthday_shift`], rather than through this action's ordinary
+    /// dispatch point below.
+    GMonthDayComposite,
+    /// `gDay`'s seconds (day-count) component. Always paired with
+    /// [`MonthAction::GDayComposite`] — see that variant's doc for why gDay's
+    /// months and days components are decided together, by [`gday_shift`],
+    /// rather than through this action's ordinary dispatch point below.
+    GDayComposite,
+    /// The sort has no seconds field at all — a nonzero seconds component is a
+    /// type error (`xsd:gYearMonth`, `xsd:gYear`, `xsd:gMonth`).
+    Absent,
+}
+
+/// Classify `datatype`'s reception of a duration's months and seconds components
+/// (XML Schema Appendix E's addition table, generalized to the Gregorian family —
+/// see [`MonthAction`]/[`SecondAction`]).
+///
+/// The match is exhaustive over **every** [`XsdDatatype`] variant, not just the
+/// eight temporal sorts that receive a nonzero component: every non-temporal
+/// datatype genuinely has no months field and no seconds field, so it classifies
+/// as `(Absent, Absent)` — the same "no such field" answer `xsd:time` gives for
+/// months. `XsdDatatype` is `#[non_exhaustive]` to downstream crates only; this
+/// module is the defining crate, so the no-wildcard match is legal and total
+/// coverage means adding a new `XsdDatatype` variant anywhere in the crate is a
+/// compile error here until it is classified, not a silent gap.
+const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
+    match datatype {
+        XsdDatatype::DateTime => (MonthAction::Clamped, SecondAction::Free),
+        XsdDatatype::Date => (MonthAction::Clamped, SecondAction::MidnightTruncating),
+        XsdDatatype::Time => (MonthAction::Absent, SecondAction::CyclicDay),
+        XsdDatatype::GYearMonth => (MonthAction::Free, SecondAction::Absent),
+        XsdDatatype::GYear => (MonthAction::Divisible12, SecondAction::Absent),
+        XsdDatatype::GMonth => (MonthAction::Cyclic12, SecondAction::Absent),
+        XsdDatatype::GMonthDay => (
+            MonthAction::GMonthDayComposite,
+            SecondAction::GMonthDayComposite,
+        ),
+        XsdDatatype::GDay => (MonthAction::GDayComposite, SecondAction::GDayComposite),
+        XsdDatatype::Integer
+        | XsdDatatype::Long
+        | XsdDatatype::Int
+        | XsdDatatype::Short
+        | XsdDatatype::Byte
+        | XsdDatatype::UnsignedLong
+        | XsdDatatype::UnsignedInt
+        | XsdDatatype::UnsignedShort
+        | XsdDatatype::UnsignedByte
+        | XsdDatatype::NonNegativeInteger
+        | XsdDatatype::PositiveInteger
+        | XsdDatatype::NonPositiveInteger
+        | XsdDatatype::NegativeInteger
+        | XsdDatatype::Decimal
+        | XsdDatatype::Float
+        | XsdDatatype::Double
+        | XsdDatatype::Boolean
+        | XsdDatatype::String
+        | XsdDatatype::Duration
+        | XsdDatatype::DayTimeDuration
+        | XsdDatatype::YearMonthDuration
+        | XsdDatatype::HexBinary
+        | XsdDatatype::Base64Binary => (MonthAction::Absent, SecondAction::Absent),
+    }
+}
+
+/// Apply `dur` to `point`: the months component first (with the day-of-month
+/// clamped against the target month, XML Schema Appendix E), then the seconds
+/// component — the order is load-bearing, see [`MonthAction`]'s doc. A zero
+/// component is skipped entirely regardless of its action, which is what makes
+/// "zero duration → identity" uniform across every sort instead of a case worked
+/// out per sort, and what spares a pure-seconds duration `shift_year_month`'s
+/// multiplication for a no-op month step.
+///
+/// `month_action`/`second_action` come from [`actions`]. Only
+/// [`MonthAction::Clamped`]/[`MonthAction::Absent`] and [`SecondAction::Free`]/
+/// [`SecondAction::MidnightTruncating`]/[`SecondAction::CyclicDay`] are executed
+/// here, for `dateTime`/`date`/`time`; the remaining actions — including
+/// [`MonthAction::GMonthDayComposite`], `gMonthDay`'s own composite
+/// months-and-days action — belong to the Gregorian family, whose values
+/// carry optional fields and no time-of-day, so they are not shaped like a
+/// `CalendarPoint` and are not driven through it; [`actions`] never pairs a
+/// `CalendarPoint` sort with [`MonthAction::GMonthDayComposite`], so this
+/// function structurally never receives it in practice, and the match arm
+/// below exists only to keep the match total.
+fn drive(
+    datatype: XsdDatatype,
+    month_action: MonthAction,
+    second_action: SecondAction,
+    point: CalendarPoint,
+    dur: &Duration,
+) -> Result<CalendarPoint, XsdError> {
+    let point = if dur.months == 0 {
+        point
+    } else {
+        match month_action {
+            MonthAction::Clamped => {
+                let (y, m) = shift_year_month(datatype, point.year, point.month, dur.months)?;
+                let day = point.day.min(days_in_month(y, m));
+                CalendarPoint {
+                    year: y,
+                    month: m,
+                    day,
+                    ..point
+                }
+            }
+            MonthAction::Absent => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this temporal sort has no months field to receive a duration's months component",
+                });
+            }
+            MonthAction::Free
+            | MonthAction::Cyclic12
+            | MonthAction::Divisible12
+            | MonthAction::GDayComposite
+            | MonthAction::GMonthDayComposite => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this calendar action applies only to the Gregorian family, which this driver does not carry a CalendarPoint for",
+                });
+            }
+        }
+    };
+    if dur.seconds.is_zero() {
+        return Ok(point);
+    }
+    match second_action {
+        SecondAction::Free | SecondAction::MidnightTruncating | SecondAction::CyclicDay => {
+            let (y, m, d, h, mi, s) = add_seconds_decimal(datatype, &point, &dur.seconds)?;
+            Ok(CalendarPoint {
+                year: y,
+                month: m,
+                day: d,
+                hour: h,
+                minute: mi,
+                second: s,
+            })
+        }
+        SecondAction::Absent | SecondAction::GMonthDayComposite | SecondAction::GDayComposite => {
+            Err(XsdError::TypeMismatch {
+                reason: "this temporal sort has no free-form seconds field for a duration's seconds component",
+            })
+        }
+    }
+}
+
+/// Convert a duration's seconds component into a whole day count, or reject a
+/// sub-day remainder. Universal precondition across **all five** Gregorian
+/// sorts, checked before any [`SecondAction`]-specific dispatch: no Gregorian
+/// type has an hour/minute/second field (XSD 1.1 Part 2 §3.3.9–§3.3.13), so —
+/// unlike the reference implementation, which silently drops such precision —
+/// this crate refuses to fabricate a day count that ignores it.
+fn gregorian_whole_days(datatype: XsdDatatype, seconds: &Decimal) -> Result<i64, XsdError> {
+    let day_unit = 10i128
+        .pow(u32::from(seconds.scale()))
+        .checked_mul(SECS_PER_DAY)
+        .ok_or_else(|| arith_overflow(datatype, "gregorian day-count overflow"))?;
+    let mantissa = seconds.mantissa();
+    if mantissa.rem_euclid(day_unit) != 0 {
+        return Err(XsdError::TypeMismatch {
+            reason: "no Gregorian type has a time-of-day field: a duration's seconds component must be an exact whole number of days",
+        });
+    }
+    let whole = mantissa.div_euclid(day_unit);
+    i64::try_from(whole).map_err(|_| arith_overflow(datatype, "gregorian day-count overflow"))
+}
+
+/// A Gregorian value's `(year, month, day)` fields, the shape [`drive_gregorian`]
+/// takes and returns — named so its signature does not trip
+/// `clippy::type_complexity`.
+type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
+
+/// The gMonthDay year-independence oracle and answer, computed together:
+/// anchor the source `(month, day)` at every year in
+/// [`GMONTHDAY_ANCHOR_YEARS`] (one full 400-year Gregorian period) where that
+/// date is real, walk EACH anchor through the complete anchored Appendix E
+/// computation — `dur_months` first, with the day-of-month clamped against
+/// the now-known real target year, then `whole_days` as a plain civil-day
+/// walk — and accept iff every anchor lands on the same `(month, day)`.
+///
+/// Because the calendar's leap pattern is exactly periodic with period 400
+/// years (see [`GMONTHDAY_ANCHOR_YEARS`]'s doc), scanning one full period is
+/// scanning every anchor year that could ever exist for the source date —
+/// sound and complete BY CONSTRUCTION, not by a curated set of probe years or
+/// a closed-form leap-rule argument that has to be independently proven
+/// correct — TRUE for any `dur_months`/`whole_days` magnitude, not just the
+/// ones a bounded test grid happens to try (see the reduce-first argument
+/// ahead of the anchor loop below, which is what makes that true in code, not
+/// only in this paragraph). This replaces, and SUBSUMES, everything the
+/// earlier per-arm implementation needed to decide the same question:
+///
+/// - the three-probe day-shift unanimity check (probing every reachable
+///   adjacent-year leap pattern) — every anchor's own walk already realizes
+///   whichever pattern applies to it, so there is no pattern set to curate;
+/// - the closed-form Feb-29 month-shift rule (whether a carry is a multiple
+///   of 4/400) — the same reasoning, done directly instead of algebraically;
+/// - the `±364`-day magnitude guard — deleted outright. That guard existed
+///   because a *bounded* probe set could be fooled by a walk long enough to
+///   re-agree by 4-year-cycle coincidence while still being century-dependent
+///   (`P1461D`, four years plus a day). A full-period anchor walk cannot be
+///   fooled that way for any magnitude: every anchor gets its own complete
+///   walk, so an enormous `whole_days` (or `dur_months`) never widens the
+///   probe set, only the reduce-first step ahead of the loop below, which
+///   collapses it back to a fixed `0..400`/`0..146_097` window before any
+///   anchor arithmetic runs — genuinely `O(1)` checked-arithmetic work per
+///   anchor, independent of the input magnitude, not merely bounded by a
+///   wide-enough integer type;
+/// - the per-arm ordering defect this fix was written for: because this one
+///   function decides the FINISHED `(month, day)` — months, then days, both
+///   inside the same per-anchor walk — a composite `PnMmD` duration's
+///   year-independence is one question about that finished result, never two
+///   separate questions asked of an unfinished intermediate. The previous
+///   per-arm split asked "is the months-only shift year-independent?" before
+///   the days shift ever ran, so `--01-31 + P1M1D` was refused by the months
+///   half alone even though the FINISHED answer (`--03-01`, from every leap
+///   or non-leap anchor) never depends on the anchor year at all.
+///
+/// The pure-month case (`whole_days == 0`) and the pure-day case
+/// (`dur_months == 0`) are deliberately NOT special-cased: both are
+/// composites with one zero component, and [`drive_gregorian`] routes them
+/// through this same function rather than through their own closed-form or
+/// probe-based paths — one function, one truth, instead of several rules
+/// that can silently drift apart from each other (exactly how the defect
+/// this replaces was introduced: two independently-maintained per-arm rules,
+/// each locally sound, whose composition was not).
+///
+/// Cost: [`GMONTHDAY_ANCHOR_YEARS`] has exactly 400 years, so this is at most
+/// 400 iterations of small, fixed-width `i64`/`i128` civil-day/month
+/// arithmetic — a cold-path cost (Gregorian duration arithmetic is never a
+/// hot loop) of low single-digit microseconds, negligible next to the
+/// correctness it buys, and INDEPENDENT of `dur_months`/`whole_days`'s
+/// magnitude (see the reduce-first step below).
+///
+/// ## Reduce first, by exact periodicity (an F2 fix)
+///
+/// `dur_months`/`whole_days` are full `i64`s — a duration can carry
+/// `P400000000000000000M`, i.e. a ~3.3e16-year month carry. Anchoring THAT
+/// carry directly (`anchor_year + dur_months/12`) hands
+/// [`days_from_civil`]/[`civil_from_days`] a year far outside any calendar a
+/// caller could mean, and previously (before those two functions were made
+/// `i128`-internal — see their docs) that reached an UNCHECKED `i64` multiply
+/// on the hot path of every anchor, wrapping silently in release and
+/// panicking in a debug/overflow-checks build for a well-formed literal — a
+/// real regression, not a hypothetical one (`--01-15 + P400000000000000000M`
+/// used to answer `--05-15` via a closed form; the per-arm rewrite this
+/// function replaced made it either wrap to a wrong refusal or panic).
+///
+/// `days_from_civil`/`civil_from_days` being `i128`-internal already closes
+/// that hole generically (any `i64` year is safe there now). This function
+/// ALSO reduces first, belt-and-suspenders, for the same reason
+/// `MonthAction::Cyclic12` (`drive_gregorian`'s gMonth arm) reduces before
+/// touching an anchor: the finished `(month, day)` this function decides
+/// depends on an anchor's year ONLY through that year's position in the
+/// 400-year Gregorian cycle. `days_from_civil`'s own `era * 146_097` term is
+/// exactly the statement that `days_from_civil(y + 400, m, d) ==
+/// days_from_civil(y, m, d) + 146_097` for EVERY `y` (only `era` changes by
+/// exactly 1 per 400 years; `yoe`/`doy`/`doe` are unchanged, since they are
+/// computed modulo the 400-year offset). Symmetrically,
+/// `civil_from_days(x + 146_097)` names the same `(month, day)` as
+/// `civil_from_days(x)` for every `x` (only the returned year differs, by
+/// exactly 400). Two consequences, each independently sound:
+///
+/// - Splitting `dur_months` into `(carry_years, month_offset) =
+///   (dur_months.div_euclid(12), dur_months.rem_euclid(12))` and then
+///   reducing `carry_years.rem_euclid(400)` before it ever reaches an
+///   anchor's year shifts every anchor's target year by some exact multiple
+///   of 400 relative to the true (unreduced) target year — which shifts that
+///   anchor's `base` day count by the SAME multiple of 146_097 (the identity
+///   above) and leaves `days_in_month`/the finished `(month, day)` completely
+///   unchanged (`days_in_month` is itself 400-year-periodic, by the same leap
+///   rule [`GMONTHDAY_ANCHOR_YEARS`]'s doc gives).
+/// - Reducing `whole_days.rem_euclid(146_097)` before adding it to `base`
+///   changes the total by some exact multiple of 146_097, which — by the
+///   identity above — cannot change `civil_from_days`'s `(month, day)`
+///   output either.
+///
+/// Both reductions together permute the (already exhaustive) 400-anchor set
+/// within an equivalent window and cannot change the agreement verdict or the
+/// agreed `(month, day)` — only the (never-returned) year differs from the
+/// true, unreduced computation. `bounded_months_delta` therefore lands in
+/// `0..=4799` and `bounded_whole_days` in `0..=146_096` for ANY `i64`
+/// `dur_months`/`whole_days`, so `y1` stays within roughly
+/// `GMONTHDAY_ANCHOR_YEARS`'s own window plus 400 years and one month carry —
+/// nowhere near any overflow boundary, checked or not — restoring every
+/// pre-regression large-carry answer with NO ceiling at all (there is none in
+/// the true value space either): `--01-15 + P303032819133169872M` (the
+/// bisected wrap point) answers instead of refusing, and
+/// `--01-15 + P400000000000000000M` answers `--05-15` again.
+fn gmonthday_shift(
+    datatype: XsdDatatype,
+    month: u8,
+    day: u8,
+    dur_months: i64,
+    whole_days: i64,
+) -> Result<(u8, u8), XsdError> {
+    // `div_euclid`/`rem_euclid` never panic for these operands (only division by
+    // zero or by -1 at `i64::MIN` can, and the divisors here are the constants 12,
+    // 400, and 146_097), so this decomposition is total over every `i64`
+    // `dur_months`/`whole_days` — see the doc above for why it is also SOUND.
+    let carry_years = dur_months.div_euclid(12);
+    let month_offset = dur_months.rem_euclid(12); // 0..=11
+    let carry_years_mod400 = carry_years.rem_euclid(400); // 0..=399
+    let bounded_months_delta = carry_years_mod400 * 12 + month_offset; // 0..=4799
+
+    let bounded_whole_days = whole_days.rem_euclid(146_097); // 0..=146_096
+
+    let mut agreed: Option<(u8, u8)> = None;
+    for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+        if day > days_in_month(anchor_year, month) {
+            continue; // not a real anchor for this source date (matters only for --02-29)
+        }
+        let (y1, m1) = shift_year_month(datatype, anchor_year, month, bounded_months_delta)?;
+        let d1 = day.min(days_in_month(y1, m1));
+        let base = days_from_civil(y1, m1, d1);
+        let shifted = base
+            .checked_add(i128::from(bounded_whole_days))
+            .ok_or_else(|| arith_overflow(datatype, "gMonthDay arithmetic overflow"))?;
+        let (_, m2, d2) = civil_from_days(shifted);
+        match agreed {
+            None => agreed = Some((m2, d2)),
+            Some(first) if first != (m2, d2) => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "gMonthDay: the shifted (month, day) depends on which year it starts in",
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(agreed.expect(
+        "every valid gMonthDay (month, day) source has at least one anchor in a full 400-year Gregorian period",
+    ))
+}
+
+/// The gDay month-independence oracle and answer, computed together — one
+/// field narrower than [`gmonthday_shift`], on the identical construction.
+///
+/// `gMonthDay` carries `month` as part of its own value, so
+/// [`gmonthday_shift`] anchors that FIXED month at every YEAR in one 400-year
+/// period. `gDay` carries no month at all, so there is no fixed month to
+/// anchor: the anchor set here is every `(year, month)` PAIR in one full
+/// 400-year period ([`GMONTHDAY_ANCHOR_YEARS`] × all twelve months) for which
+/// the source `day` is real. Each anchor is walked through the exact same
+/// Appendix E computation `gmonthday_shift` uses — `dur_months` first,
+/// landing the anchor on some target `(year, month)` with the day clamped
+/// against that target month's real length, then `whole_days` as a plain
+/// civil-day walk — and the shift is accepted iff every anchor's walk lands
+/// on the SAME DAY. Only the day is compared: the landed month is not part of
+/// a `gDay` value (unlike `gmonthday_shift`, which compares the landed
+/// `(month, day)` pair, because gMonthDay's month is a real output field).
+///
+/// This is the composite construction [`MonthAction::GDayComposite`]'s doc
+/// promises: because months-then-days is decided as one walk per anchor,
+/// month-independence of a composite `PnMmD` duration is one question about
+/// the FINISHED day, not two separate per-component questions — the same
+/// defect [`gmonthday_shift`] closed for `gMonthDay`, closed here for `gDay`.
+/// The two old per-arm rules this replaces (`MonthAction::IdentityIfSafe`'s
+/// `day <= 28` sufficient condition and `SecondAction::MonthIndependentDays`'
+/// `1..=28` target-range check) each asked a SUFFICIENT question — "is this
+/// day small enough that no month could possibly matter?" — rather than the
+/// actual necessary-and-sufficient one this function answers by construction,
+/// so they refused every determinate case a day-29/30/31 source or a
+/// crossing-into-29/30/31 target ever produced (`---31 + P1D`, `---29 - P1D`,
+/// `---31 + P1M1D`, and the entire `±146,097·k`-day class, among others).
+///
+/// Reduce-first (months carry reduced mod 4800 = 400 years' worth, whole-day
+/// carry reduced mod 146,097) is the identical periodicity argument
+/// [`gmonthday_shift`]'s doc proves in full — the calendar's leap pattern and
+/// day-count period are both properties of the shared 400-year Gregorian
+/// cycle, not of `gMonthDay`'s value shape, so the same proof carries over
+/// unchanged; it is not repeated here.
+///
+/// Cost: ~400 years × 12 months = 4800 anchors, each `O(1)` checked
+/// arithmetic — twelve times [`gmonthday_shift`]'s own per-call cost, still a
+/// cold-path, low single-digit-microsecond-to-millisecond cost (Gregorian
+/// duration arithmetic is never a hot loop), negligible next to the
+/// correctness it buys, and independent of `dur_months`/`whole_days`'s
+/// magnitude for the same reduce-first reason.
+fn gday_shift(
+    datatype: XsdDatatype,
+    day: u8,
+    dur_months: i64,
+    whole_days: i64,
+) -> Result<u8, XsdError> {
+    let carry_years = dur_months.div_euclid(12);
+    let month_offset = dur_months.rem_euclid(12); // 0..=11
+    let carry_years_mod400 = carry_years.rem_euclid(400); // 0..=399
+    let bounded_months_delta = carry_years_mod400 * 12 + month_offset; // 0..=4799
+
+    let bounded_whole_days = whole_days.rem_euclid(146_097); // 0..=146_096
+
+    let mut agreed: Option<u8> = None;
+    for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+        for anchor_month in 1u8..=12 {
+            if day > days_in_month(anchor_year, anchor_month) {
+                continue; // not a real anchor for this source day
+            }
+            let (y1, m1) =
+                shift_year_month(datatype, anchor_year, anchor_month, bounded_months_delta)?;
+            let d1 = day.min(days_in_month(y1, m1));
+            let base = days_from_civil(y1, m1, d1);
+            let shifted = base
+                .checked_add(i128::from(bounded_whole_days))
+                .ok_or_else(|| arith_overflow(datatype, "gDay arithmetic overflow"))?;
+            let (_, _m2, d2) = civil_from_days(shifted);
+            match agreed {
+                None => agreed = Some(d2),
+                Some(first) if first != d2 => {
+                    return Err(XsdError::TypeMismatch {
+                        reason: "gDay: the shifted day depends on which month it starts in",
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    Ok(agreed.expect(
+        "every valid gDay day has at least one (year, month) anchor in a full 400-year Gregorian period",
+    ))
+}
+
+/// Apply `dur` to a Gregorian value's `(year, month, day)` fields through the
+/// calendar-action classifier ([`actions`]). Companion to [`drive`], which
+/// serves `dateTime`/`date`/`time`: Gregorian values carry optional fields and
+/// no time-of-day, so they are not shaped like a [`CalendarPoint`] and are
+/// driven separately here, over the same [`MonthAction`]/[`SecondAction`]
+/// vocabulary — which is why [`drive`]'s own match has a permanent (never
+/// executed from that function) arm for every action realized below, and this
+/// function returns the mirror-image permanent `TypeMismatch` for the three
+/// [`SecondAction`] variants ([`SecondAction::Free`],
+/// [`SecondAction::MidnightTruncating`], [`SecondAction::CyclicDay`]) and the
+/// two [`MonthAction`] variants ([`MonthAction::Absent`], and
+/// [`MonthAction::Clamped`] — `dateTime`/`date`'s own instant-only clamp,
+/// distinct from `gMonthDay`'s [`MonthAction::GMonthDayComposite`] and
+/// `gDay`'s [`MonthAction::GDayComposite`], which this function intercepts
+/// and answers through [`gmonthday_shift`]/[`gday_shift`] respectively before
+/// the per-field dispatch below ever runs) that no Gregorian sort's
+/// classification ever selects.
+///
+/// Months are applied first, then days — the order is load-bearing, see
+/// [`MonthAction`]'s doc — and a zero component is skipped entirely, which is
+/// what makes "zero duration → identity" uniform here too.
+fn drive_gregorian(
+    datatype: XsdDatatype,
+    month_action: MonthAction,
+    second_action: SecondAction,
+    year: Option<i64>,
+    month: Option<u8>,
+    day: Option<u8>,
+    dur: &Duration,
+) -> Result<GregorianFields, XsdError> {
+    if (month_action, second_action)
+        == (
+            MonthAction::GMonthDayComposite,
+            SecondAction::GMonthDayComposite,
+        )
+    {
+        // gMonthDay: intercepted here, before the per-field months-then-days
+        // dispatch below, because Appendix E's months-then-days order means
+        // the composite's year-independence is one question about the
+        // FINISHED (month, day), never two separate per-component questions
+        // — see `gmonthday_shift`'s doc.
+        let whole_days = if dur.seconds.is_zero() {
+            0
+        } else {
+            gregorian_whole_days(datatype, &dur.seconds)?
+        };
+        if dur.months == 0 && whole_days == 0 {
+            return Ok((year, month, day)); // zero duration → identity
+        }
+        let m = month.unwrap_or(1);
+        let d = day.unwrap_or(1);
+        let (nm, nd) = gmonthday_shift(datatype, m, d, dur.months, whole_days)?;
+        return Ok((None, Some(nm), Some(nd)));
+    }
+
+    if (month_action, second_action) == (MonthAction::GDayComposite, SecondAction::GDayComposite) {
+        // gDay: intercepted here for the same reason gMonthDay is above — a
+        // gDay has no month field, so a composite `PnMmD` duration's
+        // month-independence is one question about the FINISHED day, decided
+        // by walking every `(year, month)` anchor through the complete
+        // Appendix E computation, never by deciding the months half and days
+        // half separately (the exact defect this replaces — see
+        // `gday_shift`'s doc).
+        let whole_days = if dur.seconds.is_zero() {
+            0
+        } else {
+            gregorian_whole_days(datatype, &dur.seconds)?
+        };
+        if dur.months == 0 && whole_days == 0 {
+            return Ok((year, month, day)); // zero duration → identity
+        }
+        let d = day.unwrap_or(1);
+        let nd = gday_shift(datatype, d, dur.months, whole_days)?;
+        return Ok((None, None, Some(nd)));
+    }
+
+    let (year, month, day) = if dur.months == 0 {
+        (year, month, day)
+    } else {
+        match month_action {
+            MonthAction::Free => {
+                // gYearMonth: `ℤ` acts freely on absolute months — exact,
+                // checked arithmetic via the same `shift_year_month` the
+                // CalendarPoint driver uses for `dateTime`/`date`.
+                let (y, m) =
+                    shift_year_month(datatype, year.unwrap_or(0), month.unwrap_or(1), dur.months)?;
+                (Some(y), Some(m), day)
+            }
+            MonthAction::Divisible12 => {
+                // gYear: the subgroup 12ℤ — a duration must be a whole number
+                // of years, or gYear has no month field to receive the
+                // remainder.
+                if dur.months % 12 != 0 {
+                    return Err(XsdError::TypeMismatch {
+                        reason: "gYear has no month field: a duration's months component must be a whole number of years",
+                    });
+                }
+                // Same lexical-year-domain fact as `shift_year_month`: the lexical
+                // space is symmetric (`-i64::MAX..=i64::MAX`), so `i64::MIN` is not
+                // a representable year. `checked_add` alone would let it through
+                // (it is a valid `i64`), so it is rejected explicitly here too.
+                let y = year
+                    .unwrap_or(0)
+                    .checked_add(dur.months / 12)
+                    .filter(|y| *y != i64::MIN)
+                    .ok_or_else(|| arith_overflow(datatype, "gYear arithmetic overflow"))?;
+                (Some(y), None, day)
+            }
+            MonthAction::Cyclic12 => {
+                // gMonth: the quotient map ℤ → ℤ/12, not a dropped carry —
+                // XSD 1.1 Part 2 §3.3.13 makes gMonth a recurring month with
+                // no year field, so there is no year to carry into and no
+                // field is fabricated by reducing modulo 12.
+                //
+                // Overflow-safety argument (style of `Decimal::cmp_exact`,
+                // numeric.rs:73-88): reduce FIRST. `dur.months.rem_euclid(12)`
+                // of any `i64` is in `0..=11`; `month - 1` (month in
+                // `1..=12`) is in `0..=11`; their sum is therefore in
+                // `0..=22`, strictly within `i64` range, so plain
+                // (non-checked) arithmetic is provably safe here — there is
+                // no overflow path to guard, for any `i64` months value.
+                let m = month.unwrap_or(1);
+                let m0 = i64::from(m) - 1 + dur.months.rem_euclid(12);
+                (None, Some((m0 % 12 + 1) as u8), day)
+            }
+            MonthAction::GDayComposite => {
+                // gDay's months component is always intercepted at the top of
+                // this function (paired with `SecondAction::GDayComposite`)
+                // and answered jointly with the days component via
+                // `gday_shift`, never through this per-field dispatch — see
+                // that function's doc and the interception at the top of
+                // `drive_gregorian`. This arm exists only to keep the match
+                // total.
+                return Err(XsdError::TypeMismatch {
+                    reason: "gDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+                });
+            }
+            MonthAction::GMonthDayComposite => {
+                // gMonthDay's months component is always intercepted at the
+                // top of this function (paired with
+                // `SecondAction::GMonthDayComposite`) and answered jointly
+                // with the days component via `gmonthday_shift`, never
+                // through this per-field dispatch — see that function's doc
+                // and the interception at the top of `drive_gregorian`. This
+                // arm exists only to keep the match total.
+                return Err(XsdError::TypeMismatch {
+                    reason: "gMonthDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+                });
+            }
+            MonthAction::Absent => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this Gregorian sort has no months field to receive a duration's months component",
+                });
+            }
+            MonthAction::Clamped => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "this calendar action applies only to dateTime/date, which this driver does not carry a CalendarPoint for",
+                });
+            }
+        }
+    };
+    if dur.seconds.is_zero() {
+        return Ok((year, month, day));
+    }
+    // Validate the whole-day precondition even though every remaining arm
+    // below rejects outright: both gMonthDay and gDay are always intercepted
+    // above before this line runs (a sub-day remainder in their composite
+    // seconds component is validated there, via `gregorian_whole_days`
+    // called from the interception itself), so every sort that reaches this
+    // match has no day field at all — but a caller passing e.g. `PT1H` to
+    // `gYearMonth` must still see "not a whole day" rejected before "no day
+    // field", matching the diagnostic this function has always given.
+    let _whole_days = gregorian_whole_days(datatype, &dur.seconds)?;
+    match second_action {
+        SecondAction::GMonthDayComposite => {
+            // gMonthDay's days component is always intercepted at the top of
+            // this function (paired with `MonthAction::GMonthDayComposite`)
+            // and answered jointly with the months component via
+            // `gmonthday_shift`, never through this per-field dispatch — see
+            // that function's doc and the interception at the top of
+            // `drive_gregorian`. This arm exists only to keep the match
+            // total.
+            Err(XsdError::TypeMismatch {
+                reason: "gMonthDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+            })
+        }
+        SecondAction::GDayComposite => {
+            // gDay's days component is always intercepted at the top of this
+            // function (paired with `MonthAction::GDayComposite`) and
+            // answered jointly with the months component via `gday_shift`,
+            // never through this per-field dispatch — see that function's
+            // doc and the interception at the top of `drive_gregorian`. This
+            // arm exists only to keep the match total.
+            Err(XsdError::TypeMismatch {
+                reason: "gDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+            })
+        }
+        SecondAction::Absent => Err(XsdError::TypeMismatch {
+            reason: "this Gregorian sort has no day field to receive a duration's seconds component",
+        }),
+        SecondAction::Free | SecondAction::MidnightTruncating | SecondAction::CyclicDay => {
+            Err(XsdError::TypeMismatch {
+                reason: "this calendar action applies only to dateTime/date/time, which this driver carries no fields for",
+            })
+        }
+    }
+}
+
+/// Negate a `Duration`'s months and seconds components together (unary minus).
+/// A `Duration` is always sign-coherent by construction (`Duration::new`), and
+/// negating both components together preserves that — it can never produce a
+/// mixed-sign pair, so this function has exactly one arm. Subtraction throughout
+/// the general-duration primitives below, and [`subtract_durations`] itself, are
+/// both expressed as negate-then-add rather than as their own driver passes.
+///
+/// **PurRDF extension:** XPath F&O's unary minus is numeric-only
+/// (`op:numeric-unary-minus`, §4.2.8) — F&O defines no duration unary minus, and
+/// unary plus stays numeric-only in PurRDF too (`+(?duration)` is a type error
+/// while `-(?duration)` is not; that asymmetry is deliberate, not an oversight).
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{negate_duration, parse_duration};
+///
+/// let d = parse_duration(XsdDatatype::YearMonthDuration, "P1Y2M").unwrap();
+/// let negated = negate_duration(&d).unwrap();
+/// assert_eq!(negated.canonical_lexical(), "-P1Y2M");
+/// assert_eq!(negate_duration(&negated).unwrap().canonical_lexical(), "P1Y2M");
+/// ```
+pub fn negate_duration(dur: &Duration) -> Result<Duration, XsdError> {
+    let months = dur
+        .months
+        .checked_neg()
+        .ok_or_else(|| arith_overflow(dur.datatype, "duration negation overflow"))?;
+    let seconds = decimal_negate(dur.datatype, &dur.seconds)?;
+    Duration::new(months, seconds, dur.datatype)
+}
+
+/// Add any `xsd:duration` value — regardless of its declared subtype — to a
+/// `dateTime`, applying the months component first (clamping the day-of-month
+/// against the target month, XML Schema Appendix E) and the seconds component
+/// second. This is the general form of [`add_year_month_duration_to_datetime`] and
+/// [`add_day_time_duration_to_datetime`] combined: those two remain the F&O-named
+/// single-component entry points, but only this function (and its five siblings
+/// below) can correctly order a duration whose months and seconds are both
+/// nonzero.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_datetime, parse_datetime, parse_duration};
+///
+/// // Months are applied before days: Jan 30 clamps to Feb 29 (2024 is a leap
+/// // year), THEN one day is added, landing on Mar 1 — not Feb 29.
+/// let dt = parse_datetime("2024-01-30T00:00:00").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1M1D").unwrap();
+/// let result = add_duration_to_datetime(&dt, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2024-03-01T00:00:00");
+/// ```
+pub fn add_duration_to_datetime(dt: &DateTime, dur: &Duration) -> Result<DateTime, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::DateTime);
+    let point = CalendarPoint {
+        year: dt.year,
+        month: dt.month,
+        day: dt.day,
+        hour: dt.hour,
+        minute: dt.minute,
+        second: dt.second,
+    };
+    let point = drive(
+        XsdDatatype::DateTime,
+        month_action,
+        second_action,
+        point,
+        dur,
+    )?;
+    Ok(DateTime {
+        year: point.year,
+        month: point.month,
+        day: point.day,
+        hour: point.hour,
+        minute: point.minute,
+        second: point.second,
+        tz: dt.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `dateTime`. See
+/// [`add_duration_to_datetime`] for the accepted shapes and the months-before-
+/// seconds ordering; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_datetime, parse_duration, subtract_duration_from_datetime};
+///
+/// let dt = parse_datetime("2024-03-01T00:00:00").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1Y1D").unwrap();
+/// let result = subtract_duration_from_datetime(&dt, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2023-02-28T00:00:00");
+/// ```
+pub fn subtract_duration_from_datetime(
+    dt: &DateTime,
+    dur: &Duration,
+) -> Result<DateTime, XsdError> {
+    add_duration_to_datetime(dt, &negate_duration(dur)?)
+}
+
+/// Add any `xsd:duration` value to a `date`. The seconds component is applied at
+/// midnight and only the resulting date is kept (matching
+/// [`add_day_time_duration_to_date`]) — a sub-day remainder never errors.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_date, parse_date, parse_duration};
+///
+/// let d = parse_date("2024-01-31").unwrap();
+/// // A sub-day remainder never errors and never changes the date.
+/// let unchanged =
+///     add_duration_to_date(&d, &parse_duration(XsdDatatype::Duration, "PT1H").unwrap()).unwrap();
+/// assert_eq!(unchanged.canonical_lexical(), "2024-01-31");
+/// // A whole day rolls the date forward.
+/// let rolled =
+///     add_duration_to_date(&d, &parse_duration(XsdDatatype::Duration, "P1D").unwrap()).unwrap();
+/// assert_eq!(rolled.canonical_lexical(), "2024-02-01");
+/// ```
+pub fn add_duration_to_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::Date);
+    let point = CalendarPoint::midnight(d.year, d.month, d.day);
+    let point = drive(XsdDatatype::Date, month_action, second_action, point, dur)?;
+    Ok(Date {
+        year: point.year,
+        month: point.month,
+        day: point.day,
+        tz: d.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `date`. See [`add_duration_to_date`]
+/// for the midnight-truncation rule; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_date, parse_duration, subtract_duration_from_date};
+///
+/// let d = parse_date("2024-02-01").unwrap();
+/// let result =
+///     subtract_duration_from_date(&d, &parse_duration(XsdDatatype::Duration, "P1D").unwrap())
+///         .unwrap();
+/// assert_eq!(result.canonical_lexical(), "2024-01-31");
+/// ```
+pub fn subtract_duration_from_date(d: &Date, dur: &Duration) -> Result<Date, XsdError> {
+    add_duration_to_date(d, &negate_duration(dur)?)
+}
+
+/// Add any `xsd:duration` value to a `time`. The duration's months component must
+/// be zero — `xsd:time` has no months field (`MonthAction::Absent`) — while the
+/// seconds component wraps across an implicit day boundary that is then discarded,
+/// leaving only the resulting time-of-day.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_time, parse_duration, parse_time};
+///
+/// let t = parse_time("23:00:00").unwrap();
+/// let result =
+///     add_duration_to_time(&t, &parse_duration(XsdDatatype::Duration, "PT2H").unwrap()).unwrap();
+/// assert_eq!(result.canonical_lexical(), "01:00:00");
+///
+/// // A duration with a nonzero months component is a type error: `time` has no
+/// // months field to receive it.
+/// let months = parse_duration(XsdDatatype::Duration, "P1M").unwrap();
+/// assert!(add_duration_to_time(&t, &months).is_err());
+/// ```
+pub fn add_duration_to_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    let (month_action, second_action) = actions(XsdDatatype::Time);
+    let point = CalendarPoint::on_reference_date(t.hour, t.minute, t.second);
+    let point = drive(XsdDatatype::Time, month_action, second_action, point, dur)?;
+    Ok(Time {
+        hour: point.hour,
+        minute: point.minute,
+        second: point.second,
+        tz: t.tz,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a `time`. See [`add_duration_to_time`]
+/// for the accepted shapes; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{parse_duration, parse_time, subtract_duration_from_time};
+///
+/// let t = parse_time("01:00:00").unwrap();
+/// let result =
+///     subtract_duration_from_time(&t, &parse_duration(XsdDatatype::Duration, "PT2H").unwrap())
+///         .unwrap();
+/// assert_eq!(result.canonical_lexical(), "23:00:00");
+/// ```
+pub fn subtract_duration_from_time(t: &Time, dur: &Duration) -> Result<Time, XsdError> {
+    add_duration_to_time(t, &negate_duration(dur)?)
+}
+
+/// Add any `xsd:duration` value to a Gregorian value (`gYearMonth`, `gYear`,
+/// `gMonth`, `gMonthDay`, `gDay`), through the calendar-action classifier
+/// (`actions`). Where the reference implementation would fabricate an
+/// absent field to force an answer (substituting year 0, January, or day 1
+/// via JAXP — e.g. `"2024-01"^^gYearMonth + P1D` returning `"2024-01"`
+/// unchanged, or `"---31"^^gDay + P1M` returning `"---29"` clamped against a
+/// fictitious leap year 0), this function returns a typed error instead: it
+/// matches the reference implementation only where its answer is genuinely
+/// year-independent. The sole information-losing accept is `gMonth`'s months
+/// component, which acts through the quotient map `ℤ → ℤ/12` (XSD 1.1 Part 2
+/// §3.3.13 — `gMonth` has no year field for a carry to be dropped from, so
+/// none is fabricated by reducing modulo 12).
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_duration_to_gregorian, parse_duration, parse_gregorian};
+///
+/// // RDF4J's own pinned Gregorian case: year-independent, so it succeeds.
+/// let g = parse_gregorian(XsdDatatype::GYearMonth, "2012-10").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1Y1M").unwrap();
+/// let result = add_duration_to_gregorian(&g, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2013-11");
+///
+/// // `gDay` day 31 has no year-independent answer for "+P1M" (the shift
+/// // would depend on a month `gDay` does not carry) — a typed error, not
+/// // RDF4J's fabricated `---29` clamped against a fictitious leap year 0.
+/// let day = parse_gregorian(XsdDatatype::GDay, "---31").unwrap();
+/// let one_month = parse_duration(XsdDatatype::Duration, "P1M").unwrap();
+/// assert!(add_duration_to_gregorian(&day, &one_month).is_err());
+/// ```
+pub fn add_duration_to_gregorian(g: &Gregorian, dur: &Duration) -> Result<Gregorian, XsdError> {
+    let (month_action, second_action) = actions(g.datatype);
+    let (year, month, day) = drive_gregorian(
+        g.datatype,
+        month_action,
+        second_action,
+        g.year,
+        g.month,
+        g.day,
+        dur,
+    )?;
+    Ok(Gregorian {
+        year,
+        month,
+        day,
+        tz: g.tz,
+        datatype: g.datatype,
+    })
+}
+
+/// Subtract any `xsd:duration` value from a Gregorian value. See
+/// [`add_duration_to_gregorian`] for the accepted shapes and the
+/// fabrication-refusal rule; subtraction is negate-then-add.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{
+///     parse_duration, parse_gregorian, subtract_duration_from_gregorian,
+/// };
+///
+/// let g = parse_gregorian(XsdDatatype::GYear, "2025").unwrap();
+/// let dur = parse_duration(XsdDatatype::Duration, "P1Y").unwrap();
+/// let result = subtract_duration_from_gregorian(&g, &dur).unwrap();
+/// assert_eq!(result.canonical_lexical(), "2024");
+/// ```
+pub fn subtract_duration_from_gregorian(
+    g: &Gregorian,
+    dur: &Duration,
+) -> Result<Gregorian, XsdError> {
+    add_duration_to_gregorian(g, &negate_duration(dur)?)
+}
+
 // ── Duration ↔ calendar arithmetic (XPath F&O §9.7.5–9.7.14; XML Schema Appendix E) ─
+//
+// The ten functions below are the F&O-named single-component surface (each takes a
+// duration statically declared `yearMonthDuration` or `dayTimeDuration`). Nothing
+// inside this workspace calls them — the general `add_duration_to_*` /
+// `subtract_duration_from_*` functions above are what any caller dispatching on a
+// bare `xsd:duration` tag uses, because only they can order a duration whose
+// months and seconds are both nonzero. These ten stay published as the crate's
+// F&O-named public surface; they are not dead code.
 
 /// `op:add-yearMonthDuration-to-dateTime`. The day-of-month is clamped to the target
 /// month's last day when the original day does not exist there (XML Schema Appendix
@@ -1495,83 +2895,88 @@ pub fn subtract_times(a: &Time, b: &Time) -> Result<Duration, XsdError> {
     instant_diff(XsdDatatype::Time, &a_inst, &b_inst)
 }
 
-// ── Duration arithmetic (XPath F&O §8.4) ─────────────────────────────────────────
+// ── Duration arithmetic (XPath F&O §8.4, extended to the general xsd:duration) ───
 
-/// The two duration values must be the *same declared* `yearMonthDuration`/
-/// `dayTimeDuration` subtype. F&O defines `+`/`-`/`*`//` only for those two
-/// subtypes (not the general `xsd:duration`, whose (months, seconds) pair mixes
-/// units that cannot be added component-wise without loss); mixing subtypes, or
-/// using the general `xsd:duration`, is a type error.
-fn require_same_duration_subtype(a: &Duration, b: &Duration) -> Result<XsdDatatype, XsdError> {
-    if a.datatype != b.datatype {
-        return Err(XsdError::TypeMismatch {
-            reason: "duration arithmetic requires matching yearMonthDuration/dayTimeDuration subtypes",
-        });
-    }
-    match a.datatype {
-        XsdDatatype::YearMonthDuration | XsdDatatype::DayTimeDuration => Ok(a.datatype),
-        _ => Err(XsdError::TypeMismatch {
-            reason: "duration arithmetic requires a yearMonthDuration or dayTimeDuration operand",
-        }),
+/// The result datatype for `a OP b` over the duration group: syntactic on the
+/// operands' own *declared* tags, never on their computed (months, seconds)
+/// components — `dayTimeDuration` iff both operands declare it, `yearMonthDuration`
+/// iff both do, else the general `xsd:duration`. This is a plain `match`, the same
+/// idiom [`Shape`]'s doc requires of it: durations do not carry a total order over
+/// tags for `Ord`/`max` to invent one from.
+fn duration_result_datatype(a: XsdDatatype, b: XsdDatatype) -> XsdDatatype {
+    match (a, b) {
+        (XsdDatatype::YearMonthDuration, XsdDatatype::YearMonthDuration) => {
+            XsdDatatype::YearMonthDuration
+        }
+        (XsdDatatype::DayTimeDuration, XsdDatatype::DayTimeDuration) => {
+            XsdDatatype::DayTimeDuration
+        }
+        _ => XsdDatatype::Duration,
     }
 }
 
-/// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`.
+/// `op:add-yearMonthDurations` / `op:add-dayTimeDurations`, extended to accept any
+/// `xsd:duration` operand: PurRDF follows RDF4J's permissiveness here rather than
+/// F&O's restriction to the two named subtypes (F&O's (months, seconds) pair for
+/// the general tag is not a mixing of incompatible units — it is exactly this
+/// module's own `D = Y ⊕ T` direct sum). Componentwise checked addition through
+/// `Duration::new`, so a mixed-sign result is refused at construction regardless
+/// of which operator produced it — see `Duration::new`'s own doc for why the
+/// guard cannot live in either operator alone. See `duration_result_datatype` for
+/// the result's tag.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{add_durations, parse_duration};
+///
+/// let a = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let b = parse_duration(XsdDatatype::DayTimeDuration, "PT1H").unwrap();
+/// let sum = add_durations(&a, &b).unwrap();
+/// assert_eq!(sum.canonical_lexical(), "P1YT1H");
+/// assert_eq!(sum.datatype(), XsdDatatype::Duration);
+/// ```
 pub fn add_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
-    let datatype = require_same_duration_subtype(a, b)?;
-    match datatype {
-        XsdDatatype::YearMonthDuration => {
-            let months = a
-                .months
-                .checked_add(b.months)
-                .ok_or_else(|| arith_overflow(datatype, "yearMonthDuration addition overflow"))?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype,
-            })
-        }
-        _ => {
-            let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype,
-            })
-        }
-    }
+    let datatype = duration_result_datatype(a.datatype, b.datatype);
+    let months = a
+        .months
+        .checked_add(b.months)
+        .ok_or_else(|| arith_overflow(datatype, "duration addition overflow (months)"))?;
+    let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
+    Duration::new(months, seconds, datatype)
 }
 
-/// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`.
+/// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`, extended the
+/// same way as [`add_durations`]. Expressed as negate-then-add through
+/// [`negate_duration`] rather than its own componentwise pass, matching this
+/// module's negate-then-add idiom for calendar subtraction.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{subtract_durations, parse_duration};
+///
+/// let a = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let b = parse_duration(XsdDatatype::YearMonthDuration, "P1Y").unwrap();
+/// let diff = subtract_durations(&a, &b).unwrap();
+/// // Zero canonicalizes per the operand subtype ("P0M", not "PT0S").
+/// assert_eq!(diff.canonical_lexical(), "P0M");
+/// assert_eq!(diff.datatype(), XsdDatatype::YearMonthDuration);
+/// ```
 pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
-    let datatype = require_same_duration_subtype(a, b)?;
-    match datatype {
-        XsdDatatype::YearMonthDuration => {
-            let months = a.months.checked_sub(b.months).ok_or_else(|| {
-                arith_overflow(datatype, "yearMonthDuration subtraction overflow")
-            })?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype,
-            })
-        }
-        _ => {
-            let seconds = decimal_sub_exact(datatype, &a.seconds, &b.seconds)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype,
-            })
-        }
-    }
+    add_durations(a, &negate_duration(b)?)
 }
 
-/// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`. `factor` is a
-/// `Decimal` rather than F&O's `xs:double`: this crate keeps its stored values exact
-/// (no floats), so the multiplication stays exact too. `yearMonthDuration` results
-/// are rounded to the nearest whole month, ties toward positive infinity (matching
-/// `fn:round`, since months cannot be fractional).
+/// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`, extended with a
+/// general-`xsd:duration` arm that scales BOTH components, preserving the
+/// operand's declared tag. `factor` is a `Decimal` rather than F&O's `xs:double`:
+/// this crate keeps its stored values exact (no floats), so the multiplication
+/// stays exact too. Months results are always rounded to the nearest whole month,
+/// ties toward positive infinity (`round_decimal_to_i64`, matching `fn:round`,
+/// since months cannot be fractional) — this is a deliberate, documented
+/// non-inverse: `(d ÷ 2) × 2` need not equal `d` for an odd month count.
 pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, XsdError> {
     match dur.datatype {
         XsdDatatype::YearMonthDuration => {
@@ -1580,31 +2985,33 @@ pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, X
                 arith_overflow(dur.datatype, "yearMonthDuration multiplication overflow")
             })?;
             let months = round_decimal_to_i64(dur.datatype, &product)?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype: dur.datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "dayTimeDuration multiplication overflow")
             })?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype: dur.datatype,
-            })
+            Duration::new(0, seconds, dur.datatype)
         }
-        _ => Err(XsdError::TypeMismatch {
-            reason: "multiply requires a yearMonthDuration or dayTimeDuration operand",
-        }),
+        _ => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_product = decimal_mul_raw(&months_dec, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "duration multiplication overflow (months)")
+            })?;
+            let months = round_decimal_to_i64(dur.datatype, &months_product)?;
+            let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
+                arith_overflow(dur.datatype, "duration multiplication overflow (seconds)")
+            })?;
+            Duration::new(months, seconds, dur.datatype)
+        }
     }
 }
 
-/// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`. `divisor` is a
-/// `Decimal` for the same exactness reason as [`multiply_duration`]; a zero divisor
-/// is `Err(DivisionByZero)`.
+/// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`, extended with a
+/// general-`xsd:duration` arm that scales BOTH components (see
+/// [`multiply_duration`], whose months-rounding rule and non-inverse note apply
+/// identically here). `divisor` is a `Decimal` for the same exactness reason as
+/// [`multiply_duration`]; a zero divisor is `Err(DivisionByZero)`.
 pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, XsdError> {
     if divisor.is_zero() {
         return Err(XsdError::DivisionByZero {
@@ -1616,22 +3023,70 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
             let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
             let quotient = decimal_div_raw(&months_dec, divisor)?;
             let months = round_decimal_to_i64(dur.datatype, &quotient)?;
-            Ok(Duration {
-                months,
-                seconds: Decimal::from_parts(0, 0),
-                datatype: dur.datatype,
-            })
+            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_div_raw(&dur.seconds, divisor)?;
-            Ok(Duration {
-                months: 0,
-                seconds,
-                datatype: dur.datatype,
-            })
+            Duration::new(0, seconds, dur.datatype)
         }
-        _ => Err(XsdError::TypeMismatch {
-            reason: "divide requires a yearMonthDuration or dayTimeDuration operand",
+        _ => {
+            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_quotient = decimal_div_raw(&months_dec, divisor)?;
+            let months = round_decimal_to_i64(dur.datatype, &months_quotient)?;
+            let seconds = decimal_div_raw(&dur.seconds, divisor)?;
+            Duration::new(months, seconds, dur.datatype)
+        }
+    }
+}
+
+/// Divide one `xsd:duration` by another, by VALUE commensurability rather than by
+/// declared tag — the distinction [`divide_year_month_durations`] and
+/// [`divide_day_time_durations`] do not need to make, since they each gate on a
+/// single named subtype. Two durations are commensurable, and their ratio a plain
+/// `xs:decimal`, iff they occupy the same summand of `D = Y ⊕ T` (`Shape`):
+/// both `Shape::Months`-shaped, or both `Shape::Seconds`-shaped. A
+/// `Shape::Zero` dividend is compatible with either summand — it is the point
+/// where the two meet — so `0 ÷ nonzero` always succeeds with a ratio of `0`.
+/// A `Shape::Zero` divisor is `Err(DivisionByZero)`, checked first so it takes
+/// priority over a `Shape::Zero` dividend. An incommensurable pair (e.g. a
+/// `Shape::Months` dividend against a `Shape::Seconds` divisor, or either operand
+/// `Shape::Mixed`) reports `XsdError::Indeterminate` with the reason
+/// `"incommensurable duration operands"` — the operand *types* are both
+/// `xsd:duration`, so a type error would misclassify this; the under-
+/// determination arises from the *values*, which is exactly what
+/// `XsdError::Indeterminate` exists to name.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::temporal::{divide_durations, parse_duration};
+///
+/// // Cross-tag but value-commensurable: both are purely seconds-shaped.
+/// let thirty_days = parse_duration(XsdDatatype::Duration, "P30D").unwrap();
+/// let one_day = parse_duration(XsdDatatype::DayTimeDuration, "P1D").unwrap();
+/// assert_eq!(
+///     divide_durations(&thirty_days, &one_day).unwrap().canonical_lexical(),
+///     "30"
+/// );
+///
+/// // Same tag but value-incommensurable: months vs. seconds.
+/// let one_year = parse_duration(XsdDatatype::Duration, "P1Y").unwrap();
+/// assert!(divide_durations(&one_year, &one_day).is_err());
+/// ```
+pub fn divide_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+    match (a.shape(), b.shape()) {
+        (_, Shape::Zero) => Err(XsdError::DivisionByZero {
+            datatype: a.datatype,
+        }),
+        (Shape::Zero, _) => Ok(Decimal::from_parts(0, 0)),
+        (Shape::Months, Shape::Months) => decimal_div_raw(
+            &Decimal::from_parts(i128::from(a.months), 0),
+            &Decimal::from_parts(i128::from(b.months), 0),
+        ),
+        (Shape::Seconds, Shape::Seconds) => decimal_div_raw(&a.seconds, &b.seconds),
+        (Shape::Months | Shape::Seconds | Shape::Mixed, _) => Err(XsdError::Indeterminate {
+            reason: "incommensurable duration operands",
         }),
     }
 }
@@ -1667,7 +3122,12 @@ pub fn divide_day_time_durations(a: &Duration, b: &Duration) -> Result<Decimal, 
 
 fn fmt_year(year: i64) -> String {
     if year < 0 {
-        format!("-{:04}", -year)
+        // `unsigned_abs` (not unary negation) so this is total for every `i64`,
+        // including `i64::MIN` — defense in depth: the narrowing sites that build
+        // `year` fields reject `i64::MIN` as non-representable in the lexical
+        // space, but this formatter must never panic or wrap even if that
+        // invariant is ever violated by a future caller.
+        format!("-{:04}", year.unsigned_abs())
     } else {
         format!("{year:04}")
     }
@@ -1835,64 +3295,6 @@ impl Time {
     }
 }
 
-impl Duration {
-    /// Canonical lexical form `[-]PnYnMnDTnHnMnS` (general duration grammar).
-    #[must_use]
-    pub fn canonical_lexical(&self) -> String {
-        let neg = self.months < 0 || self.seconds.mantissa() < 0;
-        let months = self.months.unsigned_abs();
-        let years = months / 12;
-        let rem_months = months % 12;
-        let total_secs = self.seconds.whole_part().unsigned_abs();
-        let frac = self.seconds.frac_part();
-        let days = total_secs / 86_400;
-        let rem = total_secs % 86_400;
-        let hours = rem / 3600;
-        let mins = (rem % 3600) / 60;
-        let secs = rem % 60;
-
-        use std::fmt::Write as _;
-        let mut out = String::new();
-        if neg {
-            out.push('-');
-        }
-        out.push('P');
-        if years > 0 {
-            let _ = write!(out, "{years}Y");
-        }
-        if rem_months > 0 {
-            let _ = write!(out, "{rem_months}M");
-        }
-        if days > 0 {
-            let _ = write!(out, "{days}D");
-        }
-        let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
-        if has_time {
-            out.push('T');
-            if hours > 0 {
-                let _ = write!(out, "{hours}H");
-            }
-            if mins > 0 {
-                let _ = write!(out, "{mins}M");
-            }
-            if secs > 0 || !frac.is_zero() {
-                if frac.is_zero() {
-                    let _ = write!(out, "{secs}S");
-                } else {
-                    let canon = frac.canonical_lexical();
-                    let digits = canon.split_once('.').map_or("", |(_, f)| f);
-                    let _ = write!(out, "{secs}.{digits}S");
-                }
-            }
-        }
-        // The zero duration canonicalizes to "PT0S".
-        if out == "P" || out == "-P" {
-            out.push_str("T0S");
-        }
-        out
-    }
-}
-
 impl Gregorian {
     /// XSD canonical lexical form.
     #[must_use]
@@ -1998,6 +3400,231 @@ mod tests {
                 .canonical_lexical(),
             "PT1.5S"
         );
+    }
+
+    /// `"P9223372036854775807Y"` (`i64::MAX` years) must overflow `checked_mul(12)`
+    /// on the way in, and negating `i64::MAX` months (via a leading `-`) must
+    /// overflow `checked_neg` — both are typed `OutOfRange`, never a silently
+    /// wrapped value.
+    #[test]
+    fn duration_month_overflow_is_out_of_range() {
+        assert!(matches!(
+            parse_duration(XsdDatatype::Duration, "P9223372036854775807Y"),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            parse_duration(XsdDatatype::Duration, "-P9223372036854775807Y"),
+            Err(XsdError::OutOfRange { .. })
+        ));
+    }
+
+    /// F3 regression: the lexical year domain is symmetric — `parse_ymd`/
+    /// `parse_year_str` parse a sign-free magnitude into `i64` and negate it, so a
+    /// lexical year ranges over `-i64::MAX..=i64::MAX`. `i64::MIN` (whose magnitude
+    /// has no positive `i64` counterpart) is therefore NOT a representable year.
+    /// Before this fix, `shift_year_month`, `add_seconds_decimal`, and the gYear
+    /// arm's `checked_add` all narrowed into a bare `i64` (or let `checked_add`
+    /// through) without excluding `i64::MIN`, so
+    /// `"-9223372036854775807"^^xsd:gYear + "-P1Y"` constructed year `i64::MIN`:
+    /// `fmt_year`'s unchecked `-year` then emitted the malformed lexical
+    /// `--9223372036854775808` in release (round-trip broken — this crate's own
+    /// parser rejects it) and panicked ("attempt to negate with overflow") in
+    /// debug. Every one of the six reachable operator families — gYear ± ym,
+    /// gYearMonth ± ym, date ± ym, dateTime ± ym, date − dt, dateTime − dt — must
+    /// instead answer a typed `OutOfRange`, never a value and never a panic.
+    #[test]
+    fn year_arithmetic_rejects_i64_min_construction() {
+        const MIN_YEAR: &str = "-9223372036854775807"; // -i64::MAX, the most negative representable year
+        let minus_one_year = ymd(XsdDatatype::YearMonthDuration, "-P1Y");
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+
+        // 1. gYear ± ym
+        let gy = parse_gregorian(XsdDatatype::GYear, MIN_YEAR).unwrap();
+        assert!(matches!(
+            add_duration_to_gregorian(&gy, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 2. gYearMonth ± ym
+        let gym = parse_gregorian(XsdDatatype::GYearMonth, &format!("{MIN_YEAR}-01")).unwrap();
+        assert!(matches!(
+            add_duration_to_gregorian(&gym, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 3. date ± ym
+        let d = parse_date(&format!("{MIN_YEAR}-01-01")).unwrap();
+        assert!(matches!(
+            add_year_month_duration_to_date(&d, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 4. dateTime ± ym
+        let dt = parse_datetime(&format!("{MIN_YEAR}-01-01T00:00:00")).unwrap();
+        assert!(matches!(
+            add_year_month_duration_to_datetime(&dt, &minus_one_year),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 5. date − dt: one day before Jan 1 of MIN_YEAR is Dec 31 of the year
+        // below it, i.e. `i64::MIN`.
+        assert!(matches!(
+            subtract_day_time_duration_from_date(&d, &one_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // 6. dateTime − dt: same one-day-earlier crossing.
+        assert!(matches!(
+            subtract_day_time_duration_from_datetime(&dt, &one_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // The boundary year itself, `-i64::MAX`, is a genuinely representable
+        // year and a zero-shift (or any shift that stays inside `i64`) must
+        // still answer, not be swept up by an overly broad guard.
+        assert_eq!(
+            add_duration_to_gregorian(&gy, &ymd(XsdDatatype::YearMonthDuration, "P0M"))
+                .unwrap()
+                .canonical_lexical(),
+            MIN_YEAR
+        );
+    }
+
+    /// Defense-in-depth companion to the arithmetic-side guard above: `fmt_year`
+    /// itself must be total over every `i64`, including `i64::MIN`, and the
+    /// boundary year that IS representable (`-i64::MAX`) must format and
+    /// round-trip through `parse_gregorian`/`canonical_lexical` unchanged.
+    #[test]
+    fn fmt_year_is_total_and_boundary_year_round_trips() {
+        // `fmt_year` is private; exercise it through `canonical_lexical`, which is
+        // the only way any caller ever observes its output. `i64::MIN` cannot be
+        // constructed as a `year` field by any public arithmetic entry point
+        // (pinned above), but `fmt_year` must not panic even if it somehow were —
+        // reach it directly via a `Gregorian` built from `parse_gregorian` at the
+        // one year that IS representable, `-i64::MAX`, plus a direct unit check
+        // that `unsigned_abs` (not unary negation) is what backs the negative
+        // branch.
+        assert_eq!(i64::MIN.unsigned_abs(), 9_223_372_036_854_775_808u64);
+        assert_eq!(fmt_year(i64::MIN), "-9223372036854775808"); // total: no panic, no wrap
+
+        let g = parse_gregorian(XsdDatatype::GYear, "-9223372036854775807").unwrap();
+        let lex = g.canonical_lexical();
+        assert_eq!(lex, "-9223372036854775807");
+        assert_eq!(
+            parse_gregorian(XsdDatatype::GYear, &lex)
+                .unwrap()
+                .canonical_lexical(),
+            lex
+        );
+    }
+
+    /// XSD 1.1 Part 2's pattern facets on the two named duration subtypes:
+    /// `yearMonthDuration` is `[^DT]*` (§3.4.27, no day component, no time part at
+    /// all) and `dayTimeDuration` is `[^YM]*(T.*)?` (§3.4.26, no year/month
+    /// component in the date part — an `M` inside the time part is minutes and is
+    /// unrestricted). `xsd:duration` itself carries no pattern facet.
+    #[test]
+    fn duration_subtype_pattern_facets_are_enforced() {
+        assert!(matches!(
+            parse_duration(XsdDatatype::YearMonthDuration, "P1D"),
+            Err(XsdError::InvalidLexical { .. })
+        ));
+        assert!(matches!(
+            parse_duration(XsdDatatype::DayTimeDuration, "P1Y"),
+            Err(XsdError::InvalidLexical { .. })
+        ));
+        // 'M' inside the TIME part is minutes, not months — unrestricted for
+        // dayTimeDuration. Pin the parsed components, not just success.
+        let minutes = parse_duration(XsdDatatype::DayTimeDuration, "PT1M").unwrap();
+        assert_eq!(minutes.months(), 0);
+        assert_eq!(minutes.seconds().canonical_lexical(), "60");
+        // xsd:duration carries no pattern facet and accepts every component.
+        let general = parse_duration(XsdDatatype::Duration, "P1Y1D").unwrap();
+        assert_eq!(general.months(), 12);
+        assert_eq!(general.seconds().canonical_lexical(), "86400");
+    }
+
+    /// A zero `yearMonthDuration` must canonicalize to `"P0M"` (the only lexical
+    /// form its `[^DT]*` pattern facet permits), while a zero `dayTimeDuration`
+    /// keeps `"PT0S"`; both must round-trip through `parse_duration`.
+    #[test]
+    fn duration_zero_lexical_is_subtype_correct() {
+        let zero_ym = subtract_durations(
+            &ymd(XsdDatatype::YearMonthDuration, "P1Y"),
+            &ymd(XsdDatatype::YearMonthDuration, "P1Y"),
+        )
+        .unwrap();
+        assert_eq!(zero_ym.canonical_lexical(), "P0M");
+        assert_eq!(
+            parse_duration(XsdDatatype::YearMonthDuration, &zero_ym.canonical_lexical())
+                .unwrap()
+                .canonical_lexical(),
+            "P0M"
+        );
+
+        let zero_dt = subtract_durations(
+            &ymd(XsdDatatype::DayTimeDuration, "PT1H"),
+            &ymd(XsdDatatype::DayTimeDuration, "PT1H"),
+        )
+        .unwrap();
+        assert_eq!(zero_dt.canonical_lexical(), "PT0S");
+        assert_eq!(
+            parse_duration(XsdDatatype::DayTimeDuration, &zero_dt.canonical_lexical())
+                .unwrap()
+                .canonical_lexical(),
+            "PT0S"
+        );
+    }
+
+    /// A `Duration` with strictly opposite-signed `(months, seconds)` components is
+    /// outside the range of the lexical mapping (XSD 1.1 Part 2 §3.3.6) and must be
+    /// unconstructible regardless of which arithmetic entry point would compute it.
+    /// `Duration::new` is the single point every entry point funnels through, so it
+    /// is exercised directly with both sign shapes; a companion assertion pins that
+    /// `add_durations`/`subtract_durations` — now that the general `xsd:duration`
+    /// tag is accepted and the old subtype gate is gone — reach that same
+    /// `Duration::new` refusal, as `OutOfRange`, through BOTH public doors, rather
+    /// than silently constructing a mixed-sign value.
+    #[test]
+    fn mixed_sign_duration_is_unconstructible() {
+        // The guard this test protects is `Duration::new`'s sign coherence check —
+        // the single point of construction every arithmetic entry point (addition
+        // AND subtraction) funnels through. Exercise both sign directions
+        // directly: (months: 12, seconds: -86400) is the shape `P1Y - P1D` would
+        // reach; (months: -12, seconds: 86400) is the shape `-P1Y + P1D` would
+        // reach. A guard placed in only one call site would leave one of these
+        // constructible — pinning both proves it is not.
+        assert!(matches!(
+            Duration::new(12, Decimal::from_parts(-86_400, 0), XsdDatatype::Duration),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            Duration::new(-12, Decimal::from_parts(86_400, 0), XsdDatatype::Duration),
+            Err(XsdError::OutOfRange { .. })
+        ));
+
+        // Both-public-doors form: the yearMonthDuration/dayTimeDuration subtype
+        // gate that used to intercept a cross-subtype pair earlier, as a
+        // TypeMismatch, is gone — the general `xsd:duration` tag is accepted, and
+        // `Duration::new`'s sign guard is the one and only place left that can
+        // still refuse the resulting mixed-sign pair.
+        //
+        // `add_durations`: a positive-months operand plus a negative-seconds
+        // operand reaches (months: 12, seconds: -86400) directly.
+        let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let neg_day = ymd(XsdDatatype::DayTimeDuration, "-P1D");
+        assert!(matches!(
+            add_durations(&ym, &neg_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        // `subtract_durations`: two positive general-`xsd:duration` operands whose
+        // difference is mixed-sign reaches the same guard via negate-then-add.
+        let pos_year = ymd(XsdDatatype::Duration, "P1Y");
+        let pos_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(matches!(
+            subtract_durations(&pos_year, &pos_day),
+            Err(XsdError::OutOfRange { .. })
+        ));
     }
 
     #[test]
@@ -2147,7 +3774,14 @@ mod tests {
 
     // ── Duration ↔ calendar arithmetic: Appendix E month-end clamping ────────────
 
-    fn ymd(dt: XsdDatatype, s: &str) -> Duration {
+    // Brace kept on its own line (via `rustfmt::skip`) purely so this signature's
+    // return type doesn't textually collide with `Duration::new`'s struct-literal
+    // audit pattern (`rg 'Duration \{'`, used elsewhere to confirm every
+    // construction site routes through the smart constructor) — this helper
+    // already routes through `parse_duration`, not a struct literal.
+    #[rustfmt::skip]
+    fn ymd(dt: XsdDatatype, s: &str) -> Duration
+    {
         parse_duration(dt, s).unwrap()
     }
 
@@ -2302,6 +3936,943 @@ mod tests {
         assert!(add_day_time_duration_to_datetime(&dt, &general).is_err());
     }
 
+    // ── Calendar-action classifier ─────────────────────────────────────────────────
+
+    #[test]
+    fn calendar_action_driver_matches_the_classifier_table_for_all_eight_sorts() {
+        assert_eq!(
+            actions(XsdDatatype::DateTime),
+            (MonthAction::Clamped, SecondAction::Free)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Date),
+            (MonthAction::Clamped, SecondAction::MidnightTruncating)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Time),
+            (MonthAction::Absent, SecondAction::CyclicDay)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GYearMonth),
+            (MonthAction::Free, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GYear),
+            (MonthAction::Divisible12, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GMonth),
+            (MonthAction::Cyclic12, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::GMonthDay),
+            (
+                MonthAction::GMonthDayComposite,
+                SecondAction::GMonthDayComposite
+            )
+        );
+        assert_eq!(
+            actions(XsdDatatype::GDay),
+            (MonthAction::GDayComposite, SecondAction::GDayComposite)
+        );
+        // Every non-temporal datatype genuinely has no months field and no
+        // seconds field, so it classifies the same way `time` does for months:
+        // `Absent`/`Absent`.
+        assert_eq!(
+            actions(XsdDatatype::Integer),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::String),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+        assert_eq!(
+            actions(XsdDatatype::Duration),
+            (MonthAction::Absent, SecondAction::Absent)
+        );
+    }
+
+    /// THE load-bearing test for the two-component driver: XML Schema Appendix E
+    /// requires months to be applied before seconds. Applying them in the other
+    /// order produces a *different, wrong* result for this exact input, so this
+    /// test pins both the correct answer and the incorrect alternative a
+    /// days-first implementation would produce.
+    #[test]
+    fn component_order_is_months_before_seconds() {
+        let dt = parse_datetime("2024-01-30T00:00:00").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1M1D");
+        let result = add_duration_to_datetime(&dt, &dur).unwrap();
+        // Months-first: Jan 30 clamps to Feb 29 (2024 is a leap year), then +1D
+        // lands on Mar 1.
+        assert_eq!(result.canonical_lexical(), "2024-03-01T00:00:00");
+        // Days-first (wrong): Jan 30 + 1D = Jan 31, then +1M clamps to Feb 29.
+        assert_ne!(result.canonical_lexical(), "2024-02-29T00:00:00");
+    }
+
+    /// A general `xsd:duration` with both components nonzero is accepted by the
+    /// new primitive — impossible through either single-component function, both
+    /// of which reject it (`duration_to_calendar_arithmetic_rejects_wrong_subtype`).
+    #[test]
+    fn general_duration_applies_to_instants() {
+        let dt = parse_datetime("2024-01-01T00:00:00").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1Y1D");
+        let result = add_duration_to_datetime(&dt, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "2025-01-02T00:00:00");
+    }
+
+    /// `date`'s `MidnightTruncating` second action: the duration is applied at
+    /// midnight and only the resulting date is kept, so a sub-day remainder never
+    /// errors — matching the shipped `add_day_time_duration_to_date`.
+    #[test]
+    fn date_plus_subday_duration_truncates_at_midnight() {
+        let d = parse_date("2024-01-31").unwrap();
+        let sub_day = ymd(XsdDatatype::Duration, "PT1H");
+        let unchanged = add_duration_to_date(&d, &sub_day).unwrap();
+        assert_eq!(unchanged.canonical_lexical(), "2024-01-31");
+
+        let whole_day = ymd(XsdDatatype::Duration, "P1D");
+        let rolled = add_duration_to_date(&d, &whole_day).unwrap();
+        assert_eq!(rolled.canonical_lexical(), "2024-02-01");
+    }
+
+    /// `time` has no months field (`MonthAction::Absent`): a duration with a
+    /// nonzero months component is a type error, while a pure-seconds duration
+    /// still works.
+    #[test]
+    fn time_plus_months_is_a_type_error() {
+        let t = parse_time("12:00:00").unwrap();
+        let months = ymd(XsdDatatype::Duration, "P1M");
+        assert!(add_duration_to_time(&t, &months).is_err());
+
+        let hours = ymd(XsdDatatype::Duration, "PT2H");
+        assert!(add_duration_to_time(&t, &hours).is_ok());
+    }
+
+    /// The relaxed guards on the ten F&O-named single-component functions: a
+    /// general `xsd:duration` whose value happens to be pure-months or
+    /// pure-seconds now passes, while a genuinely mixed general duration is still
+    /// rejected by BOTH single-component forms (extending
+    /// `duration_to_calendar_arithmetic_rejects_wrong_subtype`).
+    #[test]
+    fn relaxed_guards_accept_pure_component_general_durations() {
+        let dt = parse_datetime("2024-01-01T00:00:00Z").unwrap();
+        let pure_year = ymd(XsdDatatype::Duration, "P1Y");
+        assert!(add_year_month_duration_to_datetime(&dt, &pure_year).is_ok());
+
+        let pure_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(add_day_time_duration_to_datetime(&dt, &pure_day).is_ok());
+        let d = parse_date("2024-01-01").unwrap();
+        assert!(add_day_time_duration_to_date(&d, &pure_day).is_ok());
+        let t = parse_time("00:00:00").unwrap();
+        assert!(add_day_time_duration_to_time(&t, &pure_day).is_ok());
+
+        // A mixed general duration is still rejected by BOTH single-component
+        // forms — the guard relaxation is strict, not a wholesale acceptance.
+        let general = ymd(XsdDatatype::Duration, "P1Y1D");
+        assert!(add_year_month_duration_to_datetime(&dt, &general).is_err());
+        assert!(add_day_time_duration_to_datetime(&dt, &general).is_err());
+    }
+
+    // ── Gregorian ± duration through the classifier ────────────────────────────────
+
+    /// The literal in-source table for `gregorian_duration_matrix`: one row per
+    /// (Gregorian type × {months-accepted, months-rejected, days-accepted,
+    /// days-rejected, sub-day, zero}) case that exists for that type — a cell
+    /// whose action never accepts a component (e.g. `gYear`'s
+    /// `SecondAction::Absent` never accepts a nonzero days shift, and `gMonth`'s
+    /// `MonthAction::Cyclic12` never rejects a months shift) has no row, which is
+    /// what "the 6-case grid per type collapses naturally" means.
+    ///
+    /// `(datatype, gregorian_lexical, duration_lexical,
+    /// expected_canonical_lexical)` — `None` in the last slot means the row must
+    /// be rejected as `XsdError::TypeMismatch`.
+    #[test]
+    fn gregorian_duration_matrix() {
+        let rows: [(XsdDatatype, &str, &str, Option<&str>); 43] = [
+            // ── gYearMonth (Free, Absent): 4 rows — Free never rejects ────────
+            (XsdDatatype::GYearMonth, "2012-10", "P1Y1M", Some("2013-11")), // RDF4J's own pinned case
+            (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
+            (XsdDatatype::GYearMonth, "2024-01", "PT1H", None),             // sub-day
+            (XsdDatatype::GYearMonth, "2024-01", "PT0S", Some("2024-01")),  // zero
+            // ── gYear (Divisible12, Absent): 5 rows — no days-accepted ────────
+            (XsdDatatype::GYear, "2024", "P1Y", Some("2025")), // months-accepted
+            (XsdDatatype::GYear, "2024", "P1M", None),         // months-rejected: not a whole year
+            (XsdDatatype::GYear, "2024", "P1D", None),         // days-rejected: Absent
+            (XsdDatatype::GYear, "2024", "PT1H", None),        // sub-day
+            (XsdDatatype::GYear, "2024", "PT0S", Some("2024")), // zero
+            // ── gMonth (Cyclic12, Absent): 4 rows — Cyclic12 never rejects ────
+            (XsdDatatype::GMonth, "--12", "P1M", Some("--01")), // months-accepted, wraps
+            (XsdDatatype::GMonth, "--05", "P1D", None),         // days-rejected: Absent
+            (XsdDatatype::GMonth, "--05", "PT1H", None),        // sub-day
+            (XsdDatatype::GMonth, "--05", "PT0S", Some("--05")), // zero
+            // ── gMonthDay (GMonthDayComposite, decided by gmonthday_shift): 18 rows ──
+            (XsdDatatype::GMonthDay, "--01-15", "P1M", Some("--02-15")), // months-accepted
+            (XsdDatatype::GMonthDay, "--01-31", "P1M", None), // Feb 31 exists in no year — the clamped result varies by target-year leapness
+            (XsdDatatype::GMonthDay, "--03-31", "P1M", Some("--04-30")), // April's length never depends on the anchor year, even though April 31 exists in no year
+            (XsdDatatype::GMonthDay, "--08-31", "P2M", Some("--10-31")), // October always has 31 — the fix doesn't over-reject
+            (XsdDatatype::GMonthDay, "--01-31", "P3M", Some("--04-30")), // April again, via a multi-month shift
+            (XsdDatatype::GMonthDay, "--01-31", "P1D", Some("--02-01")), // January always has 31 days
+            (XsdDatatype::GMonthDay, "--02-28", "P1D", None), // Feb 28 -> {Feb 29 | Mar 1}
+            (XsdDatatype::GMonthDay, "--01-15", "PT1H", None), // sub-day
+            (XsdDatatype::GMonthDay, "--01-15", "PT0S", Some("--01-15")), // zero
+            // Every leap year's immediate next year is non-leap (leap years
+            // are never consecutive), so a whole-year shift off Feb 29
+            // always clamps to Feb 28 — the anchored oracle's own
+            // adjudication of this case, which the previous day-existence
+            // rule over-rejected.
+            (XsdDatatype::GMonthDay, "--02-29", "P1Y", Some("--02-28")),
+            // A 4-year carry is usually leap-to-leap, but not across a
+            // century mark that is not itself divisible by 400 (2096 -> 2100
+            // is the reachable example): both a leap and a non-leap target
+            // year are real, so this is genuinely year-dependent.
+            (XsdDatatype::GMonthDay, "--02-29", "P48M", None),
+            // The unsound two-probe rule's counterexample: both 2000→2001 and
+            // 2001→2002 see a non-leap February on the walk, so the old rule
+            // accepted this and fabricated --03-01, but anchored at Dec 1,
+            // 2003 the walk crosses leap February 2004 and lands on Feb 29 —
+            // genuinely year-dependent.
+            (XsdDatatype::GMonthDay, "--12-01", "P90D", None),
+            // Another year-crossing walk that lands inside a February whose
+            // leapness varies by anchor year.
+            (XsdDatatype::GMonthDay, "--09-01", "P181D", None),
+            // A year-dependent walk near a full year long. There is no
+            // magnitude guard anymore — `gmonthday_shift` anchors a full
+            // 400-year period regardless of |whole_days|, so this row is
+            // just another genuinely ambiguous walk, not a boundary probe.
+            (XsdDatatype::GMonthDay, "--12-01", "P364D", None),
+            // A genuine year-crossing walk that IS year-independent: January
+            // 1 follows December 31 in every year, leap or not.
+            (XsdDatatype::GMonthDay, "--12-31", "P1D", Some("--01-01")),
+            // The composite defect this fix closes: the OLD per-arm code
+            // decided the months half (`--01-31 + P1M`, itself refused —
+            // see the row above) before the day half ever ran, so it
+            // wrongly refused this whole composite even though the FINISHED
+            // answer is Mar 1 from every anchor (Feb 28+1d and Feb 29+1d
+            // both land on Mar 1).
+            (XsdDatatype::GMonthDay, "--01-31", "P1M1D", Some("--03-01")),
+            // `--02-29 ± P365D` is invariant: a leap year's immediate
+            // neighbors are never leap, so walking exactly 365 days from
+            // Feb 29 always lands on the following Feb 28 — genuinely
+            // year-independent even though the old ±364-day magnitude guard
+            // refused it outright purely for being 365 or more.
+            (XsdDatatype::GMonthDay, "--02-29", "P365D", Some("--02-28")),
+            // A composite that carries a whole year plus a day: shift the
+            // month/year first (Feb 29 -> Feb 28 next year, unaffected by
+            // leapness since every leap year's next year is non-leap), then
+            // the day (Feb 28 + 1d = Mar 1) — invariant from every anchor.
+            (XsdDatatype::GMonthDay, "--02-29", "P1Y1D", Some("--03-01")),
+            // ── F2 regression rows: huge-magnitude carries that used to wrap
+            // (release) or panic (debug/overflow-checks) inside
+            // `days_from_civil`'s unchecked `era * 146_097` before the
+            // reduce-first fix in `gmonthday_shift` and the `i128`-internal
+            // hardening of `days_from_civil`/`civil_from_days` — see both
+            // functions' docs. Expected values computed independently in
+            // Python from the same anchored-oracle definition the tests
+            // above use (shift-then-clamp from every anchor in
+            // `GMONTHDAY_ANCHOR_YEARS`), not from this crate's code.
+            //
+            // The pre-fix closed form answered this one correctly too
+            // (`--01-15 + P4e17M -> --05-15`); the per-arm rewrite this
+            // module replaced made it wrap to a false refusal or panic.
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P400000000000000000M",
+                Some("--05-15"),
+            ),
+            // The exact bisected wrap point of the F2 regression: one era
+            // past this magnitude, `days_from_civil`'s `era * 146_097` term
+            // first exceeds `i64::MAX`. Unambiguous from every anchor.
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P303032819133169872M",
+                Some("--01-15"),
+            ),
+            // A huge-magnitude day walk: `876_582_000_000 == 146_097 *
+            // 6_000_000`, an exact multiple of the day-count period, so by
+            // the periodicity argument `civil_from_days`'s own doc gives,
+            // walking it from ANY anchor lands on the identical (month, day)
+            // — provably identity, not merely "whatever the oracle happens
+            // to say" — while still exercising the full `i128` civil-day
+            // walk at a magnitude the old `i64` version could not have
+            // survived (`~8.8e11` days is itself unremarkable, but every
+            // anchor's `days_from_civil` result it is added to is not).
+            (
+                XsdDatatype::GMonthDay,
+                "--01-15",
+                "P876582000000D",
+                Some("--01-15"),
+            ),
+            // ── gDay (GDayComposite, decided by gday_shift): 9 rows ───────────
+            (XsdDatatype::GDay, "---15", "P1M", Some("---15")), // months-accepted: every month has a 15th
+            (XsdDatatype::GDay, "---31", "P1M", None), // months-rejected: Jan 31 + 1M lands on Feb 28/29, anchor-dependent
+            (XsdDatatype::GDay, "---15", "P1D", Some("---16")), // days-accepted
+            (XsdDatatype::GDay, "---28", "P1D", None), // days-rejected: Feb 28 + 1d is Feb 29 or Mar 1, anchor-dependent
+            (XsdDatatype::GDay, "---15", "PT1H", None), // sub-day
+            (XsdDatatype::GDay, "---15", "PT0S", Some("---15")), // zero
+            // F1 rows: cases the old `day <= 28`/`1..=28` sufficient
+            // conditions wrongly refused despite a genuinely
+            // month-independent answer from every anchor — see
+            // `gday_shift`'s doc.
+            (XsdDatatype::GDay, "---31", "P1D", Some("---01")), // day 31 exists only in 31-day months, every one followed by a 1st
+            (XsdDatatype::GDay, "---29", "-P1D", Some("---28")), // every month with a 29th has a 28th before it
+            (XsdDatatype::GDay, "---15", "P146097D", Some("---15")), // exactly one Gregorian period: identity from every anchor
+        ];
+        assert_eq!(rows.len(), 43);
+        for (datatype, g_lex, dur_lex, expected) in rows {
+            let g = parse_gregorian(datatype, g_lex).unwrap();
+            let dur = ymd(XsdDatatype::Duration, dur_lex);
+            let result = add_duration_to_gregorian(&g, &dur);
+            match expected {
+                Some(canon) => assert_eq!(
+                    result.unwrap().canonical_lexical(),
+                    canon,
+                    "{datatype:?} {g_lex} + {dur_lex}"
+                ),
+                None => assert!(
+                    matches!(result, Err(XsdError::TypeMismatch { .. })),
+                    "{datatype:?} {g_lex} + {dur_lex} expected TypeMismatch, got {result:?}"
+                ),
+            }
+        }
+    }
+
+    /// The `|whole_days| < 365` guard fires before probe unanimity is even
+    /// checked: a 1461-day walk (four years plus a day, the classic "4-year
+    /// cycle" magnitude) would agree across every probe year by 4-year-cycle
+    /// coincidence yet is genuinely century-dependent (e.g. starting in 2100,
+    /// a century non-leap year, it lands a day off) — exactly the unsound
+    /// failure mode the magnitude guard exists to prevent without having to
+    /// detect it directly.
+    #[test]
+    fn year_independence_rejects_the_century_leap_case() {
+        let g = parse_gregorian(XsdDatatype::GMonthDay, "--01-15").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1461D");
+        assert!(matches!(
+            add_duration_to_gregorian(&g, &dur),
+            Err(XsdError::TypeMismatch { .. })
+        ));
+    }
+
+    /// `--02-29 + P1D` IS year-independent: the day after Feb 29 is always
+    /// Mar 1, from every leap-year anchor there is. The probe-only-valid-years
+    /// rule resolves this correctly without ever needing to clamp `--02-29`
+    /// down to a non-leap probe's Feb 28 — see `gregorian_duration_matrix`'s
+    /// `--02-28 + P1D` row for the genuinely ambiguous neighbor this is not.
+    #[test]
+    fn year_independence_accepts_the_day_after_leap_day() {
+        let g = parse_gregorian(XsdDatatype::GMonthDay, "--02-29").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1D");
+        let result = add_duration_to_gregorian(&g, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "--03-01");
+    }
+
+    /// The ground-truth oracle for `gMonthDay`'s PURE day-shift case (a
+    /// composite through [`gmonthday_shift`] whose months component happens
+    /// to be zero): anchor a `(month, day)` source at every year in
+    /// `ANCHOR_YEARS` where that date is real, walk `whole_days` civil days
+    /// from each anchor, and collect the resulting `(month, day)` pairs. A
+    /// shift is genuinely year-independent iff every anchor lands on the
+    /// same pair.
+    ///
+    /// For every `(month, day)` valid in some year and every magnitude this
+    /// test sweeps (`|whole_days| <= 364`, both signs — well within
+    /// [`gmonthday_shift`]'s unbounded range, since the magnitude guard the
+    /// old per-arm rule needed no longer exists), this test asserts BOTH
+    /// directions of agreement between the classifier and the oracle:
+    ///
+    /// - If the classifier **accepts**, the oracle set must be the singleton
+    ///   `{result}` — soundness: the classifier never fabricates an answer
+    ///   the true calendar disagrees with on some anchor. This is exactly
+    ///   the property the reverted two-probe rule violated: it accepted
+    ///   `--12-01 + P90D` and returned `--03-01`, while the oracle (anchored
+    ///   at Dec 1, 2003) also contains `--02-29`.
+    /// - If the classifier **rejects**, the oracle set must contain at least
+    ///   two distinct pairs — completeness: the classifier never refuses a
+    ///   shift that the calendar actually agrees on everywhere.
+    ///
+    /// `ANCHOR_YEARS` (1900..=2104) is a deliberately narrowed proleptic
+    /// range, not the full `i64` year space: every disagreement this action
+    /// can produce is a leap/non-leap difference between adjacent calendar
+    /// years, and 1900..=2104 already contains that difference in its
+    /// "ordinary" 4-year-cycle form many times over, plus the one kind of
+    /// anchor year a wider range could add information about — a
+    /// century year that is *not* divisible by 400 and so is non-leap
+    /// despite being divisible by 4 (2100, included here).
+    #[test]
+    fn gmonthday_day_shift_agrees_with_the_anchored_oracle() {
+        const ANCHOR_YEARS: std::ops::RangeInclusive<i64> = 1900..=2104;
+
+        for month in 1u8..=12 {
+            let max_day = days_in_month(A_LEAP_YEAR, month);
+            for day in 1u8..=max_day {
+                // Every anchor year in range for which (month, day) is a real
+                // date, expressed as a civil day count — computed once per
+                // (month, day), then reused (incrementally, not re-walked)
+                // across all 729 shift magnitudes below.
+                let bases: Vec<i128> = ANCHOR_YEARS
+                    .clone()
+                    .filter(|&y| day <= days_in_month(y, month))
+                    .map(|y| days_from_civil(y, month, day))
+                    .collect();
+                assert!(
+                    !bases.is_empty(),
+                    "--{month:02}-{day:02} has no anchor year in {ANCHOR_YEARS:?}"
+                );
+
+                let g_lex = format!("--{month:02}-{day:02}");
+                let g = parse_gregorian(XsdDatatype::GMonthDay, &g_lex).unwrap();
+
+                for whole_days in -364i64..=364 {
+                    let dur = Duration::new(
+                        0,
+                        Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                        XsdDatatype::DayTimeDuration,
+                    )
+                    .unwrap();
+
+                    // Oracle: walk every valid anchor; stop scanning as soon
+                    // as two distinct results are seen — a rejection only
+                    // needs to be shown genuinely ambiguous, not fully
+                    // enumerated, and every accept path below still scans
+                    // every anchor because it must confirm there is no
+                    // disagreement anywhere.
+                    let mut oracle_first: Option<(u8, u8)> = None;
+                    let mut oracle_ambiguous = false;
+                    for &base in &bases {
+                        let (_, nm, nd) = civil_from_days(base + i128::from(whole_days));
+                        match oracle_first {
+                            None => oracle_first = Some((nm, nd)),
+                            Some(first) if first != (nm, nd) => {
+                                oracle_ambiguous = true;
+                                break;
+                            }
+                            Some(_) => {}
+                        }
+                    }
+
+                    match add_duration_to_gregorian(&g, &dur) {
+                        Ok(result) => {
+                            assert!(
+                                !oracle_ambiguous,
+                                "{g_lex} + P{whole_days}D: classifier accepted but the oracle disagrees across anchors"
+                            );
+                            let (em, ed) = oracle_first.expect("bases is never empty");
+                            assert_eq!(
+                                result.canonical_lexical(),
+                                format!("--{em:02}-{ed:02}"),
+                                "{g_lex} + P{whole_days}D"
+                            );
+                        }
+                        Err(XsdError::TypeMismatch { .. }) => {
+                            assert!(
+                                oracle_ambiguous,
+                                "{g_lex} + P{whole_days}D: classifier rejected but every anchor agrees on {oracle_first:?}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!("{g_lex} + P{whole_days}D: unexpected error {other:?}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The ground-truth oracle for `gMonthDay`'s PURE months-shift case (a
+    /// composite through [`gmonthday_shift`] whose days component happens to
+    /// be zero): anchor a `(month, day)` source at every year in
+    /// `ANCHOR_YEARS` where that date is real, shift `months` (carrying years
+    /// as needed), clamp the day down to the target month's actual length
+    /// (XML Schema Appendix E), and collect the resulting `(month, day)`
+    /// pairs. A shift is genuinely year-independent iff every anchor lands
+    /// on the same clamped pair — exactly the same soundness/completeness
+    /// contract as [`gmonthday_day_shift_agrees_with_the_anchored_oracle`],
+    /// carried over to the month arm: an **accepted** shift's oracle set must
+    /// be the singleton the classifier returned, and a **rejected** shift's
+    /// oracle set must contain at least two distinct pairs.
+    ///
+    /// This is the property the previous day-existence rule violated in the
+    /// opposite direction from the day arm's bug: instead of fabricating a
+    /// wrong answer, it *over-rejected* `--03-31 + P1M`, refusing a shift
+    /// whose clamped result (`--04-30`) is identical from every anchor
+    /// because April's length never depends on the anchor year.
+    ///
+    /// `months` sweeps densely over `-48..=48` (covering every within-one-leap-cycle
+    /// carry) plus a sparse set of larger magnitudes chosen to exercise
+    /// deeper carries cheaply: an ordinary multi-decade carry (`1200` months
+    /// = 100 years), a carry landing exactly on the century-mark alignment
+    /// that makes a Feb-29 shift ambiguous (`2400` months = 200 years, a
+    /// multiple of 4 but not of 400 years), and a carry landing exactly on
+    /// one full 400-year Gregorian cycle (`4800` months), where the leap
+    /// pattern repeats exactly and a Feb-29 shift is unambiguous again.
+    #[test]
+    fn gmonthday_month_shift_agrees_with_the_anchored_oracle() {
+        const ANCHOR_YEARS: std::ops::RangeInclusive<i64> = 1900..=2104;
+        let dense = (-48i64..=48).collect::<Vec<_>>();
+        let sparse: Vec<i64> = vec![96, -96, 1200, -1200, 2400, -2400, 4800, -4800];
+
+        for month in 1u8..=12 {
+            let max_day = days_in_month(A_LEAP_YEAR, month);
+            for day in 1u8..=max_day {
+                let anchors: Vec<i64> = ANCHOR_YEARS
+                    .clone()
+                    .filter(|&y| day <= days_in_month(y, month))
+                    .collect();
+                assert!(
+                    !anchors.is_empty(),
+                    "--{month:02}-{day:02} has no anchor year in {ANCHOR_YEARS:?}"
+                );
+
+                let g_lex = format!("--{month:02}-{day:02}");
+                let g = parse_gregorian(XsdDatatype::GMonthDay, &g_lex).unwrap();
+
+                for &months in dense.iter().chain(sparse.iter()) {
+                    if months == 0 {
+                        continue; // identity — no months arm is exercised at all
+                    }
+                    let dur = Duration::new(
+                        months,
+                        Decimal::from_parts(0, 0),
+                        XsdDatatype::YearMonthDuration,
+                    )
+                    .unwrap();
+
+                    // Oracle: shift-then-clamp from every valid anchor; stop
+                    // scanning as soon as two distinct results are seen.
+                    let mut oracle_first: Option<(u8, u8)> = None;
+                    let mut oracle_ambiguous = false;
+                    for &anchor_year in &anchors {
+                        let total = i64::from(month) - 1 + months;
+                        let target_year = anchor_year + total.div_euclid(12);
+                        let target_month = (total.rem_euclid(12) + 1) as u8;
+                        let clamped_day = day.min(days_in_month(target_year, target_month));
+                        let candidate = (target_month, clamped_day);
+                        match oracle_first {
+                            None => oracle_first = Some(candidate),
+                            Some(first) if first != candidate => {
+                                oracle_ambiguous = true;
+                                break;
+                            }
+                            Some(_) => {}
+                        }
+                    }
+
+                    match add_duration_to_gregorian(&g, &dur) {
+                        Ok(result) => {
+                            assert!(
+                                !oracle_ambiguous,
+                                "{g_lex} + P{months}M: classifier accepted but the oracle disagrees across anchors"
+                            );
+                            let (em, ed) = oracle_first.expect("anchors is never empty");
+                            assert_eq!(
+                                result.canonical_lexical(),
+                                format!("--{em:02}-{ed:02}"),
+                                "{g_lex} + P{months}M"
+                            );
+                        }
+                        Err(XsdError::TypeMismatch { .. }) => {
+                            assert!(
+                                oracle_ambiguous,
+                                "{g_lex} + P{months}M: classifier rejected but every anchor agrees on {oracle_first:?}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!("{g_lex} + P{months}M: unexpected error {other:?}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A THIRD, independent ground-truth oracle — this time for the
+    /// COMPOSITE case (`dur_months` and `whole_days` both nonzero) that
+    /// neither oracle test above ever exercises. This is the exact defect
+    /// this fix closes: the old per-arm code decided "is the months-only
+    /// shift year-independent?" before the days half ever ran, so a
+    /// composite whose intermediate (post-months) clamp is year-dependent
+    /// but whose FINISHED answer is invariant was wrongly refused —
+    /// `--01-31 + P1M1D` = `--03-01` from every anchor (Feb 28+1d and Feb
+    /// 29+1d both land on Mar 1), yet the months half alone (`--01-31 +
+    /// P1M`) is genuinely ambiguous and was refused outright.
+    ///
+    /// The oracle reimplements the anchored Appendix E walk straight-line —
+    /// its own year-month shift arithmetic, matching
+    /// `gmonthday_month_shift_agrees_with_the_anchored_oracle`'s oracle
+    /// above, never [`shift_year_month`] or [`gmonthday_shift`] themselves,
+    /// so a bug shared between a production helper and this test's oracle
+    /// cannot hide a disagreement. It still calls
+    /// [`days_in_month`]/[`days_from_civil`]/[`civil_from_days`] as
+    /// ground-truth calendar primitives, exactly as both oracle tests above
+    /// already do — those are tested independently elsewhere in this module
+    /// and are not part of the year-independence LOGIC under test here.
+    ///
+    /// Same soundness/completeness contract as the two oracles above: an
+    /// **accepted** shift's oracle set must be the singleton the classifier
+    /// returned, and a **rejected** shift's oracle set must contain at least
+    /// two distinct pairs.
+    ///
+    /// Grid, chosen to keep this test in the low single-digit seconds
+    /// (`gmonthday_shift` walks up to 400 anchors per call, and this test's
+    /// own oracle does too, so the combination count below times ~800
+    /// anchor-steps is the real cost — a sparser grid is not less CORRECT,
+    /// since `gmonthday_shift` has no bounded probe set for a sparse grid to
+    /// accidentally miss, only less exhaustive):
+    /// - every `(month, day)` valid in some year — 366 pairs, the same full
+    ///   sweep both oracle tests above already do;
+    /// - `months` densely over `-5..=5` plus sparse deep carries: `±100`
+    ///   months (≈8 years), `±4800` months (exactly one full 400-year
+    ///   Gregorian period, where a Feb-29 carry becomes unambiguous again),
+    ///   and — the F2 regression grid extension — `±4×10¹⁷` and two
+    ///   magnitudes beyond `3×10¹⁸`, all comfortably inside `i64`, but each
+    ///   one FAR past the point where `days_from_civil`'s old unchecked
+    ///   `era * 146_097` `i64` multiply would have wrapped (release) or
+    ///   panicked (debug/overflow-checks) — see [`gmonthday_shift`]'s doc;
+    /// - `whole_days` densely over `-10..=10` plus the eight magnitudes the
+    ///   deleted `±364`-day guard used to treat specially (`±364`, `±365`,
+    ///   `±366`, `±730`), plus — the same F2 extension — `±10⁸` and two
+    ///   `±146_097·k` forms (exact multiples of the day-count period, so
+    ///   they also cross-check the periodicity argument
+    ///   [`gmonthday_shift`]'s doc makes for its own `whole_days` reduction).
+    ///
+    /// (The two oracle tests above sweep their single nonzero component far
+    /// more densely — up to `±364` whole days, or `-48..=48` months — because
+    /// each is a single loop; this test's grid is a full cross product of
+    /// `(month, day) × months × whole_days`, so its density is deliberately
+    /// narrower per dimension to land in the same total budget.)
+    ///
+    /// Mixed-sign `(months, whole_days)` pairs are skipped: `Duration::new`
+    /// refuses a mixed-sign general duration outright (XSD 1.1 Part 2
+    /// §3.3.6), so there is no value to construct or test for those
+    /// combinations — they lie outside the value space, not outside this
+    /// oracle's coverage.
+    #[test]
+    fn gmonthday_composite_shift_agrees_with_the_anchored_oracle() {
+        let months_grid: Vec<i64> = (-5i64..=5)
+            .chain([
+                100,
+                -100,
+                4800,
+                -4800,
+                // F2 regression: magnitudes past the old bisected wrap point
+                // (`era * 146_097` first exceeds `i64::MAX` around
+                // `2.5e16` years, i.e. `~3.03e17` months).
+                400_000_000_000_000_000,
+                -400_000_000_000_000_000,
+                3_500_000_000_000_000_000,
+                -3_500_000_000_000_000_000,
+                5_000_000_000_000_000_000,
+                -5_000_000_000_000_000_000,
+            ])
+            .collect();
+        let days_grid: Vec<i64> = (-10i64..=10)
+            .chain([
+                364,
+                -364,
+                365,
+                -365,
+                366,
+                -366,
+                730,
+                -730,
+                // F2 regression: a plain huge magnitude and two exact
+                // multiples of the 146_097-day period.
+                100_000_000,
+                -100_000_000,
+                146_097 * 2,
+                -(146_097 * 2),
+                146_097 * 1_000_000,
+                -(146_097 * 1_000_000),
+            ])
+            .collect();
+
+        for month in 1u8..=12 {
+            let max_day = days_in_month(A_LEAP_YEAR, month);
+            for day in 1u8..=max_day {
+                let g_lex = format!("--{month:02}-{day:02}");
+                let g = parse_gregorian(XsdDatatype::GMonthDay, &g_lex).unwrap();
+
+                for &months in &months_grid {
+                    for &whole_days in &days_grid {
+                        if months == 0 && whole_days == 0 {
+                            continue; // identity — no arm exercised at all
+                        }
+                        let m_sign = months.signum();
+                        let d_sign = whole_days.signum();
+                        if m_sign != 0 && d_sign != 0 && m_sign != d_sign {
+                            continue; // mixed-sign: not a constructible Duration
+                        }
+
+                        // Independent oracle: anchor at every year in one
+                        // full 400-year Gregorian period where (month, day)
+                        // is real, shift `months` (straight-line year-month
+                        // arithmetic, not `shift_year_month`), clamp against
+                        // the target year's real month length, walk
+                        // `whole_days` civil days, and collect the results.
+                        let mut oracle_first: Option<(u8, u8)> = None;
+                        let mut oracle_ambiguous = false;
+                        for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+                            if day > days_in_month(anchor_year, month) {
+                                continue; // not a real anchor for this source
+                            }
+                            let total = i64::from(month) - 1 + months;
+                            let target_year = anchor_year + total.div_euclid(12);
+                            let target_month = (total.rem_euclid(12) + 1) as u8;
+                            let clamped_day = day.min(days_in_month(target_year, target_month));
+                            let base = days_from_civil(target_year, target_month, clamped_day);
+                            let shifted = base + i128::from(whole_days);
+                            let (_, nm, nd) = civil_from_days(shifted);
+                            match oracle_first {
+                                None => oracle_first = Some((nm, nd)),
+                                Some(first) if first != (nm, nd) => {
+                                    oracle_ambiguous = true;
+                                    break;
+                                }
+                                Some(_) => {}
+                            }
+                        }
+
+                        let dur = Duration::new(
+                            months,
+                            Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                            XsdDatatype::Duration,
+                        )
+                        .unwrap();
+
+                        match add_duration_to_gregorian(&g, &dur) {
+                            Ok(result) => {
+                                assert!(
+                                    !oracle_ambiguous,
+                                    "{g_lex} + P{months}M{whole_days}D: classifier accepted but the oracle disagrees across anchors"
+                                );
+                                let (em, ed) =
+                                    oracle_first.expect("at least one anchor is always real");
+                                assert_eq!(
+                                    result.canonical_lexical(),
+                                    format!("--{em:02}-{ed:02}"),
+                                    "{g_lex} + P{months}M{whole_days}D"
+                                );
+                            }
+                            Err(XsdError::TypeMismatch { .. }) => {
+                                assert!(
+                                    oracle_ambiguous,
+                                    "{g_lex} + P{months}M{whole_days}D: classifier rejected but every anchor agrees on {oracle_first:?}"
+                                );
+                            }
+                            Err(other) => {
+                                panic!(
+                                    "{g_lex} + P{months}M{whole_days}D: unexpected error {other:?}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A FOURTH, independent ground-truth oracle — this time for `gDay`
+    /// ([`MonthAction::GDayComposite`]/[`SecondAction::GDayComposite`],
+    /// decided by [`gday_shift`]), one field narrower than the three
+    /// `gMonthDay` oracles above: `gDay` has no month field of its own, so
+    /// its anchor set is every `(year, month)` PAIR in one full 400-year
+    /// Gregorian period ([`GMONTHDAY_ANCHOR_YEARS`] × all twelve months) for
+    /// which the source day is real — see [`gday_shift`]'s doc for why that
+    /// is the correct construction, not `gmonthday_shift`'s own fixed-month,
+    /// year-only anchor set.
+    ///
+    /// The oracle reimplements the anchored Appendix E walk straight-line —
+    /// its own year-month shift and day-count arithmetic, never
+    /// [`shift_year_month`] or [`gday_shift`] themselves, so a bug shared
+    /// between a production helper and this test's oracle cannot hide a
+    /// disagreement — the same independence
+    /// [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]'s oracle
+    /// keeps. It still calls
+    /// [`days_in_month`]/[`days_from_civil`]/[`civil_from_days`] as
+    /// ground-truth calendar primitives, exactly as every oracle test in this
+    /// module already does.
+    ///
+    /// Same soundness/completeness contract as the three `gMonthDay` oracles:
+    /// an **accepted** shift's oracle set must be the singleton day the
+    /// classifier returned, and a **rejected** shift's oracle set must
+    /// contain at least two distinct days.
+    ///
+    /// Grid, measured (not merely estimated) to land in a low-single-digit-
+    /// seconds budget: this test's 4800-anchor set is twelve times
+    /// [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]'s
+    /// 400-anchor `gMonthDay` set — one `(year, month)` pair per anchor
+    /// instead of one year — and early-exit on the first disagreement means
+    /// an ACCEPTED combination (the common case for most of this sweep) pays
+    /// for a full 4800-anchor scan on both the classifier side and this
+    /// oracle's own side, twice over. A grid as dense per-dimension as that
+    /// test's own (`-13..=13` months, `-60..=60` whole_days) measured at
+    /// roughly 17s here — sound, but well past this test's own budget — so
+    /// the dense ranges below are narrower (`-3..=3` months, `-4..=4`
+    /// whole_days, ~2.9s measured), while every source day `1..=31` and every
+    /// sparse magnitude stay in unchanged: `months`' sparse set is the same
+    /// deep-carry set
+    /// [`gmonthday_month_shift_agrees_with_the_anchored_oracle`] uses (an
+    /// ordinary multi-decade carry, a century-alignment carry, and a carry
+    /// landing exactly on one full 400-year period), and `whole_days`' sparse
+    /// set keeps the eight magnitudes the deleted `±364`-day-class guard used
+    /// to treat specially, plus two exact multiples of the 146,097-day period
+    /// (one and three full periods) that cross-check [`gday_shift`]'s own
+    /// reduce-first periodicity argument — the boundary-and-magnitude
+    /// coverage a property test exists to buy, which a narrower *dense*
+    /// sweep does not give up.
+    ///
+    /// Mixed-sign `(months, whole_days)` pairs are skipped for the same
+    /// reason [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]
+    /// skips them: `Duration::new` refuses a mixed-sign general duration
+    /// outright (XSD 1.1 Part 2 §3.3.6), so there is no value to construct.
+    #[test]
+    fn gday_shift_agrees_with_the_anchored_oracle() {
+        let months_grid: Vec<i64> = (-3i64..=3)
+            .chain([96, -96, 1200, -1200, 2400, -2400, 4800, -4800])
+            .collect();
+        let days_grid: Vec<i64> = (-4i64..=4)
+            .chain([
+                364,
+                -364,
+                365,
+                -365,
+                366,
+                -366,
+                730,
+                -730,
+                146_097,
+                -146_097,
+                146_097 * 3,
+                -(146_097 * 3),
+            ])
+            .collect();
+
+        for day in 1u8..=31 {
+            let g_lex = format!("---{day:02}");
+            let g = parse_gregorian(XsdDatatype::GDay, &g_lex).unwrap();
+
+            for &months in &months_grid {
+                for &whole_days in &days_grid {
+                    if months == 0 && whole_days == 0 {
+                        continue; // identity — no arm exercised at all
+                    }
+                    let m_sign = months.signum();
+                    let d_sign = whole_days.signum();
+                    if m_sign != 0 && d_sign != 0 && m_sign != d_sign {
+                        continue; // mixed-sign: not a constructible Duration
+                    }
+
+                    // Independent oracle: anchor at every (year, month) pair
+                    // in one full 400-year Gregorian period where `day` is
+                    // real, shift `months` (straight-line year-month
+                    // arithmetic, not `shift_year_month`), clamp against the
+                    // target month's real length, walk `whole_days` civil
+                    // days, and collect the resulting days.
+                    let mut oracle_first: Option<u8> = None;
+                    let mut oracle_ambiguous = false;
+                    'anchors: for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+                        for anchor_month in 1u8..=12 {
+                            if day > days_in_month(anchor_year, anchor_month) {
+                                continue; // not a real anchor for this source
+                            }
+                            let total = i64::from(anchor_month) - 1 + months;
+                            let target_year = anchor_year + total.div_euclid(12);
+                            let target_month = (total.rem_euclid(12) + 1) as u8;
+                            let clamped_day = day.min(days_in_month(target_year, target_month));
+                            let base = days_from_civil(target_year, target_month, clamped_day);
+                            let shifted = base + i128::from(whole_days);
+                            let (_, _nm, nd) = civil_from_days(shifted);
+                            match oracle_first {
+                                None => oracle_first = Some(nd),
+                                Some(first) if first != nd => {
+                                    oracle_ambiguous = true;
+                                    break 'anchors;
+                                }
+                                Some(_) => {}
+                            }
+                        }
+                    }
+
+                    let dur = Duration::new(
+                        months,
+                        Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                        XsdDatatype::Duration,
+                    )
+                    .unwrap();
+
+                    match add_duration_to_gregorian(&g, &dur) {
+                        Ok(result) => {
+                            assert!(
+                                !oracle_ambiguous,
+                                "{g_lex} + P{months}M{whole_days}D: classifier accepted but the oracle disagrees across anchors"
+                            );
+                            let ed = oracle_first.expect("at least one anchor is always real");
+                            assert_eq!(
+                                result.canonical_lexical(),
+                                format!("---{ed:02}"),
+                                "{g_lex} + P{months}M{whole_days}D"
+                            );
+                        }
+                        Err(XsdError::TypeMismatch { .. }) => {
+                            assert!(
+                                oracle_ambiguous,
+                                "{g_lex} + P{months}M{whole_days}D: classifier rejected but every anchor agrees on {oracle_first:?}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!("{g_lex} + P{months}M{whole_days}D: unexpected error {other:?}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `gMonth`'s `Cyclic12` action is the quotient map `ℤ → ℤ/12`: it wraps
+    /// correctly at the year boundary, and — because the reduce-first bound
+    /// (`month - 1 + months.rem_euclid(12) <= 22`, proven in `drive_gregorian`'s
+    /// doc) holds for every `i64`, not just small ones — a huge months value
+    /// neither panics nor errors.
+    #[test]
+    fn gmonth_cycle_wraps_without_overflow() {
+        let g = parse_gregorian(XsdDatatype::GMonth, "--12").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1M");
+        let result = add_duration_to_gregorian(&g, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "--01");
+
+        let huge = Duration::new(
+            i64::MAX,
+            Decimal::from_parts(0, 0),
+            XsdDatatype::YearMonthDuration,
+        )
+        .unwrap();
+        let g2 = parse_gregorian(XsdDatatype::GMonth, "--01").unwrap();
+        assert!(add_duration_to_gregorian(&g2, &huge).is_ok());
+    }
+
+    /// `subtract_duration_from_gregorian` is negate-then-add, exercised
+    /// independently of the addition matrix above.
+    #[test]
+    fn gregorian_subtraction_is_negate_then_add() {
+        let g = parse_gregorian(XsdDatatype::GYear, "2025").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "P1Y");
+        let result = subtract_duration_from_gregorian(&g, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "2024");
+    }
+
+    /// A zero duration is identity for every Gregorian type, including a
+    /// timezone-carrying value — Appendix E step E[3] carries the timezone
+    /// through unchanged.
+    #[test]
+    fn gregorian_zero_duration_preserves_timezone() {
+        let g = parse_gregorian(XsdDatatype::GYear, "2024Z").unwrap();
+        let dur = ymd(XsdDatatype::Duration, "PT0S");
+        let result = add_duration_to_gregorian(&g, &dur).unwrap();
+        assert_eq!(result.canonical_lexical(), "2024Z");
+    }
+
     // ── subtract-{dateTimes,dates,times} → dayTimeDuration ────────────────────────
 
     #[test]
@@ -2372,7 +4943,7 @@ mod tests {
         assert_eq!(d.seconds().canonical_lexical(), "1.5");
     }
 
-    /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `TypeMismatch`
+    /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `Indeterminate`
     /// when exactly one side carries a timezone — see `instant_diff`'s docs), pinned
     /// independently of `subtract_datetimes_indeterminate_mix_is_error`: the dateTime
     /// form is not the only caller of the shared `instant_diff` helper, and a defect
@@ -2426,16 +4997,166 @@ mod tests {
         );
     }
 
+    /// Inverted from (and renamed from) a test that once pinned the opposite
+    /// behavior: F&O restricts `+`/`-`/`*`//` to the two named subtypes, but
+    /// PurRDF's RDF4J-permissiveness ruling accepts the general `xsd:duration`
+    /// too, in both the mixed-subtype and the general-plus-general case. Both
+    /// assertions pin the exact result value AND its exact result datatype — a
+    /// bare `is_ok()` would not show the tag-join rule landed correctly.
     #[test]
-    fn duration_add_rejects_mixed_subtype() {
+    fn duration_add_mixes_subtypes_into_general_duration() {
+        // yearMonthDuration + dayTimeDuration: neither operand declares the same
+        // tag as the other, so the result is the general `xsd:duration`.
         let ym = ymd(XsdDatatype::YearMonthDuration, "P1Y");
         let dt = ymd(XsdDatatype::DayTimeDuration, "PT1H");
-        assert!(add_durations(&ym, &dt).is_err());
-        // The general xsd:duration is also rejected — F&O defines +/-/*// only for
-        // the two named subtypes.
+        let sum = add_durations(&ym, &dt).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1YT1H");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+
+        // general + general: both operands already declare the general tag, and
+        // an already-general tag stays general.
         let general_a = ymd(XsdDatatype::Duration, "P1Y1D");
         let general_b = ymd(XsdDatatype::Duration, "P1D");
-        assert!(add_durations(&general_a, &general_b).is_err());
+        let sum = add_durations(&general_a, &general_b).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1Y2D");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+    }
+
+    /// Dual discriminator A: `P1Y - P1Y` computes the pair `(0, 0)`, which is indistinguishable
+    /// from a pure `dayTimeDuration` zero by VALUE alone — only the declared-tag
+    /// join rule (never a components-based one) keeps the result tagged
+    /// `yearMonthDuration`, which is why its canonical lexical is `"P0M"` and not
+    /// `"PT0S"`.
+    #[test]
+    fn zero_result_keeps_the_operand_subtype() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let b = ymd(XsdDatatype::YearMonthDuration, "P1Y");
+        let diff = subtract_durations(&a, &b).unwrap();
+        assert_eq!(diff.canonical_lexical(), "P0M");
+        assert_eq!(diff.datatype(), XsdDatatype::YearMonthDuration);
+    }
+
+    /// Dual discriminator B: `P1M + PT0S` computes the pair `(1, 0)`, which looks
+    /// exactly like a pure `yearMonthDuration` value by VALUE alone — only the
+    /// declared-tag join rule (the operands' tags differ: `yearMonthDuration` vs.
+    /// `dayTimeDuration`) keeps the result tagged as the general `xsd:duration`
+    /// rather than `yearMonthDuration`. A+B together force the tag-join rule to be
+    /// syntactic on tags, never a function of the computed components.
+    #[test]
+    fn mixed_subtype_sum_is_the_general_duration() {
+        let a = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        let b = ymd(XsdDatatype::DayTimeDuration, "PT0S");
+        let sum = add_durations(&a, &b).unwrap();
+        assert_eq!(sum.canonical_lexical(), "P1M");
+        assert_eq!(sum.datatype(), XsdDatatype::Duration);
+    }
+
+    /// The group inverse: negating both components together, and the round trip
+    /// back through a second negation.
+    #[test]
+    fn unary_minus_negates_both_components() {
+        let d = ymd(XsdDatatype::YearMonthDuration, "P1Y2M");
+        let negated = negate_duration(&d).unwrap();
+        assert_eq!(negated.canonical_lexical(), "-P1Y2M");
+        assert_eq!(negated.datatype(), XsdDatatype::YearMonthDuration);
+
+        let round_tripped = negate_duration(&negated).unwrap();
+        assert_eq!(round_tripped.canonical_lexical(), d.canonical_lexical());
+        assert_eq!(round_tripped.datatype(), d.datatype());
+    }
+
+    /// `multiply_duration`/`divide_duration` round the months component (ties
+    /// toward positive infinity, `round_decimal_to_i64`) rather than truncating —
+    /// and the documented consequence that rounding makes `(d ÷ 2) × 2` NOT an
+    /// inverse for an odd month count.
+    #[test]
+    fn duration_scale_rounds_months_not_truncates() {
+        let one_month = ymd(XsdDatatype::YearMonthDuration, "P1M");
+        let half = parse_decimal("0.5").unwrap();
+        // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity) => "P1M".
+        assert_eq!(
+            multiply_duration(&one_month, &half)
+                .unwrap()
+                .canonical_lexical(),
+            "P1M"
+        );
+        let one_half = parse_decimal("1.5").unwrap();
+        // 1 month * 1.5 = 1.5, rounds to 2 (ties toward +infinity) => "P2M".
+        assert_eq!(
+            multiply_duration(&one_month, &one_half)
+                .unwrap()
+                .canonical_lexical(),
+            "P2M"
+        );
+
+        // Documented non-inverse: (P1M ÷ 2) × 2 rounds 1 month / 2 = 0.5 up to 1
+        // month at the division step, so multiplying that back by 2 gives P2M, not
+        // the original P1M.
+        let two = Decimal::from_parts(2, 0);
+        let halved = divide_duration(&one_month, &two).unwrap();
+        let doubled = multiply_duration(&halved, &two).unwrap();
+        assert_eq!(doubled.canonical_lexical(), "P2M");
+        assert_ne!(doubled.canonical_lexical(), one_month.canonical_lexical());
+    }
+
+    /// `divide_durations` dispatches on VALUE commensurability, not on declared
+    /// tags — three assertions, because a same-tag-only test cannot distinguish
+    /// value-based dispatch from a wrong tag-gated implementation that happens to
+    /// pass it verbatim.
+    #[test]
+    fn divide_durations_is_commensurability_not_tags() {
+        // Same tag, commensurable (both purely months-shaped).
+        let one_year = ymd(XsdDatatype::Duration, "P1Y");
+        let one_month = ymd(XsdDatatype::Duration, "P1M");
+        assert_eq!(
+            divide_durations(&one_year, &one_month)
+                .unwrap()
+                .canonical_lexical(),
+            "12"
+        );
+
+        // Cross tag, value-commensurable (both purely seconds-shaped) — must
+        // succeed despite the differing declared tags.
+        let thirty_days = ymd(XsdDatatype::Duration, "P30D");
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+        assert_eq!(
+            divide_durations(&thirty_days, &one_day)
+                .unwrap()
+                .canonical_lexical(),
+            "30"
+        );
+
+        // Same tag, value-incommensurable (months vs. seconds) — must fail even
+        // though the declared tags agree.
+        let one_year = ymd(XsdDatatype::Duration, "P1Y");
+        let one_day = ymd(XsdDatatype::Duration, "P1D");
+        assert!(matches!(
+            divide_durations(&one_year, &one_day),
+            Err(XsdError::Indeterminate {
+                reason: "incommensurable duration operands"
+            })
+        ));
+    }
+
+    /// The reachable overflow boundary `decimal_div_raw` guards with a typed
+    /// `Err` rather than a wrapping/truncating `i128` multiply: scaling
+    /// `86400` (one day, in seconds) up by `10^36` to align a divisor with 18
+    /// fractional digits overflows `i128` (`86400 × 10^36 ≈ 8.64 × 10^40 >
+    /// i128::MAX ≈ 1.7 × 10^38`). Documented here so the boundary is pinned,
+    /// not discovered — it is a different case from the dead `shift_exp < 0`
+    /// arm removed alongside this test, which was unreachable, not merely
+    /// untested.
+    #[test]
+    fn decimal_div_scale_overflow_is_out_of_range() {
+        let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
+        let attosecond = ymd(XsdDatatype::DayTimeDuration, "PT0.000000000000000001S");
+        assert!(matches!(
+            divide_durations(&one_day, &attosecond),
+            Err(XsdError::OutOfRange {
+                datatype: XsdDatatype::Decimal,
+                ..
+            })
+        ));
     }
 
     #[test]

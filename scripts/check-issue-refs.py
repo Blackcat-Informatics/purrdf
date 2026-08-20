@@ -8,16 +8,20 @@ Four token families are rejected, over exactly the same scanned surface.
 **Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
 and misleading, so we do not allow new ones.
 
-**Process references** — ``Task 28``, ``EPIC``, ``this branch``, and a phrase
+**Process references** — ``Task 28``, ``EPIC``, ``this branch``, a phrase
 that locates something in the repository's own history (``on origin/main``,
-`` on `origin/main` ``). These name the *development effort* that produced the
-code rather than the code itself. They go stale the moment the branch merges:
-"this branch" has no referent in a merged history, "Pre-existing on
-`origin/main`" answers a question only the reviewer who wrote it was asking,
-and a reader who meets "task 29" in a test file cannot look it up. ``#NNN``
-was banned for exactly this reason and these are the same debt spelled
-differently — which is why ``// --- task 28: the reasoner façade ---`` sailed
-through a lint that was already meant to stop it.
+`` on `origin/main` ``), a possessive or section-anchored reference to an
+external planning document (``the plan's``, ``the plan §``), and a standalone
+acceptance-criterion label (``AC1``). These name the *development effort*
+that produced the code rather than the code itself. They go stale the moment
+the branch merges: "this branch" has no referent in a merged history,
+"Pre-existing on `origin/main`" answers a question only the reviewer who
+wrote it was asking, "verbatim from the plan's §6.5" sends a reader to a
+document that never shipped, and a reader who meets "task 29" or "AC1" in a
+test file cannot look either up. ``#NNN`` was banned for exactly this reason
+and these are the same debt spelled differently — which is why ``// ---
+task 28: the reasoner façade ---`` sailed through a lint that was already
+meant to stop it.
 
 **Hazard / finding labels** — a bare ``H12``, or an ``F6``/``N3``-shaped token
 used AS A LABEL (``F6:`` at the start of a clause, or wrapped alone in
@@ -33,7 +37,7 @@ code) that must not be flagged.
 grammar choice by pointing at the tracker discussion that settled it rather
 than by describing the choice itself.
 
-Process and hazard-label references carry two frozen registers, both of which
+Process and hazard-label references carry three frozen registers, all of which
 may only SHRINK:
 
 * ``PRE_EXISTING_PROCESS_REFERENCES`` — the debt that predates this rule, one
@@ -44,6 +48,12 @@ may only SHRINK:
   *control-flow* arm and not a git branch. English overloads the word; these
   places are named so the ban can stay absolute. New code should say "this arm",
   "this case", or "this match arm", which is clearer prose regardless.
+* ``AMBIGUOUS_PLAN_PHRASES`` — the files where "the plan's"/"the plan §" names
+  a runtime query, compaction, or execution *plan value* (``the plan's
+  pre-order``, ``the plan's transform chain``) and not a development-planning
+  document. "Plan" is both a domain noun in this codebase and the word the
+  banned phrase uses, so these places are named so the ban can stay absolute
+  without flagging every doc comment that talks about a query plan's shape.
 
 This lint scans:
 
@@ -79,10 +89,18 @@ and markdown anchors while still catching references like ``#16`` or ``#123``.
 The process token patterns are ``Task``/``task`` followed by an optional ``#``
 and a number, the bare uppercase acronym ``EPIC`` (so ``EPIC #906`` and
 ``(EPIC \\`text_parse\\`)`` are both caught, while the ordinary English word
-"epic" in a changelog entry is not), the phrase "this branch" in any case, and
+"epic" in a changelog entry is not), the phrase "this branch" in any case,
 "on origin/main" / "on `origin/main`" (release documentation that says a
 branch is *synchronized with* `origin/main` is unaffected — only the "on"
-collocation that locates a piece of code in history is banned).
+collocation that locates a piece of code in history is banned), "the plan's"
+(the apostrophe matches either the ASCII ``'`` or the typographic U+2019
+``’`` form, since a prose editor or pasted review comment may use either)
+/ "the plan §" (a possessive or section-anchored reference to an external
+planning document — matched literally, since every occurrence in this
+repository's history has been lowercase mid-sentence prose), and a standalone
+acceptance-criterion label ``AC`` followed by exactly one digit (``AC1``);
+``AC12`` is two digits and does not match, since the shape is specifically the
+single-digit labels this repository's planning documents have used.
 
 The hazard-label token patterns are a bare ``H`` followed by 1-3 digits
 (``H12``), and an ``F``/``N`` followed by 1-3 digits either immediately
@@ -119,6 +137,8 @@ TOKEN_RE = re.compile(
     r"|(?P<issue_normative>\bissue-normative\b)"
     r"|(?P<hazard>\bH\d{1,3}\b)"
     r"|(?P<hazard_label>\b[FN]\d{1,3}:|\([FHN]\d{1,3}\))"
+    r"|(?P<plan_ref>\bthe plan(?:[\'’]s\b|\s+§))"
+    r"|(?P<ac_label>\bAC\d\b)"
 )
 
 # The prose fix each process family's message suggests.
@@ -140,6 +160,14 @@ PROCESS_REMEDY: dict[str, str] = {
     "hazard": "restate as the behaviour it describes, with no review-thread hazard id",
     "hazard_label": (
         "restate as the behaviour it describes, with no review-thread finding label"
+    ),
+    "plan_ref": (
+        "describe what the code/table/text itself does or covers, not a planning "
+        "document's section number or item count"
+    ),
+    "ac_label": (
+        "name the requirement itself, not the acceptance-criterion label that "
+        "tracked it"
     ),
 }
 
@@ -172,6 +200,7 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_authorship_census.rs", "this branch"),
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
+        ("crates/rdf/tests/gts_certify.rs", "the plan's"),
         ("crates/shapes/src/instance.rs", "Task 6"),
         ("crates/shapes/src/json_schema.rs", "F6:"),
         ("crates/shapes/src/json_schema.rs", "Task 3"),
@@ -179,8 +208,9 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/shapes/src/json_schema.rs", "Task 6"),
         ("crates/shapes/src/shapes.rs", "Task 2"),
         ("crates/shapes/tests/rules_conformance.rs", "Task 6"),
+        ("crates/sparql-conformance/tests/owl2_rl_conformance.rs", "the plan's"),
         ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
-        ("crates/xsd/src/ops.rs", "Task 4"),
+        ("crates/sparql-eval/src/stat_agg.rs", "the plan's"),
     }
 )
 
@@ -199,6 +229,28 @@ AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
         "crates/rdf-core/src/dataset_view.rs",
         "crates/rdf-core/src/turtle_render.rs",
         "crates/validate/src/regime.rs",
+    }
+)
+
+# Files where "the plan's"/"the plan §" denotes a runtime QUERY, COMPACTION, or
+# EXECUTION plan VALUE — "the plan's pre-order", "the plan's transform chain" —
+# and not a development-planning document. The phrase is banned outright rather
+# than guessed at, because English gives no reliable signal: "arrived at through
+# the plan's soundness certificate" reads identically whether "plan" is a query
+# plan or a design document, and both shapes occur in this codebase. Naming the
+# code-sense sites keeps the ban absolute while costing nothing in precision.
+# Like the registers above, this may only shrink: an entry whose file no longer
+# says "the plan's"/"the plan §" is reported as stale.
+AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
+    {
+        "crates/datalog/src/seminaive.rs",
+        "crates/gts/src/compact.rs",
+        "crates/gts/tests/pinned_dict_compaction.rs",
+        "crates/rdf-core/src/ir/dataset.rs",
+        "crates/rdf/tests/dict_vectors.rs",
+        "crates/sparql-eval/src/governor/ledger.rs",
+        "crates/sparql-eval/src/property_fn.rs",
+        "crates/sparql-eval/tests/governed_query.rs",
     }
 )
 
@@ -896,6 +948,7 @@ def main() -> int:
     # that no longer has one can be reported as stale.
     live_process: set[tuple[str, str]] = set()
     live_branch_files: set[str] = set()
+    live_plan_files: set[str] = set()
 
     for path in iter_scan_paths(root):
         rel = str(path.relative_to(root))
@@ -908,6 +961,9 @@ def main() -> int:
             if kind == "branch" and rel in AMBIGUOUS_BRANCH_PHRASES:
                 live_branch_files.add(rel)
                 continue
+            if kind == "plan_ref" and rel in AMBIGUOUS_PLAN_PHRASES:
+                live_plan_files.add(rel)
+                continue
             if key in PRE_EXISTING_PROCESS_REFERENCES:
                 continue
             process.append((path, line, col, token, text, PROCESS_REMEDY[kind]))
@@ -916,6 +972,7 @@ def main() -> int:
         entry for entry in PRE_EXISTING_PROCESS_REFERENCES if entry not in live_process
     )
     stale_branch = sorted(AMBIGUOUS_BRANCH_PHRASES - live_branch_files)
+    stale_plan = sorted(AMBIGUOUS_PLAN_PHRASES - live_plan_files)
 
     if issues:
         for path, line, col, token, text in issues:
@@ -937,16 +994,23 @@ def main() -> int:
             f"{entry_path!r}, which no longer says 'this branch' — delete the "
             f"entry so the register keeps shrinking."
         )
+    for entry_path in stale_plan:
+        print(
+            f"scripts/check-issue-refs.py: AMBIGUOUS_PLAN_PHRASES still lists "
+            f"{entry_path!r}, which no longer says 'the plan's'/'the plan §' — "
+            f"delete the entry so the register keeps shrinking."
+        )
 
-    if issues or process or stale or stale_branch:
+    if issues or process or stale or stale_branch or stale_plan:
         return 1
 
     print(
         f"OK: no #NNN issue-reference tokens and no new process references in "
         f"comments or docs "
         f"({len(PRE_EXISTING_PROCESS_REFERENCES)} pre-existing process "
-        f"reference(s) and {len(AMBIGUOUS_BRANCH_PHRASES)} control-flow "
-        f"'this branch' site(s) registered)."
+        f"reference(s), {len(AMBIGUOUS_BRANCH_PHRASES)} control-flow "
+        f"'this branch' site(s), and {len(AMBIGUOUS_PLAN_PHRASES)} runtime-plan "
+        f"'the plan's' site(s) registered)."
     )
     return 0
 

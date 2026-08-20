@@ -521,14 +521,24 @@ pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
     }
 }
 
-/// Promote an `Integer` to a `Decimal` with scale 0.
-fn integer_to_decimal(value: i128) -> Decimal {
+/// Promote an `Integer` to a `Decimal` with scale 0. `pub(crate)` so `ops.rs` can
+/// build the exact factor `value_mul`/`value_div` pass to the duration-scaling
+/// primitives (`temporal::multiply_duration`/`divide_duration`) without widening
+/// `Decimal::from_parts` beyond `pub(crate)`.
+pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
     Decimal::from_parts(value, 0)
 }
 
-/// SPARQL `op:numeric-add` (`+`). Follows the numeric promotion tower:
-/// `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is exact (`i128`);
-/// decimal addition is exact within the representable range; float/double are IEEE.
+/// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
+/// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
+/// exact (`i128`); decimal addition is exact within the representable range;
+/// float/double are IEEE.
+///
+/// This is a narrower contract than [`crate::ops::value_add`], the SPARQL-
+/// facing `+`: every call site over an `XsdValue` of unknown family should go
+/// through `value_add`, which also accepts SEP-0002's temporal operand pairs;
+/// call this function directly only where the operands are already known
+/// numeric.
 ///
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
@@ -598,7 +608,10 @@ fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
     Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
-/// SPARQL `op:numeric-subtract` (`-`). Same promotion tower as `numeric_add`.
+/// `op:numeric-subtract` — the numeric-TIER `-` operator only. Same promotion
+/// tower as [`numeric_add`]; see its doc for why [`crate::ops::value_sub`],
+/// not this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family.
 ///
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
@@ -645,7 +658,11 @@ fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
     Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
-/// SPARQL `op:numeric-multiply` (`*`). Same promotion tower as `numeric_add`.
+/// `op:numeric-multiply` — the numeric-TIER `*` operator only. Same promotion
+/// tower as [`numeric_add`]; see its doc for why [`crate::ops::value_mul`],
+/// not this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family (it also accepts `xsd:duration × xsd:integer|xsd:decimal`,
+/// which this function does not).
 ///
 /// Decimal multiplication: `new_mantissa = a.mantissa × b.mantissa`,
 /// `new_scale = a.scale + b.scale`. If `new_scale > MAX_DECIMAL_SCALE`, the result
@@ -719,9 +736,14 @@ pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdEr
     }
 }
 
-/// SPARQL `op:numeric-divide` (`/`). Integer ÷ integer returns **decimal** (not
-/// integer), per XPath `op:numeric-divide` semantics. All other pairs follow the
-/// numeric promotion tower.
+/// `op:numeric-divide` — the numeric-TIER `/` operator only. Integer ÷ integer
+/// returns **decimal** (not integer), per XPath `op:numeric-divide` semantics.
+/// All other pairs follow the numeric promotion tower.
+///
+/// See [`numeric_add`]'s doc for why [`crate::ops::value_div`], not this
+/// function, is the SPARQL-facing entry point for an `XsdValue` of unknown
+/// family (it also accepts `xsd:duration ÷ xsd:integer|xsd:decimal|xsd:duration`,
+/// which this function does not).
 ///
 /// Division by zero:
 /// - `xsd:integer` or `xsd:decimal` divisor = 0 → `Err(DivisionByZero)` (hard error).
@@ -856,25 +878,28 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     let vs = i32::from(divisor.scale());
     let ds = i32::from(dividend.scale());
     let shift_exp: i32 = i32::from(target_scale) + vs - ds;
-    // Scale dm up (or down) by 10^shift_exp.
-    let scaled_dm: i128 = if shift_exp >= 0 {
-        // Scale up: dm × 10^shift_exp. Max shift is 18 + 18 - 0 = 36.
-        // 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38, so we can represent 10^36.
-        // dm itself can be up to i128::MAX / 10 (from multiplication), but in the
-        // typical case |dm| ≤ 10^18. If the scale-up overflows, return OutOfRange.
-        let factor = 10i128.pow(shift_exp as u32);
-        dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
-            datatype: XsdDatatype::Decimal,
-            lexical: String::new(),
-            reason: "decimal division intermediate overflow",
-        })?
-    } else {
-        // Scale down: dm / 10^(-shift_exp). Precision is lost; this only happens
-        // when the dividend has more fractional digits than target_scale + vs,
-        // which is unusual but possible.
-        let factor = 10i128.pow((-shift_exp) as u32);
-        dm / factor
+    // Scale dm up by 10^shift_exp. `shift_exp` is NEVER negative: both `vs` and
+    // `ds` are bounded by the crate-wide `scale <= MAX_DECIMAL_SCALE` (= 18)
+    // invariant (documented on `Decimal::cmp_exact` above, `debug_assert!`ed
+    // there, enforced at parse time by `parse_decimal`, and re-clamped by
+    // `decimal_mul_raw`), so `shift_exp = MAX_DECIMAL_SCALE + vs - ds >= 18 + 0
+    // - 18 = 0` for every reachable input. A scale-down arm here would be dead
+    // code; `unreachable!()` (not `debug_assert!`, which compiles out under
+    // `[profile.release]` and would ship a silent truncation) keeps that proof
+    // load-bearing in every build profile rather than merely in debug builds.
+    let Ok(shift) = u32::try_from(shift_exp) else {
+        unreachable!("decimal scale invariant (scale <= 18) keeps shift_exp non-negative")
     };
+    // Max shift is 18 + 18 - 0 = 36. 10^36 ≈ 10^36, and i128::MAX ≈ 1.70×10^38,
+    // so we can represent 10^36. dm itself can be up to i128::MAX / 10 (from
+    // multiplication), but in the typical case |dm| ≤ 10^18. If the scale-up
+    // overflows, return OutOfRange.
+    let factor = 10i128.pow(shift);
+    let scaled_dm: i128 = dm.checked_mul(factor).ok_or_else(|| XsdError::OutOfRange {
+        datatype: XsdDatatype::Decimal,
+        lexical: String::new(),
+        reason: "decimal division intermediate overflow",
+    })?;
     Ok(Decimal::from_parts(scaled_dm / vm, target_scale))
 }
 
@@ -965,7 +990,13 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
     quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
 }
 
-/// SPARQL `op:numeric-unary-minus` (unary `-`). Negates the value, preserving its type.
+/// `op:numeric-unary-minus` — the numeric-TIER unary `-` only. Negates the
+/// value, preserving its type.
+///
+/// See [`numeric_add`]'s doc for why [`crate::ops::value_unary_minus`], not
+/// this function, is the SPARQL-facing entry point for an `XsdValue` of
+/// unknown family (it also accepts `xsd:duration`, a PurRDF extension this
+/// function does not implement).
 ///
 /// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →
 /// `Err(OutOfRange)`. For float/double, IEEE negation (−0.0 negates to +0.0 and
@@ -1844,6 +1875,32 @@ mod tests {
                 datatype: XsdDatatype::Decimal
             })
         ));
+    }
+
+    /// `decimal_div_raw` used to branch on `shift_exp < 0` and scale the
+    /// dividend DOWN (losing precision by plain truncating division) in that
+    /// arm — provably unreachable, since `shift_exp = MAX_DECIMAL_SCALE + vs -
+    /// ds` with both scales bounded by the crate-wide `scale <= 18` invariant
+    /// is always `>= 0`. That arm is gone; this pins the boundary case
+    /// CLOSEST to it — the maximum reachable dividend scale (`ds == 18`)
+    /// against a whole-number divisor (`vs == 0`), so `shift_exp == 0`
+    /// exactly, the `>= 0` branch's own zero edge — with the exact correct
+    /// quotient, proving the surviving code path handles it rather than
+    /// merely not panicking.
+    ///
+    /// The branch's deletion itself is pinned as a shell acceptance check,
+    /// not here: a source grep for the negated `shift_exp` token that the
+    /// dead arm used to scale the dividend down (`10i128.pow(negated as
+    /// u32)`) reports zero hits in this file, where it used to report two
+    /// (the dead arm's cast plus its comment) before this change.
+    #[test]
+    fn decimal_div_has_no_dead_truncating_branch() {
+        let dividend = dec("0.000000000000000001"); // scale 18 (MAX_DECIMAL_SCALE)
+        let divisor = dec("1"); // scale 0
+        let result = decimal_div_raw(&dividend, &divisor).unwrap();
+        assert_eq!(result.mantissa(), 1);
+        assert_eq!(result.scale(), MAX_DECIMAL_SCALE);
+        assert_eq!(result.canonical_lexical(), "0.000000000000000001");
     }
 
     // -- unary minus --

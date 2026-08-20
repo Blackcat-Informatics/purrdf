@@ -1,0 +1,7 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# 2024 is a leap year, so adding one month to the last day of January must
+# clamp against the TARGET month's length (Feb 29), not merely subtract a
+# fixed day count.
+SELECT ?d WHERE {
+  BIND("2024-01-31T00:00:00Z"^^xsd:dateTime + "P1M"^^xsd:yearMonthDuration AS ?d)
+}

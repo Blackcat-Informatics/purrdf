@@ -1,0 +1,9 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# The components alone LOOK like a pure yearMonthDuration sum (PT0S
+# contributes nothing), but the operands mix subtypes (yearMonthDuration +
+# dayTimeDuration), so the result must carry the general xsd:duration tag —
+# the rule is syntactic on the declared operand tags, never on the computed
+# components.
+SELECT ?d WHERE {
+  BIND("P1M"^^xsd:yearMonthDuration + "PT0S"^^xsd:dayTimeDuration AS ?d)
+}
