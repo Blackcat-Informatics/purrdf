@@ -4651,6 +4651,61 @@ mod tests {
         );
     }
 
+    /// `rows` `xsd:dayTimeDuration` literals `P0D, P2D, P4D, ..., P(2*(rows-1))D`
+    /// — [`stat_agg_integer_sequence_dataset`]'s duration counterpart, used by
+    /// the `crate::stat_agg`'s duration-extension forced-parallel test below.
+    /// The `2 *` step keeps the eventual `MEDIAN` midpoint an EXACT whole-day
+    /// value (see `crate::stat_agg`'s own
+    /// `median_over_pure_day_time_duration_even_group_is_the_midpoint` unit
+    /// test for the same reasoning at unit-test scale), so the pinned answer
+    /// does not depend on sub-day duration canonicalization.
+    fn stat_agg_dt_duration_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..rows {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: format!("P{}D", 2 * i),
+                datatype: Some(XSD_DAY_TIME_DURATION.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val_pred, val, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// `crate::stat_agg::MEDIAN`'s `xsd:duration` extension (see that module's
+    /// "The `xsd:duration` extension" doc section) over a group large enough
+    /// to cross `crate::parallel::PARALLEL_MIN_ROWS`, exercising the REAL
+    /// `crate::parallel::par_chunk_reduce_init` chunked fold — forced-parallel
+    /// and forced-sequential must agree byte-for-byte, the same determinism
+    /// pin [`stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree`]
+    /// makes for the numeric case.
+    #[test]
+    fn stat_agg_median_duration_chunked_fold_forced_parallel_and_sequential_agree() {
+        const ROWS: i64 = 3000;
+        const NS: &str = "http://example.org/agg/";
+
+        let ds = stat_agg_dt_duration_sequence_dataset(ROWS);
+        let mut registry = crate::agg_fn::AggregateRegistry::new();
+        registry.register_statistical_aggregates(NS);
+
+        let (sequential, forced_parallel) =
+            stat_agg_run_single_arg(&ds, &registry, &format!("{NS}MEDIAN"));
+        assert_eq!(
+            sequential, forced_parallel,
+            "MEDIAN's duration chunked within-group fold must agree with the sequential one"
+        );
+        assert_eq!(
+            sequential, "P2999D",
+            "median of P0D, P2D, .., P5998D is the midpoint of the two middle values P2998D and P3000D"
+        );
+    }
+
     /// `crate::stat_agg::LAST`'s counterpart of
     /// [`stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`]: over a
     /// large single group, forced-parallel and forced-sequential must agree, AND

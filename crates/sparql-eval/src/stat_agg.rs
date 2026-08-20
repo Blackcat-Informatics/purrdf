@@ -55,6 +55,86 @@
 //! values — a decimal `0.5` literal keeps the whole computation exact. `p = 0`
 //! and `p = 1` reduce to the group's minimum and maximum.
 //!
+//! # The `xsd:duration` extension
+//!
+//! `MEDIAN`, `PERCENTILE`, `MODE`, `FIRST`, `LAST`, `TOPK` also accept the
+//! `xsd:duration` group (`xsd:duration`/`xsd:yearMonthDuration`/
+//! `xsd:dayTimeDuration` — one value space per XSD 1.1 Part 2 §3.3.6, all
+//! represented by [`purrdf_xsd::XsdValue::Duration`]) — this crate's
+//! SEP-0002 temporal-arithmetic surface ([`purrdf_xsd::value_add`]/
+//! [`purrdf_xsd::value_sub`]/[`purrdf_xsd::value_mul`]/
+//! [`purrdf_xsd::value_cmp`]) extends the aggregate algebra to durations the
+//! same way `crate::modifier`'s `SUM`/`AVG` already do (see that module's
+//! "`SUM`/`AVG` over `xsd:duration`" doc section) — a PurRDF extension
+//! beyond F&O, which defines none of these over `xsd:duration`.
+//!
+//! * `MODE`/`FIRST`/`LAST`/`TOPK` needed NO code change at all: they already
+//!   fold over a [`TermValue`] of ANY kind (see each member's own doc
+//!   section above), gated by nothing numeric-specific — none of their
+//!   `step` implementations ever call `is_numeric_xsd`. `MODE`'s tie-break
+//!   and `TOPK`'s total order are both `crate::modifier::term_value_order`,
+//!   which already orders duration literals correctly (through
+//!   `literal_order`'s `parse_by_iri` + `value_cmp` path) — see the
+//!   ordering-policy paragraph below for the one difference between that
+//!   order and the one `MEDIAN`/`PERCENTILE` use.
+//! * `MEDIAN`/`PERCENTILE` (order statistics needing interpolation) widen
+//!   their gate from `is_numeric_xsd` alone to "numeric OR duration, never
+//!   both in the same group" (see `is_numeric_or_duration_xsd`/
+//!   `same_value_family`) — a mixed numeric+duration group POISONS, the
+//!   same discipline `crate::modifier`'s duration `SUM`/`AVG` extension
+//!   already uses for the identical mixed case. The interpolation step
+//!   (`percentile_of`'s `diff`/`scaled`/final sum) now goes through
+//!   [`purrdf_xsd::value_sub`]/[`purrdf_xsd::value_mul`]/
+//!   [`purrdf_xsd::value_add`] rather than the numeric-tower-only
+//!   `numeric_sub`/`numeric_mul`/`numeric_add` — a behavior-preserving
+//!   substitution for numeric groups (`value_*` dispatches straight to
+//!   `numeric_*` for numeric operands) that ALSO accepts `DUR − DUR`/
+//!   `DUR × exact-decimal-fraction`/`DUR + DUR`. `p` itself (`MEDIAN`'s
+//!   fixed `0.5`, `PERCENTILE`'s named `P`) and the `rank`/`floor`/
+//!   `fraction` derived from it stay on the numeric tower unconditionally
+//!   — `p` is a proportion of a COUNT, never a duration, regardless of what
+//!   the series holds. A mixed-SUBTYPE duration group
+//!   (`yearMonthDuration` values beside `dayTimeDuration` ones) is NOT
+//!   mixed-FAMILY, so it does not poison; its interpolated result's
+//!   datatype follows the SAME "both dt → dt, both ym → ym, else general"
+//!   join [`purrdf_xsd::temporal::add_durations`]/`subtract_durations`/
+//!   `multiply_duration` already apply internally — reused as-is through
+//!   the public `value_*` surface above, never re-derived here.
+//!
+//! ## Ordering policy for incomparable duration pairs
+//!
+//! `P1M` (`yearMonthDuration`) and `P30D` (`dayTimeDuration`) are
+//! VALUE-INCOMMENSURABLE — [`purrdf_xsd::value_cmp`] returns `None` for that
+//! pair (see its own docs), exactly as it does for a `NaN` numeric
+//! comparison. `MEDIAN`/`PERCENTILE`'s sort (inside `finish`, before
+//! ranking) already had a policy for THIS exact shape of question before
+//! durations existed: `numeric_cmp(a, b).unwrap_or(Ordering::Equal)` — an
+//! incomparable pair sorts as EQUAL (stably retaining relative input
+//! order), not through a secondary deterministic tie-break key. Widening the
+//! comparator's SOURCE from `numeric_cmp` to [`purrdf_xsd::value_cmp`]
+//! (needed so duration pairs compare at all) keeps that SAME
+//! `.unwrap_or(Ordering::Equal)` policy unchanged — a deliberate
+//! CONSISTENCY choice, not the only possible one: `MIN`/`MAX`/`MODE`/`TOPK`
+//! (`crate::modifier::fold_extreme`/`term_value_order`) instead fall back to
+//! a genuine total order (further tie-broken by `(datatype, language,
+//! lexical form)`), because THEIR existing policy, before durations, was
+//! already that total order, not "treat as equal" — each aggregate mirrors
+//! ITS OWN prior policy rather than adopting the other's, per this crate's
+//! "consistency with the existing surface" rule.
+//!
+//! # Why `STDDEV`/`STDDEV_POP`/`VARIANCE`/`VAR_POP` stay numeric-only
+//!
+//! The running-moments fold needs `x²` (`moments_step`'s `numeric_mul(x,
+//! x)`) — `xsd:duration × xsd:duration` is NOT in the SEP-0002 value space
+//! ([`purrdf_xsd::value_mul`]'s docs: a duration only multiplies by an EXACT
+//! numeric factor, never by another duration; "seconds²" or "months²" has no
+//! XSD datatype to hold it). There is no well-defined "duration variance" to
+//! fall back to without inventing a value space this crate does not own, so
+//! this family is deliberately NOT extended — a duration input to
+//! `STDDEV`/`VARIANCE` poisons the fold exactly as any other non-numeric
+//! value does (the unchanged `is_numeric_xsd` gate in
+//! `MomentsAccumulator::step`).
+//!
 //! # `PERCENTILE`'s named scalarval
 //!
 //! `AGG(<{NS}PERCENTILE>, ?x; P=0.95)` — `P` is a NAMED SCALARVAL (see
@@ -218,6 +298,7 @@ use purrdf_core::TermValue;
 use purrdf_xsd::numeric::numeric_cmp;
 use purrdf_xsd::{
     XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
+    value_add, value_cmp, value_mul, value_sub,
 };
 
 use crate::agg_fn::{
@@ -267,6 +348,25 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
         .find(|(k, _)| k == name)
         .and_then(|(_, v)| xsd_of(v))
         .filter(is_numeric_xsd)
+}
+
+/// `MEDIAN`/`PERCENTILE`'s widened gate — see the module docs' "The
+/// `xsd:duration` extension" section: the SPARQL numeric tower OR the
+/// `xsd:duration` value space, never judged relative to anything else
+/// already in the group (that check is [`same_value_family`]'s job, applied
+/// separately in `step`/`combine`).
+fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
+    is_numeric_xsd(v) || matches!(v, XsdValue::Duration(_))
+}
+
+/// Whether two values already passed through [`is_numeric_or_duration_xsd`]
+/// are in the SAME family — both numeric or both duration. `MEDIAN`/
+/// `PERCENTILE` commit to the first folded value's family; any later value
+/// whose family disagrees poisons the group (see the module docs) — mixed
+/// SUBTYPE duration values (`yearMonthDuration` beside `dayTimeDuration`)
+/// are the SAME family and never poison here.
+fn same_value_family(a: &XsdValue, b: &XsdValue) -> bool {
+    is_numeric_xsd(a) == is_numeric_xsd(b)
 }
 
 /// The running-moments (`(n, Σx, Σx²)`, deliberately NOT Welford — see the
@@ -321,10 +421,18 @@ fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
     }
 }
 
-/// The `p`-th percentile of an already value-order-sorted, non-empty numeric
-/// series, under linear interpolation between the two closest ranks (see the
-/// module docs). `None` (poison) when `p` is outside `[0, 1]` or any step of
-/// the promoted-numeric-tower arithmetic fails.
+/// The `p`-th percentile of an already value-order-sorted, non-empty
+/// numeric-OR-duration series (never mixed — see [`same_value_family`]),
+/// under linear interpolation between the two closest ranks (see the module
+/// docs). `None` (poison) when `p` is outside `[0, 1]` or any step of the
+/// arithmetic fails. `rank`/`floor_v`/`fraction` are always computed on the
+/// numeric tower (`p` is a proportion of a COUNT, never of the series'
+/// element type); only the final interpolation (`diff`/`scaled`/the result)
+/// goes through [`value_sub`]/[`value_mul`]/[`value_add`], which accept
+/// BOTH the numeric tower (dispatching straight to `numeric_sub`/
+/// `numeric_mul`/`numeric_add`, so numeric behavior is unchanged) and the
+/// `xsd:duration` group (see the module docs' "The `xsd:duration`
+/// extension" section).
 fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
     let zero = XsdValue::Integer {
         value: 0,
@@ -357,56 +465,74 @@ fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
         return Some(sorted[lo_idx].clone());
     }
     let fraction = numeric_sub(&rank, &floor_v).ok()?;
-    let diff = numeric_sub(&sorted[hi_idx], &sorted[lo_idx]).ok()?;
-    let scaled = numeric_mul(&diff, &fraction).ok()?;
-    numeric_add(&sorted[lo_idx], &scaled).ok()
+    let diff = value_sub(&sorted[hi_idx], &sorted[lo_idx]).ok()?;
+    let scaled = value_mul(&diff, &fraction).ok()?;
+    value_add(&sorted[lo_idx], &scaled).ok()
 }
 
 // ---------------------------------------------------------------------------
 // MEDIAN
 // ---------------------------------------------------------------------------
 
-enum NumericSeries {
+/// `MEDIAN`/`PERCENTILE`'s running (unsorted) value list — either the
+/// numeric tower OR the `xsd:duration` group, NEVER mixed (see
+/// [`is_numeric_or_duration_xsd`]/[`same_value_family`] and the module
+/// docs' "The `xsd:duration` extension" section).
+enum ValueSeries {
     Empty,
     Ok(Vec<XsdValue>),
     Poisoned,
 }
 
 struct MedianAccumulator {
-    state: NumericSeries,
+    state: ValueSeries,
 }
 
 impl AggregateAccumulator for MedianAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, NumericSeries::Poisoned) {
+        if matches!(self.state, ValueSeries::Poisoned) {
             return Ok(());
         }
-        let Some(x) = args.first().and_then(xsd_of).filter(is_numeric_xsd) else {
-            self.state = NumericSeries::Poisoned;
+        let Some(x) = args
+            .first()
+            .and_then(xsd_of)
+            .filter(is_numeric_or_duration_xsd)
+        else {
+            self.state = ValueSeries::Poisoned;
             return Ok(());
         };
-        if let NumericSeries::Ok(values) = &mut self.state {
-            values.push(x);
-        } else {
-            self.state = NumericSeries::Ok(vec![x]);
-        }
+        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
+            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
+            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
+                values.push(x);
+                ValueSeries::Ok(values)
+            }
+            ValueSeries::Ok(_) => ValueSeries::Poisoned,
+            ValueSeries::Poisoned => ValueSeries::Poisoned,
+        };
         Ok(())
     }
 
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
         // Concatenate the two (still-unsorted) value lists: merge order never
         // matters, because `finish` sorts the whole multiset before computing
-        // a rank — see the module docs' "Real merges" section.
+        // a rank — see the module docs' "Real merges" section. A family
+        // mismatch between the two partials (numeric vs duration) poisons,
+        // the same as a within-accumulator mismatch in `step` above.
         let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
-            mem::replace(&mut self.state, NumericSeries::Empty),
+            mem::replace(&mut self.state, ValueSeries::Empty),
             other.state,
         ) {
-            (NumericSeries::Poisoned, _) | (_, NumericSeries::Poisoned) => NumericSeries::Poisoned,
-            (NumericSeries::Empty, s) | (s, NumericSeries::Empty) => s,
-            (NumericSeries::Ok(mut values), NumericSeries::Ok(other_values)) => {
-                values.extend(other_values);
-                NumericSeries::Ok(values)
+            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
+            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
+            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
+                if same_value_family(&values[0], &other_values[0]) {
+                    values.extend(other_values);
+                    ValueSeries::Ok(values)
+                } else {
+                    ValueSeries::Poisoned
+                }
             }
         };
         Ok(())
@@ -421,9 +547,15 @@ impl AggregateAccumulator for MedianAccumulator {
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         let Self { state } = *self;
         match state {
-            NumericSeries::Empty | NumericSeries::Poisoned => Ok(None),
-            NumericSeries::Ok(mut values) => {
-                values.sort_by(|a, b| numeric_cmp(a, b).unwrap_or(Ordering::Equal));
+            ValueSeries::Empty | ValueSeries::Poisoned => Ok(None),
+            ValueSeries::Ok(mut values) => {
+                // `value_cmp` (not `numeric_cmp`): the sort must also order
+                // durations. An incomparable pair (e.g. `P1M` vs `P30D`)
+                // sorts as EQUAL — the SAME policy this comparator already
+                // used for an incomparable numeric pair, widened in SOURCE
+                // only; see the module docs' "Ordering policy for
+                // incomparable duration pairs" section.
+                values.sort_by(|a, b| value_cmp(a, b).unwrap_or(Ordering::Equal));
                 Ok(percentile_of(&values, &half())
                     .as_ref()
                     .map(xsd_value_to_term))
@@ -449,7 +581,7 @@ impl CustomAggregate for MedianAggregate {
     }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(MedianAccumulator {
-            state: NumericSeries::Empty,
+            state: ValueSeries::Empty,
         })
     }
 }
@@ -466,27 +598,35 @@ struct PercentileAccumulator {
     /// already refused any call this accumulator would otherwise see with `P`
     /// missing or wrong-typed.
     p: Option<XsdValue>,
-    state: NumericSeries,
+    state: ValueSeries,
 }
 
 impl AggregateAccumulator for PercentileAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
         if self.p.is_none() {
-            self.state = NumericSeries::Poisoned;
+            self.state = ValueSeries::Poisoned;
             return Ok(());
         }
-        if matches!(self.state, NumericSeries::Poisoned) {
+        if matches!(self.state, ValueSeries::Poisoned) {
             return Ok(());
         }
-        let Some(x) = args.first().and_then(xsd_of).filter(is_numeric_xsd) else {
-            self.state = NumericSeries::Poisoned;
+        let Some(x) = args
+            .first()
+            .and_then(xsd_of)
+            .filter(is_numeric_or_duration_xsd)
+        else {
+            self.state = ValueSeries::Poisoned;
             return Ok(());
         };
-        if let NumericSeries::Ok(values) = &mut self.state {
-            values.push(x);
-        } else {
-            self.state = NumericSeries::Ok(vec![x]);
-        }
+        self.state = match mem::replace(&mut self.state, ValueSeries::Empty) {
+            ValueSeries::Empty => ValueSeries::Ok(vec![x]),
+            ValueSeries::Ok(mut values) if same_value_family(&values[0], &x) => {
+                values.push(x);
+                ValueSeries::Ok(values)
+            }
+            ValueSeries::Ok(_) => ValueSeries::Poisoned,
+            ValueSeries::Poisoned => ValueSeries::Poisoned,
+        };
         Ok(())
     }
 
@@ -499,17 +639,23 @@ impl AggregateAccumulator for PercentileAccumulator {
         // the old per-row positional-argument design, there is no cross-chunk
         // `p`-mismatch to detect here: concatenating the (still-unsorted)
         // value lists is always correct, since `finish` sorts the whole
-        // multiset before computing a rank either way.
+        // multiset before computing a rank either way. A family mismatch
+        // between the two partials (numeric vs duration) poisons, the same
+        // as a within-accumulator mismatch in `step` above.
         let other = downcast_combine_partial::<Self>(other)?;
         self.state = match (
-            mem::replace(&mut self.state, NumericSeries::Empty),
+            mem::replace(&mut self.state, ValueSeries::Empty),
             other.state,
         ) {
-            (NumericSeries::Poisoned, _) | (_, NumericSeries::Poisoned) => NumericSeries::Poisoned,
-            (NumericSeries::Empty, s) | (s, NumericSeries::Empty) => s,
-            (NumericSeries::Ok(mut values), NumericSeries::Ok(other_values)) => {
-                values.extend(other_values);
-                NumericSeries::Ok(values)
+            (ValueSeries::Poisoned, _) | (_, ValueSeries::Poisoned) => ValueSeries::Poisoned,
+            (ValueSeries::Empty, s) | (s, ValueSeries::Empty) => s,
+            (ValueSeries::Ok(mut values), ValueSeries::Ok(other_values)) => {
+                if same_value_family(&values[0], &other_values[0]) {
+                    values.extend(other_values);
+                    ValueSeries::Ok(values)
+                } else {
+                    ValueSeries::Poisoned
+                }
             }
         };
         Ok(())
@@ -523,10 +669,12 @@ impl AggregateAccumulator for PercentileAccumulator {
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         let Self { p, state } = *self;
-        let (Some(p), NumericSeries::Ok(mut values)) = (p, state) else {
+        let (Some(p), ValueSeries::Ok(mut values)) = (p, state) else {
             return Ok(None);
         };
-        values.sort_by(|a, b| numeric_cmp(a, b).unwrap_or(Ordering::Equal));
+        // See `MedianAccumulator::finish`'s identical comment on the
+        // `value_cmp`-sourced, `.unwrap_or(Ordering::Equal)` sort policy.
+        values.sort_by(|a, b| value_cmp(a, b).unwrap_or(Ordering::Equal));
         Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
     }
 }
@@ -553,7 +701,7 @@ impl CustomAggregate for PercentileAggregate {
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(PercentileAccumulator {
             p: numeric_scalarval(scalarvals, PERCENTILE_P),
-            state: NumericSeries::Empty,
+            state: ValueSeries::Empty,
         })
     }
 }
@@ -1244,6 +1392,14 @@ mod tests {
         TermValue::typed_literal(s, "http://www.w3.org/2001/XMLSchema#decimal")
     }
 
+    fn ym_dur(s: &str) -> TermValue {
+        TermValue::typed_literal(s, "http://www.w3.org/2001/XMLSchema#yearMonthDuration")
+    }
+
+    fn dt_dur(s: &str) -> TermValue {
+        TermValue::typed_literal(s, "http://www.w3.org/2001/XMLSchema#dayTimeDuration")
+    }
+
     fn lex(t: &TermValue) -> String {
         match t {
             TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
@@ -1340,6 +1496,48 @@ mod tests {
         assert_eq!(fold(MEDIAN, &[vec![int(1)], vec![s]]), None);
     }
 
+    /// `MEDIAN` over a pure `yearMonthDuration` group (see the module docs'
+    /// "The `xsd:duration` extension" section) — odd count, so the median is
+    /// one member of the group, not an interpolated value.
+    #[test]
+    fn median_over_pure_year_month_duration_group() {
+        let rows = [ym_dur("P1Y"), ym_dur("P3Y"), ym_dur("P2Y")]
+            .map(|t| vec![t])
+            .to_vec();
+        let v = fold(MEDIAN, &rows).expect("bound");
+        assert_eq!(lex(&v), "P2Y");
+    }
+
+    /// `MEDIAN` over a pure `dayTimeDuration` group, even count: the midpoint
+    /// arithmetic (`(a + b) / 2`, via `value_add`/`value_mul` — see the module
+    /// docs) lands EXACTLY on a whole-day value, so the result is pinned
+    /// without depending on how a fractional day canonicalizes.
+    #[test]
+    fn median_over_pure_day_time_duration_even_group_is_the_midpoint() {
+        let rows = [dt_dur("P0D"), dt_dur("P2D"), dt_dur("P4D"), dt_dur("P6D")]
+            .map(|t| vec![t])
+            .to_vec();
+        let v = fold(MEDIAN, &rows).expect("bound");
+        assert_eq!(lex(&v), "P3D");
+    }
+
+    /// A group mixing a plain numeric value and a duration POISONS — the same
+    /// discipline `crate::modifier`'s `SUM`/`AVG` duration extension already
+    /// uses for the identical mixed case (see the module docs).
+    #[test]
+    fn median_over_mixed_numeric_and_duration_is_unbound() {
+        assert_eq!(
+            fold(MEDIAN, &[vec![int(1)], vec![dt_dur("P1D")]]),
+            None,
+            "numeric-then-duration must poison"
+        );
+        assert_eq!(
+            fold(MEDIAN, &[vec![dt_dur("P1D")], vec![int(1)]]),
+            None,
+            "duration-then-numeric must poison"
+        );
+    }
+
     // ---- PERCENTILE ------------------------------------------------------------
 
     #[test]
@@ -1371,6 +1569,58 @@ mod tests {
     fn percentile_missing_p_poisons() {
         let rows = vec![vec![int(1)], vec![int(2)]];
         assert_eq!(fold_with(PERCENTILE, &[], &rows), None);
+    }
+
+    /// `PERCENTILE` over a pure `dayTimeDuration` group, at a `p` chosen so
+    /// the interpolated rank is NOT a whole number (real interpolation, not a
+    /// data point): `n = 2`, `rank = 0.37 * 1 = 0.37`, interpolating 37% of
+    /// the way from `P0D` to `P100D` — `P37D` exactly (`100 * 0.37 = 37`, no
+    /// fractional day, so the pin does not depend on sub-day canonicalization).
+    #[test]
+    fn percentile_over_pure_day_time_duration_needs_real_interpolation() {
+        let rows = vec![vec![dt_dur("P0D")], vec![dt_dur("P100D")]];
+        let v = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("0.37")), &rows).expect("bound");
+        assert_eq!(lex(&v), "P37D");
+    }
+
+    /// `PERCENTILE` over a pure `yearMonthDuration` group, same non-data-point
+    /// interpolation shape as the `dayTimeDuration` test above: `37%` of the
+    /// way from `P0M` to `P100M` is `P37M` (`3` years `1` month), exact.
+    #[test]
+    fn percentile_over_pure_year_month_duration_needs_real_interpolation() {
+        let rows = vec![vec![ym_dur("P0M")], vec![ym_dur("P100M")]];
+        let v = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("0.37")), &rows).expect("bound");
+        assert_eq!(lex(&v), "P3Y1M");
+    }
+
+    /// A mixed-SUBTYPE duration group (`yearMonthDuration` beside
+    /// `dayTimeDuration`) is NOT mixed-FAMILY — it does not poison (see the
+    /// module docs' "The `xsd:duration` extension" section). `P0M` and `P0D`
+    /// are both the ZERO duration (comparable across subtypes — see
+    /// `purrdf_xsd::ops`'s "Zero is one value in both subtypes' value spaces"
+    /// test), so `p = 1` (the maximum) deterministically lands on `P100D`.
+    #[test]
+    fn percentile_over_mixed_subtype_duration_group_does_not_poison() {
+        let rows = vec![vec![ym_dur("P0M")], vec![dt_dur("P100D")]];
+        let v = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("1")), &rows).expect("bound");
+        assert_eq!(lex(&v), "P100D");
+    }
+
+    /// A group mixing a plain numeric value and a duration POISONS — mirrors
+    /// `median_over_mixed_numeric_and_duration_is_unbound`.
+    #[test]
+    fn percentile_over_mixed_numeric_and_duration_is_unbound() {
+        let scalars = scalarval(PERCENTILE_P, dec("0.5"));
+        assert_eq!(
+            fold_with(PERCENTILE, &scalars, &[vec![int(1)], vec![dt_dur("P1D")]]),
+            None,
+            "numeric-then-duration must poison"
+        );
+        assert_eq!(
+            fold_with(PERCENTILE, &scalars, &[vec![dt_dur("P1D")], vec![int(1)]]),
+            None,
+            "duration-then-numeric must poison"
+        );
     }
 
     // ---- STDDEV / STDDEV_POP / VARIANCE / VAR_POP -----------------------------
@@ -1427,6 +1677,22 @@ mod tests {
         }
     }
 
+    /// `STDDEV`/`STDDEV_POP`/`VARIANCE`/`VAR_POP` stay numeric-only (see the
+    /// module docs' "Why `STDDEV`/.../`VAR_POP` stay numeric-only" section:
+    /// `xsd:duration × xsd:duration` has no value space) — a duration input
+    /// poisons the fold exactly like any other non-numeric value, unlike
+    /// `MEDIAN`/`PERCENTILE`'s widened gate.
+    #[test]
+    fn moments_poison_on_duration_input() {
+        for name in [STDDEV, STDDEV_POP, VARIANCE, VAR_POP] {
+            assert_eq!(
+                fold(name, &[vec![dt_dur("P1D")], vec![dt_dur("P2D")]]),
+                None,
+                "{name} must poison on a duration input"
+            );
+        }
+    }
+
     // ---- MODE ------------------------------------------------------------------
 
     #[test]
@@ -1462,6 +1728,18 @@ mod tests {
         assert_eq!(fold(MODE, &[]), None);
     }
 
+    /// `MODE` needed no code change to accept durations (see the module docs'
+    /// "The `xsd:duration` extension" section: it folds over any [`TermValue`]
+    /// by RDF term identity, never gated on `is_numeric_xsd`).
+    #[test]
+    fn mode_over_durations_picks_the_most_frequent_value() {
+        let rows = [dt_dur("P1D"), dt_dur("P2D"), dt_dur("P2D")]
+            .map(|t| vec![t])
+            .to_vec();
+        let v = fold(MODE, &rows).expect("bound");
+        assert_eq!(lex(&v), "P2D");
+    }
+
     // ---- FIRST / LAST ------------------------------------------------------------
 
     #[test]
@@ -1475,6 +1753,17 @@ mod tests {
     fn first_and_last_of_empty_group_are_unbound() {
         assert_eq!(fold(FIRST, &[]), None);
         assert_eq!(fold(LAST, &[]), None);
+    }
+
+    /// `FIRST`/`LAST` needed no code change to accept durations — same
+    /// reasoning as `mode_over_durations_picks_the_most_frequent_value`.
+    #[test]
+    fn first_and_last_over_durations_in_input_row_order() {
+        let rows = [dt_dur("P1D"), dt_dur("P2D"), dt_dur("P3D")]
+            .map(|t| vec![t])
+            .to_vec();
+        assert_eq!(lex(&fold(FIRST, &rows).expect("bound")), "P1D");
+        assert_eq!(lex(&fold(LAST, &rows).expect("bound")), "P3D");
     }
 
     #[test]
@@ -1547,6 +1836,25 @@ mod tests {
         assert_eq!(fold_with(TOPK, &scalarval(TOPK_K, int(3)), &[]), None);
     }
 
+    /// `TOPK` needed no code change to accept durations — its total order is
+    /// `crate::modifier::term_value_order`, which already orders duration
+    /// literals correctly (see the module docs' "The `xsd:duration`
+    /// extension" section).
+    #[test]
+    fn topk_over_durations_returns_the_largest_k_descending() {
+        let rows = [
+            dt_dur("P3D"),
+            dt_dur("P1D"),
+            dt_dur("P4D"),
+            dt_dur("P1D"),
+            dt_dur("P5D"),
+        ]
+        .map(|t| vec![t])
+        .to_vec();
+        let v = fold_with(TOPK, &scalarval(TOPK_K, int(3)), &rows).expect("bound");
+        assert_eq!(lex(&v), "P5D P4D P3D");
+    }
+
     // ---- combine (parallel-reducer merge) coverage ----------------------------
     //
     // `MEDIAN`, `PERCENTILE`, `MODE`, and `TOPK` merge through `into_any`'s
@@ -1597,6 +1905,58 @@ mod tests {
             .expect("step");
 
         a.combine(poisoned).expect("combine");
+        assert_eq!(a.finish().expect("finish"), None);
+    }
+
+    /// `MEDIAN` over `xsd:duration` partials, merged through the SAME
+    /// `into_any`-downcast real merge `median_combine_merges_two_partial_value_lists`
+    /// exercises for numerics — this is `crate::stat_agg`'s share of the
+    /// "forced-parallel agreement" coverage the task's test plan asks for; the
+    /// dataset-level, real `crate::parallel::par_chunk_reduce_init` path is
+    /// additionally pinned in `crate::modifier`'s
+    /// `stat_agg_median_duration_chunked_fold_forced_parallel_and_sequential_agree`.
+    #[test]
+    fn median_combine_merges_two_partial_duration_value_lists() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(MEDIAN)).expect("registered");
+
+        let mut a = agg.init(&[]);
+        a.step(&[dt_dur("P0D")]).expect("step");
+        a.step(&[dt_dur("P4D")]).expect("step");
+        let mut b = agg.init(&[]);
+        b.step(&[dt_dur("P2D")]).expect("step");
+        b.step(&[dt_dur("P6D")]).expect("step");
+        a.combine(b).expect("combine");
+        let merged = a.finish().expect("finish").expect("bound");
+
+        let direct = fold(
+            MEDIAN,
+            &[
+                vec![dt_dur("P0D")],
+                vec![dt_dur("P4D")],
+                vec![dt_dur("P2D")],
+                vec![dt_dur("P6D")],
+            ],
+        )
+        .expect("bound");
+        assert_eq!(lex(&merged), lex(&direct));
+        assert_eq!(lex(&merged), "P3D");
+    }
+
+    /// A family mismatch (numeric vs duration) between the two partials
+    /// poisons the merge too, not just a within-accumulator mismatch (see
+    /// `median_over_mixed_numeric_and_duration_is_unbound`).
+    #[test]
+    fn median_combine_poisons_on_a_family_mismatch_between_partials() {
+        let registry = registry();
+        let agg = registry.resolve(&iri(MEDIAN)).expect("registered");
+
+        let mut a = agg.init(&[]);
+        a.step(&[int(1)]).expect("step");
+        let mut b = agg.init(&[]);
+        b.step(&[dt_dur("P1D")]).expect("step");
+
+        a.combine(b).expect("combine");
         assert_eq!(a.finish().expect("finish"), None);
     }
 
