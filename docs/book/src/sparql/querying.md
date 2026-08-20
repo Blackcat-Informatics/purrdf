@@ -186,8 +186,14 @@ widens the result's declared type, because the rule reads tags, not values.
 
 Gregorian `±` duration can ask for a field the operand's type does not carry —
 adding a duration with a months component to an `xsd:gDay` needs a month to
-apply it to, and `xsd:gDay` has none; adding a year-crossing duration to an
-`xsd:gMonthDay` needs a year to decide whether the target month even exists.
+apply it to, and `xsd:gDay` has none. `xsd:gMonthDay` clamps a day that does
+not exist in the shifted month down to that month's actual length, the same
+rule `date`/`dateTime` already follow (XML Schema Appendix E) — but every
+month other than February has the same length in every year, so that clamp
+is safe there regardless of which year the value is read against. Only when
+the shift lands on February, and the day being clamped is the 29th or later,
+does the answer turn on a year `xsd:gMonthDay` does not carry: February's
+length is the one month length that depends on it.
 RDF4J answers these by fabricating the missing field (year 0, January, or day
 1) through its underlying JAXP calendar and returning a value built on that
 fabrication — for example `"---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration`
