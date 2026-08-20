@@ -190,8 +190,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf-core/tests/paged_backend.rs", "(F1)"),
         ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
         ("crates/rdf-wasm/src/factory.rs", "Task 5"),
-        ("crates/rdf/src/bin/capture_sparql_goldens.rs", "Task 2"),
-        ("crates/rdf/src/capture_support.rs", "Task 2"),
         ("crates/rdf/src/gts.rs", "Task 4"),
         ("crates/rdf/src/gts_certify.rs", "Task 5"),
         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),

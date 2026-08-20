@@ -203,10 +203,19 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         }
         GraphPattern::Lateral { left, right } => {
             fmt_group_body(s, left);
-            if matches!(**right, GraphPattern::PropertyFunction(_)) {
-                // A property function is written as a triple, and the parser
-                // rebuilds exactly this lateral chain from that surface form, so
-                // the LATERAL wrapper is neither needed nor re-parseable here.
+            if parser_rebuilds_the_lateral(right) {
+                // Two right-operand shapes are surface forms the parser's OWN
+                // dispatch arms re-wrap into exactly this `Lateral` node without
+                // any `LATERAL` keyword in the text: a property function (written
+                // as a triple; the PF-triple-folding loop builds the chain) and a
+                // variable-endpoint `SERVICE ?g { … }` (the SERVICE dispatch arm
+                // auto-wraps a variable endpoint into a `Lateral` because it is
+                // correlated with the enclosing pattern). Emitting an explicit
+                // `LATERAL { … }` around either would double-nest on re-parse:
+                // the braced RHS parses to its OWN `Lateral` node first (rooted at
+                // the unit-table left), and the outer keyword would wrap that
+                // again. So both render unwrapped here, exactly like the
+                // fixed-IRI `SERVICE` case does for a plain `Join`.
                 if !is_empty_group_body(left) {
                     s.push(' ');
                 }
@@ -282,19 +291,39 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
     }
 }
 
-/// Emit the RIGHT operand of a `Join`, braced as its own group when it contains
-/// a property function.
+/// Emit the RIGHT operand of a `Join`, braced as its own group when leaving it
+/// unbraced would change the re-parsed tree's meaning.
 ///
-/// A property function renders as a plain triple, and the parser folds every
-/// property-function triple of ONE triples block into a single left-deep
-/// `Lateral` chain rooted at the triples written before it. A right operand that
-/// was a separate group (`{ … }`, a `GRAPH`, a nested join) would therefore be
-/// absorbed into the left operand's chain on re-parse; the explicit `{ … }`
-/// keeps it its own group and the round-trip exact. A LEFT operand needs no such
-/// brace: the parser's own left-deep assembly reproduces it. Everything without
-/// a property function keeps the historical brace-free rendering.
+/// Two independent reasons force a brace, both restated here rather than
+/// inferred from the flag names alone:
+///
+/// * **Contains a property function.** A property function renders as a plain
+///   triple, and the parser folds every property-function triple of ONE
+///   triples block into a single left-deep `Lateral` chain rooted at the
+///   triples written before it. A right operand that was a separate group
+///   (`{ … }`, a `GRAPH`, a nested join) would therefore be absorbed into the
+///   left operand's chain on re-parse; the explicit `{ … }` keeps it its own
+///   group and the round-trip exact.
+/// * **[`rendering_starts_with_a_reabsorbable_left`].** `LeftJoin` / `Lateral`
+///   / `Minus` / `Filter` / `Extend` all render by emitting their OWN left
+///   operand inline first; unbraced, that inline left operand splices onto the
+///   outer `Join`'s left operand in the running left-to-right parse, changing
+///   which elements the modifier applies over — a WIRE-FORMAT correctness bug,
+///   since [`pattern_to_select_query`] is what SERVICE federation forwards to
+///   a remote endpoint.
+///
+/// A LEFT operand needs no such brace in either case: the parser's own
+/// left-deep assembly reproduces it. `Join` itself is deliberately excluded
+/// from the second condition (see that function's docs); a plain `Join` right
+/// operand containing no property function keeps the historical brace-free
+/// rendering, which re-associates on re-parse into a semantically identical
+/// (not tree-identical) `Join` chain.
 fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
-    if contains_property_function(p) && !is_subselect_node(p) {
+    if is_subselect_node(p) {
+        fmt_group_body(s, p);
+        return;
+    }
+    if contains_property_function(p) || rendering_starts_with_a_reabsorbable_left(p) {
         s.push_str("{ ");
         fmt_group_body(s, p);
         s.push_str(" }");
@@ -334,6 +363,77 @@ fn contains_property_function(p: &GraphPattern) -> bool {
 /// `Z`), so a caller can skip the separating space before the next element.
 fn is_empty_group_body(p: &GraphPattern) -> bool {
     matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
+}
+
+/// Does a [`GraphPattern::Lateral`] right operand render as a surface form the
+/// parser's OWN dispatch arms — not the `LATERAL` keyword — re-wrap into exactly
+/// this `Lateral` node on re-parse?
+///
+/// Two shapes qualify: a [`GraphPattern::PropertyFunction`] (written as a plain
+/// triple; the parser's PF-triple-folding loop builds a left-deep `Lateral`
+/// chain from it) and a variable-endpoint [`GraphPattern::Service`] (`SERVICE ?g
+/// { … }`; the parser's `SERVICE` dispatch arm auto-wraps a variable endpoint
+/// into a `Lateral` because the endpoint is correlated with the enclosing
+/// pattern). A FIXED-IRI `Service` does **not** qualify: the parser's `SERVICE`
+/// arm folds it with a plain [`crate::algebra::GraphPattern::Join`] instead, so
+/// without an explicit `LATERAL { … }` keyword here the laterality would be lost
+/// on re-parse (the round-tripped tree would be a `Join`, not a `Lateral`).
+fn parser_rebuilds_the_lateral(right: &GraphPattern) -> bool {
+    matches!(
+        right,
+        GraphPattern::PropertyFunction(_)
+            | GraphPattern::Service {
+                name: NamedNodePattern::Variable(_),
+                ..
+            }
+    )
+}
+
+/// `true` for the [`GraphPattern`] variants whose OWN rendering starts by
+/// emitting their `left`/`inner` operand inline, with no group boundary in
+/// front of it — the set that MUST be braced when placed as a [`Join`]'s right
+/// operand, because gluing that rendering directly after the outer left
+/// operand would splice the two `left` operands into one running left-to-right
+/// accumulation on re-parse, re-associating the tree to a different meaning
+/// (`(A JOIN B) OPTIONAL C` instead of `A JOIN (B OPTIONAL C)`, for example).
+///
+/// [`GraphPattern::Join`] is deliberately **excluded**: join is associative, so
+/// re-associating a `Join` right operand into the running left-to-right chain
+/// produces a semantically identical tree — the round-trip contract this module
+/// promises is "semantics preserved", and tree-identity is asserted only where
+/// semantics actually require it (see `roundtrip_lateral_chain_shapes` beside
+/// this function's call site). Every modifier-rooted node
+/// (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/`Group`) is also excluded:
+/// [`is_subselect_node`] already renders those as a self-contained braced
+/// sub-`SELECT`, so they never glue onto a preceding element in the first
+/// place.
+///
+/// Exhaustive, wildcard-free: a new [`GraphPattern`] variant must be triaged
+/// here explicitly rather than silently inheriting the unbraced default.
+///
+/// [`Join`]: crate::algebra::GraphPattern::Join
+fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::LeftJoin { .. }
+        | GraphPattern::Lateral { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Filter { .. }
+        | GraphPattern::Extend { .. } => true,
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Join { .. }
+        | GraphPattern::Union { .. }
+        | GraphPattern::Graph { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::OrderBy { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Group { .. }
+        | GraphPattern::PropertyFunction(_) => false,
+    }
 }
 
 /// Emit a property-function call as the triple `subjectArgs <iri> objectArgs .`
@@ -1051,7 +1151,8 @@ mod tests {
 
     /// Assert that serializing the WHERE body then re-parsing reproduces the same
     /// algebra (round-trip stability) — exactly the SERVICE forward path.
-    fn assert_roundtrip(query: &str) {
+    /// Returns the serialized text for callers that also want to inspect it.
+    fn assert_roundtrip(query: &str) -> String {
         let body = where_body(&pattern_of(query));
         let text = pattern_to_select_query(&body);
         let reparsed = match SparqlParser::new()
@@ -1066,6 +1167,7 @@ mod tests {
             reparsed_body, body,
             "round-trip mismatch for `{query}`\n serialized: {text}"
         );
+        text
     }
 
     #[test]
@@ -1720,9 +1822,15 @@ mod tests {
 
     #[test]
     fn property_function_serializes_without_a_lateral_keyword() {
-        // The node is written as a triple; the LATERAL scaffold the parser builds
-        // around it is implicit in that surface form (and `LATERAL` has no
-        // parser production, so emitting it would break the round-trip).
+        // The node is written as a triple; the LATERAL scaffold the parser
+        // builds around it is implicit in that surface form. `LATERAL` DOES
+        // have a parser production now (SEP-0006) — so this is no longer a
+        // "would fail to parse" guard: emitting the keyword here would PARSE
+        // successfully, just into a double-nested `Lateral` (the braced RHS
+        // parses to its own PF-triple `Lateral` first, rooted at the unit-table
+        // left, and the explicit keyword would wrap that again), silently
+        // producing the WRONG tree rather than failing loudly. This guard pins
+        // the unwrapped rendering that keeps the round-trip tree-identical.
         let text = assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . ?s pf:related ?o }");
         assert!(!text.contains("LATERAL"), "got: {text}");
     }
@@ -1745,5 +1853,134 @@ mod tests {
             "SELECT * WHERE { { ?s pf:a ?o } UNION { ?s pf:b ?o } FILTER(?o > 1) }",
         );
         assert_pf_roundtrip("SELECT * WHERE { GRAPH ?g { ?s pf:a ?o } ?s ex:p ?o }");
+    }
+
+    // ── LATERAL ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn roundtrip_lateral() {
+        assert_roundtrip("SELECT * WHERE { ?s <http://ex/p> ?o LATERAL { ?o <http://ex/q> ?z } }");
+    }
+
+    #[test]
+    fn roundtrip_lateral_chain_shapes() {
+        // Left-deep: `A LATERAL {B} LATERAL {C}` parses as
+        // `Lateral{Lateral{A,B},C}`.
+        let left_deep = "SELECT * WHERE { ?s <http://ex/p> ?o LATERAL { ?o <http://ex/q> ?z } \
+             LATERAL { ?z <http://ex/r> ?w } }";
+        assert_roundtrip(left_deep);
+        // Right-nested: `A LATERAL { B LATERAL {C} }` parses as
+        // `Lateral{A,Lateral{B,C}}`.
+        let right_nested = "SELECT * WHERE { ?s <http://ex/p> ?o \
+             LATERAL { ?o <http://ex/q> ?z LATERAL { ?z <http://ex/r> ?w } } }";
+        assert_roundtrip(right_nested);
+        // LATERAL is not associative like JOIN: the two shapes must stay
+        // DISTINCT trees across the round-trip rather than re-associating into
+        // one another.
+        assert_ne!(
+            where_body(&pattern_of(left_deep)),
+            where_body(&pattern_of(right_nested)),
+            "the two chain shapes must remain distinct"
+        );
+    }
+
+    #[test]
+    fn roundtrip_lateral_as_a_join_right_operand() {
+        // `A . { B LATERAL { C } }` parses to `Join{A, Lateral{B, C}}` — a
+        // `Lateral` sitting as a `Join`'s right operand, reached through a
+        // nested group rather than the top-level LATERAL-attaches-to-the-
+        // preceding-pattern rule.
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o . \
+             { ?a <http://ex/x> ?b LATERAL { ?b <http://ex/y> ?c } } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_variable_endpoint_service() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?g SERVICE ?g { ?x <http://ex/q> ?y } }",
+        );
+    }
+
+    #[test]
+    fn variable_endpoint_service_serializes_without_a_lateral_keyword() {
+        // The parser's own `SERVICE` dispatch arm auto-wraps a variable
+        // endpoint into a `Lateral` node without any `LATERAL` keyword in the
+        // text; emitting the keyword here would double-nest on re-parse.
+        let body = where_body(&pattern_of(
+            "SELECT * WHERE { ?s <http://ex/p> ?g SERVICE ?g { ?x <http://ex/q> ?y } }",
+        ));
+        let text = pattern_to_select_query(&body);
+        assert!(!text.contains("LATERAL"), "got: {text}");
+    }
+
+    #[test]
+    fn roundtrip_lateral_with_a_subselect_right_hand_side() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o \
+             LATERAL { SELECT ?z WHERE { ?o <http://ex/q> ?z } ORDER BY ?z LIMIT 1 } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_lateral_with_an_empty_left() {
+        assert_roundtrip("SELECT * WHERE { LATERAL { ?s <http://ex/p> ?o } }");
+    }
+
+    #[test]
+    fn roundtrip_lateral_with_a_fixed_iri_service_right() {
+        // A fixed-IRI `SERVICE` under an explicit `LATERAL {}` is a shape the
+        // parser's `SERVICE` arm does NOT auto-wrap (only a variable endpoint
+        // does) — so the `LATERAL` keyword MUST be emitted here, or the
+        // laterality is lost on re-parse as a plain `Join`.
+        let text = assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o \
+             LATERAL { SERVICE <http://ep/sparql> { ?o <http://ex/q> ?z } } }",
+        );
+        assert!(text.contains("LATERAL"), "got: {text}");
+    }
+
+    #[test]
+    fn roundtrip_lateral_with_a_property_function_right() {
+        // The natural PF-triple fold (`A . A2 pf:call ?x`) builds a `Lateral`
+        // whose right operand is the bare `PropertyFunction` node directly;
+        // the parser's own PF-triple-folding loop rebuilds exactly this shape
+        // from the unwrapped triple, so the `LATERAL` keyword must NOT be
+        // emitted.
+        let text = assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . ?o pf:related ?z }");
+        assert!(!text.contains("LATERAL"), "got: {text}");
+    }
+
+    #[test]
+    fn roundtrip_optional_as_a_join_right_operand() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o . \
+             { ?a <http://ex/x> ?b OPTIONAL { ?b <http://ex/y> ?c } } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_minus_as_a_join_right_operand() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o . \
+             { ?a <http://ex/x> ?b MINUS { ?b <http://ex/y> ?c } } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_filter_as_a_join_right_operand() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o . \
+             { ?a <http://ex/x> ?b FILTER(?b > 1) } }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_extend_as_a_join_right_operand() {
+        assert_roundtrip(
+            "SELECT * WHERE { ?s <http://ex/p> ?o . \
+             { ?a <http://ex/x> ?b BIND((?b + 1) AS ?c) } }",
+        );
     }
 }

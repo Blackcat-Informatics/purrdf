@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Shared corpus-classification helpers for the native golden-capture binary
-//! ( Task 2/8).
+//! Shared corpus-classification helpers for the native golden-capture binary.
 //!
 //! These pure helpers — corpus enumeration, the nondeterministic / multi-query /
 //! deferred-construct classifiers, and the stable solution-row key — are used by the
@@ -25,39 +24,30 @@ pub fn is_nondeterministic(query_text: &str) -> bool {
         || lower.contains("struuid(")
 }
 
-/// Returns true if the error message matches a known-deferred SPARQL construct
-/// (property paths, SERVICE federation, LATERAL, DESCRIBE, RDF-1.2 triple terms in
-/// patterns). These are in-scope for later S8 / S6b / SPARQL-1.2 work;
-/// an Err here is expected, not a gap.
+/// Returns true if the error message matches the SPARQL evaluator's actual,
+/// enumerated unsupported residue — see `purrdf_sparql_eval`'s crate docs
+/// (`lib.rs`'s "Hard-fail, no degraded fallback" section) for the authoritative
+/// list: a variable-bound quoted-triple-term component in a BGP or
+/// property-path pattern (`convert::ground_term_pattern_to_value` /
+/// `ground_triple_pattern_to_value`), an unresolved custom SPARQL function IRI
+/// (`expr::eval_function`'s `Function::Custom` fallthrough), `heldIn` called
+/// without a caller-supplied standpoint-predicate configuration
+/// (`expr::eval_held_in`), or a manually constructed graph pattern whose
+/// nesting exceeds the parser's safety bound
+/// (`governor::soundness::validate_graph_pattern_depth`).
+///
+/// Property paths, `SERVICE` federation, `LATERAL`, `DESCRIBE`, property
+/// functions, custom aggregates, and `UPDATE` are ALL evaluated in-engine —
+/// none of them is out of scope, so an error naming one of THOSE is a real
+/// gap, not an expected deferral, and must not be classified here (a prior,
+/// broader substring match once misrouted exactly these implemented features).
 #[must_use]
 pub fn is_deferred_construct(err_msg: &str) -> bool {
     let lower = err_msg.to_lowercase();
-    lower.contains("property path")
-        || lower.contains("path expression")
-        || lower.contains("service")
-        || lower.contains("lateral")
-        || lower.contains("describe")
-        // The algebra type names the parser surfaces for path operators:
-        || lower.contains("pathexpr")
-        || lower.contains("unsupported path")
-        || lower.contains("path operator")
-        // Catch-all: any "not supported" / "not implemented" mentioning path
-        || (lower.contains("not support") && lower.contains("path"))
-        || (lower.contains("not implement") && lower.contains("path"))
-        // The algebra uses ZeroOrMore / OneOrMore / ZeroOrOne for * + ? paths
-        || lower.contains("zeroormore")
-        || lower.contains("oneormore")
-        || lower.contains("zeroorone")
-        || lower.contains("alternative path")
-        || lower.contains("inverse path")
-        || lower.contains("sequence path")
-        || lower.contains("negated path")
-        // RDF-1.2 / SPARQL 1.2: variable inside a quoted triple term (triple term
-        // pattern matching with unbound variables). The native engine explicitly scopes
-        // this out of S6 — "S6 scope" in the error. Deferred to SPARQL-1.2 work.
-        || lower.contains("variable inside a quoted triple")
-        || lower.contains("quoted triple term")
-        || (lower.contains("s6 scope") && lower.contains("quoted"))
+    lower.contains("quoted triple term")
+        || lower.contains("custom sparql function <")
+        || lower.contains("heldin requires a standpoint predicate configuration")
+        || lower.contains("graph pattern nesting exceeds the safety limit")
 }
 
 /// Returns true if the query text is a multi-query file (contains more than one
