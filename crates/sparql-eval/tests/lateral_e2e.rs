@@ -198,7 +198,7 @@ fn expect(mut rows: Vec<Row>) -> Vec<Row> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Top-1-per-group, plus its plain-join control (the AC1 laterality proof).
+// 1. Top-1-per-group, plus its plain-join control (the laterality proof).
 // ---------------------------------------------------------------------------
 
 /// `LATERAL`'s right side is driven by EACH left row: every subject gets its
@@ -857,8 +857,9 @@ fn exists_inside_lateral_rhs_correlates() {
 
 /// A `LATERAL` written INSIDE a `FILTER EXISTS`'s inner pattern, correlated to
 /// the outer row SOLELY through a triple position (never an expression) —
-/// this is the widened correlation-detection reachability #188's own parser
-/// creates (see `crate::expr::exists`'s `is_row_sensitive` branch): the inner
+/// this is the widened correlation-detection reachability the `LATERAL`
+/// surface's own parser creates (see `crate::expr::exists`'s
+/// `is_row_sensitive` branch): the inner
 /// carries a `LIMIT 1` sub-select, so evaluating it once, unconstrained, and
 /// merely probing per outer row (the pre-widening fast path) would let ONE
 /// globally-smallest-label subject win the `EXISTS` for every outer row that

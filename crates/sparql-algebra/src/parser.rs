@@ -1284,6 +1284,24 @@ impl<'a> Parser<'a, '_> {
     /// reifiers, annotations, triple terms, collections and blank-node property
     /// lists all desugar identically; property paths are not admissible here.
     fn parse_template_triple(&mut self, triples: &mut Vec<TriplePattern>) -> Result<()> {
+        // `LATERAL` is a *group-graph-pattern* operator (SEP-0006): it has no
+        // meaning as a triple to assert, exactly like a property path or a
+        // property-function call below, which this function already refuses for
+        // the same reason. Unlike those two, `LATERAL` would otherwise be
+        // misparsed as a SUBJECT term (this function has no group-boundary
+        // dispatch at all — quad templates are TriplesTemplate, not a
+        // GroupGraphPattern), producing a confusing "expected a term" error
+        // instead of naming the real cause; caught here, before subject
+        // parsing, in every quad-template context ([`Self::parse_quad_pattern_block`]'s
+        // own loop and the nested `GRAPH { … }` loop in
+        // [`Self::collect_quad_group`] — this function's only two callers, so one
+        // check here covers `INSERT`/`DELETE`/`DELETE WHERE` templates alike).
+        if self.peek_kw("LATERAL") {
+            return Err(ParseError::syntax(
+                "LATERAL is not allowed in an update template",
+                self.span(),
+            ));
+        }
         let mut sink = BlockSink::default();
         let (subject, standalone_ok) = if self.at(&Token::LBracket) {
             (self.parse_blank_node_property_list(&mut sink)?, true)
@@ -5173,6 +5191,63 @@ mod tests {
         assert!(insert.is_empty());
         // The template IS the where pattern.
         assert!(matches!(**pattern, GraphPattern::Bgp { .. }));
+    }
+
+    #[test]
+    fn delete_where_template_refuses_lateral() {
+        // `DELETE WHERE { … }`'s braces are parsed TWICE: once as a quad
+        // TEMPLATE (the delete side, via `parse_quad_pattern_block`) and once
+        // as an ordinary group graph pattern (the WHERE side — see
+        // `insert_where_lateral_parses_and_scope_checks`, where LATERAL is
+        // legal). A template has no group-pattern operators at all — no
+        // `OPTIONAL`/`FILTER`/`GRAPH`-as-a-group either — so `LATERAL` there
+        // must be refused with a clear, named message (the same idiom already
+        // used for property paths and property-function calls in
+        // `parse_template_triple`) rather than a confusing "expected a term"
+        // subject-parse error.
+        let err = update_err("DELETE WHERE { ?s purrdf:p ?o LATERAL { ?o purrdf:q ?z } }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("LATERAL is not allowed in an update template")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn insert_where_lateral_parses_and_scope_checks() {
+        // `INSERT … WHERE`, `DELETE … WHERE` (the template form, not the
+        // `DELETE WHERE` shorthand above), and `WITH … WHERE` all route their
+        // WHERE clause through the SAME `parse_group_graph_pattern` dispatch
+        // a SELECT's WHERE does — the shared arm that recognizes `LATERAL`
+        // (`parse_insert`/`parse_delete`/`parse_with_modify` each call
+        // `self.parse_group_graph_pattern()` for their WHERE, with no
+        // template-only restriction). Positive: it parses to the same
+        // `Lateral` node a SELECT's WHERE would.
+        let u = parse_update(
+            "INSERT { ?s purrdf:q ?label } \
+             WHERE { ?s purrdf:p ?o LATERAL { ?o purrdf:label ?label } }",
+        );
+        let GraphUpdateOperation::DeleteInsert { pattern, .. } = &u.operations[0] else {
+            panic!("expected DeleteInsert");
+        };
+        assert!(
+            matches!(**pattern, GraphPattern::Lateral { .. }),
+            "an UPDATE WHERE clause must produce the same Lateral node a \
+             SELECT's WHERE does: {pattern:?}"
+        );
+
+        // Negative: the SAME scope-conflict check (Jena's `SyntaxVarScope`,
+        // which runs on UPDATE WHERE clauses too) must run here — a BIND
+        // target already in scope on LATERAL's left is refused, naming the
+        // variable, exactly as it would inside a SELECT.
+        let err = update_err(
+            "INSERT { ?s purrdf:q ?o } WHERE { ?s purrdf:p ?o LATERAL { BIND(1 AS ?o) } }",
+        );
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("BIND target ?o inside LATERAL is already in scope")),
+            "got {err:?}"
+        );
     }
 
     #[test]
