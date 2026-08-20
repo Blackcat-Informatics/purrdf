@@ -469,6 +469,32 @@ fn bench_value_dispatch(c: &mut Criterion) {
     let dt_a = parse("2024-03-10T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_a");
     let dt_b = parse("2024-03-01T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_b");
 
+    // Untimed sanity assertions — every accepted operand pair below must return
+    // `Ok`. Without this, a regression that made `value_add`/`value_sub`/
+    // `numeric_add` reject one of these operands would silently redirect the
+    // timed closure onto the (much cheaper) error path, so a correctness
+    // regression would read as a performance win instead of failing loudly.
+    assert!(
+        value_add(&int_a, &int_b).is_ok(),
+        "bench operand pair must be accepted: int + int"
+    );
+    assert!(
+        numeric_add(&int_a, &int_b).is_ok(),
+        "bench operand pair must be accepted: int + int (numeric_add control)"
+    );
+    assert!(
+        value_add(&dec_a, &dec_b).is_ok(),
+        "bench operand pair must be accepted: dec + dec"
+    );
+    assert!(
+        value_add(&mixed_int, &mixed_dec).is_ok(),
+        "bench operand pair must be accepted: int + dec"
+    );
+    assert!(
+        value_sub(&dt_a, &dt_b).is_ok(),
+        "bench operand pair must be accepted: dateTime - dateTime"
+    );
+
     let mut group = c.benchmark_group("value_dispatch");
     group.bench_function("int_plus_int_value_add", |bencher| {
         bencher.iter(|| {
