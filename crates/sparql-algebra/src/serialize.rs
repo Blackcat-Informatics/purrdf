@@ -97,20 +97,30 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
     let mut s = String::new();
-    if extend_chain_reaches_group(inner) {
-        // `inner` IS a `SELECT`-expression/`HAVING` chain reaching a `Group` node with
-        // no `Project` anywhere above it — the shape the parser's algebra takes for an
-        // aggregate query once its own outer `Project` has already been peeled away
-        // (exactly what this function's doctest above does before calling it). Render
-        // it through [`fmt_subselect`] DIRECTLY: that already reconstructs a complete
-        // `SELECT … WHERE { … } [GROUP BY] …` string on its own, so wrapping it in
-        // ANOTHER literal `SELECT * WHERE { … }` here would either double-nest a
-        // needless subquery or — because a `Group`-containing pattern has no valid
-        // `SELECT *` reading — render `SELECT *` over an aggregate query, which SPARQL
-        // does not admit. Un-fixed, that second failure mode is exactly how an
-        // aggregate call could vanish behind a dangling reference to its synthetic
-        // output variable: seeing this shape and choosing NOT to reach for
-        // `fmt_subselect` is the bug, not a detail of how to call it.
+    if needs_subselect_reconstruction(inner) {
+        // `inner` IS a bare (no `Project` anywhere above it) modifier chain —
+        // a `SELECT`-expression/`HAVING` chain reaching a `Group`, OR a
+        // `Slice`/`Distinct`/`Reduced`/`OrderBy`/`Extend` sitting at the very
+        // top with nothing above it — the shape the parser's algebra takes
+        // for a `GROUP`/`ORDER BY`/`LIMIT`/`DISTINCT`/`REDUCED`/SELECT-expression
+        // query once its own outer `Project` has already been peeled away
+        // (exactly what this function's doctest above does before calling
+        // it — and what a caller of THIS function that itself stripped an
+        // outer `Project`, e.g. the corpus round-trip sweep, does too).
+        // Render it through [`fmt_subselect`] DIRECTLY: that already
+        // reconstructs a complete `SELECT … WHERE { … } [GROUP BY] …` string
+        // on its own, so wrapping it in ANOTHER literal `SELECT * WHERE { … }`
+        // here would EITHER double-nest a needless subquery whose outer
+        // `Project` re-projects the identical variable set the inner one
+        // already declared (a real, if harmless, structural mismatch on
+        // re-parse — see `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+        // `negation/full-minuend.rq` finding) OR — because a `Group`-containing
+        // pattern has no valid `SELECT *` reading — render `SELECT *` over an
+        // aggregate query, which SPARQL does not admit. Un-fixed, that second
+        // failure mode is exactly how an aggregate call could vanish behind a
+        // dangling reference to its synthetic output variable: seeing this
+        // shape and choosing NOT to reach for `fmt_subselect` is the bug, not
+        // a detail of how to call it.
         fmt_subselect(&mut s, inner);
     } else {
         s.push_str("SELECT * WHERE { ");
@@ -118,6 +128,31 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
         s.push_str(" }");
     }
     s
+}
+
+/// Whether `p`, with no `Project` above it, is a bare modifier-chain shape
+/// [`fmt_subselect`] must reconstruct directly rather than being wrapped in
+/// another `SELECT * WHERE { … }` (see [`pattern_to_select_query`]'s doc for
+/// why the wrap is wrong either way this predicate is true). `Slice`/
+/// `Distinct`/`Reduced`/`OrderBy`/`Extend` are UNCONDITIONALLY this shape at
+/// the top — none of them can legally appear as a bare (`Project`-less)
+/// element of an ORDINARY `{ … }` group (SPARQL's grammar only ever produces
+/// them as part of a `SELECT`/subselect's own solution-modifier chain, which
+/// always carries a `Project`), so reaching one here with no `Project` above
+/// it is exactly the "outer `Project` already peeled" shape, regardless of
+/// whether it goes on to reach a `Group`. `Filter`/`Group` still route through
+/// [`extend_chain_reaches_group`], which is the one case where "reaches a
+/// `Group`" (not "is one, unconditionally") is the right test — an ordinary
+/// WHERE-body `FILTER` (never wrapping a `Group`) must NOT trigger this.
+fn needs_subselect_reconstruction(p: &GraphPattern) -> bool {
+    matches!(
+        p,
+        GraphPattern::Extend { .. }
+            | GraphPattern::Slice { .. }
+            | GraphPattern::Distinct { .. }
+            | GraphPattern::Reduced { .. }
+            | GraphPattern::OrderBy { .. }
+    ) || extend_chain_reaches_group(p)
 }
 
 /// `true` for the solution-modifier nodes that re-materialize as a sub-`SELECT`
@@ -135,9 +170,12 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
 }
 
 /// Whether `p` is a leading chain of ONLY `Extend` (a SELECT-expression `(expr AS
-/// ?v)` bind) / `Filter`-directly-over-`Group` (`HAVING`) nodes that terminates at a
-/// `Group` — the shape an aggregate query's own SELECT-expression/`HAVING` chain
-/// takes once its outer `Project` has already been peeled away.
+/// ?v)` bind) / `Filter` (`HAVING` — however many conditions are chained; `HAVING
+/// (a) (b) …` lifts to one nested `Filter` per condition, so this recurses through
+/// the whole chain rather than checking only the OUTERMOST `Filter`'s immediate
+/// `inner`) nodes that terminates at a `Group` — the shape an aggregate query's own
+/// SELECT-expression/`HAVING` chain takes once its outer `Project` has already been
+/// peeled away.
 ///
 /// Deliberately narrower than [`is_subselect_node`]/[`fmt_subselect`]'s full peel
 /// loop: a `Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy` node anywhere in the chain
@@ -154,8 +192,19 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
 fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
     match p {
         GraphPattern::Group { .. } => true,
-        GraphPattern::Extend { inner, .. } => extend_chain_reaches_group(inner),
-        GraphPattern::Filter { inner, .. } => matches!(**inner, GraphPattern::Group { .. }),
+        // `HAVING (a) (b) …` lifts to a CHAIN of `Filter`s, one per condition
+        // (`parser.rs`'s `for expr in modifiers.having { p = Filter{expr,
+        // inner: p} }`), so recursing here — not just checking whether THIS
+        // Filter's immediate `inner` is the `Group` — is what makes a query
+        // with more than one `HAVING` condition recognized at all. Un-fixed,
+        // a second `HAVING` condition made this predicate return `false`,
+        // which sent `pattern_to_select_query` down the ordinary
+        // `SELECT * WHERE { … }` path over a `Group`-containing pattern — the
+        // exact "SPARQL has no `SELECT *` reading over `GROUP BY`" failure
+        // this function's own doc says choosing that path is the bug.
+        GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => {
+            extend_chain_reaches_group(inner)
+        }
         _ => false,
     }
 }
@@ -182,7 +231,7 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             s.push_str(" .");
         }
         GraphPattern::Join { left, right } => {
-            fmt_group_body(s, left);
+            fmt_flattened_left(s, left);
             s.push(' ');
             fmt_join_right_operand(s, right);
         }
@@ -191,7 +240,7 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             right,
             expression,
         } => {
-            fmt_group_body(s, left);
+            fmt_flattened_left(s, left);
             s.push_str(" OPTIONAL { ");
             fmt_group_body(s, right);
             if let Some(expr) = expression {
@@ -202,7 +251,7 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             s.push_str(" }");
         }
         GraphPattern::Lateral { left, right } => {
-            fmt_group_body(s, left);
+            fmt_flattened_left(s, left);
             if parser_rebuilds_the_lateral(right) {
                 // Two right-operand shapes are surface forms the parser's OWN
                 // dispatch arms re-wrap into exactly this `Lateral` node without
@@ -258,7 +307,7 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             let _ = write!(s, " AS {})", VarRef(variable));
         }
         GraphPattern::Minus { left, right } => {
-            fmt_group_body(s, left);
+            fmt_flattened_left(s, left);
             s.push_str(" MINUS { ");
             fmt_group_body(s, right);
             s.push_str(" }");
@@ -397,6 +446,11 @@ fn parser_rebuilds_the_lateral(right: &GraphPattern) -> bool {
 /// accumulation on re-parse, re-associating the tree to a different meaning
 /// (`(A JOIN B) OPTIONAL C` instead of `A JOIN (B OPTIONAL C)`, for example).
 ///
+/// A SIMILAR (not identical — see its own doc) hazard applies to a `Join`/
+/// `LeftJoin`/`Lateral`/`Minus` node's OWN LEFT operand; that side is decided
+/// by the narrower [`left_operand_needs_bracing`] instead, via
+/// [`fmt_flattened_left`].
+///
 /// [`GraphPattern::Join`] is deliberately **excluded**: join is associative, so
 /// re-associating a `Join` right operand into the running left-to-right chain
 /// produces a semantically identical tree — the round-trip contract this module
@@ -422,6 +476,70 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::Join { .. }
+        | GraphPattern::Union { .. }
+        | GraphPattern::Graph { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::OrderBy { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Group { .. }
+        | GraphPattern::PropertyFunction(_) => false,
+    }
+}
+
+/// Emit the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node,
+/// bracing it as its own group when [`left_operand_needs_bracing`] says
+/// leaving it unbraced would splice its own scope onto the outer group.
+/// Every other LEFT shape (an ordinary `Bgp`/`Path`/`Join`/`Lateral`/`Union`/
+/// `Graph`/`Service`/`Values`/property-function/…) keeps the historical
+/// unbraced rendering: the parser's own left-deep assembly reproduces those
+/// exactly.
+fn fmt_flattened_left(s: &mut String, left: &GraphPattern) {
+    if left_operand_needs_bracing(left) {
+        s.push_str("{ ");
+        fmt_group_body(s, left);
+        s.push_str(" }");
+    } else {
+        fmt_group_body(s, left);
+    }
+}
+
+/// `true` for the [`GraphPattern`] variants that need bracing when they sit
+/// as the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node — a
+/// NARROWER set than [`rendering_starts_with_a_reabsorbable_left`]'s (that
+/// predicate governs the RIGHT-operand hazard, a different question): a
+/// `Filter`/`Extend`/`LeftJoin`/`Minus` LEFT operand renders by emitting ITS
+/// OWN left operand inline first, so flattening it splices its own
+/// filter/bind/optional/minus scope onto the OUTER node's own group instead
+/// of keeping it as its own nested scope (found by the corpus round-trip
+/// sweep: `service/service05.rq`'s `FILTER`, scoped to a bracketed
+/// sub-group, re-associated onto the whole outer group — including a
+/// `SERVICE ?g` lateral join written after it — once flattened unbraced).
+///
+/// `Lateral` is DELIBERATELY EXCLUDED, unlike on the right-operand
+/// predicate: it chains left-deep the SAME way `Join` does (SEP-0006
+/// laterality is written left-to-right; both a user-written
+/// `A LATERAL { B } LATERAL { C }` chain and the parser's OWN
+/// property-function-triple folding build exactly this shape as `g`
+/// accumulates), so bracing it here would be WRONG for a PF-folded chain
+/// specifically: the parser's triples-block loop expects to read a
+/// continuous run of triples/PF-calls as ONE triples block, and a brace
+/// splits it, breaking the fold (`roundtrip_property_functions_mixed_with_data_triples`
+/// is what catches this — it round-trips a PF chain immediately followed by
+/// an ordinary triple sharing the same block).
+fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::LeftJoin { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Filter { .. }
+        | GraphPattern::Extend { .. } => true,
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Join { .. }
+        | GraphPattern::Lateral { .. }
         | GraphPattern::Union { .. }
         | GraphPattern::Graph { .. }
         | GraphPattern::Service { .. }
@@ -539,10 +657,19 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
                 select_exprs.push((variable, expression));
                 cur = inner;
             }
-            GraphPattern::Filter { expr, inner }
-                if matches!(**inner, GraphPattern::Group { .. }) =>
-            {
-                // HAVING: a Filter directly wrapping the Group.
+            GraphPattern::Filter { expr, inner } if extend_chain_reaches_group(inner) => {
+                // HAVING: this Filter's `inner` is either the `Group` directly
+                // (one `HAVING` condition) or another `Extend`/`Filter` whose
+                // OWN chain reaches it (`HAVING (a) (b) …`'s multi-condition
+                // lift — see `extend_chain_reaches_group`'s doc). The
+                // look-ahead through the WHOLE remaining chain, not just this
+                // Filter's immediate `inner`, is what a second `HAVING`
+                // condition needs: without it this arm stops peeling at the
+                // FIRST (outermost) `HAVING` Filter, leaving `group` unset
+                // and silently dropping the `GROUP BY`/aggregate rendering
+                // entirely. An ordinary WHERE-body `FILTER` (no `Group`
+                // anywhere below it) fails this guard and correctly falls
+                // through to `_ => break`, staying part of the body.
                 having.push(expr);
                 cur = inner;
             }
@@ -568,40 +695,89 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
     } else if reduced {
         s.push_str("REDUCED ");
     }
-    match project {
-        None => {
-            if select_exprs.is_empty() {
-                s.push('*');
+    // `SELECT *` has NO valid reading over an aggregating query (`GROUP BY`
+    // present, or one or more aggregates) — SPARQL flatly bans it, the same
+    // rule the parser itself enforces (`"SELECT * is not allowed in an
+    // aggregate query"`). With no `Project` peeled here (this function's
+    // top-level caller, `pattern_to_select_query`, is invoked on a
+    // `Project`-STRIPPED body — see its own doc) there is no explicit
+    // variable list to fall back to either, so one is reconstructed:
+    // * Reaching a `Group`: its OWN key variables — the only ones guaranteed
+    //   meaningful past a grouping boundary (an ordinary WHERE-body variable
+    //   is NOT visible above a `Group`). Caught by the corpus round-trip
+    //   sweep: `SELECT ?s { … } GROUP BY ?s` (no aggregate function at all —
+    //   a plain `GROUP BY` key projection) used to re-emit `SELECT * …
+    //   GROUP BY ?s`, which the parser then correctly refused on re-parse.
+    // * Reaching a `Group` with an EMPTY key list (the implicit whole-table
+    //   group an aggregate with no explicit `GROUP BY` gets): `None` —
+    //   `cur` here sits BELOW the `Group`, and an ordinary WHERE-body
+    //   variable is not legally project-able alongside an aggregate at all
+    //   (`"SELECT projects ?s, which is neither a GROUP BY key nor confined
+    //   to an aggregate"` — the very check that catches a wrong answer
+    //   here), so there is nothing to add beyond the AS-targets already
+    //   covering what the query needs.
+    // * NOT reaching a `Group` at all (an `Extend` chain over an ordinary
+    //   body — `needs_subselect_reconstruction`'s other case): every
+    //   variable [`crate::parser::visible_variables`] still finds in the
+    //   remaining body (`cur`, which here is genuinely still in scope — no
+    //   grouping boundary was crossed), so a variable a real caller needs —
+    //   chiefly `SERVICE` federation, whose whole contract with the remote
+    //   endpoint is "return everything visible" — is never silently dropped
+    //   from the projection just because it also carries a `(expr AS ?v)`
+    //   bind. Also caught by the sweep: `SELECT (BNODE(?s1) AS ?b1) … WHERE
+    //   { … FILTER (…) }` (a SELECT-expression bind over a filtered,
+    //   non-aggregating body) used to render as an in-body `BIND`, which the
+    //   parser's own "filters float to the group's end" rule then
+    //   re-associated the `Filter`/`Extend` nesting differently than the
+    //   original tree.
+    let no_project_vars: Option<Vec<Variable>> = match &group {
+        Some((vars, _)) if !vars.is_empty() => Some(vars.to_vec()),
+        Some(_) => None,
+        None if !select_exprs.is_empty() => Some(crate::parser::visible_variables(cur)),
+        None => None,
+    };
+    // Skip any var whose binding will be emitted via `(expr AS ?v)`; emitting
+    // it here too would produce an invalid duplicate projection. Shared by
+    // every branch below that has a real variable LIST to filter (a
+    // reconstructed `no_project_vars` list, or a genuine `Project`'s own
+    // `variables`) — `*` needs no filtering, it names nothing to duplicate.
+    let as_targets: std::collections::HashSet<&Variable> =
+        select_exprs.iter().map(|(v, _)| *v).collect();
+    let emit_filtered_vars = |s: &mut String, vars: &[Variable]| -> bool {
+        let mut emitted = false;
+        for v in vars {
+            if as_targets.contains(v) {
+                continue;
             }
-        }
-        Some(vars) if vars.is_empty() && select_exprs.is_empty() => s.push('*'),
-        Some(vars) => {
-            // Skip any var whose binding will be emitted via `(expr AS ?v)`;
-            // emitting it here too would produce an invalid duplicate projection.
-            let as_targets: std::collections::HashSet<&Variable> =
-                select_exprs.iter().map(|(v, _)| *v).collect();
-            let mut plain_emitted = false;
-            for v in vars {
-                if as_targets.contains(v) {
-                    continue;
-                }
-                if plain_emitted {
-                    s.push(' ');
-                }
-                let _ = write!(s, "{}", VarRef(v));
-                plain_emitted = true;
+            if emitted {
+                s.push(' ');
             }
+            let _ = write!(s, "{}", VarRef(v));
+            emitted = true;
         }
-    }
-    // Determine whether any plain var was emitted (for spacing before AS-exprs).
+        emitted
+    };
     let plain_emitted = match project {
-        None => false,
-        Some(vars) if vars.is_empty() && select_exprs.is_empty() => false,
-        Some(vars) => {
-            let as_targets: std::collections::HashSet<&Variable> =
-                select_exprs.iter().map(|(v, _)| *v).collect();
-            vars.iter().any(|v| !as_targets.contains(v))
+        None => match &no_project_vars {
+            Some(vars) => emit_filtered_vars(s, vars),
+            // `no_project_vars` is `None` in two shapes: an ordinary,
+            // non-aggregating body with no `Extend` chain at all (`*` is
+            // exactly right), OR an implicit whole-table group with nothing
+            // legally project-able beyond its aggregate `select_exprs` (`*`
+            // combined with a `(expr AS ?v)` target is ALSO illegal SPARQL —
+            // `*` must be the entire select list — so it is pushed only when
+            // there is no such target to combine it with).
+            None if select_exprs.is_empty() => {
+                s.push('*');
+                false
+            }
+            None => false,
+        },
+        Some(vars) if vars.is_empty() && select_exprs.is_empty() => {
+            s.push('*');
+            false
         }
+        Some(vars) => emit_filtered_vars(s, vars),
     };
     // Every select-expression/`HAVING`/`ORDER BY` render below sits ABOVE the
     // `Group` in the modifier chain, so each resolves an aggregate's synthetic
@@ -1448,6 +1624,23 @@ mod tests {
     fn direct_roundtrip_having() {
         assert_roundtrip(
             "SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t HAVING(COUNT(?x) > 1)",
+        );
+    }
+
+    /// `HAVING (a) (b)` — TWO conditions — lifts to a `Filter`-over-`Filter`-over-
+    /// `Group` chain, not a single `Filter` directly over `Group`. The corpus
+    /// round-trip sweep (`crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`)
+    /// caught this: `extend_chain_reaches_group`/`fmt_subselect`'s peel loop each
+    /// only checked the OUTERMOST `Filter`'s immediate `inner`, so a second
+    /// `HAVING` condition made both silently mis-detect the whole shape — the
+    /// SAME failure mode `direct_roundtrip_explicit_group_by`'s doc names,
+    /// reachable through one more `HAVING` clause than that fix's own tests
+    /// exercised.
+    #[test]
+    fn direct_roundtrip_multiple_having() {
+        assert_roundtrip(
+            "SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t \
+             HAVING(COUNT(?x) > 1)(COUNT(?x) < 100)",
         );
     }
 

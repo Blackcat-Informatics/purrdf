@@ -859,15 +859,30 @@ impl core::fmt::Display for PropertyPathExpression {
         match self {
             Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),
             Self::Reverse(a) => write!(f, "^{}", PathElt(a)),
-            Self::Sequence(a, b) => write!(f, "{a}/{b}"),
-            Self::Alternative(a, b) => write!(f, "{a}|{b}"),
-            Self::ZeroOrMore(a) => write!(f, "{}*", PathElt(a)),
-            Self::OneOrMore(a) => write!(f, "{}+", PathElt(a)),
-            Self::ZeroOrOne(a) => write!(f, "{}?", PathElt(a)),
+            // `/` (this arm) binds TIGHTER than `|`, and both are
+            // left-associative: an `Alternative` operand on EITHER side needs
+            // parens (it would otherwise mis-group into the surrounding `|`
+            // on re-parse — `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+            // `property-path/path-p2.rq`/`path-p4.rq` findings, e.g.
+            // `(p1|p2)/(p3|p4)` rendered bare as `p1|p2/p3|p4` reparses as
+            // `(p1|(p2/p3))|p4`); a `Sequence` operand needs parens ONLY on
+            // the RIGHT (the left one reproduces via `/`'s own
+            // left-associativity — `a/b/c` IS `Sequence(Sequence(a,b),c)`
+            // already — but a RIGHT-nested `Sequence(a, Sequence(b,c))`
+            // rendered bare as `a/b/c` would reparse LEFT-nested instead).
+            Self::Sequence(a, b) => write!(f, "{}/{}", SeqLeft(a), SeqRight(b)),
+            // `|`'s own left operand never needs parens (lowest precedence,
+            // left-associative — any shape reproduces bare); the right
+            // operand needs them only for a nested `Alternative` (the same
+            // right-nesting-vs-left-associativity mismatch `Sequence` has).
+            Self::Alternative(a, b) => write!(f, "{a}|{}", AltRight(b)),
+            Self::ZeroOrMore(a) => write!(f, "{}*", QuantifierOperand(a)),
+            Self::OneOrMore(a) => write!(f, "{}+", QuantifierOperand(a)),
+            Self::ZeroOrOne(a) => write!(f, "{}?", QuantifierOperand(a)),
             Self::Range { inner, min, max } => match max {
-                Some(m) if *m == *min => write!(f, "{}{{{min}}}", PathElt(inner)),
-                Some(m) => write!(f, "{}{{{min},{m}}}", PathElt(inner)),
-                None => write!(f, "{}{{{min},}}", PathElt(inner)),
+                Some(m) if *m == *min => write!(f, "{}{{{min}}}", QuantifierOperand(inner)),
+                Some(m) => write!(f, "{}{{{min},{m}}}", QuantifierOperand(inner)),
+                None => write!(f, "{}{{{min},}}", QuantifierOperand(inner)),
             },
             Self::NegatedPropertySet(elems) => {
                 let inner = elems
@@ -891,17 +906,22 @@ impl core::fmt::Display for PropertyPathExpression {
     }
 }
 
-/// Wraps a property path in parentheses when it must be grouped to sit under a
-/// postfix operator (`*`/`+`/`?`/`{n,m}`) — i.e. when it is a sequence,
-/// alternative, or **inverse** (`^`) path.
+/// Wraps a property path in parentheses when it must be grouped to sit as
+/// `^`'s (`Reverse`'s) operand — i.e. when it is a sequence or alternative
+/// path (lower precedence than `^`, needs disambiguating) or ITSELF another
+/// inverse (`^^p` needs `^(^p)` to stay two `Reverse`s rather than folding
+/// however a double-`^` might otherwise lex/parse).
 ///
-/// The postfix quantifiers bind tighter than `^` in the SPARQL grammar:
-/// `parse_path_elt_or_inverse` applies `^` and then delegates to
-/// `parse_path_elt` for the quantified primary.  So `^<p>*` reparses as
-/// `Reverse(ZeroOrMore(<p>))`, not `ZeroOrMore(Reverse(<p>))`.  Wrapping a
-/// `Reverse` inner in parentheses — `(^<p>)*` — forces the parser to treat
-/// the whole inverse path as the primary before the quantifier is applied,
-/// preserving the original AST on round-trip.
+/// A QUANTIFIED path (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) is
+/// DELIBERATELY NOT in this list: the postfix quantifiers bind tighter than
+/// `^` in the SPARQL grammar — `parse_path_elt_or_inverse` applies `^` and
+/// then delegates to `parse_path_elt` for the quantified primary, so
+/// `^<p>*` reparses as `Reverse(ZeroOrMore(<p>))` (not
+/// `ZeroOrMore(Reverse(<p>))`) WITHOUT any parens needed — the grammar rule
+/// the grammar rule `^` sits in already expects a possibly-quantified
+/// primary right after it.
+/// [`QuantifierOperand`] is the analogous wrapper for the OTHER context
+/// (a quantifier's own operand), which has different rules — see its doc.
 struct PathElt<'a>(&'a PropertyPathExpression);
 
 impl core::fmt::Display for PathElt<'_> {
@@ -912,6 +932,85 @@ impl core::fmt::Display for PathElt<'_> {
             | PropertyPathExpression::Reverse(..) => {
                 write!(f, "({})", self.0)
             }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// Wraps a property path in parentheses when it must be grouped to sit as a
+/// postfix quantifier's (`*`/`+`/`?`/`{n,m}`) OWN operand — a DIFFERENT
+/// context from [`PathElt`] (`^`'s operand), with a wider parenthesize set:
+/// a `Sequence`/`Alternative`/`Reverse` operand needs the same
+/// disambiguation `PathElt` gives `^`, but ALSO a NESTED quantified path
+/// (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) does here, unlike under
+/// `^` — `PathMod` attaches to exactly one `PathPrimary`, and an
+/// already-quantified path is not one, so chaining two quantifiers directly
+/// (`p**`, the un-parenthesized spelling `(p*)*` would otherwise collapse
+/// to) is not even valid surface syntax
+/// (`crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+/// `property-path/pp37.rq` finding: `((:P)*)*` used to render as the
+/// un-reparseable `<P>**`). Parenthesizing the inner quantified path makes it
+/// a primary again, exactly like `PathElt` does for `Sequence`/`Alternative`.
+struct QuantifierOperand<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for QuantifierOperand<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Sequence(..)
+            | PropertyPathExpression::Alternative(..)
+            | PropertyPathExpression::Reverse(..)
+            | PropertyPathExpression::ZeroOrMore(..)
+            | PropertyPathExpression::OneOrMore(..)
+            | PropertyPathExpression::ZeroOrOne(..)
+            | PropertyPathExpression::Range { .. } => {
+                write!(f, "({})", self.0)
+            }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The LEFT operand of `/` (`Sequence`): parens only for `Alternative` (lower
+/// precedence — see [`PropertyPathExpression`]'s `Display`'s `Sequence` arm
+/// for the full precedence argument). A nested `Sequence` reproduces bare via
+/// `/`'s own left-associativity.
+struct SeqLeft<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for SeqLeft<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The RIGHT operand of `/` (`Sequence`): parens for `Alternative` (lower
+/// precedence) AND for a nested `Sequence` (right-nesting does not survive
+/// `/`'s left-associative re-parse — see the `Sequence` `Display` arm).
+struct SeqRight<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for SeqRight<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) | PropertyPathExpression::Sequence(..) => {
+                write!(f, "({})", self.0)
+            }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The RIGHT operand of `|` (`Alternative`): parens only for a nested
+/// `Alternative` (right-nesting does not survive `|`'s left-associative
+/// re-parse). `Sequence` binds tighter and never needs parens on either side
+/// of `|`.
+struct AltRight<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for AltRight<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
             other => write!(f, "{other}"),
         }
     }

@@ -696,12 +696,18 @@ impl<'a> Parser<'a, '_> {
         // solution modifiers — valid on both a top-level query and a `SubSelect`.
         // It is joined with the WHERE group graph pattern *before* grouping and
         // projection, so the inline data is visible to aggregation and `SELECT *`.
+        // Through the shared `join()` helper (not a raw `GraphPattern::Join`),
+        // matching the identity-absorbing construction every IN-BODY `VALUES`
+        // block already goes through (`parse_group_graph_pattern_inner`'s own
+        // `VALUES` arm) — an empty WHERE clause (`{}`) plus a trailing
+        // `VALUES` must reach the SAME `Values { .. }` node an in-body
+        // `{ VALUES … }` does, not a `Join { Bgp { [] }, Values { .. } }`
+        // the round-trip serializer has no way to reproduce (it has no
+        // surface form for a Join whose left operand is visibly, deliberately
+        // the identity table rather than an omitted one).
         let where_pat = if self.peek_kw("VALUES") {
             let values = self.parse_inline_data()?;
-            GraphPattern::Join {
-                left: Box::new(where_pat),
-                right: Box::new(values),
-            }
+            join(where_pat, values)
         } else {
             where_pat
         };
@@ -3631,8 +3637,12 @@ impl VarScope {
 }
 
 /// Collect the in-scope variables of a pattern in first-appearance order
-/// (used for `SELECT *` projection).
-fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
+/// (used for `SELECT *` projection). `pub(crate)`: `crate::serialize` also
+/// needs this, to recover every variable a bare (`Project`-less) modifier
+/// chain's remaining WHERE body still makes visible when reconstructing a
+/// `SELECT` clause that has no real `Project` to read a variable list from
+/// (see `fmt_subselect`'s `no_project_vars`).
+pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
     let mut scope = VarScope::new();
     collect_vars(p, &mut scope);
     scope.into_vec()
