@@ -306,8 +306,12 @@ surfaces; each is called out below with what a consumer must do.
   `xsd:gDay`) ± duration arithmetic, covering SEP-0002's full temporal operator table plus
   Gregorian ± duration, which has no SEP-0002 row of its own but matches the permissive reading
   of another SPARQL engine's own duration handling everywhere the answer does not depend on a
-  fabricated calendar field (the book's SPARQL querying chapter carries the full table and that
-  divergence's record). `numeric_add`/`numeric_sub`/`numeric_mul`/`numeric_div` remain public but
+  fabricated calendar field — for `xsd:gMonthDay` specifically, "does not depend on a fabricated
+  field" is decided by anchoring the complete months-then-days computation at every year in one
+  full 400-year Gregorian period (the calendar's leap rule is exactly periodic at that length) and
+  requiring every anchor to agree on the finished `(month, day)`, not on either component alone
+  (the book's SPARQL querying chapter carries the full table and that divergence's record).
+  `numeric_add`/`numeric_sub`/`numeric_mul`/`numeric_div` remain public but
   are now documented as the narrower numeric-tier operators the value-space surface delegates to
   for numeric operands, not as the SPARQL-facing entry point — a caller that depended on them
   accepting a temporal operand and returning a type error there should switch to the `value_*`

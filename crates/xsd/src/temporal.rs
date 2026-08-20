@@ -46,40 +46,26 @@ const MAX_TZ_MIN: i32 = 14 * 60;
 /// ±14:00 expressed in seconds, for the no-timezone comparison bound.
 const TZ_BOUND_SECS: i128 = 14 * 3600;
 const SECS_PER_DAY: i128 = 86_400;
-/// A non-leap probe year, shared by every Gregorian day-validity check that
-/// needs "the fewest days a given month can have" — a plain, non-century,
-/// non-leap year gives every month (including February) its minimum length in
-/// a single lookup via [`days_in_month`], so `day <= days_in_month(NON_LEAP_PROBE_YEAR, m)`
-/// is the general "does `day` exist in every year's version of month `m`"
-/// test, not a February-only special case. Also one of the three probe years
-/// in [`SecondAction::YearIndependentDays`]'s unanimity check — see that match
-/// arm's doc for why three probes (not two) are required and why they
-/// suffice.
-const NON_LEAP_PROBE_YEAR: i64 = 2001;
-/// A leap probe year. Paired with [`NON_LEAP_PROBE_YEAR`] and
-/// [`THIRD_PROBE_YEAR`] by [`SecondAction::YearIndependentDays`]'s
-/// three-probe unanimity check, and reused (with [`FEB29_ALT_PROBE_YEAR`]) as
-/// one of the two probes for a `--02-29` source specifically.
-const LEAP_PROBE_YEAR: i64 = 2000;
-/// A non-leap probe year immediately followed by a leap year (2003 → 2004).
-/// [`LEAP_PROBE_YEAR`] (2000) is followed by non-leap 2001, and
-/// [`NON_LEAP_PROBE_YEAR`] (2001) is followed by non-leap 2002; between the
-/// three probe years, every reachable (this-year, next-year) leap pattern —
-/// (leap, non-leap), (non-leap, leap), (non-leap, non-leap) — is realized.
-/// (leap, leap) is unreachable: two Gregorian leap years are never
-/// consecutive.
-const THIRD_PROBE_YEAR: i64 = 2003;
-/// A second leap probe year, distinct from [`LEAP_PROBE_YEAR`] and chosen on
-/// the far side of a century boundary that is itself divisible by 400 (so
-/// still leap), used only for a `--02-29` source. Every leap year's immediate
-/// neighbors are non-leap (the same non-consecutive-leap-years fact as
-/// [`THIRD_PROBE_YEAR`]'s doc), so a walk anchored at *any* leap year sees the
-/// same (non-leap, non-leap) neighbor pattern: there is only one reachable
-/// pattern for a Feb-29 source, and this second, unrelated leap year is
-/// probed purely as a belt-and-braces check on the walk arithmetic itself
-/// (including the divisible-by-400 century rule), not because a second
-/// pattern exists to disagree.
-const FEB29_ALT_PROBE_YEAR: i64 = 2400;
+/// A leap year, used only by the test sweeps below to look up February's
+/// maximum length (29) via [`days_in_month`] when sizing a sweep — not a
+/// probe: `gMonthDay` year-independence is decided by [`gmonthday_shift`]'s
+/// full-period anchor walk, not by a curated set of probe years (see that
+/// function's doc for why a bounded probe set was retired outright).
+#[cfg(test)]
+const A_LEAP_YEAR: i64 = 2000;
+/// One full Gregorian leap cycle of candidate anchor years for
+/// [`gmonthday_shift`]'s year-independence oracle. The proleptic Gregorian
+/// leap rule (`year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)`) has an
+/// EXACT period of 400 years — `leap(Y) == leap(Y + 400)` for every `Y`,
+/// because 400 is a multiple of 4, of 100, and of 400 simultaneously — so
+/// scanning every anchor year in any one window of exactly 400 consecutive
+/// years is scanning every anchor year that exists: a disagreement produced
+/// by some anchor outside this window is, by periodicity, reproduced by the
+/// congruent anchor inside it. `2000..=2399` is one such window, chosen only
+/// to keep the walk's intermediate `i64` values small and distinct from any
+/// of this module's other named years; any other 400-consecutive-year window
+/// decides every case identically.
+const GMONTHDAY_ANCHOR_YEARS: std::ops::RangeInclusive<i64> = 2000..=2399;
 
 /// `xsd:dateTime`.
 #[derive(Debug, Clone)]
@@ -1620,19 +1606,19 @@ enum MonthAction {
     /// known, so the clamp is always a real value, never a fabrication —
     /// `dateTime`/`date`, the two instant sorts, driven through [`drive`].
     Clamped,
-    /// The months component shifts a month with no year attached
-    /// (`gMonthDay`), so — unlike [`MonthAction::Clamped`] — there is no real
-    /// calendar year to clamp the day-of-month against, and picking one to
-    /// clamp against would silently fabricate a year the value never
-    /// carried. Instead, the shift is accepted, with the day clamped to the
-    /// target month's last day exactly as [`MonthAction::Clamped`] would,
-    /// only when that clamped result is the same from **every** year the
-    /// source `(month, day)` can be anchored at; a target month whose
-    /// clamped result would depend on the anchor year is refused outright
-    /// rather than guessed. Driven through [`drive_gregorian`], never
-    /// through [`drive`] — no Gregorian sort has a `CalendarPoint` to clamp
-    /// within.
-    ClampIfYearIndependent,
+    /// `gMonthDay`'s months component. Unlike every other [`MonthAction`]
+    /// variant this is never evaluated on its own: `gMonthDay` always pairs
+    /// it with [`SecondAction::GMonthDayComposite`] (see [`actions`]), and
+    /// [`drive_gregorian`] intercepts that pair before the ordinary
+    /// months-then-seconds dispatch below and hands both components to
+    /// [`gmonthday_shift`] together. That function's doc explains why: a
+    /// composite `PnMmD` duration's year-independence is one question about
+    /// the FINISHED `(month, day)`, not two separate per-component
+    /// questions — deciding the months half alone (as this variant's name
+    /// might suggest) is the exact defect [`gmonthday_shift`] replaces. This
+    /// variant exists only so [`actions`]'s classification match stays total
+    /// and honest about which sort receives this behavior.
+    GMonthDayComposite,
     /// The months component acts through the quotient map `ℤ → ℤ/12`, not a
     /// dropped carry: XSD 1.1 Part 2 §3.3.13 makes `gMonth` a recurring month with
     /// no year field, so there is no year to carry into and no field is fabricated
@@ -1665,9 +1651,12 @@ enum SecondAction {
     /// The seconds component shifts the time-of-day, wrapping across an implicit
     /// day boundary that is discarded afterward — `xsd:time`.
     CyclicDay,
-    /// The seconds component shifts a day count that is accepted only when the
-    /// shift's outcome does not depend on which year it starts in — `xsd:gMonthDay`.
-    YearIndependentDays,
+    /// `gMonthDay`'s seconds (day-count) component. Always paired with
+    /// [`MonthAction::GMonthDayComposite`] — see that variant's doc for why
+    /// gMonthDay's months and days components are decided together, by
+    /// [`gmonthday_shift`], rather than through this action's ordinary
+    /// dispatch point below.
+    GMonthDayComposite,
     /// The seconds component shifts a day count that is accepted only when the
     /// shift's outcome does not depend on which month it starts in — `xsd:gDay`.
     MonthIndependentDays,
@@ -1697,8 +1686,8 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
         XsdDatatype::GYear => (MonthAction::Divisible12, SecondAction::Absent),
         XsdDatatype::GMonth => (MonthAction::Cyclic12, SecondAction::Absent),
         XsdDatatype::GMonthDay => (
-            MonthAction::ClampIfYearIndependent,
-            SecondAction::YearIndependentDays,
+            MonthAction::GMonthDayComposite,
+            SecondAction::GMonthDayComposite,
         ),
         XsdDatatype::GDay => (
             MonthAction::IdentityIfSafe,
@@ -1742,13 +1731,13 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
 /// [`MonthAction::Clamped`]/[`MonthAction::Absent`] and [`SecondAction::Free`]/
 /// [`SecondAction::MidnightTruncating`]/[`SecondAction::CyclicDay`] are executed
 /// here, for `dateTime`/`date`/`time`; the remaining actions — including
-/// [`MonthAction::ClampIfYearIndependent`], `gMonthDay`'s own month-end action
-/// — belong to the Gregorian family, whose values carry optional fields and no
-/// time-of-day, so they are not shaped like a `CalendarPoint` and are not
-/// driven through it; [`actions`] never pairs a `CalendarPoint` sort with
-/// [`MonthAction::ClampIfYearIndependent`], so this function structurally
-/// never receives it in practice, and the match arm below exists only to keep
-/// the match total.
+/// [`MonthAction::GMonthDayComposite`], `gMonthDay`'s own composite
+/// months-and-days action — belong to the Gregorian family, whose values
+/// carry optional fields and no time-of-day, so they are not shaped like a
+/// `CalendarPoint` and are not driven through it; [`actions`] never pairs a
+/// `CalendarPoint` sort with [`MonthAction::GMonthDayComposite`], so this
+/// function structurally never receives it in practice, and the match arm
+/// below exists only to keep the match total.
 fn drive(
     datatype: XsdDatatype,
     month_action: MonthAction,
@@ -1779,7 +1768,7 @@ fn drive(
             | MonthAction::Cyclic12
             | MonthAction::Divisible12
             | MonthAction::IdentityIfSafe
-            | MonthAction::ClampIfYearIndependent => {
+            | MonthAction::GMonthDayComposite => {
                 return Err(XsdError::TypeMismatch {
                     reason: "this calendar action applies only to the Gregorian family, which this driver does not carry a CalendarPoint for",
                 });
@@ -1802,7 +1791,7 @@ fn drive(
             })
         }
         SecondAction::Absent
-        | SecondAction::YearIndependentDays
+        | SecondAction::GMonthDayComposite
         | SecondAction::MonthIndependentDays => Err(XsdError::TypeMismatch {
             reason: "this temporal sort has no free-form seconds field for a duration's seconds component",
         }),
@@ -1835,6 +1824,92 @@ fn gregorian_whole_days(datatype: XsdDatatype, seconds: &Decimal) -> Result<i64,
 /// `clippy::type_complexity`.
 type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 
+/// The gMonthDay year-independence oracle and answer, computed together:
+/// anchor the source `(month, day)` at every year in
+/// [`GMONTHDAY_ANCHOR_YEARS`] (one full 400-year Gregorian period) where that
+/// date is real, walk EACH anchor through the complete anchored Appendix E
+/// computation — `dur_months` first, with the day-of-month clamped against
+/// the now-known real target year, then `whole_days` as a plain civil-day
+/// walk — and accept iff every anchor lands on the same `(month, day)`.
+///
+/// Because the calendar's leap pattern is exactly periodic with period 400
+/// years (see [`GMONTHDAY_ANCHOR_YEARS`]'s doc), scanning one full period is
+/// scanning every anchor year that could ever exist for the source date —
+/// sound and complete BY CONSTRUCTION, not by a curated set of probe years or
+/// a closed-form leap-rule argument that has to be independently proven
+/// correct. This replaces, and SUBSUMES, everything the earlier per-arm
+/// implementation needed to decide the same question:
+///
+/// - the three-probe day-shift unanimity check (probing every reachable
+///   adjacent-year leap pattern) — every anchor's own walk already realizes
+///   whichever pattern applies to it, so there is no pattern set to curate;
+/// - the closed-form Feb-29 month-shift rule (whether a carry is a multiple
+///   of 4/400) — the same reasoning, done directly instead of algebraically;
+/// - the `±364`-day magnitude guard — deleted outright. That guard existed
+///   because a *bounded* probe set could be fooled by a walk long enough to
+///   re-agree by 4-year-cycle coincidence while still being century-dependent
+///   (`P1461D`, four years plus a day). A full-period anchor walk cannot be
+///   fooled that way for any magnitude: every anchor gets its own complete
+///   walk, so an enormous `whole_days` just walks further per anchor, still
+///   `O(1)` checked-arithmetic work per anchor, not a wider probe set to
+///   maintain;
+/// - the per-arm ordering defect this fix was written for: because this one
+///   function decides the FINISHED `(month, day)` — months, then days, both
+///   inside the same per-anchor walk — a composite `PnMmD` duration's
+///   year-independence is one question about that finished result, never two
+///   separate questions asked of an unfinished intermediate. The previous
+///   per-arm split asked "is the months-only shift year-independent?" before
+///   the days shift ever ran, so `--01-31 + P1M1D` was refused by the months
+///   half alone even though the FINISHED answer (`--03-01`, from every leap
+///   or non-leap anchor) never depends on the anchor year at all.
+///
+/// The pure-month case (`whole_days == 0`) and the pure-day case
+/// (`dur_months == 0`) are deliberately NOT special-cased: both are
+/// composites with one zero component, and [`drive_gregorian`] routes them
+/// through this same function rather than through their own closed-form or
+/// probe-based paths — one function, one truth, instead of several rules
+/// that can silently drift apart from each other (exactly how the defect
+/// this replaces was introduced: two independently-maintained per-arm rules,
+/// each locally sound, whose composition was not).
+///
+/// Cost: [`GMONTHDAY_ANCHOR_YEARS`] has exactly 400 years, so this is at most
+/// 400 iterations of `i64` civil-day/month arithmetic — a cold-path cost
+/// (Gregorian duration arithmetic is never a hot loop) of low single-digit
+/// microseconds, negligible next to the correctness it buys.
+fn gmonthday_shift(
+    datatype: XsdDatatype,
+    month: u8,
+    day: u8,
+    dur_months: i64,
+    whole_days: i64,
+) -> Result<(u8, u8), XsdError> {
+    let mut agreed: Option<(u8, u8)> = None;
+    for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+        if day > days_in_month(anchor_year, month) {
+            continue; // not a real anchor for this source date (matters only for --02-29)
+        }
+        let (y1, m1) = shift_year_month(datatype, anchor_year, month, dur_months)?;
+        let d1 = day.min(days_in_month(y1, m1));
+        let base = days_from_civil(y1, m1, d1);
+        let shifted = base
+            .checked_add(whole_days)
+            .ok_or_else(|| arith_overflow(datatype, "gMonthDay arithmetic overflow"))?;
+        let (_, m2, d2) = civil_from_days(shifted);
+        match agreed {
+            None => agreed = Some((m2, d2)),
+            Some(first) if first != (m2, d2) => {
+                return Err(XsdError::TypeMismatch {
+                    reason: "gMonthDay: the shifted (month, day) depends on which year it starts in",
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(agreed.expect(
+        "every valid gMonthDay (month, day) source has at least one anchor in a full 400-year Gregorian period",
+    ))
+}
+
 /// Apply `dur` to a Gregorian value's `(year, month, day)` fields through the
 /// calendar-action classifier ([`actions`]). Companion to [`drive`], which
 /// serves `dateTime`/`date`/`time`: Gregorian values carry optional fields and
@@ -1847,8 +1922,10 @@ type GregorianFields = (Option<i64>, Option<u8>, Option<u8>);
 /// [`SecondAction::MidnightTruncating`], [`SecondAction::CyclicDay`]) and the
 /// two [`MonthAction`] variants ([`MonthAction::Absent`], and
 /// [`MonthAction::Clamped`] — `dateTime`/`date`'s own instant-only clamp,
-/// distinct from `gMonthDay`'s [`MonthAction::ClampIfYearIndependent`] below)
-/// that no Gregorian sort's classification ever selects.
+/// distinct from `gMonthDay`'s [`MonthAction::GMonthDayComposite`], which
+/// this function intercepts and answers through [`gmonthday_shift`] before
+/// the per-field dispatch below ever runs) that no Gregorian sort's
+/// classification ever selects.
 ///
 /// Months are applied first, then days — the order is load-bearing, see
 /// [`MonthAction`]'s doc — and a zero component is skipped entirely, which is
@@ -1862,6 +1939,31 @@ fn drive_gregorian(
     day: Option<u8>,
     dur: &Duration,
 ) -> Result<GregorianFields, XsdError> {
+    if (month_action, second_action)
+        == (
+            MonthAction::GMonthDayComposite,
+            SecondAction::GMonthDayComposite,
+        )
+    {
+        // gMonthDay: intercepted here, before the per-field months-then-days
+        // dispatch below, because Appendix E's months-then-days order means
+        // the composite's year-independence is one question about the
+        // FINISHED (month, day), never two separate per-component questions
+        // — see `gmonthday_shift`'s doc.
+        let whole_days = if dur.seconds.is_zero() {
+            0
+        } else {
+            gregorian_whole_days(datatype, &dur.seconds)?
+        };
+        if dur.months == 0 && whole_days == 0 {
+            return Ok((year, month, day)); // zero duration → identity
+        }
+        let m = month.unwrap_or(1);
+        let d = day.unwrap_or(1);
+        let (nm, nd) = gmonthday_shift(datatype, m, d, dur.months, whole_days)?;
+        return Ok((None, Some(nm), Some(nd)));
+    }
+
     let (year, month, day) = if dur.months == 0 {
         (year, month, day)
     } else {
@@ -1919,115 +2021,17 @@ fn drive_gregorian(
                     });
                 }
             }
-            MonthAction::ClampIfYearIndependent => {
-                // gMonthDay. Recover the target month AND how many whole
-                // years the shift carries into. `dur.months`'s own
-                // div_euclid/rem_euclid split off the (unboundedly large but
-                // overflow-safe, because dividing only shrinks a value)
-                // year-carry component first, leaving a small `0..=22`
-                // remainder sum to reduce a second time — the same
-                // reduce-first trick `Cyclic12` above uses, extended one
-                // step further so the exact year carry is recovered too,
-                // without ever adding the raw (possibly `i64::MAX`-sized)
-                // `dur.months` to anything unchecked.
-                let m = month.unwrap_or(1);
-                let d = day.unwrap_or(1);
-                let months_div = dur.months.div_euclid(12);
-                let months_rem = dur.months.rem_euclid(12); // 0..=11
-                let combined = i64::from(m) - 1 + months_rem; // 0..=22, proven safe above
-                let target_month = (combined % 12 + 1) as u8;
-                let carry_years = months_div
-                    .checked_add(combined / 12) // combined / 12 is 0 or 1
-                    .ok_or_else(|| arith_overflow(datatype, "gMonthDay arithmetic overflow"))?;
-
-                // XML Schema Appendix E clamps a day that does not exist in
-                // the shifted month down to that month's actual length. The
-                // question this rule answers is whether the CLAMPED result
-                // is the same from every year the source (month, day) can be
-                // anchored at — not, as the previous rule conflated, whether
-                // the unclamped day exists in the target month at all.
-                // `--03-31 + P1M` makes the difference concrete: April never
-                // has a 31st, but April's length (30 days) never depends on
-                // the anchor year, so the clamped result --04-30 is
-                // identical from every anchor and the shift is genuinely
-                // year-independent — unlike the previous rule's outright
-                // refusal of it.
-                //
-                // A non-February target month's length is the same in every
-                // year, so its clamp result never depends on the anchor:
-                // accept unconditionally, clamping only if the source day
-                // overshoots.
-                //
-                // A February target's length depends on the TARGET year's
-                // leapness — `anchor_year + carry_years`, not the anchor
-                // year by itself — so the question becomes whether that is
-                // constant as the anchor ranges over every year the source
-                // (month, day) is real.
-                //
-                // For every source other than `--02-29`, every year is a
-                // real anchor (the day-shift arm's doc gives the same fact:
-                // day <= 28 always exists, and a day of 29-31 outside
-                // February exists regardless of leap status). So
-                // `anchor_year + carry_years` ranges over every integer too
-                // — both a leap and a non-leap target year are certainly
-                // reachable whenever the clamp can even tell them apart,
-                // i.e. whenever the source day is 29 or more. Refuse in that
-                // case; a source day <= 28 needs no clamp and is unaffected
-                // by which February it lands in, so accept.
-                //
-                // For a `--02-29` source, only leap years are real anchors,
-                // and the reachable target-year leapness is no longer
-                // "every pattern is reachable": the Gregorian calendar's
-                // leap rule has an EXACT period of 400 years —
-                // `leap(Y) == leap(Y + 400)` for every `Y`, because 400 is a
-                // multiple of 4, of 100, and of 400 simultaneously — so the
-                // decision reduces to a closed form instead of a handful of
-                // concrete probe years the way the day-shift arm's
-                // per-February decision does:
-                // - `carry_years` a multiple of 400: the target year sits at
-                //   the same point in the 400-year cycle as the (leap)
-                //   anchor, so it is leap for every anchor — accept, day 29.
-                // - `carry_years` not a multiple of 4: the anchor is a
-                //   multiple of 4 (it is leap), so the target year never is
-                //   — accept, day 28.
-                // - `carry_years` a multiple of 4 but not of 400: the target
-                //   year is a multiple of 4 for every anchor, so it is leap
-                //   unless it also lands on one of the three non-leap
-                //   century marks a 400-year window contains. The 97
-                //   reachable leap-anchor residues mod 400 (every multiple
-                //   of 4 except those three marks), shifted by a nonzero
-                //   offset that is itself not a multiple of 400, always
-                //   relocates at least one residue onto a mark while leaving
-                //   most of the others off it — both a leap and a non-leap
-                //   target year are reachable, so reject.
-                //
-                // The day-shift arm never needs any of this: a civil-day
-                // walk moves through real calendar days and never clamps,
-                // so its only year-dependence question is which February a
-                // walk crosses, not whether an intermediate day exists.
-                if target_month == 2 && d >= 29 {
-                    let source_is_feb29 = m == 2 && d == 29;
-                    if source_is_feb29 && carry_years % 400 == 0 {
-                        (
-                            None,
-                            Some(target_month),
-                            Some(days_in_month(LEAP_PROBE_YEAR, 2)),
-                        )
-                    } else if source_is_feb29 && carry_years % 4 != 0 {
-                        (
-                            None,
-                            Some(target_month),
-                            Some(days_in_month(NON_LEAP_PROBE_YEAR, 2)),
-                        )
-                    } else {
-                        return Err(XsdError::TypeMismatch {
-                            reason: "gMonthDay: the shifted (month, day) depends on which year it starts in",
-                        });
-                    }
-                } else {
-                    let clamped = d.min(days_in_month(NON_LEAP_PROBE_YEAR, target_month));
-                    (None, Some(target_month), Some(clamped))
-                }
+            MonthAction::GMonthDayComposite => {
+                // gMonthDay's months component is always intercepted at the
+                // top of this function (paired with
+                // `SecondAction::GMonthDayComposite`) and answered jointly
+                // with the days component via `gmonthday_shift`, never
+                // through this per-field dispatch — see that function's doc
+                // and the interception at the top of `drive_gregorian`. This
+                // arm exists only to keep the match total.
+                return Err(XsdError::TypeMismatch {
+                    reason: "gMonthDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+                });
             }
             MonthAction::Absent => {
                 return Err(XsdError::TypeMismatch {
@@ -2046,98 +2050,17 @@ fn drive_gregorian(
     }
     let whole_days = gregorian_whole_days(datatype, &dur.seconds)?;
     match second_action {
-        SecondAction::YearIndependentDays => {
-            // gMonthDay. A single non-leap probe cannot decide this (a
-            // 1461-day walk agrees between a leap and a non-leap probe by
-            // 4-year-cycle coincidence yet is genuinely century-dependent),
-            // so a shift of 365 days or more is refused outright rather than
-            // trusted to probe agreement.
-            if !(-364..=364).contains(&whole_days) {
-                return Err(XsdError::TypeMismatch {
-                    reason: "gMonthDay: a duration spanning 365 days or more cannot be shown year-independent by a bounded probe",
-                });
-            }
-            let m = month.unwrap_or(1);
-            let d = day.unwrap_or(1);
-            // Walking at most 364 civil days crosses at most one February —
-            // crossing two would need a walk of a full year or more, which
-            // the guard above already refuses — and that crossed February
-            // belongs either to the walk's start year or to a year
-            // immediately adjacent to it (start - 1 for a backward walk that
-            // reaches past January into the previous year, start + 1 for a
-            // forward walk that reaches past December into the next year).
-            // A shift is year-independent exactly when it computes the same
-            // result from *every* year in which the source (month, day) is a
-            // real anchor, so probing a set of valid anchor years and
-            // requiring unanimous agreement is both necessary (a genuinely
-            // year-independent shift agrees everywhere) and sufficient,
-            // provided the probe set realizes every leap/non-leap pattern
-            // the crossed February can actually show — anything left
-            // unprobed could hide a disagreement, but nothing further needs
-            // checking once every reachable pattern is unanimous.
-            //
-            // For every (month, day) except `--02-29`, the source date
-            // exists in every proleptic-Gregorian year: day <= 28 always
-            // exists, and a day of 29-31 in a month other than February
-            // exists regardless of leap status, since February is the only
-            // variable-length month. So any year is a valid anchor.
-            // Adjacent-year leapness has exactly three reachable patterns —
-            // (leap, non-leap), (non-leap, leap), (non-leap, non-leap);
-            // (leap, leap) is impossible in the Gregorian calendar, since two
-            // leap years are never consecutive. [`LEAP_PROBE_YEAR`] (2000,
-            // followed by non-leap 2001), [`THIRD_PROBE_YEAR`] (2003,
-            // followed by leap 2004), and [`NON_LEAP_PROBE_YEAR`] (2001,
-            // followed by non-leap 2002) realize all three. Their own
-            // leapness (leap, non-leap, non-leap) and previous-year leapness
-            // (1999 non-leap, 2000 leap, 2002 non-leap) additionally range
-            // over the same three patterns, so a February crossed backward
-            // into the start year itself, or into the year before it, is
-            // equally covered — unanimity across these three probes decides
-            // every crossing this walk can produce.
-            //
-            // `--02-29` only exists in leap years, so only a leap year is a
-            // valid anchor for it. This is why the day is no longer clamped
-            // to each probe year's own month length before walking (as this
-            // code used to do): clamping is not a shortcut, it silently
-            // substitutes a different question ("what does Mar 1 minus n
-            // days look like" instead of "what does Feb 29 plus n days look
-            // like"). Restricting to leap anchors also collapses the
-            // reachable pattern set: two Gregorian leap years are never
-            // consecutive, so *every* leap year's immediate neighbors are
-            // non-leap, and the only reachable (previous-year, next-year)
-            // pattern for a `--02-29` source is (non-leap, non-leap) — there
-            // is no second pattern to unify against. [`FEB29_ALT_PROBE_YEAR`]
-            // (2400, itself leap via the divisible-by-400 exception) is
-            // probed alongside [`LEAP_PROBE_YEAR`] purely as a check that the
-            // walk arithmetic agrees across a century-rule boundary.
-            let probe_years: &[i64] = if (m, d) == (2, 29) {
-                &[LEAP_PROBE_YEAR, FEB29_ALT_PROBE_YEAR]
-            } else {
-                &[LEAP_PROBE_YEAR, THIRD_PROBE_YEAR, NON_LEAP_PROBE_YEAR]
-            };
-            let probe = |probe_year: i64| -> Result<(u8, u8), XsdError> {
-                let base = days_from_civil(probe_year, m, d);
-                let shifted = base
-                    .checked_add(whole_days)
-                    .ok_or_else(|| arith_overflow(datatype, "gMonthDay arithmetic overflow"))?;
-                let (_, nm, nd) = civil_from_days(shifted);
-                Ok((nm, nd))
-            };
-            let mut agreed: Option<(u8, u8)> = None;
-            for &probe_year in probe_years {
-                let result = probe(probe_year)?;
-                match agreed {
-                    None => agreed = Some(result),
-                    Some(first) if first != result => {
-                        return Err(XsdError::TypeMismatch {
-                            reason: "gMonthDay: the shifted (month, day) depends on which year it starts in",
-                        });
-                    }
-                    Some(_) => {}
-                }
-            }
-            let (nm, nd) = agreed.expect("probe_years is never empty");
-            Ok((None, Some(nm), Some(nd)))
+        SecondAction::GMonthDayComposite => {
+            // gMonthDay's days component is always intercepted at the top of
+            // this function (paired with `MonthAction::GMonthDayComposite`)
+            // and answered jointly with the months component via
+            // `gmonthday_shift`, never through this per-field dispatch — see
+            // that function's doc and the interception at the top of
+            // `drive_gregorian`. This arm exists only to keep the match
+            // total.
+            Err(XsdError::TypeMismatch {
+                reason: "gMonthDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+            })
         }
         SecondAction::MonthIndependentDays => {
             // gDay: source and target day must both exist in every month —
@@ -3676,8 +3599,8 @@ mod tests {
         assert_eq!(
             actions(XsdDatatype::GMonthDay),
             (
-                MonthAction::ClampIfYearIndependent,
-                SecondAction::YearIndependentDays
+                MonthAction::GMonthDayComposite,
+                SecondAction::GMonthDayComposite
             )
         );
         assert_eq!(
@@ -3800,7 +3723,7 @@ mod tests {
     /// be rejected as `XsdError::TypeMismatch`.
     #[test]
     fn gregorian_duration_matrix() {
-        let rows: [(XsdDatatype, &str, &str, Option<&str>); 34] = [
+        let rows: [(XsdDatatype, &str, &str, Option<&str>); 37] = [
             // ── gYearMonth (Free, Absent): 4 rows — Free never rejects ────────
             (XsdDatatype::GYearMonth, "2012-10", "P1Y1M", Some("2013-11")), // RDF4J's own pinned case
             (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
@@ -3817,7 +3740,7 @@ mod tests {
             (XsdDatatype::GMonth, "--05", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GMonth, "--05", "PT1H", None),        // sub-day
             (XsdDatatype::GMonth, "--05", "PT0S", Some("--05")), // zero
-            // ── gMonthDay (ClampIfYearIndependent, YearIndependentDays): 15 rows ──
+            // ── gMonthDay (GMonthDayComposite, decided by gmonthday_shift): 18 rows ──
             (XsdDatatype::GMonthDay, "--01-15", "P1M", Some("--02-15")), // months-accepted
             (XsdDatatype::GMonthDay, "--01-31", "P1M", None), // Feb 31 exists in no year — the clamped result varies by target-year leapness
             (XsdDatatype::GMonthDay, "--03-31", "P1M", Some("--04-30")), // April's length never depends on the anchor year, even though April 31 exists in no year
@@ -3847,13 +3770,32 @@ mod tests {
             // Another year-crossing walk that lands inside a February whose
             // leapness varies by anchor year.
             (XsdDatatype::GMonthDay, "--09-01", "P181D", None),
-            // The longest walk this action still considers (364 days,
-            // one under the 365-day magnitude guard) starting from a date
-            // that crosses a year-dependent February.
+            // A year-dependent walk near a full year long. There is no
+            // magnitude guard anymore — `gmonthday_shift` anchors a full
+            // 400-year period regardless of |whole_days|, so this row is
+            // just another genuinely ambiguous walk, not a boundary probe.
             (XsdDatatype::GMonthDay, "--12-01", "P364D", None),
             // A genuine year-crossing walk that IS year-independent: January
             // 1 follows December 31 in every year, leap or not.
             (XsdDatatype::GMonthDay, "--12-31", "P1D", Some("--01-01")),
+            // The composite defect this fix closes: the OLD per-arm code
+            // decided the months half (`--01-31 + P1M`, itself refused —
+            // see the row above) before the day half ever ran, so it
+            // wrongly refused this whole composite even though the FINISHED
+            // answer is Mar 1 from every anchor (Feb 28+1d and Feb 29+1d
+            // both land on Mar 1).
+            (XsdDatatype::GMonthDay, "--01-31", "P1M1D", Some("--03-01")),
+            // `--02-29 ± P365D` is invariant: a leap year's immediate
+            // neighbors are never leap, so walking exactly 365 days from
+            // Feb 29 always lands on the following Feb 28 — genuinely
+            // year-independent even though the old ±364-day magnitude guard
+            // refused it outright purely for being 365 or more.
+            (XsdDatatype::GMonthDay, "--02-29", "P365D", Some("--02-28")),
+            // A composite that carries a whole year plus a day: shift the
+            // month/year first (Feb 29 -> Feb 28 next year, unaffected by
+            // leapness since every leap year's next year is non-leap), then
+            // the day (Feb 28 + 1d = Mar 1) — invariant from every anchor.
+            (XsdDatatype::GMonthDay, "--02-29", "P1Y1D", Some("--03-01")),
             // ── gDay (IdentityIfSafe, MonthIndependentDays): 6 rows ───────────
             (XsdDatatype::GDay, "---15", "P1M", Some("---15")), // months-accepted: day <= 28
             (XsdDatatype::GDay, "---31", "P1M", None),          // months-rejected: day >= 29
@@ -3862,7 +3804,7 @@ mod tests {
             (XsdDatatype::GDay, "---15", "PT1H", None),         // sub-day
             (XsdDatatype::GDay, "---15", "PT0S", Some("---15")), // zero
         ];
-        assert_eq!(rows.len(), 34);
+        assert_eq!(rows.len(), 37);
         for (datatype, g_lex, dur_lex, expected) in rows {
             let g = parse_gregorian(datatype, g_lex).unwrap();
             let dur = ymd(XsdDatatype::Duration, dur_lex);
@@ -3911,15 +3853,18 @@ mod tests {
         assert_eq!(result.canonical_lexical(), "--03-01");
     }
 
-    /// The ground-truth oracle for `SecondAction::YearIndependentDays`:
-    /// anchor a `(month, day)` source at every year in `ANCHOR_YEARS` where
-    /// that date is real, walk `whole_days` civil days from each anchor, and
-    /// collect the resulting `(month, day)` pairs. A shift is genuinely
-    /// year-independent iff every anchor lands on the same pair.
+    /// The ground-truth oracle for `gMonthDay`'s PURE day-shift case (a
+    /// composite through [`gmonthday_shift`] whose months component happens
+    /// to be zero): anchor a `(month, day)` source at every year in
+    /// `ANCHOR_YEARS` where that date is real, walk `whole_days` civil days
+    /// from each anchor, and collect the resulting `(month, day)` pairs. A
+    /// shift is genuinely year-independent iff every anchor lands on the
+    /// same pair.
     ///
-    /// For every `(month, day)` valid in some year and every magnitude
-    /// `SecondAction::YearIndependentDays` will ever consider
-    /// (`|whole_days| <= 364`, both signs), this test asserts BOTH
+    /// For every `(month, day)` valid in some year and every magnitude this
+    /// test sweeps (`|whole_days| <= 364`, both signs — well within
+    /// [`gmonthday_shift`]'s unbounded range, since the magnitude guard the
+    /// old per-arm rule needed no longer exists), this test asserts BOTH
     /// directions of agreement between the classifier and the oracle:
     ///
     /// - If the classifier **accepts**, the oracle set must be the singleton
@@ -3945,7 +3890,7 @@ mod tests {
         const ANCHOR_YEARS: std::ops::RangeInclusive<i64> = 1900..=2104;
 
         for month in 1u8..=12 {
-            let max_day = days_in_month(LEAP_PROBE_YEAR, month);
+            let max_day = days_in_month(A_LEAP_YEAR, month);
             for day in 1u8..=max_day {
                 // Every anchor year in range for which (month, day) is a real
                 // date, expressed as a civil day count — computed once per
@@ -4020,8 +3965,9 @@ mod tests {
         }
     }
 
-    /// The ground-truth oracle for `MonthAction::ClampIfYearIndependent`'s
-    /// gMonthDay months-shift: anchor a `(month, day)` source at every year in
+    /// The ground-truth oracle for `gMonthDay`'s PURE months-shift case (a
+    /// composite through [`gmonthday_shift`] whose days component happens to
+    /// be zero): anchor a `(month, day)` source at every year in
     /// `ANCHOR_YEARS` where that date is real, shift `months` (carrying years
     /// as needed), clamp the day down to the target month's actual length
     /// (XML Schema Appendix E), and collect the resulting `(month, day)`
@@ -4053,7 +3999,7 @@ mod tests {
         let sparse: Vec<i64> = vec![96, -96, 1200, -1200, 2400, -2400, 4800, -4800];
 
         for month in 1u8..=12 {
-            let max_day = days_in_month(LEAP_PROBE_YEAR, month);
+            let max_day = days_in_month(A_LEAP_YEAR, month);
             for day in 1u8..=max_day {
                 let anchors: Vec<i64> = ANCHOR_YEARS
                     .clone()
@@ -4119,6 +4065,152 @@ mod tests {
                         }
                         Err(other) => {
                             panic!("{g_lex} + P{months}M: unexpected error {other:?}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A THIRD, independent ground-truth oracle — this time for the
+    /// COMPOSITE case (`dur_months` and `whole_days` both nonzero) that
+    /// neither oracle test above ever exercises. This is the exact defect
+    /// this fix closes: the old per-arm code decided "is the months-only
+    /// shift year-independent?" before the days half ever ran, so a
+    /// composite whose intermediate (post-months) clamp is year-dependent
+    /// but whose FINISHED answer is invariant was wrongly refused —
+    /// `--01-31 + P1M1D` = `--03-01` from every anchor (Feb 28+1d and Feb
+    /// 29+1d both land on Mar 1), yet the months half alone (`--01-31 +
+    /// P1M`) is genuinely ambiguous and was refused outright.
+    ///
+    /// The oracle reimplements the anchored Appendix E walk straight-line —
+    /// its own year-month shift arithmetic, matching
+    /// `gmonthday_month_shift_agrees_with_the_anchored_oracle`'s oracle
+    /// above, never [`shift_year_month`] or [`gmonthday_shift`] themselves,
+    /// so a bug shared between a production helper and this test's oracle
+    /// cannot hide a disagreement. It still calls
+    /// [`days_in_month`]/[`days_from_civil`]/[`civil_from_days`] as
+    /// ground-truth calendar primitives, exactly as both oracle tests above
+    /// already do — those are tested independently elsewhere in this module
+    /// and are not part of the year-independence LOGIC under test here.
+    ///
+    /// Same soundness/completeness contract as the two oracles above: an
+    /// **accepted** shift's oracle set must be the singleton the classifier
+    /// returned, and a **rejected** shift's oracle set must contain at least
+    /// two distinct pairs.
+    ///
+    /// Grid, chosen to keep this test in the low single-digit seconds
+    /// (`gmonthday_shift` walks up to 400 anchors per call, and this test's
+    /// own oracle does too, so the combination count below times ~800
+    /// anchor-steps is the real cost — a sparser grid is not less CORRECT,
+    /// since `gmonthday_shift` has no bounded probe set for a sparse grid to
+    /// accidentally miss, only less exhaustive):
+    /// - every `(month, day)` valid in some year — 366 pairs, the same full
+    ///   sweep both oracle tests above already do;
+    /// - `months` densely over `-5..=5` plus four sparse deep carries
+    ///   (`±100` months ≈ 8 years, and `±4800` months = exactly one full
+    ///   400-year Gregorian period, where a Feb-29 carry becomes
+    ///   unambiguous again);
+    /// - `whole_days` densely over `-10..=10` plus the eight magnitudes the
+    ///   deleted `±364`-day guard used to treat specially (`±364`, `±365`,
+    ///   `±366`, `±730`).
+    ///
+    /// (The two oracle tests above sweep their single nonzero component far
+    /// more densely — up to `±364` whole days, or `-48..=48` months — because
+    /// each is a single loop; this test's grid is a full cross product of
+    /// `(month, day) × months × whole_days`, so its density is deliberately
+    /// narrower per dimension to land in the same total budget.)
+    ///
+    /// Mixed-sign `(months, whole_days)` pairs are skipped: `Duration::new`
+    /// refuses a mixed-sign general duration outright (XSD 1.1 Part 2
+    /// §3.3.6), so there is no value to construct or test for those
+    /// combinations — they lie outside the value space, not outside this
+    /// oracle's coverage.
+    #[test]
+    fn gmonthday_composite_shift_agrees_with_the_anchored_oracle() {
+        let months_grid: Vec<i64> = (-5i64..=5).chain([100, -100, 4800, -4800]).collect();
+        let days_grid: Vec<i64> = (-10i64..=10)
+            .chain([364, -364, 365, -365, 366, -366, 730, -730])
+            .collect();
+
+        for month in 1u8..=12 {
+            let max_day = days_in_month(A_LEAP_YEAR, month);
+            for day in 1u8..=max_day {
+                let g_lex = format!("--{month:02}-{day:02}");
+                let g = parse_gregorian(XsdDatatype::GMonthDay, &g_lex).unwrap();
+
+                for &months in &months_grid {
+                    for &whole_days in &days_grid {
+                        if months == 0 && whole_days == 0 {
+                            continue; // identity — no arm exercised at all
+                        }
+                        let m_sign = months.signum();
+                        let d_sign = whole_days.signum();
+                        if m_sign != 0 && d_sign != 0 && m_sign != d_sign {
+                            continue; // mixed-sign: not a constructible Duration
+                        }
+
+                        // Independent oracle: anchor at every year in one
+                        // full 400-year Gregorian period where (month, day)
+                        // is real, shift `months` (straight-line year-month
+                        // arithmetic, not `shift_year_month`), clamp against
+                        // the target year's real month length, walk
+                        // `whole_days` civil days, and collect the results.
+                        let mut oracle_first: Option<(u8, u8)> = None;
+                        let mut oracle_ambiguous = false;
+                        for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+                            if day > days_in_month(anchor_year, month) {
+                                continue; // not a real anchor for this source
+                            }
+                            let total = i64::from(month) - 1 + months;
+                            let target_year = anchor_year + total.div_euclid(12);
+                            let target_month = (total.rem_euclid(12) + 1) as u8;
+                            let clamped_day = day.min(days_in_month(target_year, target_month));
+                            let base = days_from_civil(target_year, target_month, clamped_day);
+                            let shifted = base + whole_days;
+                            let (_, nm, nd) = civil_from_days(shifted);
+                            match oracle_first {
+                                None => oracle_first = Some((nm, nd)),
+                                Some(first) if first != (nm, nd) => {
+                                    oracle_ambiguous = true;
+                                    break;
+                                }
+                                Some(_) => {}
+                            }
+                        }
+
+                        let dur = Duration::new(
+                            months,
+                            Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                            XsdDatatype::Duration,
+                        )
+                        .unwrap();
+
+                        match add_duration_to_gregorian(&g, &dur) {
+                            Ok(result) => {
+                                assert!(
+                                    !oracle_ambiguous,
+                                    "{g_lex} + P{months}M{whole_days}D: classifier accepted but the oracle disagrees across anchors"
+                                );
+                                let (em, ed) =
+                                    oracle_first.expect("at least one anchor is always real");
+                                assert_eq!(
+                                    result.canonical_lexical(),
+                                    format!("--{em:02}-{ed:02}"),
+                                    "{g_lex} + P{months}M{whole_days}D"
+                                );
+                            }
+                            Err(XsdError::TypeMismatch { .. }) => {
+                                assert!(
+                                    oracle_ambiguous,
+                                    "{g_lex} + P{months}M{whole_days}D: classifier rejected but every anchor agrees on {oracle_first:?}"
+                                );
+                            }
+                            Err(other) => {
+                                panic!(
+                                    "{g_lex} + P{months}M{whole_days}D: unexpected error {other:?}"
+                                )
+                            }
                         }
                     }
                 }

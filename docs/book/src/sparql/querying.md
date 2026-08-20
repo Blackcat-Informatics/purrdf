@@ -189,12 +189,25 @@ Gregorian `±` duration can ask for a field the operand's type does not carry �
 adding a duration with a months component to an `xsd:gDay` needs a month to
 apply it to, and `xsd:gDay` has none. `xsd:gMonthDay` clamps a day that does
 not exist in the shifted month down to that month's actual length, the same
-rule `date`/`dateTime` already follow (XML Schema Appendix E) — but every
-month other than February has the same length in every year, so that clamp
-is safe there regardless of which year the value is read against. Only when
-the shift lands on February, and the day being clamped is the 29th or later,
-does the answer turn on a year `xsd:gMonthDay` does not carry: February's
-length is the one month length that depends on it.
+rule `date`/`dateTime` already follow (XML Schema Appendix E) — but
+`xsd:gMonthDay` carries no year for that clamp to run against, so `purrdf`
+decides whether one would need to be fabricated by anchoring the *complete*
+months-then-days computation at every year in one full 400-year Gregorian
+period (the calendar's leap rule is exactly periodic at that length, so one
+period is every anchor that could ever matter) and checking whether every
+anchor agrees on the answer. `purrdf` answers exactly when they do, and
+returns a typed error exactly when they don't. The computation is judged as
+a whole, not component by component: a duration's months half can land on an
+intermediate day whose clamp is itself year-dependent even though the
+*finished* answer, after the days half also runs, is not — `"--01-31"^^xsd:gMonthDay
++ "P1M1D"^^xsd:duration` is `"--03-01"` from every anchor (the day after
+either Feb 28 or Feb 29 is always Mar 1), even though `"--01-31"^^xsd:gMonthDay
++ "P1M"^^xsd:yearMonthDuration` alone is genuinely ambiguous. The one
+recurring example of a refused class is February: every other month has the
+same length in every year, so a shift landing there is always safe, while a
+shift landing on February with the day being clamped the 29th or later is
+the case whose answer can turn on a year `xsd:gMonthDay` does not carry —
+that is an example of the refused class, not the rule itself.
 RDF4J answers these by fabricating the missing field (year 0, January, or day
 1) through its underlying JAXP calendar and returning a value built on that
 fabrication — for example `"---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration`
