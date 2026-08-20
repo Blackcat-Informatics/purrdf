@@ -177,8 +177,10 @@ surfaces; each is called out below with what a consumer must do.
 - **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
   timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
   arithmetic with month-end clamping, instant subtraction, and duration add/subtract/
-  multiply/divide computed in exact `Decimal`. No behavior change to parsing, canonical forms,
-  or the existing partial order.
+  multiply/divide computed in exact `Decimal`. The existing partial order is unchanged; parsing
+  and one canonical form are, per the `xsd` Bug Fixes entries above — subtype pattern facets are
+  now enforced at parse time, and a zero-valued `yearMonthDuration` now canonicalizes to `"P0M"`
+  instead of `"PT0S"`.
 - **sparql:** Add the `ADJUST` builtin over `dateTime`, `date`, and `time` (SEP-0002's
   two-argument signature over the new F&O adjust-to-timezone family): shifts a timezoned value,
   annotates an untimezoned one, and treats the empty simple literal as timezone removal.
