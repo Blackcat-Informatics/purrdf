@@ -1686,10 +1686,25 @@ enum MonthAction {
     /// The months component must lie in the subgroup `12ℤ` (a whole number of
     /// years) — `xsd:gYear` has no month field to receive a fractional-year shift.
     Divisible12,
-    /// The months component is accepted unchanged only when doing so cannot alter
-    /// the value's denotation — `xsd:gDay`, whose day exists in every month only
-    /// for `day <= 28`; larger days depend on a month this sort does not carry.
-    IdentityIfSafe,
+    /// `gDay`'s months component. Like [`MonthAction::GMonthDayComposite`], never
+    /// evaluated on its own: `gDay` always pairs it with
+    /// [`SecondAction::GDayComposite`] (see [`actions`]), and [`drive_gregorian`]
+    /// intercepts that pair before the ordinary months-then-seconds dispatch below
+    /// and hands both components to [`gday_shift`] together, one field narrower
+    /// than [`gmonthday_shift`] (`gDay` has no month field of its own to fix an
+    /// anchor's month at, so [`gday_shift`] anchors over every `(year, month)`
+    /// PAIR in one 400-year period instead of `gmonthday_shift`'s year-only
+    /// anchor set — see that function's doc). A composite `PnMmD` duration's
+    /// month-independence is one question about the FINISHED day, not two
+    /// separate per-component questions — deciding the months half alone by a
+    /// `day <= 28` sufficient condition (this variant's previous behavior, before
+    /// this composite conversion) is the exact defect [`gday_shift`] replaces: it
+    /// refused every determinate day-29/30/31 case (`---31 + P1D`, `---29 - P1D`,
+    /// `---31 + P1M1D`, the entire `±146,097·k`-day class) even though the
+    /// FINISHED answer is invariant from every real `(year, month)` anchor. This
+    /// variant exists only so [`actions`]'s classification match stays total and
+    /// honest about which sort receives this behavior.
+    GDayComposite,
     /// The sort has no months field at all — a nonzero months component is a type
     /// error (`xsd:time`).
     Absent,
@@ -1716,9 +1731,11 @@ enum SecondAction {
     /// [`gmonthday_shift`], rather than through this action's ordinary
     /// dispatch point below.
     GMonthDayComposite,
-    /// The seconds component shifts a day count that is accepted only when the
-    /// shift's outcome does not depend on which month it starts in — `xsd:gDay`.
-    MonthIndependentDays,
+    /// `gDay`'s seconds (day-count) component. Always paired with
+    /// [`MonthAction::GDayComposite`] — see that variant's doc for why gDay's
+    /// months and days components are decided together, by [`gday_shift`],
+    /// rather than through this action's ordinary dispatch point below.
+    GDayComposite,
     /// The sort has no seconds field at all — a nonzero seconds component is a
     /// type error (`xsd:gYearMonth`, `xsd:gYear`, `xsd:gMonth`).
     Absent,
@@ -1748,10 +1765,7 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
             MonthAction::GMonthDayComposite,
             SecondAction::GMonthDayComposite,
         ),
-        XsdDatatype::GDay => (
-            MonthAction::IdentityIfSafe,
-            SecondAction::MonthIndependentDays,
-        ),
+        XsdDatatype::GDay => (MonthAction::GDayComposite, SecondAction::GDayComposite),
         XsdDatatype::Integer
         | XsdDatatype::Long
         | XsdDatatype::Int
@@ -1826,7 +1840,7 @@ fn drive(
             MonthAction::Free
             | MonthAction::Cyclic12
             | MonthAction::Divisible12
-            | MonthAction::IdentityIfSafe
+            | MonthAction::GDayComposite
             | MonthAction::GMonthDayComposite => {
                 return Err(XsdError::TypeMismatch {
                     reason: "this calendar action applies only to the Gregorian family, which this driver does not carry a CalendarPoint for",
@@ -1849,11 +1863,11 @@ fn drive(
                 second: s,
             })
         }
-        SecondAction::Absent
-        | SecondAction::GMonthDayComposite
-        | SecondAction::MonthIndependentDays => Err(XsdError::TypeMismatch {
-            reason: "this temporal sort has no free-form seconds field for a duration's seconds component",
-        }),
+        SecondAction::Absent | SecondAction::GMonthDayComposite | SecondAction::GDayComposite => {
+            Err(XsdError::TypeMismatch {
+                reason: "this temporal sort has no free-form seconds field for a duration's seconds component",
+            })
+        }
     }
 }
 
@@ -2044,6 +2058,93 @@ fn gmonthday_shift(
     ))
 }
 
+/// The gDay month-independence oracle and answer, computed together — one
+/// field narrower than [`gmonthday_shift`], on the identical construction.
+///
+/// `gMonthDay` carries `month` as part of its own value, so
+/// [`gmonthday_shift`] anchors that FIXED month at every YEAR in one 400-year
+/// period. `gDay` carries no month at all, so there is no fixed month to
+/// anchor: the anchor set here is every `(year, month)` PAIR in one full
+/// 400-year period ([`GMONTHDAY_ANCHOR_YEARS`] × all twelve months) for which
+/// the source `day` is real. Each anchor is walked through the exact same
+/// Appendix E computation `gmonthday_shift` uses — `dur_months` first,
+/// landing the anchor on some target `(year, month)` with the day clamped
+/// against that target month's real length, then `whole_days` as a plain
+/// civil-day walk — and the shift is accepted iff every anchor's walk lands
+/// on the SAME DAY. Only the day is compared: the landed month is not part of
+/// a `gDay` value (unlike `gmonthday_shift`, which compares the landed
+/// `(month, day)` pair, because gMonthDay's month is a real output field).
+///
+/// This is the composite construction [`MonthAction::GDayComposite`]'s doc
+/// promises: because months-then-days is decided as one walk per anchor,
+/// month-independence of a composite `PnMmD` duration is one question about
+/// the FINISHED day, not two separate per-component questions — the same
+/// defect [`gmonthday_shift`] closed for `gMonthDay`, closed here for `gDay`.
+/// The two old per-arm rules this replaces (`MonthAction::IdentityIfSafe`'s
+/// `day <= 28` sufficient condition and `SecondAction::MonthIndependentDays`'
+/// `1..=28` target-range check) each asked a SUFFICIENT question — "is this
+/// day small enough that no month could possibly matter?" — rather than the
+/// actual necessary-and-sufficient one this function answers by construction,
+/// so they refused every determinate case a day-29/30/31 source or a
+/// crossing-into-29/30/31 target ever produced (`---31 + P1D`, `---29 - P1D`,
+/// `---31 + P1M1D`, and the entire `±146,097·k`-day class, among others).
+///
+/// Reduce-first (months carry reduced mod 4800 = 400 years' worth, whole-day
+/// carry reduced mod 146,097) is the identical periodicity argument
+/// [`gmonthday_shift`]'s doc proves in full — the calendar's leap pattern and
+/// day-count period are both properties of the shared 400-year Gregorian
+/// cycle, not of `gMonthDay`'s value shape, so the same proof carries over
+/// unchanged; it is not repeated here.
+///
+/// Cost: ~400 years × 12 months = 4800 anchors, each `O(1)` checked
+/// arithmetic — twelve times [`gmonthday_shift`]'s own per-call cost, still a
+/// cold-path, low single-digit-microsecond-to-millisecond cost (Gregorian
+/// duration arithmetic is never a hot loop), negligible next to the
+/// correctness it buys, and independent of `dur_months`/`whole_days`'s
+/// magnitude for the same reduce-first reason.
+fn gday_shift(
+    datatype: XsdDatatype,
+    day: u8,
+    dur_months: i64,
+    whole_days: i64,
+) -> Result<u8, XsdError> {
+    let carry_years = dur_months.div_euclid(12);
+    let month_offset = dur_months.rem_euclid(12); // 0..=11
+    let carry_years_mod400 = carry_years.rem_euclid(400); // 0..=399
+    let bounded_months_delta = carry_years_mod400 * 12 + month_offset; // 0..=4799
+
+    let bounded_whole_days = whole_days.rem_euclid(146_097); // 0..=146_096
+
+    let mut agreed: Option<u8> = None;
+    for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+        for anchor_month in 1u8..=12 {
+            if day > days_in_month(anchor_year, anchor_month) {
+                continue; // not a real anchor for this source day
+            }
+            let (y1, m1) =
+                shift_year_month(datatype, anchor_year, anchor_month, bounded_months_delta)?;
+            let d1 = day.min(days_in_month(y1, m1));
+            let base = days_from_civil(y1, m1, d1);
+            let shifted = base
+                .checked_add(i128::from(bounded_whole_days))
+                .ok_or_else(|| arith_overflow(datatype, "gDay arithmetic overflow"))?;
+            let (_, _m2, d2) = civil_from_days(shifted);
+            match agreed {
+                None => agreed = Some(d2),
+                Some(first) if first != d2 => {
+                    return Err(XsdError::TypeMismatch {
+                        reason: "gDay: the shifted day depends on which month it starts in",
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    Ok(agreed.expect(
+        "every valid gDay day has at least one (year, month) anchor in a full 400-year Gregorian period",
+    ))
+}
+
 /// Apply `dur` to a Gregorian value's `(year, month, day)` fields through the
 /// calendar-action classifier ([`actions`]). Companion to [`drive`], which
 /// serves `dateTime`/`date`/`time`: Gregorian values carry optional fields and
@@ -2056,8 +2157,9 @@ fn gmonthday_shift(
 /// [`SecondAction::MidnightTruncating`], [`SecondAction::CyclicDay`]) and the
 /// two [`MonthAction`] variants ([`MonthAction::Absent`], and
 /// [`MonthAction::Clamped`] — `dateTime`/`date`'s own instant-only clamp,
-/// distinct from `gMonthDay`'s [`MonthAction::GMonthDayComposite`], which
-/// this function intercepts and answers through [`gmonthday_shift`] before
+/// distinct from `gMonthDay`'s [`MonthAction::GMonthDayComposite`] and
+/// `gDay`'s [`MonthAction::GDayComposite`], which this function intercepts
+/// and answers through [`gmonthday_shift`]/[`gday_shift`] respectively before
 /// the per-field dispatch below ever runs) that no Gregorian sort's
 /// classification ever selects.
 ///
@@ -2096,6 +2198,27 @@ fn drive_gregorian(
         let d = day.unwrap_or(1);
         let (nm, nd) = gmonthday_shift(datatype, m, d, dur.months, whole_days)?;
         return Ok((None, Some(nm), Some(nd)));
+    }
+
+    if (month_action, second_action) == (MonthAction::GDayComposite, SecondAction::GDayComposite) {
+        // gDay: intercepted here for the same reason gMonthDay is above — a
+        // gDay has no month field, so a composite `PnMmD` duration's
+        // month-independence is one question about the FINISHED day, decided
+        // by walking every `(year, month)` anchor through the complete
+        // Appendix E computation, never by deciding the months half and days
+        // half separately (the exact defect this replaces — see
+        // `gday_shift`'s doc).
+        let whole_days = if dur.seconds.is_zero() {
+            0
+        } else {
+            gregorian_whole_days(datatype, &dur.seconds)?
+        };
+        if dur.months == 0 && whole_days == 0 {
+            return Ok((year, month, day)); // zero duration → identity
+        }
+        let d = day.unwrap_or(1);
+        let nd = gday_shift(datatype, d, dur.months, whole_days)?;
+        return Ok((None, None, Some(nd)));
     }
 
     let (year, month, day) = if dur.months == 0 {
@@ -2147,18 +2270,17 @@ fn drive_gregorian(
                 let m0 = i64::from(m) - 1 + dur.months.rem_euclid(12);
                 (None, Some((m0 % 12 + 1) as u8), day)
             }
-            MonthAction::IdentityIfSafe => {
-                // gDay: day <= 28 exists in every month, so a months shift
-                // cannot change what the value denotes; day >= 29 depends on
-                // a month gDay does not carry.
-                let d = day.unwrap_or(1);
-                if d <= 28 {
-                    (year, month, day)
-                } else {
-                    return Err(XsdError::TypeMismatch {
-                        reason: "gDay day >= 29 cannot safely receive a duration's months component: the clamp would depend on the unknown month",
-                    });
-                }
+            MonthAction::GDayComposite => {
+                // gDay's months component is always intercepted at the top of
+                // this function (paired with `SecondAction::GDayComposite`)
+                // and answered jointly with the days component via
+                // `gday_shift`, never through this per-field dispatch — see
+                // that function's doc and the interception at the top of
+                // `drive_gregorian`. This arm exists only to keep the match
+                // total.
+                return Err(XsdError::TypeMismatch {
+                    reason: "gDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+                });
             }
             MonthAction::GMonthDayComposite => {
                 // gMonthDay's months component is always intercepted at the
@@ -2187,7 +2309,15 @@ fn drive_gregorian(
     if dur.seconds.is_zero() {
         return Ok((year, month, day));
     }
-    let whole_days = gregorian_whole_days(datatype, &dur.seconds)?;
+    // Validate the whole-day precondition even though every remaining arm
+    // below rejects outright: both gMonthDay and gDay are always intercepted
+    // above before this line runs (a sub-day remainder in their composite
+    // seconds component is validated there, via `gregorian_whole_days`
+    // called from the interception itself), so every sort that reaches this
+    // match has no day field at all — but a caller passing e.g. `PT1H` to
+    // `gYearMonth` must still see "not a whole day" rejected before "no day
+    // field", matching the diagnostic this function has always given.
+    let _whole_days = gregorian_whole_days(datatype, &dur.seconds)?;
     match second_action {
         SecondAction::GMonthDayComposite => {
             // gMonthDay's days component is always intercepted at the top of
@@ -2201,22 +2331,16 @@ fn drive_gregorian(
                 reason: "gMonthDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
             })
         }
-        SecondAction::MonthIndependentDays => {
-            // gDay: source and target day must both exist in every month —
-            // the only sort whose modulus (28-31) is non-constant, so its
-            // guard is month-independence rather than year-independence.
-            let d = day.unwrap_or(1);
-            if d > 28 {
-                return Err(XsdError::TypeMismatch {
-                    reason: "gDay: source day >= 29 does not exist in every month, so a days shift cannot be shown month-independent",
-                });
-            }
-            match i64::from(d).checked_add(whole_days) {
-                Some(t) if (1..=28).contains(&t) => Ok((None, None, Some(t as u8))),
-                _ => Err(XsdError::TypeMismatch {
-                    reason: "gDay: shifted day does not exist in every month",
-                }),
-            }
+        SecondAction::GDayComposite => {
+            // gDay's days component is always intercepted at the top of this
+            // function (paired with `MonthAction::GDayComposite`) and
+            // answered jointly with the months component via `gday_shift`,
+            // never through this per-field dispatch — see that function's
+            // doc and the interception at the top of `drive_gregorian`. This
+            // arm exists only to keep the match total.
+            Err(XsdError::TypeMismatch {
+                reason: "gDay is intercepted before this per-field dispatch — see drive_gregorian's composite branch",
+            })
         }
         SecondAction::Absent => Err(XsdError::TypeMismatch {
             reason: "this Gregorian sort has no day field to receive a duration's seconds component",
@@ -3849,10 +3973,7 @@ mod tests {
         );
         assert_eq!(
             actions(XsdDatatype::GDay),
-            (
-                MonthAction::IdentityIfSafe,
-                SecondAction::MonthIndependentDays
-            )
+            (MonthAction::GDayComposite, SecondAction::GDayComposite)
         );
         // Every non-temporal datatype genuinely has no months field and no
         // seconds field, so it classifies the same way `time` does for months:
@@ -3967,7 +4088,7 @@ mod tests {
     /// be rejected as `XsdError::TypeMismatch`.
     #[test]
     fn gregorian_duration_matrix() {
-        let rows: [(XsdDatatype, &str, &str, Option<&str>); 40] = [
+        let rows: [(XsdDatatype, &str, &str, Option<&str>); 43] = [
             // ── gYearMonth (Free, Absent): 4 rows — Free never rejects ────────
             (XsdDatatype::GYearMonth, "2012-10", "P1Y1M", Some("2013-11")), // RDF4J's own pinned case
             (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
@@ -4083,15 +4204,22 @@ mod tests {
                 "P876582000000D",
                 Some("--01-15"),
             ),
-            // ── gDay (IdentityIfSafe, MonthIndependentDays): 6 rows ───────────
-            (XsdDatatype::GDay, "---15", "P1M", Some("---15")), // months-accepted: day <= 28
-            (XsdDatatype::GDay, "---31", "P1M", None),          // months-rejected: day >= 29
+            // ── gDay (GDayComposite, decided by gday_shift): 9 rows ───────────
+            (XsdDatatype::GDay, "---15", "P1M", Some("---15")), // months-accepted: every month has a 15th
+            (XsdDatatype::GDay, "---31", "P1M", None), // months-rejected: Jan 31 + 1M lands on Feb 28/29, anchor-dependent
             (XsdDatatype::GDay, "---15", "P1D", Some("---16")), // days-accepted
-            (XsdDatatype::GDay, "---28", "P1D", None),          // days-rejected: 29 not in 1..=28
-            (XsdDatatype::GDay, "---15", "PT1H", None),         // sub-day
+            (XsdDatatype::GDay, "---28", "P1D", None), // days-rejected: Feb 28 + 1d is Feb 29 or Mar 1, anchor-dependent
+            (XsdDatatype::GDay, "---15", "PT1H", None), // sub-day
             (XsdDatatype::GDay, "---15", "PT0S", Some("---15")), // zero
+            // F1 rows: cases the old `day <= 28`/`1..=28` sufficient
+            // conditions wrongly refused despite a genuinely
+            // month-independent answer from every anchor — see
+            // `gday_shift`'s doc.
+            (XsdDatatype::GDay, "---31", "P1D", Some("---01")), // day 31 exists only in 31-day months, every one followed by a 1st
+            (XsdDatatype::GDay, "---29", "-P1D", Some("---28")), // every month with a 29th has a 28th before it
+            (XsdDatatype::GDay, "---15", "P146097D", Some("---15")), // exactly one Gregorian period: identity from every anchor
         ];
-        assert_eq!(rows.len(), 40);
+        assert_eq!(rows.len(), 43);
         for (datatype, g_lex, dur_lex, expected) in rows {
             let g = parse_gregorian(datatype, g_lex).unwrap();
             let dur = ymd(XsdDatatype::Duration, dur_lex);
@@ -4538,6 +4666,163 @@ mod tests {
                                     "{g_lex} + P{months}M{whole_days}D: unexpected error {other:?}"
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A FOURTH, independent ground-truth oracle — this time for `gDay`
+    /// ([`MonthAction::GDayComposite`]/[`SecondAction::GDayComposite`],
+    /// decided by [`gday_shift`]), one field narrower than the three
+    /// `gMonthDay` oracles above: `gDay` has no month field of its own, so
+    /// its anchor set is every `(year, month)` PAIR in one full 400-year
+    /// Gregorian period ([`GMONTHDAY_ANCHOR_YEARS`] × all twelve months) for
+    /// which the source day is real — see [`gday_shift`]'s doc for why that
+    /// is the correct construction, not `gmonthday_shift`'s own fixed-month,
+    /// year-only anchor set.
+    ///
+    /// The oracle reimplements the anchored Appendix E walk straight-line —
+    /// its own year-month shift and day-count arithmetic, never
+    /// [`shift_year_month`] or [`gday_shift`] themselves, so a bug shared
+    /// between a production helper and this test's oracle cannot hide a
+    /// disagreement — the same independence
+    /// [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]'s oracle
+    /// keeps. It still calls
+    /// [`days_in_month`]/[`days_from_civil`]/[`civil_from_days`] as
+    /// ground-truth calendar primitives, exactly as every oracle test in this
+    /// module already does.
+    ///
+    /// Same soundness/completeness contract as the three `gMonthDay` oracles:
+    /// an **accepted** shift's oracle set must be the singleton day the
+    /// classifier returned, and a **rejected** shift's oracle set must
+    /// contain at least two distinct days.
+    ///
+    /// Grid, measured (not merely estimated) to land in a low-single-digit-
+    /// seconds budget: this test's 4800-anchor set is twelve times
+    /// [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]'s
+    /// 400-anchor `gMonthDay` set — one `(year, month)` pair per anchor
+    /// instead of one year — and early-exit on the first disagreement means
+    /// an ACCEPTED combination (the common case for most of this sweep) pays
+    /// for a full 4800-anchor scan on both the classifier side and this
+    /// oracle's own side, twice over. A grid as dense per-dimension as that
+    /// test's own (`-13..=13` months, `-60..=60` whole_days) measured at
+    /// roughly 17s here — sound, but well past this test's own budget — so
+    /// the dense ranges below are narrower (`-3..=3` months, `-4..=4`
+    /// whole_days, ~2.9s measured), while every source day `1..=31` and every
+    /// sparse magnitude stay in unchanged: `months`' sparse set is the same
+    /// deep-carry set
+    /// [`gmonthday_month_shift_agrees_with_the_anchored_oracle`] uses (an
+    /// ordinary multi-decade carry, a century-alignment carry, and a carry
+    /// landing exactly on one full 400-year period), and `whole_days`' sparse
+    /// set keeps the eight magnitudes the deleted `±364`-day-class guard used
+    /// to treat specially, plus two exact multiples of the 146,097-day period
+    /// (one and three full periods) that cross-check [`gday_shift`]'s own
+    /// reduce-first periodicity argument — the boundary-and-magnitude
+    /// coverage a property test exists to buy, which a narrower *dense*
+    /// sweep does not give up.
+    ///
+    /// Mixed-sign `(months, whole_days)` pairs are skipped for the same
+    /// reason [`gmonthday_composite_shift_agrees_with_the_anchored_oracle`]
+    /// skips them: `Duration::new` refuses a mixed-sign general duration
+    /// outright (XSD 1.1 Part 2 §3.3.6), so there is no value to construct.
+    #[test]
+    fn gday_shift_agrees_with_the_anchored_oracle() {
+        let months_grid: Vec<i64> = (-3i64..=3)
+            .chain([96, -96, 1200, -1200, 2400, -2400, 4800, -4800])
+            .collect();
+        let days_grid: Vec<i64> = (-4i64..=4)
+            .chain([
+                364,
+                -364,
+                365,
+                -365,
+                366,
+                -366,
+                730,
+                -730,
+                146_097,
+                -146_097,
+                146_097 * 3,
+                -(146_097 * 3),
+            ])
+            .collect();
+
+        for day in 1u8..=31 {
+            let g_lex = format!("---{day:02}");
+            let g = parse_gregorian(XsdDatatype::GDay, &g_lex).unwrap();
+
+            for &months in &months_grid {
+                for &whole_days in &days_grid {
+                    if months == 0 && whole_days == 0 {
+                        continue; // identity — no arm exercised at all
+                    }
+                    let m_sign = months.signum();
+                    let d_sign = whole_days.signum();
+                    if m_sign != 0 && d_sign != 0 && m_sign != d_sign {
+                        continue; // mixed-sign: not a constructible Duration
+                    }
+
+                    // Independent oracle: anchor at every (year, month) pair
+                    // in one full 400-year Gregorian period where `day` is
+                    // real, shift `months` (straight-line year-month
+                    // arithmetic, not `shift_year_month`), clamp against the
+                    // target month's real length, walk `whole_days` civil
+                    // days, and collect the resulting days.
+                    let mut oracle_first: Option<u8> = None;
+                    let mut oracle_ambiguous = false;
+                    'anchors: for anchor_year in GMONTHDAY_ANCHOR_YEARS {
+                        for anchor_month in 1u8..=12 {
+                            if day > days_in_month(anchor_year, anchor_month) {
+                                continue; // not a real anchor for this source
+                            }
+                            let total = i64::from(anchor_month) - 1 + months;
+                            let target_year = anchor_year + total.div_euclid(12);
+                            let target_month = (total.rem_euclid(12) + 1) as u8;
+                            let clamped_day = day.min(days_in_month(target_year, target_month));
+                            let base = days_from_civil(target_year, target_month, clamped_day);
+                            let shifted = base + i128::from(whole_days);
+                            let (_, _nm, nd) = civil_from_days(shifted);
+                            match oracle_first {
+                                None => oracle_first = Some(nd),
+                                Some(first) if first != nd => {
+                                    oracle_ambiguous = true;
+                                    break 'anchors;
+                                }
+                                Some(_) => {}
+                            }
+                        }
+                    }
+
+                    let dur = Duration::new(
+                        months,
+                        Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                        XsdDatatype::Duration,
+                    )
+                    .unwrap();
+
+                    match add_duration_to_gregorian(&g, &dur) {
+                        Ok(result) => {
+                            assert!(
+                                !oracle_ambiguous,
+                                "{g_lex} + P{months}M{whole_days}D: classifier accepted but the oracle disagrees across anchors"
+                            );
+                            let ed = oracle_first.expect("at least one anchor is always real");
+                            assert_eq!(
+                                result.canonical_lexical(),
+                                format!("---{ed:02}"),
+                                "{g_lex} + P{months}M{whole_days}D"
+                            );
+                        }
+                        Err(XsdError::TypeMismatch { .. }) => {
+                            assert!(
+                                oracle_ambiguous,
+                                "{g_lex} + P{months}M{whole_days}D: classifier rejected but every anchor agrees on {oracle_first:?}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!("{g_lex} + P{months}M{whole_days}D: unexpected error {other:?}")
                         }
                     }
                 }
