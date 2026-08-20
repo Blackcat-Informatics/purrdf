@@ -238,6 +238,8 @@ impl SparqlParser {
             anon_counter: 0,
             group_counter: 0,
             group_pattern_depth: 0,
+            #[cfg(debug_assertions)]
+            scope_consultations: 0,
             options,
         })
     }
@@ -256,6 +258,19 @@ struct Parser<'a, 'o> {
     anon_counter: usize,
     group_counter: usize,
     group_pattern_depth: usize,
+    /// Debug-only regression counter for the group-loop scope-set quadratic:
+    /// incremented ONLY at the handful of PRODUCTION sites that consult a
+    /// freshly-computed (`visible_variables`-derived) whole-pattern scope
+    /// snapshot ([`Parser::note_scope_consultation`]) — never at a per-element
+    /// site inside the group loop (`BIND`'s own membership test consults the
+    /// incremental [`VarScope`] directly, in O(log n), and is not a
+    /// "consultation" in this sense). A query's snapshot-consultation count is
+    /// therefore fixed by its STRUCTURE (one per `SELECT`, one per `LATERAL`
+    /// keyword) and invariant under how many elements a group between them
+    /// holds — see `scope_set_stays_linear_over_two_thousand_binds`, which
+    /// reads this field through [`Self::debug_scope_consultations`].
+    #[cfg(debug_assertions)]
+    scope_consultations: u64,
     options: &'o ParserOptions,
 }
 
@@ -332,12 +347,40 @@ impl<'a> Parser<'a, '_> {
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
             group_pattern_depth: self.group_pattern_depth,
+            #[cfg(debug_assertions)]
+            scope_consultations: self.scope_consultations,
             options: self.options,
         }
     }
 
     fn set_counters(&mut self, counters: (usize, usize, usize)) {
         (self.agg_counter, self.anon_counter, self.group_counter) = counters;
+    }
+
+    /// Record one PRODUCTION consultation of a freshly-computed whole-pattern
+    /// scope snapshot (see [`Parser::scope_consultations`]'s doc for exactly
+    /// what counts). A no-op in release builds — this exists to make the
+    /// group-loop scope-set quadratic falsifiable by a scale-invariant COUNT
+    /// rather than a clock (no timing assertion is sound across machines/CI
+    /// load; a call count fixed by query STRUCTURE is).
+    #[cfg(debug_assertions)]
+    fn note_scope_consultation(&mut self) {
+        self.scope_consultations += 1;
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn note_scope_consultation(&mut self) {}
+
+    /// The current value of the debug-only scope-consultation counter — the
+    /// NON-COUNTING read `scope_set_stays_linear_over_two_thousand_binds`
+    /// uses (reading the counter does not itself consult anything). Test-only
+    /// (no production caller needs a query's own consultation count), hence
+    /// `cfg(test)` too — otherwise an ordinary `debug_assertions` lib build
+    /// carries a method nothing calls.
+    #[cfg(all(debug_assertions, test))]
+    fn debug_scope_consultations(&self) -> u64 {
+        self.scope_consultations
     }
 
     fn at(&self, t: &Token<'a>) -> bool {
@@ -580,6 +623,11 @@ impl<'a> Parser<'a, '_> {
                     .chain(modifiers.group_extends.iter().map(|(v, _)| v.clone()))
                     .collect()
             } else {
+                // A PRODUCTION consultation of the whole WHERE pattern's
+                // scope — once per SELECT with `(expr AS ?v)` targets, never
+                // once per element of that WHERE pattern (see
+                // `Parser::scope_consultations`'s doc).
+                self.note_scope_consultation();
                 visible_variables(&where_pat).into_iter().collect()
             };
             for (var, _) in &select_exprs {
@@ -697,6 +745,10 @@ impl<'a> Parser<'a, '_> {
             };
         }
         let variables = if star {
+            // A PRODUCTION consultation of the whole (modifier-wrapped) query
+            // pattern's scope — once per `SELECT *`, never once per element
+            // of the WHERE pattern it wraps.
+            self.note_scope_consultation();
             visible_variables(&p)
         } else {
             projected
@@ -1464,6 +1516,16 @@ impl<'a> Parser<'a, '_> {
 
         let mut g = GraphPattern::Bgp { patterns: vec![] };
         let mut filters: Vec<Expression> = Vec::new();
+        // The incremental in-scope set: kept in lock-step with `g`, one
+        // `collect_vars` call over exactly the NEWLY-parsed element (never
+        // over the whole, growing `g`) per iteration — see [`VarScope`]'s
+        // doc. This is what turns the group loop from O(n²) into O(n log n)
+        // over a long run of `BIND`/`LATERAL` elements
+        // (`scope_set_stays_linear_over_two_thousand_binds`): the OLD code
+        // called `visible_variables(&g)` (a fresh whole-`g` walk) on every
+        // `BIND`/`LATERAL`, so the Nth element paid for re-walking the N-1
+        // before it.
+        let mut scope = VarScope::new();
 
         loop {
             if self.at(&Token::RBrace) {
@@ -1477,10 +1539,18 @@ impl<'a> Parser<'a, '_> {
                         right: Box::new(right),
                     };
                 }
+                // A bracketed sub-group (possibly a `{ SELECT ... }`, whose
+                // contribution is its OWN projection — `collect_vars`'s
+                // `Project` arm — not its inner WHERE pattern) or a chain of
+                // `UNION` arms: `collect_vars` already knows how to fold
+                // either shape into exactly the vars this element puts in
+                // scope, in one walk over `node` alone.
+                collect_vars(&node, &mut scope);
                 g = join(g, node);
             } else if self.eat_kw("OPTIONAL") {
                 let inner = self.parse_group_graph_pattern()?;
                 let (right, expression) = split_trailing_filter(inner);
+                collect_vars(&right, &mut scope);
                 g = GraphPattern::LeftJoin {
                     left: Box::new(g),
                     right: Box::new(right),
@@ -1494,8 +1564,20 @@ impl<'a> Parser<'a, '_> {
                 // itself).
                 let at = self.span();
                 let right = self.parse_group_graph_pattern()?;
-                let lhs_scope = compute_lateral_left_scope(&g);
-                if let Some((var, intro)) = find_lateral_rhs_scope_conflict(&lhs_scope, &right) {
+                // A genuine PRODUCTION consultation (once per `LATERAL`
+                // keyword, never per element inside `right`): read the
+                // incremental set built so far — `g`'s vars, NOT yet
+                // `right`'s — as the LHS scope. Verified against a fresh
+                // walk (the non-counting entry point) under
+                // `debug_assertions` only.
+                self.note_scope_consultation();
+                debug_assert_eq!(
+                    scope.as_slice(),
+                    compute_lateral_left_scope(&g).as_slice(),
+                    "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
+                );
+                let lhs_scope = scope.as_slice();
+                if let Some((var, intro)) = find_lateral_rhs_scope_conflict(lhs_scope, &right) {
                     return Err(ParseError::syntax(
                         format!(
                             "{} ?{} inside LATERAL is already in scope on the LATERAL \
@@ -1506,12 +1588,16 @@ impl<'a> Parser<'a, '_> {
                         at,
                     ));
                 }
+                collect_vars(&right, &mut scope);
                 g = GraphPattern::Lateral {
                     left: Box::new(g),
                     right: Box::new(right),
                 };
             } else if self.eat_kw("MINUS") {
                 let right = self.parse_group_graph_pattern()?;
+                // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING
+                // to the enclosing group's scope — no `collect_vars` call
+                // here, matching `collect_vars`'s own `Minus` arm.
                 g = GraphPattern::Minus {
                     left: Box::new(g),
                     right: Box::new(right),
@@ -1519,13 +1605,12 @@ impl<'a> Parser<'a, '_> {
             } else if self.eat_kw("GRAPH") {
                 let name = self.parse_var_or_iri_name()?;
                 let inner = self.parse_group_graph_pattern()?;
-                g = join(
-                    g,
-                    GraphPattern::Graph {
-                        name,
-                        inner: Box::new(inner),
-                    },
-                );
+                let graph = GraphPattern::Graph {
+                    name,
+                    inner: Box::new(inner),
+                };
+                collect_vars(&graph, &mut scope);
+                g = join(g, graph);
             } else if self.eat_kw("SERVICE") {
                 let silent = self.eat_kw("SILENT");
                 let name = self.parse_var_or_iri_name()?;
@@ -1536,6 +1621,7 @@ impl<'a> Parser<'a, '_> {
                     inner: Box::new(inner),
                     silent,
                 };
+                collect_vars(&service, &mut scope);
                 // A variable endpoint (`SERVICE ?g`) is correlated with the
                 // enclosing pattern — it must bind the endpoint from the
                 // surrounding solution before federating — so it becomes a
@@ -1559,8 +1645,20 @@ impl<'a> Parser<'a, '_> {
                 // §19.6: the variable introduced by BIND must not already be
                 // in-scope in the group graph pattern up to this point — a
                 // re-binding is a hard syntax error, not a silent shadow
-                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`).
-                if visible_variables(&g).contains(&variable) {
+                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`). The
+                // incremental set answers this in O(log n) — NOT a
+                // production "consultation" (`note_scope_consultation` is
+                // NOT called here: this is the one site the linear-scan test
+                // exists to keep counter-invisible, since it fires once per
+                // `BIND` and must not scale the count with the group's
+                // element count). The equivalence check still runs, through
+                // the free-function (non-counting) `visible_variables`.
+                debug_assert_eq!(
+                    scope.contains(&variable),
+                    visible_variables(&g).contains(&variable),
+                    "the incremental BIND-scope check drifted from a fresh visible_variables walk"
+                );
+                if scope.contains(&variable) {
                     return Err(ParseError::syntax(
                         format!(
                             "BIND target ?{} is already in scope in the group graph pattern",
@@ -1569,6 +1667,7 @@ impl<'a> Parser<'a, '_> {
                         self.span(),
                     ));
                 }
+                scope.note(&variable);
                 g = GraphPattern::Extend {
                     inner: Box::new(g),
                     variable,
@@ -1576,12 +1675,14 @@ impl<'a> Parser<'a, '_> {
                 };
             } else if self.peek_kw("VALUES") {
                 let values = self.parse_inline_data()?;
+                collect_vars(&values, &mut scope);
                 g = join(g, values);
             } else if self.eat(&Token::Dot) {
                 // statement separator between blocks
             } else {
                 // A triples block (BGP / path patterns).
                 let block = self.parse_triples_block()?;
+                collect_vars(&block, &mut scope);
                 g = join(g, block);
             }
         }
@@ -3482,27 +3583,68 @@ fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) 
     }
 }
 
-/// Collect the in-scope variables of a pattern in first-appearance order
-/// (used for `SELECT *` projection).
-fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
-    let mut out = Vec::new();
-    collect_vars(p, &mut out);
-    out
+/// An order-preserving set of [`Variable`]s with O(log n) membership and
+/// insertion — the group-parsing loop's incremental in-scope set, and
+/// [`visible_variables`]'s own collection buffer.
+///
+/// Two structures move together: `order` is the first-appearance sequence
+/// SPARQL's "in scope" (`SELECT *`'s projection order, the LATERAL scope
+/// walk's deterministic first-conflict order) needs, and `seen` is what makes
+/// membership and insertion O(log n) instead of the O(n) linear scan a bare
+/// `Vec<Variable>::contains` forces. That scan is what made both this loop
+/// (recomputing it from scratch on every `BIND`/`LATERAL`, discussed at this
+/// module's group-loop) and a single [`visible_variables`] call over a
+/// `BIND`-heavy pattern quadratic; the `BTreeSet` (not a hash set — this
+/// crate is wasm32-clean and deliberately does not depend on `ahash`, and a
+/// membership set that is never iterated for its OWN order — only `order`
+/// ever is — needs no hash at all) removes both.
+#[derive(Default)]
+struct VarScope {
+    order: Vec<Variable>,
+    seen: std::collections::BTreeSet<Variable>,
 }
 
-fn push_var(v: &Variable, out: &mut Vec<Variable>) {
-    if !out.contains(v) {
-        out.push(v.clone());
+impl VarScope {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record `v` as in scope; a no-op if it already is (first-appearance
+    /// order is preserved, so a later re-mention never moves it).
+    fn note(&mut self, v: &Variable) {
+        if self.seen.insert(v.clone()) {
+            self.order.push(v.clone());
+        }
+    }
+
+    fn contains(&self, v: &Variable) -> bool {
+        self.seen.contains(v)
+    }
+
+    fn as_slice(&self) -> &[Variable] {
+        &self.order
+    }
+
+    fn into_vec(self) -> Vec<Variable> {
+        self.order
     }
 }
 
-fn collect_term_vars(t: &TermPattern, out: &mut Vec<Variable>) {
+/// Collect the in-scope variables of a pattern in first-appearance order
+/// (used for `SELECT *` projection).
+fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
+    let mut scope = VarScope::new();
+    collect_vars(p, &mut scope);
+    scope.into_vec()
+}
+
+fn collect_term_vars(t: &TermPattern, out: &mut VarScope) {
     match t {
-        TermPattern::Variable(v) => push_var(v, out),
+        TermPattern::Variable(v) => out.note(v),
         TermPattern::Triple(tp) => {
             collect_term_vars(&tp.subject, out);
             if let NamedNodePattern::Variable(v) = &tp.predicate {
-                push_var(v, out);
+                out.note(v);
             }
             collect_term_vars(&tp.object, out);
         }
@@ -3510,15 +3652,15 @@ fn collect_term_vars(t: &TermPattern, out: &mut Vec<Variable>) {
     }
 }
 
-fn collect_triple_vars(tp: &TriplePattern, out: &mut Vec<Variable>) {
+fn collect_triple_vars(tp: &TriplePattern, out: &mut VarScope) {
     collect_term_vars(&tp.subject, out);
     if let NamedNodePattern::Variable(v) = &tp.predicate {
-        push_var(v, out);
+        out.note(v);
     }
     collect_term_vars(&tp.object, out);
 }
 
-fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
+fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
     match p {
         GraphPattern::Bgp { patterns } => {
             for tp in patterns {
@@ -3562,7 +3704,7 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
         | GraphPattern::Slice { inner, .. } => collect_vars(inner, out),
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             if let NamedNodePattern::Variable(v) = name {
-                push_var(v, out);
+                out.note(v);
             }
             collect_vars(inner, out);
         }
@@ -3570,16 +3712,16 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
             inner, variable, ..
         } => {
             collect_vars(inner, out);
-            push_var(variable, out);
+            out.note(variable);
         }
         GraphPattern::Values { variables, .. } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
         }
         GraphPattern::Project { variables, .. } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
         }
         GraphPattern::Group {
@@ -3588,10 +3730,10 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
             ..
         } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
             for (v, _) in aggregates {
-                push_var(v, out);
+                out.note(v);
             }
         }
     }
@@ -5574,6 +5716,82 @@ mod tests {
         SparqlParser::new()
             .parse_query(&ok)
             .expect("fresh BIND target parses");
+    }
+
+    /// The group-parsing loop's scope set is a genuinely incremental structure,
+    /// not a per-element recompute wearing an O(log n) membership test: a
+    /// query's count of PRODUCTION scope-snapshot consultations
+    /// ([`Parser::note_scope_consultation`]) is fixed by its STRUCTURE — one
+    /// `SELECT *`, one `LATERAL` keyword — and invariant under how many `BIND`s
+    /// sit inside it. Falsified by a SCALE-INVARIANT COUNT, deliberately never
+    /// a clock (benches report, never assert; wall-clock varies with machine
+    /// load, a call count reached by fixed code paths does not).
+    ///
+    /// Named without a `lateral_`/`sep0006_`/`service_variable_` prefix so it
+    /// stays outside `rg -c '^\s*fn (lateral_|sep0006_|service_variable_)'`'s
+    /// count of the `LATERAL` scope-rule tests (still 25 — untouched by this
+    /// test).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scope_set_stays_linear_over_two_thousand_binds() {
+        fn binds(n: usize) -> String {
+            use std::fmt::Write as _;
+            (1..=n).fold(String::new(), |mut acc, i| {
+                let _ = write!(acc, "BIND({i} AS ?x{i}) ");
+                acc
+            })
+        }
+
+        /// Parse `body` (already wrapped in a full query) and return the
+        /// number of production scope-snapshot consultations it took —
+        /// reading the counter is itself a plain field read, not a
+        /// consultation, so this helper cannot inflate what it measures.
+        fn consultations(query: &str) -> u64 {
+            let options = ParserOptions::default();
+            let mut p = SparqlParser::new()
+                .parser_for(query, &options)
+                .expect("tokenize");
+            p.parse_query().expect("parse");
+            p.expect_eof().expect("a full query consumes every token");
+            p.debug_scope_consultations()
+        }
+
+        // Plain: N sequential BINDs directly in the WHERE group, under a
+        // `SELECT *` (one production consultation: the projection build).
+        let plain = |n: usize| {
+            consultations(&format!(
+                "{GM}SELECT * WHERE {{ ?s purrdf:p ?o {} }}",
+                binds(n)
+            ))
+        };
+        let plain_200 = plain(200);
+        let plain_2000 = plain(2000);
+        assert_eq!(
+            plain_200, plain_2000,
+            "the count must be invariant under how many BINDs the group holds"
+        );
+        assert!(
+            plain_2000 <= 2,
+            "count={plain_2000} — a per-BIND recompute would read 200 vs 2,000 here (the \
+             pre-fix revert-check), not a value fixed at <= 2"
+        );
+
+        // The same N BINDs, inside a LATERAL right-hand side (two production
+        // consultations: the outer `SELECT *` and the LATERAL's own
+        // left-scope read — each fires exactly ONCE regardless of N).
+        let inside_lateral = |n: usize| {
+            consultations(&format!(
+                "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ {} }} }}",
+                binds(n)
+            ))
+        };
+        let lateral_200 = inside_lateral(200);
+        let lateral_2000 = inside_lateral(2000);
+        assert_eq!(
+            lateral_200, lateral_2000,
+            "the count must be invariant under how many BINDs the LATERAL right-hand side holds"
+        );
+        assert!(lateral_2000 <= 2, "count={lateral_2000}");
     }
 
     #[test]

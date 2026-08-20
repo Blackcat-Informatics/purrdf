@@ -95,7 +95,14 @@ impl core::fmt::Debug for BlankNode {
 }
 
 /// A query variable (without the leading `?`/`$`).
-#[derive(Clone, PartialEq, Eq, Hash)]
+///
+/// `Ord`/`PartialOrd` (lexicographic on the name) are derived so a scope-tracking
+/// caller can key a `BTreeSet<Variable>` for O(log n) membership — the parser's
+/// in-scope set is exactly such a caller (see `parser::VarScope`) and needs an
+/// ordering that costs nothing to satisfy (any total order works; the derived
+/// one needs no separate justification) rather than the O(n) linear scan a bare
+/// `Vec<Variable>` membership test would otherwise force.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
     name: String,
 }
