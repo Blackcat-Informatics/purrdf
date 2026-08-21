@@ -211,7 +211,17 @@ fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
 
 /// Emit a graph pattern as the body of a `{ … }` group. Modifier-wrapped patterns
 /// (subqueries) are emitted as a braced `{ SELECT … }` block.
-fn fmt_group_body(s: &mut String, p: &GraphPattern) {
+///
+/// `pub(crate)`: this is also the WHERE-clause renderer `Display for
+/// GraphUpdateOperation` (`algebra.rs`) reuses for `INSERT`/`DELETE … WHERE { … }`
+/// — the exact same shape [`crate::parser`]'s `parse_group_graph_pattern` produces
+/// for an UPDATE's WHERE clause (never the "bare aggregate chain" shape
+/// [`needs_subselect_reconstruction`] exists to catch, which only arises once an
+/// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
+/// WHERE clause never carries one). Reusing this function rather than writing a
+/// second pattern-to-text renderer is deliberate: see `algebra.rs`'s `Display for
+/// GraphUpdateOperation` doc.
+pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
     if is_subselect_node(p) {
         s.push_str("{ ");
         fmt_subselect(s, p);

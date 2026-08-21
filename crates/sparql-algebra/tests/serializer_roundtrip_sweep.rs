@@ -27,12 +27,17 @@
 //!   already proves every embedded fragment PARSES, which this sweep does
 //!   not re-litigate).
 //!
-//! **`.ru` (UPDATE) files are explicitly OUT OF SCOPE.** This sweep exercises
-//! [`pattern_to_select_query`], the QUERY-pattern serializer — there is no
-//! UPDATE-request serializer in this crate to test, and inventing a sweep
-//! surface for a function that does not exist would test nothing. `.ru`
-//! fixtures under the swept suite roots are simply never opened here (`.rq`
-//! is the only extension [`collect_rq`] follows).
+//! **`.ru` (UPDATE) files are swept too.** `Display for GraphUpdateOperation`/
+//! `Display for Update` (`crates/sparql-algebra/src/algebra.rs`) IS an
+//! UPDATE-request serializer — it renders a parsed [`Update`] back to SPARQL
+//! Update surface syntax, reusing [`crate::serialize::fmt_group_body`] (the
+//! same WHERE-body renderer [`pattern_to_select_query`] uses) for each
+//! operation's `WHERE` clause. Every `.ru` file under the same corpus roots is
+//! parsed with [`SparqlParser::parse_update`], `Display`ed, re-parsed with
+//! [`SparqlParser::parse_update`], and compared for equality — the same
+//! shape as the `.rq` sweep below, with its own unparseable/`XFAIL` counters
+//! ([`RU_XFAIL`]) kept separate from the query-side ones so the two corpora's
+//! accounting never gets confused.
 //!
 //! # Method
 //!
@@ -87,7 +92,9 @@
 
 use std::path::{Path, PathBuf};
 
-use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser, pattern_to_select_query};
+use purrdf_sparql_algebra::{
+    GraphPattern, GraphUpdateOperation, Query, SparqlParser, Update, pattern_to_select_query,
+};
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -96,23 +103,33 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root resolves")
 }
 
-/// Every `.rq` file under `dir`, recursively, in a stable (sorted) order.
-/// `.ru` and every other extension are ignored — see this file's module doc
-/// on why UPDATE requests are out of scope for a QUERY-pattern serializer
-/// sweep.
-fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Every file with extension `ext` under `dir`, recursively, in a stable
+/// (sorted) order. Shared by the `.rq` (query) and `.ru` (update) collection
+/// passes below — every other extension is ignored.
+fn collect_by_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_rq(&path, out);
-        } else if path.extension().is_some_and(|x| x == "rq") {
+            collect_by_ext(&path, ext, out);
+        } else if path.extension().is_some_and(|x| x == ext) {
             out.push(path);
         }
     }
     out.sort();
+}
+
+/// Every `.rq` file under `dir`, recursively, in a stable (sorted) order.
+fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
+    collect_by_ext(dir, "rq", out);
+}
+
+/// Every `.ru` (UPDATE request) file under `dir`, recursively, in a stable
+/// (sorted) order.
+fn collect_ru(dir: &Path, out: &mut Vec<PathBuf>) {
+    collect_by_ext(dir, "ru", out);
 }
 
 /// Every fenced ` ```sparql ` block under `dir`'s Markdown files — the book's
@@ -357,17 +374,131 @@ fn roundtrip(original: &Query) -> Result<(), String> {
     Ok(())
 }
 
+/// Normalize the one [`GraphUpdateOperation`] shape that embeds a
+/// [`GraphPattern`] (`DeleteInsert`'s `WHERE` clause) by
+/// [`normalize_join_assoc`] — the same, and only, modulo the `.rq` side of
+/// this sweep allows. Every other arm carries no `GraphPattern` and is
+/// returned unchanged. The match is exhaustive (no wildcard arm), matching
+/// [`normalize_join_assoc`]'s own discipline: a future enum variant is a
+/// compile error here until this function is taught its shape.
+fn normalize_update_op(op: &GraphUpdateOperation) -> GraphUpdateOperation {
+    match op {
+        GraphUpdateOperation::InsertData { data } => {
+            GraphUpdateOperation::InsertData { data: data.clone() }
+        }
+        GraphUpdateOperation::DeleteData { data } => {
+            GraphUpdateOperation::DeleteData { data: data.clone() }
+        }
+        GraphUpdateOperation::DeleteInsert {
+            delete,
+            insert,
+            with,
+            using,
+            pattern,
+        } => GraphUpdateOperation::DeleteInsert {
+            delete: delete.clone(),
+            insert: insert.clone(),
+            with: with.clone(),
+            using: using.clone(),
+            pattern: Box::new(normalize_join_assoc(pattern)),
+        },
+        GraphUpdateOperation::Load {
+            silent,
+            source,
+            destination,
+        } => GraphUpdateOperation::Load {
+            silent: *silent,
+            source: source.clone(),
+            destination: destination.clone(),
+        },
+        GraphUpdateOperation::Clear { silent, target } => GraphUpdateOperation::Clear {
+            silent: *silent,
+            target: target.clone(),
+        },
+        GraphUpdateOperation::Drop { silent, target } => GraphUpdateOperation::Drop {
+            silent: *silent,
+            target: target.clone(),
+        },
+        GraphUpdateOperation::Create { silent, graph } => GraphUpdateOperation::Create {
+            silent: *silent,
+            graph: graph.clone(),
+        },
+        GraphUpdateOperation::Add {
+            silent,
+            source,
+            destination,
+        } => GraphUpdateOperation::Add {
+            silent: *silent,
+            source: source.clone(),
+            destination: destination.clone(),
+        },
+        GraphUpdateOperation::Move {
+            silent,
+            source,
+            destination,
+        } => GraphUpdateOperation::Move {
+            silent: *silent,
+            source: source.clone(),
+            destination: destination.clone(),
+        },
+        GraphUpdateOperation::Copy {
+            silent,
+            source,
+            destination,
+        } => GraphUpdateOperation::Copy {
+            silent: *silent,
+            source: source.clone(),
+            destination: destination.clone(),
+        },
+    }
+}
+
+/// Normalize every operation of `u` by [`normalize_update_op`].
+fn normalize_update(u: &Update) -> Update {
+    Update {
+        operations: u.operations.iter().map(normalize_update_op).collect(),
+        base_iri: u.base_iri.clone(),
+        version: u.version.clone(),
+    }
+}
+
+/// Parse `text` as an Update, `Display` it, re-parse, and compare modulo
+/// [`normalize_update`]/[`normalize_join_assoc`]. `Ok(())` on success; `Err`
+/// describes the mismatch. The `.ru`-side counterpart of [`roundtrip`].
+fn roundtrip_update(original: &Update) -> Result<(), String> {
+    let text = original.to_string();
+    let reparsed = SparqlParser::new()
+        .parse_update(&text)
+        .map_err(|e| format!("re-parse of the serialized update failed: {e}\n  text: {text}"))?;
+    let original_norm = normalize_update(original);
+    let reparsed_norm = normalize_update(&reparsed);
+    if original_norm != reparsed_norm {
+        return Err(format!(
+            "round-trip mismatch (modulo Join re-association)\n  text: {text}\n  \
+             original:  {original_norm:?}\n  reparsed:  {reparsed_norm:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// (corpus-relative path or `file#sparql-block-N` label, emit-only construct
 /// name). See this file's module doc's "The `XFAIL` ledger" section: an
 /// entry here is a construct the PARSER can produce but the surface grammar
 /// has no construct to re-emit — never a route around a real serializer bug.
 const XFAIL: [(&str, &str); 0] = [];
 
+/// The `.ru` (UPDATE) side's own `XFAIL` ledger, kept separate from the `.rq`
+/// side's [`XFAIL`] so the two corpora's accounting never gets confused (see
+/// this file's module doc). Empty: nothing found in the vendored corpora that
+/// parses but fails to round-trip through `Display for GraphUpdateOperation`.
+const RU_XFAIL: [(&str, &str); 0] = [];
+
 #[test]
 fn corpus_round_trips_through_the_serializer() {
     let root = workspace_root();
 
     let mut rq_files = Vec::new();
+    let mut ru_files = Vec::new();
     for suite in [
         "crates/sparql-conformance/suite/w3c-sparql11",
         "crates/sparql-conformance/suite/w3c-sparql12",
@@ -379,23 +510,26 @@ fn corpus_round_trips_through_the_serializer() {
             "expected corpus root {suite} to exist under the workspace"
         );
         collect_rq(&dir, &mut rq_files);
+        collect_ru(&dir, &mut ru_files);
     }
     let doc_examples = collect_doc_examples(&root.join("docs"));
 
-    let seen = rq_files.len() + doc_examples.len();
+    let seen = rq_files.len() + doc_examples.len() + ru_files.len();
     println!(
-        "corpus round-trip sweep: {} vendored/first-party .rq files + {} doc examples = {seen} \
-         total",
+        "corpus round-trip sweep: {} vendored/first-party .rq files + {} doc examples + {} \
+         vendored .ru files = {seen} total",
         rq_files.len(),
-        doc_examples.len()
+        doc_examples.len(),
+        ru_files.len()
     );
     // Measured at authoring time: 352 w3c-sparql11 + 242 w3c-sparql12 + 47
     // purrdf-extend .rq files, plus 11 fenced ```sparql blocks in the book's
     // temporal-arithmetic and LATERAL (SEP-0006) sections (the only file
-    // under docs/ that has any) — 652 total. A corpus that stops loading (a
-    // moved suite root, a broken walk) silently sweeps far less than this
-    // and must fail loudly instead.
-    const N: usize = 652;
+    // under docs/ that has any) — 652 .rq/doc total — plus 148 w3c-sparql11 +
+    // 23 w3c-sparql12 + 0 purrdf-extend .ru files — 171 .ru total — 823
+    // combined. A corpus that stops loading (a moved suite root, a broken
+    // walk) silently sweeps far less than this and must fail loudly instead.
+    const N: usize = 652 + 171;
     assert!(
         seen >= N,
         "the corpus round-trip sweep saw only {seen} items, expected at least {N} — a corpus \
@@ -406,6 +540,11 @@ fn corpus_round_trips_through_the_serializer() {
         XFAIL.len(),
         0,
         "keep this in sync with the XFAIL array literal's length"
+    );
+    assert_eq!(
+        RU_XFAIL.len(),
+        0,
+        "keep this in sync with the RU_XFAIL array literal's length"
     );
 
     // Several W3C fixtures reference a relative IRI (`<ng-01.ttl>`, `<g>`, …)
@@ -466,8 +605,54 @@ fn corpus_round_trips_through_the_serializer() {
     );
 
     println!(
-        "unparseable (skipped, outside the serializer's contract — see module doc): \
-         {unparseable}"
+        "unparseable .rq/doc-example (skipped, outside the serializer's contract — see module \
+         doc): {unparseable}"
+    );
+
+    // The `.ru` (UPDATE) side of the sweep: parse → `Display` → re-parse →
+    // compare, exactly as above but through `roundtrip_update`/`RU_XFAIL`.
+    // Genuinely negative-syntax `.ru` fixtures (W3C `NegativeUpdateSyntaxTest`
+    // manifests among the vendored `syntax-update-*` directories) are expected
+    // and counted the same way the `.rq` side counts its own unparseable
+    // items — never asserted on, just accounted for below.
+    let mut unparseable_ru = 0usize;
+    let mut ru_xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for path in &ru_files {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        let label = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let Ok(update) = parser.parse_update(&text) else {
+            unparseable_ru += 1;
+            continue;
+        };
+        let xfail_entry = RU_XFAIL.iter().find(|(path, _)| *path == label);
+        match (roundtrip_update(&update), xfail_entry) {
+            (Ok(()), None) => {}
+            (Ok(()), Some((path, construct))) => failures.push(format!(
+                "{path}: RU_XFAIL entry for {construct:?} round-trips cleanly now — remove the \
+                 ledger entry"
+            )),
+            (Err(msg), None) => failures.push(format!("{label}: {msg}")),
+            (Err(_), Some((path, construct))) => {
+                ru_xfail_matched.insert(path);
+                let _ = construct;
+            }
+        }
+    }
+
+    assert_eq!(
+        ru_xfail_matched.len(),
+        RU_XFAIL.len(),
+        "an RU_XFAIL entry never matched any swept, parseable .ru item — a dead ledger row \
+         (matched: {ru_xfail_matched:?})"
+    );
+
+    println!(
+        "unparseable .ru (skipped, outside the serializer's contract — negative update syntax \
+         tests among others): {unparseable_ru}"
     );
 
     assert!(
