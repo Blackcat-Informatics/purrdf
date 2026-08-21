@@ -3210,6 +3210,14 @@ mod tests {
         // `Bgp`, so completing the fixture's rows costs a few more node-entry polls
         // than before. The exact count is an implementation detail; the margin is
         // generous rather than tight.
+        //
+        // NOT tightened back by the gap R9/G10 allocation work (`SubstitutionRow`'s
+        // term text now lives behind `Arc<str>` — see `purrdf_sparql_algebra::
+        // NamedNode`'s doc): that removed per-leaf TEXT allocation, but the governor
+        // polls PLAN NODES, and the extra `Join`/`Values` node this test's bound
+        // widening accounts for is still built once per left row regardless — the
+        // node COUNT this bound tracks is unchanged by making that node's content
+        // cheap to construct.
         for budget in 1..=40_u64 {
             let signal = Arc::new(StopOnPoll {
                 remaining: std::sync::atomic::AtomicU64::new(budget),

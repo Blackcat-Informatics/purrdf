@@ -2175,6 +2175,14 @@ mod tests {
         // instead of a single term-rewritten `Bgp`, so completing it costs a few
         // more node-entry polls than before. The exact count is an implementation
         // detail; the margin is generous rather than tight.
+        //
+        // NOT tightened back by the gap R9/G10 allocation work (`SubstitutionRow`'s
+        // term text now lives behind `Arc<str>` — see `purrdf_sparql_algebra::
+        // NamedNode`'s doc): that removed per-leaf TEXT allocation, but the governor
+        // polls PLAN NODES, and the extra `Join`/`Values` node this bound accounts
+        // for is still built once per left row regardless — the node COUNT this
+        // bound tracks is unchanged by making that node's content cheap to
+        // construct.
         for budget in 1..=60_u64 {
             let sequential = {
                 let _sequential = crate::parallel::force_sequential_operation();

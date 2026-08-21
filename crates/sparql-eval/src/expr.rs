@@ -1300,6 +1300,32 @@ fn exists<D: DatasetView + Sync>(
 ///   as a [`purrdf_sparql_algebra::GroundTerm`]: the row Values Insertion joins
 ///   onto a `Bgp`/`Path` leaf (see [`substitute_pattern`]'s doc), total over
 ///   every term kind a syntactic term-rewrite could never place.
+///
+/// # Allocation shape (AGENTS.md's per-term-`String` hot-path rule)
+///
+/// Values Insertion means `term`/`expr` fan out to MANY sites per outer row:
+/// once per `Bgp`/`Path` leaf ([`join_leaf_with_values`]), once per
+/// expression-bearing node that needs a term-only var
+/// ([`wrap_with_expr_term_only_values`]), and the whole row is cloned again at
+/// every `Project` boundary ([`narrow_to`](Self::narrow_to)). Naively that is
+/// O(leaves + wrappers + `Project` boundaries) DEEP clones of every bound
+/// var's text per row on top of the O(bound vars) text this struct's own
+/// construction already pays once
+/// ([`outer_bindings_for_substitution`]/[`ground_term_from_term_value`]).
+///
+/// [`Variable`], [`purrdf_sparql_algebra::NamedNode`], and
+/// [`purrdf_sparql_algebra::Literal`] store their text behind `Arc<str>` (see
+/// those types' docs), so every one of those fan-out `.clone()` calls —
+/// `Variable`, `GroundTerm::NamedNode`/`Literal`/`BlankNode`, `Expression::
+/// NamedNode`/`Literal` alike — is a refcount bump, not a text
+/// allocation/copy. The allocation count per row is therefore O(bound vars)
+/// TEXT allocations, paid exactly once by construction; every fan-out site
+/// after that is O(1) refcount traffic. The one residual exception is
+/// `GroundTerm::Triple`: its `Box<GroundTriple>` is a unique owner (quoted
+/// triples are rare in `VALUES` cells and not text-length-dependent), so a
+/// leaf/wrapper clone of a bound quoted-triple term pays one small,
+/// fixed-size `Box` allocation — not a `String`, and not one that grows with
+/// leaf/wrapper count times term length.
 pub(crate) struct SubstitutionRow {
     pub(crate) expr: Vec<(Variable, Expression)>,
     pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
@@ -1311,7 +1337,9 @@ impl SubstitutionRow {
     /// scope boundary the surface language has (SEP-0006's rule, restated in
     /// [`substitute_pattern`]'s doc). The walk already deep-clones the tree
     /// once per outer row, so the narrowed copy here is noise against that
-    /// cost, not a new per-row allocation class (AGENTS.md's hot-path rule).
+    /// cost, not a new per-row allocation class (AGENTS.md's hot-path rule) —
+    /// see [`SubstitutionRow`]'s doc: every element clone here is an `Arc`
+    /// refcount bump, not text allocation.
     fn narrow_to(&self, variables: &[Variable]) -> Self {
         Self {
             expr: self
@@ -1827,6 +1855,12 @@ fn boxed_and_mapped(
 /// wrapper that inherited from its enclosing node instead would, for a `LATERAL` whose
 /// right operand is directly a `Bgp`/`Path` (no `Filter` between the `LATERAL` and the
 /// wrapped leaf), fold straight into the `LATERAL` node.
+///
+/// This runs once per `Bgp`/`Path` leaf in the substituted pattern, so a query with
+/// several leaves sharing bound vars clones each `(Variable, GroundTerm)` pair once per
+/// leaf that needs it — see [`SubstitutionRow`]'s doc: that per-leaf fan-out is `Arc`
+/// refcount traffic (both types store their text behind `Arc<str>`), not the per-term
+/// `String` allocation AGENTS.md's hot-path rule forbids.
 fn join_leaf_with_values(
     leaf: Box<GraphPattern>,
     leaf_vars: &DetHashSet<Variable>,
@@ -1890,6 +1924,11 @@ fn join_leaf_with_values(
 /// for the same reason: when this function DOES add the synthetic `Join`/`Values`
 /// wrapper, the wrapper is mapped to that SAME `source` rather than left to inherit from
 /// whatever encloses it — see [`SubstitutionSourceMap`]'s doc.
+///
+/// Same allocation shape as [`join_leaf_with_values`]: this runs once per
+/// expression-bearing node that needs a term-only var, and the `(Variable, GroundTerm)`
+/// clone at each such site is `Arc` refcount traffic (see [`SubstitutionRow`]'s doc), not
+/// a `String` allocation.
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
     expr_free_vars: &DetHashSet<Variable>,
@@ -2084,6 +2123,17 @@ fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
 /// Build the [`SubstitutionRow`] μ from the outer row's bound variables,
 /// materializing each `SolutionTerm` to both a constant `Expression` (when
 /// representable — IRI/literal) and a total `GroundTerm` (every term kind).
+///
+/// Runs once per outer row (this function's sole caller,
+/// `crate::binop::eval_correlated`, calls it once per left row before
+/// walking the pattern). For an IRI/literal-representable var this builds an
+/// owned [`purrdf_sparql_algebra::NamedNode`]/[`purrdf_sparql_algebra::Literal`]
+/// (the ONE text materialization from the dataset's interned form — genuinely
+/// new text, so genuinely a `String`-shaped cost, not avoidable here) and
+/// then clones it a second time into `expr`'s `Expression`: that second clone
+/// is an `Arc` refcount bump (see [`SubstitutionRow`]'s doc), not a second
+/// text allocation, because `NamedNode`/`Literal` carry their text behind
+/// `Arc<str>`.
 pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,

@@ -13,6 +13,8 @@
 //! RDF 1.2 quoted triple terms are first-class: [`TermPattern::Triple`] (in query
 //! patterns) and [`GroundTerm::Triple`] (in ground data, e.g. `VALUES`).
 
+use std::sync::Arc;
+
 use crate::error::{ParseError, Result};
 
 /// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
@@ -27,9 +29,22 @@ pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-n
 /// The lexical form is stored verbatim (Constitution C0.1: IRIs are
 /// lexical-verbatim); [`NamedNode::new`] validates it against RFC-3987 via
 /// `purrdf-iri`, while [`NamedNode::new_unchecked`] trusts the caller.
+///
+/// # Clone cost
+///
+/// The lexical form lives behind `Arc<str>`, not an owned `String`: `Clone`
+/// is one refcount bump, never a text allocation/copy. This is off the
+/// parser's construction path — a correlated `LATERAL`/`EXISTS` substitution
+/// builds a fresh `GroundTerm`/`Expression` per outer solution row
+/// (`purrdf-sparql-eval`'s `outer_bindings_for_substitution`) and then clones
+/// that SAME term into every leaf/wrapper `VALUES` join the substituted
+/// pattern needs (`join_leaf_with_values`, `wrap_with_expr_term_only_values`);
+/// with the lexical form behind an `Arc`, that per-leaf fan-out is refcount
+/// traffic, not per-term string allocation — the AGENTS.md hot-path rule this
+/// satisfies.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NamedNode {
-    iri: String,
+    iri: Arc<str>,
 }
 
 impl NamedNode {
@@ -49,13 +64,15 @@ impl NamedNode {
                 reason: "relative IRI reference in term position (no scheme)".to_owned(),
             });
         }
-        Ok(Self { iri })
+        Ok(Self { iri: iri.into() })
     }
 
     /// Wrap an IRI without validation. Use only when the source is already known
     /// to be a valid IRI (e.g. round-tripping an already-parsed node).
     pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        Self { iri: iri.into() }
+        Self {
+            iri: iri.into().into(),
+        }
     }
 
     /// The IRI lexical form.
@@ -71,15 +88,22 @@ impl core::fmt::Debug for NamedNode {
 }
 
 /// A blank node, identified by its label (without the `_:` prefix).
+///
+/// Label storage is `Arc<str>` for the same reason as [`NamedNode`]'s lexical
+/// form: `Clone` is a refcount bump, so a blank-node outer binding fanning out
+/// to several `VALUES`-join sites in a correlated substitution costs no
+/// per-site text allocation.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct BlankNode {
-    id: String,
+    id: Arc<str>,
 }
 
 impl BlankNode {
     /// Wrap a blank-node label (the part after `_:`).
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into() }
+        Self {
+            id: id.into().into(),
+        }
     }
 
     /// The blank-node label (without `_:`).
@@ -102,15 +126,26 @@ impl core::fmt::Debug for BlankNode {
 /// ordering that costs nothing to satisfy (any total order works; the derived
 /// one needs no separate justification) rather than the O(n) linear scan a bare
 /// `Vec<Variable>` membership test would otherwise force.
+///
+/// Name storage is `Arc<str>`, so `Clone` is a refcount bump rather than a
+/// text allocation/copy: a correlated `LATERAL`/`EXISTS` substitution clones a
+/// `Variable` once per leaf/wrapper `VALUES` join a bound outer variable
+/// participates in (`purrdf-sparql-eval`'s `join_leaf_with_values`,
+/// `wrap_with_expr_term_only_values`), so this keeps that per-leaf fan-out
+/// allocation-free the same way [`NamedNode`]'s `Arc<str>` does for terms —
+/// `PartialOrd`/`Ord`/`Hash` still compare/hash the referenced text (`Arc<T>`
+/// delegates to `T`), never the pointer, so ordering/dedup stay unaffected.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
-    name: String,
+    name: Arc<str>,
 }
 
 impl Variable {
     /// Wrap a variable name (the part after `?` or `$`).
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into().into(),
+        }
     }
 
     /// The variable name (without the sigil).
@@ -141,11 +176,19 @@ pub enum BaseDirection {
 /// `xsd:string`, a language-tagged one `rdf:langString`. This matches the
 /// consumer contract `literal.datatype().as_str()` (the only thing the existing
 /// IRI-extraction walker reads off a literal).
+///
+/// `value`/`language` are `Arc<str>` for the same reason [`NamedNode`]'s
+/// lexical form is: `Clone` is refcount traffic, not a text
+/// allocation/copy, which matters when a bound literal fans out to several
+/// `VALUES`-join sites in a correlated `LATERAL`/`EXISTS` substitution
+/// (`purrdf-sparql-eval`'s `join_leaf_with_values`,
+/// `wrap_with_expr_term_only_values`). `datatype` is already `Arc`-backed
+/// through `NamedNode` itself.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Literal {
-    value: String,
+    value: Arc<str>,
     datatype: NamedNode,
-    language: Option<String>,
+    language: Option<Arc<str>>,
     direction: Option<BaseDirection>,
 }
 
@@ -153,7 +196,7 @@ impl Literal {
     /// A simple `xsd:string` literal.
     pub fn new_simple(value: impl Into<String>) -> Self {
         Self {
-            value: value.into(),
+            value: value.into().into(),
             datatype: NamedNode::new_unchecked(XSD_STRING),
             language: None,
             direction: None,
@@ -163,7 +206,7 @@ impl Literal {
     /// A typed literal `"value"^^<datatype>`.
     pub fn new_typed(value: impl Into<String>, datatype: NamedNode) -> Self {
         Self {
-            value: value.into(),
+            value: value.into().into(),
             datatype,
             language: None,
             direction: None,
@@ -183,9 +226,9 @@ impl Literal {
             RDF_LANG_STRING
         });
         Self {
-            value: value.into(),
+            value: value.into().into(),
             datatype,
-            language: Some(language.into()),
+            language: Some(language.into().into()),
             direction,
         }
     }
