@@ -43,6 +43,50 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// a fuel or stop check could run.
 pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 
+/// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
+/// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
+/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct.
+///
+/// [`MAX_GRAPH_PATTERN_DEPTH`] bounds `{ … }` BRACE nesting only. It does
+/// nothing for a run of SIBLING operators at one brace depth — `OPTIONAL { }
+/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, a `UNION`-arm run at
+/// one `{ … }` boundary, or a run of non-BGP triples-block elements (e.g.
+/// complex property-path triples, which `join` cannot flatten the way it
+/// flattens adjacent `Bgp`s) — each of which grows the algebra tree by one
+/// level PER SIBLING while `{ … }` nesting stays at 1. A query built from N
+/// such siblings therefore produces a tree of height ~N with no brace ever
+/// nesting past depth 1, invisible to `MAX_GRAPH_PATTERN_DEPTH`. The SAME
+/// shape arises from a long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection
+/// list, a long `GROUP BY` expression-condition list, or a long `HAVING`
+/// condition list — each lowers to a chain of `Extend`/`Filter` nodes wrapped
+/// around the WHERE pattern, built by a loop with no brace at all.
+///
+/// This limit closes that gap at its source: every site in this module that
+/// can grow the algebra tree by repetition — the group-parsing loop, its
+/// nested `UNION`-arm loop, a triples block's non-BGP (`Path`/property-function)
+/// elements, and the three projection/grouping/having list loops above —
+/// charges one unit against this budget per node it is about to build, and
+/// the parse hard-fails with a typed [`ParseError`] the instant the budget is
+/// exhausted, rather than building the (N+1)-th node. Because every node that
+/// could deepen the tree is charged, capping the TOTAL count also caps the
+/// tree's maximum root-to-leaf HEIGHT by the same number — which is what
+/// actually matters: that height is the native-stack recursion depth of
+/// every downstream consumer that walks the parsed tree by ordinary
+/// recursion (`collect_vars`/`visible_variables`, `find_lateral_rhs_scope_conflict`,
+/// the tree's own recursive `Drop`), none of which can be rewritten to an
+/// explicit-stack walk without also rewriting `Drop`, which recursion alone
+/// cannot avoid. Bounding construction is therefore the one fix that covers
+/// every present AND future consumer at once, `Drop` included.
+///
+/// The value is chosen with a wide safety margin under the depth at which a
+/// left-deep tree of this shape has been observed to exhaust a 2&nbsp;MiB
+/// stack (the size `cargo test` gives each test thread) while still leaving
+/// several orders of magnitude of headroom over any query in this crate's
+/// corpus: a single query with `MAX_GRAPH_PATTERN_NODES` non-BGP siblings is
+/// already far outside anything a hand- or tool-written SPARQL query
+/// resembles.
+pub const MAX_GRAPH_PATTERN_NODES: usize = 2048;
+
 /// Parse-time configuration for the SPARQL front-end.
 ///
 /// Both knobs are caller-supplied IRI-namespace sets that default to EMPTY.
@@ -238,6 +282,7 @@ impl SparqlParser {
             anon_counter: 0,
             group_counter: 0,
             group_pattern_depth: 0,
+            pattern_node_budget: 0,
             #[cfg(debug_assertions)]
             scope_consultations: 0,
             options,
@@ -258,6 +303,9 @@ struct Parser<'a, 'o> {
     anon_counter: usize,
     group_counter: usize,
     group_pattern_depth: usize,
+    /// Running count of graph-pattern combinator nodes charged so far against
+    /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
+    pattern_node_budget: usize,
     /// Debug-only regression counter for the group-loop scope-set quadratic:
     /// incremented ONLY at the handful of PRODUCTION sites that consult a
     /// freshly-computed (`visible_variables`-derived) whole-pattern scope
@@ -347,6 +395,7 @@ impl<'a> Parser<'a, '_> {
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
             group_pattern_depth: self.group_pattern_depth,
+            pattern_node_budget: self.pattern_node_budget,
             #[cfg(debug_assertions)]
             scope_consultations: self.scope_consultations,
             options: self.options,
@@ -355,6 +404,27 @@ impl<'a> Parser<'a, '_> {
 
     fn set_counters(&mut self, counters: (usize, usize, usize)) {
         (self.agg_counter, self.anon_counter, self.group_counter) = counters;
+    }
+
+    /// Charge `n` graph-pattern combinator nodes against
+    /// [`MAX_GRAPH_PATTERN_NODES`], hard-failing the instant the running total
+    /// would exceed it. Every call site that is ABOUT TO build one more
+    /// `Join`/`LeftJoin`/`Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/
+    /// `Minus` node calls this FIRST, so the budget is checked before the node
+    /// (and any input it borrows unboundedly, like a `LATERAL` right-hand
+    /// side) is built — never after.
+    fn charge_pattern_nodes(&mut self, n: usize) -> Result<()> {
+        self.pattern_node_budget += n;
+        if self.pattern_node_budget > MAX_GRAPH_PATTERN_NODES {
+            return Err(ParseError::syntax(
+                format!(
+                    "graph pattern combinator count exceeds the safety limit of \
+                     {MAX_GRAPH_PATTERN_NODES}"
+                ),
+                self.span(),
+            ));
+        }
+        Ok(())
     }
 
     /// Record one PRODUCTION consultation of a freshly-computed whole-pattern
@@ -587,6 +657,12 @@ impl<'a> Parser<'a, '_> {
                     let var = self.expect_var()?;
                     self.expect(&Token::RParen)?;
                     projected.push(var.clone());
+                    // A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list lowers to
+                    // a chain of N `Extend` nodes wrapped around the WHERE
+                    // pattern (below, near the query's assembly) — no brace
+                    // anywhere, so `MAX_GRAPH_PATTERN_DEPTH` never sees it.
+                    // Charged per condition, at the point each is parsed.
+                    self.charge_pattern_nodes(1)?;
                     select_exprs.push((var, expr));
                 } else {
                     break;
@@ -1536,9 +1612,21 @@ impl<'a> Parser<'a, '_> {
         loop {
             if self.at(&Token::RBrace) {
                 break;
-            } else if self.at(&Token::LBrace) {
+            }
+            // A structural charge against `MAX_GRAPH_PATTERN_NODES`, once per
+            // group ELEMENT — the choke point that closes the sibling-spine
+            // gap `MAX_GRAPH_PATTERN_DEPTH` (brace nesting only) leaves open:
+            // every branch below builds (or, for a bracketed sub-group, is
+            // about to fold in) exactly one more combinator node onto `g`.
+            self.charge_pattern_nodes(1)?;
+            if self.at(&Token::LBrace) {
                 let mut node = self.parse_group_graph_pattern()?;
                 while self.eat_kw("UNION") {
+                    // Each ADDITIONAL `UNION` arm is a hidden extra node the
+                    // outer per-element charge above does not see (they are
+                    // all consumed within this one loop iteration) — charged
+                    // here, one per arm past the first.
+                    self.charge_pattern_nodes(1)?;
                     let right = self.parse_group_graph_pattern()?;
                     node = GraphPattern::Union {
                         left: Box::new(node),
@@ -1757,6 +1845,16 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
+        // `BlockSink::into_pattern` folds every `paths` entry and every
+        // `prop_fns` call onto the running pattern with its OWN `join`/
+        // `Lateral` node, one per entry — a left-deep spine entirely inside
+        // ONE triples block (e.g. a long run of dot-separated COMPLEX
+        // property-path triples, which `join` cannot flatten the way it
+        // flattens adjacent plain `Bgp` triples) that the group loop's own
+        // per-element charge never sees, because the whole block is one
+        // element to it. Charged here, once per node `into_pattern` is about
+        // to build, before it builds any of them.
+        self.charge_pattern_nodes(sink.paths.len() + sink.prop_fns.len())?;
         Ok(sink.into_pattern())
     }
 
@@ -2752,6 +2850,11 @@ impl<'a> Parser<'a, '_> {
                         self.fresh_group_var()
                     };
                     self.expect(&Token::RParen)?;
+                    // An expression-valued `GROUP BY` condition list lowers to
+                    // a chain of `Extend` nodes placed directly under `Group`
+                    // (§18.2.4) — see `MAX_GRAPH_PATTERN_NODES`'s doc for why
+                    // this list is charged the same as the group loop.
+                    self.charge_pattern_nodes(1)?;
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else if self.at_bare_group_condition() {
@@ -2759,6 +2862,7 @@ impl<'a> Parser<'a, '_> {
                     // `GROUP BY STR(?x)` — lower to a synthetic-var Extend.
                     let expr = self.parse_expression()?;
                     let var = self.fresh_group_var();
+                    self.charge_pattern_nodes(1)?;
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else {
@@ -2769,6 +2873,9 @@ impl<'a> Parser<'a, '_> {
         if self.eat_kw("HAVING") {
             loop {
                 let expr = self.parse_having_constraint(aggregates)?;
+                // A long `HAVING (c1) (c2) … (cN)` condition list lowers to a
+                // chain of `Filter` nodes — same class, same budget.
+                self.charge_pattern_nodes(1)?;
                 m.having.push(expr);
                 if !self.at(&Token::LParen) {
                     break;
@@ -4256,6 +4363,129 @@ mod tests {
             "the nesting refusal remains a typed syntax error: {error}"
         );
         assert!(error.to_string().contains("nesting exceeds"));
+    }
+
+    /// Locate the EXACT repetition count at which a monotonic spine generator
+    /// — one more repetition of `spine` only ever charges MORE combinator
+    /// nodes, never fewer, true of every generator this helper is applied to
+    /// below — stops parsing, then assert the transition is exactly what
+    /// [`MAX_GRAPH_PATTERN_NODES`] demands: one repetition short of it parses
+    /// clean, and the very next repetition is refused with a typed
+    /// [`ParseError`] naming the limit — never an abort (reaching this
+    /// assertion at all, on either side, already demonstrates that this test
+    /// PROCESS did not crash; a real stack overflow would have taken the
+    /// whole process down before any assertion could run).
+    fn assert_spine_bound(spine: impl Fn(usize) -> String) {
+        assert!(
+            SparqlParser::new().parse_query(&spine(1)).is_ok(),
+            "the smallest spine must parse"
+        );
+        let (mut lo, mut hi) = (1usize, 2usize);
+        while SparqlParser::new().parse_query(&spine(hi)).is_ok() {
+            lo = hi;
+            hi *= 2;
+            assert!(
+                hi < 1_000_000,
+                "spine never reaches the safety limit up to {hi} repetitions"
+            );
+        }
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if SparqlParser::new().parse_query(&spine(mid)).is_ok() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        SparqlParser::new()
+            .parse_query(&spine(lo))
+            .expect("one repetition short of the safety limit must parse");
+        let error = SparqlParser::new().parse_query(&spine(hi)).expect_err(
+            "one repetition past the safety limit must be a typed refusal, never an abort",
+        );
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "the spine refusal remains a typed syntax error: {error}"
+        );
+        assert!(
+            error.to_string().contains("combinator count exceeds"),
+            "the refusal should name the combinator-count limit, got: {error}"
+        );
+    }
+
+    /// A run of SIBLING `OPTIONAL { }` elements at ONE brace depth: each
+    /// keyword adds one `LeftJoin` level to a left-deep spine while
+    /// `group_pattern_depth` never exceeds 1 — the exact shape
+    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, and the shape
+    /// [`MAX_GRAPH_PATTERN_NODES`] exists to bound instead.
+    #[test]
+    fn sibling_spine_length_is_bounded_by_a_typed_error() {
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { ?s <https://example.org/p> ?o ");
+            for _ in 0..n {
+                body.push_str("OPTIONAL { ?s <https://example.org/q> ?r } ");
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// The SAME left-deep-spine hazard, reachable with no `OPTIONAL`/`UNION`/
+    /// `LATERAL` keyword at all: a long run of dot-separated COMPLEX
+    /// property-path triples inside ONE triples block. `join` flattens
+    /// adjacent plain `Bgp` triples into one node (so a triples-only spine of
+    /// this length is harmless), but a property path with a modifier
+    /// (`+`/`*`/`?`/a multi-step sequence) parses to its own
+    /// `GraphPattern::Path` node, and `BlockSink::into_pattern` folds each one
+    /// onto the block with its own `Join` — entirely inside what the
+    /// group-parsing loop counts as ONE element.
+    #[test]
+    fn dot_separated_path_spine_length_is_bounded_by_a_typed_error() {
+        use std::fmt::Write as _;
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { ");
+            for i in 0..n {
+                let _ = write!(
+                    body,
+                    "<https://example.org/s{i}> <https://example.org/p>+ <https://example.org/o{i}> . "
+                );
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// A single bracketed group with a long run of `UNION` arms — hidden from
+    /// the group loop's own per-element charge because the whole chain is
+    /// consumed inside ONE loop iteration (the nested `while eat_kw("UNION")`
+    /// loop), so it is charged separately, one unit per arm past the first.
+    #[test]
+    fn union_arm_spine_length_is_bounded_by_a_typed_error() {
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { { ?s <https://example.org/p> ?o }");
+            for _ in 0..n {
+                body.push_str(" UNION { ?s <https://example.org/p> ?o }");
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection list lowers to a
+    /// chain of `Extend` nodes with no brace involved at all — a THIRD shape
+    /// (alongside the group loop and its `UNION` arms) that
+    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, closed by the same budget.
+    #[test]
+    fn select_expression_list_length_is_bounded_by_a_typed_error() {
+        use std::fmt::Write as _;
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT ");
+            for i in 0..n {
+                let _ = write!(body, "(1 AS ?v{i}) ");
+            }
+            body.push_str("WHERE { }");
+            body
+        });
     }
 
     #[test]

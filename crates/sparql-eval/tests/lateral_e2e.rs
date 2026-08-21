@@ -918,57 +918,94 @@ fn lateral_inside_exists_pattern_evaluates() {
 }
 
 // ---------------------------------------------------------------------------
-// 18. A LATERAL spine, adversarially deep: typed error or bounded eval, never
+// 18. A LATERAL spine, adversarially deep: a typed PARSE-time refusal, never
 //     a stack abort.
 // ---------------------------------------------------------------------------
 
 /// Chained (sibling, not nested-brace) `LATERAL` clauses build a LEFT-DEEP
 /// algebra spine whose STRUCTURAL depth is unrelated to the parser's
-/// brace-nesting guard (`group_pattern_depth`, which pops back down between
-/// sibling elements at the same textual level and never sees this growth).
-/// The evaluator's own nesting guard
-/// (`crate::governor::soundness::validate_graph_pattern_depth`) walks the
-/// PARSED ALGEBRA structurally with an explicit stack (no native recursion,
-/// so it cannot itself overflow) and is what must catch this before any
-/// recursive evaluation begins.
+/// brace-nesting guard (`purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH` /
+/// `group_pattern_depth`, which pops back down between sibling elements at
+/// the same textual level and never sees this growth): a spine of N chained
+/// `LATERAL { … }` keywords holds `group_pattern_depth` at 1 throughout,
+/// regardless of N.
+///
+/// The gap that once left open is closed at the PARSER, not the evaluator:
+/// `purrdf_sparql_algebra::MAX_GRAPH_PATTERN_NODES` charges one unit of a
+/// bounded budget per combinator node the group-parsing loop is about to
+/// build (a `LATERAL` keyword among them), and hard-fails with a typed
+/// [`purrdf_sparql_algebra::ParseError`] the instant the budget is
+/// exhausted — well before a tree deep enough to threaten the native stack
+/// (in the parser's own recursive walks, or in the tree's own recursive
+/// `Drop`) can ever be built. This closes the hole the evaluator's own
+/// iterative depth guard (`crate::governor::soundness::validate_graph_pattern_depth`)
+/// cannot: that guard runs AFTER a full parse, so it never gets a chance to
+/// run over a spine large enough to have already crashed the parser.
+///
+/// This finds the EXACT boundary by search rather than asserting it at a
+/// fixed N (`MAX_GRAPH_PATTERN_NODES ± 1` in isolation would drift silently
+/// out of sync with the parser's own accounting the moment another
+/// construct is added to the same budget): one `LATERAL` short of the limit
+/// must parse, the next must be a typed refusal — never an abort. Reaching
+/// either assertion at all already demonstrates the "never a stack abort"
+/// half of the contract; a real overflow would have taken the whole test
+/// PROCESS down before either could run.
 #[test]
-fn lateral_spine_depth_is_bounded_or_errors() {
-    let n = purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH + 64;
-    let mut body = String::from("SELECT * WHERE { ?s :q ?o ");
-    for _ in 0..n {
-        body.push_str("LATERAL { ?a :q ?b } ");
+fn lateral_spine_depth_is_bounded_by_a_typed_parse_error() {
+    fn lateral_spine(n: usize) -> String {
+        let mut body = String::from("SELECT * WHERE { ?s :q ?o ");
+        for _ in 0..n {
+            body.push_str("LATERAL { ?a :q ?b } ");
+        }
+        body.push('}');
+        format!("{PFX}{body}")
     }
-    body.push('}');
-    let text = format!("{PFX}{body}");
 
-    // The parser's own brace-depth guard does not bound a sibling spine: this
-    // must parse (each `LATERAL { … }` is one level below the enclosing
-    // group, popped back before the next sibling is parsed).
+    assert!(
+        SparqlParser::new().parse_query(&lateral_spine(1)).is_ok(),
+        "the smallest LATERAL spine must parse"
+    );
+    let (mut lo, mut hi) = (1usize, 2usize);
+    while SparqlParser::new().parse_query(&lateral_spine(hi)).is_ok() {
+        lo = hi;
+        hi *= 2;
+        assert!(
+            hi < 1_000_000,
+            "a LATERAL spine never reached the parser's safety limit up to {hi} links"
+        );
+    }
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if SparqlParser::new().parse_query(&lateral_spine(mid)).is_ok() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    // One LATERAL link short of the limit: parses clean. (Evaluating a
+    // spine this deep is a SEPARATE concern this test does not probe — the
+    // evaluator's own, much tighter, iterative nesting guard
+    // (`crate::governor::soundness::validate_graph_pattern_depth`,
+    // `MAX_GRAPH_PATTERN_DEPTH` = 128) legitimately refuses a spine this
+    // long at EVALUATION time regardless of this parser-level budget; that
+    // guard is covered elsewhere and is not what this test is about.)
     let query = SparqlParser::new()
-        .parse_query(&text)
-        .expect("a sibling LATERAL spine is not brace-nested and must parse");
-
-    // Evaluating it must be a typed refusal or a bounded (in-process, non-
-    // aborting) answer — never a stack overflow. Reaching this line at all
-    // (the test process did not abort) already demonstrates the "never a
-    // stack abort" half; the typed-error half is asserted explicitly.
-    let ds = dataset();
-    let outcome = NativeSparqlEngine::new().query(&ds, request(&text));
-    match outcome {
-        Err(e) => {
-            let message = format!("{e:?}");
-            assert!(
-                message.to_lowercase().contains("depth") || message.to_lowercase().contains("nest"),
-                "a depth refusal should name depth/nesting, got: {message}"
-            );
-        }
-        Ok(result) => {
-            // A bounded (non-erroring) evaluator is equally acceptable — but it
-            // must actually have produced a genuine, finite answer, not hung.
-            let _ = rows(&result);
-        }
-    }
+        .parse_query(&lateral_spine(lo))
+        .expect("one LATERAL link short of the safety limit must parse");
     let _ = query;
+
+    // One LATERAL link past the limit: a typed parse-time refusal.
+    let error = SparqlParser::new()
+        .parse_query(&lateral_spine(hi))
+        .expect_err(
+            "one LATERAL link past the safety limit must be a typed refusal, never an abort",
+        );
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("combinator count exceeds"),
+        "a spine refusal should name the combinator-count limit, got: {message}"
+    );
 }
 
 // ---------------------------------------------------------------------------
