@@ -122,8 +122,18 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     // the per-row substituted copy instead of folding into the enclosing node.
     let source_addr = std::ptr::from_ref(pattern) as usize;
     let (substituted, ledger_map) = if ctx.resolve_ledger_ordinal(source_addr).is_some() {
+        // The immediately enclosing window's map, when THIS window is itself substituting a
+        // subtree an enclosing `LATERAL` window already substituted (`pattern` is then one
+        // of that window's own synthetic copies, not a real plan address) — read before
+        // this call's own map is pushed below, so it names exactly the one window `pattern`
+        // came from. `substitute_pattern_tracked` uses it to resolve past that window's
+        // scaffolding straight to the real plan address, and to arbitrate `counts_rows` so
+        // nesting never mints more than one counting node per real ordinal — see
+        // `crate::expr::SubstitutionSource`'s doc.
+        let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
-        let substituted = crate::expr::substitute_pattern_tracked(pattern, &row, &mut map);
+        let substituted =
+            crate::expr::substitute_pattern_tracked(pattern, &row, &mut map, enclosing);
         (substituted, Some(map))
     } else {
         (crate::expr::substitute_pattern(pattern, &row), None)

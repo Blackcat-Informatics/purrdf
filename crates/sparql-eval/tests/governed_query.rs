@@ -1777,6 +1777,194 @@ fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
     );
 }
 
+/// The one-level-deeper recurrence of the bug
+/// [`ledger_attributes_lateral_rhs_work_to_the_rhs_nodes`] fixes: a `LATERAL` nested inside
+/// another `LATERAL`'s per-row substituted copy.
+///
+/// The inner window's substitution walk substitutes the OUTER window's already
+/// Values-Insertion-wrapped subtree (`Join(leaf, Values{…})`, see that test's doc), and the
+/// inner walk's generic recursion re-copies every node in it — the leaf, the `Values` table,
+/// AND the outer `Join` wrapper — exactly as if each were fresh, unrelated source material.
+/// Considered only against the inner window's own local attribution rule, each re-copy looks
+/// like an independent node with its own claim to count rows, and before this fix all three
+/// DID count: the innermost `Bgp`'s `rows` became a fourfold-inflated composite of three
+/// different synthetic nodes' outputs printed beside a per-invocation estimate that was
+/// exact. See `crate::expr::SubstitutionSource`'s doc (not in this crate's public surface)
+/// for the cross-window arbitration that fixes it: within one substitution window, for each
+/// real plan ordinal, only the FIRST (topmost) synthesized node this window mints keeps its
+/// local `counts_rows: true`; every further one this window mints for the same real ordinal —
+/// including one re-copied from an enclosing window's already-wrapped subtree — is forced
+/// `false`.
+///
+/// The fixture is `ledger_attributes_lateral_rhs_work_to_the_rhs_nodes`'s shape, one level
+/// deeper, still small enough that every number below is hand-computable:
+///
+/// - `:a :p :oa`, `:a :label "a1"`, `:a :label "a2"`, `:a :q :c` — `:b :p :ob`, `:b :label
+///   "b1"`, `:b :label "b2"` (`:b` has no `:q` fact).
+/// - `?s :p ?o LATERAL { ?s :label ?l LATERAL { ?s :q ?c } }`: the outer `Bgp` (`?s :p ?o`)
+///   produces 2 rows (`:a`, `:b`). The middle `Bgp` (`?s :label ?l`) is invoked once per
+///   OUTER row and produces 2 rows each time (`:a`'s two labels, then `:b`'s two labels) —
+///   4 invocations of the innermost `Bgp` (`?s :q ?c`) in total: 2 with `?s = :a`, 2 with
+///   `?s = :b`. Each `:a`-invocation matches `(:a, :q, :c)` (1 row); each `:b`-invocation
+///   matches nothing (`:b` has no `:q` fact, 0 rows). The innermost `Bgp`'s TRUE constrained
+///   output, summed over all 4 invocations, is therefore exactly `1 + 1 + 0 + 0 = 2` — the
+///   SAME per-invocation shape `ledger_attributes_lateral_rhs_work_to_the_rhs_nodes` already
+///   gets right one level up, which is what makes this a regression test for the recurrence
+///   rather than a new bug.
+#[test]
+fn ledger_attributes_nested_lateral_rhs_rows_to_the_true_output() {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    let label = builder.intern_iri("http://example.org/label");
+    let q = builder.intern_iri("http://example.org/q");
+    let a = builder.intern_iri("http://example.org/a");
+    let b = builder.intern_iri("http://example.org/b");
+    let oa = builder.intern_iri("http://example.org/oa");
+    let ob = builder.intern_iri("http://example.org/ob");
+    let c = builder.intern_iri("http://example.org/c");
+    let a1 = builder.intern_literal(RdfLiteral::simple("a1"));
+    let a2 = builder.intern_literal(RdfLiteral::simple("a2"));
+    let b1 = builder.intern_literal(RdfLiteral::simple("b1"));
+    let b2 = builder.intern_literal(RdfLiteral::simple("b2"));
+    builder.push_quad(a, p, oa, None);
+    builder.push_quad(a, label, a1, None);
+    builder.push_quad(a, label, a2, None);
+    builder.push_quad(a, q, c, None);
+    builder.push_quad(b, p, ob, None);
+    builder.push_quad(b, label, b1, None);
+    builder.push_quad(b, label, b2, None);
+    let dataset = builder.freeze().expect("freeze the nested-LATERAL fixture");
+
+    let engine = NativeSparqlEngine::new();
+    let query = "PREFIX : <http://example.org/> SELECT * WHERE { \
+                 ?s :p ?o LATERAL { ?s :label ?l LATERAL { ?s :q ?c } } }";
+    let explanation = engine
+        .explain_query(&dataset, query, None)
+        .expect("explain the query");
+    let ledger = explanation.ledger();
+    assert_eq!(
+        ledger.len(),
+        6,
+        "expected Project, outer Lateral, outer-left Bgp, inner Lateral, inner-left Bgp, \
+         innermost Bgp: {ledger:?}"
+    );
+    assert_eq!(ledger[0].label, "Project");
+    assert_eq!(ledger[1].label, "Lateral");
+    assert_eq!(ledger[2].label, "Bgp");
+    assert_eq!(ledger[3].label, "Lateral");
+    assert_eq!(ledger[4].label, "Bgp");
+    assert_eq!(ledger[5].label, "Bgp");
+
+    // Every pinned value below was independently confirmed against the release CLI's
+    // `--explain` output over the equivalent fixture before being written here.
+    let outer_lateral = &ledger[1];
+    assert_eq!(
+        outer_lateral.rows, 2,
+        "the outer LATERAL's true output — :a's 2 rows, :b's 0 — is untouched by the inner \
+         window's arbitration: {ledger:?}"
+    );
+
+    let outer_left_bgp = &ledger[2];
+    assert_eq!(
+        outer_left_bgp.rows, 2,
+        "the outer left Bgp's own two rows: {ledger:?}"
+    );
+    let outer_left_estimate = outer_left_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp carries a planner estimate");
+    assert_eq!(outer_left_estimate.rows, 2);
+    assert_eq!(outer_left_bgp.rows, outer_left_estimate.rows);
+
+    let inner_lateral = &ledger[3];
+    assert_eq!(
+        inner_lateral.rows, 2,
+        "the inner LATERAL's true output, summed across its 2 outer-row invocations \
+         (2 for :a, 0 for :b): {ledger:?}"
+    );
+
+    let inner_left_bgp = &ledger[4];
+    assert_eq!(
+        inner_left_bgp.rows, 4,
+        "the inner left Bgp's own output summed across its 2 invocations (2 labels each \
+         for :a and :b): {ledger:?}"
+    );
+    let inner_left_estimate = inner_left_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp carries a planner estimate");
+    assert_eq!(inner_left_estimate.rows, 4);
+    assert_eq!(inner_left_bgp.rows, inner_left_estimate.rows);
+
+    let innermost_bgp = &ledger[5];
+    let innermost_estimate = innermost_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp under a nested LATERAL still carries a planner estimate");
+    assert_eq!(
+        innermost_estimate.rows, 1,
+        "the per-invocation estimate is unaffected by the fix: {ledger:?}"
+    );
+    // The false inflation this test exists to catch: before the fix, this line read
+    // `rows=4` (fourfold the true value) beside the SAME `estimated-rows=1` — a real Bgp
+    // whose planner estimate was exact rendering as an apparent 4x miss.
+    assert_eq!(
+        innermost_bgp.rows, 2,
+        "the innermost Bgp's TRUE constrained output, summed over all 4 invocations \
+         (1 + 1 + 0 + 0), is 2 — not a composite of the outer window's re-copied leaf, \
+         `VALUES` table, and `Join` wrapper: {ledger:?}"
+    );
+    assert_eq!(
+        innermost_bgp.cells, 2,
+        "exactly two invocations (both :a's) committed a nonzero row, and neither exceeds \
+         one row, so the peak single-bag cell count equals the summed row count here: \
+         {ledger:?}"
+    );
+
+    // The adversary's invariant strengthened: `cells <= rows * columns` alone cannot catch
+    // row inflation (inflating `rows` only loosens that bound), so the pins above — not
+    // this sweep — are what actually catches the regression. The sweep still holds and is
+    // worth keeping as a general cross-check.
+    for node in ledger {
+        if let Some(estimate) = &node.estimate {
+            assert!(
+                node.cells <= node.rows.saturating_mul(estimate.columns),
+                "cells={} must not exceed rows={} * columns={} for {node:?}",
+                node.cells,
+                node.rows,
+                estimate.columns
+            );
+        }
+        assert!(
+            node.rows > 0 || node.cells == 0,
+            "a node with zero committed rows cannot report nonzero cells: {node:?}"
+        );
+    }
+
+    // Fuel attribution is untouched by this fix: every unit charged during every
+    // substituted evaluation, at every nesting depth, still lands on the one real node it
+    // was charged against, and the ledger's fuel column still sums to the evidence total.
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
+    assert_eq!(
+        ledger_fuel,
+        explanation.evidence().consumed_in(ResourceDimension::Fuel),
+        "the per-node fuel column must still sum to the execution's fuel total"
+    );
+
+    // Determinism: the construction-time arbitration this fix adds is internal,
+    // address-keyed bookkeeping; nothing address-derived may leak into the rendered
+    // explanation.
+    let rendered = explanation.render();
+    assert_eq!(
+        engine
+            .explain_query(&dataset, query, None)
+            .expect("explain again")
+            .render(),
+        rendered,
+        "identical query and data must render byte-identical explain output"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The cap over a graph-producing form
 // ---------------------------------------------------------------------------

@@ -1484,8 +1484,8 @@ pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
 ) -> Box<GraphPattern> {
-    let mut map: Option<&mut SubstitutionSourceMap> = None;
-    substitute_pattern_impl(pattern, row, &mut map)
+    let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
+    substitute_pattern_impl(pattern, row, &mut tracking)
 }
 
 /// One [`SubstitutionSourceMap`] entry: which real plan node a substituted-tree node is
@@ -1503,17 +1503,40 @@ pub(crate) fn substitute_pattern(
 ///   nearest enclosing REAL node instead would be worse). Fuel's sum-to-total invariant
 ///   depends on this: every unit charged during the substituted evaluation must land
 ///   somewhere, and nothing but `source` has a claim on it.
-/// - **Committed rows/cells** are attributed to `source` ONLY from the node whose output
-///   IS `source`'s true output for this row — `counts_rows`. A `Bgp`/`Path` leaf Values
-///   Insertion wraps is evaluated UNCONSTRAINED (its own triple patterns are never
-///   rewritten to ground terms — see [`substitute_pattern`]'s doc), so its own
-///   committed rows are a re-scan cost, not `source`'s output; the one-row `VALUES` table
-///   is bookkeeping, never `source`'s output either. Only the wrapping `Join`'s narrowed
-///   result is. Counting all three would make `source`'s reported `rows`/`cells` a
-///   composite of three different nodes' outputs rendered beside ONE estimate that
-///   predicts only `source`'s own — the miscalibration this type exists to prevent.
-///   `counts_rows` is `true` for a plain 1:1 copy (no wrapper needed) and for the
-///   wrapper itself when one is added, `false` for the scaffolding a wrapper wraps.
+/// - **Committed rows/cells** are attributed to `source` ONLY from the ONE node, across the
+///   WHOLE substitution — not just this call's own map — whose output IS `source`'s true
+///   output for this row: `counts_rows`. Within a single, non-nested call this is exactly
+///   the local rule it always was — `true` for a plain 1:1 copy or the `Join` wrapper Values
+///   Insertion adds, `false` for the leaf/`Join` it wraps (a `Bgp`/`Path` leaf Values
+///   Insertion wraps is evaluated UNCONSTRAINED — its own triple patterns are never
+///   rewritten to ground terms, see [`substitute_pattern`]'s doc — so its own committed rows
+///   are a re-scan cost, not `source`'s output; the one-row `VALUES` table is bookkeeping,
+///   never `source`'s output either). Counting all three would make `source`'s reported
+///   `rows`/`cells` a composite of three different nodes' outputs rendered beside ONE
+///   estimate that predicts only `source`'s own — the miscalibration this type exists to
+///   prevent.
+///
+///   A `LATERAL` nested inside another `LATERAL`'s per-row substituted copy is where the
+///   local rule alone stops being enough: the INNER window's walk substitutes an already
+///   Values-Insertion-wrapped subtree (`Join(leaf, Values)`) the OUTER window built, and the
+///   inner walk's generic recursion re-copies every node in it — the leaf, the `Values`
+///   table, AND the outer `Join` wrapper — exactly as if each were fresh, unrelated source
+///   material. Left alone, EACH of those re-copies would independently satisfy the local
+///   rule's default (`true` for a plain copy, `true` for a fresh wrapper) and all commit
+///   rows for the SAME real ordinal — a `rows` inflated by however many extra synthetic
+///   copies a `LATERAL` is nested how many levels deep. [`boxed_and_mapped_as`] closes this:
+///   before minting an entry it resolves `source`'s own address one hop through
+///   [`SubstitutionTracking::enclosing`] — the immediately enclosing window's map, when
+///   `source` is itself a copy that window produced — straight to the real plan address
+///   underneath (never the synthetic one), and only the FIRST node this window's walk
+///   mints for that real address (in call order, which is bottom-up within a wrapped leaf's
+///   own subtree — see [`join_leaf_with_values`] — and outside-in across the rest of the
+///   walk) is allowed to keep `counts_rows: true`; every further one this window mints for
+///   the SAME real address is forced `false`, tracked by [`SubstitutionTracking::claimed`].
+///   Nesting three, four, or `n` windows deep composes: each window only ever needs to look
+///   one hop out, because by induction every entry a window mints already names a real,
+///   ledger-resolvable address — never another window's synthetic one — so the address a
+///   window resolves against is always already final.
 ///
 /// A node the walk **synthesizes** — the `Values` Values Insertion adds, and the `Join`
 /// that joins it in (see [`substitute_pattern`]'s doc) — carries no source identity of its
@@ -1529,7 +1552,10 @@ pub(crate) fn substitute_pattern(
 /// of, and nothing but that node's own true output ever lands on an ancestor's row column.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SubstitutionSource {
-    /// The real plan node's own address, in the UNSUBSTITUTED plan tree.
+    /// The real plan node's own address, in the UNSUBSTITUTED plan tree — never a
+    /// synthetic address from an enclosing window's substituted tree, even when `source`
+    /// (the argument [`boxed_and_mapped_as`] was called with) was one: see this type's doc
+    /// on nested `LATERAL`.
     pub(crate) source: usize,
     /// Whether this node's own committed rows/cells are `source`'s true output for this
     /// row — see this type's doc.
@@ -1545,20 +1571,54 @@ pub(crate) struct SubstitutionSource {
 /// prints — see that function's determinism note.
 pub(crate) type SubstitutionSourceMap = crate::DetHashMap<usize, SubstitutionSource>;
 
-/// [`substitute_pattern`], additionally populating `map` (see [`SubstitutionSourceMap`]) —
-/// the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
+/// The state [`substitute_pattern_tracked`]'s walk threads through
+/// [`substitute_pattern_impl`]'s recursion alongside the map it is building for the CURRENT
+/// window — everything [`boxed_and_mapped_as`] needs to arbitrate `counts_rows` across
+/// nested `LATERAL` windows rather than only within this one. See [`SubstitutionSource`]'s
+/// doc for why that arbitration is necessary at all.
+struct SubstitutionTracking<'a> {
+    /// The map this call is populating.
+    map: &'a mut SubstitutionSourceMap,
+    /// The immediately enclosing (most-recently-entered) window's map, when this walk is
+    /// itself substituting a subtree an ENCLOSING window already substituted — `None` for
+    /// the outermost `LATERAL`, which walks the true unsubstituted plan and therefore never
+    /// needs to resolve past anything.
+    enclosing: Option<&'a SubstitutionSourceMap>,
+    /// Real plan addresses that have already had a `counts_rows: true` node minted during
+    /// THIS window's walk. [`boxed_and_mapped_as`] consults and updates this so that, of
+    /// every node this window mints for the same real address — including ones re-copied
+    /// from an enclosing window's already-wrapped subtree — only the first keeps its local
+    /// `true`.
+    claimed: &'a mut DetHashSet<usize>,
+}
+
+/// [`substitute_pattern`], additionally populating `tracked` (see [`SubstitutionSourceMap`])
+/// — the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
 /// nodes ARE plan nodes and must keep their own ledger identity across the per-row
 /// substituted copy. A correlated-`EXISTS` inner (also reached through
 /// `eval_correlated`, via [`substitute_pattern`] without a map) has no plan identity to
 /// preserve — see the ledger module doc's "Attribution of work that is not a plan node" —
 /// so it is deliberately never tracked.
+///
+/// `enclosing` is the immediately enclosing window's map — the last entry of
+/// [`EvalCtx::correlated_node_maps`](crate::eval::EvalCtx::correlated_node_maps) at the call
+/// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
+/// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
+/// nested `LATERAL` needs it.
 pub(crate) fn substitute_pattern_tracked(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     tracked: &mut SubstitutionSourceMap,
+    enclosing: Option<&SubstitutionSourceMap>,
 ) -> Box<GraphPattern> {
-    let mut map = Some(tracked);
-    substitute_pattern_impl(pattern, row, &mut map)
+    let mut claimed = DetHashSet::default();
+    let mut tracking = SubstitutionTracking {
+        map: tracked,
+        enclosing,
+        claimed: &mut claimed,
+    };
+    let mut tracking = Some(&mut tracking);
+    substitute_pattern_impl(pattern, row, &mut tracking)
 }
 
 /// The substitution walk itself. Every arm ends by boxing the node it built and — through
@@ -1575,7 +1635,7 @@ pub(crate) fn substitute_pattern_tracked(
 fn substitute_pattern_impl(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
     match pattern {
         GraphPattern::Bgp { patterns } => {
@@ -1926,7 +1986,7 @@ fn substitute_pattern_impl(
 fn boxed_and_mapped(
     built: GraphPattern,
     source: &GraphPattern,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
     boxed_and_mapped_as(built, source, map, true)
 }
@@ -1937,24 +1997,46 @@ fn boxed_and_mapped(
 fn boxed_and_mapped_scaffolding(
     built: GraphPattern,
     source: &GraphPattern,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
     boxed_and_mapped_as(built, source, map, false)
 }
 
 /// Shared implementation of [`boxed_and_mapped`]/[`boxed_and_mapped_scaffolding`].
+///
+/// `counts_rows` here is the LOCAL candidate — the ordinary within-one-window rule
+/// ([`SubstitutionSource`]'s doc) — not the final answer. Two more things happen before it
+/// is recorded, both there to keep a nested `LATERAL` from minting more than one counting
+/// node for the same real ordinal (see that type's doc for why re-copying an
+/// already-wrapped enclosing subtree would otherwise do exactly that):
+///
+/// 1. `source`'s own address is resolved one hop through [`SubstitutionTracking::enclosing`]
+///    — the immediately enclosing window's map — when it is itself a copy that window
+///    produced, so the entry this call inserts names the REAL plan address underneath,
+///    never a synthetic one. A `None` result (no enclosing window, or `source` is not one of
+///    its copies) leaves `source`'s own address as the answer, which is already real.
+/// 2. The local candidate is granted `true` only if [`SubstitutionTracking::claimed`] does
+///    not already hold that real address — and, when granted, claims it — so of every node
+///    this window mints for the same real address, only the first survives as the counting
+///    one. [`demote_to_scaffolding`] releases a claim it turns out not to need.
 fn boxed_and_mapped_as(
     built: GraphPattern,
     source: &GraphPattern,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
     counts_rows: bool,
 ) -> Box<GraphPattern> {
     let boxed = Box::new(built);
-    if let Some(m) = map.as_deref_mut() {
-        m.insert(
+    if let Some(tracking) = map.as_deref_mut() {
+        let source_addr = std::ptr::from_ref(source) as usize;
+        let real_source = tracking
+            .enclosing
+            .and_then(|enclosing| enclosing.get(&source_addr))
+            .map_or(source_addr, |entry| entry.source);
+        let counts_rows = counts_rows && tracking.claimed.insert(real_source);
+        tracking.map.insert(
             std::ptr::from_ref(boxed.as_ref()) as usize,
             SubstitutionSource {
-                source: std::ptr::from_ref(source) as usize,
+                source: real_source,
                 counts_rows,
             },
         );
@@ -1967,10 +2049,20 @@ fn boxed_and_mapped_as(
 /// becomes `source`'s true output for this row, so the wrapped node underneath must stop
 /// counting rows/cells — its fuel keeps accruing to `source` unaffected (see
 /// [`SubstitutionSource`]'s doc). A no-op when `map` is disengaged.
-fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionSourceMap>, address: usize) {
-    if let Some(m) = map.as_deref_mut()
-        && let Some(entry) = m.get_mut(&address)
+///
+/// Also releases the real address's claim in [`SubstitutionTracking::claimed`] when the
+/// demoted entry currently holds one: the entry claimed it on the (soon to be wrong)
+/// assumption that it would stay the counting node, and the wrapper [`boxed_and_mapped_as`]
+/// mints next for the SAME real address must be free to claim it instead — that hand-off is
+/// what keeps a wrapped leaf's own `boxed_and_mapped` call (always locally `true`, before its
+/// caller knows whether wrapping is even needed) from permanently starving the wrapper.
+fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, address: usize) {
+    if let Some(tracking) = map.as_deref_mut()
+        && let Some(entry) = tracking.map.get_mut(&address)
     {
+        if entry.counts_rows {
+            tracking.claimed.remove(&entry.source);
+        }
         entry.counts_rows = false;
     }
 }
@@ -2009,7 +2101,7 @@ fn join_leaf_with_values(
     leaf_vars: &DetHashSet<Variable>,
     term_row: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
     source: &GraphPattern,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
     let restricted: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = term_row
         .iter()
@@ -2086,7 +2178,7 @@ fn wrap_with_expr_term_only_values(
     expr_free_vars: &DetHashSet<Variable>,
     row: &SubstitutionRow,
     source: &GraphPattern,
-    map: &mut Option<&mut SubstitutionSourceMap>,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
     if expr_free_vars.is_empty() {
         return node;

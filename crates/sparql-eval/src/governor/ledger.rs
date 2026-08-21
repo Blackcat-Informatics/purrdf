@@ -81,11 +81,29 @@
 //! nodes' outputs printed beside an estimate that predicts only one of them — a real `Bgp`
 //! whose planner estimate was EXACT then renders as an apparent order-of-magnitude miss.
 //! `crate::expr::SubstitutionSource::counts_rows` is the per-synthesized-node flag that
-//! keeps `rows`/`cells` counting only the one node whose output IS the real node's true
-//! output for that row — the wrapper when Values Insertion adds one, a plain 1:1 copy when
-//! it does not — while every synthesized node's fuel keeps landing here regardless. See
-//! that type's doc for the full attribution rule and
-//! `crate::eval::EvalCtx::ledger_counts_rows` for the evaluator-side cursor that carries it.
+//! keeps `rows`/`cells` counting only ONE node's output as the real node's true output for
+//! that row — while every synthesized node's fuel keeps landing here regardless.
+//!
+//! For a single (non-nested) `LATERAL` window that one counting node is simply the wrapper
+//! when Values Insertion adds one, or a plain 1:1 copy when it does not. A `LATERAL` nested
+//! inside another `LATERAL`'s per-row substituted copy raises the same question one level
+//! deeper: the inner window's own substitution walk re-copies the OUTER window's
+//! already-wrapped subtree — the leaf, the `VALUES` table, AND the outer `Join` wrapper —
+//! and each re-copy, considered only against the inner window's OWN local rule, looks like
+//! an independent node with its own claim to count. Rewarding every one of them (the
+//! pre-fix behaviour) commits the same real ordinal's rows several times over — a `Bgp`
+//! whose true constrained output is 2 rows can render `actual-rows` several multiples of
+//! that beside an `estimated-rows` that was exact. The rule that avoids it, stated
+//! precisely: **within one substitution window, for each real plan ordinal, exactly one
+//! synthesized or copied node counts rows — the topmost node of the window's synthesized
+//! chain that resolves to that ordinal.** Every `VALUES` join below that topmost node only
+//! narrows further; the topmost node's own committed output is already the fully-constrained
+//! result the planner's estimate refers to, so nothing beneath it can also be that result
+//! without double-counting. See `crate::expr::SubstitutionSource`'s doc for how the walk
+//! enforces this — resolving each copy's source past its own enclosing window at
+//! construction time and letting only the first (topmost) copy per real ordinal, per window,
+//! keep the claim — and `crate::eval::EvalCtx::ledger_counts_rows` for the evaluator-side
+//! cursor that carries the already-arbitrated answer through to the commit.
 //!
 //! `rows` sums every commit this node's ledger line receives (its total output, however
 //! many times the node was invoked); `cells` keeps only the largest single commit (the

@@ -380,13 +380,18 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     ///
     /// Pushed by [`Self::enter_substituted_exists`] when [`crate::binop::eval_correlated`]
     /// substitutes a `LATERAL` right operand whose source node IS a plan node (a
-    /// correlated `EXISTS` inner pushes nothing — it has no plan identity to preserve).
-    /// [`Self::resolve_ledger_ordinal`] is the only reader: it walks this stack
-    /// innermost-first so a `LATERAL` nested inside another `LATERAL`'s per-row
-    /// substituted copy chains through BOTH maps back to a real ordinal, rather than one
-    /// window's map silently shadowing the other's. A stack, not a single slot merged in
-    /// place, because both the outer and the inner window's map are simultaneously live
-    /// for the whole time the inner one is being evaluated.
+    /// correlated `EXISTS` inner pushes nothing — it has no plan identity to preserve). Two
+    /// readers: [`Self::resolve_ledger_ordinal`] walks this stack innermost-first at
+    /// evaluation time so a `LATERAL` nested inside another `LATERAL`'s per-row substituted
+    /// copy chains through BOTH maps back to a real ordinal, rather than one window's map
+    /// silently shadowing the other's; [`crate::binop::eval_correlated`] reads only its
+    /// TOP (via `.last()`), BEFORE pushing the map it is about to build, as the `enclosing`
+    /// window [`crate::expr::substitute_pattern_tracked`]'s walk resolves synthetic nodes
+    /// against at construction time — see [`crate::expr::SubstitutionSource`]'s doc for why
+    /// that second reader is what actually keeps a nested `LATERAL` from over-counting rows,
+    /// with this stack's runtime chase now mostly a same-answer fallback. A stack, not a
+    /// single slot merged in place, because both the outer and the inner window's map are
+    /// simultaneously live for the whole time the inner one is being evaluated.
     pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
@@ -902,13 +907,24 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// heap-temporary address; [`Self::correlated_node_maps`]'s TOP (innermost, most
     /// recently entered) map translates it one substitution-window's worth closer to a real
     /// plan address, and the loop retries — first against the ledger directly, then, on a
-    /// further miss, against the next map out. That outward chain is what makes a `LATERAL`
-    /// nested inside another `LATERAL`'s substituted RHS resolve correctly: the inner map
-    /// only ever knows how to translate one level, so BOTH windows' maps must stay live and
-    /// be walked in order — see that field's doc. `counts_rows` is read from the FIRST map
-    /// entry consulted — the one describing `address` itself — and carried through any
-    /// further translation unchanged: it answers a question about THIS node, not about
-    /// whatever address it is chased through on the way to an ordinal.
+    /// further miss, against the next map out.
+    ///
+    /// That outward chain exists for a `LATERAL` nested inside another `LATERAL`'s
+    /// substituted RHS, but by the time it runs the nesting has ALREADY been resolved once,
+    /// at construction:
+    /// [`crate::expr::substitute_pattern_tracked`]'s walk resolves each synthetic node's
+    /// source past its own enclosing window at MINT time
+    /// (`crate::expr::boxed_and_mapped_as`), so every map entry already names a real,
+    /// ledger-resolvable address rather than another window's synthetic one — the loop
+    /// below almost always resolves on its first map probe as a consequence, and the
+    /// further-map fallback is what is left for the rare case a translation is not yet
+    /// resolvable that way. `counts_rows` is read from the FIRST map entry consulted — the
+    /// one describing `address` itself — and carried through any further translation
+    /// unchanged: it answers a question about THIS node, not about whatever address it is
+    /// chased through on the way to an ordinal, and it is already the fully-arbitrated
+    /// answer (at most one synthetic node per real ordinal per window keeps `true` — see
+    /// [`crate::expr::SubstitutionSource`]'s doc), not a locally-decided one that a caller
+    /// would still need to reconcile against an enclosing window's own claim.
     ///
     /// A miss at any step — `address` absent from the map being consulted — stops the
     /// search and returns `None` rather than trying an outer map with the SAME address: a
