@@ -15,12 +15,13 @@ use std::time::Duration;
 
 use purrdf_core::{
     BlankScope, GovernorEvidence, InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset,
-    RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
+    RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest, SparqlResult, StopCause,
+    TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
     GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpRemoteQuerySource,
-    HttpRequest, NativeSparqlEngine, PartialAnswers, QueryExplanation, QueryGovernors,
+    HttpRequest, NativeSparqlEngine, NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors,
     QueryOptions, RemoteError, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 
@@ -1510,10 +1511,7 @@ fn explain_reports_a_deterministic_per_node_ledger() {
     // The ledger DECOMPOSES the evidence: its fuel column sums to exactly the total the
     // evidence reports. A decomposition that did not add up would be a decomposition of
     // some other number.
-    let ledger_fuel: u64 = ledger
-        .iter()
-        .map(purrdf_sparql_eval::NodeCharges::fuel_total)
-        .sum();
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
     assert_eq!(
         ledger_fuel,
         first.evidence().consumed_in(ResourceDimension::Fuel),
@@ -1561,6 +1559,146 @@ fn explain_reports_a_deterministic_per_node_ledger() {
     // Explaining does not bound the query: `METERED` reaches no ceiling, so the run the
     // explanation describes is the run a caller would get.
     assert!(first.evidence().is_complete(), "{:?}", first.evidence());
+}
+
+/// A `LATERAL` right operand's per-row substituted copy must keep its OWN ledger
+/// identity. Without that, EVERY charge inside a `LATERAL`'s per-row substituted
+/// evaluation folds into the `LATERAL` node itself: a real plan node underneath it (here,
+/// the RHS `Bgp`) prints `actual-rows=0` next to a nonzero planner estimate — a FALSE ZERO
+/// on a node that did real work — while `LATERAL`'s own `rows=` becomes the sum of every
+/// substituted copy's work rather than the join's true output cardinality. The
+/// pre-existing `explain_reports_a_deterministic_per_node_ledger` test above cannot catch
+/// that: it only checks that the ledger's fuel column SUMS to the evidence's fuel total,
+/// an invariant that is exactly as true under misattribution as without it (addition
+/// commutes; a unit charged to the wrong node still adds up to the same total). This test
+/// checks per-node counters instead.
+///
+/// The fixture is deliberately tiny so every number below is hand-computable:
+///
+/// - `:a :p :oa`, `:a :label "hit"`, `:b :p :ob` (`:b` has no `:label`).
+/// - `?s :p ?o LATERAL { ?s :label ?l }`: the left `Bgp` produces 2 rows (`:a`, `:b`); the
+///   right `Bgp` (`?s :label ?l`) is Values-Insertion'd (SEP-0007's `Replace`
+///   mechanism joins the outer `?s` binding in as a `VALUES` row rather than rewriting the
+///   leaf's own — still unconstrained — terms), so it is invoked ONCE PER LEFT ROW and,
+///   each time, scans the WHOLE dataset for `?s :label ?l` (one match, `(:a, "hit")`)
+///   before the joined `VALUES` row narrows it:
+///   - left row `:a`: the unconstrained scan finds `(:a, "hit")` (1 candidate quad, 1 raw
+///     row); `VALUES{?s=:a}` is compatible, so the per-row result is 1 row.
+///   - left row `:b`: the SAME unconstrained scan again finds `(:a, "hit")` (1 candidate
+///     quad, 1 raw row); `VALUES{?s=:b}` is INCOMPATIBLE with subject `:a`, so the
+///     per-row result is 0 rows.
+///   - `LATERAL`'s true output is therefore exactly 1 row (`:a`'s).
+///
+/// The right `Bgp`'s own ledger line therefore carries: 2 node visits for the leaf itself
+/// (`algebra-node-entry`), plus 2 more for the synthetic `Join`/`Values` wrapper Values
+/// Insertion adds (mapped to the SAME source as the leaf — see
+/// `crate::expr::SubstitutionSourceMap`'s doc, not in this crate's public surface, for
+/// why), plus 2 more for the `Values` node itself = 6; 2 candidate quads (only the leaf
+/// charges this point); and 2 (the leaf's own raw output) + 1 (the synthetic `Join`
+/// wrapper's narrowed output — `:a`'s row only) + 2 (the synthetic `Values` node's own
+/// always-one-row-per-invocation output) = 5 committed rows.
+#[test]
+fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    let label = builder.intern_iri("http://example.org/label");
+    let a = builder.intern_iri("http://example.org/a");
+    let b = builder.intern_iri("http://example.org/b");
+    let oa = builder.intern_iri("http://example.org/oa");
+    let ob = builder.intern_iri("http://example.org/ob");
+    let hit = builder.intern_literal(RdfLiteral::simple("hit"));
+    builder.push_quad(a, p, oa, None);
+    builder.push_quad(a, label, hit, None);
+    builder.push_quad(b, p, ob, None);
+    let dataset = builder.freeze().expect("freeze the mini LATERAL fixture");
+
+    let engine = NativeSparqlEngine::new();
+    let query =
+        "PREFIX : <http://example.org/> SELECT * WHERE { ?s :p ?o LATERAL { ?s :label ?l } }";
+    let explanation = engine
+        .explain_query(&dataset, query, None)
+        .expect("explain the query");
+    let ledger = explanation.ledger();
+    assert_eq!(
+        ledger.len(),
+        4,
+        "expected exactly Project, Lateral, left Bgp, right Bgp: {ledger:?}"
+    );
+    assert_eq!(ledger[0].label, "Project");
+    assert_eq!(ledger[1].label, "Lateral");
+    assert_eq!(ledger[2].label, "Bgp");
+    assert_eq!(ledger[3].label, "Bgp");
+
+    let lateral = &ledger[1];
+    assert_eq!(
+        lateral.rows, 1,
+        "LATERAL's own row count must be its TRUE output cardinality (:a's one row), not \
+         the sum of every substituted copy's own work: {ledger:?}"
+    );
+    assert_eq!(lateral.fuel_at(ChargePoint::AlgebraNodeEntry), 1);
+    assert_eq!(lateral.fuel_at(ChargePoint::CommittedOutputRow), 1);
+
+    let left_bgp = &ledger[2];
+    assert_eq!(
+        left_bgp.rows, 2,
+        "the left Bgp's own two rows (:a, :b): {ledger:?}"
+    );
+    assert_eq!(left_bgp.fuel_at(ChargePoint::BgpCandidateQuad), 2);
+
+    let rhs_bgp = &ledger[3];
+    // The false zero this test exists to catch: before the fix, EVERY one of these
+    // counters read 0 on this exact node, next to a nonzero planner estimate
+    // (`estimated-rows=1 actual-rows=0`).
+    assert!(
+        rhs_bgp.rows > 0,
+        "the RHS Bgp did real work (invoked twice) and must not report a false zero: \
+         {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.estimate.as_ref().map(|estimate| estimate.rows),
+        Some(1)
+    );
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::BgpCandidateQuad),
+        2,
+        "one candidate quad per invocation — the leaf is unconstrained by Values \
+         Insertion's design (see this test's doc): {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.rows, 5,
+        "2 (the leaf's own raw output) + 1 (the synthetic Join wrapper's narrowed \
+         output) + 2 (the synthetic Values leaf's own one-row-per-invocation output), \
+         ALL correctly attributed to this real plan node instead of folding into \
+         LATERAL or reading a false zero: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::AlgebraNodeEntry),
+        6,
+        "2 leaf visits + 2 synthetic-Join-wrapper visits + 2 synthetic-Values visits: \
+         {ledger:?}"
+    );
+
+    // The pre-existing invariant still holds — a decomposition that did not add up would
+    // be a decomposition of some other number — but, as this test's doc explains, it alone
+    // cannot distinguish correct attribution from this exact bug.
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
+    assert_eq!(
+        ledger_fuel,
+        explanation.evidence().consumed_in(ResourceDimension::Fuel),
+        "the per-node fuel column must still sum to the execution's fuel total"
+    );
+
+    // Determinism: the cursor-mapping mechanism this fix adds is internal, address-keyed
+    // bookkeeping; nothing address-derived may leak into the rendered explanation.
+    let rendered = explanation.render();
+    assert_eq!(
+        engine
+            .explain_query(&dataset, query, None)
+            .expect("explain again")
+            .render(),
+        rendered,
+        "identical query and data must render byte-identical explain output"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -1389,7 +1389,68 @@ impl SubstitutionRow {
 /// Unchanged: still IRI-only value substitution via `substitute_term_pattern`
 /// — the fusion contract a joined `VALUES` row cannot satisfy (see that
 /// function's doc).
-pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) -> GraphPattern {
+pub(crate) fn substitute_pattern(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+) -> Box<GraphPattern> {
+    let mut map: Option<&mut SubstitutionSourceMap> = None;
+    substitute_pattern_impl(pattern, row, &mut map)
+}
+
+/// Substituted-node address → source-node address, one entry per node
+/// [`substitute_pattern_tracked`]'s walk produces from the plan it is substituting.
+///
+/// A node the walk **synthesizes** — the `Values` Values Insertion adds, and the `Join`
+/// that joins it in (see [`substitute_pattern`]'s doc) — carries no source identity of its
+/// own, so it is mapped to the SAME source as the already-mapped copy it wraps
+/// ([`join_leaf_with_values`]/[`wrap_with_expr_term_only_values`]). That, not leaving it
+/// unmapped, is what keeps a bare `LATERAL { ?s :p ?o }` (no `Filter`/`Extend` between the
+/// `LATERAL` and the wrapped leaf) from folding the wrapper's own charges into the
+/// `LATERAL` node itself: the wrapper is very often the SUBSTITUTED TREE'S OWN ROOT in
+/// that shape, so "fold into the nearest enclosing mapped node" would mean "fold into
+/// `LATERAL`", corrupting exactly the row count this whole map exists to keep honest.
+/// Mapping the wrapper to its child's source instead means every node in a wrapped
+/// subtree — real or synthetic — resolves to the ONE real node it is doing work on behalf
+/// of, and nothing but that node's own true output ever lands on an ancestor.
+///
+/// Keyed by a per-row heap-temporary address. That address is internal evaluator
+/// bookkeeping only: [`crate::governor::ledger::QueryExplanation::render`] emits ordinals
+/// and labels, never an address, so this map's keys never reach anything the ledger
+/// prints — see that function's determinism note.
+pub(crate) type SubstitutionSourceMap = crate::DetHashMap<usize, usize>;
+
+/// [`substitute_pattern`], additionally populating `map` (see [`SubstitutionSourceMap`]) —
+/// the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
+/// nodes ARE plan nodes and must keep their own ledger identity across the per-row
+/// substituted copy. A correlated-`EXISTS` inner (also reached through
+/// `eval_correlated`, via [`substitute_pattern`] without a map) has no plan identity to
+/// preserve — see the ledger module doc's "Attribution of work that is not a plan node" —
+/// so it is deliberately never tracked.
+pub(crate) fn substitute_pattern_tracked(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+    tracked: &mut SubstitutionSourceMap,
+) -> Box<GraphPattern> {
+    let mut map = Some(tracked);
+    substitute_pattern_impl(pattern, row, &mut map)
+}
+
+/// The substitution walk itself. Every arm ends by boxing the node it built and — through
+/// [`boxed_and_mapped`] — recording, IF `map` is engaged, that box's address (its
+/// permanent location; a `Box`'s pointee never moves again once allocated) against
+/// `pattern`'s address, so a later [`resolve_ledger_ordinal`](crate::eval::EvalCtx::resolve_ledger_ordinal)
+/// lookup on the returned tree resolves back to the exact plan node this call
+/// substituted. [`GraphPattern::Bgp`]/[`GraphPattern::Path`] and the expression-bearing
+/// arms additionally hand [`join_leaf_with_values`]/[`wrap_with_expr_term_only_values`]
+/// the SAME `pattern`/`map`, so a synthetic `Join`/`Values` wrapper those helpers add gets
+/// mapped to the identical source its wrapped child already resolves to — see
+/// [`SubstitutionSourceMap`]'s doc for why that, not leaving the wrapper unmapped, is the
+/// correct choice.
+fn substitute_pattern_impl(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+) -> Box<GraphPattern> {
     match pattern {
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
@@ -1400,13 +1461,14 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                 }
                 term_pattern_vars(&tp.object, &mut vars);
             }
-            join_leaf_with_values(
+            let leaf = boxed_and_mapped(
                 GraphPattern::Bgp {
                     patterns: patterns.clone(),
                 },
-                &vars,
-                &row.term,
-            )
+                pattern,
+                map,
+            );
+            join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
         }
         GraphPattern::Path {
             subject,
@@ -1416,22 +1478,23 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
             let mut vars = DetHashSet::default();
             term_pattern_vars(subject, &mut vars);
             term_pattern_vars(object, &mut vars);
-            join_leaf_with_values(
+            let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
                     path: path.clone(),
                     object: object.clone(),
                 },
-                &vars,
-                &row.term,
-            )
+                pattern,
+                map,
+            );
+            join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
         }
         // A property function's argument vectors are term positions, but — unlike a
         // `Bgp`/`Path` leaf, which now receives its row via a joined `VALUES` above —
         // the relation's invocation contract needs the argument itself constant, not
         // merely join-compatible with one (`substitute_term_pattern`'s fusion-contract
         // doc). This is that helper's one remaining client.
-        GraphPattern::PropertyFunction(call) => {
+        GraphPattern::PropertyFunction(call) => boxed_and_mapped(
             GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
                 iri: call.iri.clone(),
                 subject_args: call
@@ -1444,8 +1507,10 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                     .iter()
                     .map(|term| substitute_term_pattern(term, &row.expr))
                     .collect(),
-            })
-        }
+            }),
+            pattern,
+            map,
+        ),
         // `wrap_with_expr_term_only_values` closes the gap `substitute_expr` alone
         // leaves open: a blank-node/quoted-triple outer binding referenced ONLY by
         // `expr` (no leaf occurrence elsewhere in `inner`) has no `Expression`
@@ -1455,14 +1520,16 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
         GraphPattern::Filter { expr, inner } => {
             let mut free = DetHashSet::default();
             expr_vars(expr, &mut free);
-            GraphPattern::Filter {
-                expr: substitute_expr(expr, row),
-                inner: Box::new(wrap_with_expr_term_only_values(
-                    substitute_pattern(inner, row),
-                    &free,
-                    row,
-                )),
-            }
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::Filter {
+                    expr: substitute_expr(expr, row),
+                    inner: inner_final,
+                },
+                pattern,
+                map,
+            )
         }
         GraphPattern::Extend {
             inner,
@@ -1471,24 +1538,42 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
         } => {
             let mut free = DetHashSet::default();
             expr_vars(expression, &mut free);
-            GraphPattern::Extend {
-                inner: Box::new(wrap_with_expr_term_only_values(
-                    substitute_pattern(inner, row),
-                    &free,
-                    row,
-                )),
-                variable: variable.clone(),
-                expression: substitute_expr(expression, row),
-            }
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::Extend {
+                    inner: inner_final,
+                    variable: variable.clone(),
+                    expression: substitute_expr(expression, row),
+                },
+                pattern,
+                map,
+            )
         }
-        GraphPattern::Join { left, right } => GraphPattern::Join {
-            left: Box::new(substitute_pattern(left, row)),
-            right: Box::new(substitute_pattern(right, row)),
-        },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(substitute_pattern(left, row)),
-            right: Box::new(substitute_pattern(right, row)),
-        },
+        GraphPattern::Join { left, right } => {
+            let left_sub = substitute_pattern_impl(left, row, map);
+            let right_sub = substitute_pattern_impl(right, row, map);
+            boxed_and_mapped(
+                GraphPattern::Join {
+                    left: left_sub,
+                    right: right_sub,
+                },
+                pattern,
+                map,
+            )
+        }
+        GraphPattern::Union { left, right } => {
+            let left_sub = substitute_pattern_impl(left, row, map);
+            let right_sub = substitute_pattern_impl(right, row, map);
+            boxed_and_mapped(
+                GraphPattern::Union {
+                    left: left_sub,
+                    right: right_sub,
+                },
+                pattern,
+                map,
+            )
+        }
         // The optional inline filter evaluates against the (already merged) joined
         // row, so a term-only variable it needs is injected on `left`: an outer
         // binding is never a `right`-side join key (the parser forbids `right`
@@ -1503,45 +1588,71 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
             if let Some(e) = expression {
                 expr_vars(e, &mut free);
             }
-            GraphPattern::LeftJoin {
-                left: Box::new(wrap_with_expr_term_only_values(
-                    substitute_pattern(left, row),
-                    &free,
-                    row,
-                )),
-                right: Box::new(substitute_pattern(right, row)),
-                expression: expression.as_ref().map(|e| substitute_expr(e, row)),
-            }
+            let left_sub = substitute_pattern_impl(left, row, map);
+            let left_final = wrap_with_expr_term_only_values(left_sub, &free, row, left, map);
+            let right_sub = substitute_pattern_impl(right, row, map);
+            boxed_and_mapped(
+                GraphPattern::LeftJoin {
+                    left: left_final,
+                    right: right_sub,
+                    expression: expression.as_ref().map(|e| substitute_expr(e, row)),
+                },
+                pattern,
+                map,
+            )
         }
         // Both sides receive the SAME row (see this function's doc on the MINUS
         // disjoint-domain fix): the right side is NOT excluded from substitution here,
         // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
         // evaluation-time injection).
-        GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(substitute_pattern(left, row)),
-            right: Box::new(substitute_pattern(right, row)),
-        },
-        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(substitute_pattern(left, row)),
-            right: Box::new(substitute_pattern(right, row)),
-        },
+        GraphPattern::Minus { left, right } => {
+            let left_sub = substitute_pattern_impl(left, row, map);
+            let right_sub = substitute_pattern_impl(right, row, map);
+            boxed_and_mapped(
+                GraphPattern::Minus {
+                    left: left_sub,
+                    right: right_sub,
+                },
+                pattern,
+                map,
+            )
+        }
+        GraphPattern::Lateral { left, right } => {
+            let left_sub = substitute_pattern_impl(left, row, map);
+            let right_sub = substitute_pattern_impl(right, row, map);
+            boxed_and_mapped(
+                GraphPattern::Lateral {
+                    left: left_sub,
+                    right: right_sub,
+                },
+                pattern,
+                map,
+            )
+        }
         // The graph name is left unresolved even when it is a bound variable — see this
         // function's doc for why that is sound (the caller's post-hoc compatibility
         // check against μ is what makes it sound, not a substitution here).
-        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
-            name: name.clone(),
-            inner: Box::new(substitute_pattern(inner, row)),
-        },
+        GraphPattern::Graph { name, inner } => {
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            boxed_and_mapped(
+                GraphPattern::Graph {
+                    name: name.clone(),
+                    inner: inner_sub,
+                },
+                pattern,
+                map,
+            )
+        }
         GraphPattern::Service {
             name,
             inner,
             silent,
-        } => GraphPattern::Service {
+        } => {
             // A variable endpoint (`SERVICE ?g`) bound to an IRI by the enclosing
             // solution becomes a concrete named endpoint, so the substituted
             // pattern federates against the resolved IRI (the LATERAL seam) — a
             // joined `VALUES` row cannot supply the constant a dispatch needs.
-            name: match name {
+            let resolved_name = match name {
                 purrdf_sparql_algebra::NamedNodePattern::Variable(v) => row
                     .expr
                     .iter()
@@ -1554,10 +1665,18 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                     })
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
-            },
-            inner: Box::new(substitute_pattern(inner, row)),
-            silent: *silent,
-        },
+            };
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            boxed_and_mapped(
+                GraphPattern::Service {
+                    name: resolved_name,
+                    inner: inner_sub,
+                    silent: *silent,
+                },
+                pattern,
+                map,
+            )
+        }
         GraphPattern::OrderBy { inner, expression } => {
             let mut free = DetHashSet::default();
             for oe in expression {
@@ -1566,24 +1685,28 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                     | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, &mut free),
                 }
             }
-            GraphPattern::OrderBy {
-                inner: Box::new(wrap_with_expr_term_only_values(
-                    substitute_pattern(inner, row),
-                    &free,
-                    row,
-                )),
-                expression: expression
-                    .iter()
-                    .map(|oe| match oe {
-                        purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                            purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
-                        }
-                        purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                            purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(e, row))
-                        }
-                    })
-                    .collect(),
-            }
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::OrderBy {
+                    inner: inner_final,
+                    expression: expression
+                        .iter()
+                        .map(|oe| match oe {
+                            purrdf_sparql_algebra::OrderExpression::Asc(e) => {
+                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
+                            }
+                            purrdf_sparql_algebra::OrderExpression::Desc(e) => {
+                                purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(
+                                    e, row,
+                                ))
+                            }
+                        })
+                        .collect(),
+                },
+                pattern,
+                map,
+            )
         }
         GraphPattern::Group {
             inner,
@@ -1596,59 +1719,95 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                     expr_vars(arg, &mut free);
                 }
             }
-            GraphPattern::Group {
-                inner: Box::new(wrap_with_expr_term_only_values(
-                    substitute_pattern(inner, row),
-                    &free,
-                    row,
-                )),
-                variables: variables.clone(),
-                aggregates: aggregates
-                    .iter()
-                    .map(|(v, agg)| {
-                        let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
-                        // `substitute_expr` rewrites each argument in place and never
-                        // changes the argument COUNT, so this can never turn a valid
-                        // `agg` into an invalid one.
-                        let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
-                            agg.function().clone(),
-                            args,
-                            agg.scalarvals().to_vec(),
-                            agg.distinct,
-                        )
-                        .expect("substitution preserves argument count, so arity stays valid");
-                        (v.clone(), new_agg)
-                    })
-                    .collect(),
-            }
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::Group {
+                    inner: inner_final,
+                    variables: variables.clone(),
+                    aggregates: aggregates
+                        .iter()
+                        .map(|(v, agg)| {
+                            let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
+                            // `substitute_expr` rewrites each argument in place and never
+                            // changes the argument COUNT, so this can never turn a valid
+                            // `agg` into an invalid one.
+                            let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
+                                agg.function().clone(),
+                                args,
+                                agg.scalarvals().to_vec(),
+                                agg.distinct,
+                            )
+                            .expect("substitution preserves argument count, so arity stays valid");
+                            (v.clone(), new_agg)
+                        })
+                        .collect(),
+                },
+                pattern,
+                map,
+            )
         }
         // Leaf patterns that need no substitution.
-        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(substitute_pattern(inner, row)),
-        },
-        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(substitute_pattern(inner, row)),
-        },
+        GraphPattern::Distinct { inner } => {
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            boxed_and_mapped(GraphPattern::Distinct { inner: inner_sub }, pattern, map)
+        }
+        GraphPattern::Reduced { inner } => {
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            boxed_and_mapped(GraphPattern::Reduced { inner: inner_sub }, pattern, map)
+        }
         GraphPattern::Slice {
             inner,
             start,
             length,
-        } => GraphPattern::Slice {
-            inner: Box::new(substitute_pattern(inner, row)),
-            start: *start,
-            length: *length,
-        },
+        } => {
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            boxed_and_mapped(
+                GraphPattern::Slice {
+                    inner: inner_sub,
+                    start: *start,
+                    length: *length,
+                },
+                pattern,
+                map,
+            )
+        }
         // The Project-boundary narrowing this walk's theorem depends on: only the
         // projected variables survive to the inner pattern's substitution.
         GraphPattern::Project { inner, variables } => {
             let narrowed = row.narrow_to(variables);
-            GraphPattern::Project {
-                inner: Box::new(substitute_pattern(inner, &narrowed)),
-                variables: variables.clone(),
-            }
+            let inner_sub = substitute_pattern_impl(inner, &narrowed, map);
+            boxed_and_mapped(
+                GraphPattern::Project {
+                    inner: inner_sub,
+                    variables: variables.clone(),
+                },
+                pattern,
+                map,
+            )
         }
-        GraphPattern::Values { .. } => pattern.clone(),
+        GraphPattern::Values { .. } => boxed_and_mapped(pattern.clone(), pattern, map),
     }
+}
+
+/// Box `built` (its final, permanent address — a `Box`'s pointee never moves again) and,
+/// if `map` is engaged, record that address against `source`'s. The one place
+/// [`substitute_pattern_impl`] pairs a `Box::new` with a [`SubstitutionSourceMap`] entry,
+/// so every entry is keyed by an address the node actually ends up at rather than one it
+/// only transiently held on the stack before being moved into its `Box`.
+fn boxed_and_mapped(
+    built: GraphPattern,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+) -> Box<GraphPattern> {
+    let boxed = Box::new(built);
+    if let Some(m) = map.as_deref_mut() {
+        m.insert(
+            std::ptr::from_ref(boxed.as_ref()) as usize,
+            std::ptr::from_ref(source) as usize,
+        );
+    }
+    boxed
 }
 
 /// Wrap a `Bgp`/`Path` leaf in `Join(leaf, Values { .. })` when its variables
@@ -1659,11 +1818,22 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
 /// returned unchanged: no join is worth adding, and the pattern stays
 /// leaf-shaped for every operator that inspects it structurally (e.g. the
 /// property-function fusion check in `crate::property_fn_eval`).
+///
+/// `leaf` arrives already boxed — at its permanent address — and, when a
+/// [`SubstitutionSourceMap`] is engaged, already mapped to `source` by the caller
+/// ([`substitute_pattern_impl`]'s `Bgp`/`Path` arms, which pass their own `pattern` as
+/// `source`). When this function DOES add the synthetic `Join`/`Values` wrapper, the
+/// wrapper is mapped to that SAME `source` — see [`SubstitutionSourceMap`]'s doc for why a
+/// wrapper that inherited from its enclosing node instead would, for a `LATERAL` whose
+/// right operand is directly a `Bgp`/`Path` (no `Filter` between the `LATERAL` and the
+/// wrapped leaf), fold straight into the `LATERAL` node.
 fn join_leaf_with_values(
-    leaf: GraphPattern,
+    leaf: Box<GraphPattern>,
     leaf_vars: &DetHashSet<Variable>,
     term_row: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
-) -> GraphPattern {
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+) -> Box<GraphPattern> {
     let restricted: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = term_row
         .iter()
         .filter(|(v, _)| leaf_vars.contains(v))
@@ -1677,13 +1847,17 @@ fn join_leaf_with_values(
         variables.push(v.clone());
         values_row.push(Some(g.clone()));
     }
-    GraphPattern::Join {
-        left: Box::new(leaf),
-        right: Box::new(GraphPattern::Values {
-            variables,
-            bindings: vec![values_row],
-        }),
-    }
+    boxed_and_mapped(
+        GraphPattern::Join {
+            left: leaf,
+            right: Box::new(GraphPattern::Values {
+                variables,
+                bindings: vec![values_row],
+            }),
+        },
+        source,
+        map,
+    )
 }
 
 /// Wrap `node` in `Join(node, Values { .. })` for every variable `expr_free_vars`
@@ -1710,11 +1884,19 @@ fn join_leaf_with_values(
 /// RHS from rebinding an outer variable) is compatible and therefore
 /// harmless if it ever occurs; this function does not attempt to detect that
 /// case, only the term-kind one that make it necessary.
+///
+/// `node` arrives already boxed and, when a [`SubstitutionSourceMap`] is engaged, already
+/// mapped to `source` by the caller — exactly like [`join_leaf_with_values`]'s `leaf`, and
+/// for the same reason: when this function DOES add the synthetic `Join`/`Values`
+/// wrapper, the wrapper is mapped to that SAME `source` rather than left to inherit from
+/// whatever encloses it — see [`SubstitutionSourceMap`]'s doc.
 fn wrap_with_expr_term_only_values(
-    node: GraphPattern,
+    node: Box<GraphPattern>,
     expr_free_vars: &DetHashSet<Variable>,
     row: &SubstitutionRow,
-) -> GraphPattern {
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+) -> Box<GraphPattern> {
     if expr_free_vars.is_empty() {
         return node;
     }
@@ -1732,13 +1914,17 @@ fn wrap_with_expr_term_only_values(
         variables.push(v.clone());
         values_row.push(Some(g.clone()));
     }
-    GraphPattern::Join {
-        left: Box::new(node),
-        right: Box::new(GraphPattern::Values {
-            variables,
-            bindings: vec![values_row],
-        }),
-    }
+    boxed_and_mapped(
+        GraphPattern::Join {
+            left: node,
+            right: Box::new(GraphPattern::Values {
+                variables,
+                bindings: vec![values_row],
+            }),
+        },
+        source,
+        map,
+    )
 }
 
 /// Substitute outer-bound variables into a property-function argument term —
@@ -1886,9 +2072,12 @@ fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
             f.clone(),
             args.iter().map(|a| substitute_expr(a, row)).collect(),
         ),
-        Expression::Exists(inner_pat) => {
-            Expression::Exists(Box::new(substitute_pattern(inner_pat, row)))
-        }
+        // Untracked (`map = None`): a nested `EXISTS`'s inner pattern is not walked by
+        // `walk_spine` even in its un-substituted form (see the ledger module doc's
+        // "Attribution of work that is not a plan node"), so it has no plan identity for
+        // any map to preserve — its charges fold into the enclosing node exactly as
+        // before.
+        Expression::Exists(inner_pat) => Expression::Exists(substitute_pattern(inner_pat, row)),
     }
 }
 
@@ -6002,7 +6191,7 @@ mod tests {
         };
         let row = row_binding_iri("s", "alice");
 
-        let substituted = substitute_pattern(&bgp, &row);
+        let substituted = *substitute_pattern(&bgp, &row);
         let GraphPattern::Join { left, right } = substituted else {
             panic!("expected a Join, got {bgp:?} -> not a Join");
         };
@@ -6047,7 +6236,7 @@ mod tests {
         };
         let row = row_binding_iri("s", "a");
 
-        let substituted = substitute_pattern(&minus, &row);
+        let substituted = *substitute_pattern(&minus, &row);
         let GraphPattern::Minus { left, right } = substituted else {
             panic!("Minus wrapper preserved");
         };
@@ -6120,7 +6309,7 @@ mod tests {
         };
         let row = row_binding_iri("s", "x1");
 
-        let substituted = substitute_pattern(&subselect, &row);
+        let substituted = *substitute_pattern(&subselect, &row);
         let GraphPattern::Project { inner, variables } = substituted else {
             panic!("Project wrapper preserved");
         };
@@ -6156,7 +6345,7 @@ mod tests {
             )],
         };
 
-        let substituted = substitute_pattern(&call, &row);
+        let substituted = *substitute_pattern(&call, &row);
         let GraphPattern::PropertyFunction(c) = substituted else {
             panic!("PropertyFunction node preserved");
         };

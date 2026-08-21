@@ -375,6 +375,19 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// allocation can reuse a dropped node's address) and must be bypassed
     /// entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
+    /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
+    /// last — see [`crate::expr::SubstitutionSourceMap`].
+    ///
+    /// Pushed by [`Self::enter_substituted_exists`] when [`crate::binop::eval_correlated`]
+    /// substitutes a `LATERAL` right operand whose source node IS a plan node (a
+    /// correlated `EXISTS` inner pushes nothing — it has no plan identity to preserve).
+    /// [`Self::resolve_ledger_ordinal`] is the only reader: it walks this stack
+    /// innermost-first so a `LATERAL` nested inside another `LATERAL`'s per-row
+    /// substituted copy chains through BOTH maps back to a real ordinal, rather than one
+    /// window's map silently shadowing the other's. A stack, not a single slot merged in
+    /// place, because both the outer and the inner window's map are simultaneously live
+    /// for the whole time the inner one is being evaluated.
+    pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -504,10 +517,12 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
 /// Derefs to the wrapped [`EvalCtx`] so the guarded evaluation call reads as
 /// ordinary `&mut EvalCtx` use; [`Drop::drop`] restores the PRIOR
 /// [`EvalCtx::in_substituted_exists`] value unconditionally, including when
-/// the guard is dropped during an early `?` return.
+/// the guard is dropped during an early `?` return — and, when this window pushed a
+/// [`EvalCtx::correlated_node_maps`] entry, pops exactly that one entry, same as the flag.
 pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
     ctx: &'ctx mut EvalCtx<'d, D>,
     prev: bool,
+    pushed_map: bool,
 }
 
 impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
@@ -526,6 +541,9 @@ impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '
 impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
     fn drop(&mut self) {
         self.ctx.in_substituted_exists = self.prev;
+        if self.pushed_map {
+            self.ctx.correlated_node_maps.pop();
+        }
     }
 }
 
@@ -571,6 +589,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: None,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            correlated_node_maps: Vec::new(),
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -594,10 +613,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// `LATERAL` inside a correlated `EXISTS`'s substituted inner, or the
     /// reverse) composes correctly instead of the inner scope's `Drop`
     /// clobbering the outer scope's flag back to `false`.
-    pub(crate) fn enter_substituted_exists(&mut self) -> SubstitutedExistsGuard<'_, 'd, D> {
+    ///
+    /// `ledger_map` is the [`crate::expr::SubstitutionSourceMap`]
+    /// [`crate::binop::eval_correlated`] built for this window, when the node it
+    /// substituted resolved to a real plan ordinal (a `LATERAL` right operand) — `None`
+    /// for a correlated `EXISTS` inner, which has no plan identity to preserve. When
+    /// `Some`, it is pushed onto [`Self::correlated_node_maps`] for the guard's lifetime
+    /// and popped on drop, same RAII discipline as the flag — see that field's doc for why
+    /// a nested correlated evaluation needs BOTH this window's map and every enclosing
+    /// one's still live at once.
+    pub(crate) fn enter_substituted_exists(
+        &mut self,
+        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+    ) -> SubstitutedExistsGuard<'_, 'd, D> {
         let prev = self.in_substituted_exists;
         self.in_substituted_exists = true;
-        SubstitutedExistsGuard { ctx: self, prev }
+        let pushed_map = ledger_map.is_some();
+        if let Some(map) = ledger_map {
+            self.correlated_node_maps.push(Arc::new(map));
+        }
+        SubstitutedExistsGuard {
+            ctx: self,
+            prev,
+            pushed_map,
+        }
     }
 
     /// Set the evaluation-time value of NOW(). Test-only: production callers get a
@@ -818,17 +857,52 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
     ///
-    /// Both cursors move together, except that the ledger's only moves when `pattern` is a
-    /// node of the plan the ledger was built for — see [`Self::ledger_node`].
+    /// Both cursors move together, except that the ledger's only moves when `pattern`
+    /// resolves to a node of the plan the ledger was built for — see
+    /// [`Self::resolve_ledger_ordinal`].
     pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize) {
         let restore = (self.current_node, self.ledger_node);
         self.current_node = std::ptr::from_ref(pattern) as usize;
-        if let Some(ledger) = self.ledger.as_ref()
-            && let Some(ordinal) = ledger.ordinal_of(self.current_node)
-        {
+        if let Some(ordinal) = self.resolve_ledger_ordinal(self.current_node) {
             self.ledger_node = ordinal;
         }
         restore
+    }
+
+    /// Resolve `address` to a plan node's ledger ordinal, chasing through any live
+    /// correlated-substitution maps ([`Self::correlated_node_maps`]) when `address` is not
+    /// itself a plan address.
+    ///
+    /// An ordinary (non-substituted) evaluation always hits the fast path — `address` IS a
+    /// plan address, found on the first probe, no map ever consulted. Inside a `LATERAL`
+    /// right operand's per-row substituted copy, `address` is instead a heap-temporary
+    /// address; [`Self::correlated_node_maps`]'s TOP (innermost, most recently entered) map
+    /// translates it one substitution-window's worth closer to a real plan address, and the
+    /// loop retries — first against the ledger directly, then, on a further miss, against
+    /// the next map out. That outward chain is what makes a `LATERAL` nested inside another
+    /// `LATERAL`'s substituted RHS resolve correctly: the inner map only ever knows how to
+    /// translate one level, so BOTH windows' maps must stay live and be walked in order —
+    /// see that field's doc.
+    ///
+    /// A miss at any step — `address` absent from the map being consulted — stops the
+    /// search and returns `None` rather than trying an outer map with the SAME address: a
+    /// map miss means the node at THIS level is synthetic (introduced by Values Insertion,
+    /// never present in any source tree), and its charges are meant to fall to whatever
+    /// node is already the ledger cursor — the nearest enclosing node that DID resolve —
+    /// not to be guessed at by skipping a level.
+    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<usize> {
+        let ledger = self.ledger.as_ref()?;
+        if let Some(ordinal) = ledger.ordinal_of(address) {
+            return Some(ordinal);
+        }
+        let mut address = address;
+        for map in self.correlated_node_maps.iter().rev() {
+            address = *map.get(&address)?;
+            if let Some(ordinal) = ledger.ordinal_of(address) {
+                return Some(ordinal);
+            }
+        }
+        None
     }
 
     /// Restore the cursors [`Self::enter_node`] returned.
@@ -1364,6 +1438,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            // SHARED (cheap `Arc` clones), not fresh: a worker evaluating part of a
+            // correlated substituted tree must resolve the SAME ledger identities its
+            // parent would — dropping the stack here would silently reproduce the false-zero
+            // attribution this field exists to fix, just scoped to the parallel path.
+            correlated_node_maps: self.correlated_node_maps.clone(),
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -1519,6 +1598,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            // SHARED, like `ledger`: the body's own nodes never resolve through it (their
+            // addresses are in neither the plan nor any live substitution window, so
+            // `resolve_ledger_ordinal` always misses for them and `ledger_node` stays put —
+            // see that field's doc), but a body called FROM inside a correlated window must
+            // still see the enclosing window's map for any of ITS OWN charges that legitimately
+            // resolve through it.
+            correlated_node_maps: self.correlated_node_maps.clone(),
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any

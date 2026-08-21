@@ -113,13 +113,28 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
-    let substituted = crate::expr::substitute_pattern(pattern, &row);
+    // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
+    // another `LATERAL`'s substituted RHS, its already-installed enclosing map) resolves
+    // to a ledger ordinal — a `LATERAL` right operand, never a correlated `EXISTS` inner
+    // (which is not walked by `walk_spine` even unsubstituted; see the ledger module
+    // doc's "Attribution of work that is not a plan node"). Only then is the substitution
+    // walk worth tracking: every node it copies 1:1 keeps its own ledger identity across
+    // the per-row substituted copy instead of folding into the enclosing node.
+    let source_addr = std::ptr::from_ref(pattern) as usize;
+    let (substituted, ledger_map) = if ctx.resolve_ledger_ordinal(source_addr).is_some() {
+        let mut map = crate::expr::SubstitutionSourceMap::default();
+        let substituted = crate::expr::substitute_pattern_tracked(pattern, &row, &mut map);
+        (substituted, Some(map))
+    } else {
+        (crate::expr::substitute_pattern(pattern, &row), None)
+    };
     // `substituted` is a per-row heap temporary whose node addresses do not
     // outlive this call; the guard flags the window so address-keyed
     // memoization is bypassed while it is evaluated, and restores the prior
-    // flag on drop — even on the `?` this function's caller applies to its
-    // result — so nested correlated evaluations compose correctly.
-    let mut guard = ctx.enter_substituted_exists();
+    // flag (and pops `ledger_map`, when one was pushed) on drop — even on the
+    // `?` this function's caller applies to its result — so nested correlated
+    // evaluations compose correctly.
+    let mut guard = ctx.enter_substituted_exists(ledger_map);
     eval_evaluated(&substituted, &mut guard)
 }
 
