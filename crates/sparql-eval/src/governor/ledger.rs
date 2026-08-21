@@ -95,15 +95,19 @@
 //! whose true constrained output is 2 rows can render `actual-rows` several multiples of
 //! that beside an `estimated-rows` that was exact. The rule that avoids it, stated
 //! precisely: **within one substitution window, for each real plan ordinal, exactly one
-//! synthesized or copied node counts rows — the topmost node of the window's synthesized
-//! chain that resolves to that ordinal.** Every `VALUES` join below that topmost node only
-//! narrows further; the topmost node's own committed output is already the fully-constrained
-//! result the planner's estimate refers to, so nothing beneath it can also be that result
-//! without double-counting. See `crate::expr::SubstitutionSource`'s doc for how the walk
-//! enforces this — resolving each copy's source past its own enclosing window at
-//! construction time and letting only the first (topmost) copy per real ordinal, per window,
-//! keep the claim — and `crate::eval::EvalCtx::ledger_counts_rows` for the evaluator-side
-//! cursor that carries the already-arbitrated answer through to the commit.
+//! synthesized or copied node counts rows — the first node the window's bottom-up walk
+//! mints for that ordinal that is not later demoted to scaffolding.** That survivor is the
+//! lowest undemoted node of the synthesized chain (the wrapped leaf hands its claim to the
+//! `Join` wrapper minted directly above it); the copies minted above the survivor re-apply
+//! an identical `VALUES` binding — the scope rule forbids the right-hand side rebinding an
+//! outer variable — so they cannot narrow the result further, and the survivor's committed
+//! output already equals the fully-constrained result the planner's estimate refers to.
+//! Letting any node above it also count would double-count that same result. See
+//! `crate::expr::SubstitutionSource`'s doc for how the walk enforces this — resolving each
+//! copy's source past its own enclosing window at construction time and letting only the
+//! first-minted copy per real ordinal, per window, keep the claim — and
+//! `crate::eval::EvalCtx::ledger_counts_rows` for the evaluator-side cursor that carries
+//! the already-arbitrated answer through to the commit.
 //!
 //! `rows` sums every commit this node's ledger line receives (its total output, however
 //! many times the node was invoked); `cells` keeps only the largest single commit (the

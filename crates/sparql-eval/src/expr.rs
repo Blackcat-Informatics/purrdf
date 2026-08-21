@@ -1529,10 +1529,15 @@ pub(crate) fn substitute_pattern(
 ///   [`SubstitutionTracking::enclosing`] — the immediately enclosing window's map, when
 ///   `source` is itself a copy that window produced — straight to the real plan address
 ///   underneath (never the synthetic one), and only the FIRST node this window's walk
-///   mints for that real address (in call order, which is bottom-up within a wrapped leaf's
-///   own subtree — see [`join_leaf_with_values`] — and outside-in across the rest of the
-///   walk) is allowed to keep `counts_rows: true`; every further one this window mints for
-///   the SAME real address is forced `false`, tracked by [`SubstitutionTracking::claimed`].
+///   mints for that real address is allowed to keep `counts_rows: true`; every further one
+///   this window mints for the SAME real address is forced `false`, tracked by
+///   [`SubstitutionTracking::claimed`]. The walk recurses into children before minting
+///   their parent, so call order is uniformly bottom-up and the surviving counter is the
+///   LOWEST undemoted node of the chain (a wrapped leaf hands its claim to the wrapper via
+///   [`join_leaf_with_values`]'s demotion). The copies minted above it re-apply an
+///   identical `VALUES` binding — the scope rule forbids the right-hand side rebinding an
+///   outer variable — so they cannot narrow the result further, and the lowest undemoted
+///   node's committed output already equals the fully-constrained result.
 ///   Nesting three, four, or `n` windows deep composes: each window only ever needs to look
 ///   one hop out, because by induction every entry a window mints already names a real,
 ///   ledger-resolvable address — never another window's synthetic one — so the address a
