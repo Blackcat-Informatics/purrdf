@@ -3777,7 +3777,7 @@ impl LateralIntro {
 /// [`find_lateral_rhs_scope_conflict`].
 ///
 /// A thin delegating wrapper over [`visible_variables`] — same function,
-/// different name — so that the one deliberate Jena divergence it carries
+/// different name — so that the one rule-specific consequence it carries
 /// (below) is documented on the rule that owns it, rather than left as an
 /// unexplained side effect of reusing `visible_variables` directly. If
 /// `visible_variables` ever grows a caller-specific variant (e.g. a
@@ -3785,16 +3785,26 @@ impl LateralIntro {
 /// call site that would need to move to it — a change made for an unrelated
 /// caller cannot silently widen or narrow the LATERAL rule.
 ///
-/// # Divergence: a `SERVICE ?g` endpoint variable counts as left scope
+/// # A `SERVICE ?g` endpoint variable is left-hand scope
 ///
 /// `visible_variables` (via [`collect_vars`]) includes a `SERVICE`/`GRAPH`
-/// name variable, pushed before it descends into the block. Jena's
-/// `SyntaxVarScope` does not add the `SERVICE` endpoint variable to its
-/// LATERAL left-scope set. This function follows `visible_variables`, which
-/// the rest of the parser already treats as the one definition of "in scope"
-/// (`SELECT *`'s projection, `BIND`'s §19.6 check) — so a `LATERAL`
-/// right-hand side here may not rebind a `SERVICE ?g` endpoint variable via
-/// `BIND`/`VALUES`, even though Jena permits it. Pinned by
+/// name variable, pushed before it descends into the block — and that is
+/// the correct scope for it, not an accident of reusing `visible_variables`
+/// for this rule. `SERVICE ?g { ... }` with a variable endpoint requires
+/// `?g` to already be bound in the incoming solution: this engine resolves
+/// the endpoint IRI from that binding before the remote call is made
+/// (`substitute_in_named_node_pattern` in `crates/sparql-eval`, the same
+/// per-row substitution `LATERAL`'s own `inject` step uses), so by the time
+/// a `LATERAL` right-hand side runs, `?g` already holds an observable,
+/// per-row value contributed by the left-hand side — a USE of an existing
+/// binding, exactly like any other variable reused from an ordinary triple
+/// pattern, not a fresh binding `SERVICE` introduces. A `BIND`/`VALUES` on
+/// the right giving `?g` a NEW value at the right-hand side's own scope
+/// level is therefore exactly the class of observable rebinding
+/// [`find_lateral_rhs_scope_conflict`]'s theorem rejects, applied to this
+/// variable the same as any other left-bound one. Jena's `SyntaxVarScope`
+/// omits the `SERVICE` endpoint variable from its own left-scope set; this
+/// function does not follow it here, on the ground above. Pinned by
 /// `lateral_left_scope_includes_a_service_endpoint_variable`.
 fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
     visible_variables(p)
@@ -3836,19 +3846,29 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// while only `Project` narrows the scope being checked, and `Group`
 /// (§18.2.4's aggregation boundary, which likewise hides the pattern it
 /// aggregates over behind grouping keys and aggregate outputs) is checked
-/// only for the fresh variables its OWN aggregates introduce.
+/// only for the fresh variables its OWN aggregates and expression-valued
+/// `GROUP BY` conditions introduce.
 ///
-/// # `Group`'s synthetic aggregate targets
+/// # `Group`'s synthetic targets: aggregate outputs and grouping-expression keys
 ///
 /// A `GROUP BY` query's aggregate output variables (e.g. `?n` in
 /// `(COUNT(?x) AS ?n)`) are, like a `BIND` target, fresh bindings introduced
 /// at the `Group` node's own scope level — checked here the same way (mapped
-/// to [`LateralIntro::Bind`]) — while the pattern being grouped is never
-/// walked, because only the grouping keys and aggregate outputs escape a
-/// `Group` (mirrors [`collect_vars`]'s own non-descent into `Group`'s
-/// `inner`).
+/// to [`LateralIntro::Bind`]). So is an expression-valued `GROUP BY (expr AS
+/// ?v)` condition's grouping variable: `?v`'s value is a computed
+/// expression, never a matched term, so the parser lowers it to an `Extend`
+/// placed directly beneath `Group` (see the grouping-extend loop right
+/// before `GraphPattern::Group` is built). [`find_group_extend_conflict`]
+/// walks exactly that lowered chain and nothing past it: the pattern
+/// actually being grouped is never walked, because only the grouping keys
+/// and aggregate outputs escape a `Group` (mirrors [`collect_vars`]'s own
+/// non-descent into `Group`'s `inner`, which likewise only notes
+/// `variables` and `aggregates`). A bare `GROUP BY ?y` grouping key that
+/// merely names an already-bound variable produces no `Extend` at all — it
+/// is a USE of an existing binding, not an introduction, so this walker
+/// never has anything to find for it.
 ///
-/// # Two deliberate divergences from Jena
+/// # Two points of disagreement with Jena
 ///
 /// * **Laxer.** `SELECT *` over a pattern whose only violation lives in a
 ///   `MINUS` right operand is ACCEPTED here (Jena rejects it). §18.2.1 puts
@@ -3861,7 +3881,10 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 ///   (§18.2.1 wins), not adopted. Pinned by
 ///   `lateral_rhs_minus_right_bind_under_select_star_is_accepted`.
 /// * **Stricter.** A `SERVICE ?g` endpoint variable counts as left-hand scope
-///   here (documented on [`compute_lateral_left_scope`]); Jena omits it.
+///   here (ground documented on [`compute_lateral_left_scope`]: the variable
+///   is required to already be bound before the endpoint is resolved, so it
+///   is left-hand USE, not introduction); Jena omits it from its own
+///   left-scope set.
 ///
 /// # Never descends into `Expression`
 ///
@@ -3957,17 +3980,63 @@ fn find_lateral_rhs_scope_conflict<'a>(
             }
         }
         // `GROUP BY`'s aggregate output variables are fresh bindings at this
-        // scope level (see "Group's synthetic aggregate targets" above); the
+        // scope level (see "Group's synthetic targets" above); then the
+        // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
+        // `Extend`s directly beneath `Group` — and nothing past it, the
         // pattern being grouped is never walked.
-        GraphPattern::Group { aggregates, .. } => {
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
             for (v, _) in aggregates {
                 if lhs_scope.contains(v) {
                     return Some((v, LateralIntro::Bind));
                 }
             }
-            None
+            find_group_extend_conflict(inner, variables, lhs_scope)
         }
     }
+}
+
+/// Walk the chain of `Extend` nodes the parser lowers each expression-valued
+/// `GROUP BY (expr AS ?v)` condition to, which the query builder places
+/// directly beneath `Group` (one `Extend` per condition, innermost-first —
+/// see the grouping-extend loop immediately before `GraphPattern::Group` is
+/// constructed). Stops the instant a node is not one of these lowered
+/// `Extend`s: `variables` is `Group`'s full grouping-key list, so an
+/// `Extend` whose target is not in it cannot be a grouping-extend the parser
+/// produced — it is the top of the pattern actually being grouped, which
+/// this walker never descends into (mirrors [`collect_vars`]'s own
+/// non-descent into `Group`'s `inner`).
+///
+/// Recurses before checking the current node, so the first conflict
+/// reported is the earliest-DECLARED `GROUP BY (expr AS ?v)` condition
+/// (the innermost `Extend`, closest to the ungrouped pattern), preserving
+/// the walker's left-to-right determinism contract.
+fn find_group_extend_conflict<'a>(
+    inner: &'a GraphPattern,
+    variables: &[Variable],
+    lhs_scope: &[Variable],
+) -> Option<(&'a Variable, LateralIntro)> {
+    let GraphPattern::Extend {
+        inner: next,
+        variable,
+        ..
+    } = inner
+    else {
+        return None;
+    };
+    if !variables.contains(variable) {
+        return None;
+    }
+    find_group_extend_conflict(next, variables, lhs_scope).or_else(|| {
+        if lhs_scope.contains(variable) {
+            Some((variable, LateralIntro::Bind))
+        } else {
+            None
+        }
+    })
 }
 
 /// Collect the labels of every blank node in a run of quad patterns, descending
@@ -6088,6 +6157,36 @@ mod tests {
                 .contains("BIND target ?o inside LATERAL is already in scope"),
             "unexpected message: {err}"
         );
+    }
+
+    #[test]
+    fn lateral_rhs_group_by_expr_target_collision_is_rejected() {
+        // The parser lowers `GROUP BY (?y AS ?o)` to an `Extend` directly
+        // beneath `Group`, at the RHS's own top scope level — a fresh
+        // (computed) binding for `?o` just like a `BIND` target, so it must
+        // collide with the LHS's `?o` the same way.
+        let q = format!(
+            "{GM}SELECT * {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o WHERE {{ ?x purrdf:q ?y }} GROUP BY (?y AS ?o) }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a GROUP BY (expr AS ?v) grouping target colliding with the left scope must fail",
+        );
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_group_by_expr_fresh_target_is_accepted() {
+        // Control: a genuinely fresh grouping target must still parse.
+        let q = format!(
+            "{GM}SELECT * {{ ?s purrdf:p ?o LATERAL {{ SELECT ?fresh WHERE {{ ?x purrdf:q ?y }} GROUP BY (?y AS ?fresh) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh GROUP BY (expr AS ?v) target must parse");
     }
 
     #[test]

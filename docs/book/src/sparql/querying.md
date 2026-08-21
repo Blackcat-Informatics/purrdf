@@ -365,12 +365,14 @@ SELECT * WHERE {
 `LATERAL`'s right-hand side may freely REUSE a variable already bound on the
 left (that is the whole point — it is how correlation happens), but it may not
 INTRODUCE a fresh binding for one: no variable target of a `BIND`, of a
-sub-`SELECT`'s `(expr AS ?v)` projection, of a `GROUP BY` aggregate's output, or
-a `VALUES` column, at the right-hand side's own scope level, may collide with a
-variable already visible on the left. The one construct that opens a fresh
-scope level is a sub-`SELECT`'s own projection — `OPTIONAL`/`UNION`/`GRAPH`/a
-nested group/a nested `LATERAL` are all transparent to it. The SEP's own legal
-and illegal pair:
+sub-`SELECT`'s `(expr AS ?v)` projection, of a `GROUP BY` aggregate's output,
+of an expression-valued `GROUP BY (expr AS ?v)` grouping condition, or a
+`VALUES` column, at the right-hand side's own scope level, may collide with a
+variable already visible on the left. A bare `GROUP BY ?v` grouping key that
+just names an already-bound variable is a USE, not an introduction, and never
+collides. The one construct that opens a fresh scope level is a sub-`SELECT`'s
+own projection — `OPTIONAL`/`UNION`/`GRAPH`/a nested group/a nested `LATERAL`
+are all transparent to it. The SEP's own legal and illegal pair:
 
 ```sparql
 PREFIX : <https://example.org/>
@@ -393,10 +395,10 @@ SELECT * WHERE {
 }
 ```
 
-### Divergence from Jena
+### Points of disagreement with Jena
 
-Two corners of the restriction deliberately disagree with Jena's own
-`SyntaxVarScope` check, each pinned by a named test rather than left to drift:
+Two corners of the restriction disagree with Jena's own `SyntaxVarScope`
+check, each pinned by a named test rather than left to drift:
 
 - **Laxer.** `SELECT *` over a right-hand side whose only violation lives in a
   `MINUS` right operand is ACCEPTED here; Jena rejects it. SPARQL §18.2.1 puts
@@ -404,7 +406,13 @@ Two corners of the restriction deliberately disagree with Jena's own
   never contains the colliding name in the first place — there is nothing
   observable for the projection to carry across.
 - **Stricter.** A `SERVICE ?g { ... }` endpoint variable counts as left-hand
-  scope here; Jena omits it.
+  scope here; Jena omits it. `SERVICE ?g { ... }` with a variable endpoint
+  requires `?g` to already be bound in the incoming solution — the endpoint
+  IRI is resolved from that binding before the remote call is made — so by
+  the time a `LATERAL` right-hand side runs, `?g` already holds an
+  observable, per-row value from the left, the same as any other left-bound
+  variable. A `BIND`/`VALUES` on the right giving it a NEW value is therefore
+  exactly the kind of observable rebinding this rule exists to reject.
 
 ### In `UPDATE`
 
