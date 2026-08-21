@@ -965,10 +965,15 @@ fn fmt_ground_term(s: &mut String, gt: &GroundTerm) {
         }
         GroundTerm::Literal(l) => fmt_literal(s, l),
         GroundTerm::Triple(t) => fmt_ground_triple(s, t),
-        // Injection-only (GAP-A): emitted as a blank-node label. This appears
-        // only if a substituted query is re-serialized (e.g. forwarded to SERVICE);
-        // the parser never produces it, so a round-trip of an un-substituted query is
-        // unaffected.
+        // Injection-only (GAP-A): emitted as a blank-node label. The parser never
+        // produces this variant, and `purrdf-sparql-eval`'s `SERVICE` forwarding path
+        // (`sanitize_forwarded_body` in `crates/sparql-eval/src/remote.rs`) strips every
+        // `Values` column carrying one before a substituted `SERVICE` body is
+        // serialized — a blank-node `VALUES` cell is not legal `DataBlockValue` syntax,
+        // so it must never reach the wire. This arm therefore stays live only for a
+        // hand-built pattern serialized directly through this crate's public API (e.g. a
+        // caller constructing a `GroundTerm::BlankNode` itself, or the round-trip tests
+        // below); the forwarding path never feeds it one.
         GroundTerm::BlankNode(b) => {
             let _ = write!(s, "_:{}", b.as_str());
         }
