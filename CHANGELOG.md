@@ -98,6 +98,22 @@ surfaces; each is called out below with what a consumer must do.
   into an honest error. Callers who worked around the regression by dropping `SILENT` need
   no further change; callers who still need `SILENT` and hit the refusal should read the
   error message, which now names the same workaround (drop `SILENT`) directly.
+- **sparql-eval:** The `SERVICE`-forwarding `LATERAL` guard is rebuilt to close a bypass and
+  correct an over-broad refusal. The bypass: the guard's `Lateral` arm recursed into a
+  variable-endpoint `SERVICE ?g { … }` auto-wrap's `left` operand only, never its wrapped
+  `Service::inner` — so a written `LATERAL` nested inside `SERVICE ?g { … }` (itself nested
+  inside a forwarded body) reached a remote endpoint's text unrefused. The guard now walks the
+  full forwardable body, including every `Service::inner` (fixed-IRI or variable-endpoint), so a
+  written `LATERAL` is found no matter how deeply it is nested. The over-broad refusal: a
+  `LATERAL` clause inside a forwarded body was refused unconditionally, even though the hazard —
+  a `SILENT` clause swallowing the endpoint's rejection into the join identity, a result that
+  looks complete and is wrong — exists only under `SERVICE SILENT`. The refusal is now scoped to
+  `SILENT`, naming it as the reason; a plain, non-silent `SERVICE` body forwards its `LATERAL {
+  … }` text and surfaces the endpoint's actual verdict — an answer from a `LATERAL`-capable
+  endpoint (`LATERAL` is Apache Jena's own extension) or an honest `EvalError::Remote` from one
+  that rejects it. Callers who need `LATERAL` federated to a `LATERAL`-capable endpoint should
+  drop `SILENT`; callers relying on the previous unconditional refusal under `SILENT` see no
+  change, since `SILENT` still refuses.
 - **sparql:** Let aggregate partial states merge by their concrete type (see the `into_any`
   entry above for the resulting trait break).
 - **BREAKING** **sparql-eval:** The three extension registries (custom aggregates, property

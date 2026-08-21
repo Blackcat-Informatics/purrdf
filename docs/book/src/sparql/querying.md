@@ -425,11 +425,16 @@ there is refused by name rather than misparsed as a subject term.
 
 ### `SERVICE` forwarding
 
-A pattern containing `LATERAL` is never forwarded to a remote `SERVICE`
-endpoint — `LATERAL` is a Jena extension most remote endpoints do not
-implement, and under `SERVICE SILENT` a remote's rejection would otherwise be
-swallowed into the identity table, a silent wrong answer rather than a typed
-refusal.
+A pattern containing a written `LATERAL` clause — anywhere in the forwarded
+body, including nested inside another `SERVICE` — is refused only under
+`SERVICE SILENT`: there, a remote's rejection of the `LATERAL` extension
+would otherwise be swallowed into the identity table, a silent wrong answer
+rather than a typed refusal. A plain, non-silent `SERVICE` forwards the body
+with its `LATERAL { … }` text intact, so the endpoint's actual verdict — an
+answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own extension,
+so a Jena-backed endpoint answers it), or an honest failure from one that does
+not implement it — surfaces the same way any other unsupported forwarded
+construct's rejection would.
 
 ## The `VERSION` declaration
 
