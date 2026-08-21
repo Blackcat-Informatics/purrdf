@@ -437,12 +437,13 @@ A pattern containing a written `LATERAL` clause — anywhere in the forwarded
 body, including nested inside another `SERVICE` — is refused only under
 `SERVICE SILENT`: there, a remote's rejection of the `LATERAL` extension
 would otherwise be swallowed into the identity table, a silent wrong answer
-rather than a typed refusal. A plain, non-silent `SERVICE` forwards the body
+rather than a typed refusal. A plain, non-silent `SERVICE` with a fixed IRI forwards the body
 with its `LATERAL { … }` text intact, so the endpoint's actual verdict — an
 answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own extension,
 so a Jena-backed endpoint answers it), or an honest failure from one that does
 not implement it — surfaces the same way any other unsupported forwarded
-construct's rejection would.
+construct's rejection would. Variable-endpoint `SERVICE ?g` remains unsupported
+by the remote evaluator and does not dispatch a remote request.
 
 ## The `VERSION` declaration
 
