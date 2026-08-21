@@ -2096,7 +2096,17 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
     for (i, var) in schema.vars().iter().enumerate() {
         if let Some(t) = row[i] {
             let value = ctx.scratch.value_of(ctx.dataset, t);
-            let ground = ground_term_from_term_value(&value);
+            // `None` means `value` is a quoted triple with a non-IRI predicate — see
+            // `ground_term_from_term_value`'s doc. That term kind has no `GroundTerm`
+            // representation, so the variable is left OUT of both `expr` and `term`:
+            // the same "uninjected" treatment `wrap_with_expr_term_only_values` and
+            // `join_leaf_with_values` already give any variable absent from
+            // `row.term` (they simply don't build a `VALUES` cell for it). The
+            // substituted plan then evaluates with that one variable unbound rather
+            // than panicking on a foreign `DatasetView`'s malformed data.
+            let Some(ground) = ground_term_from_term_value(&value) else {
+                continue;
+            };
             match &ground {
                 GroundTerm::NamedNode(n) => {
                     expr.push((var.clone(), Expression::NamedNode(n.clone())));
@@ -2115,17 +2125,23 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
 
 /// Convert an interned term's dataset-independent value to the algebra's
 /// [`purrdf_sparql_algebra::GroundTerm`] — the constant a `VALUES` row cell
-/// carries. Total: every IRI/datatype IRI reaching this function was already
-/// validated when the engine interned it (this function only ever sees a
-/// value read back out of `ctx.scratch`), so `NamedNode::new_unchecked` is
-/// exactly as safe here as it already is in `outer_bindings_for_substitution`'s
-/// sibling `Expression` construction.
-fn ground_term_from_term_value(value: &TermValue) -> purrdf_sparql_algebra::GroundTerm {
+/// carries. `None` means `value` has no `GroundTerm` representation; today the
+/// only such case is a quoted triple whose predicate is not an IRI (see the
+/// `TermValue::Triple` arm below) — the caller,
+/// [`outer_bindings_for_substitution`], leaves that variable uninjected rather
+/// than treating the whole substitution as failed.
+///
+/// IRI/literal construction below (`NamedNode::new_unchecked`) stays
+/// unconditionally safe: every IRI/datatype IRI reaching this function was
+/// already validated when the engine interned it (this function only ever
+/// sees a value read back out of `ctx.scratch`), matching
+/// `outer_bindings_for_substitution`'s sibling `Expression` construction.
+fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
     use purrdf_sparql_algebra::{
         BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
     };
 
-    match value {
+    Some(match value {
         TermValue::Iri(iri) => GroundTerm::NamedNode(NamedNode::new_unchecked(iri)),
         TermValue::Literal {
             lexical_form,
@@ -2158,23 +2174,41 @@ fn ground_term_from_term_value(value: &TermValue) -> purrdf_sparql_algebra::Grou
             GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
         }
         TermValue::Triple { s, p, o } => {
-            let subject = ground_term_from_term_value(s);
+            let subject = ground_term_from_term_value(s)?;
+            // A quoted triple's predicate MUST be an IRI (RDF 1.2 C0 positional
+            // constraint). For PurRDF's own data this is enforced once, structurally,
+            // at `RdfDatasetBuilder::freeze` (`crates/rdf-core/src/ir/validate.rs`,
+            // `require_iri_predicate`, reached for every interned triple term via
+            // `validate_triple_terms`) — every `TermId` this evaluator resolves out
+            // of a purrdf-built `RdfDataset` already cleared that gate, so this arm
+            // is unreachable in practice for `RdfDataset`.
+            //
+            // That gate, however, sits on `RdfDatasetBuilder::freeze`, NOT on the
+            // `DatasetView` trait (`crates/rdf-core/src/dataset_view.rs`) this
+            // function is generic over. `DatasetView` is public and UNSEALED: a
+            // third-party implementation can hand back a `TermRef` for a triple's
+            // predicate id that resolves to anything at all, with no freeze-time
+            // validation ever run. `value_of`/`term_id_to_value` (`crate::scratch`)
+            // copy exactly what such a view's `resolve` returns into this
+            // `TermValue`, so a malformed quoted triple from a foreign dataset
+            // reaches here as real, unvalidated input on a LATERAL/EXISTS
+            // substitution path. Because the invariant is NOT enforced at a boundary
+            // every `DatasetView` implementor is forced through, a `debug_assert!`
+            // here would panic on exactly that foreign input in every debug/test
+            // build — the same crash this arm exists to remove. So: a total `None`,
+            // no assertion, not `unreachable!`.
             let TermValue::Iri(p_iri) = p.as_ref() else {
-                unreachable!(
-                    "a quoted triple's predicate is always interned as an IRI \
-                     (purrdf-core's own invariant); this function only ever sees \
-                     already-interned values"
-                )
+                return None;
             };
             let predicate = NamedNode::new_unchecked(p_iri);
-            let object = ground_term_from_term_value(o);
+            let object = ground_term_from_term_value(o)?;
             GroundTerm::Triple(Box::new(GroundTriple {
                 subject,
                 predicate,
                 object,
             }))
         }
-    }
+    })
 }
 
 /// Dispatch a built-in (or custom) function call.
@@ -6172,6 +6206,54 @@ mod tests {
                 purrdf_sparql_algebra::GroundTerm::NamedNode(ex_iri(local)),
             )],
         }
+    }
+
+    #[test]
+    fn non_iri_quoted_triple_predicate_degrades_without_panic() {
+        // The production parser/interner can never build this: `TermValue::Triple`
+        // with a non-IRI predicate is exactly the RDF 1.2 positional-constraint
+        // violation `RdfDatasetBuilder::freeze` rejects via `require_iri_predicate`
+        // before any `TermId` naming such a term could exist (see
+        // `ground_term_from_term_value`'s doc). But `DatasetView` is public and
+        // unsealed, so a foreign implementation is not forced through that gate —
+        // a malformed `TermValue` reaching this function from such a view must
+        // degrade to `None`, not panic the engine. Constructed directly here
+        // because there is no other way to reach this arm.
+        let malformed = TermValue::Triple {
+            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
+            // A literal predicate: never producible by the parser or by
+            // PurRDF's own interner, only by a hand-built (or foreign-view)
+            // `TermValue`.
+            p: Box::new(TermValue::simple_literal("not-an-iri")),
+            o: Box::new(TermValue::Iri("https://example.org/o".to_owned())),
+        };
+
+        assert_eq!(
+            ground_term_from_term_value(&malformed),
+            None,
+            "a non-IRI quoted-triple predicate must degrade to an unrepresentable \
+             binding, not panic"
+        );
+    }
+
+    #[test]
+    fn non_iri_quoted_triple_predicate_nested_in_object_degrades_without_panic() {
+        // The same malformed predicate, one level down (inside the object of an
+        // otherwise well-formed outer triple): the recursive `?` propagation must
+        // carry the `None` all the way up rather than the outer call constructing
+        // a triple around a term that could not be built.
+        let inner_malformed = TermValue::Triple {
+            s: Box::new(TermValue::Iri("https://example.org/s2".to_owned())),
+            p: Box::new(TermValue::simple_literal("still-not-an-iri")),
+            o: Box::new(TermValue::Iri("https://example.org/o2".to_owned())),
+        };
+        let outer = TermValue::Triple {
+            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
+            p: Box::new(TermValue::Iri("https://example.org/p".to_owned())),
+            o: Box::new(inner_malformed),
+        };
+
+        assert_eq!(ground_term_from_term_value(&outer), None);
     }
 
     #[test]
