@@ -1488,8 +1488,32 @@ pub(crate) fn substitute_pattern(
     substitute_pattern_impl(pattern, row, &mut map)
 }
 
-/// Substituted-node address → source-node address, one entry per node
-/// [`substitute_pattern_tracked`]'s walk produces from the plan it is substituting.
+/// One [`SubstitutionSourceMap`] entry: which real plan node a substituted-tree node is
+/// doing work on behalf of, and whether ITS OWN committed-output rows ARE that node's true
+/// output for this row.
+///
+/// The two charge kinds this walk's synthetic nodes generate are attributed differently on
+/// purpose:
+///
+/// - **Fuel** (and every other non-row charge point) is attributed to `source`
+///   unconditionally, from every synthesized node — the leaf's own raw re-scan, the
+///   one-row `VALUES` table, and the `Join` that narrows them — because that work really
+///   happened and `source` is the only real node it can be charged against (see this
+///   type's field-less predecessor's doc, preserved below, for why folding it into the
+///   nearest enclosing REAL node instead would be worse). Fuel's sum-to-total invariant
+///   depends on this: every unit charged during the substituted evaluation must land
+///   somewhere, and nothing but `source` has a claim on it.
+/// - **Committed rows/cells** are attributed to `source` ONLY from the node whose output
+///   IS `source`'s true output for this row — `counts_rows`. A `Bgp`/`Path` leaf Values
+///   Insertion wraps is evaluated UNCONSTRAINED (its own triple patterns are never
+///   rewritten to ground terms — see [`substitute_pattern`]'s doc), so its own
+///   committed rows are a re-scan cost, not `source`'s output; the one-row `VALUES` table
+///   is bookkeeping, never `source`'s output either. Only the wrapping `Join`'s narrowed
+///   result is. Counting all three would make `source`'s reported `rows`/`cells` a
+///   composite of three different nodes' outputs rendered beside ONE estimate that
+///   predicts only `source`'s own — the miscalibration this type exists to prevent.
+///   `counts_rows` is `true` for a plain 1:1 copy (no wrapper needed) and for the
+///   wrapper itself when one is added, `false` for the scaffolding a wrapper wraps.
 ///
 /// A node the walk **synthesizes** — the `Values` Values Insertion adds, and the `Join`
 /// that joins it in (see [`substitute_pattern`]'s doc) — carries no source identity of its
@@ -1502,13 +1526,24 @@ pub(crate) fn substitute_pattern(
 /// `LATERAL`", corrupting exactly the row count this whole map exists to keep honest.
 /// Mapping the wrapper to its child's source instead means every node in a wrapped
 /// subtree — real or synthetic — resolves to the ONE real node it is doing work on behalf
-/// of, and nothing but that node's own true output ever lands on an ancestor.
+/// of, and nothing but that node's own true output ever lands on an ancestor's row column.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SubstitutionSource {
+    /// The real plan node's own address, in the UNSUBSTITUTED plan tree.
+    pub(crate) source: usize,
+    /// Whether this node's own committed rows/cells are `source`'s true output for this
+    /// row — see this type's doc.
+    pub(crate) counts_rows: bool,
+}
+
+/// Substituted-node address → [`SubstitutionSource`], one entry per node
+/// [`substitute_pattern_tracked`]'s walk produces from the plan it is substituting.
 ///
 /// Keyed by a per-row heap-temporary address. That address is internal evaluator
 /// bookkeeping only: [`crate::governor::ledger::QueryExplanation::render`] emits ordinals
 /// and labels, never an address, so this map's keys never reach anything the ledger
 /// prints — see that function's determinism note.
-pub(crate) type SubstitutionSourceMap = crate::DetHashMap<usize, usize>;
+pub(crate) type SubstitutionSourceMap = crate::DetHashMap<usize, SubstitutionSource>;
 
 /// [`substitute_pattern`], additionally populating `map` (see [`SubstitutionSourceMap`]) —
 /// the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
@@ -1882,7 +1917,9 @@ fn substitute_pattern_impl(
 }
 
 /// Box `built` (its final, permanent address — a `Box`'s pointee never moves again) and,
-/// if `map` is engaged, record that address against `source`'s. The one place
+/// if `map` is engaged, record that address against `source`'s, `counts_rows: true` — the
+/// default for a node that has not (yet) been wrapped by
+/// [`join_leaf_with_values`]/[`wrap_with_expr_term_only_values`]. The one place
 /// [`substitute_pattern_impl`] pairs a `Box::new` with a [`SubstitutionSourceMap`] entry,
 /// so every entry is keyed by an address the node actually ends up at rather than one it
 /// only transiently held on the stack before being moved into its `Box`.
@@ -1891,14 +1928,51 @@ fn boxed_and_mapped(
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionSourceMap>,
 ) -> Box<GraphPattern> {
+    boxed_and_mapped_as(built, source, map, true)
+}
+
+/// [`boxed_and_mapped`], but for Values-Insertion SCAFFOLDING — the one-row `VALUES` table
+/// a wrapper joins in — whose own committed rows are never `source`'s true output (see
+/// [`SubstitutionSource`]'s doc) and must therefore not count toward it.
+fn boxed_and_mapped_scaffolding(
+    built: GraphPattern,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+) -> Box<GraphPattern> {
+    boxed_and_mapped_as(built, source, map, false)
+}
+
+/// Shared implementation of [`boxed_and_mapped`]/[`boxed_and_mapped_scaffolding`].
+fn boxed_and_mapped_as(
+    built: GraphPattern,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionSourceMap>,
+    counts_rows: bool,
+) -> Box<GraphPattern> {
     let boxed = Box::new(built);
     if let Some(m) = map.as_deref_mut() {
         m.insert(
             std::ptr::from_ref(boxed.as_ref()) as usize,
-            std::ptr::from_ref(source) as usize,
+            SubstitutionSource {
+                source: std::ptr::from_ref(source) as usize,
+                counts_rows,
+            },
         );
     }
     boxed
+}
+
+/// Demote an already-mapped node (inserted `counts_rows: true` by [`boxed_and_mapped`]) to
+/// scaffolding, because a wrapper is being added over it: the wrapper's own narrowed output
+/// becomes `source`'s true output for this row, so the wrapped node underneath must stop
+/// counting rows/cells — its fuel keeps accruing to `source` unaffected (see
+/// [`SubstitutionSource`]'s doc). A no-op when `map` is disengaged.
+fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionSourceMap>, address: usize) {
+    if let Some(m) = map.as_deref_mut()
+        && let Some(entry) = m.get_mut(&address)
+    {
+        entry.counts_rows = false;
+    }
 }
 
 /// Wrap a `Bgp`/`Path` leaf in `Join(leaf, Values { .. })` when its variables
@@ -1913,11 +1987,17 @@ fn boxed_and_mapped(
 /// `leaf` arrives already boxed — at its permanent address — and, when a
 /// [`SubstitutionSourceMap`] is engaged, already mapped to `source` by the caller
 /// ([`substitute_pattern_impl`]'s `Bgp`/`Path` arms, which pass their own `pattern` as
-/// `source`). When this function DOES add the synthetic `Join`/`Values` wrapper, the
-/// wrapper is mapped to that SAME `source` — see [`SubstitutionSourceMap`]'s doc for why a
-/// wrapper that inherited from its enclosing node instead would, for a `LATERAL` whose
-/// right operand is directly a `Bgp`/`Path` (no `Filter` between the `LATERAL` and the
-/// wrapped leaf), fold straight into the `LATERAL` node.
+/// `source`), `counts_rows: true`. When this function DOES add the synthetic
+/// `Join`/`Values` wrapper, the wrapper is mapped to that SAME `source` — see
+/// [`SubstitutionSourceMap`]'s doc for why a wrapper that inherited from its enclosing node
+/// instead would, for a `LATERAL` whose right operand is directly a `Bgp`/`Path` (no
+/// `Filter` between the `LATERAL` and the wrapped leaf), fold straight into the `LATERAL`
+/// node — but the wrapper, not `leaf`, becomes the row-counting entry
+/// ([`SubstitutionSource::counts_rows`]): `leaf` is demoted to scaffolding, because its own
+/// committed rows are the UNCONSTRAINED scan (Values Insertion never rewrites the leaf's
+/// own triple patterns to ground terms), not `source`'s output for this row, and the
+/// `Values` table is bookkeeping that carries no output of its own either. Only the
+/// `Join`'s narrowed result is `source`'s true output.
 ///
 /// This runs once per `Bgp`/`Path` leaf in the substituted pattern, so a query with
 /// several leaves sharing bound vars clones each `(Variable, GroundTerm)` pair once per
@@ -1944,13 +2024,19 @@ fn join_leaf_with_values(
         variables.push(v.clone());
         values_row.push(Some(g.clone()));
     }
+    demote_to_scaffolding(map, std::ptr::from_ref(leaf.as_ref()) as usize);
+    let values = boxed_and_mapped_scaffolding(
+        GraphPattern::Values {
+            variables,
+            bindings: vec![values_row],
+        },
+        source,
+        map,
+    );
     boxed_and_mapped(
         GraphPattern::Join {
             left: leaf,
-            right: Box::new(GraphPattern::Values {
-                variables,
-                bindings: vec![values_row],
-            }),
+            right: values,
         },
         source,
         map,
@@ -1983,10 +2069,13 @@ fn join_leaf_with_values(
 /// case, only the term-kind one that make it necessary.
 ///
 /// `node` arrives already boxed and, when a [`SubstitutionSourceMap`] is engaged, already
-/// mapped to `source` by the caller — exactly like [`join_leaf_with_values`]'s `leaf`, and
-/// for the same reason: when this function DOES add the synthetic `Join`/`Values`
-/// wrapper, the wrapper is mapped to that SAME `source` rather than left to inherit from
-/// whatever encloses it — see [`SubstitutionSourceMap`]'s doc.
+/// mapped to `source` by the caller, `counts_rows: true` — exactly like
+/// [`join_leaf_with_values`]'s `leaf`, and for the same reason: when this function DOES add
+/// the synthetic `Join`/`Values` wrapper, the wrapper is mapped to that SAME `source`
+/// rather than left to inherit from whatever encloses it — see [`SubstitutionSourceMap`]'s
+/// doc — and BECOMES the row-counting entry for `source`, demoting `node` (whose own
+/// committed rows are pre-narrowing, not `source`'s output for this row) to scaffolding,
+/// same as there.
 ///
 /// Same allocation shape as [`join_leaf_with_values`]: this runs once per
 /// expression-bearing node that needs a term-only var, and the `(Variable, GroundTerm)`
@@ -2016,13 +2105,19 @@ fn wrap_with_expr_term_only_values(
         variables.push(v.clone());
         values_row.push(Some(g.clone()));
     }
+    demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
+    let values = boxed_and_mapped_scaffolding(
+        GraphPattern::Values {
+            variables,
+            bindings: vec![values_row],
+        },
+        source,
+        map,
+    );
     boxed_and_mapped(
         GraphPattern::Join {
             left: node,
-            right: Box::new(GraphPattern::Values {
-                variables,
-                bindings: vec![values_row],
-            }),
+            right: values,
         },
         source,
         map,

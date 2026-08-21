@@ -57,6 +57,45 @@
 //! summing every ledger line's fuel column against
 //! [`GovernorEvidence::consumed_in`](purrdf_core::GovernorEvidence::consumed_in) for
 //! [`ResourceDimension::Fuel`](purrdf_core::ResourceDimension::Fuel).
+//!
+//! # What `rows`/`cells` measure, and why that is not the same rule as fuel's
+//!
+//! A `LATERAL` right operand is evaluated once per left row through a *per-row substituted
+//! copy* of the real plan node (`crate::binop::eval_correlated`), and a `Bgp`/`Path` leaf
+//! that copy touches is, by Values-Insertion's design, wrapped `Join(leaf, Values{…})`
+//! rather than having its own triple patterns rewritten to ground terms (`crate::expr`'s
+//! `substitute_pattern` doc) — so ONE substituted evaluation of a real `Bgp` node produces
+//! THREE separate committed-output events under the same ledger line: the leaf's own
+//! UNCONSTRAINED re-scan, the one-row `VALUES` table's own always-one-row output, and the
+//! `Join`'s NARROWED result. All three did real work and all three charge fuel here — fuel
+//! meters *work*, every unit charged during the substituted evaluation belongs to this
+//! node and nowhere else, and the sum-to-total invariant above depends on that.
+//!
+//! `rows` (and, downstream of it, `cells` and the rendered `actual-rows`) is a different
+//! question: not "how much work happened here" but "what did this node's evaluation
+//! PRODUCE". For a `Bgp` under `LATERAL`, the answer a caller comparing `estimated-rows`
+//! against `actual-rows` needs is the SAME quantity the planner sized — the node's
+//! constrained, post-injection output — which is exactly the wrapping `Join`'s result, not
+//! the leaf's unconstrained re-scan and not the `Values` table's bookkeeping. Committing
+//! all three into `rows` (the pre-fix behaviour) makes it a composite of three different
+//! nodes' outputs printed beside an estimate that predicts only one of them — a real `Bgp`
+//! whose planner estimate was EXACT then renders as an apparent order-of-magnitude miss.
+//! `crate::expr::SubstitutionSource::counts_rows` is the per-synthesized-node flag that
+//! keeps `rows`/`cells` counting only the one node whose output IS the real node's true
+//! output for that row — the wrapper when Values Insertion adds one, a plain 1:1 copy when
+//! it does not — while every synthesized node's fuel keeps landing here regardless. See
+//! that type's doc for the full attribution rule and
+//! `crate::eval::EvalCtx::ledger_counts_rows` for the evaluator-side cursor that carries it.
+//!
+//! `rows` sums every commit this node's ledger line receives (its total output, however
+//! many times the node was invoked); `cells` keeps only the largest single commit (the
+//! peak one materialized bag ever held — see [`ChargeLedger::record_cells`]). A node
+//! invoked exactly once therefore always shows `cells == rows * columns`; a node invoked
+//! several times can show `cells < rows * columns` whenever more than one invocation
+//! committed a nonzero row (the peak of several nonnegative numbers is never more than
+//! their sum) — never more, since a violation of `cells <= rows * columns` would mean
+//! `rows` and `cells` on the same line describe two different row sets rather than the
+//! same one.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

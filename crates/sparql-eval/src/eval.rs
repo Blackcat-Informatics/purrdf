@@ -470,6 +470,23 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// the operator that owns the expression — which is what makes the ledger's fuel
     /// column sum to the evidence's fuel total exactly.
     pub(crate) ledger_node: usize,
+    /// Whether [`Self::current_node`]'s own committed-output rows/cells ARE
+    /// [`Self::ledger_node`]'s true output for this evaluation, and should therefore be
+    /// added to its ledger `rows`/`cells` columns.
+    ///
+    /// `true` for every ordinary (non-substituted) plan node — a real node's own output
+    /// always is its own true output — and moves together with [`Self::ledger_node`] in
+    /// [`Self::enter_node`]/[`Self::leave_node`], staying put whenever the cursor does.
+    /// Inside a `LATERAL` right operand's per-row substituted copy it can be `false`: a
+    /// Values-Insertion wrapper's own children (the leaf's unconstrained re-scan, the
+    /// one-row `VALUES` table) still charge [`Self::ledger_node`]'s FUEL — that work
+    /// really happened and has nowhere else to go — but only the node
+    /// [`crate::expr::SubstitutionSource::counts_rows`] marks as `true` (the wrapper
+    /// itself, or a plain unwrapped copy) may add to its row/cell columns. Without this
+    /// split, `LATERAL`'s RHS `rows` becomes a composite of three different nodes'
+    /// outputs printed beside an estimate that predicts only one of them — see
+    /// [`crate::expr::SubstitutionSource`]'s doc.
+    pub(crate) ledger_counts_rows: bool,
 }
 
 /// The maximum SHACL-AF function call depth. A function body that calls another
@@ -601,6 +618,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             current_node: 0,
             ledger: None,
             ledger_node: ChargeLedger::root_ordinal(),
+            ledger_counts_rows: true,
         }
     }
 
@@ -812,6 +830,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
         self.ledger = Some(ledger);
         self.ledger_node = ChargeLedger::root_ordinal();
+        self.ledger_counts_rows = true;
         self
     }
 
@@ -857,32 +876,39 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
     ///
-    /// Both cursors move together, except that the ledger's only moves when `pattern`
+    /// The ledger cursor and its `counts_rows` flag move together, and only when `pattern`
     /// resolves to a node of the plan the ledger was built for — see
     /// [`Self::resolve_ledger_ordinal`].
-    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize) {
-        let restore = (self.current_node, self.ledger_node);
+    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize, bool) {
+        let restore = (self.current_node, self.ledger_node, self.ledger_counts_rows);
         self.current_node = std::ptr::from_ref(pattern) as usize;
-        if let Some(ordinal) = self.resolve_ledger_ordinal(self.current_node) {
+        if let Some((ordinal, counts_rows)) = self.resolve_ledger_ordinal(self.current_node) {
             self.ledger_node = ordinal;
+            self.ledger_counts_rows = counts_rows;
         }
         restore
     }
 
-    /// Resolve `address` to a plan node's ledger ordinal, chasing through any live
+    /// Resolve `address` to a plan node's ledger ordinal and whether `address`'s OWN
+    /// committed rows count as that node's true output
+    /// ([`crate::expr::SubstitutionSource::counts_rows`]), chasing through any live
     /// correlated-substitution maps ([`Self::correlated_node_maps`]) when `address` is not
     /// itself a plan address.
     ///
     /// An ordinary (non-substituted) evaluation always hits the fast path — `address` IS a
-    /// plan address, found on the first probe, no map ever consulted. Inside a `LATERAL`
-    /// right operand's per-row substituted copy, `address` is instead a heap-temporary
-    /// address; [`Self::correlated_node_maps`]'s TOP (innermost, most recently entered) map
-    /// translates it one substitution-window's worth closer to a real plan address, and the
-    /// loop retries — first against the ledger directly, then, on a further miss, against
-    /// the next map out. That outward chain is what makes a `LATERAL` nested inside another
-    /// `LATERAL`'s substituted RHS resolve correctly: the inner map only ever knows how to
-    /// translate one level, so BOTH windows' maps must stay live and be walked in order —
-    /// see that field's doc.
+    /// plan address, found on the first probe, no map ever consulted, and `counts_rows` is
+    /// unconditionally `true`: a real plan node's own output is always its own true output.
+    /// Inside a `LATERAL` right operand's per-row substituted copy, `address` is instead a
+    /// heap-temporary address; [`Self::correlated_node_maps`]'s TOP (innermost, most
+    /// recently entered) map translates it one substitution-window's worth closer to a real
+    /// plan address, and the loop retries — first against the ledger directly, then, on a
+    /// further miss, against the next map out. That outward chain is what makes a `LATERAL`
+    /// nested inside another `LATERAL`'s substituted RHS resolve correctly: the inner map
+    /// only ever knows how to translate one level, so BOTH windows' maps must stay live and
+    /// be walked in order — see that field's doc. `counts_rows` is read from the FIRST map
+    /// entry consulted — the one describing `address` itself — and carried through any
+    /// further translation unchanged: it answers a question about THIS node, not about
+    /// whatever address it is chased through on the way to an ordinal.
     ///
     /// A miss at any step — `address` absent from the map being consulted — stops the
     /// search and returns `None` rather than trying an outer map with the SAME address: a
@@ -890,25 +916,31 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// never present in any source tree), and its charges are meant to fall to whatever
     /// node is already the ledger cursor — the nearest enclosing node that DID resolve —
     /// not to be guessed at by skipping a level.
-    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<usize> {
+    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<(usize, bool)> {
         let ledger = self.ledger.as_ref()?;
         if let Some(ordinal) = ledger.ordinal_of(address) {
-            return Some(ordinal);
+            return Some((ordinal, true));
         }
         let mut address = address;
-        for map in self.correlated_node_maps.iter().rev() {
-            address = *map.get(&address)?;
+        let mut counts_rows = true;
+        for (depth, map) in self.correlated_node_maps.iter().rev().enumerate() {
+            let entry = map.get(&address)?;
+            if depth == 0 {
+                counts_rows = entry.counts_rows;
+            }
+            address = entry.source;
             if let Some(ordinal) = ledger.ordinal_of(address) {
-                return Some(ordinal);
+                return Some((ordinal, counts_rows));
             }
         }
         None
     }
 
     /// Restore the cursors [`Self::enter_node`] returned.
-    pub(crate) const fn leave_node(&mut self, restore: (usize, usize)) {
+    pub(crate) const fn leave_node(&mut self, restore: (usize, usize, bool)) {
         self.current_node = restore.0;
         self.ledger_node = restore.1;
+        self.ledger_counts_rows = restore.2;
     }
 
     /// The per-node charge ledger this execution records into, if one is installed.
@@ -1198,7 +1230,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !state.is_engaged_in(purrdf_core::ResourceDimension::IntermediateCells) {
             return Ok(());
         }
-        if let Some(ledger) = self.ledger.as_ref() {
+        // The LEDGER'S per-node cell column only takes an observation from the node
+        // whose own output is the wrapped node's true output — see
+        // [`Self::ledger_counts_rows`] — but the GOVERNOR'S real ceiling still sees every
+        // observation regardless: a Values-Insertion scaffolding node genuinely
+        // materializes the bag it reports, and the ceiling that bounds peak memory must
+        // not blind itself to a real allocation just because the ledger declines to
+        // print it against this node.
+        if self.ledger_counts_rows
+            && let Some(ledger) = self.ledger.as_ref()
+        {
             ledger.record_cells(self.ledger_node, cells);
         }
         state.observe_peak(purrdf_core::ResourceDimension::IntermediateCells, cells)
@@ -1327,12 +1368,25 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         None
     }
 
-    /// Record `count` committed output rows against the current node's ledger line, both
-    /// as a row count and as the fuel those rows cost.
+    /// Record `count` committed output rows against the current node's ledger line: the
+    /// fuel those rows cost, always, and the row count itself only when
+    /// [`Self::ledger_counts_rows`] says this node's own output is the ledger node's true
+    /// output.
+    ///
+    /// The split matters for a `LATERAL` right operand's Values-Insertion scaffolding: the
+    /// leaf's unconstrained re-scan and the one-row `VALUES` table both did real work that
+    /// must still be charged in fuel (nothing else could pay for it, and fuel's
+    /// sum-to-total invariant depends on every unit landing somewhere), but neither is the
+    /// wrapped node's true committed output — only the narrowing `Join`'s is. Counting all
+    /// three into `rows` would make the printed `rows`/`actual-rows` a composite of three
+    /// different nodes' outputs beside an estimate that predicts only one of them — see
+    /// [`crate::expr::SubstitutionSource`]'s doc.
     #[inline]
     fn note_rows(&self, count: usize, point: crate::governor::ChargePoint) {
         if let Some(ledger) = self.ledger.as_ref() {
-            ledger.record_rows(self.ledger_node, count as u64);
+            if self.ledger_counts_rows {
+                ledger.record_rows(self.ledger_node, count as u64);
+            }
             ledger.record_fuel(
                 self.ledger_node,
                 point,
@@ -1476,6 +1530,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             current_node: self.current_node,
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
+            ledger_counts_rows: self.ledger_counts_rows,
         }
     }
 
@@ -1635,6 +1690,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // node a reader of the ledger can act on.
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
+            ledger_counts_rows: self.ledger_counts_rows,
         }))
     }
 

@@ -1546,6 +1546,24 @@ fn explain_reports_a_deterministic_per_node_ledger() {
             )),
             "the rendering must print the prediction beside what materialised"
         );
+        // `rows` sums every commit to this node's ledger line (its total output across
+        // however many times it was invoked); `cells` keeps only the largest single
+        // commit (the peak one materialized bag ever held — see
+        // `ChargeLedger::record_cells`'s doc). A node invoked exactly once therefore
+        // shows `cells == rows * columns` exactly; a node invoked several times (a BGP
+        // under `LATERAL`, invoked once per left row) can show `cells < rows * columns`
+        // whenever more than one invocation committed a nonzero row. Both are sound:
+        // the peak of several nonnegative numbers is never more than their sum. What
+        // must NEVER happen is `cells` exceeding that bound — that would mean some
+        // commit's cells were not `columns`-wide, i.e. `rows` and `cells` on this line
+        // describe two different row sets rather than the same one.
+        assert!(
+            node.cells <= node.rows.saturating_mul(estimate.columns),
+            "cells={} must not exceed rows={} * columns={} for {node:?}",
+            node.cells,
+            node.rows,
+            estimate.columns
+        );
     }
 
     // The join orders the API returned before the ledger existed are still there, unmoved.
@@ -1589,14 +1607,28 @@ fn explain_reports_a_deterministic_per_node_ledger() {
 ///     per-row result is 0 rows.
 ///   - `LATERAL`'s true output is therefore exactly 1 row (`:a`'s).
 ///
-/// The right `Bgp`'s own ledger line therefore carries: 2 node visits for the leaf itself
+/// The right `Bgp`'s own ledger line carries: 2 node visits for the leaf itself
 /// (`algebra-node-entry`), plus 2 more for the synthetic `Join`/`Values` wrapper Values
 /// Insertion adds (mapped to the SAME source as the leaf — see
-/// `crate::expr::SubstitutionSourceMap`'s doc, not in this crate's public surface, for
-/// why), plus 2 more for the `Values` node itself = 6; 2 candidate quads (only the leaf
-/// charges this point); and 2 (the leaf's own raw output) + 1 (the synthetic `Join`
-/// wrapper's narrowed output — `:a`'s row only) + 2 (the synthetic `Values` node's own
-/// always-one-row-per-invocation output) = 5 committed rows.
+/// `crate::expr::SubstitutionSource`'s doc, not in this crate's public surface, for why),
+/// plus 2 more for the `Values` node itself = 6; 2 candidate quads (only the leaf charges
+/// this point). Every one of those visits' committed-row FUEL still lands here too — 2
+/// (the leaf's own raw output) + 1 (the synthetic `Join` wrapper's narrowed output — `:a`'s
+/// row only) + 2 (the synthetic `Values` node's own always-one-row-per-invocation output)
+/// = 5 units of `committed-output-row` fuel — because that work genuinely happened and
+/// this node is the only real one it can be charged against (fuel's sum-to-total invariant
+/// needs it to land somewhere).
+///
+/// The `rows`/`cells` LEDGER COLUMNS, though, count only the node whose own output IS this
+/// `Bgp`'s true output for a given left row: the synthetic `Join` wrapper — never the
+/// leaf's own unconstrained re-scan, and never the `Values` table's own always-one-row
+/// bookkeeping. Both of those are pre-narrowing scaffolding, not this node's output. So
+/// `rows` is exactly the `Join`'s own narrowed output summed across invocations: `1` (`:a`)
+/// `+ 0` (`:b`) `= 1` — which lands beside `estimated-rows=1`, a perfect match, because the
+/// two now measure the SAME quantity: this `Bgp`'s constrained (post-`LATERAL`-injection)
+/// output. Before this fix `rows` was `5` — the false composite the doc above's fuel
+/// paragraph describes — printed beside the SAME `estimated-rows=1`, a ~5x apparent miss
+/// on an estimator that was actually exact.
 #[test]
 fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
     let mut builder = RdfDatasetBuilder::new();
@@ -1654,10 +1686,11 @@ fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
         "the RHS Bgp did real work (invoked twice) and must not report a false zero: \
          {ledger:?}"
     );
-    assert_eq!(
-        rhs_bgp.estimate.as_ref().map(|estimate| estimate.rows),
-        Some(1)
-    );
+    let rhs_estimate = rhs_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp under LATERAL still carries a planner estimate");
+    assert_eq!(rhs_estimate.rows, 1);
     assert_eq!(
         rhs_bgp.fuel_at(ChargePoint::BgpCandidateQuad),
         2,
@@ -1665,18 +1698,61 @@ fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
          Insertion's design (see this test's doc): {ledger:?}"
     );
     assert_eq!(
-        rhs_bgp.rows, 5,
-        "2 (the leaf's own raw output) + 1 (the synthetic Join wrapper's narrowed \
-         output) + 2 (the synthetic Values leaf's own one-row-per-invocation output), \
-         ALL correctly attributed to this real plan node instead of folding into \
-         LATERAL or reading a false zero: {ledger:?}"
-    );
-    assert_eq!(
         rhs_bgp.fuel_at(ChargePoint::AlgebraNodeEntry),
         6,
         "2 leaf visits + 2 synthetic-Join-wrapper visits + 2 synthetic-Values visits: \
          {ledger:?}"
     );
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::CommittedOutputRow),
+        5,
+        "committed-output-row FUEL still sums every visit's rows — 2 (leaf) + 1 (Join) \
+         + 2 (Values) — because that work happened and this is the only real node it can \
+         be charged against; only the LEDGER's rows/cells columns (checked below) stop \
+         double- and triple-counting it: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.rows, 1,
+        "the ledger's `rows` column now measures ONLY the synthetic Join wrapper's \
+         narrowed output (1 for :a + 0 for :b), the SAME quantity the planner estimated \
+         — not the leaf's own unconstrained re-scan or the Values table's own \
+         one-row-per-invocation bookkeeping, both of which are pre-narrowing scaffolding \
+         rather than this node's true output: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.rows, rhs_estimate.rows,
+        "estimate and actual now measure the same quantity — this Bgp's constrained, \
+         post-LATERAL-injection output — so a correctly-sized estimator prints as a \
+         match rather than an apparent miss: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.cells,
+        rhs_bgp.rows * rhs_estimate.columns,
+        "exactly one invocation (:a's) committed a nonzero Join output, so the peak \
+         single-bag cell count and the summed row count agree here: {ledger:?}"
+    );
+
+    // The adversary's invariant, swept over every line: `cells` (the largest single
+    // commit) can never exceed `rows` (the sum of every commit) times the node's own
+    // schema width, on every node the planner sized — and a node with zero committed
+    // rows can never report nonzero cells regardless. A violation would mean `rows` and
+    // `cells` on the SAME line describe two different row sets, exactly the
+    // self-contradiction ("rows=19 cells=8") this fix exists to close.
+    for node in ledger {
+        if let Some(estimate) = &node.estimate {
+            assert!(
+                node.cells <= node.rows.saturating_mul(estimate.columns),
+                "cells={} must not exceed rows={} * columns={} for {node:?}",
+                node.cells,
+                node.rows,
+                estimate.columns
+            );
+        }
+        assert!(
+            node.rows > 0 || node.cells == 0,
+            "a node with zero committed rows cannot report nonzero cells: {node:?}"
+        );
+    }
 
     // The pre-existing invariant still holds — a decomposition that did not add up would
     // be a decomposition of some other number — but, as this test's doc explains, it alone
