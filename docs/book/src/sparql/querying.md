@@ -360,6 +360,14 @@ SELECT * WHERE {
 }
 ```
 
+Correlation carries a left-hand binding of ANY RDF 1.2 term kind — including a
+blank node or a quoted triple — into the right-hand side, even when the only
+occurrence of that variable there is inside an expression (a `FILTER`, a
+`BIND`, a `BOUND(?s)` call) rather than as a triple-pattern leaf: `BOUND(?s)`
+answers correctly for a left-bound blank node or quoted triple the same as it
+does for an IRI or a literal, and such a row is not silently dropped for
+lacking a leaf occurrence to carry it.
+
 ### The scope restriction
 
 `LATERAL`'s right-hand side may freely REUSE a variable already bound on the

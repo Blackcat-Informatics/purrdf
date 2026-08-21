@@ -945,8 +945,7 @@ impl core::fmt::Display for PropertyPathExpression {
 /// then delegates to `parse_path_elt` for the quantified primary, so
 /// `^<p>*` reparses as `Reverse(ZeroOrMore(<p>))` (not
 /// `ZeroOrMore(Reverse(<p>))`) WITHOUT any parens needed — the grammar rule
-/// the grammar rule `^` sits in already expects a possibly-quantified
-/// primary right after it.
+/// `^` sits in already expects a possibly-quantified primary right after it.
 /// [`QuantifierOperand`] is the analogous wrapper for the OTHER context
 /// (a quantifier's own operand), which has different rules — see its doc.
 struct PathElt<'a>(&'a PropertyPathExpression);

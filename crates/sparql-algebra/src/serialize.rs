@@ -262,7 +262,7 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         }
         GraphPattern::Lateral { left, right } => {
             fmt_flattened_left(s, left);
-            if parser_rebuilds_the_lateral(right) {
+            if parser_rebuilds_the_lateral(left, right) {
                 // Two right-operand shapes are surface forms the parser's OWN
                 // dispatch arms re-wrap into exactly this `Lateral` node without
                 // any `LATERAL` keyword in the text: a property function (written
@@ -424,28 +424,67 @@ fn is_empty_group_body(p: &GraphPattern) -> bool {
     matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
-/// Does a [`GraphPattern::Lateral`] right operand render as a surface form the
-/// parser's OWN dispatch arms — not the `LATERAL` keyword — re-wrap into exactly
-/// this `Lateral` node on re-parse?
+/// Does a [`GraphPattern::Lateral`] node render as a surface form the parser's
+/// OWN dispatch arms — not the `LATERAL` keyword — re-wrap into exactly this
+/// `Lateral` node on re-parse?
 ///
-/// Two shapes qualify: a [`GraphPattern::PropertyFunction`] (written as a plain
-/// triple; the parser's PF-triple-folding loop builds a left-deep `Lateral`
-/// chain from it) and a variable-endpoint [`GraphPattern::Service`] (`SERVICE ?g
-/// { … }`; the parser's `SERVICE` dispatch arm auto-wraps a variable endpoint
-/// into a `Lateral` because the endpoint is correlated with the enclosing
-/// pattern). A FIXED-IRI `Service` does **not** qualify: the parser's `SERVICE`
-/// arm folds it with a plain [`crate::algebra::GraphPattern::Join`] instead, so
-/// without an explicit `LATERAL { … }` keyword here the laterality would be lost
-/// on re-parse (the round-tripped tree would be a `Join`, not a `Lateral`).
-fn parser_rebuilds_the_lateral(right: &GraphPattern) -> bool {
-    matches!(
-        right,
-        GraphPattern::PropertyFunction(_)
-            | GraphPattern::Service {
-                name: NamedNodePattern::Variable(_),
-                ..
-            }
-    )
+/// Two right-operand shapes qualify, under different conditions on `left`:
+///
+/// * A variable-endpoint [`GraphPattern::Service`] (`SERVICE ?g { … }`): the
+///   parser's `SERVICE` dispatch arm auto-wraps a variable endpoint into a
+///   `Lateral` USING WHATEVER `left` IT ALREADY HAS ACCUMULATED, unconditionally
+///   — so this qualifies for every `left` shape. A FIXED-IRI `Service` does
+///   **not** qualify at all: the parser's `SERVICE` arm folds it with a plain
+///   [`crate::algebra::GraphPattern::Join`] instead, so without an explicit
+///   `LATERAL { … }` keyword here the laterality would be lost on re-parse (the
+///   round-tripped tree would be a `Join`, not a `Lateral`).
+/// * A [`GraphPattern::PropertyFunction`] (written as a plain triple): the
+///   parser's PF-triple-folding loop builds this `Lateral` node INSIDE ONE
+///   triples block, independently of whatever the enclosing group's `left` is —
+///   it only reproduces `left` exactly when `left` is ITSELF a shape that same
+///   fold can build ([`is_pf_reabsorbable_left`]). When `left` is some other
+///   group element (`Union`/`Graph`/`Values`/…), the fold instead starts a
+///   fresh unit-table `Lateral` for the PF call and the group loop's own `join`
+///   attaches `left` to it as a plain `Join` — dropping the laterality (the PF
+///   call would no longer see `left`'s bindings). This qualifies ONLY when
+///   [`is_pf_reabsorbable_left`] says so.
+fn parser_rebuilds_the_lateral(left: &GraphPattern, right: &GraphPattern) -> bool {
+    match right {
+        GraphPattern::PropertyFunction(_) => is_pf_reabsorbable_left(left),
+        GraphPattern::Service {
+            name: NamedNodePattern::Variable(_),
+            ..
+        } => true,
+        _ => false,
+    }
+}
+
+/// Is `left` a shape the parser's PF-triple-folding loop (`BlockSink::into_pattern`,
+/// in `parser.rs`) can itself produce as the LEFT operand of a
+/// `Lateral{left, right: PropertyFunction}` node — i.e. would rendering `left`
+/// unbraced immediately before a property-function triple re-parse as ONE
+/// triples block that folds back to exactly this `left`?
+///
+/// The fold's only leaves are `Bgp`s (property paths are recorded separately
+/// and always joined on AFTER every property-function fold, never inside one —
+/// so a `Path` leaf is deliberately EXCLUDED here even though it renders
+/// unbraced too: reparsing would relocate it to the far end of the block
+/// instead of keeping it as this node's left, changing the tree). The two
+/// combinators the fold builds around those leaves are `Join{prior, Bgp}`
+/// (residual triples appended after a PF call) and `Lateral{prior,
+/// PropertyFunction}` (the PF call itself) — so both recurse on their own
+/// `left`/`prior` operand.
+fn is_pf_reabsorbable_left(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Bgp { .. } => true,
+        GraphPattern::Join { left, right } => {
+            matches!(**right, GraphPattern::Bgp { .. }) && is_pf_reabsorbable_left(left)
+        }
+        GraphPattern::Lateral { left, right } => {
+            matches!(**right, GraphPattern::PropertyFunction(_)) && is_pf_reabsorbable_left(left)
+        }
+        _ => false,
+    }
 }
 
 /// `true` for the [`GraphPattern`] variants whose OWN rendering starts by
@@ -2153,6 +2192,197 @@ mod tests {
         // emitted.
         let text = assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . ?o pf:related ?z }");
         assert!(!text.contains("LATERAL"), "got: {text}");
+    }
+
+    /// Collapse a `Lateral` node whose LEFT is the identity/unit table
+    /// (`Bgp { patterns: [] }`) into its right operand alone — a lateral join
+    /// against a table holding exactly one, empty solution evaluates its right
+    /// operand exactly once with no extra bindings, i.e. is the right operand
+    /// — recursively, so it also cancels a unit-table `Lateral` reached
+    /// through other combinators. This is what an explicit `LATERAL { … }`
+    /// keyword necessarily reintroduces around a bare property-function
+    /// triple (the braced body's OWN triples-block fold roots the call at a
+    /// fresh unit table before the outer keyword wraps it again), so
+    /// tree-identity across that keyword is only available up to this
+    /// cancellation. Every other `GraphPattern` variant is reconstructed with
+    /// its children normalized the same way and every non-pattern field
+    /// carried through unchanged; the match is exhaustive so a future algebra
+    /// variant is a compile error here, not a silent blind spot.
+    fn normalize(p: &GraphPattern) -> GraphPattern {
+        match p {
+            GraphPattern::Lateral { left, right } => {
+                let left = normalize(left);
+                let right = normalize(right);
+                if matches!(&left, GraphPattern::Bgp { patterns } if patterns.is_empty()) {
+                    right
+                } else {
+                    GraphPattern::Lateral {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    }
+                }
+            }
+            GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
+                patterns: patterns.clone(),
+            },
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => GraphPattern::Path {
+                subject: subject.clone(),
+                path: path.clone(),
+                object: object.clone(),
+            },
+            GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
+            GraphPattern::Join { left, right } => GraphPattern::Join {
+                left: Box::new(normalize(left)),
+                right: Box::new(normalize(right)),
+            },
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => GraphPattern::LeftJoin {
+                left: Box::new(normalize(left)),
+                right: Box::new(normalize(right)),
+                expression: expression.clone(),
+            },
+            GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
+                expr: expr.clone(),
+                inner: Box::new(normalize(inner)),
+            },
+            GraphPattern::Union { left, right } => GraphPattern::Union {
+                left: Box::new(normalize(left)),
+                right: Box::new(normalize(right)),
+            },
+            GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+                name: name.clone(),
+                inner: Box::new(normalize(inner)),
+            },
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } => GraphPattern::Extend {
+                inner: Box::new(normalize(inner)),
+                variable: variable.clone(),
+                expression: expression.clone(),
+            },
+            GraphPattern::Minus { left, right } => GraphPattern::Minus {
+                left: Box::new(normalize(left)),
+                right: Box::new(normalize(right)),
+            },
+            GraphPattern::Service {
+                name,
+                inner,
+                silent,
+            } => GraphPattern::Service {
+                name: name.clone(),
+                inner: Box::new(normalize(inner)),
+                silent: *silent,
+            },
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } => GraphPattern::Values {
+                variables: variables.clone(),
+                bindings: bindings.clone(),
+            },
+            GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
+                inner: Box::new(normalize(inner)),
+                expression: expression.clone(),
+            },
+            GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: Box::new(normalize(inner)),
+                variables: variables.clone(),
+            },
+            GraphPattern::Distinct { inner } => GraphPattern::Distinct {
+                inner: Box::new(normalize(inner)),
+            },
+            GraphPattern::Reduced { inner } => GraphPattern::Reduced {
+                inner: Box::new(normalize(inner)),
+            },
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => GraphPattern::Slice {
+                inner: Box::new(normalize(inner)),
+                start: *start,
+                length: *length,
+            },
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => GraphPattern::Group {
+                inner: Box::new(normalize(inner)),
+                variables: variables.clone(),
+                aggregates: aggregates.clone(),
+            },
+        }
+    }
+
+    #[test]
+    fn roundtrip_lateral_with_a_union_left_and_property_function_right() {
+        // Only reachable by constructing the algebra directly — `GraphPattern`
+        // and `pattern_to_select_query` are public API, but the parser itself
+        // never builds this tree: its PF-triple fold only ever re-absorbs a
+        // preceding TRIPLES BLOCK as a PF-`Lateral`'s left
+        // (`is_pf_reabsorbable_left`), never a `Union`. Rendering the right
+        // operand unwrapped here (the way a reabsorbable left does) would
+        // re-parse as `Join(Union{..}, Lateral(unit-table, PF))` instead — the
+        // PF call would stop seeing the union's bindings, a semantic change.
+        // The `LATERAL { … }` keyword this fix DOES emit re-parses as
+        // `Lateral{left: Union, right: Lateral{Bgp{[]}, PF}}` — laterality is
+        // preserved (the union's bindings are visible to the call again), but
+        // the braced body's own fold adds a unit-table `Lateral` around the
+        // call that a bare, API-constructed `right: PropertyFunction` never
+        // had; `normalize` cancels exactly that harmless wrapper before the
+        // comparison.
+        let call = PropertyFunctionCall {
+            iri: format!("{PF_NS}related"),
+            subject_args: vec![TermPattern::Variable(Variable::new("o"))],
+            object_args: vec![TermPattern::Variable(Variable::new("z"))],
+        };
+        let union = GraphPattern::Union {
+            left: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
+                        "https://example.org/d/p",
+                    )),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+            right: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
+                        "https://example.org/d/q",
+                    )),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+        };
+        let body = GraphPattern::Lateral {
+            left: Box::new(union),
+            right: Box::new(GraphPattern::PropertyFunction(call)),
+        };
+        let text = pattern_to_select_query(&body);
+        let reparsed = match SparqlParser::new()
+            .parse_query_with(&text, &pf_options())
+            .unwrap_or_else(|e| panic!("re-parse `{text}`: {e:?}"))
+        {
+            Query::Select { pattern, .. } => where_body(&pattern),
+            other => panic!("expected SELECT, got {other:?}"),
+        };
+        assert_eq!(
+            normalize(&reparsed),
+            normalize(&body),
+            "round-trip mismatch\n serialized: {text}"
+        );
     }
 
     #[test]

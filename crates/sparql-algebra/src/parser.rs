@@ -3930,11 +3930,16 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// (`crates/sparql-eval`) — exposes the left row's bindings to `P` as
 /// ordinary, still-variable solutions rather than literal term substitution.
 /// This walker is the syntax half of the contract that makes that injection
-/// sound: **it rejects exactly the programs in which injecting a left-hand
-/// binding into the right-hand side would be observable as a rebinding** — a
-/// fresh `BIND`/`VALUES`/aggregate target at the RHS's own top scope level
-/// trying to give a NEW value to a variable the LHS already gave one. The
-/// evaluator's half of the same theorem is that injection never crosses a
+/// sound: **it rejects exactly the programs, WRITTEN WITH THE `LATERAL`
+/// KEYWORD, in which injecting a left-hand binding into the right-hand side
+/// would be observable as a rebinding** — a fresh `BIND`/`VALUES`/aggregate
+/// target at the RHS's own top scope level trying to give a NEW value to a
+/// variable the LHS already gave one; the `SERVICE ?g { ... }` auto-wrap
+/// form (see "A property of the surface form" below) also builds a
+/// `GraphPattern::Lateral` node but is outside this theorem's domain — it is
+/// never walked, by construction, regardless of what its right-hand side
+/// does. The evaluator's half of the same theorem is that injection never
+/// crosses a
 /// `Project` boundary the projection does not itself carry forward, so a
 /// sub-select that does not project a shadowed name never observes the outer
 /// value, and rebinding it inside is legal. The two halves are one design:
@@ -6316,7 +6321,6 @@ mod tests {
         let err = SparqlParser::new()
             .parse_query(&q)
             .expect_err("SEP-0006's own illegal example must be rejected");
-        println!("{err}");
         assert!(
             err.to_string()
                 .contains("BIND target ?o inside LATERAL is already in scope"),
