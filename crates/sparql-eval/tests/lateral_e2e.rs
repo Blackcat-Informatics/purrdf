@@ -15,14 +15,20 @@
 //! predicates (`:q`, `:tagged`, `:usesPred`) exist purely to isolate one
 //! term-kind or position for one test each; two named graphs (`:g1`/`:g2`) hold a
 //! shared subject `:x` under DIFFERENT labels, for the `GRAPH ?g` scoping test.
-//! Every sub-select below carries `ORDER BY` before `LIMIT 1`, per the SEP's own
+//! `:a` also carries `:hasAnon` to one blank node (which carries an `:note`
+//! literal of its own), and one RDF 1.2 reifier `:reifierA` reifies the `:a :p
+//! :oa` triple as a quoted triple term — both exist to bind an outer variable to
+//! a term kind an `Expression` has no constant spelling for (a blank node, a
+//! quoted triple), for the expression-only correlated-substitution tests. Every
+//! sub-select below carries `ORDER BY` before `LIMIT 1`, per the SEP's own
 //! examples.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
+    SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
@@ -122,6 +128,25 @@ fn dataset() -> Arc<RdfDataset> {
     b.push_quad(x, label, alpha2, Some(g1));
     b.push_quad(x, label, beta1, Some(g2));
     b.push_quad(x, label, beta2, Some(g2));
+
+    // Blank-node injection: `:a` carries a blank node that itself carries a
+    // literal, so an outer row can bind a variable to a `TermValue::Blank` —
+    // the term kind an `Expression` cannot spell as a constant — for the
+    // `BOUND(?bn)`-in-a-`LATERAL`-`FILTER` test.
+    let has_anon = b.intern_iri(&iri("hasAnon"));
+    let anon = b.intern_blank("anon1", BlankScope::DEFAULT);
+    let note = b.intern_iri(&iri("note"));
+    let noted = b.intern_literal(RdfLiteral::simple("noted"));
+    b.push_quad(a, has_anon, anon, None);
+    b.push_quad(anon, note, noted, None);
+
+    // RDF 1.2 reification: `:reifierA` reifies `:a :p :oa` as a quoted triple
+    // term, so `?r rdf:reifies ?tt` binds `?tt` to a `TermValue::Triple` — the
+    // other term kind an `Expression` cannot spell as a constant — for the
+    // `sameTerm`-in-a-`LATERAL`-`FILTER` test.
+    let reifier_a = b.intern_iri(&iri("reifierA"));
+    let statement_a = b.intern_triple(a, p, oa);
+    b.push_reifier(reifier_a, statement_a);
 
     b.freeze().expect("freeze fixture")
 }
@@ -944,4 +969,84 @@ fn lateral_spine_depth_is_bounded_or_errors() {
         }
     }
     let _ = query;
+}
+
+// ---------------------------------------------------------------------------
+// 19. An outer binding with no `Expression` constant form (blank node, quoted
+//     triple), referenced ONLY in a `LATERAL` RHS expression position — the
+//     wrap `wrap_with_expr_term_only_values` adds so `substitute_expr`'s
+//     IRI/literal-only rewrite is not the only carrier into an expression.
+// ---------------------------------------------------------------------------
+
+/// `?bn` is bound to a BLANK NODE by the outer pattern and referenced ONLY
+/// inside the `LATERAL` RHS's `FILTER(BOUND(?bn))` — no leaf occurrence of
+/// `?bn` anywhere in the RHS for Values Insertion's leaf join to carry it.
+/// Before the fix, `substitute_expr`'s `Bound` arm consulted only
+/// `row.expr` (which has no entry for a blank-node binding — `Expression`
+/// has no constant spelling for one), so the rewritten `BOUND(?bn)` stayed
+/// literally `BOUND(?bn)` and was evaluated against a RHS solution row where
+/// `?bn` is genuinely absent: `BOUND` of an absent variable is `false`, the
+/// `FILTER` drops the row, and the whole outer row is lost even though it
+/// binds `?bn`. `:a` is the only subject with a `:hasAnon` blank node, so
+/// exactly one row must survive.
+#[test]
+fn lateral_bnode_bound_variable_in_a_filter() {
+    let ds = dataset();
+    let result = run(
+        &ds,
+        "SELECT * { ?s :hasAnon ?bn LATERAL { ?s :p ?o FILTER(BOUND(?bn)) } }",
+    );
+    let solutions = rows(&result);
+    assert_eq!(
+        solutions.len(),
+        1,
+        "the outer row's blank-node binding must survive a LATERAL RHS FILTER \
+         that references it only in an expression position; got {solutions:?}"
+    );
+    let r = &solutions[0];
+    assert_eq!(r["s"], "<https://example.org/lateral#a>");
+    assert_eq!(r["o"], "<https://example.org/lateral#oa>");
+    assert!(
+        r["bn"].starts_with("_:"),
+        "?bn must still be the outer row's blank-node term, got {:?}",
+        r["bn"]
+    );
+}
+
+/// `?tt` is bound to a QUOTED TRIPLE TERM (via the RDF 1.2 `rdf:reifies`
+/// virtual predicate) by the outer pattern and referenced ONLY inside the
+/// `LATERAL` RHS's `FILTER(sameTerm(?tt, ?x))` — no leaf occurrence of `?tt`
+/// in the RHS (the RHS's own reifies-pattern binds a DIFFERENT variable,
+/// `?x`, to the same triple term). Before the fix, `substitute_expr` had no
+/// `Expression` constant form for a quoted triple either, so `?tt` was
+/// absent from the RHS solution row `sameTerm` evaluated against: an absent
+/// operand is an evaluation error, `FILTER` drops the row, and the single
+/// candidate row (the dataset has exactly one reifier) is lost.
+#[test]
+fn lateral_triple_term_bound_variable_in_a_filter() {
+    let ds = dataset();
+    let result = run(
+        &ds,
+        "SELECT * { \
+         ?r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?tt \
+         LATERAL { \
+           ?r2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?x \
+           FILTER(sameTerm(?tt, ?x)) \
+         } }",
+    );
+    let solutions = rows(&result);
+    assert_eq!(
+        solutions.len(),
+        1,
+        "the outer row's quoted-triple-term binding must survive a LATERAL RHS \
+         FILTER that references it only in an expression position; got {solutions:?}"
+    );
+    let r = &solutions[0];
+    assert_eq!(r["r1"], "<https://example.org/lateral#reifierA>");
+    assert_eq!(r["r2"], "<https://example.org/lateral#reifierA>");
+    assert_eq!(
+        r["tt"], r["x"],
+        "sameTerm(?tt, ?x) only kept this row because the two ARE the same \
+         quoted triple term — their rendered cells must match"
+    );
 }

@@ -195,12 +195,19 @@ surfaces; each is called out below with what a consumer must do.
   variables that make the two sides comparable, and crossed sub-select projection boundaries —
   correlating a variable the SEP-0006 scope example says is explicitly NOT correlated.
   Substitution now joins each pattern leaf with a one-row `VALUES` table carrying that leaf's own
-  bindings, narrowed at every projection boundary to the variables it actually projects;
-  expression positions keep value substitution unchanged. This is a strictly corrective behavior
-  change: `MINUS` inside a correlated `LATERAL`/`EXISTS` now answers correctly instead of a
-  domain-flipped wrong answer, and a `LATERAL`-bearing pattern is now refused rather than silently
-  forwarded to a `SERVICE` endpoint (a remote rejecting the extension under `SILENT` would
-  otherwise have contributed the identity table as a silent wrong answer).
+  bindings, narrowed at every projection boundary to the variables it actually projects; an
+  expression position keeps direct value substitution for an IRI or literal binding, and a
+  blank-node or quoted-triple binding referenced ONLY in an expression position (no leaf
+  occurrence for the leaf join above to carry it) is now carried the same way — by joining the
+  expression's own owning pattern node against a one-row `VALUES` table — since no SPARQL
+  expression syntax can spell either term kind as a rewritten constant; `BOUND` in particular now
+  answers correctly for a bound variable of ANY term kind rather than only IRI/literal ones. This
+  is a strictly corrective behavior change: `MINUS` inside a correlated `LATERAL`/`EXISTS` now
+  answers correctly instead of a domain-flipped wrong answer, a `LATERAL`-bearing pattern is now
+  refused rather than silently forwarded to a `SERVICE` endpoint (a remote rejecting the extension
+  under `SILENT` would otherwise have contributed the identity table as a silent wrong answer),
+  and a blank-node or quoted-triple outer binding reachable ONLY through an expression inside a
+  `LATERAL` right-hand side no longer silently drops the row.
 
 ### Features
 

@@ -1372,8 +1372,17 @@ impl SubstitutionRow {
 ///
 /// # Expression positions
 ///
-/// Unchanged: `substitute_expr` still rewrites `Expression::Variable`/`Bound`
-/// occurrences directly (SPARQL §18.6), including through a nested `EXISTS`.
+/// `substitute_expr` still rewrites `Expression::Variable`/`Bound` occurrences
+/// directly (SPARQL §18.6) for the IRI/literal fast path, including through a
+/// nested `EXISTS`. An outer binding with no `Expression` constant form — a
+/// blank node or a quoted triple — that occurs ONLY in an expression position
+/// (no leaf occurrence Values Insertion above already covers) is instead
+/// carried by Values Insertion applied to the expression's own owning pattern
+/// node: `Filter`/`Extend`/`LeftJoin`/`OrderBy`/`Group`'s arms below join the
+/// pattern the expression evaluates against with a one-row `VALUES` table
+/// carrying exactly that variable (`wrap_with_expr_term_only_values`), so the
+/// expression sees it bound like any other row cell rather than needing a
+/// syntactic rewrite that term kind has no syntax for.
 ///
 /// # Property-function arguments
 ///
@@ -1437,19 +1446,41 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
                     .collect(),
             })
         }
-        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: substitute_expr(expr, row),
-            inner: Box::new(substitute_pattern(inner, row)),
-        },
+        // `wrap_with_expr_term_only_values` closes the gap `substitute_expr` alone
+        // leaves open: a blank-node/quoted-triple outer binding referenced ONLY by
+        // `expr` (no leaf occurrence elsewhere in `inner`) has no `Expression`
+        // constant `substitute_expr` could rewrite it to, so `inner` is instead
+        // joined against a one-row `VALUES` carrying it — `expr` then evaluates
+        // against a row where the variable is bound like any other.
+        GraphPattern::Filter { expr, inner } => {
+            let mut free = DetHashSet::default();
+            expr_vars(expr, &mut free);
+            GraphPattern::Filter {
+                expr: substitute_expr(expr, row),
+                inner: Box::new(wrap_with_expr_term_only_values(
+                    substitute_pattern(inner, row),
+                    &free,
+                    row,
+                )),
+            }
+        }
         GraphPattern::Extend {
             inner,
             variable,
             expression,
-        } => GraphPattern::Extend {
-            inner: Box::new(substitute_pattern(inner, row)),
-            variable: variable.clone(),
-            expression: substitute_expr(expression, row),
-        },
+        } => {
+            let mut free = DetHashSet::default();
+            expr_vars(expression, &mut free);
+            GraphPattern::Extend {
+                inner: Box::new(wrap_with_expr_term_only_values(
+                    substitute_pattern(inner, row),
+                    &free,
+                    row,
+                )),
+                variable: variable.clone(),
+                expression: substitute_expr(expression, row),
+            }
+        }
         GraphPattern::Join { left, right } => GraphPattern::Join {
             left: Box::new(substitute_pattern(left, row)),
             right: Box::new(substitute_pattern(right, row)),
@@ -1458,15 +1489,30 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
             left: Box::new(substitute_pattern(left, row)),
             right: Box::new(substitute_pattern(right, row)),
         },
+        // The optional inline filter evaluates against the (already merged) joined
+        // row, so a term-only variable it needs is injected on `left`: an outer
+        // binding is never a `right`-side join key (the parser forbids `right`
+        // rebinding it), so it survives into every merged row regardless of
+        // whether `right` finds a match, exactly where the filter needs it.
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
-        } => GraphPattern::LeftJoin {
-            left: Box::new(substitute_pattern(left, row)),
-            right: Box::new(substitute_pattern(right, row)),
-            expression: expression.as_ref().map(|e| substitute_expr(e, row)),
-        },
+        } => {
+            let mut free = DetHashSet::default();
+            if let Some(e) = expression {
+                expr_vars(e, &mut free);
+            }
+            GraphPattern::LeftJoin {
+                left: Box::new(wrap_with_expr_term_only_values(
+                    substitute_pattern(left, row),
+                    &free,
+                    row,
+                )),
+                right: Box::new(substitute_pattern(right, row)),
+                expression: expression.as_ref().map(|e| substitute_expr(e, row)),
+            }
+        }
         // Both sides receive the SAME row (see this function's doc on the MINUS
         // disjoint-domain fix): the right side is NOT excluded from substitution here,
         // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
@@ -1512,45 +1558,70 @@ pub(crate) fn substitute_pattern(pattern: &GraphPattern, row: &SubstitutionRow) 
             inner: Box::new(substitute_pattern(inner, row)),
             silent: *silent,
         },
-        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(substitute_pattern(inner, row)),
-            expression: expression
-                .iter()
-                .map(|oe| match oe {
-                    purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                        purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
-                    }
-                    purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                        purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(e, row))
-                    }
-                })
-                .collect(),
-        },
+        GraphPattern::OrderBy { inner, expression } => {
+            let mut free = DetHashSet::default();
+            for oe in expression {
+                match oe {
+                    purrdf_sparql_algebra::OrderExpression::Asc(e)
+                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, &mut free),
+                }
+            }
+            GraphPattern::OrderBy {
+                inner: Box::new(wrap_with_expr_term_only_values(
+                    substitute_pattern(inner, row),
+                    &free,
+                    row,
+                )),
+                expression: expression
+                    .iter()
+                    .map(|oe| match oe {
+                        purrdf_sparql_algebra::OrderExpression::Asc(e) => {
+                            purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
+                        }
+                        purrdf_sparql_algebra::OrderExpression::Desc(e) => {
+                            purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(e, row))
+                        }
+                    })
+                    .collect(),
+            }
+        }
         GraphPattern::Group {
             inner,
             variables,
             aggregates,
-        } => GraphPattern::Group {
-            inner: Box::new(substitute_pattern(inner, row)),
-            variables: variables.clone(),
-            aggregates: aggregates
-                .iter()
-                .map(|(v, agg)| {
-                    let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
-                    // `substitute_expr` rewrites each argument in place and never
-                    // changes the argument COUNT, so this can never turn a valid
-                    // `agg` into an invalid one.
-                    let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
-                        agg.function().clone(),
-                        args,
-                        agg.scalarvals().to_vec(),
-                        agg.distinct,
-                    )
-                    .expect("substitution preserves argument count, so arity stays valid");
-                    (v.clone(), new_agg)
-                })
-                .collect(),
-        },
+        } => {
+            let mut free = DetHashSet::default();
+            for (_, agg) in aggregates {
+                for arg in agg.args() {
+                    expr_vars(arg, &mut free);
+                }
+            }
+            GraphPattern::Group {
+                inner: Box::new(wrap_with_expr_term_only_values(
+                    substitute_pattern(inner, row),
+                    &free,
+                    row,
+                )),
+                variables: variables.clone(),
+                aggregates: aggregates
+                    .iter()
+                    .map(|(v, agg)| {
+                        let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
+                        // `substitute_expr` rewrites each argument in place and never
+                        // changes the argument COUNT, so this can never turn a valid
+                        // `agg` into an invalid one.
+                        let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
+                            agg.function().clone(),
+                            args,
+                            agg.scalarvals().to_vec(),
+                            agg.distinct,
+                        )
+                        .expect("substitution preserves argument count, so arity stays valid");
+                        (v.clone(), new_agg)
+                    })
+                    .collect(),
+            }
+        }
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
             inner: Box::new(substitute_pattern(inner, row)),
@@ -1615,6 +1686,61 @@ fn join_leaf_with_values(
     }
 }
 
+/// Wrap `node` in `Join(node, Values { .. })` for every variable `expr_free_vars`
+/// mentions that is bound in `row.term` **but has no `Expression` constant form**
+/// (a blank node or a quoted triple — see [`outer_bindings_for_substitution`]'s
+/// doc on why `row.expr` omits them). This is Values Insertion applied to an
+/// expression-only occurrence: `substitute_expr` cannot rewrite
+/// `Expression::Variable(v)`/`Expression::Bound(v)` into a constant for such a
+/// `v` (no SPARQL expression syntax spells a bare blank node or a quoted
+/// triple), so instead the enclosing pattern node — `node`, already the
+/// recursively-substituted `inner`/`left` a `Filter`/`Extend`/`LeftJoin`/
+/// `OrderBy`/`Group` evaluates its expression against — is joined against a
+/// one-row `VALUES` table carrying exactly those bindings. The variable then
+/// arrives at expression evaluation BOUND, through the ordinary row the
+/// expression evaluator already reads for every other bound variable: no new
+/// evaluation path, `BOUND`/`sameTerm`/every builtin sees it like any other
+/// solution cell.
+///
+/// A variable already covered by a leaf's own Values Insertion below `node`
+/// (or already carried in `row.expr`) is excluded here, so the common
+/// IRI/literal case pays no extra join — `substitute_expr`'s direct constant
+/// rewrite stays the fast path. Joining a variable the leaf ALSO already
+/// binds (to the same term — the parser's scope-conflict check forbids the
+/// RHS from rebinding an outer variable) is compatible and therefore
+/// harmless if it ever occurs; this function does not attempt to detect that
+/// case, only the term-kind one that make it necessary.
+fn wrap_with_expr_term_only_values(
+    node: GraphPattern,
+    expr_free_vars: &DetHashSet<Variable>,
+    row: &SubstitutionRow,
+) -> GraphPattern {
+    if expr_free_vars.is_empty() {
+        return node;
+    }
+    let needed: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = row
+        .term
+        .iter()
+        .filter(|(v, _)| expr_free_vars.contains(v) && !row.expr.iter().any(|(ev, _)| ev == v))
+        .collect();
+    if needed.is_empty() {
+        return node;
+    }
+    let mut variables = Vec::with_capacity(needed.len());
+    let mut values_row = Vec::with_capacity(needed.len());
+    for (v, g) in needed {
+        variables.push(v.clone());
+        values_row.push(Some(g.clone()));
+    }
+    GraphPattern::Join {
+        left: Box::new(node),
+        right: Box::new(GraphPattern::Values {
+            variables,
+            bindings: vec![values_row],
+        }),
+    }
+}
+
 /// Substitute outer-bound variables into a property-function argument term —
 /// the ONLY remaining client of this substitution style, since Values
 /// Insertion (`substitute_pattern`'s `Bgp`/`Path` arms) took over triple-pattern
@@ -1650,8 +1776,20 @@ fn substitute_term_pattern(
 
 /// Substitute outer-bound variables in expression positions by replacing
 /// `Expression::Variable(v)` with the corresponding constant expression
-/// (`row.expr`). A nested `EXISTS`'s inner pattern gets the FULL row (`row`,
-/// not just `row.expr`), so Values Insertion reaches its leaves too.
+/// (`row.expr`) — the IRI/literal fast path. A nested `EXISTS`'s inner pattern
+/// gets the FULL row (`row`, not just `row.expr`), so Values Insertion reaches
+/// its leaves too.
+///
+/// This function alone is NOT total over `Expression::Variable`: a blank-node
+/// or quoted-triple binding has no `row.expr` entry (no expression syntax
+/// spells one) and so is left as the unresolved `Expression::Variable(v)`
+/// here — total coverage for that case is `wrap_with_expr_term_only_values`,
+/// applied by `substitute_pattern`'s expression-bearing arms to the pattern
+/// node the expression evaluates against, so `v` arrives already bound in the
+/// row by the time this leftover `Expression::Variable(v)` is evaluated.
+/// `Expression::Bound`, by contrast, IS total here: it only needs to know
+/// THAT `v` is bound, which `row.term` (not `row.expr`) answers for every
+/// term kind.
 fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
     let bindings = &row.expr;
     match expr {
@@ -1664,14 +1802,19 @@ fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
             expr.clone()
         }
         Expression::Bound(v) => {
-            // BOUND(?v) where ?v is outer-bound → always true (the variable IS bound).
-            for (bv, _) in bindings {
-                if bv == v {
-                    return Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                        "true",
-                        purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN),
-                    ));
-                }
+            // BOUND(?v) where ?v is outer-bound → always true (the variable IS
+            // bound). Checked against `row.term`, not `bindings` (`row.expr`):
+            // `row.term` is total over every outer-bound variable, including a
+            // blank node or a quoted-triple binding `row.expr` has no constant
+            // form for (see `outer_bindings_for_substitution`'s doc) — `BOUND`
+            // only needs to know THAT ?v is bound, never a term to substitute,
+            // so the totality gap that forces `wrap_with_expr_term_only_values`
+            // for `Expression::Variable` does not apply here.
+            if row.term.iter().any(|(bv, _)| bv == v) {
+                return Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                    "true",
+                    purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN),
+                ));
             }
             expr.clone()
         }
