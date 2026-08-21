@@ -103,9 +103,13 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root resolves")
 }
 
-/// Every file with extension `ext` under `dir`, recursively, in a stable
-/// (sorted) order. Shared by the `.rq` (query) and `.ru` (update) collection
-/// passes below — every other extension is ignored.
+/// Every file with extension `ext` under `dir`, recursively. Shared by the
+/// `.rq` (query) and `.ru` (update) collection passes below — every other
+/// extension is ignored. Unsorted: sorting a growing `out` at every
+/// recursion level is a redundant `O(depth)` re-sort of the same prefix, so
+/// the one sort that actually matters is the caller's, once, after the
+/// whole tree (or set of trees) has been walked — see [`collect_rq`]/
+/// [`collect_ru`].
 fn collect_by_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -118,18 +122,24 @@ fn collect_by_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Every `.rq` file under `dir`, recursively, appended to `out` and left in
+/// a stable (sorted) order. Callable more than once against the same `out`
+/// (each corpus root in the sweep below does) — the sort still runs exactly
+/// once per call, over the whole accumulated vector, which is enough to
+/// leave it fully sorted.
+fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
+    collect_by_ext(dir, "rq", out);
     out.sort();
 }
 
-/// Every `.rq` file under `dir`, recursively, in a stable (sorted) order.
-fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
-    collect_by_ext(dir, "rq", out);
-}
-
-/// Every `.ru` (UPDATE request) file under `dir`, recursively, in a stable
-/// (sorted) order.
+/// Every `.ru` (UPDATE request) file under `dir`, recursively, appended to
+/// `out` and left in a stable (sorted) order. See [`collect_rq`]'s doc for
+/// the repeated-call/sort-once discipline this shares.
 fn collect_ru(dir: &Path, out: &mut Vec<PathBuf>) {
     collect_by_ext(dir, "ru", out);
+    out.sort();
 }
 
 /// Every fenced ` ```sparql ` block under `dir`'s Markdown files — the book's
@@ -140,9 +150,9 @@ fn collect_ru(dir: &Path, out: &mut Vec<PathBuf>) {
 /// round-trip sweep needs).
 fn collect_doc_examples(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    if !dir.is_dir() {
         return out;
-    };
+    }
     let mut md_files = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -159,7 +169,6 @@ fn collect_doc_examples(dir: &Path) -> Vec<(String, String)> {
         }
     }
     md_files.sort();
-    drop(entries);
     for file in md_files {
         let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("read {file:?}: {e}"));
         let mut in_fence = false;
@@ -493,6 +502,24 @@ const XFAIL: [(&str, &str); 0] = [];
 /// parses but fails to round-trip through `Display for GraphUpdateOperation`.
 const RU_XFAIL: [(&str, &str); 0] = [];
 
+/// Measured at authoring time: the count of `.rq`/doc-example corpus items
+/// that are genuinely negative-syntax fixtures (W3C `NegativeSyntaxTest`
+/// manifests, mainly) rather than something this parser merely does not yet
+/// accept. A rise past this ceiling means one of two things: either the
+/// vendored corpora grew new negative-syntax `.rq` fixtures (raise this
+/// constant deliberately, remeasuring by hand) or a parser regression is
+/// rejecting queries it used to accept (fix the regression — do NOT raise
+/// the ceiling to paper over it). Printed alongside the raw count either
+/// way; see the module doc's "Corpus items that do not even parse" section.
+const MAX_UNPARSEABLE_RQ: usize = 119;
+
+/// The `.ru`-side counterpart of [`MAX_UNPARSEABLE_RQ`]: the measured count
+/// of genuinely negative-syntax `.ru` fixtures (W3C `NegativeUpdateSyntaxTest`
+/// manifests). Same discipline applies — growth means either new vendored
+/// negative-syntax `.ru` fixtures (raise deliberately) or a parser
+/// regression (fix it, don't raise the ceiling).
+const MAX_UNPARSEABLE_RU: usize = 22;
+
 #[test]
 fn corpus_round_trips_through_the_serializer() {
     let root = workspace_root();
@@ -608,6 +635,14 @@ fn corpus_round_trips_through_the_serializer() {
         "unparseable .rq/doc-example (skipped, outside the serializer's contract — see module \
          doc): {unparseable}"
     );
+    assert!(
+        unparseable <= MAX_UNPARSEABLE_RQ,
+        "unparseable .rq/doc-example count {unparseable} exceeds the measured ceiling \
+         MAX_UNPARSEABLE_RQ = {MAX_UNPARSEABLE_RQ} — either new negative-syntax .rq fixtures \
+         landed in the vendored corpora (raise the constant deliberately) or a parser \
+         regression is rejecting queries it used to accept (fix it); a sweep that silently \
+         skips more items proves less, not the same"
+    );
 
     // The `.ru` (UPDATE) side of the sweep: parse → `Display` → re-parse →
     // compare, exactly as above but through `roundtrip_update`/`RU_XFAIL`.
@@ -653,6 +688,14 @@ fn corpus_round_trips_through_the_serializer() {
     println!(
         "unparseable .ru (skipped, outside the serializer's contract — negative update syntax \
          tests among others): {unparseable_ru}"
+    );
+    assert!(
+        unparseable_ru <= MAX_UNPARSEABLE_RU,
+        "unparseable .ru count {unparseable_ru} exceeds the measured ceiling \
+         MAX_UNPARSEABLE_RU = {MAX_UNPARSEABLE_RU} — either new negative-syntax .ru fixtures \
+         landed in the vendored corpora (raise the constant deliberately) or a parser \
+         regression is rejecting updates it used to accept (fix it); a sweep that silently \
+         skips more items proves less, not the same"
     );
 
     assert!(
