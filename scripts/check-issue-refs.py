@@ -3,7 +3,7 @@
 
 """Reject development-process references in PurRDF comments and docs.
 
-Four token families are rejected, over exactly the same scanned surface.
+Five token families are rejected, over exactly the same scanned surface.
 
 **Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
 and misleading, so we do not allow new ones.
@@ -33,12 +33,30 @@ because those two letters are also legitimate technical vocabulary elsewhere
 (``F32``/``F64`` float widths, ``N3`` the RDF serialization, ``N802`` a linter
 code) that must not be flagged.
 
+**Development gap/remediation tags** — a bare ``G12:``/``R9:`` label opening a
+clause (mirroring the hazard-label shape above but for the ``G<N>``/``R<N>``
+letters), the collocation ``gap R9`` (a gap-plan item cited by number), the
+collocation ``gap G4``/``Gap G5``/``GAP G4`` (case-insensitive "gap" followed
+by a ``G<N>`` id), and ``G12 regression`` (a regression test named after the
+gap item it guards). These are session-ephemeral gap-analysis tags — ids from
+a review pass's internal numbering, meaningful only to the pass that assigned
+them — not stable identifiers a reader can look up once the pass that minted
+them is gone. Unlike the hazard letters above, ``G``/``R`` collide with real
+technical vocabulary constantly (a query plan's cost `` G ``, `` R1``/``R2``
+graph names, register/generation names), so the shape is deliberately narrow:
+only a label-opening colon, an explicit "gap"/"regression" collocation, or the
+literal ``gap R<N>`` phrase trips it — a bare ``G1`` or ``R2`` used as an
+ordinary identifier, and a formal spec-clause cross-reference such as
+``crates/rdf-core/src/ir/paged/mod.rs``'s ``G1``/``G3`` (which name clauses
+defined in ``docs/design/purrdf-backend-contract.md``, not review-pass items),
+are both left alone — the latter via ``AMBIGUOUS_GAP_CLAUSE_FILES`` below.
+
 **Issue-normative spelling** — the phrase "issue-normative", which describes a
 grammar choice by pointing at the tracker discussion that settled it rather
 than by describing the choice itself.
 
-Process and hazard-label references carry three frozen registers, all of which
-may only SHRINK:
+Process, hazard-label, and gap-tag references carry four frozen registers,
+all of which may only SHRINK:
 
 * ``PRE_EXISTING_PROCESS_REFERENCES`` — the debt that predates this rule, one
   entry per ``(file, token)``. A live occurrence with no entry is a hard failure,
@@ -54,6 +72,12 @@ may only SHRINK:
   document. "Plan" is both a domain noun in this codebase and the word the
   banned phrase uses, so these places are named so the ban can stay absolute
   without flagging every doc comment that talks about a query plan's shape.
+* ``AMBIGUOUS_GAP_CLAUSE_FILES`` — the files where a bare ``G<N>:`` names a
+  formal clause of a shipped design contract (e.g. ``docs/design/purrdf-
+  backend-contract.md``'s numbered ``G0``-``G9`` clauses) rather than a
+  review-pass gap-tracking id. The clause and the tag are lexically identical;
+  only the file's own cross-reference to the contract document distinguishes
+  them, so these places are named so the ban can stay absolute.
 
 This lint scans:
 
@@ -109,6 +133,19 @@ followed by a colon (``F6:``) or wrapped alone in parentheses (``(F1)``,
 history has taken. The narrower ``F``/``N`` shape leaves every other use of
 those letters (a float width, a serialization name, a linter code) alone.
 
+The gap-tag token patterns are, all case-insensitive on the word "gap": the
+literal collocation ``gap R`` followed by 1-2 digits (``gap R9``), the
+collocation ``gap G`` followed by 1-2 digits (``gap G4``, ``Gap G5``,
+``GAP G4``), a bare ``G`` followed by 1-2 digits and the word ``regression``
+(``G12 regression``), and a bare ``G`` or ``R`` followed by 1-2 digits
+immediately followed by a colon (``G12:``, ``R9:``) — the same label shape
+the hazard tokens use, applied to the two letters a gap-analysis pass names
+its own items and remediation-regression tests with. Every one of these
+shapes requires either the literal word "gap"/"regression" alongside the
+digits, or the label-opening colon; a bare ``G1``/``R2`` used as an ordinary
+identifier (a loop variable, a graph name, a generation counter) triggers
+none of them.
+
 The "issue-normative" pattern is that literal phrase, case-sensitive, since it
 has exactly one spelling in this repository's history and any capitalized
 variant would already read as a proper noun rather than as this phrase.
@@ -139,6 +176,11 @@ TOKEN_RE = re.compile(
     r"|(?P<hazard_label>\b[FN]\d{1,3}:|\([FHN]\d{1,3}\))"
     r"|(?P<plan_ref>\bthe plan(?:[\'’]s\b|\s+§))"
     r"|(?P<ac_label>\bAC\d\b)"
+    r"|(?P<gap_tag>(?i:gap)\s+R\d{1,2}\b"
+    r"|(?i:gap)\s+G\d{1,2}\b"
+    r"|\bG\d{1,2}\s+regression\b"
+    r"|\bG\d{1,2}:"
+    r"|\bR\d{1,2}:)"
 )
 
 # The prose fix each process family's message suggests.
@@ -168,6 +210,10 @@ PROCESS_REMEDY: dict[str, str] = {
     "ac_label": (
         "name the requirement itself, not the acceptance-criterion label that "
         "tracked it"
+    ),
+    "gap_tag": (
+        "restate as the technical fact the code/test establishes, with no "
+        "gap-analysis-pass id or regression-tag number"
     ),
 }
 
@@ -209,6 +255,25 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/sparql-conformance/tests/owl2_rl_conformance.rs", "the plan's"),
         ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
         ("crates/sparql-eval/src/stat_agg.rs", "the plan's"),
+        ("bindings/python/src/py_gts.rs", "gap G4"),
+        ("bindings/python/src/py_slice.rs", "gap G5"),
+        ("crates/gts/tests/event_bridge.rs", "R9:"),
+        ("crates/rdf/tests/gts_certify.rs", "GAP G2"),
+        ("crates/rdf/tests/gts_certify.rs", "GAP G4"),
+        ("crates/rdf/tests/gts_certify.rs", "GAP G6"),
+        ("crates/shapes/src/json_schema.rs", "Gap G5"),
+        ("crates/shapes/src/json_schema.rs", "R3:"),
+        ("crates/shapes/src/json_schema.rs", "R4:"),
+        ("crates/shapes/src/json_schema.rs", "R5:"),
+        ("crates/shapes/src/json_schema.rs", "R7:"),
+        ("crates/slice/src/catalog.rs", "G8:"),
+        ("crates/slice/tests/ownership_tests.rs", "G12:"),
+        ("crates/slice/tests/ownership_tests.rs", "G13:"),
+        ("crates/slice/tests/ownership_tests.rs", "G14:"),
+        ("crates/sparql-algebra/src/lexer.rs", "G1 regression"),
+        ("crates/sparql-algebra/src/lexer.rs", "G2 regression"),
+        ("crates/sparql-algebra/src/parser.rs", "G3 regression"),
+        ("crates/sparql-algebra/src/parser.rs", "gap G4"),
     }
 )
 
@@ -249,6 +314,21 @@ AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
         "crates/sparql-eval/src/governor/ledger.rs",
         "crates/sparql-eval/src/property_fn.rs",
         "crates/sparql-eval/tests/governed_query.rs",
+    }
+)
+
+# Files where a bare ``G<N>:`` cross-references a formal clause of
+# ``docs/design/purrdf-backend-contract.md`` (whose ``### G0`` .. ``### G9``
+# headings define durable, shipped identity-and-generation rules for the paged
+# layer) rather than naming a review-pass gap-tracking item. The label shape is
+# identical in both uses — only the topic each site's ``G<N>:`` comment
+# describes (matching the contract clause's own title) tells them apart, so
+# these places are named so the ban can stay absolute. Like the registers
+# above, this may only shrink: an entry whose file no longer says ``G<N>:`` is
+# reported as stale.
+AMBIGUOUS_GAP_CLAUSE_FILES: frozenset[str] = frozenset(
+    {
+        "crates/rdf-core/src/ir/paged/mod.rs",
     }
 )
 
@@ -947,6 +1027,7 @@ def main() -> int:
     live_process: set[tuple[str, str]] = set()
     live_branch_files: set[str] = set()
     live_plan_files: set[str] = set()
+    live_gap_clause_files: set[str] = set()
 
     for path in iter_scan_paths(root):
         rel = str(path.relative_to(root))
@@ -962,6 +1043,9 @@ def main() -> int:
             if kind == "plan_ref" and rel in AMBIGUOUS_PLAN_PHRASES:
                 live_plan_files.add(rel)
                 continue
+            if kind == "gap_tag" and rel in AMBIGUOUS_GAP_CLAUSE_FILES:
+                live_gap_clause_files.add(rel)
+                continue
             if key in PRE_EXISTING_PROCESS_REFERENCES:
                 continue
             process.append((path, line, col, token, text, PROCESS_REMEDY[kind]))
@@ -971,6 +1055,7 @@ def main() -> int:
     )
     stale_branch = sorted(AMBIGUOUS_BRANCH_PHRASES - live_branch_files)
     stale_plan = sorted(AMBIGUOUS_PLAN_PHRASES - live_plan_files)
+    stale_gap_clause = sorted(AMBIGUOUS_GAP_CLAUSE_FILES - live_gap_clause_files)
 
     if issues:
         for path, line, col, token, text in issues:
@@ -998,8 +1083,14 @@ def main() -> int:
             f"{entry_path!r}, which no longer says 'the plan's'/'the plan §' — "
             f"delete the entry so the register keeps shrinking."
         )
+    for entry_path in stale_gap_clause:
+        print(
+            f"scripts/check-issue-refs.py: AMBIGUOUS_GAP_CLAUSE_FILES still lists "
+            f"{entry_path!r}, which no longer says 'G<N>:' — delete the entry so "
+            f"the register keeps shrinking."
+        )
 
-    if issues or process or stale or stale_branch or stale_plan:
+    if issues or process or stale or stale_branch or stale_plan or stale_gap_clause:
         return 1
 
     print(
@@ -1007,8 +1098,9 @@ def main() -> int:
         f"comments or docs "
         f"({len(PRE_EXISTING_PROCESS_REFERENCES)} pre-existing process "
         f"reference(s), {len(AMBIGUOUS_BRANCH_PHRASES)} control-flow "
-        f"'this branch' site(s), and {len(AMBIGUOUS_PLAN_PHRASES)} runtime-plan "
-        f"'the plan's' site(s) registered)."
+        f"'this branch' site(s), {len(AMBIGUOUS_PLAN_PHRASES)} runtime-plan "
+        f"'the plan's' site(s), and {len(AMBIGUOUS_GAP_CLAUSE_FILES)} spec-clause "
+        f"'G<N>:' site(s) registered)."
     )
     return 0
 

@@ -162,7 +162,7 @@ name = "paged_cross_page_bgp"
 harness = false
 
 [[bench]]
-# Correlated LATERAL substitution (gap R9/G10): per-left-row cost of
+# Correlated LATERAL substitution: per-left-row cost of
 # `crate::expr`'s Values-Insertion substitution walk (outer bindings →
 # SubstitutionRow → Join/VALUES-wrapped leaves, crossing a Project boundary
 # via a sub-SELECT right operand) at two left-row scales, against a

@@ -296,7 +296,7 @@ mod tests {
         assert!(e.to_string().contains("scope"));
     }
 
-    /// G12: an unclassified `Unsupported` (a genuine gap) carries no diagnostic
+    /// An unclassified `Unsupported` (a genuine gap) carries no diagnostic
     /// code — the classifier at the `SparqlEngine` boundary must fall back to
     /// the generic per-callsite code for it, never mistake it for the S6
     /// residue.
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(e.diagnostic_code(), None);
     }
 
-    /// G12: `unsupported_deferred` is the only path that attaches a
+    /// `unsupported_deferred` is the only path that attaches a
     /// [`UnsupportedKind`], and its code round-trips through `diagnostic_code`
     /// unchanged — the exact seam `crate::engine::eval_diagnostic_code` reads.
     #[test]

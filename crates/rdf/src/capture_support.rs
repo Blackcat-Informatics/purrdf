@@ -144,7 +144,7 @@ pub fn row_key(row: &[Option<crate::TermValue>]) -> String {
 mod tests {
     use super::is_deferred_construct;
 
-    /// G12 regression: `is_deferred_construct` classifies on the typed
+    /// Regression test: `is_deferred_construct` classifies on the typed
     /// `RdfDiagnostic::code` identity, not scraped message prose. Every code
     /// `purrdf_sparql_eval::UnsupportedKind::code` can produce must classify as
     /// deferred here — the two are meant to never drift, and this test is what

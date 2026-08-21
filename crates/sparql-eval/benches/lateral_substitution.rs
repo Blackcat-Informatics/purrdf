@@ -5,9 +5,8 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! Correlated `LATERAL` substitution benchmark (gap R9/G10, the per-row
-//! Values-Insertion allocation path in `purrdf-sparql-eval`'s internal
-//! `expr` module).
+//! Correlated `LATERAL` substitution benchmark (the per-row Values-Insertion
+//! allocation path in `purrdf-sparql-eval`'s internal `expr` module).
 //!
 //! `LATERAL`'s right operand is re-evaluated once per left row
 //! (`eval_correlated`): each row builds a `SubstitutionRow`

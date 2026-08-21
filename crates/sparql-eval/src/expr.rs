@@ -6710,7 +6710,7 @@ mod tests {
         );
     }
 
-    // ── G11: row-sensitivity through an expression-embedded EXISTS ─────────
+    // ── Row-sensitivity through an expression-embedded EXISTS ──────────────
     //
     // `is_row_sensitive` (the classifier the widened check above depends on)
     // recurses into a `Filter`'s `inner` pattern but, pre-fix, never looked at

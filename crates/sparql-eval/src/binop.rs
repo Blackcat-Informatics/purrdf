@@ -2176,7 +2176,7 @@ mod tests {
         // more node-entry polls than before. The exact count is an implementation
         // detail; the margin is generous rather than tight.
         //
-        // NOT tightened back by the gap R9/G10 allocation work (`SubstitutionRow`'s
+        // NOT tightened back by the shared-str term-text change (`SubstitutionRow`'s
         // term text now lives behind `Arc<str>` — see `purrdf_sparql_algebra::
         // NamedNode`'s doc): that removed per-leaf TEXT allocation, but the governor
         // polls PLAN NODES, and the extra `Join`/`Values` node this bound accounts
