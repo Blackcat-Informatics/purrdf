@@ -24,11 +24,14 @@ pub fn is_nondeterministic(query_text: &str) -> bool {
         || lower.contains("struuid(")
 }
 
-/// Returns true if the error message matches the SPARQL evaluator's actual,
-/// enumerated unsupported residue — see `purrdf_sparql_eval`'s crate docs
-/// (`lib.rs`'s "Hard-fail, no degraded fallback" section) for the authoritative
-/// list: a variable-bound quoted-triple-term component in a BGP or
-/// property-path pattern (`convert::ground_term_pattern_to_value` /
+/// Returns true if `diagnostic_code` — [`purrdf_core::RdfDiagnostic::code`], as
+/// set by `purrdf_sparql_eval::NativeSparqlEngine`'s `SparqlEngine::query` from
+/// the typed [`purrdf_sparql_eval::EvalError::diagnostic_code`] — names the
+/// SPARQL evaluator's actual, enumerated unsupported residue: see
+/// `purrdf_sparql_eval`'s crate docs (`lib.rs`'s "Hard-fail, no degraded
+/// fallback" section) and `purrdf_sparql_eval::UnsupportedKind` for the
+/// authoritative list — a variable-bound quoted-triple-term component in a BGP
+/// or property-path pattern (`convert::ground_term_pattern_to_value` /
 /// `ground_triple_pattern_to_value`), an unresolved custom SPARQL function IRI
 /// (`expr::eval_function`'s `Function::Custom` fallthrough), `heldIn` called
 /// without a caller-supplied standpoint-predicate configuration
@@ -36,18 +39,19 @@ pub fn is_nondeterministic(query_text: &str) -> bool {
 /// nesting exceeds the parser's safety bound
 /// (`governor::soundness::validate_graph_pattern_depth`).
 ///
-/// Property paths, `SERVICE` federation, `LATERAL`, `DESCRIBE`, property
-/// functions, custom aggregates, and `UPDATE` are ALL evaluated in-engine —
-/// none of them is out of scope, so an error naming one of THOSE is a real
-/// gap, not an expected deferral, and must not be classified here (a prior,
-/// broader substring match once misrouted exactly these implemented features).
+/// This is a CLOSED match on the four stable codes those four sites set —
+/// never a scrape of `EvalError`'s or `RdfDiagnostic`'s free-form `Display`
+/// text, which carries no classification contract and is free to change
+/// wording at any time (a prior, broader substring match over that prose once
+/// misrouted genuinely-implemented features — property paths, `SERVICE`
+/// federation, `LATERAL`, `DESCRIBE`, property functions, custom aggregates,
+/// and `UPDATE` are ALL evaluated in-engine, so an error naming one of THOSE is
+/// a real gap, not an expected deferral, and must not be classified here).
 #[must_use]
-pub fn is_deferred_construct(err_msg: &str) -> bool {
-    let lower = err_msg.to_lowercase();
-    lower.contains("quoted triple term")
-        || lower.contains("custom sparql function <")
-        || lower.contains("heldin requires a standpoint predicate configuration")
-        || lower.contains("graph pattern nesting exceeds the safety limit")
+pub fn is_deferred_construct(diagnostic_code: &str) -> bool {
+    purrdf_sparql_eval::UnsupportedKind::ALL
+        .iter()
+        .any(|kind| kind.code() == diagnostic_code)
 }
 
 /// Returns true if the query text is a multi-query file (contains more than one
@@ -134,4 +138,49 @@ fn collect_rq_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 #[must_use]
 pub fn row_key(row: &[Option<crate::TermValue>]) -> String {
     format!("{row:?}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_deferred_construct;
+
+    /// G12 regression: `is_deferred_construct` classifies on the typed
+    /// `RdfDiagnostic::code` identity, not scraped message prose. Every code
+    /// `purrdf_sparql_eval::UnsupportedKind::code` can produce must classify as
+    /// deferred here — the two are meant to never drift, and this test is what
+    /// would catch it if they did.
+    #[test]
+    fn every_unsupported_kind_code_is_deferred() {
+        for kind in purrdf_sparql_eval::UnsupportedKind::ALL {
+            assert!(
+                is_deferred_construct(kind.code()),
+                "{kind:?}'s code {:?} must classify as a deferred construct",
+                kind.code()
+            );
+        }
+    }
+
+    /// A genuine gap must NOT be classified as an expected deferral — the exact
+    /// failure mode the prior substring match once produced for implemented,
+    /// in-engine constructs whose free-form message merely CONTAINED
+    /// deferral-adjacent text. Neither the generic unclassified eval code nor a
+    /// handful of the other stable `RdfDiagnostic` codes this engine emits for
+    /// evaluated-in-engine constructs may match.
+    #[test]
+    fn unrelated_diagnostic_codes_are_not_deferred() {
+        for code in [
+            "native-sparql-query-eval",
+            "native-sparql-query-parse",
+            "native-sparql-update-eval",
+            "native-sparql-property-function",
+            "native-sparql-aggregate-function",
+            "native-sparql-heldin-something-unrelated",
+            "",
+        ] {
+            assert!(
+                !is_deferred_construct(code),
+                "{code:?} must NOT classify as a deferred construct"
+            );
+        }
+    }
 }

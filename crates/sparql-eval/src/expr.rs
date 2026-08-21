@@ -987,17 +987,80 @@ fn is_row_sensitive(pattern: &GraphPattern) -> bool {
         | GraphPattern::Path { .. }
         | GraphPattern::Values { .. }
         | GraphPattern::PropertyFunction(_) => false,
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
+        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
             is_row_sensitive(left) || is_row_sensitive(right)
         }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        | GraphPattern::Project { inner, .. }
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            is_row_sensitive(left)
+                || is_row_sensitive(right)
+                || expression.as_ref().is_some_and(expr_is_row_sensitive)
+        }
+        GraphPattern::Filter { expr, inner } => {
+            is_row_sensitive(inner) || expr_is_row_sensitive(expr)
+        }
+        GraphPattern::Extend {
+            inner, expression, ..
+        } => is_row_sensitive(inner) || expr_is_row_sensitive(expression),
+        GraphPattern::OrderBy { inner, expression } => {
+            is_row_sensitive(inner)
+                || expression.iter().any(|oe| match oe {
+                    purrdf_sparql_algebra::OrderExpression::Asc(e)
+                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_is_row_sensitive(e),
+                })
+        }
+        GraphPattern::Project { inner, .. }
         | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. } => is_row_sensitive(inner),
+        | GraphPattern::Service { inner, .. } => is_row_sensitive(inner),
+    }
+}
+
+/// Whether any [`Expression::Exists`] reachable within `expr` (at any nesting
+/// depth through the boolean/arithmetic combinators) wraps an inner pattern
+/// [`is_row_sensitive`] itself judges row-sensitive.
+///
+/// Mirrors [`expr_vars`]'s recursion structure exactly (same combinators, same
+/// `Expression::Exists` seam) so this walk and the variable walk never diverge
+/// on which expression positions exist. Needed because [`is_row_sensitive`]'s
+/// pattern walk mirrors [`pattern_all_vars`]'s node coverage (`Filter`,
+/// `Extend`, `OrderBy`, `Group` aggregates, `LeftJoin`'s condition) — a
+/// row-sensitive node (`Lateral`+`LIMIT`, etc.) reachable ONLY inside a nested
+/// `EXISTS`/`NOT EXISTS` expression must still mark its enclosing pattern
+/// row-sensitive, or a correlated outer `EXISTS` wrongly takes the
+/// evaluate-once-and-probe fast path.
+fn expr_is_row_sensitive(expr: &Expression) -> bool {
+    match expr {
+        Expression::Variable(_) | Expression::Bound(_) => false,
+        Expression::NamedNode(_) | Expression::Literal(_) => false,
+        Expression::Or(a, b)
+        | Expression::And(a, b)
+        | Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b)
+        | Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => expr_is_row_sensitive(a) || expr_is_row_sensitive(b),
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            expr_is_row_sensitive(a)
+        }
+        Expression::If(c, t, e) => {
+            expr_is_row_sensitive(c) || expr_is_row_sensitive(t) || expr_is_row_sensitive(e)
+        }
+        Expression::In(needle, haystack) => {
+            expr_is_row_sensitive(needle) || haystack.iter().any(expr_is_row_sensitive)
+        }
+        Expression::Coalesce(items) => items.iter().any(expr_is_row_sensitive),
+        Expression::FunctionCall(_, args) => args.iter().any(expr_is_row_sensitive),
+        // The seam this walk exists for: a nested EXISTS's inner pattern can itself
+        // be row-sensitive (or carry a further-nested EXISTS that is).
+        Expression::Exists(inner_pat) => is_row_sensitive(inner_pat),
     }
 }
 
@@ -2656,10 +2719,10 @@ fn eval_function<D: DatasetView + Sync>(
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
             }
-            Err(EvalError::unsupported(format!(
-                "custom SPARQL function <{}>",
-                iri.as_str()
-            )))
+            Err(EvalError::unsupported_deferred(
+                crate::error::UnsupportedKind::CustomFunction,
+                format!("custom SPARQL function <{}>", iri.as_str()),
+            ))
         }
     }
 }
@@ -2884,7 +2947,8 @@ fn eval_held_in<D: DatasetView + Sync>(
     // The predicate table is mandatory configuration — fail loudly BEFORE looking at
     // the arguments, so a misconfigured deployment cannot get a quietly-wrong answer.
     let Some(predicates) = ctx.standpoint_predicates.clone() else {
-        return Err(EvalError::unsupported(
+        return Err(EvalError::unsupported_deferred(
+            crate::error::UnsupportedKind::HeldInUnconfigured,
             "heldIn requires a standpoint predicate configuration: supply the \
              ontology's accordingTo/sharpens IRIs via \
              NativeSparqlEngine::with_standpoint_predicates (or \
@@ -6543,6 +6607,93 @@ mod tests {
             ],
             "both owners must satisfy EXISTS — each has a child, judged against \
              its OWN children, not a single dataset-wide LIMIT winner"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree once correlation is correctly detected"
+        );
+    }
+
+    // ── G11: row-sensitivity through an expression-embedded EXISTS ─────────
+    //
+    // `is_row_sensitive` (the classifier the widened check above depends on)
+    // recurses into a `Filter`'s `inner` pattern but, pre-fix, never looked at
+    // the `Filter`'s own `expr` field — so a `LATERAL` reachable ONLY inside a
+    // nested `EXISTS`/`NOT EXISTS` expression (rather than directly as a
+    // pattern node, which the test above already covers) was invisible to it,
+    // and the outer `EXISTS` wrongly judged row-insensitive.
+
+    /// `s1`/`s2` both `:knows` a `:tag "ok"` object (so the OUTER `FILTER
+    /// EXISTS`'s own `Filter.inner` — visible to `pattern_all_vars` without
+    /// any fix — binds `?o` identically for both outer rows: any divergence
+    /// this fixture exposes must come from the `?s`-correlated `LATERAL`
+    /// buried inside the NESTED `EXISTS`, not from the `?o` column the probe
+    /// can already see). Only `s1`'s `:hasItem` has `:flag "true"`; `s2`'s
+    /// does not.
+    fn nested_exists_lateral_ds() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("https://example.org/188-nested-exists-lateral#knows");
+        let tag = b.intern_iri("https://example.org/188-nested-exists-lateral#tag");
+        let has_item = b.intern_iri("https://example.org/188-nested-exists-lateral#hasItem");
+        let flag = b.intern_iri("https://example.org/188-nested-exists-lateral#flag");
+        let s1 = b.intern_iri("https://example.org/188-nested-exists-lateral#s1");
+        let s2 = b.intern_iri("https://example.org/188-nested-exists-lateral#s2");
+        let o1 = b.intern_iri("https://example.org/188-nested-exists-lateral#o1");
+        let o2 = b.intern_iri("https://example.org/188-nested-exists-lateral#o2");
+        let v1 = b.intern_iri("https://example.org/188-nested-exists-lateral#v1");
+        let v2 = b.intern_iri("https://example.org/188-nested-exists-lateral#v2");
+        let ok = b.intern_literal(RdfLiteral::simple("ok"));
+        let t = b.intern_literal(RdfLiteral::simple("true"));
+        let f = b.intern_literal(RdfLiteral::simple("false"));
+        b.push_quad(s1, knows, o1, None);
+        b.push_quad(s2, knows, o2, None);
+        b.push_quad(o1, tag, ok, None);
+        b.push_quad(o2, tag, ok, None);
+        b.push_quad(s1, has_item, v1, None);
+        b.push_quad(s2, has_item, v2, None);
+        b.push_quad(v1, flag, t, None);
+        b.push_quad(v2, flag, f, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_nested_in_a_filter_expression_with_a_lateral_inner_correlates() {
+        // The OUTER `FILTER EXISTS { ?o :tag "ok" . FILTER EXISTS { ?s :hasItem ?v
+        // LATERAL { ?v :flag "true" } } }` has its row-sensitive `LATERAL` reachable
+        // ONLY through the nested `FILTER EXISTS`'s expression position — never as
+        // a directly-nested pattern node under the outer `Filter`. Pre-fix,
+        // `is_row_sensitive` on the outer `Filter` ignores its `expr` field
+        // entirely, so it never notices the buried `LATERAL`; the outer `EXISTS`
+        // then takes the memoized evaluate-once-and-probe path. Evaluated once
+        // unconstrained, `?s` is free throughout, so the nested `EXISTS { LATERAL
+        // { ?v :flag "true" } }` collapses to one GLOBAL boolean (true, because
+        // SOME subject — `s1` — has a `true`-flagged item) instead of one answer
+        // PER outer `?s`, and the top-level probe has no shared column for `?s` to
+        // filter on (the outer `Filter.inner`'s own output is keyed only by `?o`,
+        // which is identical for both outer rows) — so the wrong, constant answer
+        // passes both `s1` and `s2`. The correct per-row answer keeps only `s1`.
+        let ds = nested_exists_lateral_ds();
+        let q = "PREFIX : <https://example.org/188-nested-exists-lateral#> \
+                 SELECT ?s WHERE { \
+                   ?s :knows ?o \
+                   FILTER EXISTS { \
+                     ?o :tag \"ok\" \
+                     FILTER EXISTS { \
+                       ?s :hasItem ?v LATERAL { ?v :flag \"true\" } \
+                     } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec![
+                "<https://example.org/188-nested-exists-lateral#s1>".to_owned()
+            ]],
+            "only s1 (whose :hasItem is :flag \"true\") may satisfy the outer EXISTS; \
+             the pre-fix classifier let s2 through on a constant, ?s-independent answer"
         );
         assert_eq!(
             rows,

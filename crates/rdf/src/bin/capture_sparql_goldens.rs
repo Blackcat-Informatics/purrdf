@@ -185,7 +185,7 @@ fn capture_corpus(goldens: &Path) -> Tally {
             Ok(result) => write_result_golden(&stem, &result, &mut tally),
             Err(e) => {
                 let msg = e.to_string();
-                if is_deferred_construct(&msg) {
+                if is_deferred_construct(&e.code) {
                     tally.deferred += 1;
                     write_marker(
                         &with_ext(&stem, "deferred"),

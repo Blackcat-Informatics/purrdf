@@ -865,7 +865,7 @@ mod tests {
              GROUP BY ?s } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom-aggregate call inside a SERVICE body"),
@@ -908,7 +908,7 @@ mod tests {
                       ?s <https://example.org/lateral-forward#knows> ?o \
                       LATERAL { ?o <https://example.org/lateral-forward#name> ?n } } }";
         let err = run_with_source(&local(), &source, query).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("LATERAL clause inside a SERVICE SILENT body"),
@@ -975,7 +975,7 @@ mod tests {
                       SERVICE ?g { ?c <https://example.org/lateral-forward#q> ?d \
                       LATERAL { ?e <https://example.org/lateral-forward#f> ?f } } } }";
         let err = run_with_source(&local(), &source, query).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("LATERAL clause inside a SERVICE SILENT body"),
@@ -1031,7 +1031,7 @@ mod tests {
              ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom scalar-function call inside a SERVICE SILENT body"),
@@ -1063,7 +1063,7 @@ mod tests {
              FILTER(CONCAT(<http://ex/customFn>(?n), \"a\") = \"Xa\") } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom scalar-function call inside a SERVICE SILENT body"),

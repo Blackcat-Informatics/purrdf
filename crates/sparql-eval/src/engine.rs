@@ -1681,6 +1681,24 @@ where
     }
 }
 
+/// The [`RdfDiagnostic`] code for an evaluation failure: the error's own
+/// [`crate::error::EvalError::diagnostic_code`] when it names one of the narrow,
+/// enumerated S6-deferral residue, else `fallback` — each call site's existing,
+/// unclassified generic code (`"native-sparql-query-eval"` for a query,
+/// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
+/// evaluation seam), preserved for every genuine gap: an unclassified
+/// `Unsupported`, `Internal`, `Remote`, `Data`, `Function`, or `Config`. The
+/// single chokepoint every `EvalError -> RdfDiagnostic` reduction in this crate
+/// reads, so a caller further downstream (e.g. the golden-capture harness) can
+/// always recover the typed classification from `RdfDiagnostic::code` without
+/// scraping `Display` text.
+pub(crate) fn eval_diagnostic_code(
+    e: &crate::error::EvalError,
+    fallback: &'static str,
+) -> &'static str {
+    e.diagnostic_code().unwrap_or(fallback)
+}
+
 /// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).
 ///
 /// When there are no substitutions the cached parse is evaluated directly (the hot
@@ -1692,7 +1710,10 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
-        RdfDiagnostic::error("native-sparql-query-eval", e.to_string())
+        RdfDiagnostic::error(
+            eval_diagnostic_code(&e, "native-sparql-query-eval"),
+            e.to_string(),
+        )
     };
     if substitutions.is_empty() {
         return evaluate_query(&prepared.query, ctx).map_err(eval_err);
@@ -1713,7 +1734,10 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
-        RdfDiagnostic::error("native-sparql-query-eval", e.to_string())
+        RdfDiagnostic::error(
+            eval_diagnostic_code(&e, "native-sparql-query-eval"),
+            e.to_string(),
+        )
     };
     if substitutions.is_empty() {
         return evaluate_query_evaluated(&prepared.query, ctx).map_err(eval_err);
@@ -1962,8 +1986,12 @@ fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let substituted =
         crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
-    evaluate_query_evaluated(&substituted, ctx)
-        .map_err(|e| RdfDiagnostic::error("native-sparql-query-eval", e.to_string()))
+    evaluate_query_evaluated(&substituted, ctx).map_err(|e| {
+        RdfDiagnostic::error(
+            eval_diagnostic_code(&e, "native-sparql-query-eval"),
+            e.to_string(),
+        )
+    })
 }
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
@@ -1973,8 +2001,12 @@ fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let substituted =
         crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
-    evaluate_query(&substituted, ctx)
-        .map_err(|e| RdfDiagnostic::error("native-sparql-query-eval", e.to_string()))
+    evaluate_query(&substituted, ctx).map_err(|e| {
+        RdfDiagnostic::error(
+            eval_diagnostic_code(&e, "native-sparql-query-eval"),
+            e.to_string(),
+        )
+    })
 }
 
 impl SparqlEngine for NativeSparqlEngine {
@@ -3573,7 +3605,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-update-eval");
+        assert_eq!(err.code, "native-sparql-heldin-unconfigured");
         assert!(
             err.message
                 .contains("requires a standpoint predicate configuration"),
@@ -3808,7 +3840,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-query-eval");
+        assert_eq!(err.code, "native-sparql-heldin-unconfigured");
         assert!(
             err.message
                 .contains("requires a standpoint predicate configuration"),

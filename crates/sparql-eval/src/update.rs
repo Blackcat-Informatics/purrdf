@@ -306,8 +306,12 @@ pub(crate) fn eval_update(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), UpdateAbort> {
-    admit_version(AdmittedRequest::Update(update))
-        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
+    admit_version(AdmittedRequest::Update(update)).map_err(|e| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+            e.to_string(),
+        )
+    })?;
     // A single monotonic counter threaded across EVERY operation in this request, so
     // a synthetic blank label minted by operation N can never collide with one minted
     // by operation N+1 — even though each operation's own `_:b` → label map starts
@@ -553,7 +557,12 @@ fn delete_insert(
     // Nothing has been written to `m` at this point (the mutations below are collected
     // first), so this return needs no undo of its own.
     let seq = eval_evaluated(pattern, &mut ctx)
-        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+                e.to_string(),
+            )
+        })?
         .into_complete()
         .map_err(|truncation| UpdateAbort::Tripped(truncation.tripped()))?;
     let schema = seq.schema.clone();
@@ -693,7 +702,12 @@ fn admit_where(
         relations,
         &mut survey,
     )
-    .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
+    .map_err(|e| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+            e.to_string(),
+        )
+    })?;
     let estimate = survey.peak_cells();
     let limit = state.limits().get(dimension);
     if estimate <= limit {

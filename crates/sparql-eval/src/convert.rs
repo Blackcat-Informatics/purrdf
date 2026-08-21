@@ -63,9 +63,10 @@ pub(crate) fn ground_triple_pattern_to_value(
     let p = match &pattern.predicate {
         purrdf_sparql_algebra::NamedNodePattern::NamedNode(n) => named_node_to_value(n),
         purrdf_sparql_algebra::NamedNodePattern::Variable(_) => {
-            return Err(EvalError::unsupported(format!(
-                "variable predicate inside a quoted triple term in {site}"
-            )));
+            return Err(EvalError::unsupported_deferred(
+                crate::error::UnsupportedKind::QuotedTripleTermVariable,
+                format!("variable predicate inside a quoted triple term in {site}"),
+            ));
         }
     };
     let o = ground_term_pattern_to_value(&pattern.object, site)?;
@@ -97,9 +98,10 @@ pub(crate) fn ground_term_pattern_to_value(
         }),
         TermPattern::Literal(l) => Ok(literal_to_value(l)),
         TermPattern::Triple(t) => ground_triple_pattern_to_value(t, site),
-        TermPattern::Variable(_) => Err(EvalError::unsupported(format!(
-            "variable inside a quoted triple term in {site}"
-        ))),
+        TermPattern::Variable(_) => Err(EvalError::unsupported_deferred(
+            crate::error::UnsupportedKind::QuotedTripleTermVariable,
+            format!("variable inside a quoted triple term in {site}"),
+        )),
     }
 }
 

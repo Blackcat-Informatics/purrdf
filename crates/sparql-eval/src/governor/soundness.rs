@@ -775,10 +775,13 @@ pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), cr
     let mut stack = vec![(root, 1_usize)];
     while let Some((node, depth)) = stack.pop() {
         if depth > purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH {
-            return Err(crate::EvalError::unsupported(format!(
-                "graph pattern nesting exceeds the safety limit of {}",
-                purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH
-            )));
+            return Err(crate::EvalError::unsupported_deferred(
+                crate::error::UnsupportedKind::GraphPatternDepthExceeded,
+                format!(
+                    "graph pattern nesting exceeds the safety limit of {}",
+                    purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH
+                ),
+            ));
         }
         visit_classified_children(node, &mut |child, _edge| {
             stack.push((child, depth + 1));
@@ -1191,7 +1194,7 @@ mod tests {
             purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH + 1,
         ))
         .expect_err("direct algebra cannot bypass the nesting limit");
-        assert!(matches!(error, crate::EvalError::Unsupported(_)));
+        assert!(matches!(error, crate::EvalError::Unsupported { .. }));
     }
 
     // ---- prefix-monotone operators certify --------------------------------

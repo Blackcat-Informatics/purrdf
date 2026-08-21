@@ -28,6 +28,65 @@
 
 use purrdf_sparql_algebra::ParseError;
 
+/// Which of the narrow, ENUMERATED S6-deferral residue an
+/// [`EvalError::Unsupported`] belongs to — see that variant's docs for the full
+/// list and why each entry is there. Absent (`None`, in
+/// [`EvalError::Unsupported`]'s `kind` field / [`EvalError::diagnostic_code`])
+/// for every OTHER unsupported construct — a genuine gap, not a scoped
+/// deferral: `SERVICE`, `LATERAL`, a property function, a custom aggregate, an
+/// unrecognized `VERSION`, and a Basic-profile triple-term refusal are all
+/// evaluated (or refused) in-engine and never carry a kind.
+///
+/// Mirrors `crate::property_fn_plan::PlanSeam`'s shape: a small, closed
+/// classification with a stable [`Self::code`] a caller reads instead of
+/// scraping [`EvalError`]'s free-form `Display` text — which is prose with no
+/// classification contract and is free to change wording at any time. The
+/// golden-capture harness (`purrdf_rdf::capture_support::is_deferred_construct`)
+/// is the in-repo caller: it keys off [`purrdf_core::RdfDiagnostic::code`],
+/// which `crate::engine`'s `SparqlEngine` boundary sets from
+/// [`EvalError::diagnostic_code`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnsupportedKind {
+    /// A variable occupies a quoted-triple-term component in a BGP or
+    /// property-path pattern (structural triple-term matching is out of
+    /// scope).
+    QuotedTripleTermVariable,
+    /// A SPARQL function or aggregate IRI resolved to no registered custom
+    /// function, native function, or XSD constructor.
+    CustomFunction,
+    /// `heldIn` was called with no caller-supplied standpoint-predicate
+    /// configuration.
+    HeldInUnconfigured,
+    /// A manually constructed graph pattern's nesting exceeds the parser's
+    /// safety bound.
+    GraphPatternDepthExceeded,
+}
+
+impl UnsupportedKind {
+    /// Every variant, for a caller that needs to test an arbitrary diagnostic
+    /// code for membership (e.g. `purrdf_rdf::capture_support::is_deferred_construct`)
+    /// without re-enumerating the closed set itself.
+    pub const ALL: [Self; 4] = [
+        Self::QuotedTripleTermVariable,
+        Self::CustomFunction,
+        Self::HeldInUnconfigured,
+        Self::GraphPatternDepthExceeded,
+    ];
+
+    /// The stable, machine-readable diagnostic code this kind maps to at the
+    /// `SparqlEngine` boundary (`crate::engine`, where this typed error is
+    /// reduced to a [`purrdf_core::RdfDiagnostic`]).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::QuotedTripleTermVariable => "native-sparql-quoted-triple-term-variable",
+            Self::CustomFunction => "native-sparql-custom-function",
+            Self::HeldInUnconfigured => "native-sparql-heldin-unconfigured",
+            Self::GraphPatternDepthExceeded => "native-sparql-graph-pattern-depth-exceeded",
+        }
+    }
+}
+
 /// An error raised while evaluating a SPARQL query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -66,7 +125,14 @@ pub enum EvalError {
     /// SPARQL text and a call serializes as an ordinary triple — forwarding it would
     /// match it against the remote endpoint's data instead of invoking the relation, with
     /// no symptom anywhere.)
-    Unsupported(String),
+    Unsupported {
+        /// Human-readable detail naming the construct.
+        what: String,
+        /// The closed S6-deferral classification, when this instance is one of
+        /// the narrow enumerated residue [`UnsupportedKind`]'s docs list;
+        /// `None` for a genuine gap. Set ONLY by [`EvalError::unsupported_deferred`].
+        kind: Option<UnsupportedKind>,
+    },
 
     /// An internal invariant was violated — e.g. a solution row whose width does
     /// not match its schema. This indicates a bug in the evaluator, not bad input
@@ -120,9 +186,45 @@ pub enum EvalError {
 }
 
 impl EvalError {
-    /// Construct an [`EvalError::Unsupported`] from any displayable construct name.
+    /// Construct an unclassified [`EvalError::Unsupported`] from any displayable
+    /// construct name — a genuine gap, not one of the narrow S6-deferral residue.
     pub fn unsupported(what: impl Into<String>) -> Self {
-        Self::Unsupported(what.into())
+        Self::Unsupported {
+            what: what.into(),
+            kind: None,
+        }
+    }
+
+    /// Construct a CLASSIFIED [`EvalError::Unsupported`] — used ONLY by the four
+    /// call sites producing the narrow, enumerated S6-deferral residue
+    /// [`UnsupportedKind`]'s docs list. Every other unsupported construct stays
+    /// [`EvalError::unsupported`].
+    pub(crate) fn unsupported_deferred(kind: UnsupportedKind, what: impl Into<String>) -> Self {
+        Self::Unsupported {
+            what: what.into(),
+            kind: Some(kind),
+        }
+    }
+
+    /// The stable, machine-readable diagnostic code for this error's S6-deferral
+    /// classification, if it has one — `None` for every other error, INCLUDING an
+    /// unclassified [`EvalError::Unsupported`] (a genuine gap, not a scoped
+    /// deferral). [`crate::engine`]'s `SparqlEngine` boundary reads this to set
+    /// [`purrdf_core::RdfDiagnostic::code`] when reducing this typed error to a
+    /// diagnostic; a caller further downstream that needs to tell "known S6
+    /// deferral" from "real regression" reads that `RdfDiagnostic::code` field —
+    /// never `Display` text.
+    #[must_use]
+    pub fn diagnostic_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
+            Self::Parse(_)
+            | Self::Internal(_)
+            | Self::Remote(_)
+            | Self::Data(_)
+            | Self::Function(_)
+            | Self::Config(_) => None,
+        }
     }
 
     /// Construct an [`EvalError::Internal`] from any displayable message.
@@ -155,7 +257,7 @@ impl core::fmt::Display for EvalError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
-            Self::Unsupported(what) => {
+            Self::Unsupported { what, .. } => {
                 write!(f, "unsupported in sparql-eval (S6 scope): {what}")
             }
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
@@ -192,5 +294,38 @@ mod tests {
         let e = EvalError::unsupported("SERVICE");
         assert!(e.to_string().contains("SERVICE"));
         assert!(e.to_string().contains("scope"));
+    }
+
+    /// G12: an unclassified `Unsupported` (a genuine gap) carries no diagnostic
+    /// code — the classifier at the `SparqlEngine` boundary must fall back to
+    /// the generic per-callsite code for it, never mistake it for the S6
+    /// residue.
+    #[test]
+    fn unclassified_unsupported_has_no_diagnostic_code() {
+        let e = EvalError::unsupported("SERVICE");
+        assert_eq!(e.diagnostic_code(), None);
+    }
+
+    /// G12: `unsupported_deferred` is the only path that attaches a
+    /// [`UnsupportedKind`], and its code round-trips through `diagnostic_code`
+    /// unchanged — the exact seam `crate::engine::eval_diagnostic_code` reads.
+    #[test]
+    fn deferred_unsupported_carries_its_kind_code() {
+        for kind in UnsupportedKind::ALL {
+            let e = EvalError::unsupported_deferred(kind, "detail");
+            assert_eq!(e.diagnostic_code(), Some(kind.code()));
+            assert!(e.to_string().contains("detail"));
+        }
+    }
+
+    /// Every other variant is likewise unclassified.
+    #[test]
+    fn non_unsupported_variants_have_no_diagnostic_code() {
+        assert_eq!(EvalError::internal("x").diagnostic_code(), None);
+        assert_eq!(EvalError::remote("x").diagnostic_code(), None);
+        assert_eq!(EvalError::data("x").diagnostic_code(), None);
+        assert_eq!(EvalError::function("x").diagnostic_code(), None);
+        assert_eq!(EvalError::config("x").diagnostic_code(), None);
+        assert_eq!(EvalError::Parse("x".to_owned()).diagnostic_code(), None);
     }
 }

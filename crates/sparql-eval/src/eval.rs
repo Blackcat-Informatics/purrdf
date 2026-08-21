@@ -2542,7 +2542,7 @@ mod tests {
             .expect("VERSION is syntax-only; any string parses");
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx).expect_err("unrecognized VERSION is refused");
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("0.9"),
             "error should name the declared version: {err}"
@@ -2585,7 +2585,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx)
             .expect_err("a triple term outside the Basic profile is refused");
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("triple term"),
             "error should name the offending construct: {err}"

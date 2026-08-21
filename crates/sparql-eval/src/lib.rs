@@ -127,7 +127,7 @@ pub use agg_fn::{
     ScalarvalKind, ScalarvalSpec,
 };
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
-pub use error::EvalError;
+pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
