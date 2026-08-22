@@ -9,9 +9,11 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 This release re-founds the aggregate algebra on the SPARQL specification's own shape, adds a
 caller-extensible aggregate registry (with a first-party statistical set), retains and enforces
 the `VERSION` declaration, adds RDF 1.2's `ADJUST` and the underlying F&O temporal operation
-table, corrects several results-format spellings, and adds `LATERAL` (SEP-0006) surface syntax
-alongside a corrected correlated-evaluation substitution. It carries a large number of breaking
-surfaces; each is called out below with what a consumer must do.
+table, corrects several results-format spellings, adds `LATERAL` (SEP-0006) surface syntax
+alongside a corrected correlated-evaluation substitution, and rebuilds `EXISTS`/`NOT EXISTS` on
+SEP-0007's defensible substitution semantics (one definition, two proven-equivalent strategies,
+and the Part 3 assignment restriction). It carries a large number of breaking surfaces; each is
+called out below with what a consumer must do.
 
 ### Bug Fixes
 
@@ -224,6 +226,30 @@ surfaces; each is called out below with what a consumer must do.
   under `SILENT` would otherwise have contributed the identity table as a silent wrong answer),
   and a blank-node or quoted-triple outer binding reachable ONLY through an expression inside a
   `LATERAL` right-hand side no longer silently drops the row.
+- **BREAKING** **sparql-algebra:** SEP-0007 Part 3's assignment restriction is now enforced at
+  parse time: a `BIND`/a sub-`SELECT`'s `(expr AS ?v)` projection target/a `GROUP BY (expr AS ?v)`
+  grouping target, or a `VALUES` column, inside an `EXISTS`/`NOT EXISTS` body — both polarities
+  share the same grammar production, so both are covered identically, including a nested
+  `EXISTS`'s own body checked against its immediately enclosing `EXISTS`'s scope — that rebinds a
+  variable already in scope on the row being filtered is now a typed `ParseError` naming the
+  variable and the introducing construct, instead of being silently accepted and evaluated. A
+  rebinding confined to a `MINUS` right operand inside the body stays legal at any depth, since
+  such an introduction never escapes it to become observable. A caller whose query relied on the
+  previously accepted (and ambiguous) rebinding must rename the colliding variable.
+- **BREAKING** **sparql-eval:** Three `EXISTS`/`NOT EXISTS` answer defects are corrected. A
+  `GRAPH ?g { … }` body correlated through the row being filtered left the graph name unresolved
+  against that row — the substitution walk skipped it because only one of its two callers ran the
+  compatibility merge the name needed — so an existence filter could accept rows bound to a graph
+  that does not actually hold the pattern; the name now resolves to the row's bound IRI for
+  indexed selection. A correlation reaching a nested `EXISTS`'s body only through a triple position
+  (never that inner's own expression positions) went undetected by the variable walk feeding the
+  correlation decision, so that inner ran unconstrained instead of per-row; the walk now agrees
+  with the one substitution itself uses. And a bare `OPTIONAL` at the top of a correlated body was
+  evaluated as though its right side and join condition mattered to the existence test, when
+  `OPTIONAL` pads every left row unconditionally and never removes one — `FILTER EXISTS { OPTIONAL
+  { P } }` is always `true` (and its `NOT EXISTS` twin always `false`) regardless of whether `P`
+  matches, which Existential Normal Form's spine-top `LeftJoin` erasure now decides directly. A
+  query that depended on any of the three previous wrong answers now gets the correct one.
 
 ### Features
 
@@ -404,6 +430,20 @@ surfaces; each is called out below with what a consumer must do.
   legal. `LATERAL` is also now legal (and scope-checked) inside `INSERT`/`DELETE … WHERE` and
   `WITH … WHERE`, while a `DELETE WHERE` quad template refuses it by name instead of misparsing it
   as a subject term.
+- **BREAKING** **sparql-eval:** `EXISTS`/`NOT EXISTS` now rests on one stated semantics — SEP-0007's
+  `Replace`/`PrjMap` substitution (`exists(X, μ) ⟺ eval(D(G), Replace(PrjMap(X), μ))` is non-empty)
+  — served by exactly two implementations chosen through a proven boundary instead of two
+  heuristics with a guessed one: a memoized existence probe (evaluate the inner once, index it,
+  existence-probe each row) where a prepare-time admissibility proof shows it equivalent to
+  per-row substitution for every row the site can see, and the per-row definition itself (backed
+  by a restriction-keyed memo and a first-witness `Slice{0, Some(1)}` stop) everywhere else.
+  `--explain`'s per-algebra-node charge ledger now reports the chosen strategy and its cost
+  through three new evidence counters, `exists-probe-answered`, `exists-definition-answered`, and
+  `exists-inner-solutions-consumed`. `GOVERNOR_PROFILE_VERSION` moves `6` -> `7` to carry the
+  three new charge points, and the frozen governor corpus is regenerated; a consumer pinning
+  `GOVERNOR_PROFILE_VERSION`, `GOVERNOR_PROFILE_DIGEST`, or `GOVERNOR_CORPUS_DIGEST` must re-pin
+  all three. A query without a correlated `EXISTS`/`NOT EXISTS` charges none of the three new
+  points, so its fuel is unchanged in value even though the schedule and its digest moved.
 
 ### Performance
 
@@ -437,6 +477,24 @@ surfaces; each is called out below with what a consumer must do.
   examples (including the scoping oracle, proving Project-boundary narrowing rather than mere
   textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal syntax
   pair.
+- **sparql-conformance:** Add eight `purrdf-extend` SEP-0007 `EXISTS`/`NOT EXISTS` manifest cases
+  through the shipped stack — the correlated graph-variable body, the `OPTIONAL`-padding tautology
+  in both polarities, nested negation, a per-row `LIMIT 1` sub-select a one-shot probe would
+  truncate wrongly, the `MINUS` shape whose right-operand correlation a one-shot probe would flip,
+  and the Part 3 assignment restriction's own colliding-`BIND`/colliding-`VALUES` negative-syntax
+  pair — bringing the suite to fifty-five cases (forty-eight evaluation, five negative-syntax).
+  Each expected evaluation result was hand-derived from the `Replace`/`PrjMap` substitution
+  definition before being pinned against the release binary, so a still-wrong engine could not
+  have pinned itself correct.
+- **sparql-eval:** Pin the probe/definition strategy boundary from both sides with a test-only
+  forced-strategy seam: agreement tests run every admissible shape through both strategies and
+  assert row-for-row equality, and divergence witnesses force the probe onto each refused shape
+  and assert the specific wrong answer it would give. A bounded-exhaustive generator sweeps
+  hundreds of inner shapes at depth two, checking memo equivalence throughout and cross-strategy
+  agreement on every admitted one. Twenty-four `FILTER EXISTS`/`FILTER NOT EXISTS` shapes also run
+  as real query text through the public engine end to end, including the substitution document's
+  own worked examples, every solution modifier inside the body, the `HAVING`-position scope pin,
+  and quoted-triple/blank-node outer bindings.
 
 ### Documentation
 
@@ -452,6 +510,18 @@ surfaces; each is called out below with what a consumer must do.
   top-1-per-group worked example, the scope restriction with the SEP's own legal/illegal pair,
   the two deliberate divergences from Jena, the `UPDATE WHERE` status, and the `SERVICE`-forwarding
   refusal. The front-end surface enumeration now names it as a SEP extension.
+- **sparql:** Document `EXISTS`/`NOT EXISTS` under SEP-0007 in the book's query chapter: the
+  precise points SEP-0007 repairs against SPARQL 1.1/1.2 §18.6's literal `substitute`/`evalExists`
+  reading (variable-only positions, the `MINUS` domain flip, blank nodes as variables, disconnected
+  variables, and the Part 3 assignment restriction), the one `Replace`/`PrjMap` definition,
+  Existential Normal Form's rewrite laws, the two evaluation strategies and their `--explain`
+  evidence counters, the performance characteristic naming the shapes the memoized probe cannot
+  serve, and the Part 3 restriction with the SEP's own legal/illegal example pair. The front-end
+  surface enumeration's prior "EXISTS decorrelation" claim — never accurate, since a correlated
+  filter is answered either by proof-admitted probing or by genuine per-row substitution, never by
+  a blanket decorrelation — is corrected to point at this section. The README's shipped-surface
+  bullet and Direction list move `EXISTS`'s SEP-0007 semantics out of "near-term direction" and
+  into what SPARQL 1.1/1.2 already ships.
 
 ## [0.12.0] - 2026-08-02
 

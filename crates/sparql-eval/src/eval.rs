@@ -32,7 +32,6 @@ use purrdf_sparql_algebra::{
     Variable,
 };
 
-use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
 use crate::governor::GovernorState;
@@ -41,17 +40,31 @@ use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
 use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
+use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
 /// value; the criterion benches and differential tests flip individual flags to
 /// measure their effect (the flags are a measurement seam, never a degraded
 /// production mode).
+// Deliberate flag set: each bool is an independent opt-in measurement toggle, not a
+// state machine (see this type's own doc).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy)]
 pub struct EvalOptions {
-    /// Memoize each `EXISTS`/`NOT EXISTS` inner-pattern evaluation. The inner
-    /// pattern is evaluated unconstrained and then joined with the outer row's
-    /// seed, so its result is **independent of the outer row**: a `FILTER` over N
-    /// rows can evaluate it once instead of N times. Always `true` in production.
+    /// A pure cache-toggle for `crate::expr::exists`'s two per-evaluation memos —
+    /// `EvalCtx::exists_inner_cache` (the memoized probe path) and
+    /// `EvalCtx::exists_definition_memo` (the per-row definition path's
+    /// μ-restriction memo). Neither memo changes an ANSWER, only how much work
+    /// produces it: `false` forces every `EXISTS`/`NOT EXISTS` evaluation fresh
+    /// (probe-path: re-evaluate and re-index the inner every row instead of once
+    /// per site; definition-path: re-evaluate the substituted inner every row
+    /// instead of once per distinct correlated-variable restriction), which is
+    /// slower but — by the one-definition theorem (`crate::enf`'s module doc) —
+    /// never a different result. A measurement/differential-testing seam; always
+    /// `true` in production. Does NOT gate `EvalCtx::exists_prepared_cache` (the
+    /// ENF normal form and the fourth structural analysis): that cache holds a pure
+    /// function of the static query algebra, not a per-row answer, so there is no
+    /// correctness-relevant "off" state for it to toggle.
     pub exists_memo: bool,
     /// Evaluate BGPs in the retired structural (most-constrained-first) order
     /// instead of the cost-based order. Used only by the differential planner-
@@ -63,6 +76,14 @@ pub struct EvalOptions {
     /// This is a measurement seam for Criterion comparisons against the ordered
     /// parallel fold, and for differential tests. Production leaves it `false`.
     pub force_sequential: bool,
+    /// Wrap the `EXISTS` definition path's substituted inner in `Slice{0, Some(1)}`
+    /// before evaluating it (see `crate::enf`'s module doc, "truncated-at-one-witness
+    /// is complete for emptiness"). `true` (the wrap applied) in production. `false` is
+    /// an UNWRAPPED CONTROL for the differential test that checks the wrap changes no
+    /// `EXISTS` boolean answer while consuming far fewer inner solutions —
+    /// `crate::expr::exists_definition_path_stops_at_first_witness` — never a degraded
+    /// production mode.
+    pub exists_first_witness_wrap: bool,
 }
 
 impl Default for EvalOptions {
@@ -71,6 +92,7 @@ impl Default for EvalOptions {
             exists_memo: true,
             force_structural_bgp_order: false,
             force_sequential: false,
+            exists_first_witness_wrap: true,
         }
     }
 }
@@ -153,6 +175,15 @@ impl LossVocabulary {
 /// construction* even if the same `EXISTS` AST node is reached under two outer schemas.
 pub(crate) type ExistsCacheKey<I> = (usize, (u8, Option<I>), u64);
 
+/// A hashable key for the definition path's μ-restriction memo
+/// ([`EvalCtx::exists_definition_memo`]): the `EXISTS` AST node's address, a compact
+/// encoding of the active graph, a fingerprint of the outer schema, and the outer row's
+/// bindings restricted to the inner's own free-variable set, preserving unbound cells —
+/// `crate::expr::definition_restriction_key`. Two outer rows with the SAME restriction
+/// (every OTHER outer column may differ freely) share one evaluation.
+pub(crate) type ExistsDefinitionMemoKey<I> =
+    (usize, (u8, Option<I>), u64, Vec<Option<SolutionTerm<I>>>);
+
 /// A memoized `EXISTS`/`NOT EXISTS` inner pattern together with the probe index built
 /// over it. The inner pattern is evaluated unconstrained **once** per [`ExistsCacheKey`];
 /// the `(shared, keyed, wild)` index is built once and reused to existence-probe every
@@ -168,6 +199,82 @@ pub(crate) struct ExistsInner<I: ViewTermId = TermId> {
     pub keyed: DetHashMap<crate::binop::JoinKey<I>, Vec<usize>>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
     pub wild: Vec<usize>,
+}
+
+/// One `EXISTS`/`NOT EXISTS` AST node's prepare-time analysis (Parts A–C of the `EXISTS`
+/// decorrelation redesign): its Existential Normal Form, the first-witness-wrapped form
+/// the definition path evaluates, and the fourth structural analysis table
+/// (`crate::governor::soundness::analyze_pattern`) over it.
+///
+/// Computed lazily, once per distinct `EXISTS` AST node per evaluation, and cached on
+/// [`EvalCtx::exists_prepared_cache`] — see that field's doc and `crate::enf`'s module doc
+/// ("Prepare-seam choice") for why this is the chosen seam rather than
+/// [`crate::engine::PlanCache`] construction.
+pub(crate) enum PreparedExists {
+    /// ENF law 4b folded the whole `EXISTS` to constant `false` — see `crate::enf::Enf`.
+    FoldedFalse,
+    /// A non-folded inner, normalized to Existential Normal Form.
+    Pattern {
+        /// The ENF-normalized inner. What both evaluation strategies test for
+        /// non-emptiness — the memoized probe directly, the definition path via
+        /// [`Self::witness_wrapped`].
+        normalized: Arc<GraphPattern>,
+        /// `normalized` wrapped in `Slice { start: 0, length: Some(1) }` — the ENF
+        /// law 4a proof sketch read in reverse (`crate::enf`'s module doc,
+        /// "truncated-at-one-witness is complete for emptiness"): emptiness-preserving,
+        /// so the definition path's per-row substituted evaluation may stop at the
+        /// first witness without changing the boolean answer. Precomputed once here
+        /// (not per outer row) so the per-row substitution walk never allocates the
+        /// wrapper itself.
+        witness_wrapped: Arc<GraphPattern>,
+        /// The fourth structural analysis over `normalized` (Part B/C): free
+        /// variables, certainly-bound variables, stateful-builtin presence, and what
+        /// [`crate::governor::soundness::probe_admissible`] needs, per node.
+        analysis: Arc<crate::governor::soundness::NodeAnalysisTable>,
+        /// `normalized`'s own root free-variable set — `analysis`'s entry for
+        /// `normalized` itself, copied out so the per-row correlation test
+        /// (`crate::expr::exists`) need not re-look-up the table on every row.
+        free_vars: Arc<DetHashSet<Variable>>,
+    },
+}
+
+impl PreparedExists {
+    /// Build a [`PreparedExists`] for `pattern` — the walk `crate::expr::exists` calls
+    /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
+    /// per-evaluation cache and the substituted-temporary ABA guard).
+    fn build(pattern: &GraphPattern) -> Self {
+        match crate::enf::normalize(pattern) {
+            crate::enf::Enf::FoldedEmpty => Self::FoldedFalse,
+            crate::enf::Enf::Pattern(normalized) => {
+                // `normalized` is moved into its permanent `Arc` allocation FIRST, and
+                // `analyze_pattern` walks it THROUGH that `Arc` (never the pre-move local):
+                // `Arc::new` copies its argument into a fresh heap slot, so a table built
+                // against the pre-move address would key every entry to memory `exists`'s
+                // later lookups (which always dereference the `Arc`) can never match —
+                // silently missing the whole table and falling back to
+                // `node_analysis`'s maximally-conservative-for-safety default, EXCEPT for
+                // `free_vars`, where "conservative" is EMPTY (no known escape hatch — see
+                // that function's doc) and empty free variables is the UNSOUND direction
+                // for `probe_admissible`'s correlation test: it would treat every variable
+                // as "not a current-row variable" and admit a probe that should have been
+                // refused.
+                let normalized = Arc::new(normalized);
+                let witness_wrapped = Arc::new(GraphPattern::Slice {
+                    inner: Box::new((*normalized).clone()),
+                    start: 0,
+                    length: Some(1),
+                });
+                let mut analysis = crate::governor::soundness::NodeAnalysisTable::default();
+                let root = crate::governor::soundness::analyze_pattern(&normalized, &mut analysis);
+                Self::Pattern {
+                    normalized,
+                    witness_wrapped,
+                    analysis: Arc::new(analysis),
+                    free_vars: Arc::new(root.free_vars),
+                }
+            }
+        }
+    }
 }
 
 /// A cheap FNV-1a fingerprint of an outer schema's variables (names in column order),
@@ -295,12 +402,22 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// re-evaluation *and* per-row index rebuild into a single build per site.
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
     pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey<D::Id>, Arc<ExistsInner<D::Id>>>,
-    /// Per-query syntactic variable cache for expression positions inside an
-    /// `EXISTS` inner pattern, keyed by the immutable inner-pattern AST address.
-    /// Correlation detection runs for every outer row; caching this pure walk keeps
-    /// the row loop focused on the cheap membership test against currently-bound
-    /// outer variables.
-    pub(crate) exists_expr_vars_cache: DetHashMap<usize, Arc<crate::DetHashSet<Variable>>>,
+    /// Per-query cache of [`PreparedExists`] (ENF normal form, the first-witness-wrapped
+    /// form, and the fourth structural analysis table), keyed by the `EXISTS`/`NOT EXISTS`
+    /// AST node's immutable address. Populated lazily, once per distinct site — see
+    /// [`Self::prepared_exists`], the sole accessor, for the substituted-temporary ABA
+    /// guard this cache observes (the same discipline [`Self::exists_inner_cache`] and
+    /// [`Self::const_atom_cache`] already apply).
+    pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
+    /// The `EXISTS` definition path's μ-restriction memo: `key = μ` restricted to the
+    /// inner's own correlated-variable set (from [`PreparedExists::free_vars`]), `value =
+    /// the boolean answer`. So `k` distinct restrictions across `N` outer rows evaluate the
+    /// (substituted, first-witness-wrapped) inner exactly `k` times, never `N` — see
+    /// `crate::expr::exists`'s doc for the full complexity contract. Per-evaluation, like
+    /// [`Self::exists_inner_cache`]'s lifecycle: never cleared mid-query, and bypassed
+    /// (read and write both) while [`Self::in_substituted_exists`] is set, for the same ABA
+    /// reason.
+    pub(crate) exists_definition_memo: DetHashMap<ExistsDefinitionMemoKey<D::Id>, bool>,
     /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
     /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
     /// per-row key allocation). The compiled regex is behind an `Arc`, so a hit
@@ -370,10 +487,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// temporary's `Expression`/`GraphPattern` nodes are heap-allocated fresh for
     /// the current outer row and dropped at the end of it — they do NOT outlive
     /// this context's `query()` call — so address-keyed memoization
-    /// ([`Self::const_atom_cache`], [`Self::exists_expr_vars_cache`],
-    /// [`Self::exists_inner_cache`]) is unsound over them (a later row's
-    /// allocation can reuse a dropped node's address) and must be bypassed
-    /// entirely while this flag is set.
+    /// ([`Self::const_atom_cache`], [`Self::exists_prepared_cache`],
+    /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`]) is unsound over
+    /// them (a later row's allocation can reuse a dropped node's address) and must be
+    /// bypassed entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
     /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
     /// last — see [`crate::expr::SubstitutionSourceMap`].
@@ -602,7 +719,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             standpoint_predicates: None,
             loss_vocabulary: None,
             exists_inner_cache: DetHashMap::default(),
-            exists_expr_vars_cache: DetHashMap::default(),
+            exists_prepared_cache: DetHashMap::default(),
+            exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
             const_atom_cache: DetHashMap::default(),
@@ -1429,8 +1547,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   `Clone`s `active_graph`/`active_dataset`/`now`/`standpoint_predicates`):
     ///   read-only for the duration of evaluation, so sharing them across workers
     ///   cannot introduce a data race or a cross-worker ordering dependency.
-    /// - **Cloned** (`exists_inner_cache`/`exists_expr_vars_cache`): cheap
-    ///   `Arc`-valued maps, so a memo the parent already warmed (e.g. from
+    /// - **Cloned** (`exists_inner_cache`/`exists_prepared_cache`/
+    ///   `exists_definition_memo`): cheap `Arc`-valued (or, for the definition memo,
+    ///   plain `bool`-valued) maps, so a memo the parent already warmed (e.g. from
     ///   evaluating an earlier sibling sequentially) is inherited by the child
     ///   instead of rebuilt — a performance inheritance, not a correctness
     ///   requirement, since a cache miss just re-derives the same value.
@@ -1453,9 +1572,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
     /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
-    ///   `xsd_parse_cache`, `constructed`, `in_substituted_exists`): per-worker
-    ///   mutable state that must NOT be shared, so each worker mints its own
-    ///   constructed-quad buffer without contending on a lock. The caller
+    ///   `xsd_parse_cache`, `constructed`): per-worker mutable state that must
+    ///   NOT be shared, so each worker mints its own constructed-quad buffer
+    ///   without contending on a lock. The caller
     ///   classifies each worker row with [`crate::parallel::minted_row`] into a
     ///   [`crate::parallel::MintedRow`] (`Direct` — no post-fork mint, passed
     ///   through untouched — or `Portable`) and folds it back into the parent
@@ -1499,7 +1618,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: self.exists_inner_cache.clone(),
-            exists_expr_vars_cache: self.exists_expr_vars_cache.clone(),
+            exists_prepared_cache: self.exists_prepared_cache.clone(),
+            exists_definition_memo: self.exists_definition_memo.clone(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
             const_atom_cache: DetHashMap::default(),
@@ -1507,7 +1627,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
-            in_substituted_exists: false,
+            // COPIED (a `bool`, not a shared/locked structure — copying it needs no
+            // more synchronization than resetting it would), and NOT reset to
+            // `false`: a `FILTER`/`BIND` worker forked from INSIDE a per-row
+            // substituted `EXISTS`/`LATERAL` window (`crate::binop::eval_correlated`
+            // via `may_fork_row_loop`, e.g. a doubly-nested correlated `EXISTS`
+            // whose OUTER definition-path substitution wraps a `FILTER` the inner
+            // materializes many rows for) is STILL evaluating that same window's
+            // synthetic, per-row heap temporaries — resetting to `false` here would
+            // let the worker treat those addresses as stable plan identities again,
+            // reopening exactly the ABA cache-aliasing hazard this flag exists to
+            // close (`Self::in_substituted_exists`'s own doc), now merely scoped to
+            // the parallel path instead of eliminated. Same reasoning as
+            // `correlated_node_maps`, immediately below, which already inherits
+            // rather than resets for the identical reason.
+            in_substituted_exists: self.in_substituted_exists,
             // SHARED (cheap `Arc` clones), not fresh: a worker evaluating part of a
             // correlated substituted tree must resolve the SAME ledger identities its
             // parent would — dropping the stack here would silently reproduce the false-zero
@@ -1660,7 +1794,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: DetHashMap::default(),
-            exists_expr_vars_cache: DetHashMap::default(),
+            exists_prepared_cache: DetHashMap::default(),
+            exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
             const_atom_cache: DetHashMap::default(),
@@ -1719,6 +1854,29 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             GraphMatch::Default => (1, None),
             GraphMatch::Named(id) => (2, Some(id)),
         }
+    }
+
+    /// The [`PreparedExists`] for `pattern` — an `EXISTS`/`NOT EXISTS` inner — computing
+    /// it fresh on the first reach and reusing it for every later reach of the SAME AST
+    /// node within this evaluation (`crate::enf`'s module doc, "Prepare-seam choice").
+    ///
+    /// Bypasses [`Self::exists_prepared_cache`] entirely (both the read and the write)
+    /// while [`Self::in_substituted_exists`] is set: `pattern`'s address is then a per-row
+    /// heap temporary that can alias a dropped-and-reused allocation from an earlier
+    /// outer row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
+    /// already guard against, restated here for a third cache rather than left for a new
+    /// caller to rediscover.
+    pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
+        if self.in_substituted_exists {
+            return Arc::new(PreparedExists::build(pattern));
+        }
+        let key = std::ptr::from_ref(pattern) as usize;
+        if let Some(existing) = self.exists_prepared_cache.get(&key) {
+            return existing.clone();
+        }
+        let built = Arc::new(PreparedExists::build(pattern));
+        self.exists_prepared_cache.insert(key, built.clone());
+        built
     }
 }
 

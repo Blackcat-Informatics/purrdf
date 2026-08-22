@@ -80,6 +80,7 @@ fn harness_engine() -> NativeSparqlEngine {
             exists_memo: true,
             force_structural_bgp_order: false,
             force_sequential: false,
+            exists_first_witness_wrap: true,
         })
 }
 

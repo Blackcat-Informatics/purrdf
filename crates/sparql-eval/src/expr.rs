@@ -19,8 +19,14 @@
 //! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, and (Gap 4) **`ENCODE_FOR_URI`**,
 //! **`NOW`**, **`YEAR`/`MONTH`/`DAY`/`HOURS`/`MINUTES`/`SECONDS`**,
 //! **`TIMEZONE`/`TZ`/`ADJUST`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
-//! **`RAND`**, and **`UUID`/`STRUUID`**. Unsupported (`Unsupported`):
-//! `SERVICE`, property paths, and `Function::Custom`.
+//! **`RAND`**, and **`UUID`/`STRUUID`**. `SERVICE` and property paths are NOT this
+//! module's residue — they are separate [`GraphPattern`] nodes evaluated in-engine
+//! by [`crate::remote`] and the `path` module respectively (see the crate-level
+//! scope list in [the crate root docs](crate)), not an [`Expression`] this module
+//! walks. What this module DOES hard-fail on (`Unsupported`) is narrower: an
+//! unresolved [`Function::Custom`] IRI (`UnsupportedKind::CustomFunction`), and
+//! `heldIn` called without a caller-supplied standpoint-predicate configuration
+//! (`UnsupportedKind::HeldInUnconfigured`).
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -778,10 +784,26 @@ fn is_literal(v: &TermValue) -> bool {
     matches!(v, TermValue::Literal { .. })
 }
 
-/// Collect all [`Variable`]s referenced inside expression positions within `expr`.
-/// This is a pure syntactic walk of the [`Expression`] tree; it returns every
-/// variable that appears in a position where it is *evaluated* (not just matched
-/// as a triple-pattern term).
+/// Collect all [`Variable`]s referenced inside expression positions within `expr` —
+/// PLUS, for a nested [`Expression::Exists`]/`NOT EXISTS`, every variable its inner
+/// pattern mentions ANYWHERE, triple/leaf positions included, not just that inner
+/// pattern's own expression positions.
+///
+/// The extra reach is load-bearing, not merely conservative: `EXISTS`'s per-row
+/// substitution (SEP-0007's `Replace` mechanism, `substitute_pattern`) applies
+/// Values Insertion at a `Bgp`/`Path` LEAF exactly as it rewrites an expression
+/// constant, so an outer-bound variable a nested `EXISTS`'s inner pattern shares
+/// SOLELY through a triple position (never its own FILTER/BIND) still needs the
+/// leaf substitution `wrap_with_expr_term_only_values` supplies where an
+/// `Expression` constant cannot reach. This is the widened reachability
+/// [`crate::governor::soundness::analyze_pattern`]'s `free_vars` output ALSO
+/// computes, independently, for the [`exists`] decision site's own correlation
+/// test — the two walks are used for different purposes (this one feeds
+/// substitution's Values-Insertion wrapping; that one feeds the prepare-time
+/// analysis table) but must never diverge on which variables a pattern reaches,
+/// or an outer-bound variable correlated only through a nested `EXISTS`'s triple
+/// position could reach [`exists`]'s decision correctly while still reaching
+/// substitution's wrapping incorrectly (or vice versa).
 fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -827,9 +849,12 @@ fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
                 expr_vars(a, out);
             }
         }
-        // Nested EXISTS: walk the expression positions inside its inner pattern too.
+        // Nested EXISTS: widened to `pattern_all_vars` (this function's doc) — a
+        // correlation reaching the nested inner ONLY through a triple/leaf position
+        // (never that inner's own expression positions) must still surface here, or
+        // the enclosing `exists()` call wrongly takes the uncorrelated fast path.
         Expression::Exists(inner_pat) => {
-            pattern_expr_vars(inner_pat, out);
+            pattern_all_vars(inner_pat, out);
         }
     }
 }
@@ -854,226 +879,19 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
     }
 }
 
-/// Collect all variables referenced in *expression* positions within `pattern`.
-///
-/// Expression positions are: `Filter` conditions, `Extend`/BIND expressions,
-/// `LeftJoin` inline filter conditions, `OrderBy` sort-key expressions, `Group`
-/// grouping-key expressions and aggregate sub-expressions. Variables that appear
-/// only as triple-pattern terms (subject/predicate/object) are NOT included here
-/// because they are constrained by the standard join, not by expression evaluation.
-fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
-    match pattern {
-        // Leaf nodes with no expression positions.
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
-
-        // A property function's arguments are INVOCATION INPUTS: the relation is
-        // called with whatever the row binds them to, and it produces rows from that.
-        // They are therefore expression-like, NOT join-constrained the way a triple
-        // term is — so every argument variable is reported here. Under-reporting would
-        // send a correlated `EXISTS` whose inner pattern calls a relation with an
-        // outer-bound argument down the UNCORRELATED path, where the inner result is
-        // evaluated once and reused across outer rows: the relation would be invoked
-        // with the first row's arguments and every later row would read that answer.
-        GraphPattern::PropertyFunction(call) => {
-            for term in call.subject_args.iter().chain(&call.object_args) {
-                term_pattern_vars(term, out);
-            }
-        }
-
-        // Single-child wrappers with no expressions of their own.
-        GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. } => {
-            pattern_expr_vars(inner, out);
-        }
-
-        // Two-child operators with no expressions of their own.
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right } => {
-            pattern_expr_vars(left, out);
-            pattern_expr_vars(right, out);
-        }
-
-        // Filter: the condition is an expression — walk it, then recurse into inner.
-        GraphPattern::Filter { expr, inner } => {
-            expr_vars(expr, out);
-            pattern_expr_vars(inner, out);
-        }
-
-        // Extend / BIND: the bound expression is evaluated.
-        GraphPattern::Extend {
-            inner, expression, ..
-        } => {
-            expr_vars(expression, out);
-            pattern_expr_vars(inner, out);
-        }
-
-        // LeftJoin: the optional inline filter condition is evaluated.
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            if let Some(e) = expression {
-                expr_vars(e, out);
-            }
-            pattern_expr_vars(left, out);
-            pattern_expr_vars(right, out);
-        }
-
-        // OrderBy: sort keys are expressions.
-        GraphPattern::OrderBy { inner, expression } => {
-            for ord_expr in expression {
-                match ord_expr {
-                    purrdf_sparql_algebra::OrderExpression::Asc(e)
-                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, out),
-                }
-            }
-            pattern_expr_vars(inner, out);
-        }
-
-        // Group: grouping-key expressions and aggregate sub-expressions are evaluated.
-        GraphPattern::Group {
-            inner,
-            variables: _,
-            aggregates,
-        } => {
-            for (_, agg) in aggregates {
-                for arg in agg.args() {
-                    expr_vars(arg, out);
-                }
-            }
-            pattern_expr_vars(inner, out);
-        }
-    }
-}
-
-/// Whether `pattern` contains, anywhere in its tree, a node whose EVALUATED
-/// ANSWER depends on more than the unconstrained relation it computes over —
-/// `Lateral`, `Slice`, `Distinct`, `Reduced`, `Minus`, and `Group` all qualify:
-/// each can give a DIFFERENT answer depending on which specific outer row
-/// drove the evaluation that produced its input (a `LIMIT`, an aggregate, or
-/// `MINUS`'s own domain-disjointness test all read the shape of the row, not
-/// just whether it exists). `Bgp`/`Path`/`Values`/an ordinary `Join`/`Union`
-/// are NOT row-sensitive: evaluating them once, unconstrained, and probing the
-/// result for compatibility (the memoized fast path in [`exists`]) is sound
-/// for them regardless of which outer row is being tested.
-///
-/// This is what makes SEP-0006's `LATERAL` reachable inside `FILTER EXISTS`
-/// through a bare TRIPLE position (no expression position at all) a
-/// correctness hazard the fast path cannot see on its own:
-/// [`pattern_expr_vars`] only reports variables occurring in expression
-/// positions, so a `LATERAL` correlated solely through a shared triple-pattern
-/// variable was invisible to the OLD correlation test — this predicate, paired
-/// with [`pattern_all_vars`], is the widened test. A bare `Project` (a plain
-/// sub-`SELECT` with no `LIMIT`/`DISTINCT`/`GROUP BY` of its own) is a pure
-/// column restriction and is NOT independently row-sensitive; wherever a
-/// `Project` sits beneath one of the six listed constructs, that construct's
-/// own arm already reports `true` for the whole subtree.
-fn is_row_sensitive(pattern: &GraphPattern) -> bool {
-    match pattern {
-        GraphPattern::Lateral { .. }
-        | GraphPattern::Slice { .. }
-        | GraphPattern::Distinct { .. }
-        | GraphPattern::Reduced { .. }
-        | GraphPattern::Minus { .. }
-        | GraphPattern::Group { .. } => true,
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::PropertyFunction(_) => false,
-        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
-            is_row_sensitive(left) || is_row_sensitive(right)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            is_row_sensitive(left)
-                || is_row_sensitive(right)
-                || expression.as_ref().is_some_and(expr_is_row_sensitive)
-        }
-        GraphPattern::Filter { expr, inner } => {
-            is_row_sensitive(inner) || expr_is_row_sensitive(expr)
-        }
-        GraphPattern::Extend {
-            inner, expression, ..
-        } => is_row_sensitive(inner) || expr_is_row_sensitive(expression),
-        GraphPattern::OrderBy { inner, expression } => {
-            is_row_sensitive(inner)
-                || expression.iter().any(|oe| match oe {
-                    purrdf_sparql_algebra::OrderExpression::Asc(e)
-                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_is_row_sensitive(e),
-                })
-        }
-        GraphPattern::Project { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. } => is_row_sensitive(inner),
-    }
-}
-
-/// Whether any [`Expression::Exists`] reachable within `expr` (at any nesting
-/// depth through the boolean/arithmetic combinators) wraps an inner pattern
-/// [`is_row_sensitive`] itself judges row-sensitive.
-///
-/// Mirrors [`expr_vars`]'s recursion structure exactly (same combinators, same
-/// `Expression::Exists` seam) so this walk and the variable walk never diverge
-/// on which expression positions exist. Needed because [`is_row_sensitive`]'s
-/// pattern walk mirrors [`pattern_all_vars`]'s node coverage (`Filter`,
-/// `Extend`, `OrderBy`, `Group` aggregates, `LeftJoin`'s condition) — a
-/// row-sensitive node (`Lateral`+`LIMIT`, etc.) reachable ONLY inside a nested
-/// `EXISTS`/`NOT EXISTS` expression must still mark its enclosing pattern
-/// row-sensitive, or a correlated outer `EXISTS` wrongly takes the
-/// evaluate-once-and-probe fast path.
-fn expr_is_row_sensitive(expr: &Expression) -> bool {
-    match expr {
-        Expression::Variable(_) | Expression::Bound(_) => false,
-        Expression::NamedNode(_) | Expression::Literal(_) => false,
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => expr_is_row_sensitive(a) || expr_is_row_sensitive(b),
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            expr_is_row_sensitive(a)
-        }
-        Expression::If(c, t, e) => {
-            expr_is_row_sensitive(c) || expr_is_row_sensitive(t) || expr_is_row_sensitive(e)
-        }
-        Expression::In(needle, haystack) => {
-            expr_is_row_sensitive(needle) || haystack.iter().any(expr_is_row_sensitive)
-        }
-        Expression::Coalesce(items) => items.iter().any(expr_is_row_sensitive),
-        Expression::FunctionCall(_, args) => args.iter().any(expr_is_row_sensitive),
-        // The seam this walk exists for: a nested EXISTS's inner pattern can itself
-        // be row-sensitive (or carry a further-nested EXISTS that is).
-        Expression::Exists(inner_pat) => is_row_sensitive(inner_pat),
-    }
-}
-
 /// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
-/// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, and
-/// every expression position [`pattern_expr_vars`] already covers — plus every
-/// variable a construct itself INTRODUCES (`BIND`/`GROUP BY`/a projection
-/// list), which is a safe over-approximation for this predicate's one use:
-/// widened `EXISTS` correlation detection ([`is_row_sensitive`]'s doc). Used
-/// ONLY for a row-sensitive inner pattern, where an outer-bound variable
-/// occurring in ANY position — not just an expression one — makes the fast
-/// (evaluate-once, probe-per-row) path unsound, so the substituted per-row
-/// path must run instead.
+/// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, every
+/// expression position, and every variable a construct itself INTRODUCES
+/// (`BIND`/`GROUP BY`/a projection list). Used by [`expr_vars`]'s widened
+/// `Expression::Exists` arm (a nested `EXISTS`'s Values-Insertion substitution
+/// reaches its inner's LEAF positions too, not just its own expression
+/// positions — see that arm's doc) and, at the [`exists`] decision site, by
+/// [`crate::eval::PreparedExists::build`]'s call into
+/// [`crate::governor::soundness::analyze_pattern`] (the fourth structural
+/// analysis, which computes this same "every variable reachable anywhere" set —
+/// [`crate::governor::soundness::NodeAnalysis::free_vars`] — as ONE of its four
+/// per-node outputs, replacing what a bespoke widened-reachability walk here
+/// used to compute on its own for exactly the [`exists`] correlation test).
 fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::NamedNodePattern;
 
@@ -1177,35 +995,149 @@ fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     }
 }
 
+/// Which of the two `EXISTS` evaluation strategies [`force_exists_strategy_for_test`]
+/// pins, overriding [`crate::governor::soundness::probe_admissible`]'s own decision.
+/// Test-only (see that function's doc) — never constructed outside `cfg(test)` code.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForcedExistsStrategy {
+    /// Force the memoized evaluate-once probe, even on a shape
+    /// [`crate::governor::soundness::probe_admissible`] would refuse.
+    Probe,
+    /// Force the per-row substituted definition, even on a shape
+    /// [`crate::governor::soundness::probe_admissible`] would admit.
+    Definition,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only override for [`exists`]'s probe-vs-definition decision, so a
+    /// differential test can force EITHER strategy on a shape regardless of what
+    /// [`crate::governor::soundness::probe_admissible`] would decide — the same
+    /// `#[cfg(test)]` thread-local-override idiom `crate::parallel::force_parallel_for_test`
+    /// already uses for its own measurement/differential seam.
+    ///
+    /// Never consulted outside `cfg(test)` — the shipping decision is purely
+    /// [`crate::governor::soundness::probe_admissible`]'s own analysis. Forcing PROBE on a
+    /// shape the gate refuses is UNSOUND by construction: that is the entire point of the
+    /// admission boundary's divergence witnesses, which use this seam to observe, and pin,
+    /// the SPECIFIC wrong answer the gate exists to prevent. Forcing DEFINITION on a shape
+    /// the gate admits is always sound (the definition is correct for every shape) but
+    /// bypasses the memoized fast path, which is what the admissible-arm equivalence tests
+    /// use it for.
+    static FORCE_EXISTS_STRATEGY: std::cell::Cell<Option<ForcedExistsStrategy>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force [`exists`]'s strategy decision to `strategy` for the current thread until the
+/// returned guard is dropped (restores the prior override). Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_exists_strategy_for_test(
+    strategy: ForcedExistsStrategy,
+) -> ForceExistsStrategyGuard {
+    let previous = FORCE_EXISTS_STRATEGY.with(|cell| cell.replace(Some(strategy)));
+    ForceExistsStrategyGuard { previous }
+}
+
+/// RAII guard restoring the prior [`FORCE_EXISTS_STRATEGY`] override on drop.
+#[cfg(test)]
+pub(crate) struct ForceExistsStrategyGuard {
+    previous: Option<ForcedExistsStrategy>,
+}
+
+#[cfg(test)]
+impl Drop for ForceExistsStrategyGuard {
+    fn drop(&mut self) {
+        FORCE_EXISTS_STRATEGY.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`
+/// the per-row definition. Production logic is the one-line boolean this function
+/// still computes as its fallback (`!correlated || probe_admissible(..)`); the
+/// `cfg(test)` branch lets a differential test override it in either direction — see
+/// [`FORCE_EXISTS_STRATEGY`]'s doc.
+fn exists_use_probe(
+    correlated: bool,
+    normalized: &GraphPattern,
+    analysis: &crate::governor::soundness::NodeAnalysisTable,
+) -> bool {
+    #[cfg(test)]
+    if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
+        return forced == ForcedExistsStrategy::Probe;
+    }
+    !correlated || crate::governor::soundness::probe_admissible(normalized, analysis)
+}
+
 /// Evaluate `EXISTS { pattern }` for the current solution.
 ///
-/// Two evaluation paths are used depending on whether any outer-bound variable
-/// appears in an expression position (FILTER condition, BIND expression, etc.)
-/// inside the inner pattern:
+/// # The one-definition theorem
 ///
-/// **Uncorrelated path** (fast): the inner pattern result is independent of which
-/// outer row is being tested, so it can be evaluated once and cached. The outer
-/// row's bindings are substituted via a seed-join with the memoized inner result.
-/// This is the common case and preserves the performance win of evaluating the
-/// inner pattern once per EXISTS site rather than once per outer row.
+/// Stated once, in full, in `crate::enf`'s module doc (cited from there by
+/// [`crate::binop::eval_correlated`] and
+/// [`crate::governor::soundness::probe_admissible`] too, so it is written exactly
+/// ONCE): `exists(X, μ)` ⟺ `eval(D(G), Replace(PrjMap(X), μ))` is non-empty. This
+/// function carries the engine's two IMPLEMENTATIONS of that one definition —
+/// the **definition** itself (per-row substitution, below) and the **memoized
+/// probe** (evaluate once, index, existence-probe per row) — and decides,
+/// per site, which one to run:
 ///
-/// **Expression-correlated path** (correct per-row): when an outer-bound variable
-/// is referenced inside an expression context in the inner pattern (e.g. a FILTER
-/// that references an outer variable), evaluating the inner pattern unconstrained
-/// would leave that variable unbound, causing the expression to error and drop
-/// rows incorrectly. In this case the inner pattern is evaluated with the outer
-/// row's bound variables pre-seeded as a VALUES-like leading input, so they are
-/// visible as bound during expression evaluation. This result is NOT memoized
-/// because it depends on the specific outer row.
+/// 1. **Normalize.** [`EvalCtx::prepared_exists`] returns `pattern`'s
+///    [`crate::eval::PreparedExists`] — computed once per site per evaluation
+///    (`crate::enf`'s "Prepare-seam choice"): its Existential Normal Form, and the
+///    fourth structural analysis (`crate::governor::soundness::analyze_pattern`)
+///    over it. ENF law 4b may fold the whole `EXISTS` to constant `false` with no
+///    further work.
+/// 2. **Decide.** The normalized inner's own free-variable set says whether it is
+///    correlated with the outer row at all (any free variable actually bound in
+///    THIS row). If not, or if
+///    [`crate::governor::soundness::probe_admissible`] proves the shared-column
+///    probe equivalent to substitution for this shape, the memoized probe runs.
+///    Otherwise the per-row definition runs.
+/// 3. **Probe path**: unchanged from before this rewrite except that it now
+///    evaluates the ENF-normalized inner (never a difference in ANSWER — the ENF
+///    laws are emptiness-preserving — only, sometimes, in cost).
+/// 4. **Definition path**: substitutes μ into the normalized inner (via
+///    [`crate::binop::eval_correlated`]) wrapped in a first-witness `Slice{0,
+///    Some(1)}` (`crate::enf`'s module doc — emptiness-preserving in reverse), with
+///    a **μ-restriction memo**: `key = μ` restricted to the inner's own
+///    correlated-variable set, `value =` the boolean answer, so `k` distinct
+///    restrictions across `N` outer rows evaluate the inner exactly `k` times.
+///    Complexity: `O(k)` inner evaluations plus `O(N)` O(1) memo probes, versus
+///    `O(N)` inner evaluations with no memo — strictly better whenever any two
+///    outer rows share a restriction, never worse.
+///
+/// # Governed truncation
+///
+/// A trip observed while EITHER path is evaluating its inner — including one of
+/// this function's own three evidence charges — is recorded on
+/// [`EvalCtx::expression_barrier`] and answered `false`: never memoized (a
+/// truncated bag cached under a site's key would poison every later probe at that
+/// key, including one run under a larger budget in the same query — see
+/// `crate::enf`'s module doc, "Governed truncation") and never trusted as the
+/// EXISTS's real answer (the barrier makes the enclosing operator withhold its
+/// whole output, so the boolean returned here is never observed by a caller).
 fn exists<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
-    // Build the set of outer-bound variables (those with a concrete binding in
-    // the current row), then check if any of them are referenced in expression
-    // positions inside the inner pattern.
+    let prepared = ctx.prepared_exists(pattern);
+    let (normalized, witness_wrapped, analysis, free_vars) = match prepared.as_ref() {
+        // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
+        // every μ — the whole EXISTS is constant `false`, no evaluation needed.
+        crate::eval::PreparedExists::FoldedFalse => return Ok(false),
+        crate::eval::PreparedExists::Pattern {
+            normalized,
+            witness_wrapped,
+            analysis,
+            free_vars,
+        } => (normalized, witness_wrapped, analysis, free_vars),
+    };
+
+    // The outer-bound variables (a concrete binding in the current row).
     let outer_bound: DetHashSet<Variable> = schema
         .vars()
         .iter()
@@ -1219,80 +1151,63 @@ fn exists<D: DatasetView + Sync>(
         })
         .collect();
 
-    // `pattern`'s address is a sound cache key only for the static query algebra.
-    // While evaluating a per-row substituted-EXISTS temporary
-    // (`ctx.in_substituted_exists`), `pattern` is itself such a temporary — its
-    // address can be a dropped-and-reused allocation from an earlier outer row —
-    // so skip both the cache read and the write and compute the var set fresh.
-    let inner_expr_vars = if ctx.in_substituted_exists {
-        let mut vars = DetHashSet::default();
-        pattern_expr_vars(pattern, &mut vars);
-        Arc::new(vars)
-    } else {
-        let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
-        ctx.exists_expr_vars_cache
-            .entry(pattern_key)
-            .or_insert_with(|| {
-                let mut vars = DetHashSet::default();
-                pattern_expr_vars(pattern, &mut vars);
-                Arc::new(vars)
-            })
-            .clone()
-    };
+    // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
+    // `VALUES` column inside this `EXISTS` body that collides with a variable
+    // THIS row actually binds has no defined answer under either evaluation
+    // strategy below — see `crate::governor::soundness::exists_row_collision`'s
+    // doc. Checked against `normalized` (the SAME pattern either strategy
+    // evaluates) and `outer_bound` (this row's own actual bindings, never
+    // `probe_admissible`'s tree-level over-approximation), BEFORE the
+    // probe-vs-definition decision, so a genuine collision hard-errors
+    // regardless of which strategy would otherwise have run — the parser
+    // catches this exact shape at parse time (`find_scope_conflict`); this is
+    // the same check for algebra that reached this evaluator without going
+    // through it.
+    //
+    // Skipped entirely while `ctx.in_substituted_exists` is set: `pattern`
+    // (hence `normalized`) is then NOT the caller's own algebra but a per-row
+    // heap temporary [`crate::binop::eval_correlated`] just built by
+    // "Values-Insertion" substitution — its OWN injection mechanism plants a
+    // synthetic `Values{outer_var: [[μ's value]]}` at exactly the leaf a
+    // correlated variable occurs in, which is by construction never a
+    // rebinding (it is a JOIN restricting to μ's own value, not a fresh
+    // binding — the same distinction `probe_admissible`'s "Self-contained"
+    // doc draws for its own tree-level analysis, which never sees a
+    // substituted copy either). This window's own inner (a nested `EXISTS`
+    // reached while evaluating that substituted tree) was already checked
+    // — soundly, against a real `outer_bound` — on its OWN un-substituted
+    // entry to this function, before any substitution ran; skipping here
+    // avoids re-flagging the substitution machinery's own synthetic `Values`
+    // as if it were that same collision. Pinned by
+    // `exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision`
+    // in `crate::exists_admission_gate` (the W3C `exists04`/`exists05`
+    // shape — nested `FILTER EXISTS`/`FILTER NOT EXISTS`, correlated only
+    // through the DEFINITION path).
+    if !ctx.in_substituted_exists
+        && let Some((var, intro)) =
+            crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
+    {
+        return Err(EvalError::exists_scope_collision(
+            var.as_str().to_owned(),
+            intro.as_str(),
+        ));
+    }
 
-    // Widened per SEP-0006 reachability (see `is_row_sensitive`'s doc): an
-    // outer-bound variable occurring ONLY in a triple position (never an
-    // expression position) still needs the per-row substituted path whenever
-    // the inner pattern is row-sensitive — evaluating a `Lateral`/`Slice`/
-    // `Distinct`/`Reduced`/`Minus`/`Group` once, unconstrained, and probing
-    // per outer row is sound only when the inner's answer does not itself
-    // depend on which row drove it, and each of those constructs' answer CAN.
-    // `LATERAL`'s parser is what first makes such an inner reachable through a
-    // bare triple position inside `EXISTS` (previously unwritable surface
-    // syntax). The row-sensitivity/all-vars walk is deliberately NOT cached
-    // (unlike `inner_expr_vars` above): row-sensitive inners are the rare
-    // case, so the memoized fast path below is what carries the common-case
-    // performance, not this check.
-    let is_expression_correlated = inner_expr_vars.iter().any(|v| outer_bound.contains(v))
-        || (is_row_sensitive(pattern) && {
-            let mut all_vars = DetHashSet::default();
-            pattern_all_vars(pattern, &mut all_vars);
-            all_vars.iter().any(|v| outer_bound.contains(v))
-        });
+    let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
 
-    if is_expression_correlated {
-        // Correct per-row path: substitute the outer row's bound variable values
-        // into the inner pattern before evaluating (expression positions per
-        // SPARQL §18.6; triple/leaf positions via Values Insertion — see
-        // `crate::binop::eval_correlated`, this crate's one substitution seam).
+    if exists_use_probe(correlated, normalized, analysis) {
+        // ---- Memoized probe path ----
         //
-        // After substitution, the resulting pattern's result is specific to this
-        // outer row; it is NOT memoized.
-        let inner = crate::binop::eval_correlated(pattern, row, schema, ctx)?;
-        if let Evaluated::Truncated(truncation) = &inner {
-            // A truncated `EXISTS` inner bag can only turn its boolean from true to
-            // false, and a truncated `NOT EXISTS` one from false to true — a fabricated
-            // row. Neither is a bound, so the trip is reported to the enclosing operator,
-            // which withholds its whole output. The boolean returned here is therefore
-            // never observed in any row that reaches a caller.
-            ctx.expression_barrier.record(truncation.tripped());
-            return Ok(false);
-        }
-        Ok(!inner.rows().is_empty())
-    } else {
-        // Fast memoized path: the inner pattern result is independent of the outer
-        // row's values in expression contexts, so evaluate it — and build the probe
-        // index over it — ONCE per site (keyed by inner-pattern, graph, and outer
-        // schema), then existence-probe each outer row against the reused index. This
-        // replaces the former per-row seed-join, whose `join_seqs` rebuilt the inner
-        // hash index on every outer row (O(rows × |inner|)).
-        // As above: `pattern`'s address is a sound cache key only for the static
-        // query algebra. A doubly-nested EXISTS reached while
-        // `ctx.in_substituted_exists` is already set means `pattern` is itself
-        // part of an outer per-row substituted temporary, so skip both the cache
-        // get and the insert and build the entry fresh, unshared.
+        // Evaluate the (ENF-normalized) inner — and build the probe index over it —
+        // ONCE per site (keyed by normalized-inner address, graph, and outer schema),
+        // then existence-probe each outer row against the reused index. `pattern`'s
+        // (hence `normalized`'s) address is a sound cache key only for the static
+        // query algebra: a doubly-nested EXISTS reached while
+        // `ctx.in_substituted_exists` is already set means `pattern` is itself part
+        // of an outer per-row substituted temporary, so skip both the cache get and
+        // the insert and build the entry fresh, unshared.
         let key = (
-            std::ptr::from_ref::<GraphPattern>(pattern) as usize,
+            std::ptr::from_ref::<GraphPattern>(normalized.as_ref()) as usize,
             ctx.graph_key(),
             crate::eval::schema_fingerprint(schema),
         );
@@ -1304,14 +1219,12 @@ fn exists<D: DatasetView + Sync>(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let evaluated = eval_evaluated(pattern, ctx)?;
+                let evaluated = eval_evaluated(normalized, ctx)?;
                 if let Evaluated::Truncated(truncation) = &evaluated {
-                    // Never memoized: a truncated inner bag cached under this site's key
-                    // would make every subsequent probe — including one under a larger budget
-                    // in the same query — read a bag that is not the inner pattern's
-                    // answer. See the correlated branch above for why the boolean is
-                    // irrelevant once the barrier is recorded.
                     ctx.expression_barrier.record(truncation.tripped());
+                    return Ok(false);
+                }
+                if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
                     return Ok(false);
                 }
                 let inner = Arc::new(evaluated.into_complete().unwrap_or_else(|_| {
@@ -1320,7 +1233,7 @@ fn exists<D: DatasetView + Sync>(
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
-                // via `compatible`, exactly as the prior bound-only seed-join did.
+                // via `compatible`, exactly as the definition path's substitution would.
                 let shared = schema.shared_columns(&inner.schema);
                 let (keyed, wild) = crate::binop::build_index(&inner, &shared);
                 let entry = Arc::new(crate::eval::ExistsInner {
@@ -1344,7 +1257,98 @@ fn exists<D: DatasetView + Sync>(
             &entry.wild,
             &entry.inner.rows,
         ))
+    } else {
+        // ---- Per-row definition path, with the μ-restriction memo ----
+        let restriction = definition_restriction_key(row, schema, free_vars);
+        let memo_key = (
+            std::ptr::from_ref::<GraphPattern>(pattern) as usize,
+            ctx.graph_key(),
+            crate::eval::schema_fingerprint(schema),
+            restriction,
+        );
+        if ctx.options.exists_memo
+            && !ctx.in_substituted_exists
+            && let Some(&answer) = ctx.exists_definition_memo.get(&memo_key)
+        {
+            return Ok(answer);
+        }
+
+        // `witness_wrapped` is `normalized` wrapped in `Slice{0, Some(1)}` — the ENF
+        // law 4a proof sketch read in reverse (`crate::enf`'s module doc): emptiness
+        // is preserved, so the substituted evaluation may stop at the first witness.
+        // `exists_first_witness_wrap` (default `true`) is the differential-test seam
+        // that evaluates `normalized` unwrapped instead, to compare consumption without
+        // changing the boolean answer — see [`EvalOptions::exists_first_witness_wrap`].
+        let to_evaluate: &GraphPattern = if ctx.options.exists_first_witness_wrap {
+            witness_wrapped
+        } else {
+            normalized
+        };
+        let inner = crate::binop::eval_correlated(to_evaluate, row, schema, ctx)?;
+        if let Evaluated::Truncated(truncation) = &inner {
+            ctx.expression_barrier.record(truncation.tripped());
+            return Ok(false);
+        }
+        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+            return Ok(false);
+        }
+        let consumed = inner.rows().len();
+        for _ in 0..consumed {
+            if charge_exists_evidence(
+                ctx,
+                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+            ) {
+                return Ok(false);
+            }
+        }
+        let answer = !inner.rows().is_empty();
+        if ctx.options.exists_memo && !ctx.in_substituted_exists {
+            ctx.exists_definition_memo.insert(memo_key, answer);
+        }
+        Ok(answer)
     }
+}
+
+/// Charge one occurrence of `point` for the [`exists`] decision site. A trip is
+/// recorded on the expression barrier (never propagated as a hard [`EvalError`] —
+/// see [`exists`]'s doc, "Governed truncation") and reported to the caller as
+/// `true` so it can withhold the boolean it would otherwise compute; an untripped
+/// charge reports `false` and the caller proceeds.
+fn charge_exists_evidence<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    point: crate::governor::ChargePoint,
+) -> bool {
+    if let Err(tripped) = ctx.charge(point) {
+        ctx.expression_barrier.record(tripped);
+        true
+    } else {
+        false
+    }
+}
+
+/// The [`crate::eval::EvalCtx::exists_definition_memo`] key's row-restriction
+/// component: the outer row's cells at exactly the columns `free_vars` names,
+/// in schema-column order, preserving `None`/unbound. Two outer rows produce the
+/// SAME restriction iff substituting either into the (ENF-normalized) inner would
+/// bind that inner's own correlated variables identically — which is exactly the
+/// condition under which the two rows' `EXISTS` answers must agree, so sharing
+/// one evaluation between them is sound.
+///
+/// `SolutionTerm` is `Copy` (a small dataset id or a scratch index — see
+/// [`SolutionTerm`]'s own doc), so this is `O(shared columns)` `Copy`s, never a
+/// per-row `String`/text allocation (AGENTS.md's hot-path rule).
+fn definition_restriction_key<I: ViewTermId>(
+    row: &[Option<SolutionTerm<I>>],
+    schema: &VarSchema,
+    free_vars: &DetHashSet<Variable>,
+) -> Vec<Option<SolutionTerm<I>>> {
+    schema
+        .vars()
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| free_vars.contains(*v))
+        .map(|(i, _)| row[i])
+        .collect()
 }
 
 /// The per-row μ used by pattern substitution — SEP-0007's `Replace` mechanism,
@@ -1442,13 +1446,29 @@ impl SubstitutionRow {
 /// reads the truth instead of being fooled by a rewrite that erased the
 /// column into a baked-in constant.
 ///
-/// `Graph`/`Service` names keep their pre-existing treatment (a `Service`
-/// variable endpoint resolves directly — the sole reason `LATERAL` ever needs
-/// per-row re-evaluation at all, since a joined `VALUES` row cannot supply the
-/// constant a federated call must be dispatched with; a `Graph` variable name
-/// is left unresolved, exactly as before — an unconstrained `GRAPH ?g`
-/// enumeration is already sound because the caller's own compatibility check
-/// against μ, run after this substituted pattern is evaluated, filters it).
+/// `Service` names keep their pre-existing treatment: a variable endpoint resolves
+/// directly to the IRI binding when one is known — the sole reason `LATERAL` ever
+/// needs per-row re-evaluation at all, since a joined `VALUES` row cannot supply
+/// the constant a federated call must be dispatched with.
+///
+/// `Graph` IS a Values-Insertion site (unlike a stale earlier version of this doc
+/// claimed): a bound `?g` resolves directly to a `NamedNode` when the binding is
+/// one (the O(1) indexed-selection path `eval_graph` already has), and — whether
+/// or not it resolved — the `Graph` node is ALSO wrapped in `Join(.., Values{?g})`
+/// exactly like a `Bgp`/`Path` leaf, both to restrict a non-IRI (e.g. blank-node)
+/// binding's still-enumerating evaluation to μ's own term and to keep `?g` a
+/// column of the node's own result (`eval_graph`'s `NamedNodePattern::NamedNode`
+/// arm does not add it — only `eval_graph_var` does — so a bare name-resolution
+/// with no retaining join would silently drop `?g` from the schema). See the
+/// `Graph` arm of `substitute_pattern_impl` for the full case analysis and why an
+/// unconstrained enumeration relying solely on the CALLER's post-hoc compatibility
+/// check (`crate::binop::eval_lateral`'s merge) was unsound: that check restricts
+/// rows only where μ's own column happens to already share the same schema
+/// position, which a `LIMIT`/`DISTINCT`-bearing inner (or any other construct whose
+/// answer depends on which specific row drove its evaluation) defeats by picking
+/// its answer BEFORE the restriction is ever applied — see
+/// [`crate::governor::soundness::probe_admissible`]'s doc for the general hazard
+/// and the per-construct classification that now replaces this case-by-case note.
 ///
 /// # The theorem
 ///
@@ -1820,19 +1840,59 @@ fn substitute_pattern_impl(
                 map,
             )
         }
-        // The graph name is left unresolved even when it is a bound variable — see this
-        // function's doc for why that is sound (the caller's post-hoc compatibility
-        // check against μ is what makes it sound, not a substitution here).
+        // `Graph{Variable, ..}` IS a Values-Insertion site: a bound `?g` resolves to
+        // the concrete `NamedNode` when the store admits it (RDF 1.2 requires a graph
+        // name to be an IRI or a blank node — never a literal or a quoted triple, see
+        // `crates/rdf-core/src/ir/validate.rs`'s `require_graph_name`), landing
+        // `eval_graph` on its O(1) indexed-selection arm instead of `eval_graph_var`'s
+        // full named-graph enumeration. A non-IRI binding (an admissible blank-node
+        // graph name, or a literal/quoted-triple binding that can never name a graph)
+        // keeps `name` a variable, so `eval_graph_var` still enumerates — but the
+        // retained `Values` join below (same as the IRI case) restricts every
+        // enumerated candidate to μ's own term, which is empty for a term kind no
+        // graph can match and the correct single-graph restriction for an admissible
+        // blank name.
+        //
+        // Either way `?g` itself must stay a column of the substituted node's own
+        // result: `eval_graph`'s `NamedNodePattern::NamedNode` arm never adds `?g` to
+        // its output (only `NamedNodePattern::Variable`'s arm does — see
+        // `crate::eval::syntactic_schema`'s `Graph` arm and `eval_graph_var`), so
+        // resolving to a constant would silently drop `?g` from the schema. Wrapping
+        // in `Join(Graph{..}, Values{?g})` (Values Insertion, [`join_leaf_with_values`])
+        // both restricts the match and keeps `?g` bound in every row — a `LATERAL`
+        // sharing this node's column layout with its left operand depends on that
+        // column surviving (see `crate::binop::eval_lateral`'s doc).
         GraphPattern::Graph { name, inner } => {
+            let resolved_name = match name {
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => row
+                    .term
+                    .iter()
+                    .find(|(bv, _)| bv == v)
+                    .and_then(|(_, g)| match g {
+                        purrdf_sparql_algebra::GroundTerm::NamedNode(n) => Some(
+                            purrdf_sparql_algebra::NamedNodePattern::NamedNode(n.clone()),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| name.clone()),
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
+            };
             let inner_sub = substitute_pattern_impl(inner, row, map);
-            boxed_and_mapped(
+            let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
-                    name: name.clone(),
+                    name: resolved_name,
                     inner: inner_sub,
                 },
                 pattern,
                 map,
-            )
+            );
+            if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = name {
+                let mut vars = DetHashSet::default();
+                vars.insert(v.clone());
+                join_leaf_with_values(graph_node, &vars, &row.term, pattern, map)
+            } else {
+                graph_node
+            }
         }
         GraphPattern::Service {
             name,
@@ -2072,7 +2132,8 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
     }
 }
 
-/// Wrap a `Bgp`/`Path` leaf in `Join(leaf, Values { .. })` when its variables
+/// Wrap a `Bgp`/`Path` leaf — or the already-name-resolved `Graph{.., inner}` node
+/// the `Graph` arm above builds — in `Join(leaf, Values { .. })` when its variables
 /// intersect the injected row (Values Insertion — see [`substitute_pattern`]'s
 /// doc). The joined `VALUES` carries exactly `leaf_vars ∩ row-vars`, in the
 /// row's own (schema) order — a single row, so the join can only narrow, never
@@ -2080,6 +2141,13 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 /// returned unchanged: no join is worth adding, and the pattern stays
 /// leaf-shaped for every operator that inspects it structurally (e.g. the
 /// property-function fusion check in `crate::property_fn_eval`).
+///
+/// The `Graph` arm's reuse passes `{ ?g }` as `leaf_vars` for a node that is not
+/// literally a `Bgp`/`Path` leaf, but the same three properties this helper relies
+/// on still hold: `leaf`'s own triple/path/graph-selection terms are never rewritten
+/// to ground constants by substitution, `?g ∈ leaf_vars` restricts rather than
+/// multiplies (one row), and the wrapper — not `leaf` — must become the row-counting
+/// node for the same ledger-attribution reason.
 ///
 /// `leaf` arrives already boxed — at its permanent address — and, when a
 /// [`SubstitutionSourceMap`] is engaged, already mapped to `source` by the caller
@@ -5788,6 +5856,184 @@ mod tests {
         );
     }
 
+    // ── EXISTS definition-path evidence: the μ-restriction memo (Part D/E) ─────
+
+    /// A single `?x :q "w1"` triple — the shared fixture for the two definition-memo
+    /// tests below.
+    fn definition_memo_ds() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        let mut b = RdfDatasetBuilder::new();
+        let q = b.intern_iri("http://example.org/q");
+        let x = b.intern_iri("http://example.org/x");
+        let w1 = b.intern_literal(RdfLiteral::simple("w1"));
+        b.push_quad(x, q, w1, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_definition_memo_evaluates_once_per_distinct_restriction() {
+        // 8 outer rows (`?a`, via VALUES), exactly 3 distinct values. The inner
+        // `Filter(?b != ?a)` reads the outer-bound `?a`, which its own `Bgp{?x :q ?b}`
+        // does NOT certainly bind, so `probe_admissible` refuses it and every row
+        // takes the per-row definition path — the μ-restriction memo is what keeps
+        // that from costing 8 separate inner evaluations.
+        let ds = definition_memo_ds();
+        let engine = crate::engine::NativeSparqlEngine::default();
+        let q = "PREFIX : <http://example.org/> \
+                  SELECT ?a WHERE { \
+                    VALUES ?a { \"v1\" \"v2\" \"v3\" \"v1\" \"v2\" \"v3\" \"v1\" \"v2\" } \
+                    FILTER EXISTS { ?x :q ?b . FILTER(?b != ?a) } \
+                  }";
+        let explanation = engine.explain_query(&ds, q, None).expect("explain");
+        let evaluations: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        assert_eq!(
+            evaluations, 3,
+            "8 outer rows over 3 distinct ?a values must evaluate the definition path \
+             exactly 3 times (once per distinct restriction), not 8, with the memo engaged"
+        );
+    }
+
+    #[test]
+    fn exists_definition_memo_distinguishes_restrictions() {
+        // `?a` values 1/2/1/3/2/1: the inner has a match for `?b = 1` and `?b = 3` but
+        // not `?b = 2`, so the EXISTS answer genuinely differs per distinct `?a` value
+        // — the memo must key on the RESTRICTION itself, not merely count evaluations,
+        // and every recurrence of a restriction (the three `1`s) must read the SAME
+        // memoized answer as the first.
+        use purrdf_core::RdfLiteral;
+        let mut b = RdfDatasetBuilder::new();
+        let q = b.intern_iri("http://example.org/q");
+        let x1 = b.intern_iri("http://example.org/x1");
+        let x2 = b.intern_iri("http://example.org/x2");
+        let one = b.intern_literal(RdfLiteral::simple("1"));
+        let three = b.intern_literal(RdfLiteral::simple("3"));
+        b.push_quad(x1, q, one, None);
+        b.push_quad(x2, q, three, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?a WHERE { \
+                        VALUES ?a { \"1\" \"2\" \"1\" \"3\" \"2\" \"1\" } \
+                        FILTER EXISTS { ?x :q ?b . FILTER(?b = ?a) } \
+                      }";
+        let rows = run_rows(&ds, query, true);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["1".to_owned()],
+                vec!["1".to_owned()],
+                vec!["1".to_owned()],
+                vec!["3".to_owned()],
+            ],
+            "only ?a=1 and ?a=3 rows survive (three \"1\"s, one \"3\"); the shared \
+             restriction \"2\" must be refused on every recurrence, not just the first"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, query, false),
+            "memo on/off must agree row-for-row"
+        );
+    }
+
+    #[test]
+    fn exists_definition_path_stops_at_first_witness() {
+        // Three candidates for `?x :q ?b` (1, 2, 3), and a single outer `?a = "z"`
+        // that matches none of them — the inner `FILTER(?b != ?a)` keeps ALL THREE,
+        // so this one μ has >= 3 witnesses. The Filter is correlated and non-admissible
+        // (same reasoning as the memo tests above), so this is the definition path.
+        use purrdf_core::RdfLiteral;
+        let mut b = RdfDatasetBuilder::new();
+        let q = b.intern_iri("http://example.org/q");
+        let x1 = b.intern_iri("http://example.org/x1");
+        let x2 = b.intern_iri("http://example.org/x2");
+        let x3 = b.intern_iri("http://example.org/x3");
+        let one = b.intern_literal(RdfLiteral::simple("1"));
+        let two = b.intern_literal(RdfLiteral::simple("2"));
+        let three = b.intern_literal(RdfLiteral::simple("3"));
+        b.push_quad(x1, q, one, None);
+        b.push_quad(x2, q, two, None);
+        b.push_quad(x3, q, three, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?a WHERE { \
+                        VALUES ?a { \"z\" } \
+                        FILTER EXISTS { ?x :q ?b . FILTER(?b != ?a) } \
+                      }";
+
+        // Identical boolean answer with and without the wrap (the test seam:
+        // `EvalOptions::exists_first_witness_wrap`).
+        let rows_wrapped = run_rows(&ds, query, true);
+        let rows_unwrapped = {
+            let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(query)
+                .expect("parse");
+            let mut ctx = EvalCtx::new(&ds);
+            ctx.options.exists_first_witness_wrap = false;
+            match crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval") {
+                crate::eval::Outcome::Solutions(seq) => seq
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|c| match c {
+                                None => "UNBOUND".to_owned(),
+                                Some(t) => match value_of(&ctx, *t) {
+                                    TermValue::Literal { lexical_form, .. } => lexical_form,
+                                    other => format!("{other:?}"),
+                                },
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                other => panic!("expected solutions, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            rows_wrapped, rows_unwrapped,
+            "the first-witness wrap must never change the EXISTS boolean answer"
+        );
+
+        // The wrap bounds consumption at exactly 1; the unwrapped control consumes
+        // every witness (>= 3).
+        let wrapped_engine = crate::engine::NativeSparqlEngine::default();
+        let wrapped = wrapped_engine
+            .explain_query(&ds, query, None)
+            .expect("explain (wrapped)");
+        let consumed_wrapped: u64 = wrapped
+            .ledger()
+            .iter()
+            .map(|n| n.fuel_at(crate::governor::ChargePoint::ExistsInnerSolutionsConsumed))
+            .sum();
+        assert_eq!(
+            consumed_wrapped, 1,
+            "the wrap must stop at exactly one witness"
+        );
+
+        let unwrapped_engine = crate::engine::NativeSparqlEngine::default().with_eval_options(
+            crate::eval::EvalOptions {
+                exists_first_witness_wrap: false,
+                ..crate::eval::EvalOptions::default()
+            },
+        );
+        let unwrapped = unwrapped_engine
+            .explain_query(&ds, query, None)
+            .expect("explain (unwrapped)");
+        let consumed_unwrapped: u64 = unwrapped
+            .ledger()
+            .iter()
+            .map(|n| n.fuel_at(crate::governor::ChargePoint::ExistsInnerSolutionsConsumed))
+            .sum();
+        assert!(
+            consumed_unwrapped >= 3,
+            "the unwrapped control must consume every witness (>= 3), got {consumed_unwrapped}"
+        );
+    }
+
     // ── Correlated EXISTS: outer variable referenced in FILTER expression ──────
     //
     // Data: :a :knows :b ; :b :knows :c .
@@ -6100,8 +6346,9 @@ mod tests {
     // dropped at the end of each outer row's evaluation. Across many rows the
     // allocator can (and in practice does) hand back the *same address* for
     // the next row's temporary. Before the fix, `const_atom_cache`,
-    // `exists_expr_vars_cache`, and `exists_inner_cache` were keyed on that
-    // address, so a later row could get a stale cache hit computed against an
+    // `exists_prepared_cache`, `exists_inner_cache`, and `exists_definition_memo`
+    // were (or, for the latter two, are) keyed on that address, so a later row
+    // could get a stale cache hit computed against an
     // earlier row's substituted constant — corrupting the solution set. This
     // test drives five outer rows (more than enough for address reuse to
     // occur) with an alternating true/false correlated-FILTER-EXISTS result,
@@ -6773,7 +7020,7 @@ mod tests {
     fn exists_over_a_lateral_limit_correlates_through_a_triple_position() {
         // `?x` (outer-bound via `?s :owns ?x`) occurs ONLY in a triple position
         // inside the EXISTS inner — never in an expression/FILTER/BIND position —
-        // so `pattern_expr_vars` alone (the pre-widening test) reports no
+        // so an expression-positions-only correlation test (the pre-fix design) reports no
         // correlation at all and the memoized evaluate-once-and-probe path would
         // run. The `LATERAL`'s own left is the unit table (nothing precedes it,
         // per SEP-0006), so it contributes nothing about `?x`: the ONLY place
@@ -6809,8 +7056,8 @@ mod tests {
 
     // ── Row-sensitivity through an expression-embedded EXISTS ──────────────
     //
-    // `is_row_sensitive` (the classifier the widened check above depends on)
-    // recurses into a `Filter`'s `inner` pattern but, pre-fix, never looked at
+    // The pre-fix row-sensitivity classifier recursed into a `Filter`'s `inner`
+    // pattern but never looked at
     // the `Filter`'s own `expr` field — so a `LATERAL` reachable ONLY inside a
     // nested `EXISTS`/`NOT EXISTS` expression (rather than directly as a
     // pattern node, which the test above already covers) was invisible to it,
@@ -6857,7 +7104,7 @@ mod tests {
         // LATERAL { ?v :flag "true" } } }` has its row-sensitive `LATERAL` reachable
         // ONLY through the nested `FILTER EXISTS`'s expression position — never as
         // a directly-nested pattern node under the outer `Filter`. Pre-fix,
-        // `is_row_sensitive` on the outer `Filter` ignores its `expr` field
+        // the pre-fix classifier ignores the outer `Filter`'s own `expr` field
         // entirely, so it never notices the buried `LATERAL`; the outer `EXISTS`
         // then takes the memoized evaluate-once-and-probe path. Evaluated once
         // unconstrained, `?s` is free throughout, so the nested `EXISTS { LATERAL
@@ -6891,6 +7138,191 @@ mod tests {
             rows,
             run_rows(&ds, q, false),
             "memo on/off must agree once correlation is correctly detected"
+        );
+    }
+
+    // ── `Graph(Var, P)` is a Values-Insertion site ──────────────────────────
+    //
+    // `:s1 :p :g1 . :s2 :p :g2 .` plus `GRAPH :g1 { :x :q :y . }` — `:g2` is
+    // never used as a graph name (no quads live under it). The inner
+    // sub-`SELECT ... LIMIT 1` makes the whole `Graph` pattern row-sensitive
+    // which forces `crate::expr::exists` down the
+    // per-row substituted (definition) path regardless of `exists_memo` — an
+    // inner whose evaluation would otherwise be memoized once and reused
+    // unsoundly across outer rows, so the substituted `Graph` arm of
+    // `substitute_pattern_impl` is what actually runs.
+
+    fn f1_graph_variable_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let g1 = b.intern_iri("http://example.org/g1");
+        let g2 = b.intern_iri("http://example.org/g2");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        b.push_quad(s1, p, g1, None);
+        b.push_quad(s2, p, g2, None);
+        b.push_quad(x, q, y, Some(g1));
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_correlated_graph_variable_restricts_to_the_bound_graph() {
+        let ds = f1_graph_variable_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?s WHERE { \
+                   ?s :p ?g \
+                   FILTER EXISTS { \
+                     GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s1>".to_owned()]],
+            "EXISTS/GRAPH ?g must restrict the graph scan to μ's OWN \
+             ?g, not resolve it against a plan-wide binding blind to which outer \
+             row is under test"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree (this shape is row-sensitive so the memo \
+             flag never applies, but the invariant should hold regardless)"
+        );
+    }
+
+    #[test]
+    fn not_exists_correlated_graph_variable_matches_the_positive_polarity() {
+        let ds = f1_graph_variable_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?s WHERE { \
+                   ?s :p ?g \
+                   FILTER NOT EXISTS { \
+                     GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s2>".to_owned()]],
+            "NOT EXISTS is the exact complement of the positive-polarity test \
+             above: only :s2 (whose ?g, :g2, owns no quads) may pass"
+        );
+    }
+
+    #[test]
+    fn exists_graph_name_bound_to_a_blank_node_restricts_correctly() {
+        // RDF 1.2 admits a blank node as a graph name (`require_graph_name` in
+        // `crates/rdf-core/src/ir/validate.rs`) but never a literal or a quoted
+        // triple. A blank-node binding is a non-IRI `GroundTerm` the `Graph` arm
+        // cannot resolve to `NamedNodePattern::NamedNode`, so `?g` stays a
+        // variable and `eval_graph_var` still enumerates every named graph; the
+        // retained `Values` join is what restricts that enumeration to μ's own
+        // blank-node term, exactly as the `NamedNode` case restricts via
+        // resolution instead.
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        let g1 = b.intern_blank("g1", BlankScope::DEFAULT);
+        let g2 = b.intern_blank("g2", BlankScope::DEFAULT);
+        b.push_quad(s1, p, g1, None);
+        b.push_quad(s2, p, g2, None);
+        b.push_quad(x, q, y, Some(g1));
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?s WHERE { \
+                        ?s :p ?g \
+                        FILTER EXISTS { \
+                          GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                        } \
+                      }";
+        let rows = run_rows(&ds, query, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s1>".to_owned()]],
+            "a blank-node graph name must restrict exactly like an IRI one"
+        );
+    }
+
+    // ── Correlation invisible through nested-EXISTS triple positions ────────
+    //
+    // `expr_vars`'s `Exists` arm previously walked a nested EXISTS's inner
+    // pattern with an expression-positions-only walk, so a
+    // correlation reaching the nested inner SOLELY through a triple position
+    // (never an expression position of its own) was invisible to the
+    // enclosing `exists()` call's correlation test, which then wrongly took
+    // the evaluate-once-and-probe fast path.
+
+    fn f3_nested_exists_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let d = b.intern_iri("http://example.org/d");
+        let c = b.intern_iri("http://example.org/c");
+        let e = b.intern_iri("http://example.org/e");
+        let y1 = b.intern_iri("http://example.org/y1");
+        b.push_quad(d, p, c, None);
+        b.push_quad(e, q, y1, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_nested_inner_triple_position_correlates() {
+        let ds = f3_nested_exists_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?x WHERE { \
+                   ?x :p :c \
+                   FILTER EXISTS { FILTER NOT EXISTS { ?x :q ?y } } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/d>".to_owned()]],
+            ":d has no :q triple of its own, so the nested NOT EXISTS is true \
+             FOR :d and the outer EXISTS holds; the pre-fix classifier evaluated \
+             the nested NOT EXISTS with ?x free (any subject), found :e :q :y1, \
+             and wrongly made it false — hence the outer EXISTS empty — for \
+             every outer row alike"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree once the nested-EXISTS correlation is detected"
+        );
+    }
+
+    #[test]
+    fn not_exists_nested_inner_triple_position_correlates() {
+        // The polarity twin: `FILTER NOT EXISTS { FILTER NOT EXISTS { ?x :q ?y } }`
+        // is `EXISTS { ?x :q ?y }` restated through double negation — only a
+        // subject with an OWN `:q` triple may pass, which excludes :d (its only
+        // `:q` neighbor in the data is :e, a different subject). Pre-fix, the
+        // SAME unwidened classifier fires on this shape's `Not(Exists(..))`
+        // condition too (the classifier is evaluated once, for the OUTER
+        // `exists()` call, over the whole `Filter{expr: Not(Exists(inner)), ..}`
+        // node) — the inner NOT EXISTS collapses to one GLOBAL boolean (`false`,
+        // because :e :q :y1 exists somewhere) instead of one answer per outer
+        // `?x`, and doubly negating a constant `false` wrongly admits :d.
+        let ds = f3_nested_exists_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?x WHERE { \
+                   ?x :p :c \
+                   FILTER NOT EXISTS { FILTER NOT EXISTS { ?x :q ?y } } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            Vec::<Vec<String>>::new(),
+            ":d has no :q triple of its own, so the doubly-negated form must be \
+             empty — the pre-fix classifier wrongly admitted :d"
         );
     }
 }

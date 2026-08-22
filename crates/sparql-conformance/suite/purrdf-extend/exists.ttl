@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# SEP-0007 (defensible EXISTS) fixture for `:existsGraphVariableCorrelated`. This
+# file is loaded TWICE by the harness — once untagged (`qt:data`, into the default
+# graph) and once tagged with its own file IRI (`qt:graphData`), exactly like the
+# vendored `w3c-sparql11/exists/exists-graph-variable` case this fixture follows
+# byte-for-byte. `<>` self-references the file's own graph IRI, so `:s1 :p <>`
+# puts a pointer to this very named graph in the default graph, and `:a1 :q :b1`
+# becomes visible inside `GRAPH ?g { … }` once `?g` is bound to that pointer — the
+# definition-path Graph-substitution shape (`GraphPattern::Graph(Var, ·)` in
+# `crate::enf`'s `Replace` sites).
+@prefix : <https://example.org/exists#> .
+
+:s1 :p <> .
+:a1 :q :b1 .

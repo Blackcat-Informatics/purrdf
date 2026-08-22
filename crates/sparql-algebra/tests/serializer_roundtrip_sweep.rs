@@ -511,7 +511,20 @@ const RU_XFAIL: [(&str, &str); 0] = [];
 /// rejecting queries it used to accept (fix the regression — do NOT raise
 /// the ceiling to paper over it). Printed alongside the raw count either
 /// way; see the module doc's "Corpus items that do not even parse" section.
-const MAX_UNPARSEABLE_RQ: usize = 119;
+///
+/// Remeasured to 121 for two deliberately-illegal fixtures in the extension
+/// suite's own `mf:NegativeSyntaxTest` entries: a `BIND` and a `VALUES`
+/// clause, each rebinding a variable inside `FILTER EXISTS { }` that is
+/// already in scope on the row being filtered — a hard syntax error under
+/// the existence-scope rule, not a parser gap.
+///
+/// Remeasured again to 122 for one more `mf:NegativeSyntaxTest` fixture
+/// (`exists-scope-projection-violation.rq`): the SAME existence-scope rule,
+/// now enforced at a `SELECT`-list `(expr AS ?v)` projection target too
+/// (previously unenforced — the projection list parses before `WHERE`, so
+/// the collision check had nothing to compare against until the deferred
+/// post-`WHERE` resolution `Parser::pending_exists_scope_checks` adds).
+const MAX_UNPARSEABLE_RQ: usize = 122;
 
 /// The `.ru`-side counterpart of [`MAX_UNPARSEABLE_RQ`]: the measured count
 /// of genuinely negative-syntax `.ru` fixtures (W3C `NegativeUpdateSyntaxTest`
