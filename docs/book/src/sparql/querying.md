@@ -408,11 +408,16 @@ SELECT * WHERE {
 Two corners of the restriction disagree with Jena's own `SyntaxVarScope`
 check, each pinned by a named test rather than left to drift:
 
-- **Laxer.** `SELECT *` over a right-hand side whose only violation lives in a
-  `MINUS` right operand is ACCEPTED here; Jena rejects it. SPARQL §18.2.1 puts
-  `MINUS`-right variables out of scope, so `SELECT *`'s own projection list
-  never contains the colliding name in the first place — there is nothing
-  observable for the projection to carry across.
+- **Laxer.** A `BIND`/`VALUES`/aggregate introduction confined to a `MINUS`
+  right operand is ACCEPTED here at any depth — directly under the `LATERAL`
+  keyword or nested under a `SELECT *` sub-select — while Jena rejects it.
+  SPARQL §18.2.1 puts `MINUS`-right variables out of scope, and §18.5's
+  evaluation explains why: the right operand is used only to build the
+  compatibility test against the left operand's rows, then its bindings are
+  discarded, so nothing built on top of a `MINUS` — a `SELECT *` projection or
+  anything else — can ever observe a value that operand introduced. There is
+  nothing observable for the rule to reject. (`SELECT *` over such a
+  right-hand side is one route to this same shape, not a separate one.)
 - **Stricter.** A `SERVICE ?g { ... }` endpoint variable counts as left-hand
   scope here; Jena omits it. `SERVICE ?g { ... }` with a variable endpoint
   requires `?g` to already be bound in the incoming solution — the endpoint
@@ -442,8 +447,14 @@ with its `LATERAL { … }` text intact, so the endpoint's actual verdict — an
 answer from a `LATERAL`-capable endpoint (`LATERAL` is Jena's own extension,
 so a Jena-backed endpoint answers it), or an honest failure from one that does
 not implement it — surfaces the same way any other unsupported forwarded
-construct's rejection would. Variable-endpoint `SERVICE ?g` remains unsupported
-by the remote evaluator and does not dispatch a remote request.
+construct's rejection would. A variable-endpoint `SERVICE ?g` is refused only
+when nothing supplies `?g`'s binding — nothing in the incoming solution names
+an IRI for the remote evaluator to resolve. When an enclosing pattern binds
+`?g` — a preceding triple pattern in the same group, or a `LATERAL` left-hand
+side's per-row correlation — the endpoint resolves to that IRI before the
+remote call is made (the same per-row substitution described under "Points of
+disagreement with Jena" above) and the query dispatches normally, the same as
+a `SERVICE` with a fixed IRI.
 
 ## The `VERSION` declaration
 

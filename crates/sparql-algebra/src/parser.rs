@@ -3934,8 +3934,14 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// KEYWORD, in which injecting a left-hand binding into the right-hand side
 /// would be observable as a rebinding** — a fresh `BIND`/`VALUES`/aggregate
 /// target at the RHS's own top scope level trying to give a NEW value to a
-/// variable the LHS already gave one; the `SERVICE ?g { ... }` auto-wrap
-/// form (see "A property of the surface form" below) also builds a
+/// variable the LHS already gave one. A target confined to a `MINUS` right
+/// operand is, by definition, never such an observable rebinding: §18.5's
+/// evaluation uses the right operand only for the compatibility test and
+/// discards its bindings, so nothing downstream of a `MINUS` can ever see a
+/// value that operand introduced (see the `MINUS`-right paragraph in "Scope-
+/// level argument" below) — "exactly" holds with that definition, not as an
+/// exception carved out of it. The `SERVICE ?g { ... }` auto-wrap form (see
+/// "A property of the surface form" below) also builds a
 /// `GraphPattern::Lateral` node but is outside this theorem's domain — it is
 /// never walked, by construction, regardless of what its right-hand side
 /// does. The evaluator's half of the same theorem is that injection never
@@ -3961,6 +3967,16 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// only for the fresh variables its OWN aggregates and expression-valued
 /// `GROUP BY` conditions introduce.
 ///
+/// `MINUS` is the one binary node that is NOT scope-transparent on its right
+/// operand. §18.2.1 puts a `MINUS`-right-only variable out of scope
+/// entirely, and §18.5 explains why: evaluation uses the right operand
+/// solely to build the compatibility test against the left operand's rows,
+/// then discards its bindings — nothing the right operand introduces ever
+/// reaches a solution that survives `MINUS`. A `BIND`/`VALUES`/aggregate
+/// target confined to a `MINUS` right operand therefore cannot be an
+/// observable rebinding at ANY depth, so only the left operand is walked;
+/// the right operand is skipped outright rather than merely narrowed.
+///
 /// # `Group`'s synthetic targets: aggregate outputs and grouping-expression keys
 ///
 /// A `GROUP BY` query's aggregate output variables (e.g. `?n` in
@@ -3982,16 +3998,20 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 ///
 /// # Two points of disagreement with Jena
 ///
-/// * **Laxer.** `SELECT *` over a pattern whose only violation lives in a
-///   `MINUS` right operand is ACCEPTED here (Jena rejects it). §18.2.1 puts
-///   `MINUS`-right variables out of scope, so `SELECT *`'s own projection
-///   list — computed by [`visible_variables`], which already excludes
-///   them — never contains the colliding name; there is nothing for the
-///   projection to carry across, hence nothing observable to reject. Jena's
-///   walk instead passes the full unfiltered variable set down through a
-///   `SELECT *` expansion — declined here as a specification mismatch
-///   (§18.2.1 wins), not adopted. Pinned by
-///   `lateral_rhs_minus_right_bind_under_select_star_is_accepted`.
+/// * **Laxer.** An introduction confined to a `MINUS` right operand is
+///   ACCEPTED here at ANY depth (Jena rejects it) — not only under a
+///   `SELECT *` sub-select, which is merely one route to this same shape.
+///   §18.2.1 puts `MINUS`-right variables out of scope, and §18.5 explains
+///   why nothing built on top of `MINUS` can ever observe them (see the
+///   `MINUS`-right paragraph in "Scope-level argument" above), so there is
+///   never anything observable for the rule to reject, whether the
+///   `MINUS` sits directly under `LATERAL`'s keyword or beneath a `SELECT
+///   *` sub-select above it. Jena's walk instead passes the full
+///   unfiltered variable set through unconditionally — declined here as a
+///   specification mismatch (§18.2.1/§18.5 win), not adopted. Pinned by
+///   `lateral_rhs_minus_right_bind_is_accepted` (the bare form) and
+///   `lateral_rhs_minus_right_bind_under_select_star_is_accepted` (the
+///   `SELECT *`-wrapped form that first surfaced the shape).
 /// * **Stricter.** A `SERVICE ?g` endpoint variable counts as left-hand scope
 ///   here (ground documented on [`compute_lateral_left_scope`]: the variable
 ///   is required to already be bound before the endpoint is resolved, so it
@@ -4036,11 +4056,20 @@ fn find_lateral_rhs_scope_conflict<'a>(
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
             find_lateral_rhs_scope_conflict(lhs_scope, left)
                 .or_else(|| find_lateral_rhs_scope_conflict(lhs_scope, right))
         }
+        // `MINUS` is the one binary node that is NOT scope-transparent on its
+        // right operand: §18.2.1 puts a MINUS-right-only variable out of
+        // scope, and §18.5's evaluation only ever uses the right side for the
+        // compatibility test — its bindings are discarded, never carried
+        // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
+        // MINUS right operand can never be observed as a rebinding, at ANY
+        // depth, not only under a `SELECT *` sub-select (which was one route
+        // to this same shape, not a separate rule). Only the left operand is
+        // walked.
+        GraphPattern::Minus { left, .. } => find_lateral_rhs_scope_conflict(lhs_scope, left),
         // Unary wrappers are transparent to scope; any expression operand is
         // never visited.
         GraphPattern::Filter { inner, .. }
@@ -6547,6 +6576,47 @@ mod tests {
         );
         SparqlParser::new().parse_query(&q).expect(
             "a MINUS-right BIND under a SELECT * sub-select must be accepted (Jena diverges here)",
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_minus_right_bind_is_accepted() {
+        // The bare form — a `MINUS` written directly under `LATERAL`'s
+        // keyword, no `SELECT *` sub-select in between. Same ground as
+        // `lateral_rhs_minus_right_bind_under_select_star_is_accepted`: the
+        // `MINUS` right operand's `BIND(1 AS ?o)` is discarded by §18.5's
+        // evaluation before it could ever be observed as a rebinding of the
+        // left-hand `?o`, so the `Minus` arm skips the right operand
+        // outright rather than needing a `Project` boundary to narrow it
+        // away. This generalizes the `SELECT *` case above rather than
+        // adding a second rule: the `SELECT *` form was one route to this
+        // same shape, not a separate one.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?a purrdf:p ?b MINUS {{ ?a purrdf:p ?b BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new().parse_query(&q).expect(
+            "a bare MINUS-right BIND directly under LATERAL must be accepted (Jena diverges here)",
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_minus_left_bind_is_rejected() {
+        // Control: a collision in the MINUS LEFT operand is an ordinary
+        // observable rebinding — the left operand's own bindings survive
+        // `MINUS` (only the right operand is used-then-discarded by §18.5's
+        // compatibility test) — so it must still be rejected. Confirms the
+        // `Minus` arm's narrowing to skip the right operand did not
+        // accidentally stop walking the left operand too.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ BIND(1 AS ?o) MINUS {{ ?a purrdf:p ?b }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a MINUS-left collision must still be rejected");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
         );
     }
 
