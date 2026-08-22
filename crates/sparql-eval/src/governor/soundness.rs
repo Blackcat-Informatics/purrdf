@@ -1724,6 +1724,185 @@ fn admissible_rec(
     }
 }
 
+/// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
+/// `(expr AS ?v)` target or a `VALUES` column — the same two shapes, and the
+/// same message wording, as `purrdf_sparql_algebra`'s parser-side
+/// `ScopeIntro` (that type is private to the parser crate, so this is a
+/// separate, deliberately identical, enum rather than a shared one — see
+/// [`exists_row_collision`]'s doc for why the eval crate needs its own copy
+/// of the same theorem).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowCollisionIntro {
+    /// A `BIND(expr AS ?v)` target, a sub-`SELECT`'s `(expr AS ?v)`
+    /// projection target, a `GROUP BY (expr AS ?v)` condition, or a `GROUP
+    /// BY` aggregate's output variable.
+    Bind,
+    /// A `VALUES` block's column variable.
+    Values,
+}
+
+impl RowCollisionIntro {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Bind => "BIND target",
+            Self::Values => "VALUES variable",
+        }
+    }
+}
+
+/// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
+/// `(expr AS ?v)` projection target, a `GROUP BY` aggregate's output
+/// variable, or `VALUES`) that collides with a variable in `row_scope` — the
+/// CALLER'S ACTUAL current-row variables for one specific μ (`crate::expr::exists`'s
+/// own `outer_bound`: the schema columns THIS row concretely binds), never
+/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars`, a
+/// STATIC, tree-level OVER-APPROXIMATION computed once for the whole pattern
+/// with no per-row knowledge — see that function's "Self-contained" doc).
+/// The two must not be conflated: `current_row_vars` is sized to answer "is
+/// the memoized probe EVER valid for this shape", which must hold for every
+/// possible outer schema/row a correlated `EXISTS` could face, so it
+/// deliberately over-includes; using it here would hard-fail rows whose
+/// OWN binding of the colliding-by-NAME variable is simply absent (a
+/// genuinely fresh target this engine's `current_row_vars` plumbing cannot
+/// yet tell apart from a real collision — a later task widens that
+/// precision). `row_scope` carries no such ambiguity: it is read directly off
+/// `row`/`schema` for the exact μ being evaluated.
+///
+/// # Why this exists (SEP-0007 Part 3, enforced at evaluation admission too)
+///
+/// `purrdf_sparql_algebra`'s parser refuses this exact shape at parse time
+/// (`find_scope_conflict`, private to that crate) — a `BIND`/`VALUES`
+/// introduction inside `EXISTS`/`NOT EXISTS` that rebinds a variable already
+/// bound on the row being filtered has NO DEFINED ANSWER under the
+/// substitution theorem `crate::expr::exists`'s doc states (`crate::enf`'s
+/// module doc): `inject`/substitution exposes the outer row's bindings to the
+/// inner pattern as ALREADY bound, and a construct that then tries to give
+/// one of them a NEW value is exactly the "observable rebinding" the theorem
+/// excludes. But algebra reaching this evaluator WITHOUT going through that
+/// parser — a SHACL-AF pre-binding, an entailment-chase rewrite, or any other
+/// caller of the public algebra API — never had that check run over it, and
+/// neither `exists()` strategy checks for it on its own: the memoized probe
+/// path's `probe_admissible` gate refuses the shape (see [`admissible_rec`]'s
+/// `Values`/`Extend` arms), but that refusal only steers `exists()` to the
+/// OTHER (per-row definition) strategy — which then evaluates the collision
+/// unchecked and answers based on whatever the substituted rebinding happens
+/// to produce, a FABRICATED answer neither this engine's `EXISTS` definition
+/// nor SPARQL's own permits. [`crate::expr::exists`] calls this function
+/// FIRST, before deciding between the two strategies, so a genuine collision
+/// hard-errors ([`EvalError::exists_row_collision`]) instead of silently
+/// reaching either one.
+///
+/// # Same scope-transparency rules as the parser's walk
+///
+/// Deliberately the SAME shape as `find_scope_conflict` (mirrored rather than
+/// shared, since that function is private to the parser crate): every binary
+/// node transparent to scope (`Join`/`Union`/`Lateral`/`LeftJoin`) recurses
+/// both operands at the SAME scope level; `Minus`'s right operand is skipped
+/// entirely (§18.2.1 puts it out of scope: its bindings never survive
+/// `Minus`, so nothing it introduces can ever be an observable rebinding);
+/// `Project` narrows `row_scope` to the variables it actually carries out and
+/// stops once nothing survives the narrowing; `Group` is checked only for its
+/// own aggregate outputs and lowered grouping-extend chain (never the pattern
+/// being grouped, which no longer determines the group's own output row);
+/// every other unary wrapper (`Filter`/`Graph`/`Service`/`OrderBy`/
+/// `Distinct`/`Reduced`/`Slice`) is transparent. Never descends into an
+/// `Expression` — a nested `EXISTS` inside one is its own, independently
+/// evaluated pattern, checked at its OWN call to `crate::expr::exists`
+/// (hence its own, independent call to this function), not by this walk.
+pub(crate) fn exists_row_collision<'a>(
+    pattern: &'a GraphPattern,
+    row_scope: &DetHashSet<Variable>,
+) -> Option<(&'a Variable, RowCollisionIntro)> {
+    match pattern {
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => None,
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            exists_row_collision(left, row_scope).or_else(|| exists_row_collision(right, row_scope))
+        }
+        GraphPattern::Minus { left, .. } => exists_row_collision(left, row_scope),
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => exists_row_collision(inner, row_scope),
+        GraphPattern::Extend {
+            inner, variable, ..
+        } => {
+            if row_scope.contains(variable) {
+                Some((variable, RowCollisionIntro::Bind))
+            } else {
+                exists_row_collision(inner, row_scope)
+            }
+        }
+        GraphPattern::Values { variables, .. } => variables
+            .iter()
+            .find(|v| row_scope.contains(v))
+            .map(|v| (v, RowCollisionIntro::Values)),
+        GraphPattern::Project { inner, variables } => {
+            let narrowed: DetHashSet<Variable> = row_scope
+                .iter()
+                .filter(|v| variables.contains(v))
+                .cloned()
+                .collect();
+            if narrowed.is_empty() {
+                None
+            } else {
+                exists_row_collision(inner, &narrowed)
+            }
+        }
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
+            for (v, _) in aggregates {
+                if row_scope.contains(v) {
+                    return Some((v, RowCollisionIntro::Bind));
+                }
+            }
+            find_group_extend_row_collision(inner, variables, row_scope)
+        }
+    }
+}
+
+/// [`exists_row_collision`]'s `Group` arm: walk the chain of `Extend` nodes
+/// the parser lowers each expression-valued `GROUP BY (expr AS ?v)` condition
+/// to (directly beneath `Group` — mirrors `find_group_extend_conflict`,
+/// private to the parser crate). Stops the instant a node is not one of these
+/// lowered `Extend`s: `variables` is `Group`'s full grouping-key list, so an
+/// `Extend` whose target is not in it is the top of the pattern actually
+/// being grouped, which this walker never descends into.
+fn find_group_extend_row_collision<'a>(
+    inner: &'a GraphPattern,
+    variables: &[Variable],
+    row_scope: &DetHashSet<Variable>,
+) -> Option<(&'a Variable, RowCollisionIntro)> {
+    let GraphPattern::Extend {
+        inner: next,
+        variable,
+        ..
+    } = inner
+    else {
+        return None;
+    };
+    if !variables.contains(variable) {
+        return None;
+    }
+    find_group_extend_row_collision(next, variables, row_scope).or_else(|| {
+        if row_scope.contains(variable) {
+            Some((variable, RowCollisionIntro::Bind))
+        } else {
+            None
+        }
+    })
+}
+
 /// Whether a `Filter` condition or `Extend`/`BIND` expression may run against the
 /// evaluate-once-unconstrained inner and still agree with per-row substitution:
 /// every current-row variable it reads must be certainly bound by the inner

@@ -1572,9 +1572,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
     /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
-    ///   `xsd_parse_cache`, `constructed`, `in_substituted_exists`): per-worker
-    ///   mutable state that must NOT be shared, so each worker mints its own
-    ///   constructed-quad buffer without contending on a lock. The caller
+    ///   `xsd_parse_cache`, `constructed`): per-worker mutable state that must
+    ///   NOT be shared, so each worker mints its own constructed-quad buffer
+    ///   without contending on a lock. The caller
     ///   classifies each worker row with [`crate::parallel::minted_row`] into a
     ///   [`crate::parallel::MintedRow`] (`Direct` — no post-fork mint, passed
     ///   through untouched — or `Portable`) and folds it back into the parent
@@ -1627,7 +1627,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
-            in_substituted_exists: false,
+            // COPIED (a `bool`, not a shared/locked structure — copying it needs no
+            // more synchronization than resetting it would), and NOT reset to
+            // `false`: a `FILTER`/`BIND` worker forked from INSIDE a per-row
+            // substituted `EXISTS`/`LATERAL` window (`crate::binop::eval_correlated`
+            // via `may_fork_row_loop`, e.g. a doubly-nested correlated `EXISTS`
+            // whose OUTER definition-path substitution wraps a `FILTER` the inner
+            // materializes many rows for) is STILL evaluating that same window's
+            // synthetic, per-row heap temporaries — resetting to `false` here would
+            // let the worker treat those addresses as stable plan identities again,
+            // reopening exactly the ABA cache-aliasing hazard this flag exists to
+            // close (`Self::in_substituted_exists`'s own doc), now merely scoped to
+            // the parallel path instead of eliminated. Same reasoning as
+            // `correlated_node_maps`, immediately below, which already inherits
+            // rather than resets for the identical reason.
+            in_substituted_exists: self.in_substituted_exists,
             // SHARED (cheap `Arc` clones), not fresh: a worker evaluating part of a
             // correlated substituted tree must resolve the SAME ledger identities its
             // parent would — dropping the stack here would silently reproduce the false-zero

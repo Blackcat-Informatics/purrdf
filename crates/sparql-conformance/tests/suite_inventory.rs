@@ -165,8 +165,8 @@ fn purrdf_extend_case_count_and_kinds() {
 
     assert_eq!(
         cases.len(),
-        55,
-        "purrdf-extend/manifest.ttl must load exactly 55 cases (its mf:entries list \
+        56,
+        "purrdf-extend/manifest.ttl must load exactly 56 cases (its mf:entries list \
          count); got {} — a case silently stopped loading",
         cases.len()
     );
@@ -200,9 +200,9 @@ fn purrdf_extend_case_count_and_kinds() {
          expected 2, got {positive_syntax}"
     );
     assert_eq!(
-        negative_syntax, 5,
+        negative_syntax, 6,
         "purrdf-extend's mf:NegativeSyntaxTest count drifted (bare-IRI action) — \
-         expected 5, got {negative_syntax}"
+         expected 6, got {negative_syntax}"
     );
     assert_eq!(
         query_eval + positive_syntax + negative_syntax + unmodeled,

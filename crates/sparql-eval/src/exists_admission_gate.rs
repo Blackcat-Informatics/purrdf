@@ -809,17 +809,59 @@ mod tests {
         );
     }
 
+    /// Assert that EVERY row of `exists_results(ds, outer, inner, None)` is
+    /// `Err(EvalError::ExistsScopeCollision { variable, intro })` matching
+    /// `expected_variable`/`expected_intro` — and that forcing EITHER strategy
+    /// (`ForcedExistsStrategy::Probe`/`Definition`) still hard-errors the same
+    /// way, since the collision check (`crate::expr::exists`'s call to
+    /// `crate::governor::soundness::exists_row_collision`) runs BEFORE the
+    /// probe-vs-definition decision — this is the shared body of
+    /// `exists_hard_errors_on_values_collision_regardless_of_strategy` and
+    /// `exists_hard_errors_on_extend_collision_regardless_of_strategy` (the
+    /// SEP-0007 Part 3 twin of the parser-side collision tests
+    /// (`purrdf_sparql_algebra::parser::tests`), at the eval boundary that
+    /// runs when no parser ever saw this algebra).
+    fn assert_hard_errors_on_every_strategy(
+        ds: &Arc<RdfDataset>,
+        outer: &GraphPattern,
+        inner: &GraphPattern,
+        expected_variable: &str,
+        expected_intro: &str,
+    ) {
+        let strategies: [Option<ForcedExistsStrategy>; 3] = [
+            None,
+            Some(ForcedExistsStrategy::Probe),
+            Some(ForcedExistsStrategy::Definition),
+        ];
+        for strategy in strategies {
+            let _guard = strategy.map(force_exists_strategy_for_test);
+            for result in exists_results(ds, outer, inner, None) {
+                let err = result.expect_err(
+                    "a BIND/VALUES collision with the outer row must hard-error under every \
+                     strategy (natural, forced-probe, forced-definition)",
+                );
+                match err {
+                    EvalError::ExistsScopeCollision { variable, intro } => {
+                        assert_eq!(variable, expected_variable, "unexpected colliding variable");
+                        assert_eq!(intro, expected_intro, "unexpected collision-intro wording");
+                    }
+                    other => panic!("expected EvalError::ExistsScopeCollision, got {other:?}"),
+                }
+            }
+        }
+    }
+
     #[test]
-    fn probe_would_diverge_on_values_collision() {
+    fn exists_hard_errors_on_values_collision_regardless_of_strategy() {
         // `EXISTS { VALUES ?s { <cA> } }` — `?s` is the SAME variable name the outer row
-        // binds. `crate::expr::substitute_pattern_impl`'s `Values` arm never rewrites a
-        // `Values` node at all (it is cloned verbatim — see that walk's doc, "Values
-        // Insertion" — VALUES is not itself a Values-Insertion SITE): the definition
-        // path therefore evaluates `VALUES ?s { <cA> }` UNCHANGED, ignoring the outer
-        // binding entirely, so the correct answer is CONSTANT `TRUE` for every outer
-        // row. The forced probe, though, treats `?s` as an ordinary shared column and
-        // indexes the (also unconstrained-but-identical) single row keyed on `<cA>` —
-        // so it only matches an outer row whose OWN `?s` happens to equal `<cA>`.
+        // binds. Before this collision check existed, the (un-forced) definition path
+        // used to evaluate this UNCHANGED — `crate::expr::substitute_pattern_impl`'s `Values`
+        // arm never rewrites a `Values` node at all (cloned verbatim: VALUES is not
+        // itself a Values-Insertion SITE) — fabricating a CONSTANT `true` answer for
+        // every outer row regardless of its own value, while the forced probe
+        // fabricated a DIFFERENT, per-row-dependent wrong answer. Now
+        // `crate::governor::soundness::exists_row_collision` catches the collision
+        // before either strategy runs, so both give way to a single hard error.
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}tag"));
         let anything = b.intern_literal(RdfLiteral::simple("x"));
@@ -836,42 +878,21 @@ mod tests {
         };
 
         assert_classified_inadmissible(&inner);
-
-        let correct = natural_answers(&ds, &outer, &inner);
-        let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
-
-        assert_eq!(
-            correct,
-            vec![true, true],
-            "correct per-row answer: TRUE for every outer row — the definition path never \
-             rewrites a colliding `VALUES` node, so it always sees the same `[<cA>]` \
-             regardless of outer value — outer rows are `[cA, other]` in `?s :tag ?w`'s \
-             solution order"
-        );
-        assert_eq!(
-            probed,
-            vec![true, false],
-            "the forced probe wrongly answers FALSE for `other`: it treats `?s` as an \
-             ordinary shared column and only matches the outer row whose OWN `?s` equals \
-             the VALUES literal `<cA>`"
-        );
-        assert_ne!(
-            correct, probed,
-            "the forced probe must diverge from the correct per-value answer"
-        );
+        assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "VALUES variable");
     }
 
     #[test]
-    fn probe_would_diverge_on_extend_collision() {
+    fn exists_hard_errors_on_extend_collision_regardless_of_strategy() {
         // `EXISTS { BIND("fixed" AS ?s) }` — `?s` (the `BIND` TARGET) is the SAME
-        // variable name the outer row binds. `crate::expr::substitute_pattern_impl`'s
-        // `Extend` arm never touches `variable` (only `expression`/`inner` are
-        // rewritten) — the substituted tree still BINDS `?s` fresh, to `"fixed"`,
-        // REGARDLESS of what the outer row bound — so the correct answer is CONSTANT
-        // `TRUE` for every outer row (a `BIND` always yields a row). The forced probe
-        // treats `?s` as an ordinary shared column over the (also unconstrained but
-        // identical) single row, and only matches an outer row whose OWN `?s` happens
-        // to equal `"fixed"`.
+        // variable name the outer row binds. Before this collision check existed, the
+        // (un-forced) definition path used to evaluate this UNCHANGED —
+        // `crate::expr::substitute_pattern_impl`'s `Extend` arm never touches
+        // `variable` (only `expression`/`inner` are rewritten) — fabricating a
+        // CONSTANT `true` answer for every outer row (a `BIND` always yields a row),
+        // while the forced probe fabricated a DIFFERENT, per-row-dependent wrong
+        // answer. Now `crate::governor::soundness::exists_row_collision` catches the
+        // collision before either strategy runs, so both give way to a single hard
+        // error.
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}tag"));
         let holder_a = b.intern_iri(&format!("{EX}holderA"));
@@ -895,27 +916,218 @@ mod tests {
         };
 
         assert_classified_inadmissible(&inner);
+        assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "BIND target");
+    }
 
-        let correct = natural_answers(&ds, &outer, &inner);
-        let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
+    /// Build `SELECT ?x (EXISTS { inner } AS ?z) WHERE { ?x :tag ?w }` as raw
+    /// [`purrdf_sparql_algebra`] algebra — no `SparqlParser` involved anywhere —
+    /// wrap it in a [`PreparedQuery`] via [`PreparedQuery::rewritten`] (the exact
+    /// mechanism a rewriting caller — the entailment lane's chase rewrite, a
+    /// caller-restricted plan — uses to hand hand-built algebra to a governed
+    /// entry), and run it through [`NativeSparqlEngine::query_prepared`], the
+    /// PUBLIC evaluation entry point. Panics if the outer `?x :tag ?w` BGP itself
+    /// fails to build (it never should — it is a plain triple pattern).
+    fn run_hand_built_select(
+        ds: &Arc<RdfDataset>,
+        exists_inner: GraphPattern,
+    ) -> Result<purrdf_core::SparqlResult, purrdf_core::RdfDiagnostic> {
+        let outer_pattern = GraphPattern::Extend {
+            inner: bx(bgp1(tvar("x"), &format!("{EX}tag"), tvar("w"))),
+            variable: var("z"),
+            expression: Expression::Exists(bx(exists_inner)),
+        };
+        let query = purrdf_sparql_algebra::Query::Select {
+            pattern: GraphPattern::Project {
+                inner: bx(outer_pattern),
+                variables: vec![var("x"), var("z")],
+            },
+            dataset: purrdf_sparql_algebra::QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        };
+        let prepared = crate::PreparedQuery::rewritten(query, crate::QueryOptions::EMPTY)
+            .expect("no property-function/aggregate registry to fingerprint");
+        let engine = crate::NativeSparqlEngine::new();
+        engine.query_prepared(ds, &prepared, &[], crate::QueryOptions::EMPTY)
+    }
 
-        assert_eq!(
-            correct,
-            vec![true, true],
-            "correct per-row answer: TRUE for every outer row — the definition path's \
-             `BIND` always overwrites `?s` fresh, regardless of the outer value — outer \
-             rows are `[\"fixed\", \"other\"]` in `?s :tag ?w`'s solution order"
+    #[test]
+    fn exists_collision_shape_hard_errors_without_the_parser() {
+        // The `EXISTS`-side counterpart of the parser-side
+        // `select_expression_exists_scope_collision_is_rejected`
+        // (`purrdf_sparql_algebra::parser::tests`), but reached with NO parser at
+        // all — this is exactly what a SHACL-AF pre-binding, an entailment-chase
+        // rewrite, or any other direct caller of this crate's public algebra API
+        // can build. `EXISTS { BIND(:fixed AS ?x) }` collides with the outer row's
+        // OWN `?x` — before this collision check existed, this construct silently
+        // reached the per-row definition path and answered a fabricated `true`
+        // for every row (see `exists_hard_errors_on_extend_collision_regardless_of_strategy`'s
+        // doc). Through the public engine it must now hard-error instead.
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        let holder = b.intern_iri(&format!("{EX}npHolder"));
+        b.push_quad(holder, tag, anything, None);
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Extend {
+            inner: bx(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: var("x"),
+            expression: Expression::NamedNode(nn(&format!("{EX}fixed"))),
+        };
+
+        let diagnostic =
+            run_hand_built_select(&ds, inner).expect_err("a BIND-target/outer-row collision inside EXISTS must hard-error through the public engine, not silently answer");
+        assert!(
+            diagnostic.message.contains("BIND target ?x inside EXISTS")
+                && diagnostic
+                    .message
+                    .contains("already in scope on the row being filtered"),
+            "unexpected diagnostic message: {}",
+            diagnostic.message
         );
+    }
+
+    #[test]
+    fn exists_collision_shape_hard_errors_without_the_parser_values_twin() {
+        // The `VALUES`-column twin of `exists_collision_shape_hard_errors_without_the_parser`:
+        // `EXISTS { VALUES ?x { :fixed } }` collides with the outer row's own `?x`
+        // the same way a `BIND` target does.
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        let holder = b.intern_iri(&format!("{EX}npHolder"));
+        b.push_quad(holder, tag, anything, None);
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Values {
+            variables: vec![var("x")],
+            bindings: vec![vec![Some(GroundTerm::NamedNode(nn(&format!("{EX}fixed"))))]],
+        };
+
+        let diagnostic =
+            run_hand_built_select(&ds, inner).expect_err("a VALUES-column/outer-row collision inside EXISTS must hard-error through the public engine, not silently answer");
+        assert!(
+            diagnostic
+                .message
+                .contains("VALUES variable ?x inside EXISTS")
+                && diagnostic
+                    .message
+                    .contains("already in scope on the row being filtered"),
+            "unexpected diagnostic message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn exists_collision_shape_hard_errors_without_the_parser_fresh_target_control() {
+        // The control: `EXISTS { BIND(:fixed AS ?fresh) }` — `?fresh` is NOT the
+        // outer row's `?x`, so this is a genuinely fresh target, not a collision.
+        // Wiring the gap-R2 hard-fail must not touch this shape at all — it still
+        // evaluates through the SAME public engine entry point used by the two
+        // collision tests above.
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        let holder = b.intern_iri(&format!("{EX}npHolder"));
+        b.push_quad(holder, tag, anything, None);
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Extend {
+            inner: bx(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: var("fresh"),
+            expression: Expression::NamedNode(nn(&format!("{EX}fixed"))),
+        };
+
+        let result = run_hand_built_select(&ds, inner)
+            .expect("a genuinely fresh BIND target inside EXISTS must still evaluate");
+        let purrdf_core::SparqlResult::Solutions { rows, .. } = result else {
+            panic!("a SELECT query must materialize as SparqlResult::Solutions, got {result:?}");
+        };
         assert_eq!(
-            probed,
+            rows.len(),
+            1,
+            "one outer row (`?x = :npHolder`), EXISTS true (BIND always yields a row)"
+        );
+    }
+
+    #[test]
+    fn exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision() {
+        // The W3C `exists04`/`exists05` shape (`suite/w3c-sparql11/exists/exists04.rq`,
+        // `exists05.rq`): `EXISTS { ?s ?p :o1 FILTER EXISTS { ?s ?p :o2 } }` — an
+        // off-spine, INADMISSIBLE-for-the-probe `Filter{expr:Exists(nested), inner}`,
+        // correlated on BOTH `?s` and `?p`, so the OUTER `exists()` call takes the
+        // per-row DEFINITION path (`crate::binop::eval_correlated`). That path's own
+        // "Values Insertion" substitution rewrites the correlated leaf `?s ?p :o1` —
+        // and, since `substitute_expr`'s `Exists` arm recurses into the nested
+        // `EXISTS`'s own inner too, the nested leaf `?s ?p :o2` as well — into
+        // `Join(leaf, Values{[s,p]: [[row's values]]})`: a SYNTHETIC `Values` node
+        // that is the substitution mechanism's OWN injection vehicle, never a
+        // user-written rebinding.
+        //
+        // `eval_filter` forks a worker per chunk of the OUTER Filter's candidate rows
+        // via `EvalCtx::fork_for_worker` (`ctx.may_fork_row_loop`), and the NESTED
+        // `EXISTS`'s own `exists()` call runs from INSIDE that forked worker while
+        // still logically "inside" the outer substitution window. Before
+        // `EvalCtx::fork_for_worker` was fixed to inherit `in_substituted_exists`
+        // (it previously hardcoded `false` for every forked worker), the
+        // collision check (`crate::governor::soundness::exists_row_collision`,
+        // gated on `!ctx.in_substituted_exists`) misread the worker's view of that
+        // synthetic `Values` as a genuine SEP-0007 Part 3 violation and hard-errored
+        // on legitimate, W3C-vendored SPARQL — this pins the fix.
+        let mut b = RdfDatasetBuilder::new();
+        let p = nn(&format!("{EX}dblP"));
+        let o = nn(&format!("{EX}dblO"));
+        let o1 = nn(&format!("{EX}dblO1"));
+        let o2 = nn(&format!("{EX}dblO2"));
+        let p_id = b.intern_iri(p.as_str());
+        let o_id = b.intern_iri(o.as_str());
+        let o1_id = b.intern_iri(o1.as_str());
+        let o2_id = b.intern_iri(o2.as_str());
+        let s1 = b.intern_iri(&format!("{EX}dblS1"));
+        let s2 = b.intern_iri(&format!("{EX}dblS2"));
+        // `s1` has BOTH `:dblO1` and `:dblO2` — the nested EXISTS is true, so the
+        // outer FILTER keeps `?s ?p :dblO1`, and the outer EXISTS is true.
+        b.push_quad(s1, p_id, o_id, None);
+        b.push_quad(s1, p_id, o1_id, None);
+        b.push_quad(s1, p_id, o2_id, None);
+        // `s2` has `:dblO1` but NOT `:dblO2` — the nested EXISTS is false, the outer
+        // FILTER drops every candidate, and the outer EXISTS is false.
+        b.push_quad(s2, p_id, o_id, None);
+        b.push_quad(s2, p_id, o1_id, None);
+        let ds = b.freeze().expect("freeze");
+
+        let outer = bgp(vec![TriplePattern {
+            subject: tvar("s"),
+            predicate: pred_var("p"),
+            object: TermPattern::NamedNode(o.clone()),
+        }]);
+        let nested = bgp(vec![TriplePattern {
+            subject: tvar("s"),
+            predicate: pred_var("p"),
+            object: TermPattern::NamedNode(o2.clone()),
+        }]);
+        let inner = GraphPattern::Filter {
+            expr: Expression::Exists(bx(nested)),
+            inner: bx(bgp(vec![TriplePattern {
+                subject: tvar("s"),
+                predicate: pred_var("p"),
+                object: TermPattern::NamedNode(o1.clone()),
+            }])),
+        };
+
+        assert_classified_inadmissible(&inner);
+
+        let answers = natural_answers(&ds, &outer, &inner);
+        assert_eq!(
+            answers,
             vec![true, false],
-            "the forced probe wrongly answers FALSE for `\"other\"`: it treats `?s` as an \
-             ordinary shared column and only matches the outer row whose OWN `?s` equals \
-             the BIND target `\"fixed\"`"
-        );
-        assert_ne!(
-            correct, probed,
-            "the forced probe must diverge from the correct per-value answer"
+            "s1 (both :dblO1 and :dblO2) is true; s2 (only :dblO1) is false — outer \
+             rows are `[s1, s2]` in `?s ?p :dblO`'s solution order"
         );
     }
 

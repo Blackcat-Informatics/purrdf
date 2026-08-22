@@ -1151,6 +1151,48 @@ fn exists<D: DatasetView + Sync>(
         })
         .collect();
 
+    // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
+    // `VALUES` column inside this `EXISTS` body that collides with a variable
+    // THIS row actually binds has no defined answer under either evaluation
+    // strategy below — see `crate::governor::soundness::exists_row_collision`'s
+    // doc. Checked against `normalized` (the SAME pattern either strategy
+    // evaluates) and `outer_bound` (this row's own actual bindings, never
+    // `probe_admissible`'s tree-level over-approximation), BEFORE the
+    // probe-vs-definition decision, so a genuine collision hard-errors
+    // regardless of which strategy would otherwise have run — the parser
+    // catches this exact shape at parse time (`find_scope_conflict`); this is
+    // the same check for algebra that reached this evaluator without going
+    // through it.
+    //
+    // Skipped entirely while `ctx.in_substituted_exists` is set: `pattern`
+    // (hence `normalized`) is then NOT the caller's own algebra but a per-row
+    // heap temporary [`crate::binop::eval_correlated`] just built by
+    // "Values-Insertion" substitution — its OWN injection mechanism plants a
+    // synthetic `Values{outer_var: [[μ's value]]}` at exactly the leaf a
+    // correlated variable occurs in, which is by construction never a
+    // rebinding (it is a JOIN restricting to μ's own value, not a fresh
+    // binding — the same distinction `probe_admissible`'s "Self-contained"
+    // doc draws for its own tree-level analysis, which never sees a
+    // substituted copy either). This window's own inner (a nested `EXISTS`
+    // reached while evaluating that substituted tree) was already checked
+    // — soundly, against a real `outer_bound` — on its OWN un-substituted
+    // entry to this function, before any substitution ran; skipping here
+    // avoids re-flagging the substitution machinery's own synthetic `Values`
+    // as if it were that same collision. Pinned by
+    // `exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision`
+    // in `crate::exists_admission_gate` (the W3C `exists04`/`exists05`
+    // shape — nested `FILTER EXISTS`/`FILTER NOT EXISTS`, correlated only
+    // through the DEFINITION path).
+    if !ctx.in_substituted_exists
+        && let Some((var, intro)) =
+            crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
+    {
+        return Err(EvalError::exists_scope_collision(
+            var.as_str().to_owned(),
+            intro.as_str(),
+        ));
+    }
+
     let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
 
     if exists_use_probe(correlated, normalized, analysis) {

@@ -128,7 +128,12 @@
 #     `:existsScopeValuesViolation` pin SEP-0007 Part 3's in-scope-set
 #     restriction: a `BIND`/`VALUES` target inside `EXISTS` that collides with a
 #     variable already bound on the row being filtered is a hard parse-time
-#     error, not a silent rebinding.
+#     error, not a silent rebinding. `:existsScopeProjectionViolation` pins the
+#     SAME restriction at a position that previously went unenforced: a
+#     `SELECT`-list `(expr AS ?v)` projection target's own `EXISTS` — parsed
+#     BEFORE `WHERE`, so the parser must defer the check to a post-`WHERE`
+#     resolution point rather than run it on the spot, the way it does for
+#     every OTHER `EXISTS` site.
 #
 
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
@@ -201,6 +206,7 @@
         :existsMinusDomain
         :existsScopeBindViolation
         :existsScopeValuesViolation
+        :existsScopeProjectionViolation
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -494,3 +500,7 @@
 :existsScopeValuesViolation a mf:NegativeSyntaxTest ;
     mf:name "SEP-0007 Part 3: VALUES ?x { 1 } inside EXISTS is a hard syntax error when ?x is already in scope on the row being filtered" ;
     mf:action <exists-scope-values-violation.rq> .
+
+:existsScopeProjectionViolation a mf:NegativeSyntaxTest ;
+    mf:name "SEP-0007 Part 3, gap R2: EXISTS { BIND(:e AS ?x) } inside a SELECT-list (expr AS ?v) projection target is a hard syntax error when ?x is already in scope on the row being filtered, even though the projection list is parsed before WHERE" ;
+    mf:action <exists-scope-projection-violation.rq> .

@@ -284,6 +284,10 @@ impl SparqlParser {
             group_pattern_depth: 0,
             pattern_node_budget: 0,
             exists_scope_stack: Vec::new(),
+            projection_scope_pending: false,
+            in_aggregate_argument: false,
+            projection_seen_targets: Vec::new(),
+            pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
             options,
@@ -312,6 +316,49 @@ struct Parser<'a, 'o> {
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
     /// for how frames are opened.
     exists_scope_stack: Vec<VarScope>,
+    /// True while parsing a `SELECT`'s own projection list — its `(expr AS
+    /// ?v)` targets and any aggregate arguments lifted out of them — i.e. the
+    /// window BEFORE `WHERE` is even read, where [`Parser::exists_scope`] is
+    /// necessarily still empty (see [`Parser::parse_exists_body`]'s doc for
+    /// why an immediate check there cannot be correct). An `EXISTS`/`NOT
+    /// EXISTS` reached in this window is deferred into
+    /// `pending_exists_scope_checks` instead of checked on the spot.
+    /// Save/restored around every [`Parser::parse_select`] call, since a
+    /// sub-`SELECT` reached mid-projection-list (via `EXISTS { SELECT ... }`)
+    /// opens and fully resolves its OWN window without disturbing the outer
+    /// one paused around it.
+    projection_scope_pending: bool,
+    /// True while parsing an aggregate function's own `(...)` argument
+    /// expression ([`Parser::parse_aggregate`]/[`Parser::parse_agg_call`]) —
+    /// selects which basis a deferred `EXISTS` check recorded under
+    /// `projection_scope_pending` resolves against (see
+    /// [`ExistsScopeBasis`]). Aggregates cannot themselves nest, but the
+    /// `EXISTS` body an aggregate's argument contains may embed a
+    /// sub-`SELECT` with its own, unrelated aggregates, so this is
+    /// save/restored around `parse_select` the same as
+    /// `projection_scope_pending`, not merely set-and-cleared around each
+    /// aggregate call.
+    in_aggregate_argument: bool,
+    /// The `(expr AS ?v)` targets already committed by EARLIER entries in the
+    /// SAME projection list, at the moment each deferred `EXISTS` check
+    /// (`projection_scope_pending`, `ExistsScopeBasis::Projection`) is
+    /// recorded. The parser lowers a `SELECT` list to a CHAIN of nested
+    /// `Extend`s (see the loop building `p` from `select_exprs` in
+    /// [`Parser::parse_select`]): each later list entry's expression is
+    /// therefore evaluated with every earlier entry's target already bound —
+    /// exactly as much "the row" as `WHERE`'s own variables are, for this
+    /// check's purposes. Reset (via [`std::mem::take`]) and restored around
+    /// every `parse_select` call.
+    projection_seen_targets: Vec<Variable>,
+    /// `EXISTS`/`NOT EXISTS` scope checks recorded while
+    /// `projection_scope_pending` was set, resolved once the enclosing
+    /// `SELECT`'s post-`WHERE` (and, for an aggregating query,
+    /// post-grouping) in-scope set is known — see the post-`WHERE` block in
+    /// [`Parser::parse_select`]. Reset (via [`std::mem::take`]) and restored
+    /// around every `parse_select` call, so a nested sub-`SELECT`'s own
+    /// pending checks never bleed into the outer `SELECT`'s resolution point
+    /// (or vice versa).
+    pending_exists_scope_checks: Vec<PendingExistsScopeCheck>,
     /// Debug-only regression counter for the group-loop scope-set quadratic:
     /// incremented ONLY at the handful of PRODUCTION sites that consult a
     /// freshly-computed (`visible_variables`-derived) whole-pattern scope
@@ -407,8 +454,17 @@ impl<'a> Parser<'a, '_> {
             // quad-pattern reading) — neither production can contain `EXISTS`,
             // so the fork never consults this stack; starting it empty (rather
             // than cloning `self`'s, which may be mid-EXISTS-body at the fork
-            // point) is simplest and correct either way.
+            // point) is simplest and correct either way. The same reasoning
+            // covers the deferred-EXISTS-scope fields below: neither
+            // production can contain a `SELECT` either, so
+            // `projection_scope_pending`/`in_aggregate_argument` start false
+            // and the two buffers start empty regardless of `self`'s own
+            // mid-projection-list state at the fork point.
             exists_scope_stack: Vec::new(),
+            projection_scope_pending: false,
+            in_aggregate_argument: false,
+            projection_seen_targets: Vec::new(),
+            pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: self.scope_consultations,
             options: self.options,
@@ -587,12 +643,23 @@ impl<'a> Parser<'a, '_> {
     /// scope-transparent branch mirrors its contribution into this frame —
     /// see `Parser::exists_scope_stack`'s doc); for a solution-modifier
     /// expression (`GROUP BY`/`HAVING`/`ORDER BY`), it is the complete
-    /// `WHERE` clause's scope (parsed in full before modifiers run); for a
-    /// `SELECT`-list `(expr AS ?v)` target, parsed BEFORE `WHERE` is even
-    /// read, it is empty — nothing precedes it syntactically, so nothing can
-    /// collide, which is the same left-to-right "scope so far" convention
-    /// this parser already applies everywhere else (e.g. `BIND`'s own §19.6
-    /// check), not a special case carved out for `EXISTS`.
+    /// `WHERE` clause's scope (parsed in full before modifiers run).
+    ///
+    /// For a `SELECT`-list `(expr AS ?v)` target — or an aggregate argument
+    /// lifted out of one — parsed BEFORE `WHERE` is even read,
+    /// [`Parser::exists_scope`] is necessarily still empty: the row this
+    /// `EXISTS` will actually be tested against (`WHERE`'s scope, or the
+    /// grouped scope, or the aggregate-fold scope — see
+    /// [`ExistsScopeBasis`]) cannot be known yet. Rather than skip the check
+    /// (nothing precedes it syntactically is NOT the same as nothing will
+    /// ever be in scope — SEP-0007 Part 3 is a SEMANTIC rule about the row at
+    /// EVALUATION time, not a textual-order one), `Parser::projection_scope_pending`
+    /// marks this window, and the check is DEFERRED into
+    /// `Parser::pending_exists_scope_checks` instead of run here — resolved
+    /// once `Parser::parse_select`'s post-`WHERE` block completes the
+    /// missing root scope. See [`PendingExistsScopeCheck`] for why a single
+    /// `local_scope ∪ root_scope` union, computed once the root is known,
+    /// suffices at ANY nesting depth reached during this window.
     ///
     /// A NESTED `EXISTS` is checked at its OWN call to this function, with
     /// the in-scope set THAT nesting level sees — which, because this body
@@ -600,7 +667,11 @@ impl<'a> Parser<'a, '_> {
     /// `Parser::push_exists_scope_isolated`), already includes everything
     /// visible to the outer `EXISTS` plus whatever this body's own elements
     /// have introduced so far, without this body's OWN introductions ever
-    /// leaking to what the OUTER `EXISTS`'s LATER siblings see.
+    /// leaking to what the OUTER `EXISTS`'s LATER siblings see. (Immediately
+    /// or, under `projection_scope_pending`, at the SAME deferred resolution
+    /// point as its enclosing `EXISTS` — every nested occurrence reached
+    /// during that window is recorded as its OWN, independent
+    /// `PendingExistsScopeCheck`.)
     fn parse_exists_body(&mut self) -> Result<GraphPattern> {
         // Anchor the error at the body's own opening brace rather than
         // wherever the cursor lands after parsing it, mirroring `LATERAL`'s
@@ -610,6 +681,27 @@ impl<'a> Parser<'a, '_> {
         self.push_exists_scope_isolated();
         let body = self.parse_group_graph_pattern()?;
         self.pop_exists_scope_boundary();
+        if self.projection_scope_pending {
+            let mut local_scope = scope;
+            let basis = if self.in_aggregate_argument {
+                ExistsScopeBasis::AggregateArgument
+            } else {
+                // A later SELECT-list target sees every earlier one already
+                // bound (the `Extend` chain `Parser::parse_select` builds
+                // from `select_exprs` nests that way) — see
+                // `Parser::projection_seen_targets`'s doc.
+                local_scope.extend(self.projection_seen_targets.iter().cloned());
+                ExistsScopeBasis::Projection
+            };
+            self.pending_exists_scope_checks
+                .push(PendingExistsScopeCheck {
+                    local_scope,
+                    body: body.clone(),
+                    at,
+                    basis,
+                });
+            return Ok(body);
+        }
         if let Some((var, intro)) = find_scope_conflict(&scope, &body) {
             return Err(ParseError::syntax(
                 format!(
@@ -822,6 +914,27 @@ impl<'a> Parser<'a, '_> {
         // is popped just once, at this function's single success return.
         self.push_exists_scope_boundary();
 
+        // This SELECT's OWN deferred-EXISTS-scope window (SEP-0007 Part 3's
+        // projection-list position — see `Parser::projection_scope_pending`'s doc): save
+        // whatever the ENCLOSING parse had (this may itself be a sub-SELECT
+        // reached mid-projection-list of an outer one, via `EXISTS { SELECT
+        // ... }`), open a fresh one for the projection list about to be
+        // parsed, and restore the enclosing state at this function's single
+        // success return — matching `push_exists_scope_boundary`'s own
+        // pop-once-at-success-return discipline just above: on any parse
+        // error the whole request aborts (a single `Result` propagates all
+        // the way to the public entry point, and this `Parser` is never
+        // consulted again), so an unrestored window on an error path is, as
+        // with the unpopped `exists_scope_stack` frame in that same case,
+        // never observed.
+        let saved_projection_scope_pending = self.projection_scope_pending;
+        let saved_in_aggregate_argument = self.in_aggregate_argument;
+        let saved_projection_seen_targets = std::mem::take(&mut self.projection_seen_targets);
+        let saved_pending_exists_scope_checks =
+            std::mem::take(&mut self.pending_exists_scope_checks);
+        self.projection_scope_pending = true;
+        self.in_aggregate_argument = false;
+
         // Projection: `*` or a list of Var / (Expr AS Var).
         let mut star = false;
         let mut projected: Vec<Variable> = Vec::new();
@@ -840,6 +953,11 @@ impl<'a> Parser<'a, '_> {
                     let var = self.expect_var()?;
                     self.expect(&Token::RParen)?;
                     projected.push(var.clone());
+                    // Recorded so a LATER projection-list `EXISTS` deferred
+                    // under `projection_scope_pending` sees this target as
+                    // already bound — see
+                    // `Parser::projection_seen_targets`'s doc.
+                    self.projection_seen_targets.push(var.clone());
                     // A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list lowers to
                     // a chain of N `Extend` nodes wrapped around the WHERE
                     // pattern (below, near the query's assembly) — no brace
@@ -855,6 +973,13 @@ impl<'a> Parser<'a, '_> {
                 return Err(ParseError::syntax("empty SELECT projection", self.span()));
             }
         }
+
+        // The projection list is fully parsed — leave the deferred-EXISTS-scope
+        // window. Every `EXISTS`/`NOT EXISTS` reached from here on (`WHERE`,
+        // `GROUP BY`/`HAVING`/`ORDER BY`) already has a correct
+        // `Parser::exists_scope` to check against immediately, exactly as
+        // before this window existed.
+        self.projection_scope_pending = false;
 
         // Dataset clause (FROM / FROM NAMED), §13.2.
         let dataset = self.parse_dataset_clauses()?;
@@ -900,6 +1025,75 @@ impl<'a> Parser<'a, '_> {
                 self.note_scope_consultation();
                 visible_variables(&where_pat).into_iter().collect()
             };
+
+            // SEP-0007 Part 3's projection-list position: resolve every `EXISTS`/`NOT EXISTS`
+            // deferred out of `Parser::parse_exists_body` while this
+            // projection list was being parsed — BEFORE the loop below
+            // folds this SELECT's own targets into `in_scope`, so
+            // `ExistsScopeBasis::Projection` entries resolve against the
+            // SAME root `in_scope` currently holds (the grouped keys, or the
+            // full `WHERE` scope) with no contamination from sibling
+            // targets `PendingExistsScopeCheck::local_scope` did not already
+            // capture. `ExistsScopeBasis::AggregateArgument` entries resolve
+            // against the raw `WHERE`/grouping-extend scope instead,
+            // computed lazily (at most once, only if this SELECT actually
+            // deferred an aggregate-argument `EXISTS`) since it differs from
+            // `in_scope` only when the query aggregates.
+            if !self.pending_exists_scope_checks.is_empty() {
+                // Taken (not drained-in-place): the loop below needs its own
+                // unborrowed `&mut self` to call `note_scope_consultation`
+                // while computing `agg_arg_scope` lazily.
+                let pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
+                let mut agg_arg_scope: Option<std::collections::HashSet<Variable>> = None;
+                for pending in pending_checks {
+                    let root: &std::collections::HashSet<Variable> = match pending.basis {
+                        ExistsScopeBasis::Projection => &in_scope,
+                        ExistsScopeBasis::AggregateArgument => {
+                            if aggregating {
+                                if agg_arg_scope.is_none() {
+                                    self.note_scope_consultation();
+                                    let scope: std::collections::HashSet<Variable> =
+                                        visible_variables(&where_pat)
+                                            .into_iter()
+                                            .chain(
+                                                modifiers
+                                                    .group_extends
+                                                    .iter()
+                                                    .map(|(v, _)| v.clone()),
+                                            )
+                                            .collect();
+                                    agg_arg_scope = Some(scope);
+                                }
+                                agg_arg_scope.as_ref().expect("just populated above")
+                            } else {
+                                // Not aggregating: the raw `WHERE` scope IS
+                                // the projection's own root already (no
+                                // grouping-extend targets exist to add).
+                                &in_scope
+                            }
+                        }
+                    };
+                    let scope: Vec<Variable> = pending
+                        .local_scope
+                        .iter()
+                        .cloned()
+                        .chain(root.iter().cloned())
+                        .collect();
+                    if let Some((var, intro)) = find_scope_conflict(&scope, &pending.body) {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "{} ?{} inside {} is already in scope on {}",
+                                intro.as_str(),
+                                var.as_str(),
+                                ScopeConstruct::Exists.keyword(),
+                                ScopeConstruct::Exists.already_in_scope_clause(),
+                            ),
+                            pending.at,
+                        ));
+                    }
+                }
+            }
+
             for (var, _) in &select_exprs {
                 if !in_scope.insert(var.clone()) {
                     return Err(ParseError::syntax(
@@ -1046,6 +1240,24 @@ impl<'a> Parser<'a, '_> {
             };
         }
         self.pop_exists_scope_boundary();
+        // Every deferred check this SELECT recorded is resolved inside the
+        // `!select_exprs.is_empty()` §19.8 block above — entries can exist
+        // ONLY if that block ran (an `EXISTS` can be parsed here solely from
+        // within a `(expr AS ?v)` target's own expression, which always
+        // pushes to `select_exprs`), so nothing should ever reach this point
+        // still unresolved. A debug-only guard, not a silent drop: were this
+        // invariant ever wrong, restoring the saved (unrelated, outer) list
+        // below would discard the unresolved checks instead of erroring.
+        debug_assert!(
+            self.pending_exists_scope_checks.is_empty(),
+            "a deferred EXISTS scope check was never resolved"
+        );
+        // Restore the enclosing parse's own deferred-EXISTS-scope window —
+        // see the save at this function's top.
+        self.projection_scope_pending = saved_projection_scope_pending;
+        self.in_aggregate_argument = saved_in_aggregate_argument;
+        self.projection_seen_targets = saved_projection_seen_targets;
+        self.pending_exists_scope_checks = saved_pending_exists_scope_checks;
         Ok(Query::Select {
             pattern: p,
             dataset,
@@ -3564,7 +3776,20 @@ impl<'a> Parser<'a, '_> {
             AggregateExpression::new(func, Vec::new(), Vec::new(), distinct)
                 .expect("COUNT accepts an empty exprlist")
         } else {
-            let inner = self.parse_expression()?;
+            // Marks any `EXISTS` reached while parsing THIS argument as
+            // `ExistsScopeBasis::AggregateArgument` if it is later deferred
+            // under `Parser::projection_scope_pending` (a SELECT-list
+            // aggregate, e.g. `SUM(IF(EXISTS { ... }, 1, 0))`) — irrelevant,
+            // and harmless, outside that window (`GROUP BY`/`HAVING`
+            // aggregate arguments check immediately either way). Restored
+            // right after: aggregates cannot themselves nest, but the
+            // `EXISTS` body this argument may contain can embed a
+            // sub-`SELECT` with its own, unrelated aggregate arguments.
+            let saved_in_aggregate_argument = self.in_aggregate_argument;
+            self.in_aggregate_argument = true;
+            let inner = self.parse_expression();
+            self.in_aggregate_argument = saved_in_aggregate_argument;
+            let inner = inner?;
             let mut scalarvals = Vec::new();
             if matches!(func, AggregateFunction::GroupConcat)
                 && let Some(sep) = self.parse_optional_separator()?
@@ -3607,11 +3832,28 @@ impl<'a> Parser<'a, '_> {
         self.expect(&Token::Comma)?;
         let distinct = self.eat_kw("DISTINCT");
         let mut args = Vec::new();
+        // See the matching comment in `Parser::parse_aggregate`: marks any
+        // `EXISTS` reached while parsing these positional arguments as
+        // `ExistsScopeBasis::AggregateArgument`, restored once the whole
+        // argument list is parsed (or the first one fails).
+        let saved_in_aggregate_argument = self.in_aggregate_argument;
+        self.in_aggregate_argument = true;
+        let mut args_err = None;
         loop {
-            args.push(self.parse_expression()?);
+            match self.parse_expression() {
+                Ok(e) => args.push(e),
+                Err(e) => {
+                    args_err = Some(e);
+                    break;
+                }
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
+        }
+        self.in_aggregate_argument = saved_in_aggregate_argument;
+        if let Some(e) = args_err {
+            return Err(e);
         }
         let scalarvals = self.parse_agg_scalarvals()?;
         self.expect(&Token::RParen)?;
@@ -4079,6 +4321,60 @@ fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
             }
         }
     }
+}
+
+/// An `EXISTS`/`NOT EXISTS` scope check deferred out of
+/// [`Parser::parse_exists_body`] because it was reached while
+/// `Parser::projection_scope_pending` was set — a `SELECT`'s projection list
+/// is parsed BEFORE `WHERE`, so no correct in-scope set exists yet at the
+/// point the body itself is parsed. Resolved in [`Parser::parse_select`]'s
+/// post-`WHERE` block, once the correct basis (see [`ExistsScopeBasis`]) is
+/// known.
+struct PendingExistsScopeCheck {
+    /// Everything already known to be in scope at the moment this `EXISTS`
+    /// was parsed, MINUS the one thing that cannot be known yet (the
+    /// projection's own root scope) — captured as
+    /// [`Parser::exists_scope`]'s snapshot (which already carries every
+    /// enclosing `EXISTS`/`MINUS` body's own introductions-so-far, for a
+    /// nested occurrence) plus, for `ExistsScopeBasis::Projection` only, a
+    /// snapshot of [`Parser::projection_seen_targets`] at that same moment.
+    /// The missing root scope is uniform across every entry recorded during
+    /// ONE `SELECT`'s projection-parsing window (it is that `SELECT`'s own),
+    /// so resolving is exactly `local_scope ∪ root_scope` — no other
+    /// adjustment is needed regardless of nesting depth.
+    local_scope: Vec<Variable>,
+    /// The already-parsed `EXISTS`/`NOT EXISTS` body, re-walked with
+    /// [`find_scope_conflict`] once `local_scope` is completed by the root.
+    body: GraphPattern,
+    /// Where to anchor the syntax error, captured at the `EXISTS`/`NOT
+    /// EXISTS` keyword — mirrors [`Parser::parse_exists_body`]'s own `at`.
+    at: usize,
+    /// Which root scope this entry resolves against.
+    basis: ExistsScopeBasis,
+}
+
+/// Which root scope a [`PendingExistsScopeCheck`] resolves against, once its
+/// enclosing `SELECT`'s post-`WHERE` state is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistsScopeBasis {
+    /// A `(expr AS ?v)` SELECT-list target, or an `EXISTS` nested inside one
+    /// (not inside an aggregate argument) — the row this checks against is
+    /// exactly the one [`Parser::parse_select`]'s pre-existing §19.8 check
+    /// already computes: when the query aggregates, the `GROUP BY` keys plus
+    /// any expression-valued `GROUP BY (expr AS ?v)` targets (grouping
+    /// hides the raw `WHERE` pattern behind them); otherwise the full
+    /// `WHERE`-clause scope.
+    Projection,
+    /// An aggregate's own `(...)` argument expression. An aggregate folds
+    /// over the UNGROUPED rows in its group — the parser builds
+    /// expression-valued `GROUP BY (expr AS ?v)` targets as `Extend`s placed
+    /// BENEATH `Group` (see the grouping-extend loop in
+    /// [`Parser::parse_select`]), so they are already bound at the point an
+    /// aggregate argument evaluates, but the grouping itself has not
+    /// happened yet — the row is the full `WHERE`-clause scope PLUS those
+    /// grouping-extend targets, never narrowed to bare `GROUP BY` keys the
+    /// way `Projection`'s basis is.
+    AggregateArgument,
 }
 
 /// Whether a construct that introduces a fresh binding inside the pattern
@@ -7133,6 +7429,125 @@ mod tests {
         assert!(
             err.to_string().contains(
                 "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    // ── EXISTS in-scope-set restriction: SELECT-list position (SEP-0007
+    //    Part 3 — the projection list is parsed BEFORE `WHERE`, so
+    //    the check above (`Parser::parse_exists_body`) cannot run there
+    //    immediately; see `Parser::pending_exists_scope_checks`'s doc for
+    //    the deferred mechanism that closes it) ─────────────────────────────
+
+    #[test]
+    fn select_expression_exists_scope_collision_is_rejected() {
+        let q = format!(
+            "{GM}SELECT ?x (EXISTS {{ BIND(purrdf:e AS ?x) }} AS ?z) WHERE {{ ?x purrdf:p purrdf:c }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a BIND target inside a SELECT-list EXISTS colliding with the row being filtered must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?x inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn subselect_expression_exists_scope_collision_is_rejected() {
+        let q = format!(
+            "{GM}SELECT * WHERE {{ {{ SELECT ?o (EXISTS {{ BIND(1 AS ?o) }} AS ?e) WHERE {{ ?s purrdf:p ?o }} }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a BIND target inside a sub-SELECT's SELECT-list EXISTS colliding with its own WHERE row must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn aggregate_argument_exists_scope_collision_is_rejected() {
+        // `?x` is both a WHERE variable and the GROUP BY key: an aggregate's
+        // argument folds over the raw (ungrouped) rows, so it sees `?x`
+        // bound either way (see `ExistsScopeBasis::AggregateArgument`'s
+        // doc).
+        let q = format!(
+            "{GM}SELECT ?x (SUM(IF(EXISTS {{ BIND(purrdf:e AS ?x) }}, 1, 0)) AS ?n) WHERE {{ ?x purrdf:p purrdf:c }} GROUP BY ?x"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a BIND target inside an aggregate argument's EXISTS colliding with the ungrouped row must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?x inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn update_subselect_expression_exists_collision_is_rejected() {
+        let u = format!(
+            "{GM}INSERT {{ ?x purrdf:tag 1 }} WHERE {{ {{ SELECT ?x (EXISTS {{ BIND(purrdf:e AS ?x) }} AS ?z) WHERE {{ ?x purrdf:p purrdf:c }} }} }}"
+        );
+        let err = SparqlParser::new().parse_update(&u).expect_err(
+            "a BIND target inside an UPDATE-embedded sub-SELECT's SELECT-list EXISTS must fail the same way",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?x inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn select_expression_exists_fresh_bind_is_accepted() {
+        let q = format!(
+            "{GM}SELECT ?x (EXISTS {{ BIND(1 AS ?fresh) }} AS ?z) WHERE {{ ?x purrdf:p purrdf:c }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh BIND target inside a SELECT-list EXISTS must parse");
+    }
+
+    #[test]
+    fn select_expression_exists_after_aggregation_uses_the_rescope() {
+        // The aggregating rescope rule this reuses (from the pre-existing
+        // §19.8 direct-target check, right above the deferred-check
+        // resolution point in `Parser::parse_select`): when the query
+        // aggregates, only the GROUP BY keys and grouping-extend targets
+        // stay visible to the projection — the raw WHERE pattern is hidden
+        // behind grouping, so a variable that WHERE bound but grouping does
+        // NOT expose is fresh again, from the projection's point of view.
+        //
+        // `?y` is bound by WHERE but is not a GROUP BY key: grouping hides
+        // it, so rebinding it inside a SELECT-list EXISTS is legal.
+        let q = format!(
+            "{GM}SELECT ?x (EXISTS {{ BIND(1 AS ?y) }} AS ?z) WHERE {{ ?x purrdf:p ?y }} GROUP BY ?x"
+        );
+        SparqlParser::new().parse_query(&q).expect(
+            "a WHERE-only variable hidden by grouping may be rebound inside a SELECT-list EXISTS",
+        );
+
+        // `?x` IS the GROUP BY key — still visible to the projection after
+        // grouping, so rebinding it must still fail.
+        let q2 = format!(
+            "{GM}SELECT ?x (EXISTS {{ BIND(1 AS ?x) }} AS ?z) WHERE {{ ?x purrdf:p ?y }} GROUP BY ?x"
+        );
+        let err = SparqlParser::new().parse_query(&q2).expect_err(
+            "a GROUP BY key stays in scope on the row an aggregating SELECT-list EXISTS filters",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?x inside EXISTS is already in scope on the row being filtered"
             ),
             "unexpected message: {err}"
         );
