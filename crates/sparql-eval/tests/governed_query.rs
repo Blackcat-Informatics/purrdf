@@ -15,12 +15,13 @@ use std::time::Duration;
 
 use purrdf_core::{
     BlankScope, GovernorEvidence, InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset,
-    RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
+    RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest, SparqlResult, StopCause,
+    TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
     GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpRemoteQuerySource,
-    HttpRequest, NativeSparqlEngine, PartialAnswers, QueryExplanation, QueryGovernors,
+    HttpRequest, NativeSparqlEngine, NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors,
     QueryOptions, RemoteError, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 
@@ -1510,10 +1511,7 @@ fn explain_reports_a_deterministic_per_node_ledger() {
     // The ledger DECOMPOSES the evidence: its fuel column sums to exactly the total the
     // evidence reports. A decomposition that did not add up would be a decomposition of
     // some other number.
-    let ledger_fuel: u64 = ledger
-        .iter()
-        .map(purrdf_sparql_eval::NodeCharges::fuel_total)
-        .sum();
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
     assert_eq!(
         ledger_fuel,
         first.evidence().consumed_in(ResourceDimension::Fuel),
@@ -1548,6 +1546,24 @@ fn explain_reports_a_deterministic_per_node_ledger() {
             )),
             "the rendering must print the prediction beside what materialised"
         );
+        // `rows` sums every commit to this node's ledger line (its total output across
+        // however many times it was invoked); `cells` keeps only the largest single
+        // commit (the peak one materialized bag ever held — see
+        // `ChargeLedger::record_cells`'s doc). A node invoked exactly once therefore
+        // shows `cells == rows * columns` exactly; a node invoked several times (a BGP
+        // under `LATERAL`, invoked once per left row) can show `cells < rows * columns`
+        // whenever more than one invocation committed a nonzero row. Both are sound:
+        // the peak of several nonnegative numbers is never more than their sum. What
+        // must NEVER happen is `cells` exceeding that bound — that would mean some
+        // commit's cells were not `columns`-wide, i.e. `rows` and `cells` on this line
+        // describe two different row sets rather than the same one.
+        assert!(
+            node.cells <= node.rows.saturating_mul(estimate.columns),
+            "cells={} must not exceed rows={} * columns={} for {node:?}",
+            node.cells,
+            node.rows,
+            estimate.columns
+        );
     }
 
     // The join orders the API returned before the ledger existed are still there, unmoved.
@@ -1561,6 +1577,392 @@ fn explain_reports_a_deterministic_per_node_ledger() {
     // Explaining does not bound the query: `METERED` reaches no ceiling, so the run the
     // explanation describes is the run a caller would get.
     assert!(first.evidence().is_complete(), "{:?}", first.evidence());
+}
+
+/// A `LATERAL` right operand's per-row substituted copy must keep its OWN ledger
+/// identity. Without that, EVERY charge inside a `LATERAL`'s per-row substituted
+/// evaluation folds into the `LATERAL` node itself: a real plan node underneath it (here,
+/// the RHS `Bgp`) prints `actual-rows=0` next to a nonzero planner estimate — a FALSE ZERO
+/// on a node that did real work — while `LATERAL`'s own `rows=` becomes the sum of every
+/// substituted copy's work rather than the join's true output cardinality. The
+/// pre-existing `explain_reports_a_deterministic_per_node_ledger` test above cannot catch
+/// that: it only checks that the ledger's fuel column SUMS to the evidence's fuel total,
+/// an invariant that is exactly as true under misattribution as without it (addition
+/// commutes; a unit charged to the wrong node still adds up to the same total). This test
+/// checks per-node counters instead.
+///
+/// The fixture is deliberately tiny so every number below is hand-computable:
+///
+/// - `:a :p :oa`, `:a :label "hit"`, `:b :p :ob` (`:b` has no `:label`).
+/// - `?s :p ?o LATERAL { ?s :label ?l }`: the left `Bgp` produces 2 rows (`:a`, `:b`); the
+///   right `Bgp` (`?s :label ?l`) is Values-Insertion'd (SEP-0007's `Replace`
+///   mechanism joins the outer `?s` binding in as a `VALUES` row rather than rewriting the
+///   leaf's own — still unconstrained — terms), so it is invoked ONCE PER LEFT ROW and,
+///   each time, scans the WHOLE dataset for `?s :label ?l` (one match, `(:a, "hit")`)
+///   before the joined `VALUES` row narrows it:
+///   - left row `:a`: the unconstrained scan finds `(:a, "hit")` (1 candidate quad, 1 raw
+///     row); `VALUES{?s=:a}` is compatible, so the per-row result is 1 row.
+///   - left row `:b`: the SAME unconstrained scan again finds `(:a, "hit")` (1 candidate
+///     quad, 1 raw row); `VALUES{?s=:b}` is INCOMPATIBLE with subject `:a`, so the
+///     per-row result is 0 rows.
+///   - `LATERAL`'s true output is therefore exactly 1 row (`:a`'s).
+///
+/// The right `Bgp`'s own ledger line carries: 2 node visits for the leaf itself
+/// (`algebra-node-entry`), plus 2 more for the synthetic `Join`/`Values` wrapper Values
+/// Insertion adds (mapped to the SAME source as the leaf — see
+/// `crate::expr::SubstitutionSource`'s doc, not in this crate's public surface, for why),
+/// plus 2 more for the `Values` node itself = 6; 2 candidate quads (only the leaf charges
+/// this point). Every one of those visits' committed-row FUEL still lands here too — 2
+/// (the leaf's own raw output) + 1 (the synthetic `Join` wrapper's narrowed output — `:a`'s
+/// row only) + 2 (the synthetic `Values` node's own always-one-row-per-invocation output)
+/// = 5 units of `committed-output-row` fuel — because that work genuinely happened and
+/// this node is the only real one it can be charged against (fuel's sum-to-total invariant
+/// needs it to land somewhere).
+///
+/// The `rows`/`cells` LEDGER COLUMNS, though, count only the node whose own output IS this
+/// `Bgp`'s true output for a given left row: the synthetic `Join` wrapper — never the
+/// leaf's own unconstrained re-scan, and never the `Values` table's own always-one-row
+/// bookkeeping. Both of those are pre-narrowing scaffolding, not this node's output. So
+/// `rows` is exactly the `Join`'s own narrowed output summed across invocations: `1` (`:a`)
+/// `+ 0` (`:b`) `= 1` — which lands beside `estimated-rows=1`, a perfect match, because the
+/// two now measure the SAME quantity: this `Bgp`'s constrained (post-`LATERAL`-injection)
+/// output. Before this fix `rows` was `5` — the false composite the doc above's fuel
+/// paragraph describes — printed beside the SAME `estimated-rows=1`, a ~5x apparent miss
+/// on an estimator that was actually exact.
+#[test]
+fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    let label = builder.intern_iri("http://example.org/label");
+    let a = builder.intern_iri("http://example.org/a");
+    let b = builder.intern_iri("http://example.org/b");
+    let oa = builder.intern_iri("http://example.org/oa");
+    let ob = builder.intern_iri("http://example.org/ob");
+    let hit = builder.intern_literal(RdfLiteral::simple("hit"));
+    builder.push_quad(a, p, oa, None);
+    builder.push_quad(a, label, hit, None);
+    builder.push_quad(b, p, ob, None);
+    let dataset = builder.freeze().expect("freeze the mini LATERAL fixture");
+
+    let engine = NativeSparqlEngine::new();
+    let query =
+        "PREFIX : <http://example.org/> SELECT * WHERE { ?s :p ?o LATERAL { ?s :label ?l } }";
+    let explanation = engine
+        .explain_query(&dataset, query, None)
+        .expect("explain the query");
+    let ledger = explanation.ledger();
+    assert_eq!(
+        ledger.len(),
+        4,
+        "expected exactly Project, Lateral, left Bgp, right Bgp: {ledger:?}"
+    );
+    assert_eq!(ledger[0].label, "Project");
+    assert_eq!(ledger[1].label, "Lateral");
+    assert_eq!(ledger[2].label, "Bgp");
+    assert_eq!(ledger[3].label, "Bgp");
+
+    let lateral = &ledger[1];
+    assert_eq!(
+        lateral.rows, 1,
+        "LATERAL's own row count must be its TRUE output cardinality (:a's one row), not \
+         the sum of every substituted copy's own work: {ledger:?}"
+    );
+    assert_eq!(lateral.fuel_at(ChargePoint::AlgebraNodeEntry), 1);
+    assert_eq!(lateral.fuel_at(ChargePoint::CommittedOutputRow), 1);
+
+    let left_bgp = &ledger[2];
+    assert_eq!(
+        left_bgp.rows, 2,
+        "the left Bgp's own two rows (:a, :b): {ledger:?}"
+    );
+    assert_eq!(left_bgp.fuel_at(ChargePoint::BgpCandidateQuad), 2);
+
+    let rhs_bgp = &ledger[3];
+    // The false zero this test exists to catch: before the fix, EVERY one of these
+    // counters read 0 on this exact node, next to a nonzero planner estimate
+    // (`estimated-rows=1 actual-rows=0`).
+    assert!(
+        rhs_bgp.rows > 0,
+        "the RHS Bgp did real work (invoked twice) and must not report a false zero: \
+         {ledger:?}"
+    );
+    let rhs_estimate = rhs_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp under LATERAL still carries a planner estimate");
+    assert_eq!(rhs_estimate.rows, 1);
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::BgpCandidateQuad),
+        2,
+        "one candidate quad per invocation — the leaf is unconstrained by Values \
+         Insertion's design (see this test's doc): {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::AlgebraNodeEntry),
+        6,
+        "2 leaf visits + 2 synthetic-Join-wrapper visits + 2 synthetic-Values visits: \
+         {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.fuel_at(ChargePoint::CommittedOutputRow),
+        5,
+        "committed-output-row FUEL still sums every visit's rows — 2 (leaf) + 1 (Join) \
+         + 2 (Values) — because that work happened and this is the only real node it can \
+         be charged against; only the LEDGER's rows/cells columns (checked below) stop \
+         double- and triple-counting it: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.rows, 1,
+        "the ledger's `rows` column now measures ONLY the synthetic Join wrapper's \
+         narrowed output (1 for :a + 0 for :b), the SAME quantity the planner estimated \
+         — not the leaf's own unconstrained re-scan or the Values table's own \
+         one-row-per-invocation bookkeeping, both of which are pre-narrowing scaffolding \
+         rather than this node's true output: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.rows, rhs_estimate.rows,
+        "estimate and actual now measure the same quantity — this Bgp's constrained, \
+         post-LATERAL-injection output — so a correctly-sized estimator prints as a \
+         match rather than an apparent miss: {ledger:?}"
+    );
+    assert_eq!(
+        rhs_bgp.cells,
+        rhs_bgp.rows * rhs_estimate.columns,
+        "exactly one invocation (:a's) committed a nonzero Join output, so the peak \
+         single-bag cell count and the summed row count agree here: {ledger:?}"
+    );
+
+    // The adversary's invariant, swept over every line: `cells` (the largest single
+    // commit) can never exceed `rows` (the sum of every commit) times the node's own
+    // schema width, on every node the planner sized — and a node with zero committed
+    // rows can never report nonzero cells regardless. A violation would mean `rows` and
+    // `cells` on the SAME line describe two different row sets, exactly the
+    // self-contradiction ("rows=19 cells=8") this fix exists to close.
+    for node in ledger {
+        if let Some(estimate) = &node.estimate {
+            assert!(
+                node.cells <= node.rows.saturating_mul(estimate.columns),
+                "cells={} must not exceed rows={} * columns={} for {node:?}",
+                node.cells,
+                node.rows,
+                estimate.columns
+            );
+        }
+        assert!(
+            node.rows > 0 || node.cells == 0,
+            "a node with zero committed rows cannot report nonzero cells: {node:?}"
+        );
+    }
+
+    // The pre-existing invariant still holds — a decomposition that did not add up would
+    // be a decomposition of some other number — but, as this test's doc explains, it alone
+    // cannot distinguish correct attribution from this exact bug.
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
+    assert_eq!(
+        ledger_fuel,
+        explanation.evidence().consumed_in(ResourceDimension::Fuel),
+        "the per-node fuel column must still sum to the execution's fuel total"
+    );
+
+    // Determinism: the cursor-mapping mechanism this fix adds is internal, address-keyed
+    // bookkeeping; nothing address-derived may leak into the rendered explanation.
+    let rendered = explanation.render();
+    assert_eq!(
+        engine
+            .explain_query(&dataset, query, None)
+            .expect("explain again")
+            .render(),
+        rendered,
+        "identical query and data must render byte-identical explain output"
+    );
+}
+
+/// The one-level-deeper recurrence of the bug
+/// [`ledger_attributes_lateral_rhs_work_to_the_rhs_nodes`] fixes: a `LATERAL` nested inside
+/// another `LATERAL`'s per-row substituted copy.
+///
+/// The inner window's substitution walk substitutes the OUTER window's already
+/// Values-Insertion-wrapped subtree (`Join(leaf, Values{…})`, see that test's doc), and the
+/// inner walk's generic recursion re-copies every node in it — the leaf, the `Values` table,
+/// AND the outer `Join` wrapper — exactly as if each were fresh, unrelated source material.
+/// Considered only against the inner window's own local attribution rule, each re-copy looks
+/// like an independent node with its own claim to count rows, and before this fix all three
+/// DID count: the innermost `Bgp`'s `rows` became a fourfold-inflated composite of three
+/// different synthetic nodes' outputs printed beside a per-invocation estimate that was
+/// exact. See `crate::expr::SubstitutionSource`'s doc (not in this crate's public surface)
+/// for the cross-window arbitration that fixes it: within one substitution window, for each
+/// real plan ordinal, only the FIRST (topmost) synthesized node this window mints keeps its
+/// local `counts_rows: true`; every further one this window mints for the same real ordinal —
+/// including one re-copied from an enclosing window's already-wrapped subtree — is forced
+/// `false`.
+///
+/// The fixture is `ledger_attributes_lateral_rhs_work_to_the_rhs_nodes`'s shape, one level
+/// deeper, still small enough that every number below is hand-computable:
+///
+/// - `:a :p :oa`, `:a :label "a1"`, `:a :label "a2"`, `:a :q :c` — `:b :p :ob`, `:b :label
+///   "b1"`, `:b :label "b2"` (`:b` has no `:q` fact).
+/// - `?s :p ?o LATERAL { ?s :label ?l LATERAL { ?s :q ?c } }`: the outer `Bgp` (`?s :p ?o`)
+///   produces 2 rows (`:a`, `:b`). The middle `Bgp` (`?s :label ?l`) is invoked once per
+///   OUTER row and produces 2 rows each time (`:a`'s two labels, then `:b`'s two labels) —
+///   4 invocations of the innermost `Bgp` (`?s :q ?c`) in total: 2 with `?s = :a`, 2 with
+///   `?s = :b`. Each `:a`-invocation matches `(:a, :q, :c)` (1 row); each `:b`-invocation
+///   matches nothing (`:b` has no `:q` fact, 0 rows). The innermost `Bgp`'s TRUE constrained
+///   output, summed over all 4 invocations, is therefore exactly `1 + 1 + 0 + 0 = 2` — the
+///   SAME per-invocation shape `ledger_attributes_lateral_rhs_work_to_the_rhs_nodes` already
+///   gets right one level up, which is what makes this a regression test for the recurrence
+///   rather than a new bug.
+#[test]
+fn ledger_attributes_nested_lateral_rhs_rows_to_the_true_output() {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    let label = builder.intern_iri("http://example.org/label");
+    let q = builder.intern_iri("http://example.org/q");
+    let a = builder.intern_iri("http://example.org/a");
+    let b = builder.intern_iri("http://example.org/b");
+    let oa = builder.intern_iri("http://example.org/oa");
+    let ob = builder.intern_iri("http://example.org/ob");
+    let c = builder.intern_iri("http://example.org/c");
+    let a1 = builder.intern_literal(RdfLiteral::simple("a1"));
+    let a2 = builder.intern_literal(RdfLiteral::simple("a2"));
+    let b1 = builder.intern_literal(RdfLiteral::simple("b1"));
+    let b2 = builder.intern_literal(RdfLiteral::simple("b2"));
+    builder.push_quad(a, p, oa, None);
+    builder.push_quad(a, label, a1, None);
+    builder.push_quad(a, label, a2, None);
+    builder.push_quad(a, q, c, None);
+    builder.push_quad(b, p, ob, None);
+    builder.push_quad(b, label, b1, None);
+    builder.push_quad(b, label, b2, None);
+    let dataset = builder.freeze().expect("freeze the nested-LATERAL fixture");
+
+    let engine = NativeSparqlEngine::new();
+    let query = "PREFIX : <http://example.org/> SELECT * WHERE { \
+                 ?s :p ?o LATERAL { ?s :label ?l LATERAL { ?s :q ?c } } }";
+    let explanation = engine
+        .explain_query(&dataset, query, None)
+        .expect("explain the query");
+    let ledger = explanation.ledger();
+    assert_eq!(
+        ledger.len(),
+        6,
+        "expected Project, outer Lateral, outer-left Bgp, inner Lateral, inner-left Bgp, \
+         innermost Bgp: {ledger:?}"
+    );
+    assert_eq!(ledger[0].label, "Project");
+    assert_eq!(ledger[1].label, "Lateral");
+    assert_eq!(ledger[2].label, "Bgp");
+    assert_eq!(ledger[3].label, "Lateral");
+    assert_eq!(ledger[4].label, "Bgp");
+    assert_eq!(ledger[5].label, "Bgp");
+
+    // Every pinned value below was independently confirmed against the release CLI's
+    // `--explain` output over the equivalent fixture before being written here.
+    let outer_lateral = &ledger[1];
+    assert_eq!(
+        outer_lateral.rows, 2,
+        "the outer LATERAL's true output — :a's 2 rows, :b's 0 — is untouched by the inner \
+         window's arbitration: {ledger:?}"
+    );
+
+    let outer_left_bgp = &ledger[2];
+    assert_eq!(
+        outer_left_bgp.rows, 2,
+        "the outer left Bgp's own two rows: {ledger:?}"
+    );
+    let outer_left_estimate = outer_left_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp carries a planner estimate");
+    assert_eq!(outer_left_estimate.rows, 2);
+    assert_eq!(outer_left_bgp.rows, outer_left_estimate.rows);
+
+    let inner_lateral = &ledger[3];
+    assert_eq!(
+        inner_lateral.rows, 2,
+        "the inner LATERAL's true output, summed across its 2 outer-row invocations \
+         (2 for :a, 0 for :b): {ledger:?}"
+    );
+
+    let inner_left_bgp = &ledger[4];
+    assert_eq!(
+        inner_left_bgp.rows, 4,
+        "the inner left Bgp's own output summed across its 2 invocations (2 labels each \
+         for :a and :b): {ledger:?}"
+    );
+    let inner_left_estimate = inner_left_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp carries a planner estimate");
+    assert_eq!(inner_left_estimate.rows, 4);
+    assert_eq!(inner_left_bgp.rows, inner_left_estimate.rows);
+
+    let innermost_bgp = &ledger[5];
+    let innermost_estimate = innermost_bgp
+        .estimate
+        .as_ref()
+        .expect("a Bgp under a nested LATERAL still carries a planner estimate");
+    assert_eq!(
+        innermost_estimate.rows, 1,
+        "the per-invocation estimate is unaffected by the fix: {ledger:?}"
+    );
+    // The false inflation this test exists to catch: before the fix, this line read
+    // `rows=4` (fourfold the true value) beside the SAME `estimated-rows=1` — a real Bgp
+    // whose planner estimate was exact rendering as an apparent 4x miss.
+    assert_eq!(
+        innermost_bgp.rows, 2,
+        "the innermost Bgp's TRUE constrained output, summed over all 4 invocations \
+         (1 + 1 + 0 + 0), is 2 — not a composite of the outer window's re-copied leaf, \
+         `VALUES` table, and `Join` wrapper: {ledger:?}"
+    );
+    assert_eq!(
+        innermost_bgp.cells, 2,
+        "exactly two invocations (both :a's) committed a nonzero row, and neither exceeds \
+         one row, so the peak single-bag cell count equals the summed row count here: \
+         {ledger:?}"
+    );
+
+    // The adversary's invariant strengthened: `cells <= rows * columns` alone cannot catch
+    // row inflation (inflating `rows` only loosens that bound), so the pins above — not
+    // this sweep — are what actually catches the regression. The sweep still holds and is
+    // worth keeping as a general cross-check.
+    for node in ledger {
+        if let Some(estimate) = &node.estimate {
+            assert!(
+                node.cells <= node.rows.saturating_mul(estimate.columns),
+                "cells={} must not exceed rows={} * columns={} for {node:?}",
+                node.cells,
+                node.rows,
+                estimate.columns
+            );
+        }
+        assert!(
+            node.rows > 0 || node.cells == 0,
+            "a node with zero committed rows cannot report nonzero cells: {node:?}"
+        );
+    }
+
+    // Fuel attribution is untouched by this fix: every unit charged during every
+    // substituted evaluation, at every nesting depth, still lands on the one real node it
+    // was charged against, and the ledger's fuel column still sums to the evidence total.
+    let ledger_fuel: u64 = ledger.iter().map(NodeCharges::fuel_total).sum();
+    assert_eq!(
+        ledger_fuel,
+        explanation.evidence().consumed_in(ResourceDimension::Fuel),
+        "the per-node fuel column must still sum to the execution's fuel total"
+    );
+
+    // Determinism: the construction-time arbitration this fix adds is internal,
+    // address-keyed bookkeeping; nothing address-derived may leak into the rendered
+    // explanation.
+    let rendered = explanation.render();
+    assert_eq!(
+        engine
+            .explain_query(&dataset, query, None)
+            .expect("explain again")
+            .render(),
+        rendered,
+        "identical query and data must render byte-identical explain output"
+    );
 }
 
 // ---------------------------------------------------------------------------

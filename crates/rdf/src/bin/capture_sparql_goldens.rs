@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Capture the native SPARQL engine as committed goldens ( Task 2/8).
+//! Capture the native SPARQL engine as committed goldens.
 //!
-//!  removed oxigraph; the native [`NativeSparqlEngine`] is now the SOLE
-//! SPARQL authority (the cutover proved native ≡ oxigraph). This maintainer-only
+//! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority (the cutover
+//! proved native ≡ oxigraph). This maintainer-only
 //! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
 //! (`queries/**` + `generated/queries/**`) and over the GAP-A `$this`-substitution
 //! shapes, writing them as byte-stable golden files under
@@ -185,13 +185,13 @@ fn capture_corpus(goldens: &Path) -> Tally {
             Ok(result) => write_result_golden(&stem, &result, &mut tally),
             Err(e) => {
                 let msg = e.to_string();
-                if is_deferred_construct(&msg) {
+                if is_deferred_construct(&e.code) {
                     tally.deferred += 1;
                     write_marker(
                         &with_ext(&stem, "deferred"),
                         &format!(
-                            "deferred construct (property-path/service/lateral/describe/\
-                                  rdf12-triple-term): {msg}\n"
+                            "unsupported residue (quoted-triple-term variable/custom-function-\
+                                  iri/heldin-unconfigured/depth-limit): {msg}\n"
                         ),
                     );
                 } else {

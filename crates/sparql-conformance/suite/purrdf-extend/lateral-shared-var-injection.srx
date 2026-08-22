@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="s"/>
+    <variable name="o"/>
+    <variable name="qval"/>
+  </head>
+  <results>
+    <result>
+      <binding name="s"><uri>https://example.org/lateral#a</uri></binding>
+      <binding name="o"><uri>https://example.org/lateral#oa</uri></binding>
+      <binding name="qval"><uri>https://example.org/lateral#c</uri></binding>
+    </result>
+  </results>
+</sparql>

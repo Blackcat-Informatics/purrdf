@@ -74,7 +74,7 @@ fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, S
 
 /// Assemble the self-describing S3 [`RdfBundle`] from the slice-artifact rows and
 /// the parsed base graph, hard-fail `validate()` it, and return the artifact bytes
-/// as content-addressed [`BlobRow`]s to embed (S3, gap G4).
+/// as content-addressed [`BlobRow`]s to embed (S3).
 ///
 /// One [`UnitId`] per slice (metadata = slice IRI + name), one content-addressed
 /// `ArtifactRecord` per ontology artifact, every blob inserted into the bundle's
@@ -569,7 +569,7 @@ fn compile_gts_native(
                 .map_err(PyValueError::new_err)?;
         }
 
-        // S3 (gap G4): assemble the self-describing RdfBundle from the slice
+        // S3: assemble the self-describing RdfBundle from the slice
         // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
         // a content-addressed blob through the SAME channel doc_blobs ride. The base
         // graph is the bundle's hot dataset. Large external DATA blobs (graph.blobs)

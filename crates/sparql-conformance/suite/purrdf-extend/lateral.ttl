@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# LATERAL (SEP-0006) fixture for the purrdf-extend EXTEND suite. `:a` and `:b`
+# each carry `:p` to an object and TWO `rdfs:label` values ("a1"/"a2" and
+# "b1"/"b2"); `:z` carries `:p` but no label at all (the SEP's own "labelless
+# subject" example, exercised by `:lateralOptionalSubselect`'s `OPTIONAL`
+# padding). `:a` additionally carries `:q :c`, the sole fact the
+# shared-variable-injection case (`:lateralSharedVarInjection`) can match —
+# `:b`/`:z` correctly produce no row there.
+@prefix :    <https://example.org/lateral#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+:a :p :oa ;
+   rdfs:label "a1", "a2" ;
+   :q :c .
+
+:b :p :ob ;
+   rdfs:label "b1", "b2" .
+
+:z :p :oz .

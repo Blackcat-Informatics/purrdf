@@ -484,6 +484,19 @@ fn fmt_quad_pattern_body(quads: &[QuadPattern]) -> String {
 
 impl core::fmt::Display for GraphUpdateOperation {
     /// Serialize one update operation to SPARQL Update surface syntax.
+    ///
+    /// The `WHERE` clause of a [`Self::DeleteInsert`] is rendered through
+    /// [`crate::serialize::fmt_group_body`] — the SAME group-graph-pattern
+    /// renderer [`crate::pattern_to_select_query`] uses for a query's own WHERE
+    /// body — rather than a second, duplicate pattern-to-text implementation.
+    /// The two call sites want the identical shape: [`crate::parser::SparqlParser`]
+    /// parses an UPDATE's `WHERE { … }` with the very same
+    /// `parse_group_graph_pattern` a `SELECT`'s `WHERE { … }` goes through, so
+    /// anything the query-side renderer can reproduce (including a `LATERAL`
+    /// join, now legal in an UPDATE WHERE clause) the update-side renderer must
+    /// reproduce too. The output round-trips through
+    /// [`crate::parser::SparqlParser::parse_update`]: `parse_update(op.to_string())`
+    /// reproduces `op` for every variant of this enum.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InsertData { data } => {
@@ -502,16 +515,30 @@ impl core::fmt::Display for GraphUpdateOperation {
                 if let Some(w) = with {
                     write!(f, "WITH <{}> ", w.as_str())?;
                 }
-                if !delete.is_empty() {
-                    write!(f, "DELETE {{ {} }} ", fmt_quad_pattern_body(delete))?;
-                }
-                if !insert.is_empty() {
-                    write!(f, "INSERT {{ {} }} ", fmt_quad_pattern_body(insert))?;
+                if delete.is_empty() && insert.is_empty() {
+                    // The `Modify` grammar (§3, `[43]`) requires at least one of
+                    // `DeleteClause`/`InsertClause` — an empty template on BOTH
+                    // sides (a legal, if useless, `DELETE WHERE { }` / `INSERT { }
+                    // WHERE { }` / bare `WITH … WHERE { }`) still needs ONE emitted
+                    // or the text is not valid Update syntax at all. Which keyword
+                    // is chosen is immaterial: re-parsing either yields the same
+                    // `delete: vec![], insert: vec![]` this operation already
+                    // carries, so `INSERT { }` is picked unconditionally here.
+                    write!(f, "INSERT {{ }} ")?;
+                } else {
+                    if !delete.is_empty() {
+                        write!(f, "DELETE {{ {} }} ", fmt_quad_pattern_body(delete))?;
+                    }
+                    if !insert.is_empty() {
+                        write!(f, "INSERT {{ {} }} ", fmt_quad_pattern_body(insert))?;
+                    }
                 }
                 for u in using {
                     write!(f, "{u} ")?;
                 }
-                write!(f, "WHERE {{ {pattern:?} }}")
+                let mut body = String::new();
+                crate::serialize::fmt_group_body(&mut body, pattern);
+                write!(f, "WHERE {{ {body} }}")
             }
             Self::Load {
                 silent,
@@ -859,15 +886,30 @@ impl core::fmt::Display for PropertyPathExpression {
         match self {
             Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),
             Self::Reverse(a) => write!(f, "^{}", PathElt(a)),
-            Self::Sequence(a, b) => write!(f, "{a}/{b}"),
-            Self::Alternative(a, b) => write!(f, "{a}|{b}"),
-            Self::ZeroOrMore(a) => write!(f, "{}*", PathElt(a)),
-            Self::OneOrMore(a) => write!(f, "{}+", PathElt(a)),
-            Self::ZeroOrOne(a) => write!(f, "{}?", PathElt(a)),
+            // `/` (this arm) binds TIGHTER than `|`, and both are
+            // left-associative: an `Alternative` operand on EITHER side needs
+            // parens (it would otherwise mis-group into the surrounding `|`
+            // on re-parse — `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+            // `property-path/path-p2.rq`/`path-p4.rq` findings, e.g.
+            // `(p1|p2)/(p3|p4)` rendered bare as `p1|p2/p3|p4` reparses as
+            // `(p1|(p2/p3))|p4`); a `Sequence` operand needs parens ONLY on
+            // the RIGHT (the left one reproduces via `/`'s own
+            // left-associativity — `a/b/c` IS `Sequence(Sequence(a,b),c)`
+            // already — but a RIGHT-nested `Sequence(a, Sequence(b,c))`
+            // rendered bare as `a/b/c` would reparse LEFT-nested instead).
+            Self::Sequence(a, b) => write!(f, "{}/{}", SeqLeft(a), SeqRight(b)),
+            // `|`'s own left operand never needs parens (lowest precedence,
+            // left-associative — any shape reproduces bare); the right
+            // operand needs them only for a nested `Alternative` (the same
+            // right-nesting-vs-left-associativity mismatch `Sequence` has).
+            Self::Alternative(a, b) => write!(f, "{a}|{}", AltRight(b)),
+            Self::ZeroOrMore(a) => write!(f, "{}*", QuantifierOperand(a)),
+            Self::OneOrMore(a) => write!(f, "{}+", QuantifierOperand(a)),
+            Self::ZeroOrOne(a) => write!(f, "{}?", QuantifierOperand(a)),
             Self::Range { inner, min, max } => match max {
-                Some(m) if *m == *min => write!(f, "{}{{{min}}}", PathElt(inner)),
-                Some(m) => write!(f, "{}{{{min},{m}}}", PathElt(inner)),
-                None => write!(f, "{}{{{min},}}", PathElt(inner)),
+                Some(m) if *m == *min => write!(f, "{}{{{min}}}", QuantifierOperand(inner)),
+                Some(m) => write!(f, "{}{{{min},{m}}}", QuantifierOperand(inner)),
+                None => write!(f, "{}{{{min},}}", QuantifierOperand(inner)),
             },
             Self::NegatedPropertySet(elems) => {
                 let inner = elems
@@ -891,17 +933,21 @@ impl core::fmt::Display for PropertyPathExpression {
     }
 }
 
-/// Wraps a property path in parentheses when it must be grouped to sit under a
-/// postfix operator (`*`/`+`/`?`/`{n,m}`) — i.e. when it is a sequence,
-/// alternative, or **inverse** (`^`) path.
+/// Wraps a property path in parentheses when it must be grouped to sit as
+/// `^`'s (`Reverse`'s) operand — i.e. when it is a sequence or alternative
+/// path (lower precedence than `^`, needs disambiguating) or ITSELF another
+/// inverse (`^^p` needs `^(^p)` to stay two `Reverse`s rather than folding
+/// however a double-`^` might otherwise lex/parse).
 ///
-/// The postfix quantifiers bind tighter than `^` in the SPARQL grammar:
-/// `parse_path_elt_or_inverse` applies `^` and then delegates to
-/// `parse_path_elt` for the quantified primary.  So `^<p>*` reparses as
-/// `Reverse(ZeroOrMore(<p>))`, not `ZeroOrMore(Reverse(<p>))`.  Wrapping a
-/// `Reverse` inner in parentheses — `(^<p>)*` — forces the parser to treat
-/// the whole inverse path as the primary before the quantifier is applied,
-/// preserving the original AST on round-trip.
+/// A QUANTIFIED path (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) is
+/// DELIBERATELY NOT in this list: the postfix quantifiers bind tighter than
+/// `^` in the SPARQL grammar — `parse_path_elt_or_inverse` applies `^` and
+/// then delegates to `parse_path_elt` for the quantified primary, so
+/// `^<p>*` reparses as `Reverse(ZeroOrMore(<p>))` (not
+/// `ZeroOrMore(Reverse(<p>))`) WITHOUT any parens needed — the grammar rule
+/// `^` sits in already expects a possibly-quantified primary right after it.
+/// [`QuantifierOperand`] is the analogous wrapper for the OTHER context
+/// (a quantifier's own operand), which has different rules — see its doc.
 struct PathElt<'a>(&'a PropertyPathExpression);
 
 impl core::fmt::Display for PathElt<'_> {
@@ -912,6 +958,85 @@ impl core::fmt::Display for PathElt<'_> {
             | PropertyPathExpression::Reverse(..) => {
                 write!(f, "({})", self.0)
             }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// Wraps a property path in parentheses when it must be grouped to sit as a
+/// postfix quantifier's (`*`/`+`/`?`/`{n,m}`) OWN operand — a DIFFERENT
+/// context from [`PathElt`] (`^`'s operand), with a wider parenthesize set:
+/// a `Sequence`/`Alternative`/`Reverse` operand needs the same
+/// disambiguation `PathElt` gives `^`, but ALSO a NESTED quantified path
+/// (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) does here, unlike under
+/// `^` — `PathMod` attaches to exactly one `PathPrimary`, and an
+/// already-quantified path is not one, so chaining two quantifiers directly
+/// (`p**`, the un-parenthesized spelling `(p*)*` would otherwise collapse
+/// to) is not even valid surface syntax
+/// (`crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+/// `property-path/pp37.rq` finding: `((:P)*)*` used to render as the
+/// un-reparseable `<P>**`). Parenthesizing the inner quantified path makes it
+/// a primary again, exactly like `PathElt` does for `Sequence`/`Alternative`.
+struct QuantifierOperand<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for QuantifierOperand<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Sequence(..)
+            | PropertyPathExpression::Alternative(..)
+            | PropertyPathExpression::Reverse(..)
+            | PropertyPathExpression::ZeroOrMore(..)
+            | PropertyPathExpression::OneOrMore(..)
+            | PropertyPathExpression::ZeroOrOne(..)
+            | PropertyPathExpression::Range { .. } => {
+                write!(f, "({})", self.0)
+            }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The LEFT operand of `/` (`Sequence`): parens only for `Alternative` (lower
+/// precedence — see [`PropertyPathExpression`]'s `Display`'s `Sequence` arm
+/// for the full precedence argument). A nested `Sequence` reproduces bare via
+/// `/`'s own left-associativity.
+struct SeqLeft<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for SeqLeft<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The RIGHT operand of `/` (`Sequence`): parens for `Alternative` (lower
+/// precedence) AND for a nested `Sequence` (right-nesting does not survive
+/// `/`'s left-associative re-parse — see the `Sequence` `Display` arm).
+struct SeqRight<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for SeqRight<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) | PropertyPathExpression::Sequence(..) => {
+                write!(f, "({})", self.0)
+            }
+            other => write!(f, "{other}"),
+        }
+    }
+}
+
+/// The RIGHT operand of `|` (`Alternative`): parens only for a nested
+/// `Alternative` (right-nesting does not survive `|`'s left-associative
+/// re-parse). `Sequence` binds tighter and never needs parens on either side
+/// of `|`.
+struct AltRight<'a>(&'a PropertyPathExpression);
+
+impl core::fmt::Display for AltRight<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
             other => write!(f, "{other}"),
         }
     }
@@ -1809,5 +1934,142 @@ mod tests {
             version: None,
         };
         assert_eq!(upd.to_string(), "BASE <http://ex/base> CLEAR ALL");
+    }
+
+    // ── `Display for GraphUpdateOperation` round-trips through the real parser ──
+    //
+    // These prove `Display` emits genuine, re-parseable SPARQL Update surface
+    // syntax (not the `{pattern:?}` Debug dump it used to) — one test per enum
+    // arm at minimum, `parse_update(op.to_string()) == op` for a fresh op built
+    // by the real parser (never hand-built, so the comparison exercises the
+    // exact structure `parse_update_operation` produces).
+
+    /// Parse `text` as a single-operation Update and return that one operation.
+    fn parse_single_op(text: &str) -> GraphUpdateOperation {
+        let update = crate::parser::SparqlParser::new()
+            .parse_update(text)
+            .unwrap_or_else(|e| panic!("failed to parse {text:?}: {e}"));
+        assert_eq!(update.operations.len(), 1, "expected exactly one operation");
+        update
+            .operations
+            .into_iter()
+            .next()
+            .expect("checked len == 1")
+    }
+
+    /// Parse `text`, `Display` the resulting operation, re-parse that text, and
+    /// assert the two operations are equal. Returns the rendered text so callers
+    /// can inspect it further (e.g. assert it is free of Debug punctuation).
+    fn assert_op_round_trips(text: &str) -> String {
+        let op = parse_single_op(text);
+        let rendered = op.to_string();
+        let reparsed = parse_single_op(&rendered);
+        assert_eq!(
+            op, reparsed,
+            "round trip mismatch\n  original text: {text}\n  rendered:      {rendered}"
+        );
+        rendered
+    }
+
+    #[test]
+    fn insert_data_round_trips() {
+        assert_op_round_trips(
+            "INSERT DATA { <http://ex/s> <http://ex/p> <http://ex/o> . \
+             GRAPH <http://ex/g> { <http://ex/s2> <http://ex/p2> <http://ex/o2> . } }",
+        );
+    }
+
+    #[test]
+    fn delete_data_round_trips() {
+        assert_op_round_trips("DELETE DATA { <http://ex/s> <http://ex/p> <http://ex/o> . }");
+    }
+
+    #[test]
+    fn delete_where_round_trips() {
+        assert_op_round_trips("DELETE WHERE { ?s <http://ex/p> ?o . ?o <http://ex/q> ?x . }");
+    }
+
+    #[test]
+    fn insert_where_with_a_lateral_round_trips() {
+        let rendered = assert_op_round_trips(
+            "INSERT { ?s <http://ex/q> ?x } WHERE { \
+             ?s <http://ex/p> ?o . LATERAL { ?o <http://ex/r> ?x } }",
+        );
+        // The rendered WHERE clause must be real SPARQL, not a Debug dump: no
+        // `Bgp {`/`TriplePattern {`/`Lateral {` Rust-struct punctuation, and the
+        // `LATERAL` keyword itself must survive into the surface text.
+        assert!(!rendered.contains("Bgp {"), "{rendered}");
+        assert!(!rendered.contains("TriplePattern"), "{rendered}");
+        assert!(rendered.contains("LATERAL"), "{rendered}");
+    }
+
+    #[test]
+    fn with_delete_insert_where_round_trips() {
+        assert_op_round_trips(
+            "WITH <http://ex/g> DELETE { ?s <http://ex/p> ?o } INSERT { ?s <http://ex/q> ?o } \
+             USING <http://ex/u> USING NAMED <http://ex/n> WHERE { ?s <http://ex/p> ?o }",
+        );
+    }
+
+    #[test]
+    fn insert_only_where_with_empty_template_round_trips() {
+        // `delete` and `insert` are BOTH empty here — the one shape `Display`
+        // must still emit a syntactically valid `Modify` (at least one of
+        // `DeleteClause`/`InsertClause`), never a bare `WHERE { … }`.
+        assert_op_round_trips("INSERT { } WHERE { ?s <http://ex/p> ?o }");
+    }
+
+    #[test]
+    fn load_round_trips() {
+        assert_op_round_trips("LOAD SILENT <http://ex/doc> INTO GRAPH <http://ex/g>");
+        assert_op_round_trips("LOAD <http://ex/doc>");
+    }
+
+    #[test]
+    fn clear_round_trips() {
+        assert_op_round_trips("CLEAR SILENT ALL");
+        assert_op_round_trips("CLEAR GRAPH <http://ex/g>");
+    }
+
+    #[test]
+    fn drop_round_trips() {
+        assert_op_round_trips("DROP SILENT NAMED");
+        assert_op_round_trips("DROP DEFAULT");
+    }
+
+    #[test]
+    fn create_round_trips() {
+        assert_op_round_trips("CREATE SILENT GRAPH <http://ex/g>");
+    }
+
+    #[test]
+    fn add_round_trips() {
+        assert_op_round_trips("ADD SILENT DEFAULT TO GRAPH <http://ex/g>");
+    }
+
+    #[test]
+    fn move_round_trips() {
+        assert_op_round_trips("MOVE GRAPH <http://ex/a> TO GRAPH <http://ex/b>");
+    }
+
+    #[test]
+    fn copy_round_trips() {
+        assert_op_round_trips("COPY SILENT GRAPH <http://ex/a> TO DEFAULT");
+    }
+
+    #[test]
+    fn update_display_round_trips_a_multi_operation_request() {
+        let text = "BASE <http://ex/base> \
+                     INSERT DATA { <http://ex/s> <http://ex/p> <http://ex/o> } ; \
+                     DELETE WHERE { ?s <http://ex/p> ?o } ; \
+                     CLEAR ALL";
+        let update = crate::parser::SparqlParser::new()
+            .parse_update(text)
+            .unwrap_or_else(|e| panic!("failed to parse {text:?}: {e}"));
+        let rendered = update.to_string();
+        let reparsed = crate::parser::SparqlParser::new()
+            .parse_update(&rendered)
+            .unwrap_or_else(|e| panic!("failed to re-parse {rendered:?}: {e}"));
+        assert_eq!(update, reparsed);
     }
 }

@@ -1013,7 +1013,7 @@ mod tests {
         );
     }
 
-    // ── G1 regression: trailing dot must NOT be absorbed into a number ──────
+    // ── Trailing dot must NOT be absorbed into a number ──────────────────────
 
     #[test]
     fn trailing_dot_is_separator_not_decimal() {
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(toks("1.5"), vec![Token::Decimal("1.5")]);
     }
 
-    // ── G2 regression: exponent requires at least one digit after e/E ────────
+    // ── Exponent requires at least one digit after e/E ────────────────────────
 
     #[test]
     fn double_exponent_no_digit_yields_integer_then_word() {

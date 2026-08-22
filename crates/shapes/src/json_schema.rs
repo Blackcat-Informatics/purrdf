@@ -4886,7 +4886,7 @@ mod tests {
 
     #[test]
     fn target_node_shape_records_loss_instead_of_silent_exclusion() {
-        // Gap G5: a shape targeted ONLY via `sh:targetNode` selects specific
+        // A shape targeted ONLY via `sh:targetNode` selects specific
         // focus nodes, not a class extension — it used to be silently dropped
         // (no `$def`, no loss). It must now surface a `sh:targetNode` loss on
         // the shape's own subject.
@@ -4917,7 +4917,7 @@ mod tests {
 
     #[test]
     fn target_subjects_of_shape_records_loss_instead_of_silent_exclusion() {
-        // Gap G5: a shape targeted ONLY via `sh:targetSubjectsOf` selects focus
+        // A shape targeted ONLY via `sh:targetSubjectsOf` selects focus
         // nodes by a predicate's subject position, not a class extension — it
         // used to be silently dropped. It must now surface a
         // `sh:targetSubjectsOf` loss on the shape's own subject.
@@ -4948,7 +4948,7 @@ mod tests {
 
     #[test]
     fn target_objects_of_shape_records_loss_instead_of_silent_exclusion() {
-        // Gap G5: a shape targeted ONLY via `sh:targetObjectsOf` selects focus
+        // A shape targeted ONLY via `sh:targetObjectsOf` selects focus
         // nodes by a predicate's object position, not a class extension — it
         // used to be silently dropped. It must now surface a
         // `sh:targetObjectsOf` loss on the shape's own subject.
@@ -4979,7 +4979,7 @@ mod tests {
 
     #[test]
     fn implicit_class_shape_emits_def_and_records_no_loss() {
-        // Gap G5: the shape id being itself an `rdfs:Class` (no explicit
+        // The shape id being itself an `rdfs:Class` (no explicit
         // `sh:targetClass`) IS a genuine class extension — instances of the
         // shape's own class — so it must emit a `$def` exactly like an
         // explicit `sh:targetClass`, and NOT record a loss (a spurious loss
@@ -5045,7 +5045,7 @@ mod tests {
 
     #[test]
     fn every_target_kind_either_emits_a_def_or_records_a_loss_never_silent() {
-        // Gap G5's core invariant, enforced directly: a shape targeted by any
+        // Core invariant, enforced directly: a shape targeted by any
         // ONE of the four non-sh:targetClass/non-sh:target kinds must produce
         // an observable outcome — either a $def (ImplicitClass) or a loss
         // (Node, SubjectsOf, ObjectsOf) — never neither.
@@ -5539,7 +5539,7 @@ mod tests {
 
     #[test]
     fn value_vocab_standalone_enum_def_even_when_unreferenced() {
-        // R1/R2/R3: a marked class with NO referencing property still projects a
+        // A marked class with NO referencing property still projects a
         // `{Local}Enum` $def whose members are its sorted `{"@id":curie}` individuals.
         let schema = schema_of(&compile_vocab(
             r"
@@ -5682,7 +5682,7 @@ mod tests {
 
     #[test]
     fn value_vocab_none_and_zero_match_equal_plain_compile() {
-        // R7: None == compile(); AND a marker that matches zero classes == compile()
+        // None == compile(); AND a marker that matches zero classes == compile()
         // (the realistic misconfiguration — wrong marker IRI — must not perturb output).
         let ttl = format!(
             "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{}",
@@ -5918,7 +5918,7 @@ mod tests {
 
     #[test]
     fn value_vocab_sh_class_single_emits_scalar_ref() {
-        // R4: sh:class → vocab, maxCount 1 ⇒ a bare scalar $ref to the enum $def.
+        // sh:class → vocab, maxCount 1 ⇒ a bare scalar $ref to the enum $def.
         let schema = schema_of(&compile_vocab(&format!(
             "{STABILITY_VOCAB}
             meta:TermShape a sh:NodeShape ;
@@ -5935,7 +5935,7 @@ mod tests {
 
     #[test]
     fn value_vocab_sh_class_multi_wraps_ref_in_array() {
-        // R4: multi-valued ⇒ anyOf[scalar $ref, array-of-$ref], cardinality preserved.
+        // Multi-valued ⇒ anyOf[scalar $ref, array-of-$ref], cardinality preserved.
         let schema = schema_of(&compile_vocab(&format!(
             "{STABILITY_VOCAB}
             meta:TermShape a sh:NodeShape ;
@@ -5960,7 +5960,7 @@ mod tests {
 
     #[test]
     fn value_vocab_rdfs_range_open_property_emits_ref() {
-        // R4: a property with NO sh:class but a vocab rdfs:range ⇒ enum $ref.
+        // A property with NO sh:class but a vocab rdfs:range ⇒ enum $ref.
         let schema = schema_of(&compile_vocab(&format!(
             "{STABILITY_VOCAB}
             meta:stability rdfs:range logic:TermStability .
@@ -6134,7 +6134,7 @@ mod tests {
 
     #[test]
     fn value_vocab_projection_leaves_the_live_validator_open() {
-        // R5: on an rdfs:range-associated OPEN property (no sh:class), a non-anchor
+        // On an rdfs:range-associated OPEN property (no sh:class), a non-anchor
         // IRI value CONFORMS to the live SHACL validator, yet its projection is
         // REJECTED by the closed enum schema — proving the projection never closes
         // the validator. Also pins that no sh:in was injected into the shape IR.

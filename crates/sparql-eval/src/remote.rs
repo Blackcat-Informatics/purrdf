@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
-use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
+use purrdf_sparql_algebra::{GraphPattern, GroundTerm, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, materialize_solutions};
@@ -191,6 +191,347 @@ pub trait RemoteQuerySource {
     ) -> Result<ResolvedBindings, RemoteError>;
 }
 
+/// Whether `pattern` reaches a WRITTEN `LATERAL` keyword anywhere in the FULL
+/// forwardable body — including inside a nested `SERVICE` (fixed-IRI or
+/// variable-endpoint) and inside an expression-embedded `EXISTS` — shared by
+/// [`eval_service`]'s forward guard. Follows the same soundness-visitor idiom
+/// as `crate::property_fn_eval::pattern_reaches_property_function`, and the
+/// generic fallback below already recurses into `GraphPattern::Service`'s
+/// `inner` via `visit_pattern_parts`'s `Service` arm regardless of whether the
+/// endpoint is fixed or a variable — a written `LATERAL` nested inside
+/// `SERVICE ?g { … }` (which is itself nested arbitrarily deep) is therefore
+/// found no differently than one nested inside `SERVICE <fixed> { … }` or any
+/// other child position.
+///
+/// A `Lateral` whose right operand is a property-function call or a
+/// variable-endpoint `SERVICE` does NOT itself count as a written `LATERAL`:
+/// `purrdf_sparql_algebra::parser` wraps BOTH shapes in `Lateral`
+/// unconditionally as an internal representation detail (every
+/// property-function call, and every `SERVICE ?g`, is `Lateral`-wrapped even
+/// with no `LATERAL` keyword ever written), and its serializer's own
+/// `parser_rebuilds_the_lateral` mirrors this exact exclusion when deciding
+/// whether the `LATERAL` keyword needs to be emitted on re-parse. Forwarding
+/// either shape emits no `LATERAL` text AT THIS NODE — but the search does
+/// not stop there: `left` and the auto-wrapped `right` (a property-function
+/// call is a leaf with no children of its own; a variable-endpoint `Service`
+/// has an `inner` that may itself contain a written `LATERAL`, arbitrarily
+/// deeply nested) are both still searched, which is what closes the bypass
+/// where a written `LATERAL` sits inside a `SERVICE ?g { … }` auto-wrap.
+fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
+    if let GraphPattern::Lateral { left, right } = pattern {
+        let parser_reconstructs_it = matches!(
+            right.as_ref(),
+            GraphPattern::PropertyFunction(_)
+                | GraphPattern::Service {
+                    name: NamedNodePattern::Variable(_),
+                    ..
+                }
+        );
+        return if parser_reconstructs_it {
+            pattern_reaches_lateral(left) || pattern_reaches_lateral(right)
+        } else {
+            true
+        };
+    }
+    let mut found = false;
+    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::PatternPart::Child(child, _edge) => {
+                pattern_reaches_lateral(child)
+            }
+            crate::governor::soundness::PatternPart::Expression(expr) => {
+                expression_reaches_lateral(expr)
+            }
+        };
+        found
+    });
+    found
+}
+
+/// [`pattern_reaches_lateral`] through an expression's embedded patterns
+/// (an `EXISTS`'s inner pattern, recursively).
+fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    let mut found = false;
+    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
+                pattern_reaches_lateral(pattern)
+            }
+            crate::governor::soundness::ExpressionPart::Sub(inner) => {
+                expression_reaches_lateral(inner)
+            }
+            crate::governor::soundness::ExpressionPart::Call(_) => false,
+        };
+        found
+    });
+    found
+}
+
+/// Strip every blank-node-carrying `VALUES` pushdown restriction from `pattern` before it
+/// is serialized for a `SERVICE` request — the forwarding path's ONE consumer
+/// ([`eval_service`], immediately before `pattern_to_select_query`). Never called from
+/// local evaluation, which walks the unsanitized `pattern` returned by
+/// [`crate::expr::substitute_pattern`] directly.
+///
+/// # What is being stripped, and why it is safe to drop rather than forward or refuse
+///
+/// [`crate::expr::substitute_pattern`]'s Values-Insertion rewrite (`join_leaf_with_values`,
+/// `wrap_with_expr_term_only_values`) wraps a correlated `LATERAL`'s substituted leaves in
+/// `Join(leaf, Values { v → outer_term })`: a SEMI-JOIN PUSHDOWN that restricts the
+/// evaluation to the outer row's bindings. It is an OPTIMIZATION, not the sole source of
+/// that restriction — [`crate::binop::eval_lateral`]'s own compatibility merge, joining
+/// every row this node returns against the outer row μ on their shared variables, filters
+/// to the identical rows regardless of whether the remote endpoint was ever told about the
+/// restriction.
+///
+/// Blank-node scope is dataset-local (RDF 1.1 §3.4 / RDF 1.2 §3.5): the outer row's blank
+/// node is a value THIS engine minted over THIS dataset, so no solution a remote endpoint
+/// returns can ever bind the shared variable to that same node — the compatibility merge
+/// above reduces every such row to incompatible, hence dropped, regardless of what the
+/// remote sent back. Dropping the restriction from the FORWARDED TEXT therefore changes
+/// nothing about the FINAL answer: the remote instead answers unrestricted for that
+/// variable (a superset the local merge narrows back down to the same rows a satisfiable
+/// restriction would have produced), while a request that included the restriction could
+/// only ever have been satisfied by an endpoint that happens to share the exact same blank
+/// node under the exact same scope — which, by construction, no other engine's dataset
+/// does. Either way, the merge — not the pushdown — is what makes the joined result
+/// correct; the pushdown is disposable.
+///
+/// The two alternatives are worse. Serializing the cell as `_:label` produces syntax the
+/// `VALUES`/`DataBlock` grammar does not admit — it permits IRIs, literals, `UNDEF`, and,
+/// in SPARQL 1.2, ground triple terms, but never a blank node — so a conforming endpoint
+/// syntax-errors the request; under `SERVICE SILENT` that rejection degrades to the join
+/// identity, which is exactly the silent-wrong-answer hazard this module's other `SILENT`
+/// guards exist to close. A non-silent `SERVICE` would instead surface a confusing remote
+/// syntax error for a query that has a perfectly well-defined answer. Refusing to forward
+/// at all would deliver a real answer by refusal. Stripping is the only one of the three
+/// that is both legal SPARQL and loses no information the local merge does not already
+/// supply.
+///
+/// # Every stripped column is injection-produced, never user-written
+///
+/// The SPARQL `DataBlockValue` grammar admits no blank-node spelling, so
+/// [`purrdf_sparql_algebra::parser`] never produces a `VALUES`/`BIND` block whose cell is
+/// [`GroundTerm::BlankNode`] — see that variant's own doc ("injection-only"). The only
+/// producer is the Values-Insertion rewrite named above, so a column this function strips
+/// was never something the query author wrote; it is always bookkeeping this evaluator
+/// itself added a moment earlier, for its own optimization purposes, and safe to remove
+/// again for the same reason it was safe to add.
+///
+/// # Recursion
+///
+/// Exhaustive over [`GraphPattern`], so an injected `Values` node is found no differently
+/// wherever Values-Insertion placed it — wrapped around a leaf at any depth, inside a
+/// `Filter`/`Extend`/`OrderBy`/`Group`'s term-only wrapper, nested inside another `SERVICE`
+/// or `LATERAL`, and so on. [`GroundTerm::Triple`] nests, so a cell is inspected
+/// transitively: a ground quoted triple containing a blank node ANYWHERE in its
+/// subject/object tree is stripped exactly like a bare blank-node cell.
+fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
+    match pattern {
+        // Leaves with no child pattern and no `Values` cells to inspect.
+        GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
+            patterns: patterns.clone(),
+        },
+        GraphPattern::Path {
+            subject,
+            path,
+            object,
+        } => GraphPattern::Path {
+            subject: subject.clone(),
+            path: path.clone(),
+            object: object.clone(),
+        },
+        GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
+        // The one node kind that can carry the hazard directly.
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => {
+            let (variables, bindings) = strip_blank_columns(variables, bindings);
+            GraphPattern::Values {
+                variables,
+                bindings,
+            }
+        }
+        // The one node kind whose child, once sanitized, may need collapsing out of the
+        // tree — see `join_dropping_empty_values`.
+        GraphPattern::Join { left, right } => {
+            let left = sanitize_forwarded_body(left);
+            let right = sanitize_forwarded_body(right);
+            join_dropping_empty_values(left, right)
+        }
+        // Every other node kind is a plain structural recursion: it carries no `Values`
+        // cells of its own, and the wrapper Values-Insertion may have added around it sits
+        // as one of ITS children, reached through the `Join` arm above.
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => GraphPattern::LeftJoin {
+            left: Box::new(sanitize_forwarded_body(left)),
+            right: Box::new(sanitize_forwarded_body(right)),
+            expression: expression.clone(),
+        },
+        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
+            left: Box::new(sanitize_forwarded_body(left)),
+            right: Box::new(sanitize_forwarded_body(right)),
+        },
+        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
+            expr: expr.clone(),
+            inner: Box::new(sanitize_forwarded_body(inner)),
+        },
+        GraphPattern::Union { left, right } => GraphPattern::Union {
+            left: Box::new(sanitize_forwarded_body(left)),
+            right: Box::new(sanitize_forwarded_body(right)),
+        },
+        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+            name: name.clone(),
+            inner: Box::new(sanitize_forwarded_body(inner)),
+        },
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => GraphPattern::Extend {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            variable: variable.clone(),
+            expression: expression.clone(),
+        },
+        GraphPattern::Minus { left, right } => GraphPattern::Minus {
+            left: Box::new(sanitize_forwarded_body(left)),
+            right: Box::new(sanitize_forwarded_body(right)),
+        },
+        GraphPattern::Service {
+            name,
+            inner,
+            silent,
+        } => GraphPattern::Service {
+            name: name.clone(),
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            silent: *silent,
+        },
+        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            expression: expression.clone(),
+        },
+        GraphPattern::Project { inner, variables } => GraphPattern::Project {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            variables: variables.clone(),
+        },
+        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+        },
+        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+        },
+        GraphPattern::Slice {
+            inner,
+            start,
+            length,
+        } => GraphPattern::Slice {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            start: *start,
+            length: *length,
+        },
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => GraphPattern::Group {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            variables: variables.clone(),
+            aggregates: aggregates.clone(),
+        },
+    }
+}
+
+/// Whether `term` is a blank node, or a ground RDF 1.2 quoted triple that transitively
+/// contains one anywhere in its subject/object tree — [`GroundTriple::predicate`] is
+/// always an IRI, so only the two recursive positions need inspecting.
+fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
+    match term {
+        GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => false,
+        GroundTerm::BlankNode(_) => true,
+        GroundTerm::Triple(t) => {
+            ground_term_has_blank_node(&t.subject) || ground_term_has_blank_node(&t.object)
+        }
+    }
+}
+
+/// Remove every column of a `Values` block whose cell, in ANY row, is a blank node or a
+/// ground triple transitively containing one — [`sanitize_forwarded_body`]'s core rewrite.
+/// Preserves the order of the surviving columns and the row count exactly (an `UNDEF`
+/// cell, `None`, never carries a blank node, so it never causes a column to be dropped).
+///
+/// A `Values` block with no blank-carrying column (the overwhelmingly common case: every
+/// user-written block, and every injected IRI/literal/ground-triple-without-a-blank
+/// pushdown) is returned with its `Vec`s cloned but otherwise byte-for-byte unchanged —
+/// there is no column to remove, so `keep` is all-`true` and the filter below is a no-op
+/// pass.
+fn strip_blank_columns(
+    variables: &[Variable],
+    bindings: &[Vec<Option<GroundTerm>>],
+) -> (Vec<Variable>, Vec<Vec<Option<GroundTerm>>>) {
+    let keep: Vec<bool> = (0..variables.len())
+        .map(|column| {
+            !bindings.iter().any(|row| {
+                row.get(column)
+                    .and_then(Option::as_ref)
+                    .is_some_and(ground_term_has_blank_node)
+            })
+        })
+        .collect();
+    let new_variables = variables
+        .iter()
+        .zip(&keep)
+        .filter(|&(_, &k)| k)
+        .map(|(v, _)| v.clone())
+        .collect();
+    let new_bindings = bindings
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(&keep)
+                .filter(|&(_, &k)| k)
+                .map(|(cell, _)| cell.clone())
+                .collect()
+        })
+        .collect();
+    (new_variables, new_bindings)
+}
+
+/// `Join(x, Values { variables: [], bindings: [[]] })` — a `Values` block
+/// [`strip_blank_columns`] emptied of every column — is exactly the join identity
+/// (`identity_seq`: one row, zero bindings), so `Join(x, that)` and `Join(that, x)` both
+/// collapse to `x` rather than being serialized as a `VALUES { }` block, which the SPARQL
+/// grammar does not admit as a standalone group graph pattern element. The row-count
+/// guard (not merely `variables.is_empty()`) is deliberate: [`strip_blank_columns`]
+/// preserves row count exactly, so an all-columns-stripped block still carries its
+/// original row count, and an emptied block is the join identity only when that count is
+/// the single row Values-Insertion always injects — a hypothetical zero-row all-columns
+/// block (the empty relation, `FALSE`) is NOT the identity and must not be collapsed away.
+fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphPattern {
+    if is_join_identity_values(&right) {
+        left
+    } else if is_join_identity_values(&left) {
+        right
+    } else {
+        GraphPattern::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+}
+
+/// See [`join_dropping_empty_values`].
+fn is_join_identity_values(pattern: &GraphPattern) -> bool {
+    matches!(
+        pattern,
+        GraphPattern::Values { variables, bindings }
+            if variables.is_empty() && bindings.len() == 1 && bindings[0].is_empty()
+    )
+}
+
 /// Evaluate a `SERVICE [SILENT] name { inner }` node to the remote result bag.
 ///
 /// The surrounding `Join` performs the federation join, so this returns only the
@@ -217,6 +558,29 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let _ = node;
+    // A `LATERAL` clause inside a forwarded body is refused ONLY under `SERVICE
+    // SILENT` — scoped to the hazard it actually guards against, the same
+    // treatment the custom-scalar-function refusal further down gets, rather than
+    // the unconditional treatment the property-function and custom-aggregate
+    // refusals get. `LATERAL` is a SEP-0006/Jena syntax extension most SPARQL
+    // 1.1/1.2-only endpoints do not implement, so a forwarded `LATERAL` is likely
+    // to be rejected by an endpoint that lacks it — and under `SERVICE SILENT`,
+    // that rejection would degrade to the join identity: a result that looks
+    // complete and is wrong. A plain, non-silent `SERVICE` has no such hazard to
+    // close: the endpoint's verdict — an answer from a `LATERAL`-capable endpoint
+    // (Jena's own extension; a Jena-backed endpoint answers it), or an honest
+    // `EvalError::Remote` from one that rejects it — surfaces exactly as it does
+    // for any other forwarded construct the remote might not support, so the body
+    // (including its `LATERAL { … }` text) is forwarded rather than refused.
+    if silent && pattern_reaches_lateral(inner) {
+        return Err(EvalError::unsupported(
+            "a LATERAL clause inside a SERVICE SILENT body: LATERAL is a SEP-0006/Jena syntax \
+             extension most remote SPARQL endpoints do not implement, and SILENT would swallow \
+             the endpoint's rejection into the join identity — a result that looks complete and \
+             is wrong; drop SILENT and the query forwards the LATERAL text, surfacing the \
+             endpoint's verdict (an answer, or an honest failure) instead",
+        ));
+    }
     // A property-function call inside a forwarded body is a HARD refusal, and it is
     // tested before anything else — before `SILENT`, before the endpoint, before any
     // charge. The body is serialized and sent as SPARQL text, and a call serializes as
@@ -337,7 +701,13 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         )));
     }
 
-    let query_text = purrdf_sparql_algebra::pattern_to_select_query(inner);
+    // Strip any blank-node-carrying `VALUES` pushdown correlated substitution injected
+    // into `inner`, BEFORE serialization — see [`sanitize_forwarded_body`]'s doc for why
+    // dropping it (never refusing, never emitting the illegal `_:` cell) is the sound,
+    // maximal-utility fix. Local evaluation never runs this: it walks `inner` fresh, not
+    // the sanitized copy.
+    let sanitized = sanitize_forwarded_body(inner);
+    let query_text = purrdf_sparql_algebra::pattern_to_select_query(&sanitized);
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
@@ -612,10 +982,13 @@ mod tests {
     use crate::governor::WallDeadline;
     use crate::remote_http::{HttpRemoteQuerySource, HttpRequest};
     use purrdf_core::{
-        RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
+        BlankScope, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
         SparqlResult, StopCause,
     };
-    use purrdf_sparql_algebra::{GroundTerm, NamedNode, TermPattern, TriplePattern};
+    use purrdf_sparql_algebra::{
+        BlankNode, GroundTerm, GroundTriple, NamedNode, TermPattern, TriplePattern,
+    };
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -766,7 +1139,7 @@ mod tests {
              GROUP BY ?s } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom-aggregate call inside a SERVICE body"),
@@ -790,6 +1163,98 @@ mod tests {
                 .contains("custom-aggregate call inside a SERVICE body"),
             "SILENT promises an empty result from a failed endpoint, never a wrong one from a \
              misread AGG(<iri>, …) call: {err}"
+        );
+    }
+
+    // ── LATERAL / SERVICE forwarding guard ─────────────────────────────────────
+
+    #[test]
+    fn silent_service_with_a_lateral_body_is_refused() {
+        // A `LATERAL` clause inside a `SERVICE SILENT` body is refused: `LATERAL`
+        // is a SEP-0006/Jena syntax extension most remote endpoints do not
+        // implement, and under `SILENT` a rejection would degrade to the join
+        // identity — a result that looks complete and is wrong. Never reaches the
+        // source (the source below has no registered endpoints, so a forwarded
+        // attempt would surface as a transport error instead of this typed one):
+        // the refusal is typed and happens before dispatch.
+        let source = LocalRemoteQuerySource::new();
+        let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
+                      ?s <https://example.org/lateral-forward#knows> ?o \
+                      LATERAL { ?o <https://example.org/lateral-forward#name> ?n } } }";
+        let err = run_with_source(&local(), &source, query).unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("LATERAL clause inside a SERVICE SILENT body"),
+            "got {err}"
+        );
+        assert!(
+            err.to_string().contains("SILENT"),
+            "the refusal must name SILENT as the reason it fires: {err}"
+        );
+    }
+
+    #[test]
+    fn nonsilent_service_forwards_lateral_text() {
+        // The regression this pins: a non-silent SERVICE body containing a WRITTEN
+        // LATERAL clause must forward the body — LATERAL text included — to the
+        // endpoint, because the hazard the SILENT-scoped refusal guards against (a
+        // SILENT clause swallowing the endpoint's rejection into the join
+        // identity) does not exist here: the endpoint's verdict, whatever it is,
+        // surfaces honestly. This also demonstrates that
+        // `purrdf_sparql_algebra::serialize`'s `LATERAL` emission arm is live
+        // production code, not a producer with no consumer: LATERAL is Apache
+        // Jena's own extension, and a Jena-backed (or otherwise LATERAL-capable)
+        // endpoint answers it.
+        let posts = AtomicUsize::new(0);
+        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+            posts.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                request.query_text.contains("LATERAL {"),
+                "the LATERAL clause must reach the endpoint verbatim: {}",
+                request.query_text
+            );
+            Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+                {"n":{"type":"literal","value":"X"}}
+            ]}}"#
+                .to_vec())
+        });
+        let result = run_with_source(
+            &local(),
+            &source,
+            "SELECT ?n WHERE { SERVICE <http://ep> { \
+             ?s <http://ex/name> ?n LATERAL { ?n <http://ex/knows> ?x } } }",
+        )
+        .expect("a non-silent SERVICE body must forward a written LATERAL clause");
+        assert_eq!(
+            posts.load(Ordering::Relaxed),
+            1,
+            "the request must actually be issued, not refused locally"
+        );
+        assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
+    }
+
+    #[test]
+    fn silent_service_lateral_nested_in_variable_endpoint_is_refused() {
+        // The bypass this pins closed: a written LATERAL sitting inside a nested
+        // `SERVICE ?g { … }` (a variable-endpoint SERVICE, itself an auto-wrap
+        // `Lateral` the parser reconstructs without a keyword) used to escape the
+        // guard, because the guard's own `Lateral` arm recursed into `left` only
+        // and never inspected the auto-wrapped `right`'s `Service::inner`. A
+        // written LATERAL nested that way must still be found and refused under
+        // `SERVICE SILENT`.
+        let source = LocalRemoteQuerySource::new();
+        let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
+                      ?a <https://example.org/lateral-forward#hasEndpoint> ?g \
+                      SERVICE ?g { ?c <https://example.org/lateral-forward#q> ?d \
+                      LATERAL { ?e <https://example.org/lateral-forward#f> ?f } } } }";
+        let err = run_with_source(&local(), &source, query).unwrap_err();
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("LATERAL clause inside a SERVICE SILENT body"),
+            "the LATERAL nested inside the variable-endpoint SERVICE ?g must still be found: \
+             got {err}"
         );
     }
 
@@ -840,7 +1305,7 @@ mod tests {
              ?s <http://ex/name> ?n . FILTER(<http://ex/customFn>(?n) > 0) } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom scalar-function call inside a SERVICE SILENT body"),
@@ -872,7 +1337,7 @@ mod tests {
              FILTER(CONCAT(<http://ex/customFn>(?n), \"a\") = \"Xa\") } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string()
                 .contains("custom scalar-function call inside a SERVICE SILENT body"),
@@ -1393,5 +1858,185 @@ mod tests {
             "fixed SERVICE should forward exactly once"
         );
         assert_eq!(row_strings(&result).len(), n);
+    }
+
+    // ── Forwarded-body sanitizer: blank-node VALUES pushdown stripping ────────────
+
+    /// `:s <http://ex/hasAnon> _:bn` — an outer row whose bound variable is a blank
+    /// node, the shape that drives correlated substitution's injected `Values`
+    /// pushdown into a forwarded `SERVICE` body.
+    fn local_with_blank() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let has_anon = b.intern_iri("http://ex/hasAnon");
+        let s = b.intern_iri("http://ex/s");
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
+        b.push_quad(s, has_anon, bn, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// `:s <http://ex/hasTarget> <http://ex/t>` — the same LATERAL/SERVICE shape as
+    /// [`local_with_blank`], but the outer-bound variable is an IRI: the pushdown
+    /// restriction over it IS legal `VALUES` syntax and must survive forwarding.
+    fn local_with_iri() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let has_target = b.intern_iri("http://ex/hasTarget");
+        let s = b.intern_iri("http://ex/s");
+        let t = b.intern_iri("http://ex/t");
+        b.push_quad(s, has_target, t, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn forwarded_service_text_never_carries_a_blank_node_values_cell() {
+        // The regression this pins: correlated substitution
+        // injects `Join(leaf, Values { bn -> _:blank })` into a LATERAL SERVICE body
+        // when the outer row binds a blank node. Forwarding that unsanitized would
+        // serialize the cell as `_:label`, which the VALUES/DataBlock grammar does not
+        // admit — a conforming endpoint syntax-errors the request, and under SILENT
+        // that degrades to the join identity: a silent wrong answer.
+        let posts = AtomicUsize::new(0);
+        let captured = Mutex::new(String::new());
+        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+            posts.fetch_add(1, Ordering::Relaxed);
+            *captured.lock().expect("lock") = request.query_text.to_owned();
+            Ok(br#"{"head":{"vars":["x","bn"]},"results":{"bindings":[
+                {"x":{"type":"uri","value":"http://ex/remoteX"},
+                 "bn":{"type":"uri","value":"http://ex/notOurBlank"}}
+            ]}}"#
+                .to_vec())
+        });
+        let result = run_with_source(
+            &local_with_blank(),
+            &source,
+            "SELECT * WHERE { ?s <http://ex/hasAnon> ?bn \
+             LATERAL { SERVICE <http://ep> { ?x <http://ex/rel> ?bn } } }",
+        )
+        .expect("a forwarded blank-node pushdown must be stripped, never refused");
+        assert_eq!(
+            posts.load(Ordering::Relaxed),
+            1,
+            "the request must actually be issued, not refused locally"
+        );
+        let text = captured.lock().expect("lock").clone();
+        assert!(
+            !text.contains("_:"),
+            "no blank-node cell may reach the wire: {text}"
+        );
+        assert!(
+            !text.contains("VALUES {  }") && !text.contains("VALUES { }"),
+            "no empty VALUES block may reach the wire either: {text}"
+        );
+        // The remote's row does not (and cannot) carry OUR blank node, so the LATERAL
+        // compatibility merge — not the forwarded restriction — is what filters it to
+        // zero rows: the local merge, not the dropped pushdown, is what keeps this correct.
+        assert_eq!(row_strings(&result), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn forwarded_service_text_keeps_iri_and_literal_pushdown() {
+        // Same LATERAL/SERVICE shape, but the outer-bound variable is an IRI: the
+        // pushdown restriction is legal syntax and must survive forwarding — the
+        // sanitizer targets blank-node cells only, not every injected restriction.
+        let posts = AtomicUsize::new(0);
+        let captured = Mutex::new(String::new());
+        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+            posts.fetch_add(1, Ordering::Relaxed);
+            *captured.lock().expect("lock") = request.query_text.to_owned();
+            Ok(br#"{"head":{"vars":["x"]},"results":{"bindings":[]}}"#.to_vec())
+        });
+        let _ = run_with_source(
+            &local_with_iri(),
+            &source,
+            "SELECT * WHERE { ?s <http://ex/hasTarget> ?t \
+             LATERAL { SERVICE <http://ep> { ?x <http://ex/rel> ?t } } }",
+        )
+        .expect("query");
+        assert_eq!(
+            posts.load(Ordering::Relaxed),
+            1,
+            "the request must actually be issued"
+        );
+        let text = captured.lock().expect("lock").clone();
+        assert!(
+            text.contains("VALUES") && text.contains("<http://ex/t>"),
+            "the IRI pushdown restriction must survive forwarding: {text}"
+        );
+    }
+
+    #[test]
+    fn sanitize_forwarded_body_strips_a_ground_triple_containing_a_blank_node() {
+        // Unit test on the sanitizer directly: a Values cell that is not itself a blank
+        // node, but a GROUND TRIPLE whose subject is one, must still be found and its
+        // whole column stripped — `GroundTerm::Triple` nests, and the walk must follow it.
+        let pattern = GraphPattern::Join {
+            left: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/p")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+            right: Box::new(GraphPattern::Values {
+                variables: vec![Variable::new("t"), Variable::new("k")],
+                bindings: vec![vec![
+                    Some(GroundTerm::Triple(Box::new(GroundTriple {
+                        subject: GroundTerm::BlankNode(BlankNode::new("b1")),
+                        predicate: NamedNode::new_unchecked("http://ex/embeds"),
+                        object: GroundTerm::NamedNode(NamedNode::new_unchecked("http://ex/o")),
+                    }))),
+                    Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/keep",
+                    ))),
+                ]],
+            }),
+        };
+        let sanitized = sanitize_forwarded_body(&pattern);
+        let GraphPattern::Join { right, .. } = &sanitized else {
+            panic!("expected a Join, got {sanitized:?}");
+        };
+        let GraphPattern::Values {
+            variables,
+            bindings,
+        } = right.as_ref()
+        else {
+            panic!("expected the right operand to remain a Values node, got {right:?}");
+        };
+        assert_eq!(
+            variables,
+            &vec![Variable::new("k")],
+            "the ?t column (its cell embeds a blank node) must be stripped, ?k kept"
+        );
+        assert_eq!(
+            bindings,
+            &vec![vec![Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
+                "http://ex/keep"
+            )))]]
+        );
+    }
+
+    #[test]
+    fn sanitize_forwarded_body_collapses_an_all_blank_values_out_of_its_join() {
+        // The all-columns-stripped case: `Join(leaf, Values { bn -> _:blank })` must
+        // collapse to `leaf` alone, never serialize as `Join(leaf, VALUES { })` — which
+        // is not valid SPARQL as a standalone group graph pattern element.
+        let leaf = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("x")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/rel")),
+                object: TermPattern::Variable(Variable::new("bn")),
+            }],
+        };
+        let pattern = GraphPattern::Join {
+            left: Box::new(leaf.clone()),
+            right: Box::new(GraphPattern::Values {
+                variables: vec![Variable::new("bn")],
+                bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new("bn")))]],
+            }),
+        };
+        let sanitized = sanitize_forwarded_body(&pattern);
+        assert_eq!(
+            sanitized, leaf,
+            "an all-columns-stripped injected Values must collapse out of the Join entirely"
+        );
     }
 }

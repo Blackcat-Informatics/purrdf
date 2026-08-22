@@ -375,6 +375,24 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// allocation can reuse a dropped node's address) and must be bypassed
     /// entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
+    /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
+    /// last — see [`crate::expr::SubstitutionSourceMap`].
+    ///
+    /// Pushed by [`Self::enter_substituted_exists`] when [`crate::binop::eval_correlated`]
+    /// substitutes a `LATERAL` right operand whose source node IS a plan node (a
+    /// correlated `EXISTS` inner pushes nothing — it has no plan identity to preserve). Two
+    /// readers: [`Self::resolve_ledger_ordinal`] walks this stack innermost-first at
+    /// evaluation time so a `LATERAL` nested inside another `LATERAL`'s per-row substituted
+    /// copy chains through BOTH maps back to a real ordinal, rather than one window's map
+    /// silently shadowing the other's; [`crate::binop::eval_correlated`] reads only its
+    /// TOP (via `.last()`), BEFORE pushing the map it is about to build, as the `enclosing`
+    /// window [`crate::expr::substitute_pattern_tracked`]'s walk resolves synthetic nodes
+    /// against at construction time — see [`crate::expr::SubstitutionSource`]'s doc for why
+    /// that second reader is what actually keeps a nested `LATERAL` from over-counting rows,
+    /// with this stack's runtime chase now mostly a same-answer fallback. A stack, not a
+    /// single slot merged in place, because both the outer and the inner window's map are
+    /// simultaneously live for the whole time the inner one is being evaluated.
+    pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -457,6 +475,23 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// the operator that owns the expression — which is what makes the ledger's fuel
     /// column sum to the evidence's fuel total exactly.
     pub(crate) ledger_node: usize,
+    /// Whether [`Self::current_node`]'s own committed-output rows/cells ARE
+    /// [`Self::ledger_node`]'s true output for this evaluation, and should therefore be
+    /// added to its ledger `rows`/`cells` columns.
+    ///
+    /// `true` for every ordinary (non-substituted) plan node — a real node's own output
+    /// always is its own true output — and moves together with [`Self::ledger_node`] in
+    /// [`Self::enter_node`]/[`Self::leave_node`], staying put whenever the cursor does.
+    /// Inside a `LATERAL` right operand's per-row substituted copy it can be `false`: a
+    /// Values-Insertion wrapper's own children (the leaf's unconstrained re-scan, the
+    /// one-row `VALUES` table) still charge [`Self::ledger_node`]'s FUEL — that work
+    /// really happened and has nowhere else to go — but only the node
+    /// [`crate::expr::SubstitutionSource::counts_rows`] marks as `true` (the wrapper
+    /// itself, or a plain unwrapped copy) may add to its row/cell columns. Without this
+    /// split, `LATERAL`'s RHS `rows` becomes a composite of three different nodes'
+    /// outputs printed beside an estimate that predicts only one of them — see
+    /// [`crate::expr::SubstitutionSource`]'s doc.
+    pub(crate) ledger_counts_rows: bool,
 }
 
 /// The maximum SHACL-AF function call depth. A function body that calls another
@@ -492,6 +527,45 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
             .field("standpoint_predicates", &self.standpoint_predicates)
             .field("loss_vocabulary", &self.loss_vocabulary)
             .finish_non_exhaustive()
+    }
+}
+
+/// RAII guard returned by [`EvalCtx::enter_substituted_exists`]; see there for
+/// why the flag it manages exists and what composes correctly because this is
+/// a guard rather than the two hand-rolled save/restore pairs it replaces
+/// (formerly one in `binop::eval_lateral`, one in `expr::exists`'s correlated
+/// branch — both now the single seam [`crate::binop::eval_correlated`]).
+///
+/// Derefs to the wrapped [`EvalCtx`] so the guarded evaluation call reads as
+/// ordinary `&mut EvalCtx` use; [`Drop::drop`] restores the PRIOR
+/// [`EvalCtx::in_substituted_exists`] value unconditionally, including when
+/// the guard is dropped during an early `?` return — and, when this window pushed a
+/// [`EvalCtx::correlated_node_maps`] entry, pops exactly that one entry, same as the flag.
+pub(crate) struct SubstitutedExistsGuard<'ctx, 'd, D: DatasetView + Sync> {
+    ctx: &'ctx mut EvalCtx<'d, D>,
+    prev: bool,
+    pushed_map: bool,
+}
+
+impl<'d, D: DatasetView + Sync> core::ops::Deref for SubstitutedExistsGuard<'_, 'd, D> {
+    type Target = EvalCtx<'d, D>;
+    fn deref(&self) -> &Self::Target {
+        self.ctx
+    }
+}
+
+impl<D: DatasetView + Sync> core::ops::DerefMut for SubstitutedExistsGuard<'_, '_, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ctx
+    }
+}
+
+impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
+    fn drop(&mut self) {
+        self.ctx.in_substituted_exists = self.prev;
+        if self.pushed_map {
+            self.ctx.correlated_node_maps.pop();
+        }
     }
 }
 
@@ -537,6 +611,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: None,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            correlated_node_maps: Vec::new(),
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -548,6 +623,42 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             current_node: 0,
             ledger: None,
             ledger_node: ChargeLedger::root_ordinal(),
+            ledger_counts_rows: true,
+        }
+    }
+
+    /// Enter a per-row substituted-pattern evaluation window (a `LATERAL` right
+    /// operand or an expression-correlated `EXISTS` inner — see
+    /// [`crate::binop::eval_correlated`], the seam this guard exists for),
+    /// returning an RAII guard that sets [`Self::in_substituted_exists`] and
+    /// restores the PRIOR value on drop — including on an early `?` return from
+    /// the guarded evaluation — so a doubly-nested correlated evaluation (a
+    /// `LATERAL` inside a correlated `EXISTS`'s substituted inner, or the
+    /// reverse) composes correctly instead of the inner scope's `Drop`
+    /// clobbering the outer scope's flag back to `false`.
+    ///
+    /// `ledger_map` is the [`crate::expr::SubstitutionSourceMap`]
+    /// [`crate::binop::eval_correlated`] built for this window, when the node it
+    /// substituted resolved to a real plan ordinal (a `LATERAL` right operand) — `None`
+    /// for a correlated `EXISTS` inner, which has no plan identity to preserve. When
+    /// `Some`, it is pushed onto [`Self::correlated_node_maps`] for the guard's lifetime
+    /// and popped on drop, same RAII discipline as the flag — see that field's doc for why
+    /// a nested correlated evaluation needs BOTH this window's map and every enclosing
+    /// one's still live at once.
+    pub(crate) fn enter_substituted_exists(
+        &mut self,
+        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+    ) -> SubstitutedExistsGuard<'_, 'd, D> {
+        let prev = self.in_substituted_exists;
+        self.in_substituted_exists = true;
+        let pushed_map = ledger_map.is_some();
+        if let Some(map) = ledger_map {
+            self.correlated_node_maps.push(Arc::new(map));
+        }
+        SubstitutedExistsGuard {
+            ctx: self,
+            prev,
+            pushed_map,
         }
     }
 
@@ -724,6 +835,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
         self.ledger = Some(ledger);
         self.ledger_node = ChargeLedger::root_ordinal();
+        self.ledger_counts_rows = true;
         self
     }
 
@@ -769,23 +881,82 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
     ///
-    /// Both cursors move together, except that the ledger's only moves when `pattern` is a
-    /// node of the plan the ledger was built for — see [`Self::ledger_node`].
-    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize) {
-        let restore = (self.current_node, self.ledger_node);
+    /// The ledger cursor and its `counts_rows` flag move together, and only when `pattern`
+    /// resolves to a node of the plan the ledger was built for — see
+    /// [`Self::resolve_ledger_ordinal`].
+    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize, bool) {
+        let restore = (self.current_node, self.ledger_node, self.ledger_counts_rows);
         self.current_node = std::ptr::from_ref(pattern) as usize;
-        if let Some(ledger) = self.ledger.as_ref()
-            && let Some(ordinal) = ledger.ordinal_of(self.current_node)
-        {
+        if let Some((ordinal, counts_rows)) = self.resolve_ledger_ordinal(self.current_node) {
             self.ledger_node = ordinal;
+            self.ledger_counts_rows = counts_rows;
         }
         restore
     }
 
+    /// Resolve `address` to a plan node's ledger ordinal and whether `address`'s OWN
+    /// committed rows count as that node's true output
+    /// ([`crate::expr::SubstitutionSource::counts_rows`]), chasing through any live
+    /// correlated-substitution maps ([`Self::correlated_node_maps`]) when `address` is not
+    /// itself a plan address.
+    ///
+    /// An ordinary (non-substituted) evaluation always hits the fast path — `address` IS a
+    /// plan address, found on the first probe, no map ever consulted, and `counts_rows` is
+    /// unconditionally `true`: a real plan node's own output is always its own true output.
+    /// Inside a `LATERAL` right operand's per-row substituted copy, `address` is instead a
+    /// heap-temporary address; [`Self::correlated_node_maps`]'s TOP (innermost, most
+    /// recently entered) map translates it one substitution-window's worth closer to a real
+    /// plan address, and the loop retries — first against the ledger directly, then, on a
+    /// further miss, against the next map out.
+    ///
+    /// That outward chain exists for a `LATERAL` nested inside another `LATERAL`'s
+    /// substituted RHS, but by the time it runs the nesting has ALREADY been resolved once,
+    /// at construction:
+    /// [`crate::expr::substitute_pattern_tracked`]'s walk resolves each synthetic node's
+    /// source past its own enclosing window at MINT time
+    /// (`crate::expr::boxed_and_mapped_as`), so every map entry already names a real,
+    /// ledger-resolvable address rather than another window's synthetic one — the loop
+    /// below almost always resolves on its first map probe as a consequence, and the
+    /// further-map fallback is what is left for the rare case a translation is not yet
+    /// resolvable that way. `counts_rows` is read from the FIRST map entry consulted — the
+    /// one describing `address` itself — and carried through any further translation
+    /// unchanged: it answers a question about THIS node, not about whatever address it is
+    /// chased through on the way to an ordinal, and it is already the fully-arbitrated
+    /// answer (at most one synthetic node per real ordinal per window keeps `true` — see
+    /// [`crate::expr::SubstitutionSource`]'s doc), not a locally-decided one that a caller
+    /// would still need to reconcile against an enclosing window's own claim.
+    ///
+    /// A miss at any step — `address` absent from the map being consulted — stops the
+    /// search and returns `None` rather than trying an outer map with the SAME address: a
+    /// map miss means the node at THIS level is synthetic (introduced by Values Insertion,
+    /// never present in any source tree), and its charges are meant to fall to whatever
+    /// node is already the ledger cursor — the nearest enclosing node that DID resolve —
+    /// not to be guessed at by skipping a level.
+    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<(usize, bool)> {
+        let ledger = self.ledger.as_ref()?;
+        if let Some(ordinal) = ledger.ordinal_of(address) {
+            return Some((ordinal, true));
+        }
+        let mut address = address;
+        let mut counts_rows = true;
+        for (depth, map) in self.correlated_node_maps.iter().rev().enumerate() {
+            let entry = map.get(&address)?;
+            if depth == 0 {
+                counts_rows = entry.counts_rows;
+            }
+            address = entry.source;
+            if let Some(ordinal) = ledger.ordinal_of(address) {
+                return Some((ordinal, counts_rows));
+            }
+        }
+        None
+    }
+
     /// Restore the cursors [`Self::enter_node`] returned.
-    pub(crate) const fn leave_node(&mut self, restore: (usize, usize)) {
+    pub(crate) const fn leave_node(&mut self, restore: (usize, usize, bool)) {
         self.current_node = restore.0;
         self.ledger_node = restore.1;
+        self.ledger_counts_rows = restore.2;
     }
 
     /// The per-node charge ledger this execution records into, if one is installed.
@@ -1075,7 +1246,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !state.is_engaged_in(purrdf_core::ResourceDimension::IntermediateCells) {
             return Ok(());
         }
-        if let Some(ledger) = self.ledger.as_ref() {
+        // The LEDGER'S per-node cell column only takes an observation from the node
+        // whose own output is the wrapped node's true output — see
+        // [`Self::ledger_counts_rows`] — but the GOVERNOR'S real ceiling still sees every
+        // observation regardless: a Values-Insertion scaffolding node genuinely
+        // materializes the bag it reports, and the ceiling that bounds peak memory must
+        // not blind itself to a real allocation just because the ledger declines to
+        // print it against this node.
+        if self.ledger_counts_rows
+            && let Some(ledger) = self.ledger.as_ref()
+        {
             ledger.record_cells(self.ledger_node, cells);
         }
         state.observe_peak(purrdf_core::ResourceDimension::IntermediateCells, cells)
@@ -1204,12 +1384,25 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         None
     }
 
-    /// Record `count` committed output rows against the current node's ledger line, both
-    /// as a row count and as the fuel those rows cost.
+    /// Record `count` committed output rows against the current node's ledger line: the
+    /// fuel those rows cost, always, and the row count itself only when
+    /// [`Self::ledger_counts_rows`] says this node's own output is the ledger node's true
+    /// output.
+    ///
+    /// The split matters for a `LATERAL` right operand's Values-Insertion scaffolding: the
+    /// leaf's unconstrained re-scan and the one-row `VALUES` table both did real work that
+    /// must still be charged in fuel (nothing else could pay for it, and fuel's
+    /// sum-to-total invariant depends on every unit landing somewhere), but neither is the
+    /// wrapped node's true committed output — only the narrowing `Join`'s is. Counting all
+    /// three into `rows` would make the printed `rows`/`actual-rows` a composite of three
+    /// different nodes' outputs beside an estimate that predicts only one of them — see
+    /// [`crate::expr::SubstitutionSource`]'s doc.
     #[inline]
     fn note_rows(&self, count: usize, point: crate::governor::ChargePoint) {
         if let Some(ledger) = self.ledger.as_ref() {
-            ledger.record_rows(self.ledger_node, count as u64);
+            if self.ledger_counts_rows {
+                ledger.record_rows(self.ledger_node, count as u64);
+            }
             ledger.record_fuel(
                 self.ledger_node,
                 point,
@@ -1315,6 +1508,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            // SHARED (cheap `Arc` clones), not fresh: a worker evaluating part of a
+            // correlated substituted tree must resolve the SAME ledger identities its
+            // parent would — dropping the stack here would silently reproduce the false-zero
+            // attribution this field exists to fix, just scoped to the parallel path.
+            correlated_node_maps: self.correlated_node_maps.clone(),
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -1348,6 +1546,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             current_node: self.current_node,
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
+            ledger_counts_rows: self.ledger_counts_rows,
         }
     }
 
@@ -1470,6 +1669,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            // SHARED, like `ledger`: the body's own nodes never resolve through it (their
+            // addresses are in neither the plan nor any live substitution window, so
+            // `resolve_ledger_ordinal` always misses for them and `ledger_node` stays put —
+            // see that field's doc), but a body called FROM inside a correlated window must
+            // still see the enclosing window's map for any of ITS OWN charges that legitimately
+            // resolve through it.
+            correlated_node_maps: self.correlated_node_maps.clone(),
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -1500,6 +1706,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // node a reader of the ledger can act on.
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
+            ledger_counts_rows: self.ledger_counts_rows,
         }))
     }
 
@@ -2407,7 +2614,7 @@ mod tests {
             .expect("VERSION is syntax-only; any string parses");
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx).expect_err("unrecognized VERSION is refused");
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("0.9"),
             "error should name the declared version: {err}"
@@ -2450,7 +2657,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx)
             .expect_err("a triple term outside the Basic profile is refused");
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("triple term"),
             "error should name the offending construct: {err}"
@@ -3069,7 +3276,21 @@ mod tests {
 
         let mut saw_partial_with_rows = false;
         let mut saw_complete = false;
-        for budget in 1..=30_u64 {
+        // Upper end raised from the pre-Values-Insertion 30: each `LATERAL` left row
+        // now evaluates `Join(Bgp, Values)` on the right (Values Insertion's leaf
+        // join, `crate::expr::substitute_pattern`) instead of a single term-rewritten
+        // `Bgp`, so completing the fixture's rows costs a few more node-entry polls
+        // than before. The exact count is an implementation detail; the margin is
+        // generous rather than tight.
+        //
+        // NOT tightened back by the shared-str term-text change (`SubstitutionRow`'s
+        // term text now lives behind `Arc<str>` — see `purrdf_sparql_algebra::
+        // NamedNode`'s doc): that removed per-leaf TEXT allocation, but the governor
+        // polls PLAN NODES, and the extra `Join`/`Values` node this test's bound
+        // widening accounts for is still built once per left row regardless — the
+        // node COUNT this bound tracks is unchanged by making that node's content
+        // cheap to construct.
+        for budget in 1..=40_u64 {
             let signal = Arc::new(StopOnPoll {
                 remaining: std::sync::atomic::AtomicU64::new(budget),
             });

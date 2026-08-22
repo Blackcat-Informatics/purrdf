@@ -43,6 +43,50 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// a fuel or stop check could run.
 pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 
+/// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
+/// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
+/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct.
+///
+/// [`MAX_GRAPH_PATTERN_DEPTH`] bounds `{ … }` BRACE nesting only. It does
+/// nothing for a run of SIBLING operators at one brace depth — `OPTIONAL { }
+/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, a `UNION`-arm run at
+/// one `{ … }` boundary, or a run of non-BGP triples-block elements (e.g.
+/// complex property-path triples, which `join` cannot flatten the way it
+/// flattens adjacent `Bgp`s) — each of which grows the algebra tree by one
+/// level PER SIBLING while `{ … }` nesting stays at 1. A query built from N
+/// such siblings therefore produces a tree of height ~N with no brace ever
+/// nesting past depth 1, invisible to `MAX_GRAPH_PATTERN_DEPTH`. The SAME
+/// shape arises from a long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection
+/// list, a long `GROUP BY` expression-condition list, or a long `HAVING`
+/// condition list — each lowers to a chain of `Extend`/`Filter` nodes wrapped
+/// around the WHERE pattern, built by a loop with no brace at all.
+///
+/// This limit closes that gap at its source: every site in this module that
+/// can grow the algebra tree by repetition — the group-parsing loop, its
+/// nested `UNION`-arm loop, a triples block's non-BGP (`Path`/property-function)
+/// elements, and the three projection/grouping/having list loops above —
+/// charges one unit against this budget per node it is about to build, and
+/// the parse hard-fails with a typed [`ParseError`] the instant the budget is
+/// exhausted, rather than building the (N+1)-th node. Because every node that
+/// could deepen the tree is charged, capping the TOTAL count also caps the
+/// tree's maximum root-to-leaf HEIGHT by the same number — which is what
+/// actually matters: that height is the native-stack recursion depth of
+/// every downstream consumer that walks the parsed tree by ordinary
+/// recursion (`collect_vars`/`visible_variables`, `find_lateral_rhs_scope_conflict`,
+/// the tree's own recursive `Drop`), none of which can be rewritten to an
+/// explicit-stack walk without also rewriting `Drop`, which recursion alone
+/// cannot avoid. Bounding construction is therefore the one fix that covers
+/// every present AND future consumer at once, `Drop` included.
+///
+/// The value is chosen with a wide safety margin under the depth at which a
+/// left-deep tree of this shape has been observed to exhaust a 2&nbsp;MiB
+/// stack (the size `cargo test` gives each test thread) while still leaving
+/// several orders of magnitude of headroom over any query in this crate's
+/// corpus: a single query with `MAX_GRAPH_PATTERN_NODES` non-BGP siblings is
+/// already far outside anything a hand- or tool-written SPARQL query
+/// resembles.
+pub const MAX_GRAPH_PATTERN_NODES: usize = 2048;
+
 /// Parse-time configuration for the SPARQL front-end.
 ///
 /// Both knobs are caller-supplied IRI-namespace sets that default to EMPTY.
@@ -238,6 +282,9 @@ impl SparqlParser {
             anon_counter: 0,
             group_counter: 0,
             group_pattern_depth: 0,
+            pattern_node_budget: 0,
+            #[cfg(debug_assertions)]
+            scope_consultations: 0,
             options,
         })
     }
@@ -256,6 +303,22 @@ struct Parser<'a, 'o> {
     anon_counter: usize,
     group_counter: usize,
     group_pattern_depth: usize,
+    /// Running count of graph-pattern combinator nodes charged so far against
+    /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
+    pattern_node_budget: usize,
+    /// Debug-only regression counter for the group-loop scope-set quadratic:
+    /// incremented ONLY at the handful of PRODUCTION sites that consult a
+    /// freshly-computed (`visible_variables`-derived) whole-pattern scope
+    /// snapshot ([`Parser::note_scope_consultation`]) — never at a per-element
+    /// site inside the group loop (`BIND`'s own membership test consults the
+    /// incremental [`VarScope`] directly, in O(log n), and is not a
+    /// "consultation" in this sense). A query's snapshot-consultation count is
+    /// therefore fixed by its STRUCTURE (one per `SELECT`, one per `LATERAL`
+    /// keyword) and invariant under how many elements a group between them
+    /// holds — see `scope_set_stays_linear_over_two_thousand_binds`, which
+    /// reads this field through [`Self::debug_scope_consultations`].
+    #[cfg(debug_assertions)]
+    scope_consultations: u64,
     options: &'o ParserOptions,
 }
 
@@ -332,12 +395,62 @@ impl<'a> Parser<'a, '_> {
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
             group_pattern_depth: self.group_pattern_depth,
+            pattern_node_budget: self.pattern_node_budget,
+            #[cfg(debug_assertions)]
+            scope_consultations: self.scope_consultations,
             options: self.options,
         }
     }
 
     fn set_counters(&mut self, counters: (usize, usize, usize)) {
         (self.agg_counter, self.anon_counter, self.group_counter) = counters;
+    }
+
+    /// Charge `n` graph-pattern combinator nodes against
+    /// [`MAX_GRAPH_PATTERN_NODES`], hard-failing the instant the running total
+    /// would exceed it. Every call site that is ABOUT TO build one more
+    /// `Join`/`LeftJoin`/`Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/
+    /// `Minus` node calls this FIRST, so the budget is checked before the node
+    /// (and any input it borrows unboundedly, like a `LATERAL` right-hand
+    /// side) is built — never after.
+    fn charge_pattern_nodes(&mut self, n: usize) -> Result<()> {
+        self.pattern_node_budget += n;
+        if self.pattern_node_budget > MAX_GRAPH_PATTERN_NODES {
+            return Err(ParseError::syntax(
+                format!(
+                    "graph pattern combinator count exceeds the safety limit of \
+                     {MAX_GRAPH_PATTERN_NODES}"
+                ),
+                self.span(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Record one PRODUCTION consultation of a freshly-computed whole-pattern
+    /// scope snapshot (see [`Parser::scope_consultations`]'s doc for exactly
+    /// what counts). A no-op in release builds — this exists to make the
+    /// group-loop scope-set quadratic falsifiable by a scale-invariant COUNT
+    /// rather than a clock (no timing assertion is sound across machines/CI
+    /// load; a call count fixed by query STRUCTURE is).
+    #[cfg(debug_assertions)]
+    fn note_scope_consultation(&mut self) {
+        self.scope_consultations += 1;
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn note_scope_consultation(&mut self) {}
+
+    /// The current value of the debug-only scope-consultation counter — the
+    /// NON-COUNTING read `scope_set_stays_linear_over_two_thousand_binds`
+    /// uses (reading the counter does not itself consult anything). Test-only
+    /// (no production caller needs a query's own consultation count), hence
+    /// `cfg(test)` too — otherwise an ordinary `debug_assertions` lib build
+    /// carries a method nothing calls.
+    #[cfg(all(debug_assertions, test))]
+    fn debug_scope_consultations(&self) -> u64 {
+        self.scope_consultations
     }
 
     fn at(&self, t: &Token<'a>) -> bool {
@@ -544,6 +657,12 @@ impl<'a> Parser<'a, '_> {
                     let var = self.expect_var()?;
                     self.expect(&Token::RParen)?;
                     projected.push(var.clone());
+                    // A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list lowers to
+                    // a chain of N `Extend` nodes wrapped around the WHERE
+                    // pattern (below, near the query's assembly) — no brace
+                    // anywhere, so `MAX_GRAPH_PATTERN_DEPTH` never sees it.
+                    // Charged per condition, at the point each is parsed.
+                    self.charge_pattern_nodes(1)?;
                     select_exprs.push((var, expr));
                 } else {
                     break;
@@ -580,6 +699,11 @@ impl<'a> Parser<'a, '_> {
                     .chain(modifiers.group_extends.iter().map(|(v, _)| v.clone()))
                     .collect()
             } else {
+                // A PRODUCTION consultation of the whole WHERE pattern's
+                // scope — once per SELECT with `(expr AS ?v)` targets, never
+                // once per element of that WHERE pattern (see
+                // `Parser::scope_consultations`'s doc).
+                self.note_scope_consultation();
                 visible_variables(&where_pat).into_iter().collect()
             };
             for (var, _) in &select_exprs {
@@ -648,12 +772,18 @@ impl<'a> Parser<'a, '_> {
         // solution modifiers — valid on both a top-level query and a `SubSelect`.
         // It is joined with the WHERE group graph pattern *before* grouping and
         // projection, so the inline data is visible to aggregation and `SELECT *`.
+        // Through the shared `join()` helper (not a raw `GraphPattern::Join`),
+        // matching the identity-absorbing construction every IN-BODY `VALUES`
+        // block already goes through (`parse_group_graph_pattern_inner`'s own
+        // `VALUES` arm) — an empty WHERE clause (`{}`) plus a trailing
+        // `VALUES` must reach the SAME `Values { .. }` node an in-body
+        // `{ VALUES … }` does, not a `Join { Bgp { [] }, Values { .. } }`
+        // the round-trip serializer has no way to reproduce (it has no
+        // surface form for a Join whose left operand is visibly, deliberately
+        // the identity table rather than an omitted one).
         let where_pat = if self.peek_kw("VALUES") {
             let values = self.parse_inline_data()?;
-            GraphPattern::Join {
-                left: Box::new(where_pat),
-                right: Box::new(values),
-            }
+            join(where_pat, values)
         } else {
             where_pat
         };
@@ -697,6 +827,10 @@ impl<'a> Parser<'a, '_> {
             };
         }
         let variables = if star {
+            // A PRODUCTION consultation of the whole (modifier-wrapped) query
+            // pattern's scope — once per `SELECT *`, never once per element
+            // of the WHERE pattern it wraps.
+            self.note_scope_consultation();
             visible_variables(&p)
         } else {
             projected
@@ -1284,6 +1418,24 @@ impl<'a> Parser<'a, '_> {
     /// reifiers, annotations, triple terms, collections and blank-node property
     /// lists all desugar identically; property paths are not admissible here.
     fn parse_template_triple(&mut self, triples: &mut Vec<TriplePattern>) -> Result<()> {
+        // `LATERAL` is a *group-graph-pattern* operator (SEP-0006): it has no
+        // meaning as a triple to assert, exactly like a property path or a
+        // property-function call below, which this function already refuses for
+        // the same reason. Unlike those two, `LATERAL` would otherwise be
+        // misparsed as a SUBJECT term (this function has no group-boundary
+        // dispatch at all — quad templates are TriplesTemplate, not a
+        // GroupGraphPattern), producing a confusing "expected a term" error
+        // instead of naming the real cause; caught here, before subject
+        // parsing, in every quad-template context ([`Self::parse_quad_pattern_block`]'s
+        // own loop and the nested `GRAPH { … }` loop in
+        // [`Self::collect_quad_group`] — this function's only two callers, so one
+        // check here covers `INSERT`/`DELETE`/`DELETE WHERE` templates alike).
+        if self.peek_kw("LATERAL") {
+            return Err(ParseError::syntax(
+                "LATERAL is not allowed in an update template",
+                self.span(),
+            ));
+        }
         let mut sink = BlockSink::default();
         let (subject, standalone_ok) = if self.at(&Token::LBracket) {
             (self.parse_blank_node_property_list(&mut sink)?, true)
@@ -1446,30 +1598,100 @@ impl<'a> Parser<'a, '_> {
 
         let mut g = GraphPattern::Bgp { patterns: vec![] };
         let mut filters: Vec<Expression> = Vec::new();
+        // The incremental in-scope set: kept in lock-step with `g`, one
+        // `collect_vars` call over exactly the NEWLY-parsed element (never
+        // over the whole, growing `g`) per iteration — see [`VarScope`]'s
+        // doc. This is what turns the group loop from O(n²) into O(n log n)
+        // over a long run of `BIND`/`LATERAL` elements
+        // (`scope_set_stays_linear_over_two_thousand_binds`): the OLD code
+        // called `visible_variables(&g)` (a fresh whole-`g` walk) on every
+        // `BIND`/`LATERAL`, so the Nth element paid for re-walking the N-1
+        // before it.
+        let mut scope = VarScope::new();
 
         loop {
             if self.at(&Token::RBrace) {
                 break;
-            } else if self.at(&Token::LBrace) {
+            }
+            // A structural charge against `MAX_GRAPH_PATTERN_NODES`, once per
+            // group ELEMENT — the choke point that closes the sibling-spine
+            // gap `MAX_GRAPH_PATTERN_DEPTH` (brace nesting only) leaves open:
+            // every branch below builds (or, for a bracketed sub-group, is
+            // about to fold in) exactly one more combinator node onto `g`.
+            self.charge_pattern_nodes(1)?;
+            if self.at(&Token::LBrace) {
                 let mut node = self.parse_group_graph_pattern()?;
                 while self.eat_kw("UNION") {
+                    // Each ADDITIONAL `UNION` arm is a hidden extra node the
+                    // outer per-element charge above does not see (they are
+                    // all consumed within this one loop iteration) — charged
+                    // here, one per arm past the first.
+                    self.charge_pattern_nodes(1)?;
                     let right = self.parse_group_graph_pattern()?;
                     node = GraphPattern::Union {
                         left: Box::new(node),
                         right: Box::new(right),
                     };
                 }
+                // A bracketed sub-group (possibly a `{ SELECT ... }`, whose
+                // contribution is its OWN projection — `collect_vars`'s
+                // `Project` arm — not its inner WHERE pattern) or a chain of
+                // `UNION` arms: `collect_vars` already knows how to fold
+                // either shape into exactly the vars this element puts in
+                // scope, in one walk over `node` alone.
+                collect_vars(&node, &mut scope);
                 g = join(g, node);
             } else if self.eat_kw("OPTIONAL") {
                 let inner = self.parse_group_graph_pattern()?;
                 let (right, expression) = split_trailing_filter(inner);
+                collect_vars(&right, &mut scope);
                 g = GraphPattern::LeftJoin {
                     left: Box::new(g),
                     right: Box::new(right),
                     expression,
                 };
+            } else if self.eat_kw("LATERAL") {
+                // Position the error at the start of the RHS block rather than
+                // wherever the cursor lands after parsing it (the BIND-scope
+                // idiom above captures `self.span()` post hoc; here the RHS can
+                // be arbitrarily large, so the useful anchor is the keyword
+                // itself).
+                let at = self.span();
+                let right = self.parse_group_graph_pattern()?;
+                // A genuine PRODUCTION consultation (once per `LATERAL`
+                // keyword, never per element inside `right`): read the
+                // incremental set built so far — `g`'s vars, NOT yet
+                // `right`'s — as the LHS scope. Verified against a fresh
+                // walk (the non-counting entry point) under
+                // `debug_assertions` only.
+                self.note_scope_consultation();
+                debug_assert_eq!(
+                    scope.as_slice(),
+                    compute_lateral_left_scope(&g).as_slice(),
+                    "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
+                );
+                let lhs_scope = scope.as_slice();
+                if let Some((var, intro)) = find_lateral_rhs_scope_conflict(lhs_scope, &right) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "{} ?{} inside LATERAL is already in scope on the LATERAL \
+                             left-hand side",
+                            intro.as_str(),
+                            var.as_str()
+                        ),
+                        at,
+                    ));
+                }
+                collect_vars(&right, &mut scope);
+                g = GraphPattern::Lateral {
+                    left: Box::new(g),
+                    right: Box::new(right),
+                };
             } else if self.eat_kw("MINUS") {
                 let right = self.parse_group_graph_pattern()?;
+                // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING
+                // to the enclosing group's scope — no `collect_vars` call
+                // here, matching `collect_vars`'s own `Minus` arm.
                 g = GraphPattern::Minus {
                     left: Box::new(g),
                     right: Box::new(right),
@@ -1477,13 +1699,12 @@ impl<'a> Parser<'a, '_> {
             } else if self.eat_kw("GRAPH") {
                 let name = self.parse_var_or_iri_name()?;
                 let inner = self.parse_group_graph_pattern()?;
-                g = join(
-                    g,
-                    GraphPattern::Graph {
-                        name,
-                        inner: Box::new(inner),
-                    },
-                );
+                let graph = GraphPattern::Graph {
+                    name,
+                    inner: Box::new(inner),
+                };
+                collect_vars(&graph, &mut scope);
+                g = join(g, graph);
             } else if self.eat_kw("SERVICE") {
                 let silent = self.eat_kw("SILENT");
                 let name = self.parse_var_or_iri_name()?;
@@ -1494,6 +1715,7 @@ impl<'a> Parser<'a, '_> {
                     inner: Box::new(inner),
                     silent,
                 };
+                collect_vars(&service, &mut scope);
                 // A variable endpoint (`SERVICE ?g`) is correlated with the
                 // enclosing pattern — it must bind the endpoint from the
                 // surrounding solution before federating — so it becomes a
@@ -1517,8 +1739,20 @@ impl<'a> Parser<'a, '_> {
                 // §19.6: the variable introduced by BIND must not already be
                 // in-scope in the group graph pattern up to this point — a
                 // re-binding is a hard syntax error, not a silent shadow
-                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`).
-                if visible_variables(&g).contains(&variable) {
+                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`). The
+                // incremental set answers this in O(log n) — NOT a
+                // production "consultation" (`note_scope_consultation` is
+                // NOT called here: this is the one site the linear-scan test
+                // exists to keep counter-invisible, since it fires once per
+                // `BIND` and must not scale the count with the group's
+                // element count). The equivalence check still runs, through
+                // the free-function (non-counting) `visible_variables`.
+                debug_assert_eq!(
+                    scope.contains(&variable),
+                    visible_variables(&g).contains(&variable),
+                    "the incremental BIND-scope check drifted from a fresh visible_variables walk"
+                );
+                if scope.contains(&variable) {
                     return Err(ParseError::syntax(
                         format!(
                             "BIND target ?{} is already in scope in the group graph pattern",
@@ -1527,6 +1761,7 @@ impl<'a> Parser<'a, '_> {
                         self.span(),
                     ));
                 }
+                scope.note(&variable);
                 g = GraphPattern::Extend {
                     inner: Box::new(g),
                     variable,
@@ -1534,12 +1769,14 @@ impl<'a> Parser<'a, '_> {
                 };
             } else if self.peek_kw("VALUES") {
                 let values = self.parse_inline_data()?;
+                collect_vars(&values, &mut scope);
                 g = join(g, values);
             } else if self.eat(&Token::Dot) {
                 // statement separator between blocks
             } else {
                 // A triples block (BGP / path patterns).
                 let block = self.parse_triples_block()?;
+                collect_vars(&block, &mut scope);
                 g = join(g, block);
             }
         }
@@ -1608,6 +1845,16 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
+        // `BlockSink::into_pattern` folds every `paths` entry and every
+        // `prop_fns` call onto the running pattern with its OWN `join`/
+        // `Lateral` node, one per entry — a left-deep spine entirely inside
+        // ONE triples block (e.g. a long run of dot-separated COMPLEX
+        // property-path triples, which `join` cannot flatten the way it
+        // flattens adjacent plain `Bgp` triples) that the group loop's own
+        // per-element charge never sees, because the whole block is one
+        // element to it. Charged here, once per node `into_pattern` is about
+        // to build, before it builds any of them.
+        self.charge_pattern_nodes(sink.paths.len() + sink.prop_fns.len())?;
         Ok(sink.into_pattern())
     }
 
@@ -1996,6 +2243,7 @@ impl<'a> Parser<'a, '_> {
             || self.peek_kw("FILTER")
             || self.peek_kw("BIND")
             || self.peek_kw("VALUES")
+            || self.peek_kw("LATERAL")
     }
 
     fn parse_predicate_object_list(
@@ -2602,6 +2850,11 @@ impl<'a> Parser<'a, '_> {
                         self.fresh_group_var()
                     };
                     self.expect(&Token::RParen)?;
+                    // An expression-valued `GROUP BY` condition list lowers to
+                    // a chain of `Extend` nodes placed directly under `Group`
+                    // (§18.2.4) — see `MAX_GRAPH_PATTERN_NODES`'s doc for why
+                    // this list is charged the same as the group loop.
+                    self.charge_pattern_nodes(1)?;
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else if self.at_bare_group_condition() {
@@ -2609,6 +2862,7 @@ impl<'a> Parser<'a, '_> {
                     // `GROUP BY STR(?x)` — lower to a synthetic-var Extend.
                     let expr = self.parse_expression()?;
                     let var = self.fresh_group_var();
+                    self.charge_pattern_nodes(1)?;
                     m.group_extends.push((var.clone(), expr));
                     m.group_by.push(var);
                 } else {
@@ -2619,6 +2873,9 @@ impl<'a> Parser<'a, '_> {
         if self.eat_kw("HAVING") {
             loop {
                 let expr = self.parse_having_constraint(aggregates)?;
+                // A long `HAVING (c1) (c2) … (cN)` condition list lowers to a
+                // chain of `Filter` nodes — same class, same budget.
+                self.charge_pattern_nodes(1)?;
                 m.having.push(expr);
                 if !self.at(&Token::LParen) {
                     break;
@@ -3439,27 +3696,72 @@ fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) 
     }
 }
 
-/// Collect the in-scope variables of a pattern in first-appearance order
-/// (used for `SELECT *` projection).
-fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
-    let mut out = Vec::new();
-    collect_vars(p, &mut out);
-    out
+/// An order-preserving set of [`Variable`]s with O(log n) membership and
+/// insertion — the group-parsing loop's incremental in-scope set, and
+/// [`visible_variables`]'s own collection buffer.
+///
+/// Two structures move together: `order` is the first-appearance sequence
+/// SPARQL's "in scope" (`SELECT *`'s projection order, the LATERAL scope
+/// walk's deterministic first-conflict order) needs, and `seen` is what makes
+/// membership and insertion O(log n) instead of the O(n) linear scan a bare
+/// `Vec<Variable>::contains` forces. That scan is what made both this loop
+/// (recomputing it from scratch on every `BIND`/`LATERAL`, discussed at this
+/// module's group-loop) and a single [`visible_variables`] call over a
+/// `BIND`-heavy pattern quadratic; the `BTreeSet` (not a hash set — this
+/// crate is wasm32-clean and deliberately does not depend on `ahash`, and a
+/// membership set that is never iterated for its OWN order — only `order`
+/// ever is — needs no hash at all) removes both.
+#[derive(Default)]
+struct VarScope {
+    order: Vec<Variable>,
+    seen: std::collections::BTreeSet<Variable>,
 }
 
-fn push_var(v: &Variable, out: &mut Vec<Variable>) {
-    if !out.contains(v) {
-        out.push(v.clone());
+impl VarScope {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record `v` as in scope; a no-op if it already is (first-appearance
+    /// order is preserved, so a later re-mention never moves it).
+    fn note(&mut self, v: &Variable) {
+        if self.seen.insert(v.clone()) {
+            self.order.push(v.clone());
+        }
+    }
+
+    fn contains(&self, v: &Variable) -> bool {
+        self.seen.contains(v)
+    }
+
+    fn as_slice(&self) -> &[Variable] {
+        &self.order
+    }
+
+    fn into_vec(self) -> Vec<Variable> {
+        self.order
     }
 }
 
-fn collect_term_vars(t: &TermPattern, out: &mut Vec<Variable>) {
+/// Collect the in-scope variables of a pattern in first-appearance order
+/// (used for `SELECT *` projection). `pub(crate)`: `crate::serialize` also
+/// needs this, to recover every variable a bare (`Project`-less) modifier
+/// chain's remaining WHERE body still makes visible when reconstructing a
+/// `SELECT` clause that has no real `Project` to read a variable list from
+/// (see `fmt_subselect`'s `no_project_vars`).
+pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
+    let mut scope = VarScope::new();
+    collect_vars(p, &mut scope);
+    scope.into_vec()
+}
+
+fn collect_term_vars(t: &TermPattern, out: &mut VarScope) {
     match t {
-        TermPattern::Variable(v) => push_var(v, out),
+        TermPattern::Variable(v) => out.note(v),
         TermPattern::Triple(tp) => {
             collect_term_vars(&tp.subject, out);
             if let NamedNodePattern::Variable(v) = &tp.predicate {
-                push_var(v, out);
+                out.note(v);
             }
             collect_term_vars(&tp.object, out);
         }
@@ -3467,15 +3769,15 @@ fn collect_term_vars(t: &TermPattern, out: &mut Vec<Variable>) {
     }
 }
 
-fn collect_triple_vars(tp: &TriplePattern, out: &mut Vec<Variable>) {
+fn collect_triple_vars(tp: &TriplePattern, out: &mut VarScope) {
     collect_term_vars(&tp.subject, out);
     if let NamedNodePattern::Variable(v) = &tp.predicate {
-        push_var(v, out);
+        out.note(v);
     }
     collect_term_vars(&tp.object, out);
 }
 
-fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
+fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
     match p {
         GraphPattern::Bgp { patterns } => {
             for tp in patterns {
@@ -3519,7 +3821,7 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
         | GraphPattern::Slice { inner, .. } => collect_vars(inner, out),
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             if let NamedNodePattern::Variable(v) = name {
-                push_var(v, out);
+                out.note(v);
             }
             collect_vars(inner, out);
         }
@@ -3527,16 +3829,16 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
             inner, variable, ..
         } => {
             collect_vars(inner, out);
-            push_var(variable, out);
+            out.note(variable);
         }
         GraphPattern::Values { variables, .. } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
         }
         GraphPattern::Project { variables, .. } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
         }
         GraphPattern::Group {
@@ -3545,13 +3847,337 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
             ..
         } => {
             for v in variables {
-                push_var(v, out);
+                out.note(v);
             }
             for (v, _) in aggregates {
-                push_var(v, out);
+                out.note(v);
             }
         }
     }
+}
+
+/// Whether a construct that introduces a fresh binding inside a `LATERAL`
+/// right-hand side is a `BIND`/`(expr AS ?v)` target or a `VALUES` variable —
+/// the two shapes [`find_lateral_rhs_scope_conflict`] can report, matching the two
+/// message forms produced at its call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LateralIntro {
+    /// `BIND(expr AS ?v)`, a sub-`SELECT`'s `(expr AS ?v)` projection target,
+    /// a `GROUP BY (expr AS ?v)` condition, or a `GROUP BY` aggregate's output
+    /// variable — all lower to an `Extend`/`Group` introduction and share one
+    /// message form.
+    Bind,
+    /// A `VALUES` block's column variable.
+    Values,
+}
+
+impl LateralIntro {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bind => "BIND target",
+            Self::Values => "VALUES variable",
+        }
+    }
+}
+
+/// The `LATERAL` left-hand side's in-scope variable set, as consulted by
+/// [`find_lateral_rhs_scope_conflict`].
+///
+/// A thin delegating wrapper over [`visible_variables`] — same function,
+/// different name — so that the one rule-specific consequence it carries
+/// (below) is documented on the rule that owns it, rather than left as an
+/// unexplained side effect of reusing `visible_variables` directly. If
+/// `visible_variables` ever grows a caller-specific variant (e.g. a
+/// `SELECT *`-shaped pass-down some other engine carries), this is the one
+/// call site that would need to move to it — a change made for an unrelated
+/// caller cannot silently widen or narrow the LATERAL rule.
+///
+/// # A `SERVICE ?g` endpoint variable is left-hand scope
+///
+/// `visible_variables` (via [`collect_vars`]) includes a `SERVICE`/`GRAPH`
+/// name variable, pushed before it descends into the block — and that is
+/// the correct scope for it, not an accident of reusing `visible_variables`
+/// for this rule. `SERVICE ?g { ... }` with a variable endpoint requires
+/// `?g` to already be bound in the incoming solution: this engine resolves
+/// the endpoint IRI from that binding before the remote call is made
+/// (`substitute_in_named_node_pattern` in `crates/sparql-eval`, the same
+/// per-row substitution `LATERAL`'s own `inject` step uses), so by the time
+/// a `LATERAL` right-hand side runs, `?g` already holds an observable,
+/// per-row value contributed by the left-hand side — a USE of an existing
+/// binding, exactly like any other variable reused from an ordinary triple
+/// pattern, not a fresh binding `SERVICE` introduces. A `BIND`/`VALUES` on
+/// the right giving `?g` a NEW value at the right-hand side's own scope
+/// level is therefore exactly the class of observable rebinding
+/// [`find_lateral_rhs_scope_conflict`]'s theorem rejects, applied to this
+/// variable the same as any other left-bound one. Jena's `SyntaxVarScope`
+/// omits the `SERVICE` endpoint variable from its own left-scope set; this
+/// function does not follow it here, on the ground above. Pinned by
+/// `lateral_left_scope_includes_a_service_endpoint_variable`.
+fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
+    visible_variables(p)
+}
+
+/// Find the first variable a `LATERAL` right-hand side introduces (via
+/// `BIND`, a sub-`SELECT`'s `(expr AS ?v)` projection target, a `GROUP BY`
+/// aggregate's output variable, or `VALUES`) that collides with a variable
+/// already in scope on the left-hand side (`lhs_scope`, from
+/// [`compute_lateral_left_scope`]).
+///
+/// # The theorem
+///
+/// SEP-0006 defines `Lateral(Ω, P) = ⋃_{μ∈Ω} eval(inject(P, μ))`, where
+/// `inject` — the corrected substitution the evaluator performs
+/// (`crates/sparql-eval`) — exposes the left row's bindings to `P` as
+/// ordinary, still-variable solutions rather than literal term substitution.
+/// This walker is the syntax half of the contract that makes that injection
+/// sound: **it rejects exactly the programs, WRITTEN WITH THE `LATERAL`
+/// KEYWORD, in which injecting a left-hand binding into the right-hand side
+/// would be observable as a rebinding** — a fresh `BIND`/`VALUES`/aggregate
+/// target at the RHS's own top scope level trying to give a NEW value to a
+/// variable the LHS already gave one. A target confined to a `MINUS` right
+/// operand is, by definition, never such an observable rebinding: §18.5's
+/// evaluation uses the right operand only for the compatibility test and
+/// discards its bindings, so nothing downstream of a `MINUS` can ever see a
+/// value that operand introduced (see the `MINUS`-right paragraph in "Scope-
+/// level argument" below) — "exactly" holds with that definition, not as an
+/// exception carved out of it. The `SERVICE ?g { ... }` auto-wrap form (see
+/// "A property of the surface form" below) also builds a
+/// `GraphPattern::Lateral` node but is outside this theorem's domain — it is
+/// never walked, by construction, regardless of what its right-hand side
+/// does. The evaluator's half of the same theorem is that injection never
+/// crosses a
+/// `Project` boundary the projection does not itself carry forward, so a
+/// sub-select that does not project a shadowed name never observes the outer
+/// value, and rebinding it inside is legal. The two halves are one design:
+/// this function decides parse-time legality by walking the same scope
+/// boundary the evaluator's substitution respects at run time.
+///
+/// # Scope-level argument
+///
+/// SPARQL §18.2.1 defines exactly one construct that opens a fresh variable
+/// scope: a sub-`SELECT`'s projection (`Project`). Every other construct —
+/// `OPTIONAL`, `UNION`, `GRAPH`, a nested group, even a nested `LATERAL` — is
+/// transparent to scope: its introductions sit at the *same* scope level as
+/// the group around it. That is why every binary/unary node below simply
+/// recurses (a nested `LATERAL`'s own left AND right operands are both at the
+/// outer scope level — they are not given a fresh boundary of their own),
+/// while only `Project` narrows the scope being checked, and `Group`
+/// (§18.2.4's aggregation boundary, which likewise hides the pattern it
+/// aggregates over behind grouping keys and aggregate outputs) is checked
+/// only for the fresh variables its OWN aggregates and expression-valued
+/// `GROUP BY` conditions introduce.
+///
+/// `MINUS` is the one binary node that is NOT scope-transparent on its right
+/// operand. §18.2.1 puts a `MINUS`-right-only variable out of scope
+/// entirely, and §18.5 explains why: evaluation uses the right operand
+/// solely to build the compatibility test against the left operand's rows,
+/// then discards its bindings — nothing the right operand introduces ever
+/// reaches a solution that survives `MINUS`. A `BIND`/`VALUES`/aggregate
+/// target confined to a `MINUS` right operand therefore cannot be an
+/// observable rebinding at ANY depth, so only the left operand is walked;
+/// the right operand is skipped outright rather than merely narrowed.
+///
+/// # `Group`'s synthetic targets: aggregate outputs and grouping-expression keys
+///
+/// A `GROUP BY` query's aggregate output variables (e.g. `?n` in
+/// `(COUNT(?x) AS ?n)`) are, like a `BIND` target, fresh bindings introduced
+/// at the `Group` node's own scope level — checked here the same way (mapped
+/// to [`LateralIntro::Bind`]). So is an expression-valued `GROUP BY (expr AS
+/// ?v)` condition's grouping variable: `?v`'s value is a computed
+/// expression, never a matched term, so the parser lowers it to an `Extend`
+/// placed directly beneath `Group` (see the grouping-extend loop right
+/// before `GraphPattern::Group` is built). [`find_group_extend_conflict`]
+/// walks exactly that lowered chain and nothing past it: the pattern
+/// actually being grouped is never walked, because only the grouping keys
+/// and aggregate outputs escape a `Group` (mirrors [`collect_vars`]'s own
+/// non-descent into `Group`'s `inner`, which likewise only notes
+/// `variables` and `aggregates`). A bare `GROUP BY ?y` grouping key that
+/// merely names an already-bound variable produces no `Extend` at all — it
+/// is a USE of an existing binding, not an introduction, so this walker
+/// never has anything to find for it.
+///
+/// # Two points of disagreement with Jena
+///
+/// * **Laxer.** An introduction confined to a `MINUS` right operand is
+///   ACCEPTED here at ANY depth (Jena rejects it) — not only under a
+///   `SELECT *` sub-select, which is merely one route to this same shape.
+///   §18.2.1 puts `MINUS`-right variables out of scope, and §18.5 explains
+///   why nothing built on top of `MINUS` can ever observe them (see the
+///   `MINUS`-right paragraph in "Scope-level argument" above), so there is
+///   never anything observable for the rule to reject, whether the
+///   `MINUS` sits directly under `LATERAL`'s keyword or beneath a `SELECT
+///   *` sub-select above it. Jena's walk instead passes the full
+///   unfiltered variable set through unconditionally — declined here as a
+///   specification mismatch (§18.2.1/§18.5 win), not adopted. Pinned by
+///   `lateral_rhs_minus_right_bind_is_accepted` (the bare form) and
+///   `lateral_rhs_minus_right_bind_under_select_star_is_accepted` (the
+///   `SELECT *`-wrapped form that first surfaced the shape).
+/// * **Stricter.** A `SERVICE ?g` endpoint variable counts as left-hand scope
+///   here (ground documented on [`compute_lateral_left_scope`]: the variable
+///   is required to already be bound before the endpoint is resolved, so it
+///   is left-hand USE, not introduction); Jena omits it from its own
+///   left-scope set.
+///
+/// # Never descends into `Expression`
+///
+/// `Filter`'s and `Extend`'s expression operands are never visited — an
+/// `EXISTS { ... }` nested inside one binds nothing at the RHS's OWN scope
+/// level (it is its own nested query pattern), so a `BIND` inside an
+/// `EXISTS` can never trigger this rule. Pinned live, not just documented, by
+/// `lateral_rhs_exists_is_not_walked`.
+///
+/// # A property of the surface form, not of the algebra node
+///
+/// This function is only ever called from the parser's `LATERAL`-keyword
+/// dispatch arm. The pre-existing `SERVICE ?g { ... }` auto-wrap elsewhere in
+/// this module also produces a `GraphPattern::Lateral` node — for the
+/// unrelated reason that a variable-endpoint federated call must see the left
+/// row's bindings — but it is not user-written `LATERAL` syntax, so this
+/// restriction never runs over it. Pinned by
+/// `service_variable_endpoint_rhs_bind_is_not_scope_checked`.
+///
+/// # Determinism
+///
+/// `lhs_scope` is an order-preserving slice, never a hash container: the
+/// first collision in a pre-order, left-to-right walk (and, within one node,
+/// the introducing construct's own declaration order) is reported, so the
+/// variable named in the error is reproducible across runs.
+fn find_lateral_rhs_scope_conflict<'a>(
+    lhs_scope: &[Variable],
+    rhs: &'a GraphPattern,
+) -> Option<(&'a Variable, LateralIntro)> {
+    match rhs {
+        // Leaves: nothing is introduced.
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => None,
+        // Binary nodes are transparent to scope: recurse both operands at the
+        // SAME scope level (see the scope-level argument above).
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            find_lateral_rhs_scope_conflict(lhs_scope, left)
+                .or_else(|| find_lateral_rhs_scope_conflict(lhs_scope, right))
+        }
+        // `MINUS` is the one binary node that is NOT scope-transparent on its
+        // right operand: §18.2.1 puts a MINUS-right-only variable out of
+        // scope, and §18.5's evaluation only ever uses the right side for the
+        // compatibility test — its bindings are discarded, never carried
+        // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
+        // MINUS right operand can never be observed as a rebinding, at ANY
+        // depth, not only under a `SELECT *` sub-select (which was one route
+        // to this same shape, not a separate rule). Only the left operand is
+        // walked.
+        GraphPattern::Minus { left, .. } => find_lateral_rhs_scope_conflict(lhs_scope, left),
+        // Unary wrappers are transparent to scope; any expression operand is
+        // never visited.
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => find_lateral_rhs_scope_conflict(lhs_scope, inner),
+        // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
+        // condition all lower to `Extend` — a fresh binding at this scope
+        // level.
+        GraphPattern::Extend {
+            inner, variable, ..
+        } => {
+            if lhs_scope.contains(variable) {
+                Some((variable, LateralIntro::Bind))
+            } else {
+                find_lateral_rhs_scope_conflict(lhs_scope, inner)
+            }
+        }
+        // `VALUES`: the first declared column that collides, in declaration
+        // order.
+        GraphPattern::Values { variables, .. } => {
+            for v in variables {
+                if lhs_scope.contains(v) {
+                    return Some((v, LateralIntro::Values));
+                }
+            }
+            None
+        }
+        // A sub-SELECT's projection is the one scope boundary in the
+        // grammar: narrow to the variables it actually carries out,
+        // preserving `lhs_scope`'s own order, and stop once nothing survives
+        // the narrowing — nothing beneath an empty narrowed scope could ever
+        // be observed as a rebinding of an LHS variable. Projecting is not
+        // introducing: the projection's own `(expr AS ?v)` extends live
+        // beneath it and are caught, narrowed, by the `Extend` arm above.
+        GraphPattern::Project { inner, variables } => {
+            let narrowed: Vec<Variable> = lhs_scope
+                .iter()
+                .filter(|v| variables.contains(*v))
+                .cloned()
+                .collect();
+            if narrowed.is_empty() {
+                None
+            } else {
+                find_lateral_rhs_scope_conflict(&narrowed, inner)
+            }
+        }
+        // `GROUP BY`'s aggregate output variables are fresh bindings at this
+        // scope level (see "Group's synthetic targets" above); then the
+        // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
+        // `Extend`s directly beneath `Group` — and nothing past it, the
+        // pattern being grouped is never walked.
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
+            for (v, _) in aggregates {
+                if lhs_scope.contains(v) {
+                    return Some((v, LateralIntro::Bind));
+                }
+            }
+            find_group_extend_conflict(inner, variables, lhs_scope)
+        }
+    }
+}
+
+/// Walk the chain of `Extend` nodes the parser lowers each expression-valued
+/// `GROUP BY (expr AS ?v)` condition to, which the query builder places
+/// directly beneath `Group` (one `Extend` per condition, innermost-first —
+/// see the grouping-extend loop immediately before `GraphPattern::Group` is
+/// constructed). Stops the instant a node is not one of these lowered
+/// `Extend`s: `variables` is `Group`'s full grouping-key list, so an
+/// `Extend` whose target is not in it cannot be a grouping-extend the parser
+/// produced — it is the top of the pattern actually being grouped, which
+/// this walker never descends into (mirrors [`collect_vars`]'s own
+/// non-descent into `Group`'s `inner`).
+///
+/// Recurses before checking the current node, so the first conflict
+/// reported is the earliest-DECLARED `GROUP BY (expr AS ?v)` condition
+/// (the innermost `Extend`, closest to the ungrouped pattern), preserving
+/// the walker's left-to-right determinism contract.
+fn find_group_extend_conflict<'a>(
+    inner: &'a GraphPattern,
+    variables: &[Variable],
+    lhs_scope: &[Variable],
+) -> Option<(&'a Variable, LateralIntro)> {
+    let GraphPattern::Extend {
+        inner: next,
+        variable,
+        ..
+    } = inner
+    else {
+        return None;
+    };
+    if !variables.contains(variable) {
+        return None;
+    }
+    find_group_extend_conflict(next, variables, lhs_scope).or_else(|| {
+        if lhs_scope.contains(variable) {
+            Some((variable, LateralIntro::Bind))
+        } else {
+            None
+        }
+    })
 }
 
 /// Collect the labels of every blank node in a run of quad patterns, descending
@@ -3773,6 +4399,129 @@ mod tests {
         assert!(error.to_string().contains("nesting exceeds"));
     }
 
+    /// Locate the EXACT repetition count at which a monotonic spine generator
+    /// — one more repetition of `spine` only ever charges MORE combinator
+    /// nodes, never fewer, true of every generator this helper is applied to
+    /// below — stops parsing, then assert the transition is exactly what
+    /// [`MAX_GRAPH_PATTERN_NODES`] demands: one repetition short of it parses
+    /// clean, and the very next repetition is refused with a typed
+    /// [`ParseError`] naming the limit — never an abort (reaching this
+    /// assertion at all, on either side, already demonstrates that this test
+    /// PROCESS did not crash; a real stack overflow would have taken the
+    /// whole process down before any assertion could run).
+    fn assert_spine_bound(spine: impl Fn(usize) -> String) {
+        assert!(
+            SparqlParser::new().parse_query(&spine(1)).is_ok(),
+            "the smallest spine must parse"
+        );
+        let (mut lo, mut hi) = (1usize, 2usize);
+        while SparqlParser::new().parse_query(&spine(hi)).is_ok() {
+            lo = hi;
+            hi *= 2;
+            assert!(
+                hi < 1_000_000,
+                "spine never reaches the safety limit up to {hi} repetitions"
+            );
+        }
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if SparqlParser::new().parse_query(&spine(mid)).is_ok() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        SparqlParser::new()
+            .parse_query(&spine(lo))
+            .expect("one repetition short of the safety limit must parse");
+        let error = SparqlParser::new().parse_query(&spine(hi)).expect_err(
+            "one repetition past the safety limit must be a typed refusal, never an abort",
+        );
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "the spine refusal remains a typed syntax error: {error}"
+        );
+        assert!(
+            error.to_string().contains("combinator count exceeds"),
+            "the refusal should name the combinator-count limit, got: {error}"
+        );
+    }
+
+    /// A run of SIBLING `OPTIONAL { }` elements at ONE brace depth: each
+    /// keyword adds one `LeftJoin` level to a left-deep spine while
+    /// `group_pattern_depth` never exceeds 1 — the exact shape
+    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, and the shape
+    /// [`MAX_GRAPH_PATTERN_NODES`] exists to bound instead.
+    #[test]
+    fn sibling_spine_length_is_bounded_by_a_typed_error() {
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { ?s <https://example.org/p> ?o ");
+            for _ in 0..n {
+                body.push_str("OPTIONAL { ?s <https://example.org/q> ?r } ");
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// The SAME left-deep-spine hazard, reachable with no `OPTIONAL`/`UNION`/
+    /// `LATERAL` keyword at all: a long run of dot-separated COMPLEX
+    /// property-path triples inside ONE triples block. `join` flattens
+    /// adjacent plain `Bgp` triples into one node (so a triples-only spine of
+    /// this length is harmless), but a property path with a modifier
+    /// (`+`/`*`/`?`/a multi-step sequence) parses to its own
+    /// `GraphPattern::Path` node, and `BlockSink::into_pattern` folds each one
+    /// onto the block with its own `Join` — entirely inside what the
+    /// group-parsing loop counts as ONE element.
+    #[test]
+    fn dot_separated_path_spine_length_is_bounded_by_a_typed_error() {
+        use std::fmt::Write as _;
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { ");
+            for i in 0..n {
+                let _ = write!(
+                    body,
+                    "<https://example.org/s{i}> <https://example.org/p>+ <https://example.org/o{i}> . "
+                );
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// A single bracketed group with a long run of `UNION` arms — hidden from
+    /// the group loop's own per-element charge because the whole chain is
+    /// consumed inside ONE loop iteration (the nested `while eat_kw("UNION")`
+    /// loop), so it is charged separately, one unit per arm past the first.
+    #[test]
+    fn union_arm_spine_length_is_bounded_by_a_typed_error() {
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT * WHERE { { ?s <https://example.org/p> ?o }");
+            for _ in 0..n {
+                body.push_str(" UNION { ?s <https://example.org/p> ?o }");
+            }
+            body.push('}');
+            body
+        });
+    }
+
+    /// A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection list lowers to a
+    /// chain of `Extend` nodes with no brace involved at all — a THIRD shape
+    /// (alongside the group loop and its `UNION` arms) that
+    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, closed by the same budget.
+    #[test]
+    fn select_expression_list_length_is_bounded_by_a_typed_error() {
+        use std::fmt::Write as _;
+        assert_spine_bound(|n| {
+            let mut body = String::from("SELECT ");
+            for i in 0..n {
+                let _ = write!(body, "(1 AS ?v{i}) ");
+            }
+            body.push_str("WHERE { }");
+            body
+        });
+    }
+
     #[test]
     fn inverse_in_negated_property_set_parses_with_direction() {
         // `!(^iri)` — the inverse element is preserved as a `NegatedPathElement`
@@ -3982,7 +4731,7 @@ mod tests {
         // SPARQL 1.1 §11.3: ORDER BY on an aggregate is legal inside a grouped
         // query. This was previously rejected as `Unsupported` because ORDER BY
         // used `parse_expression()` (aggregate-blind) instead of the agg-lifting
-        // path. Regression guard for gap G4-A.
+        // path.
         let q = format!(
             "{GM}SELECT ?t (COUNT(?x) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t ORDER BY DESC(COUNT(?x))"
         );
@@ -4183,7 +4932,7 @@ mod tests {
     }
     #[test]
     fn custom_function_arg_aggregate_reaches_group() {
-        // G3 regression: `purrdf:fn(COUNT(?x))` was discarding the COUNT into a
+        // `purrdf:fn(COUNT(?x))` was discarding the COUNT into a
         // throwaway Vec rather than threading it through to the Group.  The
         // algebra must have a Group whose aggregates list is non-empty.
         let q =
@@ -4930,6 +5679,63 @@ mod tests {
     }
 
     #[test]
+    fn delete_where_template_refuses_lateral() {
+        // `DELETE WHERE { … }`'s braces are parsed TWICE: once as a quad
+        // TEMPLATE (the delete side, via `parse_quad_pattern_block`) and once
+        // as an ordinary group graph pattern (the WHERE side — see
+        // `insert_where_lateral_parses_and_scope_checks`, where LATERAL is
+        // legal). A template has no group-pattern operators at all — no
+        // `OPTIONAL`/`FILTER`/`GRAPH`-as-a-group either — so `LATERAL` there
+        // must be refused with a clear, named message (the same idiom already
+        // used for property paths and property-function calls in
+        // `parse_template_triple`) rather than a confusing "expected a term"
+        // subject-parse error.
+        let err = update_err("DELETE WHERE { ?s purrdf:p ?o LATERAL { ?o purrdf:q ?z } }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("LATERAL is not allowed in an update template")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn insert_where_lateral_parses_and_scope_checks() {
+        // `INSERT … WHERE`, `DELETE … WHERE` (the template form, not the
+        // `DELETE WHERE` shorthand above), and `WITH … WHERE` all route their
+        // WHERE clause through the SAME `parse_group_graph_pattern` dispatch
+        // a SELECT's WHERE does — the shared arm that recognizes `LATERAL`
+        // (`parse_insert`/`parse_delete`/`parse_with_modify` each call
+        // `self.parse_group_graph_pattern()` for their WHERE, with no
+        // template-only restriction). Positive: it parses to the same
+        // `Lateral` node a SELECT's WHERE would.
+        let u = parse_update(
+            "INSERT { ?s purrdf:q ?label } \
+             WHERE { ?s purrdf:p ?o LATERAL { ?o purrdf:label ?label } }",
+        );
+        let GraphUpdateOperation::DeleteInsert { pattern, .. } = &u.operations[0] else {
+            panic!("expected DeleteInsert");
+        };
+        assert!(
+            matches!(**pattern, GraphPattern::Lateral { .. }),
+            "an UPDATE WHERE clause must produce the same Lateral node a \
+             SELECT's WHERE does: {pattern:?}"
+        );
+
+        // Negative: the SAME scope-conflict check (Jena's `SyntaxVarScope`,
+        // which runs on UPDATE WHERE clauses too) must run here — a BIND
+        // target already in scope on LATERAL's left is refused, naming the
+        // variable, exactly as it would inside a SELECT.
+        let err = update_err(
+            "INSERT { ?s purrdf:q ?o } WHERE { ?s purrdf:p ?o LATERAL { BIND(1 AS ?o) } }",
+        );
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("BIND target ?o inside LATERAL is already in scope")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
     fn update_delete_insert_modify() {
         let u = parse_update(
             "DELETE { ?s purrdf:p ?o } INSERT { ?s purrdf:q ?o } WHERE { ?s purrdf:p ?o }",
@@ -5255,6 +6061,82 @@ mod tests {
             .expect("fresh BIND target parses");
     }
 
+    /// The group-parsing loop's scope set is a genuinely incremental structure,
+    /// not a per-element recompute wearing an O(log n) membership test: a
+    /// query's count of PRODUCTION scope-snapshot consultations
+    /// ([`Parser::note_scope_consultation`]) is fixed by its STRUCTURE — one
+    /// `SELECT *`, one `LATERAL` keyword — and invariant under how many `BIND`s
+    /// sit inside it. Falsified by a SCALE-INVARIANT COUNT, deliberately never
+    /// a clock (benches report, never assert; wall-clock varies with machine
+    /// load, a call count reached by fixed code paths does not).
+    ///
+    /// Named without a `lateral_`/`sep0006_`/`service_variable_` prefix so it
+    /// stays outside `rg -c '^\s*fn (lateral_|sep0006_|service_variable_)'`'s
+    /// count of the `LATERAL` scope-rule tests (still 25 — untouched by this
+    /// test).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scope_set_stays_linear_over_two_thousand_binds() {
+        fn binds(n: usize) -> String {
+            use std::fmt::Write as _;
+            (1..=n).fold(String::new(), |mut acc, i| {
+                let _ = write!(acc, "BIND({i} AS ?x{i}) ");
+                acc
+            })
+        }
+
+        /// Parse `body` (already wrapped in a full query) and return the
+        /// number of production scope-snapshot consultations it took —
+        /// reading the counter is itself a plain field read, not a
+        /// consultation, so this helper cannot inflate what it measures.
+        fn consultations(query: &str) -> u64 {
+            let options = ParserOptions::default();
+            let mut p = SparqlParser::new()
+                .parser_for(query, &options)
+                .expect("tokenize");
+            p.parse_query().expect("parse");
+            p.expect_eof().expect("a full query consumes every token");
+            p.debug_scope_consultations()
+        }
+
+        // Plain: N sequential BINDs directly in the WHERE group, under a
+        // `SELECT *` (one production consultation: the projection build).
+        let plain = |n: usize| {
+            consultations(&format!(
+                "{GM}SELECT * WHERE {{ ?s purrdf:p ?o {} }}",
+                binds(n)
+            ))
+        };
+        let plain_200 = plain(200);
+        let plain_2000 = plain(2000);
+        assert_eq!(
+            plain_200, plain_2000,
+            "the count must be invariant under how many BINDs the group holds"
+        );
+        assert!(
+            plain_2000 <= 2,
+            "count={plain_2000} — a per-BIND recompute would read 200 vs 2,000 here (the \
+             pre-fix revert-check), not a value fixed at <= 2"
+        );
+
+        // The same N BINDs, inside a LATERAL right-hand side (two production
+        // consultations: the outer `SELECT *` and the LATERAL's own
+        // left-scope read — each fires exactly ONCE regardless of N).
+        let inside_lateral = |n: usize| {
+            consultations(&format!(
+                "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ {} }} }}",
+                binds(n)
+            ))
+        };
+        let lateral_200 = inside_lateral(200);
+        let lateral_2000 = inside_lateral(2000);
+        assert_eq!(
+            lateral_200, lateral_2000,
+            "the count must be invariant under how many BINDs the LATERAL right-hand side holds"
+        );
+        assert!(lateral_2000 <= 2, "count={lateral_2000}");
+    }
+
     #[test]
     fn bind_target_only_in_minus_right_is_allowed() {
         // §18.2.1: a variable occurring only in the right operand of MINUS is
@@ -5286,6 +6168,501 @@ mod tests {
             !names.contains(&"v") && !names.contains(&"x"),
             "MINUS-right-only vars must not be projected, got {names:?}"
         );
+    }
+
+    // ── LATERAL (SEP-0006 surface syntax) ───────────────────────────────────
+
+    #[test]
+    fn lateral_takes_the_preceding_pattern_as_its_left() {
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?o purrdf:q ?z }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        let GraphPattern::Bgp { patterns: lp } = *left else {
+            panic!("expected the left to be the preceding BGP");
+        };
+        assert_eq!(lp.len(), 1);
+        assert_eq!(lp[0].subject, TermPattern::Variable(Variable::new("s")));
+        assert_eq!(lp[0].object, TermPattern::Variable(Variable::new("o")));
+        let GraphPattern::Bgp { patterns: rp } = *right else {
+            panic!("expected the right to be the LATERAL body's BGP");
+        };
+        assert_eq!(rp.len(), 1);
+        assert_eq!(rp[0].subject, TermPattern::Variable(Variable::new("o")));
+    }
+
+    #[test]
+    fn lateral_chains_left_deep_in_textual_order() {
+        // Two consecutive `LATERAL`s at the same nesting level must chain
+        // LEFT-DEEP, each new one absorbing everything written before it.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?a purrdf:p ?b LATERAL {{ ?b purrdf:q ?c }} LATERAL {{ ?c purrdf:r ?d }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected the outermost node to be Lateral, got {where_pat:?}");
+        };
+        let GraphPattern::Bgp { patterns } = *right else {
+            panic!("expected the outermost right to be `?c purrdf:r ?d`");
+        };
+        assert_eq!(
+            patterns[0].subject,
+            TermPattern::Variable(Variable::new("c"))
+        );
+        let GraphPattern::Lateral {
+            left: inner_left,
+            right: inner_right,
+        } = *left
+        else {
+            panic!("expected the outermost left to itself be a Lateral");
+        };
+        assert!(matches!(*inner_left, GraphPattern::Bgp { .. }));
+        let GraphPattern::Bgp { patterns: irp } = *inner_right else {
+            panic!("expected the inner right to be `?b purrdf:q ?c`");
+        };
+        assert_eq!(irp[0].subject, TermPattern::Variable(Variable::new("b")));
+    }
+
+    #[test]
+    fn lateral_nests_on_the_right_when_written_nested() {
+        // A `LATERAL` written INSIDE another `LATERAL`'s body nests on the
+        // right, rather than flattening into the outer chain.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?a purrdf:p ?b LATERAL {{ ?b purrdf:q ?c LATERAL {{ ?c purrdf:r ?d }} }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, right } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert!(matches!(*left, GraphPattern::Bgp { .. }));
+        let GraphPattern::Lateral { .. } = *right else {
+            panic!("expected the outer right to itself be a Lateral");
+        };
+    }
+
+    #[test]
+    fn lateral_after_a_dot_separated_triples_block() {
+        // A `.` between the preceding triples and `LATERAL` must not confuse
+        // the triples-block loop into trying to parse `LATERAL` as a fresh
+        // subject (the `block_boundary` fix under test).
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . LATERAL {{ ?o purrdf:q ?z }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        assert!(
+            matches!(where_pat, GraphPattern::Lateral { .. }),
+            "got {where_pat:?}"
+        );
+    }
+
+    #[test]
+    fn lateral_with_no_left_pattern_is_the_unit_table() {
+        // `LATERAL` as the first element of a group has no preceding pattern;
+        // its left stays the identity table `Bgp { patterns: [] }`, exactly
+        // like `OPTIONAL`/`MINUS` written first.
+        let q = format!("{GM}SELECT * WHERE {{ LATERAL {{ ?s purrdf:p ?o }} }}");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, .. } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert_eq!(*left, GraphPattern::Bgp { patterns: vec![] });
+    }
+
+    #[test]
+    fn lateral_binds_looser_than_union() {
+        // `{A} UNION {B} LATERAL {C}` must attach `LATERAL` to the WHOLE
+        // union, not just `{B}` — the same looser-than-UNION precedence
+        // `OPTIONAL`/`MINUS` already have (structural: the outer loop only
+        // reaches the `LATERAL` arm after the `{...} UNION {...}` element has
+        // already been folded into `g`).
+        let q = format!(
+            "{GM}SELECT * WHERE {{ {{ ?a purrdf:p ?x }} UNION {{ ?a purrdf:q ?x }} LATERAL {{ ?x purrdf:r ?y }} }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Lateral { left, .. } = where_pat else {
+            panic!("expected Lateral, got {where_pat:?}");
+        };
+        assert!(
+            matches!(*left, GraphPattern::Union { .. }),
+            "LATERAL's left must be the whole UNION, got {left:?}"
+        );
+    }
+
+    #[test]
+    fn lateral_right_hand_side_inherits_the_depth_limit() {
+        // The RHS parses via `parse_group_graph_pattern` (not `_inner`), so it
+        // counts toward `MAX_GRAPH_PATTERN_DEPTH` exactly like every other
+        // braced construct.
+        fn nested_query(extra_depth: usize) -> String {
+            format!(
+                "SELECT * WHERE {{ ?s ?p ?o LATERAL {} ?x ?y ?z {} }}",
+                "{ ".repeat(extra_depth),
+                "} ".repeat(extra_depth)
+            )
+        }
+        SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH - 1))
+            .expect("depth budget reached exactly through a LATERAL right-hand side must parse");
+        let error = SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
+            .expect_err("one level beyond the limit through a LATERAL right-hand side must fail");
+        assert!(matches!(error, ParseError::Syntax { .. }));
+        assert!(error.to_string().contains("nesting exceeds"));
+    }
+
+    #[test]
+    fn lateral_is_positional_not_reserved() {
+        // `LATERAL` is a keyword only POSITIONALLY: it must not shadow
+        // `lateral` as an ordinary prefixed-name local part or variable name.
+        // Both dotted positions below are the ones that exercise the changed
+        // `block_boundary` arm — without it, the triples-block loop would
+        // continue past the `.` and try to parse a fresh subject where the
+        // keyword sits, since `peek_kw` alone (used by the outer dispatch
+        // loop) already never confuses a `PrefixedName`/`Variable` token with
+        // a `Word` keyword token.
+        let q = format!(
+            "{GM}PREFIX lateral: <https://l/>\nSELECT * WHERE {{ ?s purrdf:p ?o . lateral:x purrdf:p ?o }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!(
+                "a prefixed name in the `lateral:` namespace must parse as an \
+                 ordinary triple, not the LATERAL keyword: {where_pat:?}"
+            );
+        };
+        assert_eq!(patterns.len(), 2);
+
+        let q2 = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . ?lateral purrdf:p ?o }}");
+        let where_pat2 = unproject(select_pattern(&q2));
+        let GraphPattern::Bgp { patterns: p2 } = where_pat2 else {
+            panic!(
+                "a variable named `lateral` must parse as an ordinary variable, \
+                 not the LATERAL keyword: {where_pat2:?}"
+            );
+        };
+        assert_eq!(p2.len(), 2);
+    }
+
+    #[test]
+    fn sep0006_illegal_bind_example_is_rejected() {
+        // SEP-0006's own illegal example: `LATERAL { BIND(123 AS ?o) }` after
+        // `?s ?p ?o` — `?o` is already bound on the left.
+        let q = format!("{GM}SELECT * {{ ?s ?p ?o LATERAL {{ BIND(123 AS ?o) }} }}");
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("SEP-0006's own illegal example must be rejected");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn sep0006_legal_subselect_example_is_accepted() {
+        // SEP-0006's own legal example: a sub-`SELECT` that reuses the outer
+        // `?s` internally but projects only `?label` — the reused name is not
+        // an introduction, so it never collides.
+        let q = format!(
+            "{GM}SELECT * {{ ?s rdf:type purrdf:T LATERAL {{ SELECT ?label {{ ?s rdfs:label ?label }} LIMIT 1 }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("SEP-0006's own legal sub-select example must parse");
+    }
+
+    #[test]
+    fn sep0006_select_star_subselect_examples_are_accepted() {
+        // SEP-0006's own two `SELECT *` sub-select examples: a bare form and
+        // one wrapped in `OPTIONAL`. `SELECT *` projects the sub-select's own
+        // visible variables (here including the reused `?s`), so `Project`
+        // narrows to a non-empty scope but the sub-select body is a plain
+        // BGP — a leaf, never an introduction — so both accept.
+        for q in [
+            format!(
+                "{GM}SELECT * {{ ?s rdf:type purrdf:T LATERAL {{ SELECT * {{ ?s rdfs:label ?label }} LIMIT 1 }} }}"
+            ),
+            format!(
+                "{GM}SELECT * {{ ?s ?p ?o LATERAL {{ OPTIONAL {{ SELECT * {{ ?s rdfs:label ?label }} LIMIT 1 }} }} }}"
+            ),
+        ] {
+            SparqlParser::new()
+                .parse_query(&q)
+                .unwrap_or_else(|e| panic!("SEP-0006's own SELECT * example must parse: {e}\n{q}"));
+        }
+    }
+
+    #[test]
+    fn lateral_rhs_values_collision_is_rejected() {
+        let q =
+            format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ VALUES ?o {{ 1 2 }} }} }}");
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a VALUES column colliding with the left scope must be rejected");
+        assert!(
+            err.to_string()
+                .contains("VALUES variable ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_subselect_as_target_collision_is_rejected() {
+        // The sub-select projects exactly the colliding `(1+1 AS ?o)` target,
+        // so `Project`'s narrowing does not filter it away.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT (1 + 1 AS ?o) {{ ?x purrdf:q ?y }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a projected (expr AS ?v) target colliding with the left scope must fail");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_group_by_expr_target_collision_is_rejected() {
+        // The parser lowers `GROUP BY (?y AS ?o)` to an `Extend` directly
+        // beneath `Group`, at the RHS's own top scope level — a fresh
+        // (computed) binding for `?o` just like a `BIND` target, so it must
+        // collide with the LHS's `?o` the same way.
+        let q = format!(
+            "{GM}SELECT * {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o WHERE {{ ?x purrdf:q ?y }} GROUP BY (?y AS ?o) }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a GROUP BY (expr AS ?v) grouping target colliding with the left scope must fail",
+        );
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_group_by_expr_fresh_target_is_accepted() {
+        // Control: a genuinely fresh grouping target must still parse.
+        let q = format!(
+            "{GM}SELECT * {{ ?s purrdf:p ?o LATERAL {{ SELECT ?fresh WHERE {{ ?x purrdf:q ?y }} GROUP BY (?y AS ?fresh) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh GROUP BY (expr AS ?v) target must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_collision_below_optional_and_union_is_rejected() {
+        // `OPTIONAL`/`UNION` are transparent to scope: a BIND collision
+        // beneath either must still be found.
+        for body in [
+            "OPTIONAL { BIND(1 AS ?o) }",
+            "{ BIND(1 AS ?o) } UNION { ?x purrdf:q ?y }",
+        ] {
+            let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ {body} }} }}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err(&format!("expected a scope-conflict rejection for {body:?}"));
+            assert!(
+                err.to_string()
+                    .contains("BIND target ?o inside LATERAL is already in scope"),
+                "unexpected message for {body:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn lateral_rhs_collision_inside_a_nested_lateral_is_rejected() {
+        // A nested `LATERAL`'s own operands sit at the OUTER scope level —
+        // the walker must keep recursing into a nested Lateral rather than
+        // treating it as its own boundary.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?x purrdf:q ?y LATERAL {{ BIND(1 AS ?o) }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a collision inside a nested LATERAL must still be found");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_fresh_bind_is_accepted() {
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ BIND(1 AS ?fresh) }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh BIND target must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_reusing_a_left_variable_in_a_triple_is_accepted() {
+        // Using a left-hand variable inside an ordinary RHS triple is
+        // correlated USE, not an introduction — always legal.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?o purrdf:q ?z }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("reusing a left variable inside a triple must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_subselect_projecting_a_left_variable_is_accepted() {
+        // Projecting an EXISTING left variable back out is not introducing a
+        // fresh one.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o {{ ?o purrdf:q ?z }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("projecting a left variable back out must parse");
+    }
+
+    #[test]
+    fn lateral_rhs_nested_subselect_rescopes_the_check() {
+        // Two nested sub-selects, each projecting exactly `?o`: the
+        // narrowing must be re-derived at EACH `Project` boundary (not
+        // computed once at the outer level) to still find the innermost
+        // `BIND(1 AS ?o)`.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT ?o {{ SELECT ?o {{ ?x purrdf:q ?y . BIND(1 AS ?o) }} }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("the collision must survive two nested Project boundaries");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_left_scope_excludes_minus_right_only_variables() {
+        // §18.2.1: a variable occurring only in the right operand of MINUS is
+        // not in scope on the LATERAL left-hand side, so binding it inside
+        // LATERAL is fresh.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} LATERAL {{ BIND(1 AS ?v) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a MINUS-right-only variable must not be in LATERAL's left scope");
+    }
+
+    #[test]
+    fn lateral_left_scope_excludes_filter_only_variables() {
+        // A variable occurring only inside a FILTER expression is never
+        // collected by `collect_vars` (FILTER's expression is not walked),
+        // so it is not part of the LATERAL left scope either.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o FILTER(?w > 5) LATERAL {{ BIND(1 AS ?w) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a FILTER-only variable must not be in LATERAL's left scope");
+    }
+
+    #[test]
+    fn lateral_rhs_minus_right_bind_under_select_star_is_accepted() {
+        // Deliberate divergence from Jena: `SELECT *`'s own projection list is
+        // computed from `visible_variables`, which already excludes a
+        // MINUS-right-only BIND target, so the narrowed scope is empty before
+        // the walker ever reaches it — nothing observable can shadow.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ SELECT * {{ ?x purrdf:q ?y MINUS {{ ?z purrdf:r ?w . BIND(1 AS ?o) }} }} }} }}"
+        );
+        SparqlParser::new().parse_query(&q).expect(
+            "a MINUS-right BIND under a SELECT * sub-select must be accepted (Jena diverges here)",
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_minus_right_bind_is_accepted() {
+        // The bare form — a `MINUS` written directly under `LATERAL`'s
+        // keyword, no `SELECT *` sub-select in between. Same ground as
+        // `lateral_rhs_minus_right_bind_under_select_star_is_accepted`: the
+        // `MINUS` right operand's `BIND(1 AS ?o)` is discarded by §18.5's
+        // evaluation before it could ever be observed as a rebinding of the
+        // left-hand `?o`, so the `Minus` arm skips the right operand
+        // outright rather than needing a `Project` boundary to narrow it
+        // away. This generalizes the `SELECT *` case above rather than
+        // adding a second rule: the `SELECT *` form was one route to this
+        // same shape, not a separate one.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ ?a purrdf:p ?b MINUS {{ ?a purrdf:p ?b BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new().parse_query(&q).expect(
+            "a bare MINUS-right BIND directly under LATERAL must be accepted (Jena diverges here)",
+        );
+    }
+
+    #[test]
+    fn lateral_rhs_minus_left_bind_is_rejected() {
+        // Control: a collision in the MINUS LEFT operand is an ordinary
+        // observable rebinding — the left operand's own bindings survive
+        // `MINUS` (only the right operand is used-then-discarded by §18.5's
+        // compatibility test) — so it must still be rejected. Confirms the
+        // `Minus` arm's narrowing to skip the right operand did not
+        // accidentally stop walking the left operand too.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ BIND(1 AS ?o) MINUS {{ ?a purrdf:p ?b }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a MINUS-left collision must still be rejected");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?o inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn lateral_left_scope_includes_a_service_endpoint_variable() {
+        // Divergence from Jena: `visible_variables` (the parser's one
+        // definition of "in scope") includes a SERVICE endpoint variable, so
+        // LATERAL's left scope does too, even though Jena's SyntaxVarScope
+        // omits it.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?g . SERVICE ?g {{ ?x purrdf:q ?y }} LATERAL {{ BIND(1 AS ?g) }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a SERVICE ?g endpoint variable must be in LATERAL's left scope here");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?g inside LATERAL is already in scope"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn service_variable_endpoint_rhs_bind_is_not_scope_checked() {
+        // `SERVICE ?g { ... }` is auto-wrapped into a `Lateral` node by the
+        // pre-existing SERVICE dispatch arm (a representation detail of
+        // variable-endpoint federation), not by the user writing the
+        // `LATERAL` keyword — so SEP-0006's scope restriction, which only
+        // runs from the `LATERAL`-keyword dispatch arm, never walks its body.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?g . SERVICE ?g {{ BIND(1 AS ?g) }} }}");
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a SERVICE ?g body is not scope-checked by the LATERAL restriction");
+    }
+
+    #[test]
+    fn lateral_rhs_exists_is_not_walked() {
+        // `Filter`'s expression operand is never visited by the walker, so an
+        // `EXISTS { BIND(1 AS ?o) }` nested inside a FILTER cannot trigger
+        // the LATERAL scope restriction, even though `?o` collides.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ FILTER EXISTS {{ BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a BIND nested inside an EXISTS expression must not be walked");
     }
 
     #[test]

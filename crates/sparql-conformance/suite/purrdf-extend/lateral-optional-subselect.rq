@@ -1,0 +1,6 @@
+PREFIX : <https://example.org/lateral#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT * WHERE {
+  ?s :p ?o
+  LATERAL { OPTIONAL { SELECT * WHERE { ?s rdfs:label ?label } ORDER BY ?label LIMIT 1 } }
+}

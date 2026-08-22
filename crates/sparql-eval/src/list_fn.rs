@@ -650,7 +650,7 @@ mod tests {
         let ds = list_ds();
         let q = "SELECT ?x WHERE { BIND(<http://other.example/notAFunction>(1) AS ?x) }";
         let err = eval_err(&ds, q);
-        assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
     }
 
     #[test]
