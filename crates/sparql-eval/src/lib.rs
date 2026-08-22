@@ -87,6 +87,7 @@ mod contain;
 mod convert;
 mod dataset_spec;
 mod describe_query;
+mod enf;
 pub mod engine;
 pub mod error;
 pub mod eval;

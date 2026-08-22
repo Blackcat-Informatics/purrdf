@@ -99,6 +99,14 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
 /// positions; ordinary constant substitution, unchanged, for expression
 /// positions).
 ///
+/// For a correlated `EXISTS`'s call into this seam specifically, `inject` is this
+/// same walk applied to the very definition `crate::enf`'s module doc states ONCE
+/// as the one-definition theorem: `exists(X, μ) ⟺ eval(D(G), Replace(PrjMap(X),
+/// μ))` is non-empty — this function computes exactly `eval(D(G), Replace(X, μ))`
+/// for the caller-supplied `pattern` (already `PrjMap`-narrowed by ENF/`Project`
+/// where applicable), and [`crate::expr::exists`]'s definition-path caller reads
+/// its non-emptiness as the answer.
+///
 /// # Errors
 ///
 /// Propagates whatever `pattern`'s evaluation returns — including a truncation,

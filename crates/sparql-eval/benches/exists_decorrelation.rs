@@ -27,6 +27,16 @@
 //!     branch), so each probe falls into the per-row compatibility scan. This makes
 //!     the unbound-shared-column cliff visible to regression tracking — even with a
 //!     reused index, an unbound probe column scans the full inner result.
+//!   - `optional_inside_exists` — an `OPTIONAL` buried inside a `FILTER` inside the
+//!     `EXISTS` inner (so the ENF `LeftJoin`-erasure law does not fire — the
+//!     `LeftJoin` is off the emptiness-observed spine — and
+//!     `crate::governor::soundness::probe_admissible` correctly refuses it): every
+//!     outer row takes the per-row DEFINITION path. This isolates the
+//!     **μ-restriction memo**'s win (`EvalOptions::exists_memo`, now shared by both
+//!     evaluation strategies) rather than the probe path's index-reuse win the other
+//!     three shapes measure: many outer rows share few distinct correlated-variable
+//!     restrictions, so the memo turns `N` per-row substituted `LeftJoin`
+//!     evaluations into `k`.
 //!
 //! Report-only, `make bench` lane only — excluded from `make check`.
 
@@ -86,6 +96,35 @@ fn hub_dataset(n_outer: usize, m_inner: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
+/// `n_outer` subjects `:knows` cycling through `m_hubs` distinct objects (`?x`).
+/// Each hub has its own `:p` value (so the correlated `EXISTS` inner's `Bgp{?x :p
+/// ?w}` differs per hub) and, for every other hub, a `:q` edge (so the buried
+/// `OPTIONAL` has real per-hub data to match or not match, rather than always
+/// padding a no-op). `m_hubs` distinct hubs ⇒ `m_hubs` distinct correlated-variable
+/// restrictions for the μ-restriction memo to collapse `n_outer` rows onto.
+fn hub_optional_dataset(n_outer: usize, m_hubs: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let knows = b.intern_iri("http://ex/knows");
+    let p = b.intern_iri("http://ex/p");
+    let q = b.intern_iri("http://ex/q");
+    let mut hubs = Vec::with_capacity(m_hubs);
+    for j in 0..m_hubs {
+        let hub = b.intern_iri(&format!("http://ex/hub{j}"));
+        let w = b.intern_iri(&format!("http://ex/w{j}"));
+        b.push_quad(hub, p, w, None);
+        if j % 2 == 0 {
+            let y = b.intern_iri(&format!("http://ex/y{j}"));
+            b.push_quad(hub, q, y, None);
+        }
+        hubs.push(hub);
+    }
+    for i in 0..n_outer {
+        let s = b.intern_iri(&format!("http://ex/s{i}"));
+        b.push_quad(s, knows, hubs[i % m_hubs], None);
+    }
+    b.freeze().expect("freeze")
+}
+
 /// Single-row inner: the outer `?o` appears only in the inner BGP triple position.
 const TRIVIAL_QUERY: &str = "SELECT ?s ?o WHERE { ?s <http://ex/knows> ?o \
                              FILTER NOT EXISTS { ?o <http://ex/member> ?m } }";
@@ -98,6 +137,18 @@ const LARGE_INNER_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/knows> ?o \
 /// the inner with an unbound shared column (the per-row compatibility scan branch).
 const UNBOUND_SCAN_QUERY: &str = "SELECT ?s WHERE { { ?s <http://ex/knows> ?o } UNION { ?s <http://ex/likes> ?z } \
      FILTER NOT EXISTS { ?o <http://ex/member> ?m } }";
+
+/// An `OPTIONAL` buried inside a `FILTER` inside the `EXISTS` inner: the `LeftJoin`
+/// is off the ENF spine (the enclosing `Filter` is not a spine-transparent wrapper),
+/// so it survives normalization and `probe_admissible` correctly refuses it — every
+/// outer row takes the per-row DEFINITION path, and the μ-restriction memo is what
+/// keeps `n_outer` rows from paying `n_outer` separate substituted evaluations.
+const OPTIONAL_INSIDE_EXISTS_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/knows> ?x \
+     FILTER EXISTS { \
+       ?x <http://ex/p> ?w \
+       OPTIONAL { ?x <http://ex/q> ?y } \
+       FILTER(?w != <http://ex/nobody>) \
+     } }";
 
 fn run(ds: &RdfDataset, query: &str, memo: bool) {
     let parsed = SparqlParser::new().parse_query(query).expect("parse");
@@ -135,6 +186,16 @@ fn bench_exists_decorrelation(c: &mut Criterion) {
     // Unbound shared column on half the outer rows: the scan-branch cliff. Reusing
     // the index still helps the bound half, but the unbound half scans the inner.
     bench_pair(c, "exists_unbound_scan_antijoin", &hub, UNBOUND_SCAN_QUERY);
+    // OPTIONAL buried inside a FILTER inside EXISTS: the definition path's
+    // μ-restriction memo win, not the probe path's index-reuse win — 1000 outer
+    // rows over 20 distinct correlated-variable restrictions.
+    let hub_optional = hub_optional_dataset(1_000, 20);
+    bench_pair(
+        c,
+        "exists_optional_inside_exists_definition_memo",
+        &hub_optional,
+        OPTIONAL_INSIDE_EXISTS_QUERY,
+    );
 }
 
 criterion_group!(benches, bench_exists_decorrelation);

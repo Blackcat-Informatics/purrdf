@@ -455,6 +455,38 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
     found
 }
 
+/// Whether `f` is one of the engine's OWN stateful-mint builtins — the
+/// registry-INDEPENDENT half of [`is_parallel_safe`]'s classification (see that
+/// function's doc comment for the full per-builtin rationale: `RAND`/`UUID`/
+/// `STRUUID` draw from `rng_state`, `BNODE` and the PurRDF list constructors mint
+/// from `bnode_counter`).
+///
+/// Split out from [`function_is_unsafe`] so `crate::governor::soundness`'s
+/// prepare-time stateful-builtin-presence analysis (Part B of the `EXISTS`
+/// decorrelation redesign) can cite this SAME classification rather than
+/// re-enumerating the builtin list: that analysis runs before any per-evaluation
+/// [`UserFunctionRegistry`] is available (a caller may supply a DIFFERENT registry
+/// to each evaluation of the same prepared plan — see
+/// [`crate::engine::QueryOptions::functions`]'s doc), so it can only ever answer
+/// the registry-independent question this function answers. A `Function::Custom`
+/// call's volatility is registry-dependent and therefore NOT decided here — see
+/// [`function_is_unsafe`]'s own `Custom` arm, and
+/// `crate::governor::soundness::analyze_expr`'s doc for how that analysis
+/// compensates (treating ANY `Custom` call as conservatively stateful, since
+/// under-reporting statefulness would be the unsound direction, while
+/// over-reporting only costs a fallback to the always-correct per-row path).
+pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
+    match f {
+        Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
+        Function::Purrdf(call) => matches!(
+            call.fn_kind,
+            purrdf_sparql_algebra::PurrdfFn::ListSlice
+                | purrdf_sparql_algebra::PurrdfFn::ListConcat
+        ),
+        _ => false,
+    }
+}
+
 /// Whether `f` is itself one of the stateful-mint builtins (see
 /// [`is_parallel_safe`]'s doc comment for the full rationale), or an unsafe
 /// [`Function::Custom`] user-function call.
@@ -475,13 +507,10 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
 ///   real `ctx` — silently diverging from the sequential stream exactly like
 ///   the builtins above. A sequential fallback is always correct.
 fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
+    if function_is_builtin_stateful(f) {
+        return true;
+    }
     match f {
-        Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
-        Function::Purrdf(call) => matches!(
-            call.fn_kind,
-            purrdf_sparql_algebra::PurrdfFn::ListSlice
-                | purrdf_sparql_algebra::PurrdfFn::ListConcat
-        ),
         Function::Custom(iri) => {
             // An EMPTY registry resolves neither kind, naturally falling through to
             // `false` below — exactly the old "no registry configured" fallback,
