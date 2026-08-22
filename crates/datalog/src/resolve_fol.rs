@@ -37,8 +37,7 @@
 //! Beyond that, a [`FolProof`] carries a **content-addressed rule identity** and
 //! splits an unconditional fact ([`FolProof::Assert`]) from a conditional
 //! derivation ([`FolProof::ByRule`]), mirroring [`crate::proof::ProofArena`]'s own
-//! [`Axiom`](crate::proof::ProofTerm::Axiom)/[`ByRule`](crate::proof::ProofTerm::ByRule)
-//! split. The rule identity is [`clause_identity`]: a length-prefixed
+//! `Axiom`/`ByRule` split. The rule identity is [`clause_identity`]: a length-prefixed
 //! [`canon_sorted`] encoding of the clause TEMPLATE (head plus polarity-tagged
 //! body literals), so it is stable across arenas and independent of the run's
 //! metavariable numbering — the stable thing a plain authored `usize` index is
@@ -179,8 +178,7 @@ pub enum Truth {
 /// re-derives against) and a content-addressed `rule_identity` (what a caller
 /// reproduces a derivation identity from — see [`clause_identity`] and
 /// [`derivation_id`]). The [`Self::Assert`]/[`Self::ByRule`] split mirrors
-/// [`crate::proof::ProofArena`]'s
-/// [`Axiom`](crate::proof::ProofTerm::Axiom)/[`ByRule`](crate::proof::ProofTerm::ByRule):
+/// [`crate::proof::ProofArena`]'s own `Axiom`/`ByRule` split:
 /// an unconditional fact is an assertion, a conditional consequence is a rule
 /// firing. See the [module docs](self).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -502,7 +500,7 @@ fn canon_sorted_at(
 /// arena, the run, or the order clauses were authored in. Two clauses with
 /// identical text but different `meta_sorts` are DIFFERENT order-sorted clauses
 /// and get different identities; the sort signature is part of what the clause IS.
-/// [`build_proofs`] stamps this onto every [`FolProof`] node and [`check_fol_proof`]
+/// The resolver stamps this onto every [`FolProof`] node and [`check_fol_proof`]
 /// re-derives it from the cited clause and rejects a mismatch.
 #[must_use]
 pub fn clause_identity(
