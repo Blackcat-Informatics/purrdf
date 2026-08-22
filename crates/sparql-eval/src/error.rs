@@ -130,7 +130,7 @@ pub enum EvalError {
         what: String,
         /// The closed S6-deferral classification, when this instance is one of
         /// the narrow enumerated residue [`UnsupportedKind`]'s docs list;
-        /// `None` for a genuine gap. Set ONLY by [`EvalError::unsupported_deferred`].
+        /// `None` for a genuine gap. Set ONLY by `EvalError::unsupported_deferred`.
         kind: Option<UnsupportedKind>,
     },
 
