@@ -2425,7 +2425,7 @@ mod tests {
         );
     }
 
-    // ── R1: order-sorted resolution (AC1a / AC1c) ────────────────────────────
+    // ── Order-sorted resolution ──────────────────────────────────────────────
 
     /// AC1a: with `Cat ⊑ Animal`, a clause variable declared `Cat` REJECTS an
     /// `Animal`-only value that a `Cat` value satisfies — the sort-correct
@@ -2515,7 +2515,7 @@ mod tests {
         assert_eq!(sorted_outcome.status, FolStatus::Complete);
     }
 
-    // ── R2: content-addressed proof identity (AC2a / AC2b / AC2c) ────────────
+    // ── Content-addressed proof identity ─────────────────────────────────────
 
     /// The Peano-addition program, its clause list, and one decided answer proof.
     fn peano_answer_proof() -> (TermDag, Vec<FolClause>, FolProof) {
@@ -2663,7 +2663,7 @@ mod tests {
         );
     }
 
-    /// R8: the recipe keeps DUPLICATE premise keys — two premises proving the same
+    /// The recipe keeps DUPLICATE premise keys — two premises proving the same
     /// atom two ways are both folded in, so the identity is a function of the
     /// actual premise multiset, not a set.
     #[test]
@@ -2804,7 +2804,7 @@ mod tests {
         assert_eq!(error, FolProofError::AssertHasBody { rule: 0 });
     }
 
-    // ── R7: sort × negation ──────────────────────────────────────────────────
+    // ── Sort discipline composed with negation-as-failure ────────────────────
 
     /// A negation-as-failure clause over a SORTED variable decides correctly, and
     /// a `not_false` verdict flip makes `check_fol_proof` reject the licensed
