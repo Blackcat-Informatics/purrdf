@@ -78,8 +78,10 @@ Anything outside this surface — and every malformed query — is a typed
   `NativeSparqlEngine::explain_query` exposes the chosen order as an ordered
   list of triple-pattern strings so you can audit planner decisions without
   running the query.
-- **EXISTS decorrelation** — correlated `EXISTS`/`NOT EXISTS` filters are
-  decorrelated rather than re-evaluated per row.
+- **`EXISTS`/`NOT EXISTS`, defensibly** — one substitution-based definition
+  (SEP-0007), answered either by a memoized existence probe or by the per-row
+  definition itself, chosen per site by a prepare-time admissibility proof —
+  see [below](#exists-under-sep-0007).
 - **The SERVICE seam** — `SERVICE` federation is evaluated through a
   **host-injectable transport**: the engine itself performs no I/O, so
   federation stays wasm-portable and the host decides how (and whether)
@@ -468,6 +470,173 @@ side's per-row correlation — the endpoint resolves to that IRI before the
 remote call is made (the same per-row substitution described under "Points of
 disagreement with Jena" above) and the query dispatches normally, the same as
 a `SERVICE` with a fixed IRI.
+
+## EXISTS under SEP-0007
+
+SPARQL 1.1/1.2 §18.6 defines `EXISTS`/`NOT EXISTS` through two functions:
+`substitute`, which rewrites a pattern's variables against the row being
+filtered, and `evalExists`, which asks whether the substituted pattern's
+evaluation is non-empty. Read as literal term-rewriting, `substitute` has
+defects at several precise points:
+
+- **Variable-only positions.** `substitute` is stated over variable
+  POSITIONS in a pattern, with no defined action on a `Bgp`/`Path` leaf term
+  or a `GRAPH ?g` name treated as anything other than an expression — so a
+  correlated variable occurring only in a triple or graph-name position has
+  no substitution to apply.
+- **The `MINUS` domain flip.** Rewriting a `MINUS`'s shared variables away as
+  constants erases the very columns its domain-join compares the two operands
+  on, turning a correlated `MINUS` into an unconditionally disjoint one — the
+  opposite of what substituting the row in was supposed to preserve.
+- **Blank nodes as variables.** No SPARQL surface syntax can spell a blank
+  node or a quoted triple as a rewritten constant, so a correlated blank-node
+  or quoted-triple binding has no legal substituted form under literal
+  term-rewriting.
+- **Disconnected variables.** A correlated variable reachable ONLY through an
+  expression position inside a nested `EXISTS` — never through that inner's
+  own triple-pattern leaves — has nothing in `substitute`'s pattern-rewriting
+  reading to carry it there.
+- **The assignment restriction.** §18.6's own text states no rule at all
+  about an `EXISTS` body rebinding a variable already in scope on the row it
+  filters.
+
+SEP-0007 — a SPARQL-dev proposal, not yet folded into the SPARQL 1.1/1.2 REC
+text — repairs the first four by restating `substitute` as `Replace`, a JOIN
+rather than a rewrite, and adds the fifth as Part 3, a new restriction.
+`purrdf` implements SEP-0007's repairs in full, including Part 3.
+
+### The one definition
+
+```text
+exists(X, μ) ⟺ eval(D(G), Replace(PrjMap(X), μ)) is non-empty
+```
+
+`Replace` is **Values Insertion**: the current row `μ` joins into `X` as a
+one-row `VALUES` table at each `Bgp`/`Path`/`Graph(Var, ·)` site, rather than
+being spliced in as syntactic constants — total over every RDF 1.2 term kind,
+including blank nodes and quoted triples, because it reaches the dataset
+through the same evaluation path real `VALUES` data uses, and it needs no
+special case for a variable reachable only through an expression, because the
+join reaches every leaf regardless of which position introduced the
+correlation. `PrjMap` is **`Project`-boundary narrowing**: `μ` is restricted
+to a `Project` node's own variable list before it is joined in below that
+node — the one scope boundary the surface language has, and the reason a
+sub-`SELECT`'s own projection can legitimately shadow an outer variable.
+
+SEP-0007 states `Replace` in terms of `toMultiSet(μ)` — converting the row to
+the multiset unit the join needs. `purrdf`'s algebra has no pattern/query
+type split for that conversion to bridge: a solution row already IS that
+multiset unit, so `Replace` lands directly below whatever solution modifiers
+wrap the leaf it targets, structurally, with nothing extra to construct or
+adjudicate.
+
+**The `HAVING` position** is outside SEP-0007's stated coverage — SEP-0007
+only specifies `Replace` for `Bgp`/`Path`/`Graph` Values-Insertion sites and
+ordinary expression positions, not for a sub-`SELECT`'s `HAVING` clause.
+`purrdf` follows the literal `PrjMap` reading: a sub-`SELECT`'s `HAVING`
+filters that sub-`SELECT`'s own scope only, exactly like every other
+expression inside it — no special correlation channel is invented for it.
+
+### Existential Normal Form
+
+Exactly one bit per row is observed under `EXISTS`: whether the inner
+pattern's evaluation is empty. Four rewrite laws replace a node with
+something provably emptiness-equivalent but cheaper, applied wherever they
+appear at the top of the inner (never inside a `Join`/`Filter`/`Extend`/
+`Graph`/`Minus` operand, which read more than emptiness from their child):
+
+- **`LeftJoin(A, B, c) → A`.** `OPTIONAL` emits at least one row per left row
+  unconditionally — a padded left row, or one row per compatible match — and
+  never removes one, so `LeftJoin(A, B, c)` is empty iff `A` is, regardless
+  of `B` or its join condition.
+- **`OrderBy(P) → P`.** Sorting is a permutation, never a filter: the sort
+  keys are never even evaluated once emptiness is the only question asked.
+- **`Distinct(P) → P`, `Reduced(P) → P`.** De-duplication only ever removes
+  rows, and only when an earlier row already carried the same value, so `P`
+  non-empty always leaves the first row's value present.
+- **`Slice(0, len ≥ 1)(P) → P`.** An offset-zero `LIMIT` with room for at
+  least one row drops rows only from the end of `P`'s bag, so `P` non-empty
+  always leaves row zero inside the window.
+- **`Slice(_, Some(0))(P) → false`.** A zero-length `LIMIT` is empty for
+  every `P` and every row — the whole `EXISTS` folds to constant `false`
+  (`NOT EXISTS` to `true`) without touching the dataset at all.
+
+### Two strategies, one answer
+
+`purrdf` carries exactly two implementations of the one definition above:
+
+1. **The definition itself** — per-row substitution via `Replace`, wrapped in
+   a `Slice{0, Some(1)}` first-witness stop (sound because "does this bag
+   have a first row" is exactly what `EXISTS` asks) and backed by a
+   **restriction-keyed memo**: the memo key is the outer row restricted to
+   the inner's own correlated-variable columns, so `k` distinct restrictions
+   across `N` outer rows evaluate the inner exactly `k` times, never `N`.
+   Always correct, for any inner pattern.
+2. **The memoized probe** — evaluate the inner exactly once, unconstrained,
+   index it on the columns it shares with the outer schema, and
+   existence-probe each row's `μ` against that index. Correct only where a
+   prepare-time admissibility proof shows it equivalent to the definition for
+   every row the site can see.
+
+A prepare-time analysis decides, once per site per evaluation, which strategy
+answers each `EXISTS`/`NOT EXISTS`. `--explain`'s per-algebra-node charge
+ledger reports the decision through three evidence counters:
+`exists-probe-answered` (one memoized-probe evaluation), `exists-definition-
+answered` (one per-row-definition evaluation), and
+`exists-inner-solutions-consumed` (one row the definition path's inner
+actually materialized — bounded at 1 per evaluation by the first-witness
+stop).
+
+**The performance characteristic, stated plainly**: an uncorrelated inner, or
+a correlated one built only from `Bgp`/`Path`/`Values`/`Graph`/`Join`/
+`Union`/`OrderBy`/`Project`/`Distinct`/`Reduced` and `Filter`/`Extend`
+expressions that read only certainly-bound columns of the inner, is served by
+the probe — one evaluation total, however many outer rows filter through it.
+A shape the probe cannot serve — `MINUS`, a restricting `Slice` (any offset
+or limit, not only one past the first row), `GROUP BY`, `LATERAL`, a
+property-function call, a `SERVICE` call, or a `FILTER`/`BIND` expression
+that reads a correlated variable the inner does not certainly bind (for
+example, one visible only down an `OPTIONAL` branch) — evaluates per row
+through the definition, with the restriction-keyed memo and first-witness
+stop above bounding the cost.
+
+### The Part 3 assignment restriction
+
+Neither a `BIND`/a sub-`SELECT`'s `(expr AS ?v)` projection target/a
+`GROUP BY (expr AS ?v)` grouping target, nor a `VALUES` column, inside an
+`EXISTS`/`NOT EXISTS` body may rebind a variable already in scope on the row
+being filtered. `NOT EXISTS` shares the exact same grammar production as
+`EXISTS` — there is no separate "`NOT EXISTS`" wording — so the restriction
+applies identically to both, and to a nested `EXISTS`'s own body against
+whatever its immediately enclosing `EXISTS` already has in scope. A rebinding
+confined to a `MINUS` right operand inside the body is exempt at any depth,
+the same reasoning `LATERAL`'s own scope restriction applies (§18.2.1: a
+`MINUS`-right introduction never escapes it, so it can never observably
+rebind the row).
+
+```sparql
+PREFIX : <https://example.org/>
+# Legal: ?fresh is not in scope on the row FILTER EXISTS is testing, so BIND
+# giving it a value is an ordinary fresh binding, not a rebinding.
+SELECT ?s WHERE {
+  ?s :p ?o .
+  FILTER EXISTS { BIND(1 AS ?fresh) }
+}
+```
+
+```
+# Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
+# the row FILTER EXISTS is testing, and BIND tries to give it a NEW value at
+# the EXISTS body's own scope level.
+SELECT ?s WHERE {
+  ?s :p ?o .
+  FILTER EXISTS { BIND(1 AS ?o) }
+}
+```
+
+The restriction is SEP-0007's own addition, adopted here because it is what
+makes `EXISTS`'s substitution semantics defensible at every site — SPARQL
+1.1/1.2's own §18.6 text requires no such rule.
 
 ## The `VERSION` declaration
 
