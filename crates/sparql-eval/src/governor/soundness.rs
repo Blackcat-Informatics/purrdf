@@ -110,7 +110,9 @@
 // than only through whole-query evaluation — a certificate that can only be observed
 // through the thing it licenses is a certificate nobody can falsify.
 
-use purrdf_sparql_algebra::{Expression, Function, GraphPattern, OrderExpression};
+use purrdf_sparql_algebra::{
+    AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
+};
 
 // ---------------------------------------------------------------------------
 // Per-child transfer functions
@@ -1172,6 +1174,49 @@ pub(crate) struct NodeAnalysis {
     /// or a `PropertyFunction` call is reachable anywhere within this node,
     /// including through a nested `EXISTS`.
     pub(crate) has_stateful_builtin: bool,
+    /// Whether evaluating this node **to completion** — no `crate::enf` erasure —
+    /// can raise a hard [`EvalError`](crate::EvalError) or an observable remote
+    /// effect, anywhere within it, including through a nested `EXISTS`/`NOT
+    /// EXISTS`.
+    ///
+    /// `crate::enf`'s laws delete a subtree without evaluating it (they are proved
+    /// emptiness-equivalent over ROW SETS, not over side effects), so a law may
+    /// only erase a subtree for which this is `false`: a `true` subtree can hard-fail
+    /// or reach a federation endpoint OUTSIDE the erased `EXISTS`, and deleting it
+    /// would silently make that failure/effect vanish instead of propagating —
+    /// exactly the swallow this field exists to prevent. Conservative (never
+    /// under-reports) by construction: every arm below is a positive trigger or an
+    /// OR of children, never a negative one, so a miss can only make a law skip a
+    /// subtree it could safely have erased, never erase one it should not have.
+    ///
+    /// Conservatively `true` for:
+    /// * a [`GraphPattern::Service`] call, of ANY `silent`-ness — `SILENT` only
+    ///   swallows the federation transport failure itself
+    ///   ([`EvalError::Remote`](crate::EvalError::Remote)); a property-function call
+    ///   forwarded inside the body is refused at the forwarding boundary regardless
+    ///   of `silent` (see [`crate::remote::eval_service`]), and that refusal is a
+    ///   hard [`EvalError::Unsupported`](crate::EvalError::Unsupported) `SILENT`
+    ///   does not touch;
+    /// * a [`GraphPattern::PropertyFunction`] call — an unresolved relation IRI, an
+    ///   access-pattern no declared mode admits, or the relation's own returned
+    ///   `Err`/caught panic is [`EvalError::Function`](crate::EvalError::Function);
+    /// * an expression [`Function::Custom`] call — an IRI resolving to nothing
+    ///   registered is [`EvalError::Unsupported`](crate::EvalError::Unsupported)
+    ///   (`UnsupportedKind::CustomFunction`), and one that DOES resolve (a SHACL-AF
+    ///   SPARQL-bodied function or a host-native closure) can itself raise
+    ///   [`EvalError::Function`](crate::EvalError::Function) — neither is knowable
+    ///   at this analysis's evaluation point, so every `Custom` call is conservative;
+    /// * an expression [`Function::Purrdf`] call — `heldIn` hard-errors
+    ///   ([`UnsupportedKind::HeldInUnconfigured`](crate::error::UnsupportedKind::HeldInUnconfigured))
+    ///   with no caller-supplied standpoint-predicate configuration, and every
+    ///   `rdf:List` function (`listLength`, …) hard-errors
+    ///   ([`EvalError::Data`](crate::EvalError::Data)) over a cyclic or torn list —
+    ///   both conditions this analysis cannot see from the algebra alone;
+    /// * a `GROUP BY` aggregate whose [`AggregateFunction`] is
+    ///   [`AggregateFunction::Custom`] — the same "unresolved or the registered
+    ///   callee's own `Err`/panic" reasoning as `Function::Custom`, restated for
+    ///   the aggregate registry.
+    pub(crate) can_hard_error: bool,
 }
 
 /// Node-identity → [`NodeAnalysis`], covering one `EXISTS`/`NOT EXISTS` inner
@@ -1197,11 +1242,13 @@ fn node_analysis(pattern: &GraphPattern, table: &NodeAnalysisTable) -> NodeAnaly
         .cloned()
         .unwrap_or_else(|| NodeAnalysis {
             // Maximally conservative on a miss: no variable certainly bound, a
-            // stateful builtin assumed present. Should not happen when `table` was
-            // built from exactly the tree being walked (see this type's doc).
+            // stateful builtin assumed present, a hard error assumed reachable.
+            // Should not happen when `table` was built from exactly the tree being
+            // walked (see this type's doc).
             free_vars: DetHashSet::default(),
             certainly_bound: DetHashSet::default(),
             has_stateful_builtin: true,
+            can_hard_error: true,
         })
 }
 
@@ -1288,6 +1335,7 @@ pub(crate) fn analyze_pattern(
                 certainly_bound: vars.clone(),
                 free_vars: vars,
                 has_stateful_builtin: false,
+                can_hard_error: false,
             }
         }
         GraphPattern::Path {
@@ -1300,6 +1348,7 @@ pub(crate) fn analyze_pattern(
                 certainly_bound: vars.clone(),
                 free_vars: vars,
                 has_stateful_builtin: false,
+                can_hard_error: false,
             }
         }
         GraphPattern::Values {
@@ -1320,6 +1369,7 @@ pub(crate) fn analyze_pattern(
                 free_vars: free,
                 certainly_bound: certainly,
                 has_stateful_builtin: false,
+                can_hard_error: false,
             }
         }
         GraphPattern::PropertyFunction(call) => {
@@ -1333,6 +1383,10 @@ pub(crate) fn analyze_pattern(
                 // A relation is host code of unknown volatility; conservatively stateful
                 // (moot for `probe_admissible`, which refuses `PropertyFunction` outright).
                 has_stateful_builtin: true,
+                // An unresolved relation IRI, an access pattern no declared mode
+                // admits, or the relation's own returned `Err`/caught panic is
+                // `EvalError::Function` — see `NodeAnalysis::can_hard_error`'s doc.
+                can_hard_error: true,
             }
         }
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
@@ -1346,6 +1400,7 @@ pub(crate) fn analyze_pattern(
                     .cloned()
                     .collect(),
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
             }
         }
         GraphPattern::Union { left, right } => {
@@ -1359,6 +1414,7 @@ pub(crate) fn analyze_pattern(
                     .cloned()
                     .collect(),
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
             }
         }
         GraphPattern::LeftJoin {
@@ -1368,9 +1424,9 @@ pub(crate) fn analyze_pattern(
         } => {
             let l = analyze_pattern(left, table);
             let r = analyze_pattern(right, table);
-            let (expr_free, expr_stateful) = match expression {
+            let (expr_free, expr_stateful, expr_hard_error) = match expression {
                 Some(e) => analyze_expr(e, table),
-                None => (DetHashSet::default(), false),
+                None => (DetHashSet::default(), false, false),
             };
             NodeAnalysis {
                 free_vars: l
@@ -1385,6 +1441,7 @@ pub(crate) fn analyze_pattern(
                 has_stateful_builtin: l.has_stateful_builtin
                     || r.has_stateful_builtin
                     || expr_stateful,
+                can_hard_error: l.can_hard_error || r.can_hard_error || expr_hard_error,
             }
         }
         GraphPattern::Minus { left, right } => {
@@ -1394,15 +1451,17 @@ pub(crate) fn analyze_pattern(
                 free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                 certainly_bound: l.certainly_bound,
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
             }
         }
         GraphPattern::Filter { expr, inner } => {
             let i = analyze_pattern(inner, table);
-            let (expr_free, expr_stateful) = analyze_expr(expr, table);
+            let (expr_free, expr_stateful, expr_hard_error) = analyze_expr(expr, table);
             NodeAnalysis {
                 free_vars: i.free_vars.union(&expr_free).cloned().collect(),
                 certainly_bound: i.certainly_bound,
                 has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
+                can_hard_error: i.can_hard_error || expr_hard_error,
             }
         }
         GraphPattern::Extend {
@@ -1411,7 +1470,7 @@ pub(crate) fn analyze_pattern(
             expression,
         } => {
             let i = analyze_pattern(inner, table);
-            let (expr_free, expr_stateful) = analyze_expr(expression, table);
+            let (expr_free, expr_stateful, expr_hard_error) = analyze_expr(expression, table);
             let mut free_vars: DetHashSet<Variable> =
                 i.free_vars.union(&expr_free).cloned().collect();
             free_vars.insert(variable.clone());
@@ -1421,6 +1480,7 @@ pub(crate) fn analyze_pattern(
                 free_vars,
                 certainly_bound,
                 has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
+                can_hard_error: i.can_hard_error || expr_hard_error,
             }
         }
         GraphPattern::Graph { name, inner } => {
@@ -1435,6 +1495,7 @@ pub(crate) fn analyze_pattern(
                 free_vars,
                 certainly_bound,
                 has_stateful_builtin: i.has_stateful_builtin,
+                can_hard_error: i.can_hard_error,
             }
         }
         GraphPattern::Service {
@@ -1453,24 +1514,32 @@ pub(crate) fn analyze_pattern(
                 // `probe_admissible`, which refuses `Service` outright.
                 certainly_bound: DetHashSet::default(),
                 has_stateful_builtin: true,
+                // Unconditional, regardless of `silent`: `SILENT` only swallows the
+                // federation transport failure itself, never a property-function call
+                // forwarded inside the body, which is refused at the forwarding
+                // boundary either way — see `NodeAnalysis::can_hard_error`'s doc.
+                can_hard_error: true,
             }
         }
         GraphPattern::OrderBy { inner, expression } => {
             let i = analyze_pattern(inner, table);
             let mut free_vars = i.free_vars;
             let mut stateful = i.has_stateful_builtin;
+            let mut hard_error = i.can_hard_error;
             for oe in expression {
                 let e = match oe {
                     OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
                 };
-                let (f, s) = analyze_expr(e, table);
+                let (f, s, h) = analyze_expr(e, table);
                 free_vars.extend(f);
                 stateful |= s;
+                hard_error |= h;
             }
             NodeAnalysis {
                 free_vars,
                 certainly_bound: i.certainly_bound,
                 has_stateful_builtin: stateful,
+                can_hard_error: hard_error,
             }
         }
         GraphPattern::Project { inner, variables } => {
@@ -1480,6 +1549,7 @@ pub(crate) fn analyze_pattern(
                 free_vars: i.free_vars.intersection(&proj).cloned().collect(),
                 certainly_bound: i.certainly_bound.intersection(&proj).cloned().collect(),
                 has_stateful_builtin: i.has_stateful_builtin,
+                can_hard_error: i.can_hard_error,
             }
         }
         GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
@@ -1498,19 +1568,25 @@ pub(crate) fn analyze_pattern(
             let mut certainly_bound: DetHashSet<Variable> =
                 i.certainly_bound.intersection(&keys).cloned().collect();
             let mut stateful = i.has_stateful_builtin;
+            let mut hard_error = i.can_hard_error
+                || aggregates
+                    .iter()
+                    .any(|(_, agg)| matches!(agg.function(), AggregateFunction::Custom(_)));
             for (v, agg) in aggregates {
                 free_vars.insert(v.clone());
                 certainly_bound.insert(v.clone());
                 for arg in agg.args() {
-                    let (f, s) = analyze_expr(arg, table);
+                    let (f, s, h) = analyze_expr(arg, table);
                     free_vars.extend(f);
                     stateful |= s;
+                    hard_error |= h;
                 }
             }
             NodeAnalysis {
                 free_vars,
                 certainly_bound,
                 has_stateful_builtin: stateful,
+                can_hard_error: hard_error,
             }
         }
     };
@@ -1518,20 +1594,21 @@ pub(crate) fn analyze_pattern(
     analysis
 }
 
-/// Analyze `expr`, returning its free variables and whether a stateful builtin is
-/// reachable within it — recursing into a nested `EXISTS`'s inner pattern via
-/// [`analyze_pattern`] (so that pattern's own table entry is populated too, for
-/// [`probe_admissible`]'s later lookup).
+/// Analyze `expr`, returning its free variables, whether a stateful builtin is
+/// reachable within it, and whether a hard error/effect is reachable within it (see
+/// [`NodeAnalysis::can_hard_error`]) — recursing into a nested `EXISTS`'s inner
+/// pattern via [`analyze_pattern`] (so that pattern's own table entry is populated
+/// too, for [`probe_admissible`]'s later lookup).
 pub(crate) fn analyze_expr(
     expr: &Expression,
     table: &mut NodeAnalysisTable,
-) -> (DetHashSet<Variable>, bool) {
+) -> (DetHashSet<Variable>, bool, bool) {
     match expr {
-        Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false),
+        Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false, false),
         Expression::Variable(v) | Expression::Bound(v) => {
             let mut out = DetHashSet::default();
             out.insert(v.clone());
-            (out, false)
+            (out, false, false)
         }
         Expression::Or(a, b)
         | Expression::And(a, b)
@@ -1545,58 +1622,98 @@ pub(crate) fn analyze_expr(
         | Expression::Subtract(a, b)
         | Expression::Multiply(a, b)
         | Expression::Divide(a, b) => {
-            let (mut fa, sa) = analyze_expr(a, table);
-            let (fb, sb) = analyze_expr(b, table);
+            let (mut fa, sa, ha) = analyze_expr(a, table);
+            let (fb, sb, hb) = analyze_expr(b, table);
             fa.extend(fb);
-            (fa, sa || sb)
+            (fa, sa || sb, ha || hb)
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             analyze_expr(a, table)
         }
         Expression::If(c, t, e) => {
-            let (mut f, mut s) = analyze_expr(c, table);
-            let (ft, st) = analyze_expr(t, table);
-            let (fe, se) = analyze_expr(e, table);
+            let (mut f, mut s, mut h) = analyze_expr(c, table);
+            let (ft, st, ht) = analyze_expr(t, table);
+            let (fe, se, he) = analyze_expr(e, table);
             f.extend(ft);
             f.extend(fe);
             s = s || st || se;
-            (f, s)
+            h = h || ht || he;
+            (f, s, h)
         }
         Expression::In(needle, haystack) => {
-            let (mut f, mut s) = analyze_expr(needle, table);
-            for h in haystack {
-                let (fh, sh) = analyze_expr(h, table);
+            let (mut f, mut s, mut h) = analyze_expr(needle, table);
+            for hay in haystack {
+                let (fh, sh, hh) = analyze_expr(hay, table);
                 f.extend(fh);
                 s |= sh;
+                h |= hh;
             }
-            (f, s)
+            (f, s, h)
         }
         Expression::Coalesce(items) => {
             let mut f = DetHashSet::default();
             let mut s = false;
+            let mut h = false;
             for item in items {
-                let (fi, si) = analyze_expr(item, table);
+                let (fi, si, hi) = analyze_expr(item, table);
                 f.extend(fi);
                 s |= si;
+                h |= hi;
             }
-            (f, s)
+            (f, s, h)
         }
         Expression::FunctionCall(function, args) => {
             let mut f = DetHashSet::default();
             let mut s =
                 function_is_builtin_stateful(function) || matches!(function, Function::Custom(_));
+            // `Function::Custom` may hard-fail unresolved (`UnsupportedKind::CustomFunction`)
+            // or, once resolved, raise `EvalError::Function` from the registered callee's
+            // own body — neither is knowable here. `Function::Purrdf` covers `heldIn`
+            // (`UnsupportedKind::HeldInUnconfigured` with no standpoint-predicate
+            // configuration) and every `rdf:List` function (`EvalError::Data` over a
+            // cyclic/torn list) — see `NodeAnalysis::can_hard_error`'s doc.
+            let mut h =
+                matches!(function, Function::Custom(_)) || matches!(function, Function::Purrdf(_));
             for a in args {
-                let (fa, sa) = analyze_expr(a, table);
+                let (fa, sa, ha) = analyze_expr(a, table);
                 f.extend(fa);
                 s |= sa;
+                h |= ha;
             }
-            (f, s)
+            (f, s, h)
         }
         Expression::Exists(inner) => {
             let a = analyze_pattern(inner, table);
-            (a.free_vars.clone(), a.has_stateful_builtin)
+            (
+                a.free_vars.clone(),
+                a.has_stateful_builtin,
+                a.can_hard_error,
+            )
         }
     }
+}
+
+/// Whether evaluating `pattern` **to completion** — no `crate::enf` erasure — can
+/// raise a hard [`EvalError`](crate::EvalError) or an observable remote effect
+/// anywhere within it; see [`NodeAnalysis::can_hard_error`].
+///
+/// `crate::enf`'s laws call this (and [`expr_can_hard_error`]) on the PORTION they
+/// are about to erase — a `LeftJoin`'s right operand and join condition, an
+/// `ORDER BY`'s sort keys, or a folded `Slice`'s whole inner — before erasing it, so
+/// a law never deletes a subtree whose evaluation could have failed loudly or
+/// reached a federation endpoint. Builds a fresh, throwaway [`NodeAnalysisTable`]:
+/// sound because `can_hard_error`, unlike [`probe_admissible`], needs no lookup
+/// into an enclosing table — it is a pure bottom-up fold over `pattern` alone.
+pub(crate) fn pattern_can_hard_error(pattern: &GraphPattern) -> bool {
+    let mut table = NodeAnalysisTable::default();
+    analyze_pattern(pattern, &mut table).can_hard_error
+}
+
+/// The expression twin of [`pattern_can_hard_error`], for a `LeftJoin` join
+/// condition or an `ORDER BY` sort key `crate::enf` is about to erase.
+pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+    let mut table = NodeAnalysisTable::default();
+    analyze_expr(expr, &mut table).2
 }
 
 /// Whether `pattern` (its top level ALREADY known to be correlated with the

@@ -561,6 +561,14 @@ appear at the top of the inner (never inside a `Join`/`Filter`/`Extend`/
   every `P` and every row — the whole `EXISTS` folds to constant `false`
   (`NOT EXISTS` to `true`) without touching the dataset at all.
 
+Every law above is proved emptiness-equivalent over row SETS, never over side
+effects, so each fires only when the portion it erases (`B` and the join
+condition for `LeftJoin`, the sort keys for `OrderBy`, the whole inner for
+the zero-length `Slice` fold) is effect-free — no `SERVICE` call, property
+function, or custom/`heldIn`/`rdf:List` function reachable within it — so a
+hard error or a remote effect that would have propagated outside the `EXISTS`
+still does, rather than vanishing merely for having been written inside one.
+
 ### Two strategies, one answer
 
 `purrdf` carries exactly two implementations of the one definition above:

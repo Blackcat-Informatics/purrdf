@@ -107,6 +107,24 @@
 //!
 //! [exists]: purrdf_sparql_algebra::Expression::Exists
 //!
+//! ## Side conditions: a law may erase only an EFFECT-FREE portion
+//!
+//! Every law above is proved emptiness-equivalent over ROW SETS — it says what the
+//! erased portion's presence or absence does to the row COUNT, never what evaluating
+//! it might otherwise have done. A hard [`EvalError`](crate::EvalError) (an
+//! unresolved custom function, an unconfigured `heldIn`, a malformed `rdf:List`, an
+//! unresolved property-function relation or a mis-invoked one) or an observable
+//! remote effect (a `SERVICE` call, `SILENT` or not) raised while evaluating the
+//! erased portion would propagate outside the `EXISTS` if that portion sat OUTSIDE
+//! one — so erasing it unconditionally would make the same query shape silently
+//! swallow the error/effect merely for having been written inside an `EXISTS`. Each
+//! law below is therefore additionally gated on
+//! [`crate::governor::soundness::NodeAnalysis::can_hard_error`] being `false` for
+//! the portion it erases; a law whose gate does not hold simply does not fire, and
+//! the un-erased pattern falls through to the definition/probe machinery, which
+//! evaluates it and lets the error/effect propagate exactly as it would outside an
+//! `EXISTS`. A law that erases nothing evaluable (3, 4a) needs no gate at all.
+//!
 //! ## Law 1 — `LeftJoin(A, B, c) → A` on the spine
 //!
 //! **THE F2 FIX BY LAW.** An `OPTIONAL` (`LeftJoin`) emits AT LEAST ONE row per left
@@ -119,11 +137,19 @@
 //! carry — the shape a bare `OPTIONAL` at the top of an `EXISTS` inner has always
 //! (wrongly) been treated as correlated by, before this law existed.
 //!
+//! **Side condition**: fires only when BOTH `B` and `c` are effect-free (see "Side
+//! conditions" above) — erasing either could otherwise erase a hard error or a
+//! `SERVICE` effect it would have raised.
+//!
 //! ## Law 2 — `OrderBy(P) → P` on the spine
 //!
 //! Sorting is a permutation, never a filter: `OrderBy(P)` and `P` have the same
 //! multiset of rows, so they are empty under exactly the same condition. The sort
 //! keys are never evaluated at all once emptiness is the only question asked.
+//!
+//! **Side condition**: fires only when every sort key expression is effect-free —
+//! "never evaluated at all" is exactly the erasure this module's laws must not
+//! perform on a key that could otherwise have hard-failed.
 //!
 //! ## Law 3 — `Distinct(P) → P`, `Reduced(P) → P` on the spine (no `Slice(start>0)` above)
 //!
@@ -133,6 +159,10 @@
 //! `Distinct(P)`/`Reduced(P)` empty and conversely `P` non-empty always leaves at
 //! least the first row's value present after dedup. The two are therefore
 //! empty under exactly the same condition as `P`.
+//!
+//! **Side condition**: none — unconditional. Only the dedup wrapper is erased; `P`
+//! itself is still evaluated by whatever [`normalize`] returns, so nothing
+//! evaluable is ever discarded.
 //!
 //! The "no `Slice(start>0)` above" qualifier in the source rule is automatically
 //! satisfied by this law's own scope: a restricting-offset `Slice` is not one of the
@@ -145,13 +175,18 @@
 //! * **4a**: `Slice(0, len ≥ 1)(P) → P`. An offset-zero slice with room for at least
 //!   one row drops rows only from the END of `P`'s bag (past the first `len`), never
 //!   the front, so `P` non-empty always leaves row zero inside the slice's window —
-//!   the slice is empty exactly when `P` is.
+//!   the slice is empty exactly when `P` is. **Side condition**: none — unconditional,
+//!   for the same reason as law 3: only the `Slice` wrapper is erased, and `P` is
+//!   still evaluated by whatever [`normalize`] returns.
 //! * **4b**: `Slice(_, Some(0))(P) → ⊥` (the whole `EXISTS` folds to constant
 //!   `false`). A zero-length slice is empty FOR EVERY `P` and EVERY μ — it needs no
 //!   evaluation at all, so the fold is represented directly: [`normalize`] returns
 //!   [`Enf::FoldedEmpty`] rather than a pattern to evaluate, and
 //!   [`crate::expr::exists`] answers `false` (making `NOT EXISTS`, `Not(Exists(..))`
-//!   in this algebra, answer `true`) without touching the dataset.
+//!   in this algebra, answer `true`) without touching the dataset. **Side
+//!   condition**: fires only when the WHOLE of `P` is effect-free — the fold
+//!   suppresses every evaluation `P` would otherwise have performed, so an effectful
+//!   `P` must fall through and actually be evaluated instead of being folded away.
 //!
 //! A `Slice(start > 0, _)` is NOT one of the transparent wrappers: an offset can
 //! discard every row `P` produces (when `P`'s bag is shorter than `start`) even
@@ -192,7 +227,9 @@
 //! distinct site per evaluation, before any row of that site is tested, never
 //! recomputed per row.
 
-use purrdf_sparql_algebra::GraphPattern;
+use purrdf_sparql_algebra::{GraphPattern, OrderExpression};
+
+use crate::governor::soundness;
 
 /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
 /// Normal Form (see the [module docs](self)).
@@ -218,12 +255,42 @@ pub(crate) enum Enf {
 /// idempotence" section.
 pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
     match pattern {
-        // Law 1: THE F2 FIX BY LAW.
-        GraphPattern::LeftJoin { left, .. } => normalize(left),
-        // Law 2.
-        GraphPattern::OrderBy { inner, .. } => normalize(inner),
+        // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
+        // join condition) being effect-free; see the module doc's "Side
+        // conditions" section and `crate::governor::soundness::NodeAnalysis::can_hard_error`.
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            let right_clean = !soundness::pattern_can_hard_error(right);
+            let condition_clean = expression
+                .as_ref()
+                .is_none_or(|e| !soundness::expr_can_hard_error(e));
+            if right_clean && condition_clean {
+                normalize(left)
+            } else {
+                Enf::Pattern(pattern.clone())
+            }
+        }
+        // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
+        GraphPattern::OrderBy { inner, expression } => {
+            let keys_clean = !expression.iter().any(|oe| {
+                let e = match oe {
+                    OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
+                };
+                soundness::expr_can_hard_error(e)
+            });
+            if keys_clean {
+                normalize(inner)
+            } else {
+                Enf::Pattern(pattern.clone())
+            }
+        }
         // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
-        // the module doc).
+        // the module doc). Unconditional: nothing evaluable is erased, only the
+        // dedup wrapper — `inner` is still evaluated by whatever this recursion
+        // returns.
         GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => normalize(inner),
         // Law 4a/4b.
         GraphPattern::Slice {
@@ -231,7 +298,19 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             start,
             length,
         } => match (*start, *length) {
-            (_, Some(0)) => Enf::FoldedEmpty,
+            // 4b is gated on the WHOLE inner being effect-free: the fold answers
+            // `EXISTS` without evaluating anything, so an inner that could have
+            // hard-failed or reached a federation endpoint must not be erased.
+            (_, Some(0)) => {
+                if soundness::pattern_can_hard_error(inner) {
+                    Enf::Pattern(pattern.clone())
+                } else {
+                    Enf::FoldedEmpty
+                }
+            }
+            // 4a is unconditional: an offset-zero, room-for-at-least-one-row
+            // slice erases nothing evaluable — `inner` is still evaluated by
+            // whatever this recursion returns.
             (0, _) => normalize(inner),
             // start > 0: not a transparent wrapper; stop here, unmodified.
             (_, _) => Enf::Pattern(pattern.clone()),
@@ -426,6 +505,59 @@ mod tests {
         assert_eq!(assert_pattern(normalize(&under_minus)), under_minus);
     }
 
+    /// Positive control for the `can_hard_error` side conditions added to gate
+    /// laws 1, 2, and 4b (see the module doc's "Side conditions" section): every
+    /// law still fires on an ordinary, EFFECT-FREE shape — the gate must not
+    /// regress the common case, only refuse the effectful one. Each arm below is
+    /// the same clean shape [`enf_left_join_erases_on_the_spine`],
+    /// [`enf_order_by_erases`], and [`enf_limit_zero_folds_false`] already cover;
+    /// see `enf::effect_free_gate_tests` for the evaluation-level negative twins
+    /// (an effectful `B`/condition/sort-key/inner that must NOT be erased).
+    #[test]
+    fn enf_laws_still_fire_on_pure_shapes() {
+        // Law 1: a clean `B` AND a clean join condition still erase to `A`.
+        let left = GraphPattern::Bgp { patterns: vec![] };
+        let right = bgp("x", "q", "y");
+        let inner = GraphPattern::LeftJoin {
+            left: Box::new(left.clone()),
+            right: Box::new(right),
+            expression: Some(Expression::Literal(
+                purrdf_sparql_algebra::Literal::new_typed(
+                    "true",
+                    NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+                ),
+            )),
+        };
+        assert_eq!(
+            assert_pattern(normalize(&inner)),
+            left,
+            "a clean B and a clean join condition must still erase to A"
+        );
+
+        // Law 2: clean sort keys still erase entirely.
+        let p = bgp("x", "q", "y");
+        let order_by = GraphPattern::OrderBy {
+            inner: Box::new(p.clone()),
+            expression: vec![OrderExpression::Asc(Expression::Variable(var("y")))],
+        };
+        assert_eq!(
+            assert_pattern(normalize(&order_by)),
+            p,
+            "clean sort keys must still erase entirely"
+        );
+
+        // Law 4b: a clean inner still folds to constant false.
+        let slice = GraphPattern::Slice {
+            inner: Box::new(bgp("x", "q", "y")),
+            start: 0,
+            length: Some(0),
+        };
+        assert!(
+            matches!(normalize(&slice), Enf::FoldedEmpty),
+            "a clean inner must still fold Slice(_, Some(0)) to constant false"
+        );
+    }
+
     /// Idempotence: normalizing an already-normalized tree is a no-op.
     #[test]
     fn enf_normalize_is_idempotent() {
@@ -442,5 +574,298 @@ mod tests {
         let once = assert_pattern(normalize(&inner));
         let twice = assert_pattern(normalize(&once));
         assert_eq!(once, twice);
+    }
+}
+
+/// Evaluation-level negative controls for the `can_hard_error` side conditions (see the
+/// module doc's "Side conditions" section): for each gated law, an EFFECTFUL erased
+/// portion (an unresolved `Function::Custom` call, or a non-`SILENT` `SERVICE`) must
+/// make the law refuse to fire, so the definition/probe machinery evaluates the
+/// un-erased pattern and the hard error/effect propagates from INSIDE an `EXISTS`
+/// exactly as it does OUTSIDE one, closing the error-swallowing hole these laws
+/// otherwise open. [`enf::tests::enf_laws_still_fire_on_pure_shapes`] is the
+/// positive control: the same laws still fire when the erased portion is clean.
+///
+/// Every "inside EXISTS" assertion here has an "outside EXISTS" twin: the same erased
+/// pattern, evaluated directly (`eval`, not `Expression::Exists`), must hard-error
+/// identically — proving the fix makes the two agree rather than merely making the
+/// inside case error somehow.
+#[cfg(test)]
+mod effect_free_gate_tests {
+    use std::sync::Arc;
+
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+    use purrdf_sparql_algebra::{
+        Expression, Function, GraphPattern, NamedNode, NamedNodePattern, OrderExpression,
+        TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{Enf, normalize};
+    use crate::error::{EvalError, UnsupportedKind};
+    use crate::eval::{EvalCtx, eval};
+
+    const EX: &str = "http://example.org/";
+
+    fn var(name: &str) -> Variable {
+        Variable::new(name)
+    }
+
+    fn tvar(name: &str) -> TermPattern {
+        TermPattern::Variable(var(name))
+    }
+
+    fn nn(iri: &str) -> NamedNode {
+        NamedNode::new_unchecked(iri)
+    }
+
+    fn triple(s: TermPattern, iri: &str, o: TermPattern) -> TriplePattern {
+        TriplePattern {
+            subject: s,
+            predicate: NamedNodePattern::NamedNode(nn(iri)),
+            object: o,
+        }
+    }
+
+    fn bgp1(s: TermPattern, iri: &str, o: TermPattern) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![triple(s, iri, o)],
+        }
+    }
+
+    fn bx(p: GraphPattern) -> Box<GraphPattern> {
+        Box::new(p)
+    }
+
+    /// An unresolved `Function::Custom` call over `?w`, which hard-errors
+    /// (`UnsupportedKind::CustomFunction`) wherever it is actually evaluated,
+    /// `EXISTS` or not.
+    fn undefined_fn_call() -> Expression {
+        Expression::FunctionCall(
+            Function::Custom(nn(&format!("{EX}undefined-fn"))),
+            vec![Expression::Variable(var("w"))],
+        )
+    }
+
+    fn assert_custom_function_error(err: &EvalError) {
+        assert!(
+            matches!(
+                err,
+                EvalError::Unsupported {
+                    kind: Some(UnsupportedKind::CustomFunction),
+                    ..
+                }
+            ),
+            "expected UnsupportedKind::CustomFunction, got {err:?}"
+        );
+    }
+
+    fn assert_remote_error(err: &EvalError) {
+        assert!(
+            matches!(err, EvalError::Remote(_)),
+            "expected EvalError::Remote, got {err:?}"
+        );
+    }
+
+    /// The fixture every test below shares: one outer row (`:s1 :outer :dummy`) to
+    /// drive `EXISTS` over, and one row `:o1 :q :w1` for the erased portion's own
+    /// `Bgp` to match — so the effectful expression it carries is actually reached
+    /// and evaluated, not skipped for want of a candidate row.
+    fn ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let outer_p = b.intern_iri(&format!("{EX}outer"));
+        let s1 = b.intern_iri(&format!("{EX}s1"));
+        let dummy = b.intern_iri(&format!("{EX}dummy"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let o1 = b.intern_iri(&format!("{EX}o1"));
+        let w1 = b.intern_iri(&format!("{EX}w1"));
+        b.push_quad(s1, outer_p, dummy, None);
+        b.push_quad(o1, q, w1, None);
+        b.freeze().expect("freeze")
+    }
+
+    fn outer() -> GraphPattern {
+        bgp1(tvar("s"), &format!("{EX}outer"), tvar("d"))
+    }
+
+    /// Evaluate `Expression::Exists(inner)` once per row of `outer()`'s result
+    /// against `ds`. Returns one `Result` per outer row, in row order.
+    fn exists_results(ds: &Arc<RdfDataset>, inner: &GraphPattern) -> Vec<Result<bool, EvalError>> {
+        let mut ctx = EvalCtx::new(ds);
+        let outer_pattern = outer();
+        let seq = eval(&outer_pattern, &mut ctx).expect("outer pattern evaluates");
+        assert_eq!(
+            seq.rows.len(),
+            1,
+            "the shared fixture drives exactly one outer row"
+        );
+        let exists_expr = Expression::Exists(Box::new(inner.clone()));
+        seq.rows
+            .iter()
+            .map(|row| {
+                crate::expr::eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).map(|ebv| {
+                    ebv.expect("EXISTS always yields a defined boolean when it succeeds")
+                })
+            })
+            .collect()
+    }
+
+    /// The same `inner` pattern, evaluated directly (no `EXISTS`) — the "outside
+    /// EXISTS" twin every assertion below compares against.
+    fn outside_result(ds: &Arc<RdfDataset>, inner: &GraphPattern) -> Result<(), EvalError> {
+        let mut ctx = EvalCtx::new(ds);
+        eval(inner, &mut ctx).map(|_| ())
+    }
+
+    /// Law 1, `B` (the `OPTIONAL` right operand) carries an unresolved custom
+    /// function call: `LeftJoin(A, B, None)` must NOT erase to `A`, because doing so
+    /// would delete a hard error `B`'s own evaluation would otherwise raise.
+    #[test]
+    fn enf_left_join_law_requires_effect_free_right() {
+        let right = GraphPattern::Filter {
+            expr: undefined_fn_call(),
+            inner: bx(bgp1(tvar("o"), &format!("{EX}q"), tvar("w"))),
+        };
+        let inner = GraphPattern::LeftJoin {
+            left: bx(GraphPattern::Bgp { patterns: vec![] }),
+            right: bx(right),
+            expression: None,
+        };
+
+        let ds = ds();
+        assert_custom_function_error(
+            &outside_result(&ds, &inner).expect_err("B must hard-error outside EXISTS too"),
+        );
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_custom_function_error(
+            results[0]
+                .as_ref()
+                .expect_err("Law 1 must not erase a B that can hard-error"),
+        );
+    }
+
+    /// Law 1, the join CONDITION carries an unresolved custom function call (`B`
+    /// itself is clean): `LeftJoin(A, B, c)` must NOT erase to `A`.
+    #[test]
+    fn enf_left_join_law_requires_effect_free_condition() {
+        let inner = GraphPattern::LeftJoin {
+            left: bx(GraphPattern::Bgp { patterns: vec![] }),
+            right: bx(bgp1(tvar("o"), &format!("{EX}q"), tvar("w"))),
+            expression: Some(undefined_fn_call()),
+        };
+
+        let ds = ds();
+        assert_custom_function_error(
+            &outside_result(&ds, &inner)
+                .expect_err("the join condition must hard-error outside EXISTS too"),
+        );
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_custom_function_error(
+            results[0]
+                .as_ref()
+                .expect_err("Law 1 must not erase when the join condition can hard-error"),
+        );
+    }
+
+    /// Law 2, a sort key carries an unresolved custom function call: `OrderBy(P)`
+    /// must NOT erase to `P` — the sort keys would never be evaluated at all.
+    #[test]
+    fn enf_order_by_law_requires_effect_free_keys() {
+        let inner = GraphPattern::OrderBy {
+            inner: bx(bgp1(tvar("o"), &format!("{EX}q"), tvar("w"))),
+            expression: vec![OrderExpression::Asc(undefined_fn_call())],
+        };
+
+        let ds = ds();
+        assert_custom_function_error(
+            &outside_result(&ds, &inner)
+                .expect_err("the sort key must hard-error outside EXISTS too"),
+        );
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_custom_function_error(
+            results[0]
+                .as_ref()
+                .expect_err("Law 2 must not erase when a sort key can hard-error"),
+        );
+    }
+
+    /// Law 4b, the WHOLE inner `P` under a `Slice(_, Some(0))` carries an unresolved
+    /// custom function call: the `EXISTS` must NOT fold to constant `false` — the
+    /// fold suppresses every evaluation `P` would otherwise have performed.
+    #[test]
+    fn enf_limit_zero_fold_requires_effect_free_inner() {
+        let inner = GraphPattern::Slice {
+            inner: bx(GraphPattern::Filter {
+                expr: undefined_fn_call(),
+                inner: bx(bgp1(tvar("o"), &format!("{EX}q"), tvar("w"))),
+            }),
+            start: 0,
+            length: Some(0),
+        };
+
+        // `normalize` itself must not fold this to `Enf::FoldedEmpty`.
+        assert!(
+            !matches!(normalize(&inner), Enf::FoldedEmpty),
+            "an effectful inner must not be folded to constant false"
+        );
+
+        let ds = ds();
+        assert_custom_function_error(&outside_result(&ds, &inner).expect_err(
+            "the inner must hard-error outside EXISTS too (Slice always \
+                             evaluates its inner in full before truncating — see \
+                             `crate::modifier::eval_slice`)",
+        ));
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_custom_function_error(
+            results[0]
+                .as_ref()
+                .expect_err("Law 4b must not fold to false when the inner can hard-error"),
+        );
+    }
+
+    /// Law 1, `B` carries a non-`SILENT` `SERVICE` call: `LeftJoin(A, B, None)` must
+    /// NOT erase to `A` — deleting `B` would delete the federation effect/error it
+    /// would otherwise raise, exactly the inconsistency the module doc's "one-
+    /// definition theorem" section calls out (`probe_admissible` already refuses
+    /// `Service` for the identical reason).
+    #[test]
+    fn enf_service_in_erased_operand_is_not_deleted() {
+        let right = GraphPattern::Join {
+            left: bx(bgp1(tvar("o"), &format!("{EX}q"), tvar("w"))),
+            right: bx(GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(nn(&format!("{EX}ep"))),
+                inner: bx(bgp1(tvar("w"), &format!("{EX}name"), tvar("n"))),
+                silent: false,
+            }),
+        };
+        let inner = GraphPattern::LeftJoin {
+            left: bx(GraphPattern::Bgp { patterns: vec![] }),
+            right: bx(right),
+            expression: None,
+        };
+
+        let ds = ds();
+        // No remote source is configured on this `EvalCtx`, so a non-SILENT
+        // `SERVICE` hard-errors — the same failure mode a top-level (non-EXISTS)
+        // query using this SERVICE call would raise.
+        assert_remote_error(
+            &outside_result(&ds, &inner)
+                .expect_err("SERVICE must federation-error outside EXISTS too"),
+        );
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_remote_error(
+            results[0]
+                .as_ref()
+                .expect_err("Law 1 must not delete a B carrying a non-SILENT SERVICE call"),
+        );
     }
 }
