@@ -2027,9 +2027,14 @@ fn find_group_extend_row_collision<'a>(
 /// later shared-column probe then restricts to μ's own — the same value
 /// substitution would have supplied), no nested `EXISTS`/`NOT EXISTS` it contains
 /// reaches a current-row variable (that inner would otherwise be evaluated once,
-/// shared across every outer row, instead of per-row), and no stateful builtin is
-/// reachable (a stateful builtin evaluated once instead of once per row is an
-/// observably different execution — see [`function_is_builtin_stateful`]'s doc).
+/// shared across every outer row, instead of per-row) OR is itself stateful (a
+/// stateful builtin reachable through the nested `EXISTS`'s own inner would then be
+/// evaluated once, shared across every outer row, instead of once per row — the
+/// same observable-difference reasoning [`function_is_builtin_stateful`]'s doc
+/// states, just reached through a nested pattern instead of a direct call), and no
+/// stateful builtin is directly reachable in THIS expression (a stateful builtin
+/// evaluated once instead of once per row is an observably different execution —
+/// see [`function_is_builtin_stateful`]'s doc).
 fn expr_probe_admissible(
     expr: &Expression,
     current_row_vars: &DetHashSet<Variable>,
@@ -2082,7 +2087,7 @@ fn expr_probe_admissible(
         }
         Expression::Exists(inner) => {
             let a = node_analysis(inner, table);
-            !a.free_vars.iter().any(|v| current_row_vars.contains(v))
+            !a.has_stateful_builtin && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
         }
     }
 }

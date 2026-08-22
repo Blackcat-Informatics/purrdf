@@ -194,9 +194,28 @@ fn natural_results_with_registry(
 /// Whether `crate::governor::soundness::probe_admissible` classifies `inner` as
 /// admissible — the exact prepare-time computation `crate::eval::PreparedExists::build`
 /// performs (ENF-normalize, then run the fourth structural analysis over the result),
-/// reproduced here so a test can ask the same question the real decision site asks.
-/// Panics if ENF folds `inner` to constant `false` (a degenerate fixture no
-/// admissibility test wants).
+/// reproduced here so a test can ask the same question the real decision site asks. See
+/// [`classify`] for the shared computation and its panic condition.
+fn is_classified_admissible(inner: &GraphPattern) -> bool {
+    classify(inner).0
+}
+
+/// Whether `inner`'s root [`crate::governor::soundness::NodeAnalysis::has_stateful_builtin`]
+/// is `true` — a stateful builtin (directly, or through a nested `EXISTS`) reachable
+/// anywhere within it. Used by the generator to tell a stateful shape apart from a
+/// deterministic one: a stateful shape's raw per-evaluation answer is not itself
+/// asserted (it can legitimately differ between two SEPARATE evaluations — see
+/// [`crate::expr::exists`]'s doc), only its CLASSIFICATION (never probe-admitted).
+fn is_classified_stateful(inner: &GraphPattern) -> bool {
+    classify(inner).1
+}
+
+/// Shared computation for [`is_classified_admissible`]/[`is_classified_stateful`]: the
+/// exact prepare-time sequence [`crate::eval::PreparedExists::build`] performs
+/// (ENF-normalize, then run the fourth structural analysis over the result), run ONCE
+/// per call so a caller that wants both classifications never normalizes/analyzes
+/// `inner` twice. Panics if ENF folds `inner` to constant `false` (a degenerate
+/// fixture no admissibility test wants).
 ///
 /// `normalized` is moved into its own `Box` FIRST, and `analyze_pattern` walks it
 /// THROUGH that `Box` — never through the pre-move local — for the identical reason
@@ -205,7 +224,7 @@ fn natural_results_with_registry(
 /// later `probe_admissible` call can never match, silently falling back to
 /// `node_analysis`'s conservative-EMPTY-free-vars default and reporting every shape
 /// admissible regardless of its actual `Values`/`Extend` collisions.
-fn is_classified_admissible(inner: &GraphPattern) -> bool {
+fn classify(inner: &GraphPattern) -> (bool, bool) {
     let normalized = match crate::enf::normalize(inner) {
         crate::enf::Enf::Pattern(p) => Box::new(p),
         crate::enf::Enf::FoldedEmpty => {
@@ -213,8 +232,9 @@ fn is_classified_admissible(inner: &GraphPattern) -> bool {
         }
     };
     let mut table = crate::governor::soundness::NodeAnalysisTable::default();
-    crate::governor::soundness::analyze_pattern(&normalized, &mut table);
-    crate::governor::soundness::probe_admissible(&normalized, &table)
+    let root = crate::governor::soundness::analyze_pattern(&normalized, &mut table);
+    let admissible = crate::governor::soundness::probe_admissible(&normalized, &table);
+    (admissible, root.has_stateful_builtin)
 }
 
 /// Assert that `crate::governor::soundness::probe_admissible` classifies `inner` as
@@ -1638,6 +1658,100 @@ mod tests {
         }
     }
 
+    #[test]
+    fn stateful_nested_exists_classifies_inadmissible() {
+        // `FILTER EXISTS { ?s :q ?z FILTER(EXISTS { :e :q
+        // :y1 . FILTER(RAND() < 0.5) }) }` — the OUTER `EXISTS`'s own inner is
+        // correlated on `?s` (`?s :q ?z`), and its `Filter`'s expression is a NESTED
+        // `EXISTS` whose own inner mentions NO variable at all (`:e :q :y1` are every
+        // one a constant), but reaches a stateful `RAND()`. Before the fix,
+        // `expr_probe_admissible`'s `Exists` arm asked ONLY whether the nested inner's
+        // free variables intersect the current row — trivially "no" here, since it has
+        // none — so the WHOLE outer body was classified ADMISSIBLE and the memoized
+        // probe evaluated the nested `RAND()` exactly ONCE, shared across every outer
+        // row, instead of once per row. `NodeAnalysis::has_stateful_builtin` was
+        // already computed correctly through the nested `EXISTS` (see
+        // `analyze_expr`'s `Exists` arm) but read by nothing at the admission site —
+        // this test pins that it is now consulted.
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        let z1 = b.intern_literal(RdfLiteral::simple("z1"));
+        let e = b.intern_iri(&format!("{EX}e"));
+        let y1 = b.intern_iri(&format!("{EX}y1"));
+        let sa = b.intern_iri(&format!("{EX}sA"));
+        let sb = b.intern_iri(&format!("{EX}sB"));
+        b.push_quad(sa, tag, anything, None);
+        b.push_quad(sb, tag, anything, None);
+        // Only `sA` has a `?s :q ?z` witness — `sB`'s row never reaches the nested
+        // EXISTS at all (its own `Bgp` is already empty), so the ledger assertion
+        // below (`ExistsDefinitionAnswered == 2`) also proves the per-row definition
+        // is charged even for a row whose inner never touches the stateful builtin.
+        b.push_quad(sa, q, z1, None);
+        b.push_quad(e, q, y1, None);
+        let ds = b.freeze().expect("freeze");
+
+        let nested = GraphPattern::Filter {
+            expr: Expression::Less(
+                Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
+                Box::new(Expression::Literal(Literal::new_typed(
+                    "0.5",
+                    nn("http://www.w3.org/2001/XMLSchema#double"),
+                ))),
+            ),
+            inner: bx(bgp1(
+                TermPattern::NamedNode(nn(&format!("{EX}e"))),
+                &format!("{EX}q"),
+                TermPattern::NamedNode(nn(&format!("{EX}y1"))),
+            )),
+        };
+        let inner = GraphPattern::Filter {
+            expr: Expression::Exists(bx(nested)),
+            inner: bx(bgp1(tvar("s"), &format!("{EX}q"), tvar("z"))),
+        };
+
+        assert_classified_inadmissible(&inner);
+
+        // `--explain`-level ledger counters, through the full governed engine, over
+        // the same shape as SPARQL text.
+        let query = format!(
+            "PREFIX : <{EX}> \
+             SELECT ?s WHERE {{ \
+               ?s :tag ?w \
+               FILTER EXISTS {{ ?s :q ?z FILTER(EXISTS {{ :e :q :y1 . FILTER(RAND() < 0.5) }}) }} \
+             }}"
+        );
+        let engine = crate::engine::NativeSparqlEngine::new();
+        let explanation = engine.explain_query(&ds, &query, None).expect("explain");
+        let definition_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        let probe_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
+            .sum();
+        assert_eq!(
+            definition_answered, 2,
+            "both outer rows (`sA`, `sB`) must now take the per-row DEFINITION path for \
+             the OUTER FILTER EXISTS: {definition_answered} `exists-definition-answered` \
+             charges, expected 2 (one per outer row) — before the fix this counter reads \
+             0, because the outer body was (wrongly) classified admissible and the \
+             memoized probe path ran instead"
+        );
+        assert_eq!(
+            probe_answered, 1,
+            "the ONE surviving `exists-probe-answered` charge is the NESTED EXISTS's \
+             own — it is genuinely uncorrelated (no free variables at all), so it \
+             legitimately takes the probe path and is cached once; the OUTER site no \
+             longer contributes to this counter — before the fix this counter reads 2 \
+             (one for the outer site, one for the nested one)"
+        );
+    }
+
     // =========================================================================
     // The bounded-exhaustive generator (modeled on
     // `crate::parallel_determinism_gate`'s corpus-gate architecture: a fixed dataset
@@ -1647,21 +1761,38 @@ mod tests {
     // not "holds for this specific hand-picked query mix").
     // =========================================================================
 
-    /// The two leaf shapes every generated `EXISTS` inner is built from — both
+    /// The three leaf shapes every generated `EXISTS` inner is built from — all
     /// correlated on `?s` (the generator's outer variable) as their subject, so `?s`
     /// remains reachable (and, through every operator in [`BINARY_COUNT`]/
     /// [`UNARY_COUNT`]'s alphabet, certainly-bound) no matter how the grammar composes
-    /// them.
+    /// them. The third leaf is a `RAND() < 0.5`-style stateful-builtin `Filter` — the
+    /// generator's ONLY source of
+    /// `NodeAnalysis::has_stateful_builtin == true` shapes, which every unary/binary
+    /// composition then propagates upward, exercising `expr_probe_admissible`'s
+    /// `Exists` arm (directly, once composed under [`UNARY_COUNT`]'s nested-`EXISTS`
+    /// operator) at every depth the grammar reaches.
     fn generator_leaves() -> Vec<GraphPattern> {
         vec![
             bgp1(tvar("s"), &format!("{EX}p1"), tvar("x")),
             bgp1(tvar("s"), &format!("{EX}p2"), tvar("y")),
+            GraphPattern::Filter {
+                expr: Expression::Less(
+                    Box::new(Expression::FunctionCall(Function::Rand, Vec::new())),
+                    Box::new(Expression::Literal(Literal::new_typed(
+                        "0.5",
+                        nn("http://www.w3.org/2001/XMLSchema#double"),
+                    ))),
+                ),
+                inner: bx(bgp1(tvar("s"), &format!("{EX}p1"), tvar("x"))),
+            },
         ]
     }
 
     /// The generator's fixed dataset: three subjects, each with a DIFFERENT one of
     /// `:p1`/`:p2`/neither, so the generated shapes' answers vary across outer rows
-    /// without needing per-shape fixture tuning.
+    /// without needing per-shape fixture tuning. Also carries the same `:p1`/`:p2`
+    /// facts inside a named graph (`ARM_GRAPH`-style, but the generator's OWN IRI —
+    /// see [`GRAPH_IRI`]) for the widened alphabet's `Graph` unary operator.
     fn generator_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}outerTag"));
@@ -1671,14 +1802,22 @@ mod tests {
         let sa = b.intern_iri(&format!("{EX}sA"));
         let sb = b.intern_iri(&format!("{EX}sB"));
         let sc = b.intern_iri(&format!("{EX}sC"));
+        let g1 = b.intern_iri(GRAPH_IRI);
         b.push_quad(sa, tag, anything, None);
         b.push_quad(sb, tag, anything, None);
         b.push_quad(sc, tag, anything, None);
         b.push_quad(sa, p1, anything, None);
         b.push_quad(sb, p2, anything, None);
         // `sc` has neither `:p1` nor `:p2` — the "matches nothing" outer row.
+        b.push_quad(sa, p1, anything, Some(g1));
+        b.push_quad(sb, p2, anything, Some(g1));
         b.freeze().expect("freeze")
     }
+
+    /// The named graph the generator's `Graph` unary operator reads from — mirrors
+    /// [`generator_ds`]'s default-graph `:p1`/`:p2` facts so a `GRAPH`-wrapped shape's
+    /// answer is non-trivial rather than uniformly empty.
+    const GRAPH_IRI: &str = "http://example.org/genGraph";
 
     /// The generator's outer pattern: `?s :outerTag ?w`, three rows (`sA`, `sB`, `sC`).
     fn generator_outer() -> GraphPattern {
@@ -1686,8 +1825,17 @@ mod tests {
     }
 
     /// Wrap `p` in the `idx`-th unary operator of the generator's alphabet —
-    /// `Filter`/`Distinct`/`Slice`/`Project`, per the task's stated grammar.
-    const UNARY_COUNT: usize = 4;
+    /// `Filter`/`Distinct`/`Slice`/`Project` (the original grammar), plus `Extend`
+    /// with a fresh target, `Values` (via a `Join` with a
+    /// fresh-column `VALUES` block — the algebra shape a surface `{ p . VALUES ?v {
+    /// … } }` lowers to), `Graph` with a fixed named-graph IRI, and a nested `EXISTS`
+    /// (`p` becomes the nested inner, correlated on `?s` exactly like every other leaf
+    /// — the shape [`crate::governor::soundness::expr_probe_admissible`]'s `Exists`
+    /// arm gates). The four new targets/columns (`fresh1`/`fresh2`) are deliberately
+    /// NOT `s`/`w` (the generator's own outer-row variables) — a collision there would
+    /// hard-error under SEP-0007's rebinding rule ([`crate::governor::soundness::exists_row_collision`]),
+    /// which is not what this generator is testing.
+    const UNARY_COUNT: usize = 8;
     fn unary_wrap(p: &GraphPattern, idx: usize) -> GraphPattern {
         match idx {
             0 => GraphPattern::Filter {
@@ -1705,6 +1853,29 @@ mod tests {
             3 => GraphPattern::Project {
                 inner: bx(p.clone()),
                 variables: vec![var("s")],
+            },
+            4 => GraphPattern::Extend {
+                inner: bx(p.clone()),
+                variable: var("fresh1"),
+                expression: Expression::Literal(Literal::new_typed(
+                    "1",
+                    nn("http://www.w3.org/2001/XMLSchema#integer"),
+                )),
+            },
+            5 => GraphPattern::Join {
+                left: bx(p.clone()),
+                right: bx(GraphPattern::Values {
+                    variables: vec![var("fresh2")],
+                    bindings: vec![vec![Some(GroundTerm::NamedNode(nn(&format!("{EX}v1"))))]],
+                }),
+            },
+            6 => GraphPattern::Graph {
+                name: NamedNodePattern::NamedNode(nn(GRAPH_IRI)),
+                inner: bx(p.clone()),
+            },
+            7 => GraphPattern::Filter {
+                expr: Expression::Exists(bx(p.clone())),
+                inner: bx(generator_leaves()[0].clone()),
             },
             _ => unreachable!("UNARY_COUNT out of sync with this match"),
         }
@@ -1794,11 +1965,11 @@ mod tests {
     /// The generator's shape-count floor: `crate::parallel_determinism_gate`'s CORPUS
     /// is small and hand-picked (dozens of cases); this generator's job is BREADTH, so
     /// the floor is set to the count [`generate_shapes`] actually reaches at
-    /// [`GENERATOR_DEPTH`] with the alphabet above (2 leaves, 4 unary ops, 4 binary
-    /// ops), rounded down generously so a small future alphabet/depth tweak does not
-    /// make this test flaky.
+    /// [`GENERATOR_DEPTH`] with the alphabet above (3 leaves — including the
+    /// stateful-builtin leaf — 8 unary ops, 4 binary ops), rounded down generously so
+    /// a small future alphabet/depth tweak does not make this test flaky.
     const GENERATOR_DEPTH: usize = 2;
-    const GENERATOR_FLOOR: usize = 500;
+    const GENERATOR_FLOOR: usize = 2500;
 
     #[test]
     fn bounded_exhaustive_exists_shape_generator() {
@@ -1820,7 +1991,32 @@ mod tests {
         );
 
         let mut admissible_checked = 0_usize;
+        let mut stateful_checked = 0_usize;
         for inner in &shapes {
+            if is_classified_stateful(inner) {
+                // A stateful inner (reachable `RAND()`, directly or through the
+                // generator's nested-`EXISTS` operator) draws a FRESH value on every
+                // evaluation, so the raw per-row booleans from two SEPARATE
+                // evaluations (the memo-on run and the memo-off run below) may
+                // legitimately differ even when BOTH take the per-row definition path
+                // — comparing them for exact equality would make this sweep
+                // nondeterministic. What must hold, and IS deterministic, is the
+                // CLASSIFICATION: `expr_probe_admissible`'s `Exists` arm must never
+                // admit a stateful inner. Still exercise both toggles once each
+                // (unasserted against one another) so a stateful shape is proven not
+                // to hard-error either way.
+                assert!(
+                    !is_classified_admissible(inner),
+                    "a shape with a reachable stateful builtin was classified \
+                     ADMISSIBLE for the memoized probe — has_stateful_builtin must \
+                     refuse it: {inner:?}"
+                );
+                let _ = exists_answers_with_memo(&ds, &outer, inner, true);
+                let _ = exists_answers_with_memo(&ds, &outer, inner, false);
+                stateful_checked += 1;
+                continue;
+            }
+
             let memo_on = exists_answers_with_memo(&ds, &outer, inner, true);
             let memo_off = exists_answers_with_memo(&ds, &outer, inner, false);
             assert_eq!(
@@ -1842,6 +2038,17 @@ mod tests {
             }
         }
 
+        assert!(
+            stateful_checked > 0,
+            "no generated shape was ever classified stateful — the widened alphabet's \
+             stateful-builtin leaf/nested-EXISTS operator never reached the corpus"
+        );
+        println!(
+            "exists_admission_gate::bounded_exhaustive_exists_shape_generator: \
+             {stateful_checked} of {} shapes were classified stateful (never \
+             probe-admitted, memo-on/off equality skipped)",
+            shapes.len()
+        );
         assert!(
             admissible_checked > 0,
             "no generated shape was ever classified admissible — the probe-vs-definition \

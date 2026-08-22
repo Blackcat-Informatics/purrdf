@@ -235,6 +235,16 @@ pub(crate) enum PreparedExists {
         /// `normalized` itself, copied out so the per-row correlation test
         /// (`crate::expr::exists`) need not re-look-up the table on every row.
         free_vars: Arc<DetHashSet<Variable>>,
+        /// `normalized`'s own root [`crate::governor::soundness::NodeAnalysis::has_stateful_builtin`]
+        /// — copied out for the same reason as [`Self::Pattern::free_vars`]: a
+        /// stateful builtin reachable anywhere in `normalized` (directly or through
+        /// a nested `EXISTS`) means the μ-restriction memo
+        /// ([`EvalCtx::exists_definition_memo`]) must be skipped on BOTH read and
+        /// write for this site — two outer rows sharing a restriction key can still
+        /// draw DIFFERENT stateful-builtin values (a fresh `RAND()`/`UUID()`/`BNODE()`
+        /// per evaluation, `crate::parallel::function_is_builtin_stateful`'s doc), so
+        /// caching one row's answer under the other would be observably wrong.
+        stateful: bool,
     },
 }
 
@@ -271,6 +281,7 @@ impl PreparedExists {
                     witness_wrapped,
                     analysis: Arc::new(analysis),
                     free_vars: Arc::new(root.free_vars),
+                    stateful: root.has_stateful_builtin,
                 }
             }
         }

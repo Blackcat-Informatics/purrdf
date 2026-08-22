@@ -1106,7 +1106,17 @@ fn exists_use_probe(
 ///    restrictions across `N` outer rows evaluate the inner exactly `k` times.
 ///    Complexity: `O(k)` inner evaluations plus `O(N)` O(1) memo probes, versus
 ///    `O(N)` inner evaluations with no memo — strictly better whenever any two
-///    outer rows share a restriction, never worse.
+///    outer rows share a restriction, never worse. The memo is skipped entirely —
+///    NEITHER read NOR write — whenever `normalized`'s own analysis reports a
+///    stateful builtin reachable within it (`PreparedExists::Pattern`'s `stateful`
+///    field, copied from `NodeAnalysis::has_stateful_builtin`): two outer rows
+///    sharing a restriction key can still draw DIFFERENT stateful-builtin values (a
+///    fresh `RAND()`/`UUID()`/`BNODE()` per evaluation — see
+///    `crate::parallel::function_is_builtin_stateful`'s doc), so caching one row's
+///    answer under a shared key and reusing it for the other would make the memo an
+///    OBSERVABLE part of the answer instead of the inert optimization its own doc
+///    promises; skipping it means the per-row definition genuinely runs once per
+///    row for a stateful inner, exactly like substitution with no memo at all.
 ///
 /// # Governed truncation
 ///
@@ -1125,7 +1135,7 @@ fn exists<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
     let prepared = ctx.prepared_exists(pattern);
-    let (normalized, witness_wrapped, analysis, free_vars) = match prepared.as_ref() {
+    let (normalized, witness_wrapped, analysis, free_vars, stateful) = match prepared.as_ref() {
         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
         crate::eval::PreparedExists::FoldedFalse => return Ok(false),
@@ -1134,7 +1144,8 @@ fn exists<D: DatasetView + Sync>(
             witness_wrapped,
             analysis,
             free_vars,
-        } => (normalized, witness_wrapped, analysis, free_vars),
+            stateful,
+        } => (normalized, witness_wrapped, analysis, free_vars, *stateful),
     };
 
     // The outer-bound variables (a concrete binding in the current row).
@@ -1259,16 +1270,31 @@ fn exists<D: DatasetView + Sync>(
         ))
     } else {
         // ---- Per-row definition path, with the μ-restriction memo ----
-        let restriction = definition_restriction_key(row, schema, free_vars);
-        let memo_key = (
-            std::ptr::from_ref::<GraphPattern>(pattern) as usize,
-            ctx.graph_key(),
-            crate::eval::schema_fingerprint(schema),
-            restriction,
-        );
-        if ctx.options.exists_memo
-            && !ctx.in_substituted_exists
-            && let Some(&answer) = ctx.exists_definition_memo.get(&memo_key)
+        //
+        // `use_memo` is `false` whenever `normalized` has a stateful builtin
+        // reachable within it (directly or through a nested `EXISTS`): the memo
+        // key is `μ` RESTRICTED to the inner's correlated variables, but a
+        // stateful builtin's own answer is not a function of those variables
+        // alone (`RAND()`/`UUID()`/`BNODE()` draw a fresh value per evaluation —
+        // see `crate::parallel::function_is_builtin_stateful`'s doc), so two
+        // outer rows sharing a restriction key can legitimately get DIFFERENT
+        // answers. Caching (or reusing a cached) answer under that key would
+        // make the memo an observable part of the result instead of the inert
+        // optimization its own doc — and this function's, above — promise, so
+        // both the read and the write below are skipped, and the per-row
+        // definition genuinely runs once per row.
+        let use_memo = ctx.options.exists_memo && !ctx.in_substituted_exists && !stateful;
+        let memo_key = use_memo.then(|| {
+            let restriction = definition_restriction_key(row, schema, free_vars);
+            (
+                std::ptr::from_ref::<GraphPattern>(pattern) as usize,
+                ctx.graph_key(),
+                crate::eval::schema_fingerprint(schema),
+                restriction,
+            )
+        });
+        if let Some(key) = &memo_key
+            && let Some(&answer) = ctx.exists_definition_memo.get(key)
         {
             return Ok(answer);
         }
@@ -1302,8 +1328,8 @@ fn exists<D: DatasetView + Sync>(
             }
         }
         let answer = !inner.rows().is_empty();
-        if ctx.options.exists_memo && !ctx.in_substituted_exists {
-            ctx.exists_definition_memo.insert(memo_key, answer);
+        if let Some(key) = memo_key {
+            ctx.exists_definition_memo.insert(key, answer);
         }
         Ok(answer)
     }
@@ -5936,6 +5962,50 @@ mod tests {
             rows,
             run_rows(&ds, query, false),
             "memo on/off must agree row-for-row"
+        );
+    }
+
+    #[test]
+    fn definition_memo_skips_stateful_inners() {
+        // `BNODE()` stands in for `RAND()` as a DETERMINISTICALLY-TESTABLE stateful
+        // builtin: it trips `crate::parallel::function_is_builtin_stateful` exactly
+        // like `RAND()` does (it MINTS a fresh blank node identity per evaluation),
+        // but this test never inspects the minted label — it only counts
+        // `ExistsDefinitionAnswered` ledger charges, so nothing here is sensitive to
+        // run-to-run variance.
+        //
+        // 4 outer rows (`VALUES ?a`), 2 DISTINCT restrictions (`"v1"`,`"v1"`,`"v2"`,
+        // `"v2"`) — the same shape as
+        // `exists_definition_memo_evaluates_once_per_distinct_restriction`, except the
+        // inner ALSO binds `BNODE()`. The correlated `FILTER(?b != ?a)` alone already
+        // makes this inadmissible for the memoized probe (as in that test); adding
+        // `BNODE()` makes it inadmissible for a SECOND, independent reason, and is the
+        // thing under test here: before this fix, the μ-restriction memo does not
+        // consult `has_stateful_builtin` at all, so it still caches/reuses the FIRST
+        // row's answer for the second row sharing its restriction
+        // (`ExistsDefinitionAnswered == 2`, one per DISTINCT restriction, not one per
+        // row). After the fix, the memo is skipped entirely — neither read nor
+        // written — for a stateful inner, so the definition genuinely re-runs on
+        // EVERY row (`== 4`).
+        let ds = definition_memo_ds();
+        let engine = crate::engine::NativeSparqlEngine::default();
+        let q = "PREFIX : <http://example.org/> \
+                  SELECT ?a WHERE { \
+                    VALUES ?a { \"v1\" \"v1\" \"v2\" \"v2\" } \
+                    FILTER EXISTS { ?x :q ?b . FILTER(?b != ?a) BIND(BNODE() AS ?fresh) } \
+                  }";
+        let explanation = engine.explain_query(&ds, q, None).expect("explain");
+        let evaluations: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        assert_eq!(
+            evaluations, 4,
+            "4 outer rows over 2 distinct ?a restrictions, with a stateful BNODE() \
+             reachable in the inner, must evaluate the definition path 4 times — once \
+             per ROW, not once per distinct restriction — because the μ-restriction \
+             memo must be skipped entirely for a stateful inner (got {evaluations})"
         );
     }
 
