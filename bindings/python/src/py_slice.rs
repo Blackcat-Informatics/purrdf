@@ -563,7 +563,7 @@ impl PyOwnershipAnalyzer {
     }
 
     /// Emit the computed `purrdf:graph/slice-analysis` named graph as a Turtle
-    /// body string (S7, gap G5).
+    /// body string (S7).
     ///
     /// This is the production consumer of `purrdf_slice::analysis::emit_analysis_graph`:
     /// it builds the `tier_of` / `term_count_of` closures from the analyzer's own

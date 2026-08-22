@@ -621,7 +621,7 @@ fn group_aggregate_iri_reaches_dependency_walk() {
 
 // ── Consumer-fidelity guards: walker must not drop IRI-bearing positions ──────
 //
-// G12/G13(OrderBy)/G14: each builds sliceA (defines `defined_term`) and sliceB
+// Each guard below builds sliceA (defines `defined_term`) and sliceB
 // (a query that references it ONLY in the position under test), then asserts the
 // B → A Query edge carries `defined_term` as evidence. Before the fix the walker
 // dropped that position and the edge/evidence vanished.
@@ -676,7 +676,7 @@ fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
 
 #[test]
 fn describe_target_iri_reaches_dependency_walk() {
-    // G12: `DESCRIBE <iri>` stores the IRI in `targets`, and the pattern is the
+    // `DESCRIBE <iri>` stores the IRI in `targets`, and the pattern is the
     // empty unit pattern — walking only `pattern` dropped the edge.
     let ev = query_edge_evidence(
         &format!("PREFIX vocab: <{NS}>\nDESCRIBE vocab:describedThing\n"),
@@ -690,7 +690,7 @@ fn describe_target_iri_reaches_dependency_walk() {
 
 #[test]
 fn order_by_function_iri_reaches_dependency_walk() {
-    // G13: a function IRI used only in an ORDER BY key was dropped because the
+    // A function IRI used only in an ORDER BY key was dropped because the
     // OrderBy arm matched `..` and never walked `expression`. The IRI is the purrdf
     // extension function vocab:heldIn (a vocab: IRI in call position must be a real
     // purrdf extension function; the walker reconstructs its IRI from the closed set).
@@ -708,7 +708,7 @@ fn order_by_function_iri_reaches_dependency_walk() {
 
 #[test]
 fn values_quoted_triple_iri_reaches_dependency_walk() {
-    // G14: an IRI inside an RDF 1.2 ground quoted-triple VALUES cell was dropped
+    // An IRI inside an RDF 1.2 ground quoted-triple VALUES cell was dropped
     // because the Values arm had no GroundTerm::Triple recursion.
     let ev = query_edge_evidence(
         &format!(

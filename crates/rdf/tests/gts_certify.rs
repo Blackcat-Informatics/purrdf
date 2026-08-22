@@ -585,7 +585,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
 }
 
 // ---------------------------------------------------------------------------
-// GAP G2 — original authorship signatures must stay bound under EACH pack's
+// Original authorship signatures must stay bound under EACH pack's
 // `stream:detachedSignatureRoot` across ANY NUMBER of repacks and key
 // rotations, distinct from each pack's own packaging (index/head) signature.
 // ---------------------------------------------------------------------------
@@ -667,10 +667,10 @@ fn signatures_survive_two_repacks_and_key_rotation() {
     )
     .expect("first compaction succeeds");
 
-    // A SECOND repack — of the pack itself, not the raw source. This is the
-    // case GAP G2 identified: a naive implementation derives the detached
-    // set only from `g.signatures`, which on a pack contains ONLY the
-    // packaging observation, silently dropping the original authorship set.
+    // A SECOND repack — of the pack itself, not the raw source. A naive
+    // implementation derives the detached set only from `g.signatures`, which
+    // on a pack contains ONLY the packaging observation, silently dropping
+    // the original authorship set.
     let (pack2, _cert2) = compact_and_certify(
         &pack1,
         DictPlan::undicted(),
@@ -725,7 +725,7 @@ fn signatures_survive_two_repacks_and_key_rotation() {
         mmr::parse_hex_32(&root_literal).expect("root literal parses as a 32-byte hex value");
     let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose).expect(
         "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
-         — this is exactly what GAP G2's bug lost on the second repack",
+         — this is exactly what the bug described above lost on the second repack",
     );
     assert_eq!(
         proof.root, expected_root,
@@ -1000,7 +1000,7 @@ fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
     );
 }
 
-/// GAP G4: `verify_compaction` folds and canonicalizes UNTRUSTED bytes
+/// `verify_compaction` folds and canonicalizes UNTRUSTED bytes
 /// (`pre_bytes`/`post_bytes` come from the caller, not from this crate's own
 /// authoring path). A pre-fix reader routed that canonicalization through the
 /// panicking `canonicalize_with`, so a crafted pack whose content projection
@@ -1044,9 +1044,9 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
 }
 
 // ---------------------------------------------------------------------------
-// GAP G6 — `content_projection` must not strip a LEGITIMATE content node
-// merely because it happens to be typed with a reserved `stream:` class; it
-// must strip ONLY the provenance the compactor itself mints.
+// `content_projection` must not strip a LEGITIMATE content node merely
+// because it happens to be typed with a reserved `stream:` class; it must
+// strip ONLY the provenance the compactor itself mints.
 // ---------------------------------------------------------------------------
 
 /// `rdf:type`, spelled out locally: `gts_certify::RDF_TYPE` is a private
@@ -1123,9 +1123,9 @@ fn manifestation_typed_content_node_mutation_is_not_masked_by_projection() {
 /// globally symmetric (each blank pair's automorphism is resolved by a
 /// cheap, independent 2-permutation search, distinguished pair-to-pair by a
 /// unique ground anchor) must still canonicalize and verify successfully.
-/// Guards against the wrong fix for GAP G4 — merely lowering
-/// `POISON_BLANK_LIMIT` — which would falsely reject this legitimate,
-/// merely-large graph even though it stays far under `RDFC_CALL_LIMIT`.
+/// Guards against the wrong fix — merely lowering `POISON_BLANK_LIMIT` —
+/// which would falsely reject this legitimate, merely-large graph even
+/// though it stays far under `RDFC_CALL_LIMIT`.
 #[test]
 fn verify_compaction_accepts_large_non_symmetric_content() {
     // 1,500 independent symmetric pairs = 3,000 blank nodes total, each

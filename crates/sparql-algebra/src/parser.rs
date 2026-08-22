@@ -4731,7 +4731,7 @@ mod tests {
         // SPARQL 1.1 §11.3: ORDER BY on an aggregate is legal inside a grouped
         // query. This was previously rejected as `Unsupported` because ORDER BY
         // used `parse_expression()` (aggregate-blind) instead of the agg-lifting
-        // path. Regression guard for gap G4-A.
+        // path.
         let q = format!(
             "{GM}SELECT ?t (COUNT(?x) AS ?c) WHERE {{ ?x a ?t }} GROUP BY ?t ORDER BY DESC(COUNT(?x))"
         );
@@ -4932,7 +4932,7 @@ mod tests {
     }
     #[test]
     fn custom_function_arg_aggregate_reaches_group() {
-        // G3 regression: `purrdf:fn(COUNT(?x))` was discarding the COUNT into a
+        // `purrdf:fn(COUNT(?x))` was discarding the COUNT into a
         // throwaway Vec rather than threading it through to the Group.  The
         // algebra must have a Group whose aggregates list is non-empty.
         let q =

@@ -562,7 +562,7 @@ fn stream_ids_are_file_order_deterministic() {
     assert_eq!(minted, (0..minted.len() as u32).collect::<Vec<_>>());
 }
 
-/// R9: re-indexing the whole segment(s) a diff fetched yields the same
+/// Re-indexing the whole segment(s) a diff fetched yields the same
 /// `content_id -> offset` map as inventorying just those fetched bytes.
 #[test]
 fn incremental_reindex_from_diff_fetch() {

@@ -92,7 +92,7 @@ pub struct SliceRecord {
     pub artifacts: Vec<ArtifactRecord>,
     /// The on-disk slice directory the record was loaded from. Retained so the
     /// authoritative `manifest.ttl` path is known without any scan/substring
-    /// match (G8: the discover walk already knows it).
+    /// match (the discover walk already knows it).
     pub slice_dir: PathBuf,
 }
 
