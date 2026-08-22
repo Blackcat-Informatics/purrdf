@@ -44,8 +44,8 @@ service to a Python pipeline to a browser and you have silently changed what the
 means three times.
 
 **Across time**: [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) — triple terms,
-reifiers, base-direction literals — is where the standard is going, and almost no
-incumbent library carries it.
+reifiers, base-direction literals — is the current revision of the standard, and
+almost no incumbent library carries it.
 
 PurRDF exists so that a graph is **the same graph everywhere**. It is a from-scratch,
 dependency-light Rust core — parser to SPARQL engine to SHACL validator to binary
@@ -68,15 +68,42 @@ but it assumes nothing about your ontology or application.
   OKF Markdown bundles with caller-supplied vocabulary; byte-deterministic output.
 - **Canonicalization** — W3C **RDFC-1.0** dataset canonicalization, tested against the
   W3C fixture suite.
-- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the interned
-  IR (property paths, aggregates, EXISTS decorrelation, cost-based BGP planning,
-  injectable SERVICE federation), gated by the W3C SPARQL 1.1 conformance harness.
-  Results in SPARQL JSON/XML/CSV/TSV.
+- **Projections & carriers** — deterministic graph, tabular, and
+  research-object projections: a canonical LPG model, W3C-gated CSVW
+  (**270/270** RDF conversions, **282/282** validation cases), OBO Graphs and
+  SKOS views, native DCAT/VoID dataset descriptions, and RO-Crate 1.3 /
+  Croissant 1.1 / DataCite 4.6 / DCAT 3 / Frictionless carriers — every lossy
+  step reported through a located loss ledger — plus the five-table
+  byte-deterministic Parquet codec in `purrdf-columnar`.
+- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the
+  interned IR: all four query forms plus full SPARQL Update, property paths,
+  cost-based BGP planning, `EXISTS` decorrelation, and the enforced `VERSION`
+  declaration (including the `1.2-basic` profile). The 1.2 surface includes
+  temporal arithmetic (SEP-0002: instants, durations, and the five Gregorian
+  partial-date types, plus duration `SUM`/`AVG` and `ADJUST`) and `LATERAL`
+  (SEP-0006, with Jena's scope rule). Three caller-keyed extension seams —
+  scalar functions, property functions (magic predicates), and custom
+  aggregates via `AGG(<iri>, …)` with a ten-aggregate statistical set under a
+  caller-supplied namespace — plus `SERVICE` federation through a
+  host-injectable transport whose wire format is the deterministic serializer,
+  round-trip-swept over the 823-item vendored corpus (update requests
+  included). Gated by the full W3C SPARQL 1.1 + 1.2 evaluation corpus:
+  **853 passing**, 5 ledgered upstream-errata fixtures. Results in SPARQL
+  JSON/XML/CSV/TSV.
+- **Governed execution** — every query/update entry point has a governed twin
+  running under caller-set ceilings (fuel, answer rows, intermediate cells,
+  scratch bytes, remote requests, deadline) that trips with certified rows
+  rather than a wrong answer, and `--explain` returns a per-algebra-node charge
+  ledger beside the cost planner's estimates. The normative charge schedule and
+  the frozen 49-case governor corpus live in
+  [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md).
 - **SHACL validation** — a native validator with the complete SHACL Core feature
   set (all constraint components, full property paths, qualified value shapes,
-  property pairs), SHACL-SPARQL constraints/targets on the native engine, and
-  scoped SHACL 1.2 draft support for reifier shapes — **126/126 passing** on the
-  vendored W3C test suite, zero ledgered.
+  property pairs), SHACL-SPARQL constraints/targets on the native engine, the
+  complete SHACL-AF surface (node expressions, expression constraints,
+  user-defined SPARQL functions and target types, and SHACL Rules materialized
+  as a new dataset), and scoped SHACL 1.2 support for reifier shapes —
+  **126/126 passing** on the vendored W3C test suite, zero ledgered.
 - **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
   against the official shexTest suite: **1,105/1,105 attempted validation tests,
   zero expected-failures** (imports and semantic actions included), 99/99 negative
@@ -239,7 +266,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
-| [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `reason`, `project`, `lift` (unpublished). |
+| [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `update`, `reason`, `entails`, `consistency`, `project`, `lift` (unpublished). |
 | [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL, entailment-regime, and OWL 2 conformance harnesses (unpublished). |
 
 ## Documentation
@@ -287,12 +314,28 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **126 / 126**, 0 ledgered |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **70 / 70** |
-| SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
+| SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **17 / 17** |
+| Syntax codecs | W3C rdf-tests round-trip | **250 / 250** |
+| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **853** pass · 5 ledgered (upstream errata) |
+| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **49 / 49**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **257 / 261** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
+
+## Direction
+
+SPARQL breadth grows through caller-keyed extension seams — scalar functions,
+property functions, custom aggregates, and the host-injected service transport
+— so new capability lands as composition through a seam, never as a Cargo
+feature flag and never as a vocabulary PurRDF mints itself. In capability
+terms, the near-term direction includes quad-form `CONSTRUCT`, SEP-0007
+variable-substitution semantics with a defensible `EXISTS`, SEP-0008 SHA-3
+builtins, SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
+`FOLD`/`UNFOLD`), deterministic full-text search, property-path binding,
+embedding similarity, and GeoSPARQL — each arriving out-of-core through those
+seams, under the same conformance discipline as everything above.
 
 ## Development
 

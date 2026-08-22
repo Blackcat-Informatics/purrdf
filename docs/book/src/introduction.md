@@ -23,7 +23,7 @@ from a Rust service to a Python pipeline to a browser and you have silently
 changed what the data means three times.
 
 **Across time**: RDF 1.2 — triple terms, reifiers, base-direction literals — is
-where the standard is going, and almost no incumbent library carries it.
+the current revision of the standard, and almost no incumbent library carries it.
 
 PurRDF exists so that a graph is **the same graph everywhere**. It is a
 from-scratch, dependency-light Rust core — parser to SPARQL engine to SHACL
@@ -41,8 +41,15 @@ reimplemented per language.
   with byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
 - **Canonicalization** — W3C RDFC-1.0 plus dataset diff and isomorphism.
   See [Canonicalization & Diff](concepts/canonicalization.md).
-- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, gated by
-  the W3C conformance suites. See [SPARQL](sparql/querying.md).
+- **Projections & carriers** — deterministic LPG, CSVW, OBO Graphs,
+  dataset-description, and research-object projections, each with a located
+  loss ledger.
+  See [Graph, Tabular & Research-Object Projections](concepts/projections.md).
+- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, with full
+  Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), caller-registered
+  aggregates and property functions, governed execution with per-node explain
+  receipts, and `SERVICE` federation through a host-injected transport, gated
+  by the W3C conformance suites. See [SPARQL](sparql/querying.md).
 - **SHACL and ShEx** — native validators for both shape languages.
   See [Validation](validation/shacl.md).
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
@@ -80,7 +87,7 @@ model: **triple terms** that can appear in object position, **reifiers** that
 name occurrences of a triple, and **base-direction literals**
 (`rdf:dirLangString`) for bidirectional text. PurRDF treats these as core data
 model, not an extension: they flow through the IR, the codecs, SPARQL, SHACL
-(a scoped SHACL 1.2 draft feature), the RDF/JS surface, and the GTS transport.
+(a scoped SHACL 1.2 feature), the RDF/JS surface, and the GTS transport.
 See [RDF 1.2 Features](concepts/rdf12.md).
 
 ## Where PurRDF sits
