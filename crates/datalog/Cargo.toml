@@ -32,6 +32,14 @@ path = "src/lib.rs"
 # (never `update_rayon`), so the workspace's `rayon` feature on blake3 costs this
 # crate no thread pool on any target, wasm32 included.
 blake3 = { workspace = true }
+# The published, caller-reproducible derivation-identity recipe for a backward
+# proof (`resolve_fol::derivation_id`) is a SHA-1 Merkle fold over each node's
+# content-addressed rule identity and its premises' identities — SHA-1 because
+# that is the digest the consuming reasoning lane keys its cross-lane derivation
+# IDs on, and byte-for-byte parity with it is the whole point. RustCrypto SHA-1
+# (`default-features = false`) is pure-Rust with no getrandom/thread/fs pull, so
+# it stays wasm32-unknown-unknown-clean; only `Digest::update`/`finalize` is used.
+sha1 = { workspace = true }
 # The arity-generic binding-pattern adornment lattice (backward magic-sets
 # demand keying, forward evaluator query-plan index selection) lives in the
 # shared kernel now that a second, non-Datalog consumer needs it too.
