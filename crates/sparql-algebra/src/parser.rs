@@ -72,7 +72,7 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 /// tree's maximum root-to-leaf HEIGHT by the same number — which is what
 /// actually matters: that height is the native-stack recursion depth of
 /// every downstream consumer that walks the parsed tree by ordinary
-/// recursion (`collect_vars`/`visible_variables`, `find_lateral_rhs_scope_conflict`,
+/// recursion (`collect_vars`/`visible_variables`, `find_scope_conflict`,
 /// the tree's own recursive `Drop`), none of which can be rewritten to an
 /// explicit-stack walk without also rewriting `Drop`, which recursion alone
 /// cannot avoid. Bounding construction is therefore the one fix that covers
@@ -283,6 +283,7 @@ impl SparqlParser {
             group_counter: 0,
             group_pattern_depth: 0,
             pattern_node_budget: 0,
+            exists_scope_stack: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
             options,
@@ -306,6 +307,11 @@ struct Parser<'a, 'o> {
     /// Running count of graph-pattern combinator nodes charged so far against
     /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
     pattern_node_budget: usize,
+    /// The `EXISTS`/`NOT EXISTS` in-scope-set stack (SEP-0007 Part 3) — see
+    /// [`Parser::exists_scope`] for what "in scope" means here and
+    /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
+    /// for how frames are opened.
+    exists_scope_stack: Vec<VarScope>,
     /// Debug-only regression counter for the group-loop scope-set quadratic:
     /// incremented ONLY at the handful of PRODUCTION sites that consult a
     /// freshly-computed (`visible_variables`-derived) whole-pattern scope
@@ -396,6 +402,13 @@ impl<'a> Parser<'a, '_> {
             group_counter: self.group_counter,
             group_pattern_depth: self.group_pattern_depth,
             pattern_node_budget: self.pattern_node_budget,
+            // A fork reparses only a bounded braced block for a template/quad
+            // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
+            // quad-pattern reading) — neither production can contain `EXISTS`,
+            // so the fork never consults this stack; starting it empty (rather
+            // than cloning `self`'s, which may be mid-EXISTS-body at the fork
+            // point) is simplest and correct either way.
+            exists_scope_stack: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: self.scope_consultations,
             options: self.options,
@@ -451,6 +464,165 @@ impl<'a> Parser<'a, '_> {
     #[cfg(all(debug_assertions, test))]
     fn debug_scope_consultations(&self) -> u64 {
         self.scope_consultations
+    }
+
+    // ── EXISTS in-scope-set tracking (SEP-0007 Part 3) ───────────────────────
+    //
+    // The `Parser::exists_scope_stack` field holds one frame per "current row"
+    // region — a query/update operation's own `WHERE` clause, or the body of
+    // an `EXISTS`/`NOT EXISTS`/`MINUS` group this parser is presently inside —
+    // NOT one frame per `{ … }` brace. Every construct SEP-0007/SEP-0006 treat
+    // as scope-transparent (a plain nested group, `OPTIONAL`, `UNION`, `GRAPH`,
+    // `SERVICE`, either side of `LATERAL`) writes what it introduces directly
+    // into the CURRENT top frame as the group-parsing loop parses it — exactly
+    // in parallel with that loop's own local [`VarScope`] (used for the
+    // pre-existing BIND/LATERAL rules), via [`Parser::note_exists_scope`] /
+    // [`Parser::note_exists_scope_var`] — so a variable bound anywhere in that
+    // transparent chain, however deeply `{ }`-nested, is visible to a LATER
+    // `EXISTS` reached while the same frame is on top. Only two things ever
+    // open a NEW frame: a sub-`SELECT` (the one real §18.2.1 scope boundary —
+    // [`Parser::push_exists_scope_boundary`], fresh and EMPTY: a sub-select is
+    // evaluated independently, not correlated with its outer query) and an
+    // `EXISTS`/`NOT EXISTS`/`MINUS` body ([`Parser::push_exists_scope_isolated`],
+    // SEEDED with a copy of the frame beneath it: `EXISTS`/`MINUS` bodies see
+    // outer bindings as already bound — the same injection theorem
+    // [`find_scope_conflict`]'s rustdoc proves for `LATERAL` — but neither
+    // construct's OWN internal introductions are ever visible outside it
+    // (`EXISTS` never joins its body's bindings out at all; `MINUS`'s right
+    // operand is explicitly out of scope per §18.2.1), so the seeded frame is
+    // POPPED AND DISCARDED, never merged back into what it was seeded from.
+    fn exists_scope(&self) -> &[Variable] {
+        self.exists_scope_stack
+            .last()
+            .map_or(&[], VarScope::as_slice)
+    }
+
+    /// Open a fresh, EMPTY in-scope-set frame — nothing precedes it. Used at
+    /// every query/update operation's own top-level `WHERE` clause and at a
+    /// sub-`SELECT`'s (the one real scope boundary; see the module doc above).
+    fn push_exists_scope_boundary(&mut self) {
+        self.exists_scope_stack.push(VarScope::new());
+    }
+
+    /// Open a fresh in-scope-set frame SEEDED with a copy of the frame beneath
+    /// it — reads see everything the enclosing rows already bound, but nothing
+    /// this frame goes on to introduce is written back once it is popped. Used
+    /// at an `EXISTS`/`NOT EXISTS`/`MINUS` body (see the module doc above).
+    fn push_exists_scope_isolated(&mut self) {
+        let mut seed = VarScope::new();
+        for v in self.exists_scope() {
+            seed.note(v);
+        }
+        self.exists_scope_stack.push(seed);
+    }
+
+    /// Close the innermost in-scope-set frame, discarding it — the caller is
+    /// responsible for having already extracted anything from it that DOES
+    /// escape (a sub-`SELECT`'s projected variables, via an ordinary
+    /// [`Parser::note_exists_scope`] call on the resulting `Project` node).
+    fn pop_exists_scope_boundary(&mut self) {
+        self.exists_scope_stack.pop();
+    }
+
+    /// Record `pattern`'s contribution to the current in-scope-set frame,
+    /// using the SAME transparency rules as [`collect_vars`] (a `Project`
+    /// contributes only its projected variables; a `Minus` contributes
+    /// nothing when called on ITS right operand — callers simply never call
+    /// this for a `Minus` right operand, matching the group loop's own
+    /// pre-existing non-call for its local `VarScope`).
+    fn note_exists_scope(&mut self, pattern: &GraphPattern) {
+        if let Some(top) = self.exists_scope_stack.last_mut() {
+            collect_vars(pattern, top);
+        }
+    }
+
+    /// Record a single fresh binding (a `BIND` target) into the current
+    /// in-scope-set frame.
+    fn note_exists_scope_var(&mut self, variable: &Variable) {
+        if let Some(top) = self.exists_scope_stack.last_mut() {
+            top.note(variable);
+        }
+    }
+
+    /// Parse a query/update operation's own top-level `WHERE` group graph
+    /// pattern (`ASK`, `DESCRIBE`, and every UPDATE form — never `SELECT`'s,
+    /// which needs its frame to stay open across the projection list parsed
+    /// BEFORE `WHERE` and the solution modifiers parsed AFTER it, so it opens
+    /// and closes its own frame directly instead of calling this): opens a
+    /// fresh EMPTY frame (nothing precedes a query/update operation), parses
+    /// the pattern, mirrors it into that frame, and closes the frame before
+    /// returning — self-contained because none of this function's callers
+    /// have anything of their own that needs to keep consulting it
+    /// afterward.
+    fn parse_where_clause(&mut self) -> Result<GraphPattern> {
+        self.push_exists_scope_boundary();
+        let pattern = self.parse_group_graph_pattern()?;
+        self.note_exists_scope(&pattern);
+        self.pop_exists_scope_boundary();
+        Ok(pattern)
+    }
+
+    /// Parse an `EXISTS`/`NOT EXISTS` group graph pattern (both `"EXISTS"`
+    /// and `"NOT" "EXISTS"` call this — the SAME production, so both share
+    /// the SAME check; there is no separate "NOT EXISTS" wording), enforcing
+    /// SEP-0007 Part 3: neither `BIND`/a sub-`SELECT`'s `(expr AS ?v)`/a
+    /// `GROUP BY (expr AS ?v)` target NOR a `VALUES` variable inside it may
+    /// rebind a variable already in scope on the row this `EXISTS` is
+    /// testing.
+    ///
+    /// # The in-scope set consulted
+    ///
+    /// [`Parser::exists_scope`], READ BEFORE the body is parsed — the
+    /// current top in-scope-set frame, exactly as [`Parser::exists_scope`]
+    /// (and the frame taxonomy on `Parser::exists_scope_stack`'s doc)
+    /// defines it: the transitively scope-transparent accumulation (through
+    /// a plain nested group, `OPTIONAL`, `UNION`, `GRAPH`, `SERVICE`, either
+    /// side of `LATERAL`) of every variable introduced, left-to-right, since
+    /// the nearest enclosing TRUE scope boundary — a sub-`SELECT`'s own
+    /// `WHERE`, or the query/update operation's own top-level one. For an
+    /// `EXISTS` reached while parsing a `FILTER`'s constraint or a `BIND`'s
+    /// value expression mid-group, that is exactly the elements of the
+    /// SAME enclosing group parsed so far (this production runs inside
+    /// `parse_group_graph_pattern_inner`'s own loop, whose every
+    /// scope-transparent branch mirrors its contribution into this frame —
+    /// see `Parser::exists_scope_stack`'s doc); for a solution-modifier
+    /// expression (`GROUP BY`/`HAVING`/`ORDER BY`), it is the complete
+    /// `WHERE` clause's scope (parsed in full before modifiers run); for a
+    /// `SELECT`-list `(expr AS ?v)` target, parsed BEFORE `WHERE` is even
+    /// read, it is empty — nothing precedes it syntactically, so nothing can
+    /// collide, which is the same left-to-right "scope so far" convention
+    /// this parser already applies everywhere else (e.g. `BIND`'s own §19.6
+    /// check), not a special case carved out for `EXISTS`.
+    ///
+    /// A NESTED `EXISTS` is checked at its OWN call to this function, with
+    /// the in-scope set THAT nesting level sees — which, because this body
+    /// is parsed inside a freshly SEEDED (not merged-back) frame (see
+    /// `Parser::push_exists_scope_isolated`), already includes everything
+    /// visible to the outer `EXISTS` plus whatever this body's own elements
+    /// have introduced so far, without this body's OWN introductions ever
+    /// leaking to what the OUTER `EXISTS`'s LATER siblings see.
+    fn parse_exists_body(&mut self) -> Result<GraphPattern> {
+        // Anchor the error at the body's own opening brace rather than
+        // wherever the cursor lands after parsing it, mirroring `LATERAL`'s
+        // own `at` capture.
+        let at = self.span();
+        let scope: Vec<Variable> = self.exists_scope().to_vec();
+        self.push_exists_scope_isolated();
+        let body = self.parse_group_graph_pattern()?;
+        self.pop_exists_scope_boundary();
+        if let Some((var, intro)) = find_scope_conflict(&scope, &body) {
+            return Err(ParseError::syntax(
+                format!(
+                    "{} ?{} inside {} is already in scope on {}",
+                    intro.as_str(),
+                    var.as_str(),
+                    ScopeConstruct::Exists.keyword(),
+                    ScopeConstruct::Exists.already_in_scope_clause(),
+                ),
+                at,
+            ));
+        }
+        Ok(body)
     }
 
     fn at(&self, t: &Token<'a>) -> bool {
@@ -639,6 +811,17 @@ impl<'a> Parser<'a, '_> {
         let distinct = self.eat_kw("DISTINCT");
         let reduced = !distinct && self.eat_kw("REDUCED");
 
+        // A fresh, EMPTY EXISTS in-scope-set frame for this SELECT/sub-SELECT —
+        // opened before the projection list is even read, so an `EXISTS`
+        // inside a `(expr AS ?v)` SELECT-list target (parsed here, BEFORE
+        // `WHERE`) sees no ambient scope leaked in from whatever query this
+        // one is nested inside (a sub-SELECT is not correlated with its outer
+        // query — see the module doc on `Parser::exists_scope_stack`). Stays
+        // open through `WHERE` and the solution modifiers (`GROUP BY`/
+        // `HAVING`/`ORDER BY` all read the current row `WHERE` produced), and
+        // is popped just once, at this function's single success return.
+        self.push_exists_scope_boundary();
+
         // Projection: `*` or a list of Var / (Expr AS Var).
         let mut star = false;
         let mut projected: Vec<Variable> = Vec::new();
@@ -678,6 +861,17 @@ impl<'a> Parser<'a, '_> {
 
         self.eat_kw("WHERE");
         let where_pat = self.parse_group_graph_pattern()?;
+        // A belt-and-suspenders bulk mirror on top of the group loop's own
+        // incremental one (`Parser::note_exists_scope`/`_var`, called
+        // throughout `parse_group_graph_pattern_inner`): the incremental
+        // mirror alone already covers the ordinary case, but `where_pat` can
+        // also come back from `parse_group_graph_pattern_inner`'s early
+        // sub-SELECT return (a `WHERE` clause that IS just `{ SELECT ... }`,
+        // no loop iteration at this level at all) — this call guarantees the
+        // solution modifiers below see `where_pat`'s full scope regardless of
+        // which path built it. Idempotent with the incremental mirror in the
+        // ordinary case ([`VarScope::note`] dedupes).
+        self.note_exists_scope(&where_pat);
 
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
 
@@ -851,6 +1045,7 @@ impl<'a> Parser<'a, '_> {
                 length: modifiers.limit,
             };
         }
+        self.pop_exists_scope_boundary();
         Ok(Query::Select {
             pattern: p,
             dataset,
@@ -902,6 +1097,14 @@ impl<'a> Parser<'a, '_> {
             let where_pat = GraphPattern::Bgp {
                 patterns: where_patterns,
             };
+            // The short form's WHERE reading is a plain triples block (no
+            // `FILTER`/`BIND` production runs over it at all — see
+            // `parse_construct_template`), so there is nothing to mirror
+            // incrementally; a fresh EMPTY-then-bulk-mirrored frame covers an
+            // `EXISTS` in the trailing `ORDER BY` exactly like the long form's
+            // incrementally-built one does.
+            self.push_exists_scope_boundary();
+            self.note_exists_scope(&where_pat);
             let mut aggregates = Vec::new();
             let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
             if !aggregates.is_empty()
@@ -924,6 +1127,7 @@ impl<'a> Parser<'a, '_> {
                     length: modifiers.limit,
                 };
             }
+            self.pop_exists_scope_boundary();
             return Ok(Query::Construct {
                 template,
                 pattern: p,
@@ -938,7 +1142,9 @@ impl<'a> Parser<'a, '_> {
         self.expect(&Token::RBrace)?;
         let dataset = self.parse_dataset_clauses()?;
         self.eat_kw("WHERE");
+        self.push_exists_scope_boundary();
         let where_pat = self.parse_group_graph_pattern()?;
+        self.note_exists_scope(&where_pat);
         let mut aggregates = Vec::new();
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
         if !aggregates.is_empty() || !modifiers.group_by.is_empty() || !modifiers.having.is_empty()
@@ -959,6 +1165,7 @@ impl<'a> Parser<'a, '_> {
                 length: modifiers.limit,
             };
         }
+        self.pop_exists_scope_boundary();
         Ok(Query::Construct {
             template,
             pattern: p,
@@ -972,7 +1179,7 @@ impl<'a> Parser<'a, '_> {
         self.expect_kw("ASK")?;
         let dataset = self.parse_dataset_clauses()?;
         self.eat_kw("WHERE");
-        let pattern = self.parse_group_graph_pattern()?;
+        let pattern = self.parse_where_clause()?;
         let mut aggregates = Vec::new();
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
         // ASK ignores solution modifiers semantically; rather than silently
@@ -1011,7 +1218,7 @@ impl<'a> Parser<'a, '_> {
         }
         let dataset = self.parse_dataset_clauses()?;
         let pattern = if self.eat_kw("WHERE") || self.at(&Token::LBrace) {
-            self.parse_group_graph_pattern()?
+            self.parse_where_clause()?
         } else {
             GraphPattern::Bgp { patterns: vec![] }
         };
@@ -1167,7 +1374,7 @@ impl<'a> Parser<'a, '_> {
         let insert = self.parse_quad_pattern_block(false)?;
         let using = self.parse_using_clauses()?;
         self.expect_kw("WHERE")?;
-        let pattern = self.parse_group_graph_pattern()?;
+        let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
             delete: Vec::new(),
             insert,
@@ -1204,7 +1411,7 @@ impl<'a> Parser<'a, '_> {
             };
             self.set_counters(counters);
             // Parse the same braces as a group graph pattern for the WHERE.
-            let pattern = self.parse_group_graph_pattern()?;
+            let pattern = self.parse_where_clause()?;
             return Ok(GraphUpdateOperation::DeleteInsert {
                 delete,
                 insert: Vec::new(),
@@ -1222,7 +1429,7 @@ impl<'a> Parser<'a, '_> {
         };
         let using = self.parse_using_clauses()?;
         self.expect_kw("WHERE")?;
-        let pattern = self.parse_group_graph_pattern()?;
+        let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
             delete,
             insert,
@@ -1253,7 +1460,7 @@ impl<'a> Parser<'a, '_> {
         }
         let using = self.parse_using_clauses()?;
         self.expect_kw("WHERE")?;
-        let pattern = self.parse_group_graph_pattern()?;
+        let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
             delete,
             insert,
@@ -1640,11 +1847,13 @@ impl<'a> Parser<'a, '_> {
                 // either shape into exactly the vars this element puts in
                 // scope, in one walk over `node` alone.
                 collect_vars(&node, &mut scope);
+                self.note_exists_scope(&node);
                 g = join(g, node);
             } else if self.eat_kw("OPTIONAL") {
                 let inner = self.parse_group_graph_pattern()?;
                 let (right, expression) = split_trailing_filter(inner);
                 collect_vars(&right, &mut scope);
+                self.note_exists_scope(&right);
                 g = GraphPattern::LeftJoin {
                     left: Box::new(g),
                     right: Box::new(right),
@@ -1671,24 +1880,37 @@ impl<'a> Parser<'a, '_> {
                     "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
                 );
                 let lhs_scope = scope.as_slice();
-                if let Some((var, intro)) = find_lateral_rhs_scope_conflict(lhs_scope, &right) {
+                if let Some((var, intro)) = find_scope_conflict(lhs_scope, &right) {
                     return Err(ParseError::syntax(
                         format!(
-                            "{} ?{} inside LATERAL is already in scope on the LATERAL \
-                             left-hand side",
+                            "{} ?{} inside {} is already in scope on {}",
                             intro.as_str(),
-                            var.as_str()
+                            var.as_str(),
+                            ScopeConstruct::Lateral.keyword(),
+                            ScopeConstruct::Lateral.already_in_scope_clause(),
                         ),
                         at,
                     ));
                 }
                 collect_vars(&right, &mut scope);
+                self.note_exists_scope(&right);
                 g = GraphPattern::Lateral {
                     left: Box::new(g),
                     right: Box::new(right),
                 };
             } else if self.eat_kw("MINUS") {
+                // A `MINUS` right operand contributes NOTHING to the
+                // enclosing group's EXISTS in-scope set either (mirrors the
+                // `collect_vars`/§18.2.1 exclusion just below) — but an
+                // `EXISTS` INSIDE this right operand must still see whatever
+                // the row being tested already has bound (the same injection
+                // ground `find_scope_conflict`'s rustdoc proves for
+                // `LATERAL`), so the frame is SEEDED, not fresh; it is popped
+                // and discarded, never merged back, so nothing this operand
+                // itself introduces ever escapes it.
+                self.push_exists_scope_isolated();
                 let right = self.parse_group_graph_pattern()?;
+                self.pop_exists_scope_boundary();
                 // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING
                 // to the enclosing group's scope — no `collect_vars` call
                 // here, matching `collect_vars`'s own `Minus` arm.
@@ -1704,6 +1926,7 @@ impl<'a> Parser<'a, '_> {
                     inner: Box::new(inner),
                 };
                 collect_vars(&graph, &mut scope);
+                self.note_exists_scope(&graph);
                 g = join(g, graph);
             } else if self.eat_kw("SERVICE") {
                 let silent = self.eat_kw("SILENT");
@@ -1716,6 +1939,7 @@ impl<'a> Parser<'a, '_> {
                     silent,
                 };
                 collect_vars(&service, &mut scope);
+                self.note_exists_scope(&service);
                 // A variable endpoint (`SERVICE ?g`) is correlated with the
                 // enclosing pattern — it must bind the endpoint from the
                 // surrounding solution before federating — so it becomes a
@@ -1762,6 +1986,7 @@ impl<'a> Parser<'a, '_> {
                     ));
                 }
                 scope.note(&variable);
+                self.note_exists_scope_var(&variable);
                 g = GraphPattern::Extend {
                     inner: Box::new(g),
                     variable,
@@ -1770,6 +1995,7 @@ impl<'a> Parser<'a, '_> {
             } else if self.peek_kw("VALUES") {
                 let values = self.parse_inline_data()?;
                 collect_vars(&values, &mut scope);
+                self.note_exists_scope(&values);
                 g = join(g, values);
             } else if self.eat(&Token::Dot) {
                 // statement separator between blocks
@@ -1777,6 +2003,7 @@ impl<'a> Parser<'a, '_> {
                 // A triples block (BGP / path patterns).
                 let block = self.parse_triples_block()?;
                 collect_vars(&block, &mut scope);
+                self.note_exists_scope(&block);
                 g = join(g, block);
             }
         }
@@ -3267,15 +3494,13 @@ impl<'a> Parser<'a, '_> {
             }
             "EXISTS" => {
                 self.pos += 1;
-                Ok(Expression::Exists(Box::new(
-                    self.parse_group_graph_pattern()?,
-                )))
+                Ok(Expression::Exists(Box::new(self.parse_exists_body()?)))
             }
             "NOT" => {
                 self.pos += 1;
                 self.expect_kw("EXISTS")?;
                 Ok(Expression::Not(Box::new(Expression::Exists(Box::new(
-                    self.parse_group_graph_pattern()?,
+                    self.parse_exists_body()?,
                 )))))
             }
             "SAMETERM" => {
@@ -3856,12 +4081,12 @@ fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
     }
 }
 
-/// Whether a construct that introduces a fresh binding inside a `LATERAL`
-/// right-hand side is a `BIND`/`(expr AS ?v)` target or a `VALUES` variable —
-/// the two shapes [`find_lateral_rhs_scope_conflict`] can report, matching the two
-/// message forms produced at its call site.
+/// Whether a construct that introduces a fresh binding inside the pattern
+/// [`find_scope_conflict`] walks is a `BIND`/`(expr AS ?v)` target or a
+/// `VALUES` variable — the two shapes it can report, matching the two
+/// message forms each call site produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LateralIntro {
+enum ScopeIntro {
     /// `BIND(expr AS ?v)`, a sub-`SELECT`'s `(expr AS ?v)` projection target,
     /// a `GROUP BY (expr AS ?v)` condition, or a `GROUP BY` aggregate's output
     /// variable — all lower to an `Extend`/`Group` introduction and share one
@@ -3871,7 +4096,7 @@ enum LateralIntro {
     Values,
 }
 
-impl LateralIntro {
+impl ScopeIntro {
     fn as_str(self) -> &'static str {
         match self {
             Self::Bind => "BIND target",
@@ -3880,8 +4105,43 @@ impl LateralIntro {
     }
 }
 
+/// Which restriction is consulting [`find_scope_conflict`]'s result —
+/// `LATERAL`'s right-hand side (SEP-0006) or an `EXISTS`/`NOT EXISTS` group
+/// graph pattern (SEP-0007 Part 3). This enum is used ONLY by the two call
+/// sites, to format their own syntax error — it is not even a parameter of
+/// `find_scope_conflict` itself, so the walk cannot branch on it, not even by
+/// an unexercised branch: LABEL-ONLY, by construction, not by convention. If
+/// a future client ever needs a walk that behaves differently from this one
+/// (rather than merely naming itself differently in the error message it
+/// builds from an identical walk), the walk functions split for that client
+/// rather than this enum growing a match inside them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeConstruct {
+    Lateral,
+    Exists,
+}
+
+impl ScopeConstruct {
+    /// The keyword named in the syntax error.
+    fn keyword(self) -> &'static str {
+        match self {
+            Self::Lateral => "LATERAL",
+            Self::Exists => "EXISTS",
+        }
+    }
+
+    /// The trailing clause describing what the colliding variable is already
+    /// in scope ON.
+    fn already_in_scope_clause(self) -> &'static str {
+        match self {
+            Self::Lateral => "the LATERAL left-hand side",
+            Self::Exists => "the row being filtered",
+        }
+    }
+}
+
 /// The `LATERAL` left-hand side's in-scope variable set, as consulted by
-/// [`find_lateral_rhs_scope_conflict`].
+/// [`find_scope_conflict`].
 ///
 /// A thin delegating wrapper over [`visible_variables`] — same function,
 /// different name — so that the one rule-specific consequence it carries
@@ -3908,7 +4168,7 @@ impl LateralIntro {
 /// pattern, not a fresh binding `SERVICE` introduces. A `BIND`/`VALUES` on
 /// the right giving `?g` a NEW value at the right-hand side's own scope
 /// level is therefore exactly the class of observable rebinding
-/// [`find_lateral_rhs_scope_conflict`]'s theorem rejects, applied to this
+/// [`find_scope_conflict`]'s theorem rejects, applied to this
 /// variable the same as any other left-bound one. Jena's `SyntaxVarScope`
 /// omits the `SERVICE` endpoint variable from its own left-scope set; this
 /// function does not follow it here, on the ground above. Pinned by
@@ -3917,11 +4177,19 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
     visible_variables(p)
 }
 
-/// Find the first variable a `LATERAL` right-hand side introduces (via
-/// `BIND`, a sub-`SELECT`'s `(expr AS ?v)` projection target, a `GROUP BY`
-/// aggregate's output variable, or `VALUES`) that collides with a variable
-/// already in scope on the left-hand side (`lhs_scope`, from
-/// [`compute_lateral_left_scope`]).
+/// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
+/// `(expr AS ?v)` projection target, a `GROUP BY` aggregate's output
+/// variable, or `VALUES`) that collides with a variable already in `scope`.
+///
+/// Shared by two restrictions that turn out to be the SAME walk applied to
+/// two different (`scope`, `pattern`) pairs: a `LATERAL` right-hand side
+/// against its left-hand side's scope (SEP-0006; `scope` from
+/// [`compute_lateral_left_scope`]), and an `EXISTS`/`NOT EXISTS` group graph
+/// pattern against the row being filtered (SEP-0007 Part 3; `scope` from
+/// [`Parser::exists_scope`], captured at the `EXISTS` keyword before its body
+/// is parsed). Each call site names itself only in the [`ParseError`] it
+/// builds from this function's result, via [`ScopeConstruct`] — this function
+/// never sees which one is asking (see [`ScopeConstruct`]'s doc).
 ///
 /// # The theorem
 ///
@@ -3929,28 +4197,32 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// `inject` — the corrected substitution the evaluator performs
 /// (`crates/sparql-eval`) — exposes the left row's bindings to `P` as
 /// ordinary, still-variable solutions rather than literal term substitution.
-/// This walker is the syntax half of the contract that makes that injection
-/// sound: **it rejects exactly the programs, WRITTEN WITH THE `LATERAL`
-/// KEYWORD, in which injecting a left-hand binding into the right-hand side
+/// SPARQL's own `ExprEXISTS(P)(µ)` (§18.5) is the same shape one level down:
+/// `P` is evaluated with the filtered row `µ`'s bindings already exposed to
+/// it, not as a literal substitution either — SEP-0007 Part 3 is this SAME
+/// injection theorem applied to `EXISTS`/`NOT EXISTS` rather than `LATERAL`.
+/// This walker is the syntax half of the contract that makes either
+/// injection sound: **it rejects exactly the programs, WRITTEN WITH THE
+/// RESTRICTED KEYWORD, in which injecting an outer binding into the pattern
 /// would be observable as a rebinding** — a fresh `BIND`/`VALUES`/aggregate
-/// target at the RHS's own top scope level trying to give a NEW value to a
-/// variable the LHS already gave one. A target confined to a `MINUS` right
-/// operand is, by definition, never such an observable rebinding: §18.5's
-/// evaluation uses the right operand only for the compatibility test and
-/// discards its bindings, so nothing downstream of a `MINUS` can ever see a
-/// value that operand introduced (see the `MINUS`-right paragraph in "Scope-
-/// level argument" below) — "exactly" holds with that definition, not as an
-/// exception carved out of it. The `SERVICE ?g { ... }` auto-wrap form (see
-/// "A property of the surface form" below) also builds a
-/// `GraphPattern::Lateral` node but is outside this theorem's domain — it is
-/// never walked, by construction, regardless of what its right-hand side
-/// does. The evaluator's half of the same theorem is that injection never
-/// crosses a
-/// `Project` boundary the projection does not itself carry forward, so a
-/// sub-select that does not project a shadowed name never observes the outer
-/// value, and rebinding it inside is legal. The two halves are one design:
-/// this function decides parse-time legality by walking the same scope
-/// boundary the evaluator's substitution respects at run time.
+/// target at the pattern's own top scope level trying to give a NEW value to
+/// a variable the outer row already gave one. A target confined to a `MINUS`
+/// right operand is, by definition, never such an observable rebinding:
+/// §18.5's evaluation uses the right operand only for the compatibility test
+/// and discards its bindings, so nothing downstream of a `MINUS` can ever see
+/// a value that operand introduced (see the `MINUS`-right paragraph in
+/// "Scope-level argument" below) — "exactly" holds with that definition, not
+/// as an exception carved out of it. The `SERVICE ?g { ... }` auto-wrap form
+/// (see "A property of the surface form" below) also builds a
+/// `GraphPattern::Lateral` node but is outside this theorem's `LATERAL`
+/// domain — it is never walked, by construction, regardless of what its
+/// right-hand side does. The evaluator's half of the same theorem is that
+/// injection never crosses a `Project` boundary the projection does not
+/// itself carry forward, so a sub-select that does not project a shadowed
+/// name never observes the outer value, and rebinding it inside is legal.
+/// The two halves are one design: this function decides parse-time legality
+/// by walking the same scope boundary the evaluator's substitution respects
+/// at run time.
 ///
 /// # Scope-level argument
 ///
@@ -3982,7 +4254,7 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// A `GROUP BY` query's aggregate output variables (e.g. `?n` in
 /// `(COUNT(?x) AS ?n)`) are, like a `BIND` target, fresh bindings introduced
 /// at the `Group` node's own scope level — checked here the same way (mapped
-/// to [`LateralIntro::Bind`]). So is an expression-valued `GROUP BY (expr AS
+/// to [`ScopeIntro::Bind`]). So is an expression-valued `GROUP BY (expr AS
 /// ?v)` condition's grouping variable: `?v`'s value is a computed
 /// expression, never a matched term, so the parser lowers it to an `Extend`
 /// placed directly beneath `Group` (see the grouping-extend loop right
@@ -4021,32 +4293,38 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// # Never descends into `Expression`
 ///
 /// `Filter`'s and `Extend`'s expression operands are never visited — an
-/// `EXISTS { ... }` nested inside one binds nothing at the RHS's OWN scope
-/// level (it is its own nested query pattern), so a `BIND` inside an
-/// `EXISTS` can never trigger this rule. Pinned live, not just documented, by
-/// `lateral_rhs_exists_is_not_walked`.
+/// `EXISTS { ... }` nested inside one binds nothing at the OUTER pattern's
+/// OWN scope level (it is its own nested query pattern), so a `BIND` inside
+/// a NESTED `EXISTS` can never trigger the OUTER `LATERAL`/`EXISTS` check
+/// that is walking the pattern around it. Pinned live, not just documented,
+/// by `lateral_rhs_exists_is_not_walked`. This is exactly why `EXISTS`
+/// needs its OWN call to this function, at its OWN parse site (the parser's
+/// `EXISTS`/`NOT EXISTS` production, via [`Parser::exists_scope`]): nothing
+/// else ever walks into a nested `EXISTS` body to find a collision inside
+/// it.
 ///
 /// # A property of the surface form, not of the algebra node
 ///
 /// This function is only ever called from the parser's `LATERAL`-keyword
-/// dispatch arm. The pre-existing `SERVICE ?g { ... }` auto-wrap elsewhere in
-/// this module also produces a `GraphPattern::Lateral` node — for the
-/// unrelated reason that a variable-endpoint federated call must see the left
-/// row's bindings — but it is not user-written `LATERAL` syntax, so this
-/// restriction never runs over it. Pinned by
+/// dispatch arm and its `EXISTS`/`NOT EXISTS` expression production. The
+/// pre-existing `SERVICE ?g { ... }` auto-wrap elsewhere in this module also
+/// produces a `GraphPattern::Lateral` node — for the unrelated reason that a
+/// variable-endpoint federated call must see the left row's bindings — but
+/// it is not user-written `LATERAL` syntax, so the `LATERAL` restriction
+/// never runs over it. Pinned by
 /// `service_variable_endpoint_rhs_bind_is_not_scope_checked`.
 ///
 /// # Determinism
 ///
-/// `lhs_scope` is an order-preserving slice, never a hash container: the
+/// `scope` is an order-preserving slice, never a hash container: the
 /// first collision in a pre-order, left-to-right walk (and, within one node,
 /// the introducing construct's own declaration order) is reported, so the
 /// variable named in the error is reproducible across runs.
-fn find_lateral_rhs_scope_conflict<'a>(
-    lhs_scope: &[Variable],
-    rhs: &'a GraphPattern,
-) -> Option<(&'a Variable, LateralIntro)> {
-    match rhs {
+fn find_scope_conflict<'a>(
+    scope: &[Variable],
+    pattern: &'a GraphPattern,
+) -> Option<(&'a Variable, ScopeIntro)> {
+    match pattern {
         // Leaves: nothing is introduced.
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
@@ -4057,8 +4335,7 @@ fn find_lateral_rhs_scope_conflict<'a>(
         | GraphPattern::Union { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::LeftJoin { left, right, .. } => {
-            find_lateral_rhs_scope_conflict(lhs_scope, left)
-                .or_else(|| find_lateral_rhs_scope_conflict(lhs_scope, right))
+            find_scope_conflict(scope, left).or_else(|| find_scope_conflict(scope, right))
         }
         // `MINUS` is the one binary node that is NOT scope-transparent on its
         // right operand: §18.2.1 puts a MINUS-right-only variable out of
@@ -4069,7 +4346,7 @@ fn find_lateral_rhs_scope_conflict<'a>(
         // depth, not only under a `SELECT *` sub-select (which was one route
         // to this same shape, not a separate rule). Only the left operand is
         // walked.
-        GraphPattern::Minus { left, .. } => find_lateral_rhs_scope_conflict(lhs_scope, left),
+        GraphPattern::Minus { left, .. } => find_scope_conflict(scope, left),
         // Unary wrappers are transparent to scope; any expression operand is
         // never visited.
         GraphPattern::Filter { inner, .. }
@@ -4078,38 +4355,38 @@ fn find_lateral_rhs_scope_conflict<'a>(
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => find_lateral_rhs_scope_conflict(lhs_scope, inner),
+        | GraphPattern::Slice { inner, .. } => find_scope_conflict(scope, inner),
         // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
         // condition all lower to `Extend` — a fresh binding at this scope
         // level.
         GraphPattern::Extend {
             inner, variable, ..
         } => {
-            if lhs_scope.contains(variable) {
-                Some((variable, LateralIntro::Bind))
+            if scope.contains(variable) {
+                Some((variable, ScopeIntro::Bind))
             } else {
-                find_lateral_rhs_scope_conflict(lhs_scope, inner)
+                find_scope_conflict(scope, inner)
             }
         }
         // `VALUES`: the first declared column that collides, in declaration
         // order.
         GraphPattern::Values { variables, .. } => {
             for v in variables {
-                if lhs_scope.contains(v) {
-                    return Some((v, LateralIntro::Values));
+                if scope.contains(v) {
+                    return Some((v, ScopeIntro::Values));
                 }
             }
             None
         }
         // A sub-SELECT's projection is the one scope boundary in the
         // grammar: narrow to the variables it actually carries out,
-        // preserving `lhs_scope`'s own order, and stop once nothing survives
+        // preserving `scope`'s own order, and stop once nothing survives
         // the narrowing — nothing beneath an empty narrowed scope could ever
-        // be observed as a rebinding of an LHS variable. Projecting is not
+        // be observed as a rebinding of an outer variable. Projecting is not
         // introducing: the projection's own `(expr AS ?v)` extends live
         // beneath it and are caught, narrowed, by the `Extend` arm above.
         GraphPattern::Project { inner, variables } => {
-            let narrowed: Vec<Variable> = lhs_scope
+            let narrowed: Vec<Variable> = scope
                 .iter()
                 .filter(|v| variables.contains(*v))
                 .cloned()
@@ -4117,7 +4394,7 @@ fn find_lateral_rhs_scope_conflict<'a>(
             if narrowed.is_empty() {
                 None
             } else {
-                find_lateral_rhs_scope_conflict(&narrowed, inner)
+                find_scope_conflict(&narrowed, inner)
             }
         }
         // `GROUP BY`'s aggregate output variables are fresh bindings at this
@@ -4131,11 +4408,11 @@ fn find_lateral_rhs_scope_conflict<'a>(
             aggregates,
         } => {
             for (v, _) in aggregates {
-                if lhs_scope.contains(v) {
-                    return Some((v, LateralIntro::Bind));
+                if scope.contains(v) {
+                    return Some((v, ScopeIntro::Bind));
                 }
             }
-            find_group_extend_conflict(inner, variables, lhs_scope)
+            find_group_extend_conflict(inner, variables, scope)
         }
     }
 }
@@ -4159,7 +4436,7 @@ fn find_group_extend_conflict<'a>(
     inner: &'a GraphPattern,
     variables: &[Variable],
     lhs_scope: &[Variable],
-) -> Option<(&'a Variable, LateralIntro)> {
+) -> Option<(&'a Variable, ScopeIntro)> {
     let GraphPattern::Extend {
         inner: next,
         variable,
@@ -4173,7 +4450,7 @@ fn find_group_extend_conflict<'a>(
     }
     find_group_extend_conflict(next, variables, lhs_scope).or_else(|| {
         if lhs_scope.contains(variable) {
-            Some((variable, LateralIntro::Bind))
+            Some((variable, ScopeIntro::Bind))
         } else {
             None
         }
@@ -6654,15 +6931,211 @@ mod tests {
 
     #[test]
     fn lateral_rhs_exists_is_not_walked() {
-        // `Filter`'s expression operand is never visited by the walker, so an
-        // `EXISTS { BIND(1 AS ?o) }` nested inside a FILTER cannot trigger
-        // the LATERAL scope restriction, even though `?o` collides.
+        // `Filter`'s expression operand is never visited by the WALKER
+        // (`find_scope_conflict`), so an `EXISTS { BIND(1 AS ?fresh) }`
+        // nested inside a FILTER cannot trigger the LATERAL scope
+        // restriction, even in principle — `?fresh` collides with nothing,
+        // so this also stays accepted under the SEP-0007 EXISTS-site check
+        // (`parse_exists_body`), which independently sees an empty
+        // collision here too. See
+        // `exists_scope_bind_collision_inside_lateral_is_caught_at_the_exists_site`
+        // for the ORIGINAL (`?o`-colliding) form of this query, which the
+        // EXISTS-site check — not the LATERAL walker — now refuses.
         let q = format!(
-            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ FILTER EXISTS {{ BIND(1 AS ?o) }} }} }}"
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ FILTER EXISTS {{ BIND(1 AS ?fresh) }} }} }}"
         );
         SparqlParser::new()
             .parse_query(&q)
             .expect("a BIND nested inside an EXISTS expression must not be walked");
+    }
+
+    #[test]
+    fn exists_scope_bind_collision_inside_lateral_is_caught_at_the_exists_site() {
+        // The ORIGINAL text of `lateral_rhs_exists_is_not_walked` before its
+        // `?o` target was changed to the fresh `?fresh`: `find_scope_conflict`
+        // still never descends into `Expression`, so the LATERAL walker
+        // itself does not catch this — but SEP-0007 Part 3's EXISTS-site
+        // check does, since `?o` is on the LATERAL left-hand side, which is
+        // scope-transparent into the LATERAL right-hand side block the
+        // `FILTER EXISTS` sits in (`Parser::exists_scope_stack`'s doc).
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o LATERAL {{ FILTER EXISTS {{ BIND(1 AS ?o) }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a BIND inside EXISTS colliding with the LATERAL left-hand side must fail");
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    // ── EXISTS in-scope-set restriction (SEP-0007 Part 3) ────────────────────
+
+    #[test]
+    fn exists_scope_bind_collision_is_rejected() {
+        let q =
+            format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ BIND(1 AS ?o) }} }}");
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a BIND target colliding with the row being filtered must fail");
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn exists_scope_values_collision_is_rejected() {
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ VALUES ?o {{ 1 }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a VALUES column colliding with the row being filtered must fail");
+        assert!(
+            err.to_string().contains(
+                "VALUES variable ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn exists_scope_subselect_as_target_collision_is_rejected() {
+        // The sub-select projects exactly the colliding `(1 AS ?o)` target,
+        // so `Project`'s narrowing does not filter it away.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ SELECT (1 AS ?o) WHERE {{ ?x purrdf:q ?y }} }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a projected (expr AS ?v) target colliding with the row being filtered must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn exists_scope_group_by_expr_target_collision_is_rejected() {
+        // `GROUP BY (?y AS ?o)` lowers to an `Extend` directly beneath
+        // `Group`, at the EXISTS body's own top scope level — a fresh
+        // (computed) binding for `?o`, exactly like a `BIND` target.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ SELECT ?o WHERE {{ ?x purrdf:q ?y }} GROUP BY (?y AS ?o) }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a GROUP BY (expr AS ?v) grouping target colliding with the row being filtered must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn exists_scope_fresh_bind_is_accepted() {
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ BIND(1 AS ?fresh) }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a genuinely fresh BIND target inside EXISTS must parse");
+    }
+
+    #[test]
+    fn exists_scope_projected_away_collision_is_accepted() {
+        // The sub-select inside EXISTS projects only `?x` — `?o`'s `BIND`
+        // never escapes the sub-select's own `Project` boundary, so the
+        // narrowed scope the walker checks against is empty by the time it
+        // reaches the `BIND`.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ SELECT ?x WHERE {{ ?x purrdf:q ?y . BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a BIND target projected away by an inner sub-select must parse");
+    }
+
+    #[test]
+    fn exists_scope_minus_right_introduction_is_accepted() {
+        // §18.2.1: a MINUS right operand's own introductions never escape
+        // it, so a `BIND` confined there cannot be an observable rebinding
+        // of the row being filtered, at any depth.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ ?a purrdf:q ?b MINUS {{ ?a purrdf:q ?b BIND(1 AS ?o) }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a MINUS-right introduction inside EXISTS must be accepted");
+    }
+
+    #[test]
+    fn exists_scope_nested_exists_checks_its_own_site() {
+        // `?a` is bound by the OUTER EXISTS's own body (`?a purrdf:q ?b`),
+        // not by the top-level WHERE clause — the INNER (doubly-nested)
+        // EXISTS's `BIND(1 AS ?a)` still collides, because the inner
+        // EXISTS's own in-scope set is seeded from its immediately
+        // enclosing frame (the outer EXISTS's own, isolated one), not just
+        // the outermost row.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ ?a purrdf:q ?b . FILTER EXISTS {{ BIND(1 AS ?a) }} }} }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query(&q)
+            .expect_err("a collision against the outer EXISTS's own row must still be found");
+        assert!(
+            err.to_string().contains(
+                "BIND target ?a inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn not_exists_scope_bind_collision_is_rejected() {
+        // `NOT EXISTS` shares the SAME production (and hence the SAME check)
+        // as `EXISTS` — there is no separate "NOT EXISTS" wording.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o . FILTER NOT EXISTS {{ BIND(1 AS ?o) }} }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a BIND target colliding with the row being filtered must fail under NOT EXISTS too",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn update_where_exists_scope_collision_is_rejected() {
+        // `INSERT … WHERE` routes its WHERE clause through the SAME
+        // `parse_group_graph_pattern` (and hence the SAME EXISTS
+        // production) a SELECT's WHERE does.
+        let u = format!(
+            "{GM}INSERT {{ ?s purrdf:tag 1 }} WHERE {{ ?s purrdf:p ?o . FILTER EXISTS {{ BIND(1 AS ?o) }} }}"
+        );
+        let err = SparqlParser::new().parse_update(&u).expect_err(
+            "a BIND target colliding with the row being filtered must fail in an UPDATE WHERE too",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?o inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
     }
 
     #[test]
