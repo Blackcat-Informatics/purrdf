@@ -1288,6 +1288,12 @@ fn project(
 /// [`crate::unify::SortContext::default`] with an empty `meta_sorts` for ordinary
 /// sort-blind resolution — the result is then byte-identical to a resolver that
 /// never knew about sorts.
+///
+/// A caller that needs order-sorted resolution to be COMPLETE (not merely sound)
+/// should first confirm its sort order is a meet-semilattice via
+/// [`crate::unify::SortOrder::validate`]: an order with an AMBIGUOUS greatest
+/// lower bound resolves soundly but may prune a unification a lattice would
+/// complete (the pinned clash-on-ambiguity contract).
 pub fn resolve_fol(
     dag: &mut TermDag,
     program: &FolProgram,
@@ -1553,6 +1559,20 @@ pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
 /// derivation reproduce the same identity byte-for-byte, which is the whole point:
 /// the digest is the content address, and minting an IRI from it is caller-supplied
 /// vocabulary this crate never learns.
+///
+/// # Example
+///
+/// ```
+/// use purrdf_datalog::resolve_fol::{derivation_id, FolProof};
+/// use purrdf_datalog::term::TermDag;
+///
+/// let mut dag = TermDag::new();
+/// let goal = dag.intern_leaf("fact");
+/// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
+/// let id = derivation_id(&dag, &proof);
+/// assert_eq!(id.len(), 40);
+/// assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+/// ```
 #[must_use]
 pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     let mut hasher = Sha1::new();
@@ -1574,6 +1594,32 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
             }
         }
     }
+    hex_lower(&hasher.finalize())
+}
+
+/// The **flat** derivation identity — the issue's literal recipe, folding a node's
+/// rule identity over its PREMISES' term content keys ONE level, rather than
+/// recursively over their derivation ids ([`derivation_id`]).
+///
+/// Exactly `sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`, where
+/// each premise's content key is [`content_key`] (the [`canon`] of the atom it
+/// proves), stable-sorted as a MULTISET (duplicates kept). This coincides with
+/// [`derivation_id`] on a single-level proof and diverges on a deeper one: the two
+/// are the two readings of the issue's `sorted(premise_content_keys)` (term keys
+/// here; child derivation ids in [`derivation_id`]), both published so a consumer
+/// keys on whichever its own lane uses.
+#[must_use]
+pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
+    let mut premise_keys: Vec<String> = proof
+        .premises()
+        .iter()
+        .map(|premise| content_key(dag, premise))
+        .collect();
+    premise_keys.sort();
+    let mut hasher = Sha1::new();
+    hasher.update(proof.rule_identity().as_bytes());
+    hasher.update(b"\n");
+    hasher.update(premise_keys.join("\n").as_bytes());
     hex_lower(&hasher.finalize())
 }
 
@@ -2608,21 +2654,13 @@ mod tests {
         // accidental change to the recipe's byte layout is caught, not silently absorbed.
         assert_eq!(id_a, "53555bbd09ce3202c40ed2048f97fde7eadd31b2");
 
-        // The issue's literal formula, over premise TERM content keys, reproduces too.
-        let formula = |dag: &TermDag, proof: &FolProof| -> String {
-            let mut premise_keys: Vec<String> = proof
-                .premises()
-                .iter()
-                .map(|p| content_key(dag, p))
-                .collect();
-            premise_keys.sort();
-            let mut hasher = Sha1::new();
-            hasher.update(proof.rule_identity().as_bytes());
-            hasher.update(b"\n");
-            hasher.update(premise_keys.join("\n").as_bytes());
-            hex_lower(&hasher.finalize())
-        };
-        assert_eq!(formula(&dag_a, &proof_a), formula(&dag_b, &proof_b));
+        // The issue's literal formula is the public `flat_derivation_id`
+        // (`sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`), and it
+        // reproduces byte-for-byte across the two independent resolutions too.
+        assert_eq!(
+            flat_derivation_id(&dag_a, &proof_a),
+            flat_derivation_id(&dag_b, &proof_b)
+        );
     }
 
     /// R8: the recipe keeps DUPLICATE premise keys — two premises proving the same
@@ -2682,6 +2720,88 @@ mod tests {
         assert_ne!(as_cat, as_dog);
         assert_ne!(as_cat, unsorted);
         assert_ne!(as_dog, unsorted);
+    }
+
+    /// A purely negative-body clause that FIRES (its negand is false) yields a
+    /// `ByRule` proof with no premises — NEVER an `Assert`. The emission gate is on
+    /// the literal counts, not the premise count: a neg-only clause has zero
+    /// positive premises yet a negation that must stay re-checkable. A regression
+    /// keying `Assert` off `premises.is_empty()` would fail this test.
+    #[test]
+    fn neg_only_clause_proof_is_by_rule_not_assert() {
+        let mut dag = TermDag::new();
+        let holds = leaf(&mut dag, "holds");
+        let absent = leaf(&mut dag, "absent");
+        // holds :- not absent.   (there is no `absent` fact, so the negation succeeds)
+        let clause = FolClause {
+            head: holds,
+            body: vec![FolLit::Neg(absent)],
+            rule: 0,
+        };
+        let clauses = vec![clause];
+        let program = FolProgram {
+            clauses: clauses.clone(),
+            goal: holds,
+            goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
+        };
+        let budget = FolBudget { max_steps: 10_000 };
+        let FolControl::Decided(outcome) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
+            panic!("a neg-only clause with a false negand is decidable");
+        };
+        assert_eq!(outcome.truth_of(&dag, holds), Truth::True);
+        assert_eq!(outcome.answers.len(), 1);
+        let proof = &outcome.answers[0].proof;
+        assert!(
+            !proof.is_assert(),
+            "a negation-guarded fact is a ByRule (its negation must be re-checkable), not an Assert"
+        );
+        assert!(
+            proof.premises().is_empty(),
+            "no positive premises, but still ByRule"
+        );
+        let checked = check_fol_proof(
+            &mut dag,
+            proof,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect("the neg-only derivation re-validates");
+        assert_eq!(checked, holds);
+    }
+
+    /// A hand-forged `Assert` citing a clause that HAS a body is rejected — an
+    /// assertion is only valid for an unconditional clause, the dual of the
+    /// emission gate above.
+    #[test]
+    fn check_fol_proof_rejects_an_assert_over_a_bodied_clause() {
+        let mut dag = TermDag::new();
+        let holds = leaf(&mut dag, "holds");
+        let absent = leaf(&mut dag, "absent");
+        let clause = FolClause {
+            head: holds,
+            body: vec![FolLit::Neg(absent)],
+            rule: 0,
+        };
+        let forged = FolProof::Assert {
+            rule: 0,
+            rule_identity: String::new(),
+            goal: holds,
+        };
+        let error = check_fol_proof(
+            &mut dag,
+            &forged,
+            std::slice::from_ref(&clause),
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect_err("an Assert over a bodied clause is rejected");
+        assert_eq!(error, FolProofError::AssertHasBody { rule: 0 });
     }
 
     // ── R7: sort × negation ──────────────────────────────────────────────────
