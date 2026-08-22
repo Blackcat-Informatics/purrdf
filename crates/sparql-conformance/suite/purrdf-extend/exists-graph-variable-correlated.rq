@@ -1,0 +1,5 @@
+PREFIX : <https://example.org/exists#>
+SELECT ?s WHERE {
+  ?s :p ?g .
+  FILTER EXISTS { GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } }
+}

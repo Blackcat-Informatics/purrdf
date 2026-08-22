@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# `:existsMinusDomain` fixture, the SEP-0007 "Issue 4" MINUS shape: the
+# correlated variable (`?s`, bound to `:cA`/`:other` in turn) occurs ONLY in
+# `MINUS`'s SUBTRACTED (right) operand, which contributes nothing to `Minus`'s own
+# output schema — so it is not even a shared column between the outer row and the
+# probe's would-be join key. `:z1 :base "1"` is the sole `MINUS`-left match;
+# `:z1 :excluded :cA` subtracts it for `?s = :cA` but leaves it standing for
+# `?s = :other`. Correct (per-row) answer: `EXISTS` false for `:cA`, true for
+# `:other`. A memoized probe (evaluating the unconstrained `MINUS` once) finds
+# `:z1 :excluded :cA` regardless of outer value, subtracts the one `MINUS`-left
+# row unconditionally, and wrongly answers false for `:other` too.
+@prefix : <https://example.org/exists#> .
+
+:cA :tag "x" .
+:other :tag "x" .
+:z1 :base "1" .
+:z1 :excluded :cA .

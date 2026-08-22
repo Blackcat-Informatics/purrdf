@@ -1,0 +1,5 @@
+PREFIX : <https://example.org/exists#>
+SELECT ?s WHERE {
+  ?s :tag ?w .
+  FILTER EXISTS { ?z :base "1" MINUS { ?z :excluded ?s } }
+}

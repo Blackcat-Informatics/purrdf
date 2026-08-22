@@ -102,7 +102,8 @@ fn first_party_suite_inventory() {
         ),
         (
             "purrdf-extend",
-            "the extension-function, standpoint, RDF 1.2 reifier and loss-aware CONSTRUCT cases",
+            "the extension-function, standpoint, RDF 1.2 reifier, loss-aware CONSTRUCT, and \
+             SEP-0007 EXISTS/NOT EXISTS scoping cases",
         ),
         ("purrdf-list-functions", "the rdf:List function cases"),
         ("purrdf-update", "the first-party UPDATE evaluation cases"),
@@ -164,8 +165,8 @@ fn purrdf_extend_case_count_and_kinds() {
 
     assert_eq!(
         cases.len(),
-        47,
-        "purrdf-extend/manifest.ttl must load exactly 47 cases (its mf:entries list \
+        55,
+        "purrdf-extend/manifest.ttl must load exactly 55 cases (its mf:entries list \
          count); got {} — a case silently stopped loading",
         cases.len()
     );
@@ -189,9 +190,9 @@ fn purrdf_extend_case_count_and_kinds() {
         "purrdf-extend must carry no unmodeled (TestKind::Unknown) cases"
     );
     assert_eq!(
-        query_eval, 42,
+        query_eval, 48,
         "purrdf-extend's mf:QueryEvaluationTest count drifted (blank-node \
-         qt:query/qt:data actions) — expected 42, got {query_eval}"
+         qt:query/qt:data actions) — expected 48, got {query_eval}"
     );
     assert_eq!(
         positive_syntax, 2,
@@ -199,9 +200,9 @@ fn purrdf_extend_case_count_and_kinds() {
          expected 2, got {positive_syntax}"
     );
     assert_eq!(
-        negative_syntax, 3,
+        negative_syntax, 5,
         "purrdf-extend's mf:NegativeSyntaxTest count drifted (bare-IRI action) — \
-         expected 3, got {negative_syntax}"
+         expected 5, got {negative_syntax}"
     );
     assert_eq!(
         query_eval + positive_syntax + negative_syntax + unmodeled,

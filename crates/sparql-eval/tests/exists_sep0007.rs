@@ -248,7 +248,7 @@ fn dataset() -> Arc<RdfDataset> {
     let yes3 = b.intern_literal(RdfLiteral::simple("yes"));
     b.push_quad(j_mark, j_flag, yes3, None);
 
-    // ---- Group K: unprojected outer variable, the AC2 pin, test 18 ------------
+    // ---- Group K: unprojected outer variable, the narrowing pin, test 18 -------
     let k_mark = b.intern_iri(&iri("kMark"));
     let k_q = b.intern_iri(&iri("q"));
     let k_m1 = b.intern_iri(&iri("kM1"));
@@ -896,13 +896,13 @@ fn exists_bare_subselect_inner() {
 }
 
 // ===========================================================================
-// Group K: unprojected outer variable, the AC2 pin, test 18.
+// Group K: unprojected outer variable, the narrowing pin, test 18.
 // ===========================================================================
 
 /// `FILTER EXISTS { SELECT ?a { ?s2 :q ?a } }` with the outer row ALSO binding a
 /// variable literally named `?s2` — the exact `Project`-narrowing shape (SEP
 /// Issue 5's own hazard, reproduced generically) `crate::exists_admission_gate`'s
-/// module doc names as the "AC2 non-regression pin". `:kM1` has a `:q` fact;
+/// module doc pins as the narrowing non-regression case. `:kM1` has a `:q` fact;
 /// `:kM2` does not, but BOTH rows must answer IDENTICALLY (since the inner `?s2`
 /// is disconnected) — a leak would instead show `:kM1` true and `:kM2` false.
 #[test]
@@ -1134,7 +1134,7 @@ fn exists_triple_nesting_alternating_polarity() {
 // ===========================================================================
 
 /// The number of enumerated `EXISTS`/`NOT EXISTS` shapes this file is contracted
-/// to cover — one per numbered item in this crate's Task 5 acceptance matrix
+/// to cover — one per shape in the enumerated matrix
 /// (`exists_optional_padding_answers_per_spec` through
 /// `exists_triple_nesting_alternating_polarity`, tests 1-24 above). This constant
 /// is the pin; [`matrix_is_complete`] is the (trivial, but load-bearing) assertion
