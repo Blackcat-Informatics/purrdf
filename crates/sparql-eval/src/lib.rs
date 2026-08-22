@@ -91,6 +91,8 @@ mod enf;
 pub mod engine;
 pub mod error;
 pub mod eval;
+#[cfg(test)]
+mod exists_admission_gate;
 mod expr;
 mod fallible;
 mod governed;

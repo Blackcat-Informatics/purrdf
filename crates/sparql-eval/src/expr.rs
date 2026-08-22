@@ -995,6 +995,81 @@ fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     }
 }
 
+/// Which of the two `EXISTS` evaluation strategies [`force_exists_strategy_for_test`]
+/// pins, overriding [`crate::governor::soundness::probe_admissible`]'s own decision.
+/// Test-only (see that function's doc) — never constructed outside `cfg(test)` code.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForcedExistsStrategy {
+    /// Force the memoized evaluate-once probe, even on a shape
+    /// [`crate::governor::soundness::probe_admissible`] would refuse.
+    Probe,
+    /// Force the per-row substituted definition, even on a shape
+    /// [`crate::governor::soundness::probe_admissible`] would admit.
+    Definition,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only override for [`exists`]'s probe-vs-definition decision, so a
+    /// differential test can force EITHER strategy on a shape regardless of what
+    /// [`crate::governor::soundness::probe_admissible`] would decide — the same
+    /// `#[cfg(test)]` thread-local-override idiom `crate::parallel::force_parallel_for_test`
+    /// already uses for its own measurement/differential seam.
+    ///
+    /// Never consulted outside `cfg(test)` — the shipping decision is purely
+    /// [`crate::governor::soundness::probe_admissible`]'s own analysis. Forcing PROBE on a
+    /// shape the gate refuses is UNSOUND by construction: that is the entire point of the
+    /// admission boundary's divergence witnesses, which use this seam to observe, and pin,
+    /// the SPECIFIC wrong answer the gate exists to prevent. Forcing DEFINITION on a shape
+    /// the gate admits is always sound (the definition is correct for every shape) but
+    /// bypasses the memoized fast path, which is what the admissible-arm equivalence tests
+    /// use it for.
+    static FORCE_EXISTS_STRATEGY: std::cell::Cell<Option<ForcedExistsStrategy>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force [`exists`]'s strategy decision to `strategy` for the current thread until the
+/// returned guard is dropped (restores the prior override). Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_exists_strategy_for_test(
+    strategy: ForcedExistsStrategy,
+) -> ForceExistsStrategyGuard {
+    let previous = FORCE_EXISTS_STRATEGY.with(|cell| cell.replace(Some(strategy)));
+    ForceExistsStrategyGuard { previous }
+}
+
+/// RAII guard restoring the prior [`FORCE_EXISTS_STRATEGY`] override on drop.
+#[cfg(test)]
+pub(crate) struct ForceExistsStrategyGuard {
+    previous: Option<ForcedExistsStrategy>,
+}
+
+#[cfg(test)]
+impl Drop for ForceExistsStrategyGuard {
+    fn drop(&mut self) {
+        FORCE_EXISTS_STRATEGY.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`
+/// the per-row definition. Production logic is the one-line boolean this function
+/// still computes as its fallback (`!correlated || probe_admissible(..)`); the
+/// `cfg(test)` branch lets a differential test override it in either direction — see
+/// [`FORCE_EXISTS_STRATEGY`]'s doc.
+fn exists_use_probe(
+    correlated: bool,
+    normalized: &GraphPattern,
+    analysis: &crate::governor::soundness::NodeAnalysisTable,
+) -> bool {
+    #[cfg(test)]
+    if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
+        return forced == ForcedExistsStrategy::Probe;
+    }
+    !correlated || crate::governor::soundness::probe_admissible(normalized, analysis)
+}
+
 /// Evaluate `EXISTS { pattern }` for the current solution.
 ///
 /// # The one-definition theorem
@@ -1078,7 +1153,7 @@ fn exists<D: DatasetView + Sync>(
 
     let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
 
-    if !correlated || crate::governor::soundness::probe_admissible(normalized, analysis) {
+    if exists_use_probe(correlated, normalized, analysis) {
         // ---- Memoized probe path ----
         //
         // Evaluate the (ENF-normalized) inner — and build the probe index over it —
