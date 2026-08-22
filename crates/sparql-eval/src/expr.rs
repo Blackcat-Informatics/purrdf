@@ -19,8 +19,14 @@
 //! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, and (Gap 4) **`ENCODE_FOR_URI`**,
 //! **`NOW`**, **`YEAR`/`MONTH`/`DAY`/`HOURS`/`MINUTES`/`SECONDS`**,
 //! **`TIMEZONE`/`TZ`/`ADJUST`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
-//! **`RAND`**, and **`UUID`/`STRUUID`**. Unsupported (`Unsupported`):
-//! `SERVICE`, property paths, and `Function::Custom`.
+//! **`RAND`**, and **`UUID`/`STRUUID`**. `SERVICE` and property paths are NOT this
+//! module's residue — they are separate [`GraphPattern`] nodes evaluated in-engine
+//! by [`crate::remote`] and the `path` module respectively (see the crate-level
+//! scope list in [the crate root docs](crate)), not an [`Expression`] this module
+//! walks. What this module DOES hard-fail on (`Unsupported`) is narrower: an
+//! unresolved [`Function::Custom`] IRI (`UnsupportedKind::CustomFunction`), and
+//! `heldIn` called without a caller-supplied standpoint-predicate configuration
+//! (`UnsupportedKind::HeldInUnconfigured`).
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -778,10 +784,26 @@ fn is_literal(v: &TermValue) -> bool {
     matches!(v, TermValue::Literal { .. })
 }
 
-/// Collect all [`Variable`]s referenced inside expression positions within `expr`.
-/// This is a pure syntactic walk of the [`Expression`] tree; it returns every
-/// variable that appears in a position where it is *evaluated* (not just matched
-/// as a triple-pattern term).
+/// Collect all [`Variable`]s referenced inside expression positions within `expr` —
+/// PLUS, for a nested [`Expression::Exists`]/`NOT EXISTS`, every variable its inner
+/// pattern mentions ANYWHERE, triple/leaf positions included, not just that inner
+/// pattern's own expression positions.
+///
+/// The extra reach is load-bearing, not merely conservative: `EXISTS`'s per-row
+/// substitution (SEP-0007's `Replace` mechanism, `substitute_pattern`) applies
+/// Values Insertion at a `Bgp`/`Path` LEAF exactly as it rewrites an expression
+/// constant, so an outer-bound variable the nested `EXISTS`'s inner pattern shares
+/// SOLELY through a triple position (never its own FILTER/BIND) still needs the
+/// correlated per-row path — the same reachability [`is_row_sensitive`]'s sibling
+/// widening exists for. This walk is what [`exists`]'s `inner_expr_vars` is built
+/// from, and it is the FIRST correlation test consulted (`is_row_sensitive`'s
+/// widening only fires when the whole inner pattern is itself row-sensitive), so
+/// under-reporting here sends a correlated `EXISTS { FILTER NOT EXISTS { ?x :q ?y
+/// } }` — `?x` shared only through the nested `NOT EXISTS`'s triple position, and
+/// nothing in `Filter{expr: NotExists(..), inner: <identity>}` making the pattern
+/// row-sensitive — down the uncorrelated (evaluate-once, probe) path, where the
+/// nested `NOT EXISTS` is evaluated with `?x` free instead of restricted to each
+/// outer row's binding.
 fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -827,9 +849,12 @@ fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
                 expr_vars(a, out);
             }
         }
-        // Nested EXISTS: walk the expression positions inside its inner pattern too.
+        // Nested EXISTS: widened to `pattern_all_vars` (this function's doc) — a
+        // correlation reaching the nested inner ONLY through a triple/leaf position
+        // (never that inner's own expression positions) must still surface here, or
+        // the enclosing `exists()` call wrongly takes the uncorrelated fast path.
         Expression::Exists(inner_pat) => {
-            pattern_expr_vars(inner_pat, out);
+            pattern_all_vars(inner_pat, out);
         }
     }
 }
@@ -1442,13 +1467,27 @@ impl SubstitutionRow {
 /// reads the truth instead of being fooled by a rewrite that erased the
 /// column into a baked-in constant.
 ///
-/// `Graph`/`Service` names keep their pre-existing treatment (a `Service`
-/// variable endpoint resolves directly — the sole reason `LATERAL` ever needs
-/// per-row re-evaluation at all, since a joined `VALUES` row cannot supply the
-/// constant a federated call must be dispatched with; a `Graph` variable name
-/// is left unresolved, exactly as before — an unconstrained `GRAPH ?g`
-/// enumeration is already sound because the caller's own compatibility check
-/// against μ, run after this substituted pattern is evaluated, filters it).
+/// `Service` names keep their pre-existing treatment: a variable endpoint resolves
+/// directly to the IRI binding when one is known — the sole reason `LATERAL` ever
+/// needs per-row re-evaluation at all, since a joined `VALUES` row cannot supply
+/// the constant a federated call must be dispatched with.
+///
+/// `Graph` IS a Values-Insertion site (unlike a stale earlier version of this doc
+/// claimed): a bound `?g` resolves directly to a `NamedNode` when the binding is
+/// one (the O(1) indexed-selection path `eval_graph` already has), and — whether
+/// or not it resolved — the `Graph` node is ALSO wrapped in `Join(.., Values{?g})`
+/// exactly like a `Bgp`/`Path` leaf, both to restrict a non-IRI (e.g. blank-node)
+/// binding's still-enumerating evaluation to μ's own term and to keep `?g` a
+/// column of the node's own result (`eval_graph`'s `NamedNodePattern::NamedNode`
+/// arm does not add it — only `eval_graph_var` does — so a bare name-resolution
+/// with no retaining join would silently drop `?g` from the schema). See the
+/// `Graph` arm of `substitute_pattern_impl` for the full case analysis and why an
+/// unconstrained enumeration relying solely on the CALLER's post-hoc compatibility
+/// check (`crate::binop::eval_lateral`'s merge) was unsound: that check restricts
+/// rows only where μ's own column happens to already share the same schema
+/// position, which a `LIMIT`/`DISTINCT`-bearing inner (or any other row-sensitive
+/// construct) defeats by picking its answer BEFORE the restriction is ever
+/// applied — see this crate's `is_row_sensitive` doc for the general hazard.
 ///
 /// # The theorem
 ///
@@ -1820,19 +1859,59 @@ fn substitute_pattern_impl(
                 map,
             )
         }
-        // The graph name is left unresolved even when it is a bound variable — see this
-        // function's doc for why that is sound (the caller's post-hoc compatibility
-        // check against μ is what makes it sound, not a substitution here).
+        // `Graph{Variable, ..}` IS a Values-Insertion site: a bound `?g` resolves to
+        // the concrete `NamedNode` when the store admits it (RDF 1.2 requires a graph
+        // name to be an IRI or a blank node — never a literal or a quoted triple, see
+        // `crates/rdf-core/src/ir/validate.rs`'s `require_graph_name`), landing
+        // `eval_graph` on its O(1) indexed-selection arm instead of `eval_graph_var`'s
+        // full named-graph enumeration. A non-IRI binding (an admissible blank-node
+        // graph name, or a literal/quoted-triple binding that can never name a graph)
+        // keeps `name` a variable, so `eval_graph_var` still enumerates — but the
+        // retained `Values` join below (same as the IRI case) restricts every
+        // enumerated candidate to μ's own term, which is empty for a term kind no
+        // graph can match and the correct single-graph restriction for an admissible
+        // blank name.
+        //
+        // Either way `?g` itself must stay a column of the substituted node's own
+        // result: `eval_graph`'s `NamedNodePattern::NamedNode` arm never adds `?g` to
+        // its output (only `NamedNodePattern::Variable`'s arm does — see
+        // `crate::eval::syntactic_schema`'s `Graph` arm and `eval_graph_var`), so
+        // resolving to a constant would silently drop `?g` from the schema. Wrapping
+        // in `Join(Graph{..}, Values{?g})` (Values Insertion, [`join_leaf_with_values`])
+        // both restricts the match and keeps `?g` bound in every row — a `LATERAL`
+        // sharing this node's column layout with its left operand depends on that
+        // column surviving (see `crate::binop::eval_lateral`'s doc).
         GraphPattern::Graph { name, inner } => {
+            let resolved_name = match name {
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => row
+                    .term
+                    .iter()
+                    .find(|(bv, _)| bv == v)
+                    .and_then(|(_, g)| match g {
+                        purrdf_sparql_algebra::GroundTerm::NamedNode(n) => Some(
+                            purrdf_sparql_algebra::NamedNodePattern::NamedNode(n.clone()),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| name.clone()),
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
+            };
             let inner_sub = substitute_pattern_impl(inner, row, map);
-            boxed_and_mapped(
+            let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
-                    name: name.clone(),
+                    name: resolved_name,
                     inner: inner_sub,
                 },
                 pattern,
                 map,
-            )
+            );
+            if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = name {
+                let mut vars = DetHashSet::default();
+                vars.insert(v.clone());
+                join_leaf_with_values(graph_node, &vars, &row.term, pattern, map)
+            } else {
+                graph_node
+            }
         }
         GraphPattern::Service {
             name,
@@ -2072,7 +2151,8 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
     }
 }
 
-/// Wrap a `Bgp`/`Path` leaf in `Join(leaf, Values { .. })` when its variables
+/// Wrap a `Bgp`/`Path` leaf — or the already-name-resolved `Graph{.., inner}` node
+/// the `Graph` arm above builds — in `Join(leaf, Values { .. })` when its variables
 /// intersect the injected row (Values Insertion — see [`substitute_pattern`]'s
 /// doc). The joined `VALUES` carries exactly `leaf_vars ∩ row-vars`, in the
 /// row's own (schema) order — a single row, so the join can only narrow, never
@@ -2080,6 +2160,13 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 /// returned unchanged: no join is worth adding, and the pattern stays
 /// leaf-shaped for every operator that inspects it structurally (e.g. the
 /// property-function fusion check in `crate::property_fn_eval`).
+///
+/// The `Graph` arm's reuse passes `{ ?g }` as `leaf_vars` for a node that is not
+/// literally a `Bgp`/`Path` leaf, but the same three properties this helper relies
+/// on still hold: `leaf`'s own triple/path/graph-selection terms are never rewritten
+/// to ground constants by substitution, `?g ∈ leaf_vars` restricts rather than
+/// multiplies (one row), and the wrapper — not `leaf` — must become the row-counting
+/// node for the same ledger-attribution reason.
 ///
 /// `leaf` arrives already boxed — at its permanent address — and, when a
 /// [`SubstitutionSourceMap`] is engaged, already mapped to `source` by the caller
@@ -6891,6 +6978,191 @@ mod tests {
             rows,
             run_rows(&ds, q, false),
             "memo on/off must agree once correlation is correctly detected"
+        );
+    }
+
+    // ── `Graph(Var, P)` is a Values-Insertion site ──────────────────────────
+    //
+    // `:s1 :p :g1 . :s2 :p :g2 .` plus `GRAPH :g1 { :x :q :y . }` — `:g2` is
+    // never used as a graph name (no quads live under it). The inner
+    // sub-`SELECT ... LIMIT 1` makes the whole `Graph` pattern row-sensitive
+    // (`is_row_sensitive`), which forces `crate::expr::exists` down the
+    // per-row substituted (definition) path regardless of `exists_memo` — an
+    // inner whose evaluation would otherwise be memoized once and reused
+    // unsoundly across outer rows, so the substituted `Graph` arm of
+    // `substitute_pattern_impl` is what actually runs.
+
+    fn f1_graph_variable_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let g1 = b.intern_iri("http://example.org/g1");
+        let g2 = b.intern_iri("http://example.org/g2");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        b.push_quad(s1, p, g1, None);
+        b.push_quad(s2, p, g2, None);
+        b.push_quad(x, q, y, Some(g1));
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_correlated_graph_variable_restricts_to_the_bound_graph() {
+        let ds = f1_graph_variable_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?s WHERE { \
+                   ?s :p ?g \
+                   FILTER EXISTS { \
+                     GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s1>".to_owned()]],
+            "EXISTS/GRAPH ?g must restrict the graph scan to μ's OWN \
+             ?g, not resolve it against a plan-wide binding blind to which outer \
+             row is under test"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree (this shape is row-sensitive so the memo \
+             flag never applies, but the invariant should hold regardless)"
+        );
+    }
+
+    #[test]
+    fn not_exists_correlated_graph_variable_matches_the_positive_polarity() {
+        let ds = f1_graph_variable_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?s WHERE { \
+                   ?s :p ?g \
+                   FILTER NOT EXISTS { \
+                     GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                   } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s2>".to_owned()]],
+            "NOT EXISTS is the exact complement of the positive-polarity test \
+             above: only :s2 (whose ?g, :g2, owns no quads) may pass"
+        );
+    }
+
+    #[test]
+    fn exists_graph_name_bound_to_a_blank_node_restricts_correctly() {
+        // RDF 1.2 admits a blank node as a graph name (`require_graph_name` in
+        // `crates/rdf-core/src/ir/validate.rs`) but never a literal or a quoted
+        // triple. A blank-node binding is a non-IRI `GroundTerm` the `Graph` arm
+        // cannot resolve to `NamedNodePattern::NamedNode`, so `?g` stays a
+        // variable and `eval_graph_var` still enumerates every named graph; the
+        // retained `Values` join is what restricts that enumeration to μ's own
+        // blank-node term, exactly as the `NamedNode` case restricts via
+        // resolution instead.
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        let g1 = b.intern_blank("g1", BlankScope::DEFAULT);
+        let g2 = b.intern_blank("g2", BlankScope::DEFAULT);
+        b.push_quad(s1, p, g1, None);
+        b.push_quad(s2, p, g2, None);
+        b.push_quad(x, q, y, Some(g1));
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?s WHERE { \
+                        ?s :p ?g \
+                        FILTER EXISTS { \
+                          GRAPH ?g { SELECT ?a WHERE { ?a :q ?b } LIMIT 1 } \
+                        } \
+                      }";
+        let rows = run_rows(&ds, query, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/s1>".to_owned()]],
+            "a blank-node graph name must restrict exactly like an IRI one"
+        );
+    }
+
+    // ── Correlation invisible through nested-EXISTS triple positions ────────
+    //
+    // `expr_vars`'s `Exists` arm previously walked a nested EXISTS's inner
+    // pattern with `pattern_expr_vars` (expression positions only), so a
+    // correlation reaching the nested inner SOLELY through a triple position
+    // (never an expression position of its own) was invisible to the
+    // enclosing `exists()` call's correlation test, which then wrongly took
+    // the evaluate-once-and-probe fast path.
+
+    fn f3_nested_exists_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let d = b.intern_iri("http://example.org/d");
+        let c = b.intern_iri("http://example.org/c");
+        let e = b.intern_iri("http://example.org/e");
+        let y1 = b.intern_iri("http://example.org/y1");
+        b.push_quad(d, p, c, None);
+        b.push_quad(e, q, y1, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn exists_nested_inner_triple_position_correlates() {
+        let ds = f3_nested_exists_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?x WHERE { \
+                   ?x :p :c \
+                   FILTER EXISTS { FILTER NOT EXISTS { ?x :q ?y } } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/d>".to_owned()]],
+            ":d has no :q triple of its own, so the nested NOT EXISTS is true \
+             FOR :d and the outer EXISTS holds; the pre-fix classifier evaluated \
+             the nested NOT EXISTS with ?x free (any subject), found :e :q :y1, \
+             and wrongly made it false — hence the outer EXISTS empty — for \
+             every outer row alike"
+        );
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree once the nested-EXISTS correlation is detected"
+        );
+    }
+
+    #[test]
+    fn not_exists_nested_inner_triple_position_correlates() {
+        // The polarity twin: `FILTER NOT EXISTS { FILTER NOT EXISTS { ?x :q ?y } }`
+        // is `EXISTS { ?x :q ?y }` restated through double negation — only a
+        // subject with an OWN `:q` triple may pass, which excludes :d (its only
+        // `:q` neighbor in the data is :e, a different subject). Pre-fix, the
+        // SAME unwidened classifier fires on this shape's `Not(Exists(..))`
+        // condition too (the classifier is evaluated once, for the OUTER
+        // `exists()` call, over the whole `Filter{expr: Not(Exists(inner)), ..}`
+        // node) — the inner NOT EXISTS collapses to one GLOBAL boolean (`false`,
+        // because :e :q :y1 exists somewhere) instead of one answer per outer
+        // `?x`, and doubly negating a constant `false` wrongly admits :d.
+        let ds = f3_nested_exists_ds();
+        let q = "PREFIX : <http://example.org/> \
+                 SELECT ?x WHERE { \
+                   ?x :p :c \
+                   FILTER NOT EXISTS { FILTER NOT EXISTS { ?x :q ?y } } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            Vec::<Vec<String>>::new(),
+            ":d has no :q triple of its own, so the doubly-negated form must be \
+             empty — the pre-fix classifier wrongly admitted :d"
         );
     }
 }

@@ -159,6 +159,30 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
 /// [`eval_correlated`], including the address-keyed-cache ABA guard
 /// (`in_substituted_exists`) around the inner eval.
 ///
+/// # What the compatibility merge below still discharges
+///
+/// The per-row merge (the `compatible_row` test below, over columns shared between
+/// `left`'s schema and ν's) is NOT what makes a `GRAPH ?g` right operand sound —
+/// `crate::expr::substitute_pattern_impl`'s `Graph` arm now resolves/restricts `?g`
+/// itself via substitution and a retaining `Values` join, so by the time a `Graph`
+/// node's rows reach this merge, `?g` is already μ's own value or the row does not
+/// exist. What the merge is STILL the only guard for:
+///
+/// * A variable μ binds to a term kind `crate::expr`'s ground-term conversion has
+///   no [`purrdf_sparql_algebra::GroundTerm`] representation for (a quoted
+///   triple with a non-IRI predicate) is absent from BOTH substitution rows
+///   (`SubstitutionRow::expr` and `::term`), so no leaf/`Graph` join ever restricts
+///   it — `right`'s own evaluation is free to (re)bind it, and this merge is what
+///   rejects a value incompatible with μ's.
+/// * A `SERVICE ?g` whose endpoint binding is not an `Expression::NamedNode` (no
+///   IRI to resolve to) keeps `name` an unresolved variable with NO retaining
+///   `Values` join added (unlike the `Graph` arm's discipline) — whatever `?g`
+///   ultimately reads as is reconciled against μ here, not by substitution.
+/// * The general backstop for any future right-operand shape whose substitution
+///   arm does not (or cannot) inject every outer-bound variable it shares with
+///   `left`: a compatibility mismatch is rejected here rather than silently
+///   producing an unjoined pair.
+///
 /// # Under a truncated child
 ///
 /// The right side is evaluated once per left row, so a trip inside it is a trip **in
@@ -2350,6 +2374,78 @@ mod tests {
         assert!(
             truncation.rows().is_empty(),
             "and no row crosses, so the narrower column list describes an empty bag"
+        );
+    }
+
+    // ── Seam pin: LATERAL over a GRAPH-variable right operand ───────────────
+
+    /// `:s1 :p :g1 ; :s2 :p :g2` — only `:g1` owns a quad (`:x :q :y`, inside
+    /// graph `:g1`); `:g2` is never used as a graph name.
+    fn graph_variable_lateral_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("https://example.org/187-lateral-graph#p");
+        let q = b.intern_iri("https://example.org/187-lateral-graph#q");
+        let s1 = b.intern_iri("https://example.org/187-lateral-graph#s1");
+        let s2 = b.intern_iri("https://example.org/187-lateral-graph#s2");
+        let g1 = b.intern_iri("https://example.org/187-lateral-graph#g1");
+        let g2 = b.intern_iri("https://example.org/187-lateral-graph#g2");
+        let x = b.intern_iri("https://example.org/187-lateral-graph#x");
+        let y = b.intern_iri("https://example.org/187-lateral-graph#y");
+        b.push_quad(s1, p, g1, None);
+        b.push_quad(s2, p, g2, None);
+        b.push_quad(x, q, y, Some(g1));
+        b.freeze().expect("freeze")
+    }
+
+    /// `SELECT * { ?s :p ?g LATERAL { GRAPH ?g { ?a :q ?b } } }`: `?g` is bound by
+    /// the LEFT arm and re-occurs as the RIGHT arm's graph name —
+    /// `crate::expr::substitute_pattern_impl`'s `Graph` arm resolves/restricts it
+    /// via Values Insertion, so this pins the resulting union schema's column
+    /// order: left columns first (this module's doc), `?g` not duplicated,
+    /// `?a`/`?b` appended — the shape that arm's own `Join(Graph{..}, Values{?g})`
+    /// wrapper must keep intact for a `LATERAL` sharing this node's column layout
+    /// with its left operand.
+    #[test]
+    fn lateral_over_graph_variable_keeps_column_order() {
+        let ds = graph_variable_lateral_ds();
+        let node = GraphPattern::Lateral {
+            left: Box::new(bgp(
+                vp("s"),
+                pred("https://example.org/187-lateral-graph#p"),
+                vp("g"),
+            )),
+            right: Box::new(GraphPattern::Graph {
+                name: NamedNodePattern::Variable(Variable::new("g")),
+                inner: Box::new(bgp(
+                    vp("a"),
+                    pred("https://example.org/187-lateral-graph#q"),
+                    vp("b"),
+                )),
+            }),
+        };
+        let mut ctx = EvalCtx::new(&ds);
+        let seq = eval(&node, &mut ctx).expect("lateral over GRAPH ?g");
+        assert_eq!(
+            seq.schema
+                .vars()
+                .iter()
+                .map(|v| v.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["s", "g", "a", "b"],
+            "left columns first (s, g), then the right arm's own new columns \
+             (a, b) — ?g must not appear twice"
+        );
+        let rendered = render(&ds, &seq, &["s", "g", "a", "b"]);
+        assert_eq!(
+            rendered,
+            vec![vec![
+                Some("https://example.org/187-lateral-graph#s1".to_owned()),
+                Some("https://example.org/187-lateral-graph#g1".to_owned()),
+                Some("https://example.org/187-lateral-graph#x".to_owned()),
+                Some("https://example.org/187-lateral-graph#y".to_owned()),
+            ]],
+            "only :s1's row survives — :s2's ?g (:g2) owns no quads, so its GRAPH \
+             scan is empty"
         );
     }
 }

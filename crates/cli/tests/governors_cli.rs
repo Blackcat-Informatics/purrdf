@@ -547,6 +547,52 @@ fn explain_renders_the_ledger_and_is_byte_identical_across_runs() {
     );
 }
 
+/// `--explain` over `LATERAL { GRAPH ?g { ... } }` is byte-identical across two runs, on
+/// the RELEASE CLI.
+///
+/// `?g` is bound by the left arm (`?s :p ?g`) and re-occurs as the right arm's `GRAPH ?g`
+/// name — `crate::expr::substitute_pattern_impl`'s `Graph` arm (in `purrdf-sparql-eval`)
+/// wraps the substituted node in `Join(Graph{..}, Values{?g})` for every left row, so this
+/// pins that the extra synthetic nodes introduce no run-to-run instability (allocation-
+/// address leakage, hash-iteration-order dependence, etc.) into the rendered charge ledger.
+#[test]
+fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let trig = write_file(
+        dir.path(),
+        "data.trig",
+        concat!(
+            "@prefix : <http://example.org/> .\n",
+            ":s1 :p :g1 .\n",
+            ":s2 :p :g2 .\n",
+            "GRAPH :g1 { :x :q :y . }\n",
+        ),
+    );
+    let query = "PREFIX : <http://example.org/> \
+                 SELECT * WHERE { ?s :p ?g LATERAL { GRAPH ?g { ?a :q ?b } } }";
+
+    let first = run(&["query", "--data", &trig, "--explain", query]);
+    assert_eq!(code(&first), 0, "stderr:\n{}", stderr(&first));
+    let second = run(&["query", "--data", &trig, "--explain", query]);
+    assert_eq!(
+        first.stdout, second.stdout,
+        "two --explain runs of the same LATERAL/GRAPH ?g query over the same data must be \
+         byte-identical"
+    );
+
+    let body = stdout(&first);
+    assert!(
+        body.starts_with("profile purrdf-sparql-governors v"),
+        "the explanation names the schedule it was priced under: {body}"
+    );
+    assert!(body.contains("\nledger\n"), "{body}");
+    assert!(
+        body.contains("Lateral") && body.contains("Graph"),
+        "the ledger must name both the LATERAL and the Graph node it substitutes \
+         per left row: {body}"
+    );
+}
+
 /// `--explain` REFUSES WHAT IT CANNOT HONOR — and that is now the WHOLE list.
 ///
 /// Each refusal is a usage error (exit 2) naming the flag to drop, because the alternative

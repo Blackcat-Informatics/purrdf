@@ -48,10 +48,23 @@ use crate::solution::{SolutionSeq, VarSchema};
 /// production mode).
 #[derive(Debug, Clone, Copy)]
 pub struct EvalOptions {
-    /// Memoize each `EXISTS`/`NOT EXISTS` inner-pattern evaluation. The inner
-    /// pattern is evaluated unconstrained and then joined with the outer row's
-    /// seed, so its result is **independent of the outer row**: a `FILTER` over N
-    /// rows can evaluate it once instead of N times. Always `true` in production.
+    /// Memoize each `EXISTS`/`NOT EXISTS` inner-pattern evaluation — but ONLY for
+    /// the shapes `crate::expr::exists` routes down its fast path: those where no
+    /// outer-bound variable reaches the inner through a position its correlation
+    /// test can see (an expression position — including one buried inside a
+    /// further-nested `EXISTS`, per `crate::expr::expr_vars`'s widened walk — or,
+    /// per `crate::expr::is_row_sensitive`, a bare triple/leaf position feeding a
+    /// `LATERAL`/`LIMIT`/`DISTINCT`/`REDUCED`/`MINUS`/`GROUP BY`). This is NOT the
+    /// same claim as "the inner result is independent of the outer row": a probe
+    /// against a shared column (`crate::binop::probe_has_match`) legitimately
+    /// answers differently per row. What is provably equivalent to a per-row
+    /// re-evaluation, for exactly this shape, is evaluating the inner's
+    /// UNCONSTRAINED bag once and then existence-probing each outer row against it
+    /// on the columns it shares with the outer schema — so a `FILTER` over N rows
+    /// builds that probe index once instead of N times. A row-sensitive or
+    /// expression-correlated inner never reaches this flag at all; it always takes
+    /// the correlated per-row substituted path (`crate::binop::eval_correlated`),
+    /// which this flag does not gate. Always `true` in production.
     pub exists_memo: bool,
     /// Evaluate BGPs in the retired structural (most-constrained-first) order
     /// instead of the cost-based order. Used only by the differential planner-

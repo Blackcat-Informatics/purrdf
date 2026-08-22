@@ -1601,6 +1601,113 @@ mod tests {
         assert!(is_parallel_safe(&exists, relations(&stable)));
     }
 
+    // ---- Does the pattern walk descend into EXISTS pattern positions, not just
+    // an EXISTS's own top-level node? ----
+    //
+    // `unsafe_inside_nested_exists_filter_is_detected` and
+    // `an_unsafe_property_function_taints_the_enclosing_pattern` above already
+    // answer this — `pattern_reaches_unsafe_builtin`'s
+    // `ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern,
+    // ..)` arm recurses into the inner pattern exactly like any other pattern, so
+    // the walk already descends (the variable-widening fix `expr_vars`'s `Exists`
+    // arm needed elsewhere in this crate does not have a sibling gap in THIS
+    // walk's decomposition, which is a boolean OR over `visit_pattern_parts`/
+    // `visit_expression_parts`, not a variable SET). These two tests exist purely
+    // as non-regression pins, nested one level deeper (behind a `Join`) than
+    // either test above, so a future change that stops the descent — even one
+    // that only breaks multi-hop recursion — trips a test immediately.
+    #[test]
+    fn parallel_safety_descends_into_exists_pattern_positions() {
+        let vp = |n: &str| {
+            purrdf_sparql_algebra::TermPattern::Variable(purrdf_sparql_algebra::Variable::new(n))
+        };
+        let pred = |iri: &str| {
+            purrdf_sparql_algebra::NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+        };
+        let safe_bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/p"),
+                object: vp("o"),
+            }],
+        };
+
+        // `BIND(RAND() AS ?r)`, two pattern levels below the EXISTS inner's own top
+        // node (behind a `Join`) — the ONLY unsafe construct anywhere in the tree.
+        let bind_rand = GraphPattern::Extend {
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: purrdf_sparql_algebra::Variable::new("r"),
+            expression: call(Function::Rand, vec![]),
+        };
+        let buried_builtin = GraphPattern::Join {
+            left: Box::new(safe_bgp.clone()),
+            right: Box::new(bind_rand),
+        };
+        let exists_builtin = Expression::Exists(Box::new(buried_builtin));
+        assert!(
+            !is_parallel_safe(&exists_builtin, NONE),
+            "RAND() buried two pattern levels below the EXISTS inner (behind a \
+             Join) must still taint the enclosing expression"
+        );
+
+        // Same shape, an unsafe PROPERTY FUNCTION instead of a stateful builtin —
+        // buried the same two levels down, behind the same kind of `Join`.
+        let buried_relation = GraphPattern::Join {
+            left: Box::new(safe_bgp),
+            right: Box::new(property_function_call()),
+        };
+        let volatile = registry_with(Volatility::Volatile);
+        let exists_relation = Expression::Exists(Box::new(buried_relation));
+        assert!(
+            !is_parallel_safe(&exists_relation, relations(&volatile)),
+            "an unsafe property-function call buried behind a Join inside the \
+             EXISTS inner must still taint the enclosing expression"
+        );
+    }
+
+    /// The positive twin: the SAME nested shape (a `Join` two levels below the
+    /// EXISTS inner) with no unsafe construct anywhere stays parallel-safe.
+    #[test]
+    fn parallel_safety_pure_exists_inner_stays_safe() {
+        let vp = |n: &str| {
+            purrdf_sparql_algebra::TermPattern::Variable(purrdf_sparql_algebra::Variable::new(n))
+        };
+        let pred = |iri: &str| {
+            purrdf_sparql_algebra::NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+        };
+        let safe_bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/p"),
+                object: vp("o"),
+            }],
+        };
+        let bind_pure = GraphPattern::Extend {
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: purrdf_sparql_algebra::Variable::new("r"),
+            expression: call(
+                Function::Abs,
+                vec![Expression::Variable(purrdf_sparql_algebra::Variable::new(
+                    "s",
+                ))],
+            ),
+        };
+        let pure = GraphPattern::Join {
+            left: Box::new(safe_bgp),
+            right: Box::new(bind_pure),
+        };
+        let exists = Expression::Exists(Box::new(pure));
+        assert!(
+            is_parallel_safe(&exists, NONE),
+            "a fully-pure EXISTS inner (no stateful builtin, no unsafe relation \
+             anywhere in the nested pattern) must stay parallel-safe"
+        );
+    }
+
     // ---- aggregate_is_unsafe: custom-aggregate fork-gate volatility --------
 
     const AGG_IRI: &str = "http://example.org/agg#custom";
