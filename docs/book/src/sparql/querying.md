@@ -84,7 +84,20 @@ Anything outside this surface — and every malformed query — is a typed
   **host-injectable transport**: the engine itself performs no I/O, so
   federation stays wasm-portable and the host decides how (and whether)
   remote endpoints are reached. All seven W3C `service` federation cases pass
-  through this seam.
+  through this seam. The forwarded body is re-emitted through the
+  deterministic serializer — the federation wire format — whose
+  parse → serialize → re-parse fidelity is swept over the 823-item corpus
+  (every vendored W3C and first-party query and update text, plus this book's
+  own examples) with an empty exception ledger.
+- **Governed twins and explain receipts** — every query/update entry point has
+  a governed counterpart running under caller-set ceilings (fuel, answer rows,
+  intermediate cells, scratch bytes, remote requests, deadline) that trips
+  with certified rows rather than a wrong answer, and `explain_query` returns
+  a `QueryExplanation` whose ledger decomposes the fuel spent per algebra node
+  and per charge point, beside the cost planner's estimate for each basic
+  graph pattern. The normative charge schedule and the frozen 49-case governor
+  corpus are documented in
+  [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
