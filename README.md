@@ -77,19 +77,22 @@ but it assumes nothing about your ontology or application.
   byte-deterministic Parquet codec in `purrdf-columnar`.
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the
   interned IR: all four query forms plus full SPARQL Update, property paths,
-  cost-based BGP planning, `EXISTS` decorrelation, and the enforced `VERSION`
-  declaration (including the `1.2-basic` profile). The 1.2 surface includes
-  temporal arithmetic (SEP-0002: instants, durations, and the five Gregorian
-  partial-date types, plus duration `SUM`/`AVG` and `ADJUST`) and `LATERAL`
-  (SEP-0006, with Jena's scope rule). Three caller-keyed extension seams —
-  scalar functions, property functions (magic predicates), and custom
-  aggregates via `AGG(<iri>, …)` with a ten-aggregate statistical set under a
-  caller-supplied namespace — plus `SERVICE` federation through a
-  host-injectable transport whose wire format is the deterministic serializer,
-  round-trip-swept over the 823-item vendored corpus (update requests
-  included). Gated by the full W3C SPARQL 1.1 + 1.2 evaluation corpus:
-  **853 passing**, 5 ledgered upstream-errata fixtures. Results in SPARQL
-  JSON/XML/CSV/TSV.
+  cost-based BGP planning, and the enforced `VERSION` declaration (including
+  the `1.2-basic` profile). `EXISTS`/`NOT EXISTS` runs on SEP-0007's
+  defensible substitution semantics (`Replace`/`PrjMap`, a JOIN rather than a
+  term rewrite, plus its Part 3 assignment restriction), answered by a
+  memoized existence probe where a prepare-time proof licenses it and by the
+  per-row definition otherwise. The 1.2 surface includes temporal arithmetic
+  (SEP-0002: instants, durations, and the five Gregorian partial-date types,
+  plus duration `SUM`/`AVG` and `ADJUST`) and `LATERAL` (SEP-0006, with
+  Jena's scope rule). Three caller-keyed extension seams — scalar functions,
+  property functions (magic predicates), and custom aggregates via
+  `AGG(<iri>, …)` with a ten-aggregate statistical set under a caller-supplied
+  namespace — plus `SERVICE` federation through a host-injectable transport
+  whose wire format is the deterministic serializer, round-trip-swept over
+  the 823-item vendored corpus (update requests included). Gated by the full
+  W3C SPARQL 1.1 + 1.2 evaluation corpus: **861 passing**, 5 ledgered
+  upstream-errata fixtures. Results in SPARQL JSON/XML/CSV/TSV.
 - **Governed execution** — every query/update entry point has a governed twin
   running under caller-set ceilings (fuel, answer rows, intermediate cells,
   scratch bytes, remote requests, deadline) that trips with certified rows
@@ -316,7 +319,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **70 / 70** |
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **17 / 17** |
 | Syntax codecs | W3C rdf-tests round-trip | **250 / 250** |
-| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **853** pass · 5 ledgered (upstream errata) |
+| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **861** pass · 5 ledgered (upstream errata) |
 | SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **49 / 49**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **257 / 261** agreeing, 4 ledgered, 0 unledgered |
@@ -330,8 +333,7 @@ SPARQL breadth grows through caller-keyed extension seams — scalar functions,
 property functions, custom aggregates, and the host-injected service transport
 — so new capability lands as composition through a seam, never as a Cargo
 feature flag and never as a vocabulary PurRDF mints itself. In capability
-terms, the near-term direction includes quad-form `CONSTRUCT`, SEP-0007
-variable-substitution semantics with a defensible `EXISTS`, SEP-0008 SHA-3
+terms, the near-term direction includes quad-form `CONSTRUCT`, SEP-0008 SHA-3
 builtins, SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
 `FOLD`/`UNFOLD`), deterministic full-text search, property-path binding,
 embedding similarity, and GeoSPARQL — each arriving out-of-core through those

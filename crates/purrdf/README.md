@@ -56,8 +56,10 @@ caller-supplied configuration.
   output.
 - **Canonicalization** — W3C RDFC-1.0, tested against the W3C fixture suite.
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator (property
-  paths, aggregates, EXISTS decorrelation, cost-based BGP planning), gated by the
-  W3C conformance suite; results in SPARQL JSON/XML/CSV/TSV.
+  paths, aggregates, EXISTS/NOT EXISTS answered by a memoized existence probe
+  where a prepare-time proof licenses it and by the per-row definition
+  otherwise, cost-based BGP planning), gated by the W3C conformance suite;
+  results in SPARQL JSON/XML/CSV/TSV.
 - **SHACL** — the complete SHACL Core feature set plus SHACL-SPARQL constraints
   and targets, on PurRDF's own engine.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the

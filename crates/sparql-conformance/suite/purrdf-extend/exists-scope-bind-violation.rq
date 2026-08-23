@@ -1,0 +1,5 @@
+PREFIX : <https://example.org/exists#>
+SELECT * WHERE {
+  ?s :p ?x .
+  FILTER EXISTS { BIND(1 AS ?x) }
+}

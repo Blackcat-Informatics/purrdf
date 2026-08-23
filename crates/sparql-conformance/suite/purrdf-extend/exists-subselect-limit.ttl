@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# `:existsSubselectLimit` fixture: two subjects, each with its OWN single `:q`
+# fact. `FILTER EXISTS { SELECT ?s WHERE { ?s :q ?y } LIMIT 1 }` correlates via
+# the sub-`SELECT`'s own projected `?s` (`Project`-boundary narrowing keeps the
+# substitution), with `LIMIT 1` sitting ABOVE the substitution site — a shape the
+# probe strategy cannot answer correctly by evaluating the whole `LIMIT 1`
+# UNCONSTRAINED once (that single evaluation can only keep ONE of `:s1`/`:s2`'s
+# rows, dropping the other), while the definition path re-evaluates the
+# substituted, single-value-restricted pattern PER outer row, so `LIMIT 1` always
+# has its own value's match to keep — both `:s1` and `:s2` must survive.
+@prefix : <https://example.org/exists#> .
+
+:s1 :p :o1 .
+:s2 :p :o2 .
+:s1 :q :vA .
+:s2 :q :vB .

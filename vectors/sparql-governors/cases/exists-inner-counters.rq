@@ -1,0 +1,8 @@
+PREFIX ex: <http://example.org/>
+
+SELECT ?a
+WHERE {
+  VALUES ?a { ex:s1 ex:s2 }
+  FILTER EXISTS { ?a ex:p ?o }
+  FILTER EXISTS { ?s ex:q ?o2 . FILTER(?s = ?a) }
+}

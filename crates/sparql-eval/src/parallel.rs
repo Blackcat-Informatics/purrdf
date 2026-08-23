@@ -455,6 +455,113 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
     found
 }
 
+/// Whether `f` is one of the engine's OWN stateful-mint builtins — the
+/// registry-INDEPENDENT half of [`is_parallel_safe`]'s classification (see that
+/// function's doc comment for the full per-builtin rationale: `RAND`/`UUID`/
+/// `STRUUID` draw from `rng_state`, `BNODE` and the PurRDF list constructors mint
+/// from `bnode_counter`).
+///
+/// Split out from [`function_is_unsafe`] so `crate::governor::soundness`'s
+/// prepare-time stateful-builtin-presence analysis (Part B of the `EXISTS`
+/// decorrelation redesign) can cite this SAME classification rather than
+/// re-enumerating the builtin list: that analysis runs before any per-evaluation
+/// [`UserFunctionRegistry`] is available (a caller may supply a DIFFERENT registry
+/// to each evaluation of the same prepared plan — see
+/// [`crate::engine::QueryOptions::functions`]'s doc), so it can only ever answer
+/// the registry-independent question this function answers. A `Function::Custom`
+/// call's volatility is registry-dependent and therefore NOT decided here — see
+/// [`function_is_unsafe`]'s own `Custom` arm, and
+/// `crate::governor::soundness::analyze_expr`'s doc for how that analysis
+/// compensates (treating ANY `Custom` call as conservatively stateful, since
+/// under-reporting statefulness would be the unsound direction, while
+/// over-reporting only costs a fallback to the always-correct per-row path).
+///
+/// # Exhaustive over [`Function`] — no wildcard arm
+///
+/// Both readers of this function's answer (fork-safety in [`is_parallel_safe`] and
+/// probe admission in `crate::governor::soundness::expr_probe_admissible`) treat
+/// `false` as "safe to run once, unconstrained, or in parallel" — the UNSOUND
+/// default for anything actually stateful. A wildcard arm here would silently
+/// classify a NEW [`Function`] variant `false` until someone remembered to add it
+/// above; matching every variant (and, inside the `Purrdf` arm, every
+/// [`purrdf_sparql_algebra::PurrdfFn`] variant) by name instead makes a future
+/// addition to either enum a compile error at this exact match, not a silent
+/// unsound default.
+pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
+    match f {
+        Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
+        Function::Purrdf(call) => match call.fn_kind {
+            purrdf_sparql_algebra::PurrdfFn::ListSlice
+            | purrdf_sparql_algebra::PurrdfFn::ListConcat => true,
+            purrdf_sparql_algebra::PurrdfFn::HeldIn
+            | purrdf_sparql_algebra::PurrdfFn::ListLength
+            | purrdf_sparql_algebra::PurrdfFn::ListGet
+            | purrdf_sparql_algebra::PurrdfFn::ListIndexOf
+            | purrdf_sparql_algebra::PurrdfFn::ListContains => false,
+        },
+        // Registry-independent builtins with no mutable engine state — see this
+        // function's own doc comment (above the `# Exhaustive` section) for why
+        // `Custom` belongs in this `false` group too: its volatility is
+        // registry-dependent and decided separately, by `function_is_unsafe`'s own
+        // `Custom` arm, never here.
+        Function::Str
+        | Function::Lang
+        | Function::LangMatches
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::Concat
+        | Function::SubStr
+        | Function::StrLen
+        | Function::Replace
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Adjust
+        | Function::Now
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::StrLang
+        | Function::StrDt
+        | Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::Regex
+        | Function::Triple
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::IsTriple
+        | Function::LangDir
+        | Function::StrLangDir
+        | Function::HasLang
+        | Function::HasLangDir
+        | Function::Custom(_) => false,
+    }
+}
+
 /// Whether `f` is itself one of the stateful-mint builtins (see
 /// [`is_parallel_safe`]'s doc comment for the full rationale), or an unsafe
 /// [`Function::Custom`] user-function call.
@@ -475,13 +582,10 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
 ///   real `ctx` — silently diverging from the sequential stream exactly like
 ///   the builtins above. A sequential fallback is always correct.
 fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
+    if function_is_builtin_stateful(f) {
+        return true;
+    }
     match f {
-        Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
-        Function::Purrdf(call) => matches!(
-            call.fn_kind,
-            purrdf_sparql_algebra::PurrdfFn::ListSlice
-                | purrdf_sparql_algebra::PurrdfFn::ListConcat
-        ),
         Function::Custom(iri) => {
             // An EMPTY registry resolves neither kind, naturally falling through to
             // `false` below — exactly the old "no registry configured" fallback,
@@ -1599,6 +1703,113 @@ mod tests {
         let stable = registry_with(Volatility::Stable);
         assert!(is_parallel_safe_pattern(&union, relations(&stable)));
         assert!(is_parallel_safe(&exists, relations(&stable)));
+    }
+
+    // ---- Does the pattern walk descend into EXISTS pattern positions, not just
+    // an EXISTS's own top-level node? ----
+    //
+    // `unsafe_inside_nested_exists_filter_is_detected` and
+    // `an_unsafe_property_function_taints_the_enclosing_pattern` above already
+    // answer this — `pattern_reaches_unsafe_builtin`'s
+    // `ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern,
+    // ..)` arm recurses into the inner pattern exactly like any other pattern, so
+    // the walk already descends (the variable-widening fix `expr_vars`'s `Exists`
+    // arm needed elsewhere in this crate does not have a sibling gap in THIS
+    // walk's decomposition, which is a boolean OR over `visit_pattern_parts`/
+    // `visit_expression_parts`, not a variable SET). These two tests exist purely
+    // as non-regression pins, nested one level deeper (behind a `Join`) than
+    // either test above, so a future change that stops the descent — even one
+    // that only breaks multi-hop recursion — trips a test immediately.
+    #[test]
+    fn parallel_safety_descends_into_exists_pattern_positions() {
+        let vp = |n: &str| {
+            purrdf_sparql_algebra::TermPattern::Variable(purrdf_sparql_algebra::Variable::new(n))
+        };
+        let pred = |iri: &str| {
+            purrdf_sparql_algebra::NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+        };
+        let safe_bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/p"),
+                object: vp("o"),
+            }],
+        };
+
+        // `BIND(RAND() AS ?r)`, two pattern levels below the EXISTS inner's own top
+        // node (behind a `Join`) — the ONLY unsafe construct anywhere in the tree.
+        let bind_rand = GraphPattern::Extend {
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: purrdf_sparql_algebra::Variable::new("r"),
+            expression: call(Function::Rand, vec![]),
+        };
+        let buried_builtin = GraphPattern::Join {
+            left: Box::new(safe_bgp.clone()),
+            right: Box::new(bind_rand),
+        };
+        let exists_builtin = Expression::Exists(Box::new(buried_builtin));
+        assert!(
+            !is_parallel_safe(&exists_builtin, NONE),
+            "RAND() buried two pattern levels below the EXISTS inner (behind a \
+             Join) must still taint the enclosing expression"
+        );
+
+        // Same shape, an unsafe PROPERTY FUNCTION instead of a stateful builtin —
+        // buried the same two levels down, behind the same kind of `Join`.
+        let buried_relation = GraphPattern::Join {
+            left: Box::new(safe_bgp),
+            right: Box::new(property_function_call()),
+        };
+        let volatile = registry_with(Volatility::Volatile);
+        let exists_relation = Expression::Exists(Box::new(buried_relation));
+        assert!(
+            !is_parallel_safe(&exists_relation, relations(&volatile)),
+            "an unsafe property-function call buried behind a Join inside the \
+             EXISTS inner must still taint the enclosing expression"
+        );
+    }
+
+    /// The positive twin: the SAME nested shape (a `Join` two levels below the
+    /// EXISTS inner) with no unsafe construct anywhere stays parallel-safe.
+    #[test]
+    fn parallel_safety_pure_exists_inner_stays_safe() {
+        let vp = |n: &str| {
+            purrdf_sparql_algebra::TermPattern::Variable(purrdf_sparql_algebra::Variable::new(n))
+        };
+        let pred = |iri: &str| {
+            purrdf_sparql_algebra::NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+        };
+        let safe_bgp = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/p"),
+                object: vp("o"),
+            }],
+        };
+        let bind_pure = GraphPattern::Extend {
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            variable: purrdf_sparql_algebra::Variable::new("r"),
+            expression: call(
+                Function::Abs,
+                vec![Expression::Variable(purrdf_sparql_algebra::Variable::new(
+                    "s",
+                ))],
+            ),
+        };
+        let pure = GraphPattern::Join {
+            left: Box::new(safe_bgp),
+            right: Box::new(bind_pure),
+        };
+        let exists = Expression::Exists(Box::new(pure));
+        assert!(
+            is_parallel_safe(&exists, NONE),
+            "a fully-pure EXISTS inner (no stateful builtin, no unsafe relation \
+             anywhere in the nested pattern) must stay parallel-safe"
+        );
     }
 
     // ---- aggregate_is_unsafe: custom-aggregate fork-gate volatility --------

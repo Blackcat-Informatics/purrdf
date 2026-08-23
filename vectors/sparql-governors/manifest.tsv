@@ -71,3 +71,4 @@ aggregate-custom-fuel-boundary	cases/aggregate-accumulation.ttl	cases/aggregate-
 aggregate-custom-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregate-custom.rq	aggregate	fuel=44	over-bound	budget-exhausted fuel
 aggregate-custom-scratch-bytes-boundary	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92202	boundary	complete
 aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92201	over-bound	budget-exhausted scratch-bytes
+exists-inner-counters	cases/exists-inner-counters.ttl	cases/exists-inner-counters.rq	none	fuel=1000	n/a	complete

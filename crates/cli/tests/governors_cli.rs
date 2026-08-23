@@ -547,6 +547,130 @@ fn explain_renders_the_ledger_and_is_byte_identical_across_runs() {
     );
 }
 
+/// `--explain` over `LATERAL { GRAPH ?g { ... } }` is byte-identical across two runs, on
+/// the RELEASE CLI.
+///
+/// `?g` is bound by the left arm (`?s :p ?g`) and re-occurs as the right arm's `GRAPH ?g`
+/// name — `crate::expr::substitute_pattern_impl`'s `Graph` arm (in `purrdf-sparql-eval`)
+/// wraps the substituted node in `Join(Graph{..}, Values{?g})` for every left row, so this
+/// pins that the extra synthetic nodes introduce no run-to-run instability (allocation-
+/// address leakage, hash-iteration-order dependence, etc.) into the rendered charge ledger.
+#[test]
+fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let trig = write_file(
+        dir.path(),
+        "data.trig",
+        concat!(
+            "@prefix : <http://example.org/> .\n",
+            ":s1 :p :g1 .\n",
+            ":s2 :p :g2 .\n",
+            "GRAPH :g1 { :x :q :y . }\n",
+        ),
+    );
+    let query = "PREFIX : <http://example.org/> \
+                 SELECT * WHERE { ?s :p ?g LATERAL { GRAPH ?g { ?a :q ?b } } }";
+
+    let first = run(&["query", "--data", &trig, "--explain", query]);
+    assert_eq!(code(&first), 0, "stderr:\n{}", stderr(&first));
+    let second = run(&["query", "--data", &trig, "--explain", query]);
+    assert_eq!(
+        first.stdout, second.stdout,
+        "two --explain runs of the same LATERAL/GRAPH ?g query over the same data must be \
+         byte-identical"
+    );
+
+    let body = stdout(&first);
+    assert!(
+        body.starts_with("profile purrdf-sparql-governors v"),
+        "the explanation names the schedule it was priced under: {body}"
+    );
+    assert!(body.contains("\nledger\n"), "{body}");
+    assert!(
+        body.contains(" Lateral fuel=") && body.contains(" Graph fuel="),
+        "the ledger must carry a node-line entry for both the LATERAL and the Graph \
+         node it substitutes per left row: {body}"
+    );
+}
+
+/// `--explain` renders all three `EXISTS`/`NOT EXISTS` evidence counters —
+/// `exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`
+/// — with NONZERO values, and BOTH `FILTER EXISTS` inners' own plan nodes (the probe path's
+/// `Bgp` under the first `FILTER EXISTS`, and the definition path's `Bgp` under the second)
+/// carry their own nonzero ledger lines rather than folding into the enclosing `Filter` —
+/// the probe path attributes too, via the same `PreparedExists::ledger_source` push the
+/// definition path uses, just around its one once-per-site evaluation instead of a
+/// per-restriction one (`crate::expr::exists`'s probe arm).
+///
+/// This is the release-CLI twin of the frozen `exists-inner-counters` governor vector
+/// (`vectors/sparql-governors/`): same query shape, same data, so a reader can compare this
+/// test's assertions directly against `expected/exists-inner-counters.charges`.
+#[test]
+fn exists_counters_render_in_cli_explain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:s1 ex:p ex:o1 .\n",
+            "ex:s2 ex:p ex:o2 .\n",
+            "ex:s1 ex:q ex:y1 .\n",
+            "ex:s2 ex:q ex:y2 .\n",
+        ),
+    );
+    let query = "PREFIX ex: <http://example.org/> \
+                 SELECT ?a WHERE { \
+                   VALUES ?a { ex:s1 ex:s2 } \
+                   FILTER EXISTS { ?a ex:p ?o } \
+                   FILTER EXISTS { ?s ex:q ?o2 . FILTER(?s = ?a) } \
+                 }";
+
+    let first = run(&["query", "--data", &ttl, "--explain", query]);
+    assert_eq!(code(&first), 0, "stderr:\n{}", stderr(&first));
+    let second = run(&["query", "--data", &ttl, "--explain", query]);
+    assert_eq!(
+        first.stdout, second.stdout,
+        "two --explain runs of the same EXISTS query over the same data must be byte-identical"
+    );
+
+    let body = stdout(&first);
+    assert!(
+        body.contains("  exists-probe-answered\t1\n"),
+        "the probe-admissible FILTER EXISTS must charge exactly one memoized-probe \
+         evaluation: {body}"
+    );
+    assert!(
+        body.contains("  exists-definition-answered\t2\n"),
+        "the second, definition-path FILTER EXISTS must charge once per distinct outer \
+         restriction (two, for ?a = ex:s1 and ex:s2): {body}"
+    );
+    assert!(
+        body.contains("  exists-inner-solutions-consumed\t2\n"),
+        "the definition path's inner must consume exactly one witness per evaluation \
+         (two, first-witness-stopped): {body}"
+    );
+    // BOTH inners' own `Bgp` lines must carry real charges, not `fuel=0 rows=0` folded into
+    // the enclosing `Filter`: the first (probe-path, `?a ex:p ?o`) and the last
+    // (definition-path, `?s ex:q ?o2`), in the ledger's pre-order.
+    let bgp_lines: Vec<&str> = body
+        .lines()
+        .filter(|line| line.contains("Bgp fuel="))
+        .collect();
+    assert_eq!(
+        bgp_lines.len(),
+        2,
+        "exactly two `Bgp` ledger lines, one per `FILTER EXISTS` inner: {body}"
+    );
+    for bgp_line in &bgp_lines {
+        assert!(
+            !bgp_line.contains("fuel=0 rows=0"),
+            "every EXISTS inner's own Bgp must show real charges, not fuel=0 rows=0: \
+             {bgp_line}\nfull explanation:\n{body}"
+        );
+    }
+}
+
 /// `--explain` REFUSES WHAT IT CANNOT HONOR — and that is now the WHOLE list.
 ///
 /// Each refusal is a usage error (exit 2) naming the flag to drop, because the alternative

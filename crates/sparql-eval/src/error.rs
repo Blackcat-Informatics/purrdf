@@ -130,7 +130,8 @@ pub enum EvalError {
         what: String,
         /// The closed S6-deferral classification, when this instance is one of
         /// the narrow enumerated residue [`UnsupportedKind`]'s docs list;
-        /// `None` for a genuine gap. Set ONLY by `EvalError::unsupported_deferred`.
+        /// `None` for a genuine gap. Set ONLY by `EvalError::unsupported_deferred`
+        /// (a crate-private constructor, not part of this public field's own API).
         kind: Option<UnsupportedKind>,
     },
 
@@ -172,6 +173,29 @@ pub enum EvalError {
     /// yielding a wrong or unbound value — or, for a relation, a short row stream
     /// offered as the complete one.
     Function(String),
+
+    /// An `EXISTS`/`NOT EXISTS` body contains a `BIND`/`(expr AS ?v)` target or
+    /// a `VALUES` column that collides with a variable already bound on the
+    /// row being filtered — SEP-0007 Part 3's no-rebinding rule, enforced at
+    /// evaluation admission here for algebra that reaches this evaluator WITHOUT
+    /// going through [`purrdf_sparql_algebra`]'s parser (which refuses the
+    /// same shape at parse time): a SHACL-AF pre-binding, an
+    /// entailment-chase rewrite, or any other caller of the public algebra
+    /// API. The substitution theorem `crate::expr::exists`'s doc states
+    /// requires the inner pattern never observably rebind an outer-row
+    /// variable; a shape that does has NO DEFINED ANSWER, so both evaluation
+    /// strategies (the memoized probe and the per-row definition) are refused
+    /// rather than one of them silently answering based on whichever
+    /// happened to run — see `crate::governor::soundness::exists_row_collision`,
+    /// this variant's sole constructor's caller.
+    ExistsScopeCollision {
+        /// The colliding variable's name, WITHOUT a leading `?`.
+        variable: String,
+        /// `"BIND target"` or `"VALUES variable"` — matches the parser's own
+        /// `ScopeIntro` wording exactly, so the message reads identically
+        /// whether the collision was caught at parse time or here.
+        intro: &'static str,
+    },
 
     /// A caller supplied an invalid evaluation-configuration parameter -- e.g. a
     /// deterministic blank-mint prefix (`EvalCtx::with_bnode_mint_prefix`) that is
@@ -223,6 +247,7 @@ impl EvalError {
             | Self::Remote(_)
             | Self::Data(_)
             | Self::Function(_)
+            | Self::ExistsScopeCollision { .. }
             | Self::Config(_) => None,
         }
     }
@@ -251,6 +276,17 @@ impl EvalError {
     pub fn config(what: impl Into<String>) -> Self {
         Self::Config(what.into())
     }
+
+    /// Construct an [`EvalError::ExistsScopeCollision`] naming the colliding
+    /// variable (no leading `?`) and which construct introduced it (`"BIND
+    /// target"` or `"VALUES variable"` — pass
+    /// `crate::governor::soundness::RowCollisionIntro::as_str`'s result).
+    pub(crate) fn exists_scope_collision(variable: impl Into<String>, intro: &'static str) -> Self {
+        Self::ExistsScopeCollision {
+            variable: variable.into(),
+            intro,
+        }
+    }
 }
 
 impl core::fmt::Display for EvalError {
@@ -263,6 +299,11 @@ impl core::fmt::Display for EvalError {
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
+            Self::ExistsScopeCollision { variable, intro } => write!(
+                f,
+                "{intro} ?{variable} inside EXISTS is already in scope on the row being \
+                 filtered: the substitution semantics define no answer for a rebinding"
+            ),
             Self::Function(msg) => write!(f, "host function error: {msg}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
         }

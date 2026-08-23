@@ -1,0 +1,4 @@
+PREFIX : <https://example.org/exists#>
+SELECT ?x (EXISTS { BIND(:e AS ?x) } AS ?z) WHERE {
+  ?x :p :c .
+}

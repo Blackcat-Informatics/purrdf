@@ -102,6 +102,45 @@
 #     the right is injected as a constant. `:lateralSyntaxBasic` and
 #     `:lateralSyntaxScopeViolation` (the SEP's own illegal BIND example)
 #     pin the SEP-0006 scope restriction at parse time.
+#   * EXISTS/NOT EXISTS (SEP-0007, "defensible EXISTS") — six evaluation cases
+#     proving the per-row definition-path substitution the specification's own
+#     `Replace`/Values-Insertion mechanism requires, plus two negative-syntax
+#     cases pinning the in-scope-set restriction at parse time.
+#     `:existsGraphVariableCorrelated` is the Graph-substitution shape (`GRAPH
+#     ?g { … }` with `?g` bound from the row being filtered — the vendored
+#     `w3c-sparql11/exists/exists-graph-variable` case's own self-referencing
+#     `qt:data`/`qt:graphData` shape, copied byte-for-byte, including its second
+#     `:p` row bound to a graph that holds NOTHING: a `?g` left unresolved by
+#     substitution enumerates every named graph instead of the row's own,
+#     wrongly finding the OTHER row's graph a match). `:existsOptionalPadding`/
+#     `:notExistsOptionalPadding` pin the `OPTIONAL` padding tautology: a group
+#     whose sole element is `OPTIONAL { P }` never empties the unit row it wraps,
+#     so `FILTER EXISTS { OPTIONAL { P } }` is always true and `FILTER NOT EXISTS
+#     { OPTIONAL { P } }` is always false, REGARDLESS of whether `P` matches
+#     anything. `:existsNestedCorrelation` nests a `NOT EXISTS` inside an
+#     `EXISTS`, both bodies filter-only groups, correlating the nested body on
+#     the OUTER row variable through a triple-leaf position (never the nested
+#     body's own expression position) — a shape only visible to the widened
+#     free-variable walk `EXISTS`'s per-row substitution consults, proving the
+#     composition threads a real correlation through instead of evaluating the
+#     nested body once, uncorrelated, for every outer row alike.
+#     `:existsSubselectLimit` correlates via a sub-`SELECT`'s own projected
+#     variable with `LIMIT 1` sitting above the substitution site — a shape only
+#     the per-row definition path answers correctly (a once-only unconstrained
+#     evaluation of the `LIMIT 1` could keep only one of two candidates).
+#     `:existsMinusDomain` is the SEP's own "Issue 4" shape: the correlated
+#     variable occurs ONLY in `MINUS`'s subtracted (right) operand, which
+#     contributes nothing to `Minus`'s own output schema, so it is not even a
+#     shared column a probe could join on. `:existsScopeBindViolation`/
+#     `:existsScopeValuesViolation` pin SEP-0007 Part 3's in-scope-set
+#     restriction: a `BIND`/`VALUES` target inside `EXISTS` that collides with a
+#     variable already bound on the row being filtered is a hard parse-time
+#     error, not a silent rebinding. `:existsScopeProjectionViolation` pins the
+#     SAME restriction at a position that previously went unenforced: a
+#     `SELECT`-list `(expr AS ?v)` projection target's own `EXISTS` — parsed
+#     BEFORE `WHERE`, so the parser must defer the check to a post-`WHERE`
+#     resolution point rather than run it on the spot, the way it does for
+#     every OTHER `EXISTS` site.
 #
 
 # On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
@@ -166,6 +205,15 @@
         :lateralSharedVarInjection
         :lateralSyntaxBasic
         :lateralSyntaxScopeViolation
+        :existsGraphVariableCorrelated
+        :existsOptionalPadding
+        :notExistsOptionalPadding
+        :existsNestedCorrelation
+        :existsSubselectLimit
+        :existsMinusDomain
+        :existsScopeBindViolation
+        :existsScopeValuesViolation
+        :existsScopeProjectionViolation
     ) .
 
 :tripleTermBinding a mf:QueryEvaluationTest ;
@@ -421,3 +469,45 @@
 :lateralSyntaxScopeViolation a mf:NegativeSyntaxTest ;
     mf:name "SEP-0006's own illegal example: BIND(123 AS ?o) inside LATERAL is a hard syntax error when ?o is already bound on the left" ;
     mf:action <lateral-syntax-scope-violation.rq> .
+
+:existsGraphVariableCorrelated a mf:QueryEvaluationTest ;
+    mf:name "SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered — a second :p row bound to a graph holding NOTHING must be excluded, not wrongly admitted by an unresolved ?g enumerating every named graph" ;
+    mf:action [ qt:query <exists-graph-variable-correlated.rq> ; qt:data <exists.ttl> ; qt:graphData <exists.ttl> ] ;
+    mf:result <exists-graph-variable-correlated.srx> .
+
+:existsOptionalPadding a mf:QueryEvaluationTest ;
+    mf:name "SEP-0007: FILTER EXISTS { OPTIONAL { P } } is always true — OPTIONAL never empties the unit row it pads, regardless of whether P matches" ;
+    mf:action [ qt:query <exists-optional-padding.rq> ; qt:data <exists-optional-padding.ttl> ] ;
+    mf:result <exists-optional-padding.srx> .
+
+:notExistsOptionalPadding a mf:QueryEvaluationTest ;
+    mf:name "the NOT EXISTS twin of :existsOptionalPadding: FILTER NOT EXISTS { OPTIONAL { P } } is always false" ;
+    mf:action [ qt:query <not-exists-optional-padding.rq> ; qt:data <exists-optional-padding.ttl> ] ;
+    mf:result <not-exists-optional-padding.srx> .
+
+:existsNestedCorrelation a mf:QueryEvaluationTest ;
+    mf:name "SEP-0007: FILTER EXISTS { FILTER NOT EXISTS { ?s :q ?y } } — the nested NOT EXISTS is correlated on the OUTER ?s through a triple-leaf position only, so :s1 (no :q of its own) and :s2 (has one) must answer differently, not agree as if ?s were an uncorrelated fresh variable" ;
+    mf:action [ qt:query <exists-nested-correlation.rq> ; qt:data <exists-nested-correlation.ttl> ] ;
+    mf:result <exists-nested-correlation.srx> .
+
+:existsSubselectLimit a mf:QueryEvaluationTest ;
+    mf:name "SEP-0007: a correlated { SELECT ?s WHERE { … } LIMIT 1 } inner — only the per-row definition path answers LIMIT correctly above a substitution site" ;
+    mf:action [ qt:query <exists-subselect-limit.rq> ; qt:data <exists-subselect-limit.ttl> ] ;
+    mf:result <exists-subselect-limit.srx> .
+
+:existsMinusDomain a mf:QueryEvaluationTest ;
+    mf:name "SEP-0007 Issue 4: the correlated variable occurs only in MINUS's subtracted (right) operand, contributing nothing to MINUS's own output schema" ;
+    mf:action [ qt:query <exists-minus-domain.rq> ; qt:data <exists-minus-domain.ttl> ] ;
+    mf:result <exists-minus-domain.srx> .
+
+:existsScopeBindViolation a mf:NegativeSyntaxTest ;
+    mf:name "SEP-0007 Part 3: BIND(1 AS ?x) inside EXISTS is a hard syntax error when ?x is already in scope on the row being filtered" ;
+    mf:action <exists-scope-bind-violation.rq> .
+
+:existsScopeValuesViolation a mf:NegativeSyntaxTest ;
+    mf:name "SEP-0007 Part 3: VALUES ?x { 1 } inside EXISTS is a hard syntax error when ?x is already in scope on the row being filtered" ;
+    mf:action <exists-scope-values-violation.rq> .
+
+:existsScopeProjectionViolation a mf:NegativeSyntaxTest ;
+    mf:name "SEP-0007 Part 3, gap R2: EXISTS { BIND(:e AS ?x) } inside a SELECT-list (expr AS ?v) projection target is a hard syntax error when ?x is already in scope on the row being filtered, even though the projection list is parsed before WHERE" ;
+    mf:action <exists-scope-projection-violation.rq> .
