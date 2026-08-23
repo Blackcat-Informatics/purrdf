@@ -96,6 +96,7 @@ prose agrees with them. Run standalone, or as part of
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import string
@@ -135,6 +136,7 @@ _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
 _GOVERNOR_PROFILE = _REPO / "docs" / "SPARQL-GOVERNOR-PROFILE.md"
 _GOVERNOR_MANIFEST = _REPO / "vectors" / "sparql-governors" / "manifest.tsv"
+_GOVERNOR_SOURCE = _REPO / "crates" / "sparql-eval" / "src" / "governor" / "mod.rs"
 
 _INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
 _RL_SUITE = _REPO / "crates" / "sparql-conformance" / "entailment-suite" / "w3c-owl2-rl"
@@ -3055,6 +3057,199 @@ def governor_corpus_count_claim(matrix: dict[str, tuple[int, int]]) -> list[str]
     return problems
 
 
+def load_governor_schedule_source() -> tuple[str, int, list[tuple[str, int]]]:
+    """``(GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, CHARGE_SCHEDULE)`` as the
+    engine defines them, in ``crates/sparql-eval/src/governor/mod.rs``.
+
+    Parsed straight from the Rust source rather than restated, so a schedule
+    change — a point added, removed, renamed, or repriced, or the version bumped
+    without it — cannot leave SPARQL-GOVERNOR-PROFILE.md §10's recipe or its
+    pinned digest comment behind without this check noticing. That is exactly
+    the failure mode that let §10 print a v6 preimage and a v6 digest under a
+    v7 heading listing 16 charge points.
+    """
+    text = _read(_GOVERNOR_SOURCE)
+    rel = _GOVERNOR_SOURCE.relative_to(_REPO)
+
+    id_match = re.search(r'pub const GOVERNOR_PROFILE_ID: &str = "([^"]+)";', text)
+    if not id_match:
+        raise SystemExit(f"check-doc-claims: no `GOVERNOR_PROFILE_ID` constant in {rel}")
+
+    version_match = re.search(r"pub const GOVERNOR_PROFILE_VERSION: u32 = (\d+);", text)
+    if not version_match:
+        raise SystemExit(
+            f"check-doc-claims: no `GOVERNOR_PROFILE_VERSION` constant in {rel}"
+        )
+
+    body_match = re.search(
+        r"pub const CHARGE_SCHEDULE: \[\(&str, u64\); \d+\] = \[(.*?)\n\];",
+        text,
+        re.DOTALL,
+    )
+    if not body_match:
+        raise SystemExit(f"check-doc-claims: no `CHARGE_SCHEDULE` table in {rel}")
+    body = body_match.group(1)
+    entries = re.findall(r'\(\s*"([^"]+)"\s*,\s*(\d+)\s*\)', body)
+    # Every tuple entry in the body must have been read. Counting the construct
+    # separately is what keeps "the table shrank" from looking like "the table
+    # is fine but the pattern missed some rows".
+    declared = len(re.findall(r'\(\s*"', body))
+    if declared != len(entries):
+        raise SystemExit(
+            f"check-doc-claims: {rel} declares {declared} `CHARGE_SCHEDULE` "
+            f"entries but only {len(entries)} parsed; the entry shape changed, "
+            f"so update the pattern in load_governor_schedule_source()"
+        )
+    schedule = [(label, int(cost)) for label, cost in entries]
+    return id_match.group(1), int(version_match.group(1)), schedule
+
+
+def load_governor_profile_recipe() -> tuple[str, int, list[str], str]:
+    """``(id, version, label list, pinned digest)`` from SPARQL-GOVERNOR-PROFILE.md
+    §10's fenced recipe — the one place a consumer is told "a consumer can
+    therefore recompute it from this document alone".
+
+    Parsed rather than restated, so the recipe cannot silently drift from what
+    it claims to reproduce.
+    """
+    text = _read(_GOVERNOR_PROFILE)
+    rel = _GOVERNOR_PROFILE.relative_to(_REPO)
+    section_match = re.search(
+        r"## 10\. Profile identity.*?```sh\n(.*?)\n```", text, re.DOTALL
+    )
+    if not section_match:
+        raise SystemExit(
+            f"check-doc-claims: no fenced recipe under the '## 10. Profile "
+            f"identity' heading in {rel}"
+        )
+    block = section_match.group(1)
+
+    header_match = re.search(r"printf '([^\\']+)\\n(\d+)\\n'", block)
+    if not header_match:
+        raise SystemExit(
+            f"check-doc-claims: could not find the `printf '<id>\\n<version>\\n'` "
+            f"line in the §10 recipe in {rel}"
+        )
+    doc_id = header_match.group(1)
+    doc_version = int(header_match.group(2))
+
+    labels_match = re.search(r"printf '%s\\t1\\n'(.*?)\n\}", block, re.DOTALL)
+    if not labels_match:
+        raise SystemExit(
+            f"check-doc-claims: could not find the `printf '%s\\t1\\n' ...` "
+            f"label line in the §10 recipe in {rel}"
+        )
+    doc_labels = labels_match.group(1).replace("\\\n", " ").split()
+
+    digest_match = re.search(r"\n#\s*([0-9a-f]{64})\s*\n```", section_match.group(0))
+    if not digest_match:
+        raise SystemExit(
+            f"check-doc-claims: could not find the pinned `# <hex digest>` "
+            f"comment closing the §10 recipe in {rel}"
+        )
+    doc_digest = digest_match.group(1)
+
+    return doc_id, doc_version, doc_labels, doc_digest
+
+
+def _schedule_digest(id_: str, version: int, schedule: list[tuple[str, int]]) -> str:
+    """The lowercase-hex SHA-256 of the canonical preimage, mirroring
+    ``schedule_preimage``/``schedule_digest`` in
+    ``crates/sparql-eval/src/governor/mod.rs``: the id, then the version, then
+    one ``label\\tcost`` line per schedule entry, every line ``\\n``-terminated.
+    """
+    preimage = f"{id_}\n{version}\n"
+    for label, cost in schedule:
+        preimage += f"{label}\t{cost}\n"
+    return hashlib.sha256(preimage.encode()).hexdigest()
+
+
+def governor_profile_digest_claim() -> list[str]:
+    """SPARQL-GOVERNOR-PROFILE.md §10's recipe must reproduce
+    ``GOVERNOR_PROFILE_DIGEST`` exactly: the same id, the same version, the
+    same label list in the same order, and the same pinned hex digest as
+    ``crates/sparql-eval/src/governor/mod.rs``, the one place those four
+    constants are defined.
+
+    A stale version, a stale label list, and a stale digest are reported as
+    three DISTINCT failures — each is independently fixable, and folding them
+    into one "the recipe disagrees" message would hide which of the three
+    moved. §10's own recipe is also re-run (not just re-derived) against its
+    own pinned comment, which is what catches a digest comment that was hand-
+    edited to the wrong value even when the id/version/labels above it are
+    all current.
+    """
+    rel = _GOVERNOR_PROFILE.relative_to(_REPO)
+    src = _GOVERNOR_SOURCE.relative_to(_REPO)
+    problems: list[str] = []
+
+    engine_id, engine_version, engine_schedule = load_governor_schedule_source()
+    doc_id, doc_version, doc_labels, doc_digest = load_governor_profile_recipe()
+
+    # The recipe's label `printf` hardcodes a literal `1` cost for every entry. That
+    # is only a valid shorthand for the engine's actual schedule while every entry
+    # really does cost 1 — the moment one does not, the recipe's shell one-liner can
+    # no longer reproduce the digest at all, which is a defect this claim must catch
+    # rather than silently mis-price.
+    non_unit = [(label, cost) for label, cost in engine_schedule if cost != 1]
+    if non_unit:
+        problems.append(
+            f"{src}: `CHARGE_SCHEDULE` prices {non_unit} at other than 1, but "
+            f"the §10 recipe in {rel} hardcodes `1` for every label via "
+            f"`printf '%s\\t1\\n'` — the recipe needs a per-label cost, not "
+            f"just a label list, or it can no longer reproduce the digest"
+        )
+
+    if doc_id != engine_id:
+        problems.append(
+            f"{rel}: the §10 recipe's id is {doc_id!r}, but `GOVERNOR_PROFILE_ID` "
+            f"in {src} is {engine_id!r}"
+        )
+
+    if doc_version != engine_version:
+        problems.append(
+            f"{rel}: the §10 recipe prints version {doc_version}, but "
+            f"`GOVERNOR_PROFILE_VERSION` in {src} is {engine_version} — the "
+            f"recipe's preimage no longer matches the version this document's "
+            f"own '## 10. Profile identity' table declares"
+        )
+
+    engine_labels = [label for label, _ in engine_schedule]
+    if doc_labels != engine_labels:
+        problems.append(
+            f"{rel}: the §10 recipe's label list is stale — it names "
+            f"{doc_labels} ({len(doc_labels)} label(s)), but `CHARGE_SCHEDULE` "
+            f"in {src} is, in table order, {engine_labels} "
+            f"({len(engine_labels)} label(s))"
+        )
+
+    # The digest is checked against BOTH the recipe's own inputs (does the recipe,
+    # run as written, actually produce the comment pinned under it?) and the
+    # freshly-parsed engine schedule (does that comment match what the engine ships
+    # today?). The two can disagree independently: a hand-edited digest comment
+    # fails only the first, and a self-consistent recipe frozen at an old version
+    # fails only the second — which is exactly how §10 went stale, since its v6
+    # recipe and v6 digest comment agreed with EACH OTHER the whole time.
+    recomputed = _schedule_digest(
+        doc_id, doc_version, [(label, 1) for label in doc_labels]
+    )
+    if doc_digest != recomputed:
+        problems.append(
+            f"{rel}: the §10 recipe's pinned digest comment is {doc_digest}, but "
+            f"running the recipe exactly as written (id={doc_id!r}, "
+            f"version={doc_version}, labels={doc_labels}) gives {recomputed}"
+        )
+    engine_digest = _schedule_digest(engine_id, engine_version, engine_schedule)
+    if doc_digest != engine_digest:
+        problems.append(
+            f"{rel}: the §10 recipe's pinned digest comment is {doc_digest}, but "
+            f"`GOVERNOR_PROFILE_DIGEST` recomputed from the current "
+            f"`CHARGE_SCHEDULE` in {src} is {engine_digest}"
+        )
+
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Source 3 — the frozen upstream OWL 2 census
 # ---------------------------------------------------------------------------
@@ -4456,6 +4651,8 @@ def main(argv: list[str]) -> int:
     problems.extend(reasoning_session_hosts_claim())
     checked += 1
     problems.extend(governor_corpus_count_claim(matrix))
+    checked += 1
+    problems.extend(governor_profile_digest_claim())
     checked += 1
     # The ban walk reports how many files it scanned, which is COVERAGE, not a claim
     # count — folding ~1,900 scanned files into the "documented claims" headline would

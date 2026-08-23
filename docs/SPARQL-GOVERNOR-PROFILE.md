@@ -182,6 +182,9 @@ units mean nothing outside this build.
 | `property-function-row` | 1 | row a property-function relation emitted and this engine accepted |
 | `aggregate-invocation` | 1 | `(group, aggregate expression)` pair folded — the fold's init/finish overhead |
 | `aggregate-accumulation` | 1 | value folded into a group's running aggregate state |
+| `exists-probe-answered` | 1 | memoized-probe evaluation answering an `EXISTS`/`NOT EXISTS` filter |
+| `exists-definition-answered` | 1 | per-row-definition evaluation of an `EXISTS`/`NOT EXISTS` inner — once per distinct restriction of the row to the inner's correlated variables, never once per outer row |
+| `exists-inner-solutions-consumed` | 1 | row the definition path's inner materialized before its first-witness stop |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -513,14 +516,16 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n6\n'
+{ printf 'purrdf-sparql-governors\n7\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
     property-function-invocation property-function-row \
-    aggregate-invocation aggregate-accumulation
+    aggregate-invocation aggregate-accumulation \
+    exists-probe-answered exists-definition-answered \
+    exists-inner-solutions-consumed
 } | sha256sum
-# 8857d03631fc533881ccad603cdf7f82786c581a8bf0ee9f1637d227fb36290a
+# 28726bbb1d560fcd57585a0a361947e904283e59e96efaf9c2d38091ae256851
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
