@@ -51,8 +51,14 @@ pub(crate) struct Node {
     pub(crate) parent: Option<usize>,
     /// The role `(property, inverted)` on the edge from `parent` to this node.
     pub(crate) incoming: Option<(u32, bool)>,
-    /// Whether this is a root (named-individual / nominal) node — never blocked.
+    /// Whether this is a root node — never blocked. NOTE: a root is not necessarily a NOMINAL
+    /// (an anonymous `fresh_types` witness is an unblocked root with no nominal identity); the
+    /// nominal-introduction rules gate on [`Node::nominal_id`], not on this flag.
     pub(crate) root: bool,
+    /// The stable nominal identity this node denotes, when it is a NOMINAL root (named or
+    /// generated). `None` for anonymous roots and blockable tree nodes. Drives the
+    /// nominal-introduction (`NN`/`NI`) trigger and supplies the `u` of a reserved root.
+    pub(crate) nominal_id: Option<NominalId>,
     /// The individual term ids this node denotes.
     ///
     /// A root starts out denoting exactly the one individual it was created for, but
@@ -85,6 +91,42 @@ pub(crate) struct Node {
     pub(crate) value_class: Option<u32>,
 }
 
+/// The STABLE identity of a nominal — either a named individual or a generated reserved one.
+///
+/// Not every structurally-unblocked (`root`) node is a nominal: an anonymous `fresh_types`
+/// witness is a root with no nominal identity, and a blockable node merged into a root does not
+/// become one. A `NominalId` is carried only by nodes that genuinely DENOTE a nominal, and it is
+/// stable across merges and state clones — it is never a node index, which a merge would
+/// invalidate. It doubles as the `u` of Motik–Shearer–Horrocks' reserved root `u.⟨R,B,i⟩`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum NominalId {
+    /// A named individual, by its term id.
+    Named(u32),
+    /// A generated reserved nominal, by its own reserved tag (MSH's `u.⟨R,B,i⟩`, nested).
+    Generated(Box<GeneratedRoot>),
+}
+
+/// A TYPED, collision-free identity for a generated (nominal-introduction) reserved root.
+///
+/// It is the Motik–Shearer–Horrocks reserved root `u.⟨R,B,i⟩`: the AT-MOST ROOT `u` this
+/// reserved set belongs to (a stable [`NominalId`], NOT a mutable node index), the counted role
+/// `R`, the at-most filler concept id `B`, and the index `i` within the bound. Because the key
+/// carries `u`, two independent at-most roots with the same `⟨R,B,i⟩` get DISTINCT reserved
+/// roots and can never alias; and because `u` is stable, a merge or clone never invalidates it.
+/// The concept-tree `NN`-rule and the hypertableau `NI`-rule share this identity so the two
+/// cores mint the same nominal for the same trigger.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct GeneratedRoot {
+    /// The at-most root `u` whose reserved set this belongs to.
+    pub(crate) origin: NominalId,
+    /// The counted role `R`.
+    pub(crate) role: Role,
+    /// The at-most filler concept id `B`.
+    pub(crate) filler: u32,
+    /// The index `i` within the bound `1..=n`.
+    pub(crate) index: u32,
+}
+
 /// A completion graph under construction.
 #[derive(Clone)]
 pub(crate) struct State {
@@ -94,6 +136,11 @@ pub(crate) struct State {
     pub(crate) edges: Vec<(usize, usize, u32)>,
     /// Named individual term id → its root node index.
     pub(crate) root_of: BTreeMap<u32, usize>,
+    /// Generated (nominal-introduction) root identity → its root node index. Kept separate
+    /// from [`State::root_of`] because the two identity spaces are disjoint by type — see
+    /// [`GeneratedRoot`]. A merged-away entry is forwarded through [`find`] on lookup, exactly
+    /// as [`Graph::root`] forwards [`State::root_of`].
+    pub(crate) generated_root_of: BTreeMap<GeneratedRoot, usize>,
     /// A clash has been detected (e.g. a forced `≠` merge).
     pub(crate) clash: bool,
     /// A clique-work budget ran out mid-rule ([`max_clique`] returned `None`), so this
@@ -722,6 +769,7 @@ impl<'a> Graph<'a> {
             nodes: Vec::new(),
             edges: Vec::new(),
             root_of: BTreeMap::new(),
+            generated_root_of: BTreeMap::new(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
         };
@@ -772,6 +820,9 @@ impl<'a> Graph<'a> {
                 parent: None,
                 incoming: None,
                 root: true,
+                // An anonymous satisfiability/subsumption witness is an unblocked root but NOT a
+                // nominal — it denotes no named element — so it must not trigger `NN`/`NI`.
+                nominal_id: None,
                 nominals: BTreeSet::new(),
                 neq: BTreeSet::new(),
                 merged: None,
@@ -807,6 +858,13 @@ impl<'a> Graph<'a> {
             parent: None,
             incoming: None,
             root: true,
+            // A named individual is a nominal; a literal's root is not (it denotes a value, not a
+            // nominal element), so the nominal-introduction rules never fire on it.
+            nominal_id: if concrete {
+                None
+            } else {
+                Some(NominalId::Named(a))
+            },
             nominals: std::iter::once(a).collect(),
             neq: BTreeSet::new(),
             merged: None,
@@ -815,6 +873,142 @@ impl<'a> Graph<'a> {
         });
         st.root_of.insert(a, idx);
         idx
+    }
+
+    /// Get or create the **generated root** node for the typed identity `key`.
+    ///
+    /// This is the nominal-introduction primitive both cores share: Horrocks & Sattler's
+    /// `NN`-rule (concept-tree) and Motik–Shearer–Horrocks' Table 5 `NI`-rule (hypertableau)
+    /// both need to mint new NOMINAL ROOT nodes for the nominal/inverse/counting corner, and
+    /// they must mint the SAME ones a second firing would, or the graph never converges. It
+    /// mirrors [`Graph::root`] exactly — a `root = true` node (so it is never blocked), seeded
+    /// with the internalized TBox because it inhabits the OBJECT domain — but it is keyed by a
+    /// [`GeneratedRoot`] rather than a term id, so its identity can never alias a named
+    /// individual. A repeated call with the same `key` returns the existing node (forwarded
+    /// through [`find`] if it has since been merged away), so the reserved pool stays bounded.
+    /// It carries no term-space name in [`Node::nominals`]: it denotes a *fresh* element, and a
+    /// later identification with a named individual unions that name in through
+    /// [`Graph::merge_nodes`] like any other merge.
+    pub(crate) fn generated_root(&self, st: &mut State, key: GeneratedRoot) -> usize {
+        if let Some(&n) = st.generated_root_of.get(&key) {
+            return find(st, n);
+        }
+        let idx = st.nodes.len();
+        // Same charge a named root costs: minting copies the internalized TBox into the label.
+        self.work.charge(self.meta.len() as u64 + 1);
+        st.nodes.push(Node {
+            label: self.seed_label(),
+            parent: None,
+            incoming: None,
+            root: true,
+            nominal_id: Some(NominalId::Generated(Box::new(key.clone()))),
+            nominals: BTreeSet::new(),
+            neq: BTreeSet::new(),
+            merged: None,
+            concrete: false,
+            value_class: None,
+        });
+        st.generated_root_of.insert(key, idx);
+        idx
+    }
+
+    /// The stable nominal identity of node `x` if it is a NOMINAL root (named or generated),
+    /// else `None`. The nominal-introduction rules gate on this rather than on the bare
+    /// [`Node::root`] flag, because an anonymous `fresh_types` witness is an unblocked root that
+    /// is not a nominal.
+    pub(crate) fn nominal_id(&self, st: &State, x: usize) -> Option<NominalId> {
+        st.nodes[find(st, x)].nominal_id.clone()
+    }
+
+    /// Whether `filler` is a nominal `{o₁,…}` at least one of whose roots counts over an INVERSE
+    /// role (`≤n S.C` with `S` an inverse role, or a named role some `owl:inverseOf` makes one).
+    ///
+    /// This is the ONLY case in which a blocked node's `∃R.{o}` / `≥n R.{o}` obligation must fire:
+    /// the nominal's inverse-role count has to see the blocked predecessor, or the bound is
+    /// silently under-counted (the incompleteness the nominal-introduction rule repairs). A
+    /// nominal that counts nothing over an inverse has no such bound, so blocking may withhold
+    /// the obligation as usual — which is what keeps the exemption from firing on every blocked
+    /// node and blowing up the search.
+    pub(crate) fn nominal_counts_over_inverse(&self, st: &State, filler: u32) -> bool {
+        let Decomp::Nominal(members) = self.kb.table.decomp(filler) else {
+            return false;
+        };
+        for &o in members {
+            let Some(&n) = st.root_of.get(&o) else {
+                continue;
+            };
+            let node = find(st, n);
+            for &cid in &st.nodes[node].label {
+                if let Decomp::Max(_, role, _) = *self.kb.table.decomp(cid) {
+                    let over_inverse = matches!(role, Role::Inv(_))
+                        || matches!(role, Role::Named(p) if self.kb.inverses.contains_key(&p));
+                    if over_inverse {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// The BLOCKABLE `role`-neighbours `y` of `x` for which `x` is a completion-graph SUCCESSOR of
+    /// `y` — `y` GENERATED (the representative of) `x`, and the generating edge, read through the
+    /// role hierarchy and inverse closure, makes `y` a `role`-neighbour of `x`.
+    ///
+    /// This is the trigger shape of the nominal-introduction (`NN`/`NI`) rule. Predecessorhood is
+    /// the Horrocks & Sattler completion notion — defined by which node GENERATED which
+    /// ([`Node::parent`]/[`Node::incoming`]), NOT by raw RDF edge direction, which cannot tell an
+    /// ordinary `role`-successor of `x` from a true predecessor of `x` after a merge, and which
+    /// sees only one of the two label spellings (`S = Inv(p)` vs `S = Named(p)`). A blockable tree
+    /// node `n` that has since been identified with the nominal `x` (`find(n) == x`) contributes
+    /// its own generating predecessor `parent(n)`: if that resolves to a blockable `y` and the
+    /// generating role `R` on `n.incoming` makes `y` a `role`-neighbour of `x`, then `x` is a
+    /// successor of the blockable `y`. Both `R = Named(p)` and `R = Inv(p)` are handled: the
+    /// generating edge is stored `parent → n` for a named `R` (so `x` is its target, matched by
+    /// the inverse achiever `(p, false)`) and `n → parent` for an inverse `R` (so `x` is its
+    /// source, matched by the forward achiever `(p, true)`). Number-restricted roles are simple,
+    /// so no transitive closure is walked.
+    pub(crate) fn blockable_predecessor_neighbours(
+        &self,
+        st: &State,
+        x: usize,
+        role: Role,
+    ) -> Vec<usize> {
+        if self.work.exhausted() {
+            return Vec::new();
+        }
+        let ach = self.achievers(role);
+        let x = find(st, x);
+        // One unit per node examined, charged whole up front as [`Graph::step`] does per edge.
+        self.work.charge(st.nodes.len() as u64 + 1);
+        let mut out: Vec<usize> = Vec::new();
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for n in 0..st.nodes.len() {
+            if find(st, n) != x {
+                continue;
+            }
+            let (Some(parent), Some((prop, inverted))) = (st.nodes[n].parent, st.nodes[n].incoming)
+            else {
+                continue;
+            };
+            let y = find(st, parent);
+            // A blockable predecessor is a tree node (`!root`); a root parent is not the corner.
+            if y == x || st.nodes[y].root {
+                continue;
+            }
+            // `parent` generated `n` under `R` (`incoming`): the edge is `n → parent` for an
+            // inverse `R` (x the source, forward achiever) and `parent → n` for a named `R`
+            // (x the target, inverse achiever).
+            let realized = if inverted {
+                ach.contains(&(prop, true))
+            } else {
+                ach.contains(&(prop, false))
+            };
+            if realized && seen.insert(y) {
+                out.push(y);
+            }
+        }
+        out
     }
 
     /// Merge `discard` into `keep`, identifying the two nodes.
@@ -877,6 +1071,21 @@ impl<'a> Graph<'a> {
         if st.nodes[discard].root {
             st.nodes[keep].root = true;
         }
+        // Carry the nominal identity onto the keeper, preferring a NAMED identity — the
+        // Motik–Shearer–Horrocks named-root merge direction: a generated reserved root
+        // identified with a named individual becomes that individual, never the other way, which
+        // is what keeps the reserved pool from renaming a named element and prevents the
+        // caterpillar of reserved-of-reserved roots from growing without bound.
+        st.nodes[keep].nominal_id = match (
+            st.nodes[keep].nominal_id.take(),
+            st.nodes[discard].nominal_id.clone(),
+        ) {
+            (Some(NominalId::Named(a)), _) | (_, Some(NominalId::Named(a))) => {
+                Some(NominalId::Named(a))
+            }
+            (Some(keep_id), _) => Some(keep_id),
+            (None, disc_id) => disc_id,
+        };
         // A node identified with a literal's node denotes that literal's value, and inherits
         // both the domain it lives in and the value class that decides its identity.
         // `are_distinct` above already refused the merge when the two classes disagree, so
@@ -965,6 +1174,8 @@ impl<'a> Graph<'a> {
             parent: Some(x),
             incoming: Some((prop, inverted)),
             root: false,
+            // A blockable tree successor is not a nominal.
+            nominal_id: None,
             nominals: BTreeSet::new(),
             neq: BTreeSet::new(),
             merged: None,
@@ -1374,6 +1585,7 @@ mod tests {
             parent: None,
             incoming: None,
             root,
+            nominal_id: None,
             nominals: BTreeSet::new(),
             neq: BTreeSet::new(),
             merged: None,
@@ -1389,6 +1601,7 @@ mod tests {
             nodes: vec![bare_node(true), bare_node(true)],
             edges: std::iter::repeat_n((0usize, 1usize, prop), n).collect(),
             root_of: BTreeMap::new(),
+            generated_root_of: BTreeMap::new(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
         }

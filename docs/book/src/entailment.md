@@ -294,9 +294,9 @@ Two corpora measure two different things, and the distinction matters:
   ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, the
   RIF-Core rule engine, and RDF-axiomatic predicate typing, all run through the
   SPARQL conformance harness.
-- **W3C OWL 2 test suite — 257 of 261 cases agree, 4 ledgered**, zero
-  unledgered. This corpus is *consistency*-shaped: all 261 vendored cases are
-  `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35). It therefore
+- **W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero
+  unledgered. This corpus is *consistency*-shaped: all 262 vendored cases are
+  `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (36). It therefore
   grades the DL/tableau lane's satisfiability verdicts and says nothing about
   the OWL 2 RL rule table. Every one of the 4 divergences is named in a typed
   ledger; an unledgered divergence, and a ledgered case that has started
@@ -308,17 +308,17 @@ Two corpora measure two different things, and the distinction matters:
   was taken from extracted the premise literal and discarded the conclusion
   literal, which is exactly the half an entailment grade needs. They are
   vendored and graded by the next bullet. Second, the corpus is a **subset**:
-  261 of the 482 consistency-shaped cases upstream. Of the 221 it leaves out,
-  **173 the tableau decided when the exclusion was measured** (109 consistent, 64
+  262 of the 482 consistency-shaped cases upstream. Of the 220 it leaves out,
+  **172 the tableau decided when the exclusion was measured** (108 consistent, 64
   inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20
   reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion was
-  payload triage, not a capability limit, and "257 of 261" is a number over a
+  payload triage, not a capability limit, and "258 of 262" is a number over a
   corpus rather than over what W3C published.
 
   Those five figures are a **dated measurement**, recorded in `census.tsv`'s
   `dl_probe` column and described in that suite's `PROVENANCE.md`. The harness
   reads the column and prints it on every run; it does NOT re-run the reasoner
-  over the 221 excluded cases, so this row cannot detect a regression among them.
+  over the 220 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
 - **W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero

@@ -224,6 +224,91 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
+/// A spy-point ontology exercising the nominal-introduction (`NN`/`NI`) rule.
+///
+/// `p owl:inverseOf invP`; everything is `p`-related to the nominal `spy`
+/// (`⊤ ⊑ ∃p.{spy}`); `spy` bounds its `invP`-successors at `bound` (`≤bound invP.⊤`, i.e. at
+/// most `bound` `p`-predecessors, so the domain has at most `bound` elements); and an individual
+/// `u` is forced to `bound` pairwise-distinct `r`-successors (`≥bound r.⊤`). The bound fits, so
+/// the ontology is CONSISTENT and the search runs the rule to completion — minting `bound`
+/// reserved roots and folding the blockable predecessors into them — rather than short-circuiting
+/// on a clash. This is the cost the nominal-introduction path adds, with somewhere to be seen.
+fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let first = b.intern_iri(RDF_FIRST);
+    let rest = b.intern_iri(RDF_REST);
+    let nil = b.intern_iri(RDF_NIL);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let inverse_of = b.intern_iri(OWL_INVERSEOF);
+    let one_of = b.intern_iri("http://www.w3.org/2002/07/owl#oneOf");
+    let on_property = b.intern_iri(OWL_ONPROPERTY);
+    let some_values = b.intern_iri("http://www.w3.org/2002/07/owl#someValuesFrom");
+    let max_cardinality = b.intern_iri("http://www.w3.org/2002/07/owl#maxCardinality");
+    let min_cardinality = b.intern_iri("http://www.w3.org/2002/07/owl#minCardinality");
+    let thing = b.intern_iri("http://www.w3.org/2002/07/owl#Thing");
+
+    let p = b.intern_iri(&format!("{EX}p"));
+    let inv_p = b.intern_iri(&format!("{EX}invP"));
+    let r = b.intern_iri(&format!("{EX}r"));
+    let spy = b.intern_iri(&format!("{EX}spy"));
+    let u = b.intern_iri(&format!("{EX}u"));
+    b.push_quad(p, inverse_of, inv_p, None);
+
+    let count = |b: &mut RdfDatasetBuilder, n: usize| {
+        b.intern_literal(RdfLiteral {
+            lexical_form: n.to_string(),
+            datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+            language: None,
+            direction: None,
+        })
+    };
+
+    // ⊤ ⊑ ∃p.{spy}.
+    let one = b.intern_blank("oneof", BlankScope::DEFAULT);
+    b.push_quad(one, first, spy, None);
+    b.push_quad(one, rest, nil, None);
+    let enum_class = b.intern_blank("enum", BlankScope::DEFAULT);
+    b.push_quad(enum_class, one_of, one, None);
+    let some = b.intern_blank("some", BlankScope::DEFAULT);
+    b.push_quad(some, on_property, p, None);
+    b.push_quad(some, some_values, enum_class, None);
+    b.push_quad(thing, sub_class, some, None);
+
+    // spy : ≤bound invP.⊤.
+    let bound_lit = count(&mut b, bound);
+    let at_most = b.intern_blank("atmost", BlankScope::DEFAULT);
+    b.push_quad(at_most, on_property, inv_p, None);
+    b.push_quad(at_most, max_cardinality, bound_lit, None);
+    b.push_quad(spy, ty, at_most, None);
+
+    // u : ≥bound r.⊤.
+    let min_lit = count(&mut b, bound);
+    let at_least = b.intern_blank("atleast", BlankScope::DEFAULT);
+    b.push_quad(at_least, on_property, r, None);
+    b.push_quad(at_least, min_cardinality, min_lit, None);
+    b.push_quad(u, ty, at_least, None);
+
+    b.freeze().expect("freeze")
+}
+
+/// Report-only bench of the nominal-introduction path over spy-point ontologies of growing bound.
+fn bench_nominal_introduction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("owl_direct_consistency_nominal_introduction");
+    for &bound in &[1usize, 2, 4] {
+        let dataset = nn_ontology(bound);
+        let reasoner = Reasoner::new(&dataset).expect("reverse-map the spy-point ontology");
+        group.bench_with_input(
+            BenchmarkId::from_parameter(bound),
+            &reasoner,
+            |bencher, reasoner| {
+                bencher.iter(|| reasoner.consistency());
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_consistency(c: &mut Criterion) {
     for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
@@ -250,5 +335,5 @@ fn bench_consistency(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_consistency);
+criterion_group!(benches, bench_consistency, bench_nominal_introduction);
 criterion_main!(benches);

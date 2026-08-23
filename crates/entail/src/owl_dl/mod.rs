@@ -39,8 +39,12 @@ use purrdf_datalog::StopSignal;
 use crate::EntailError;
 use crate::interner::Interner;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
+use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
-use crate::owl_dl::concept::{Concept, Decomp, Role};
+// `Decomp`/`Role` are used only by the `cfg(test)` sub-cardinality interning for the
+// concept-tree `NN`-rule; production no longer reads either here.
+#[cfg(test)]
+use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
@@ -420,23 +424,25 @@ impl Kb {
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
     pub(crate) fn finalize(&mut self) {
+        // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
+        // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
+        // so those sub-cardinalities must be interned now, before encoding. The production
+        // hypertableau's `NI`-rule uses reserved roots instead, so production needs none of this
+        // and its concept table is left byte-for-byte as it was.
+        #[cfg(test)]
+        self.intern_sub_cardinalities();
         match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
             Ok(()) => {}
             Err(never) => match never {},
-        }
-        if self.counts_over_an_inverse() {
-            self.boundaries.insert(Construct::CountingOnInverse);
         }
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
     ///
     /// The ENCODING half of [`Self::finalize`], and the half the reverse mapping needs: a
-    /// parsed knowledge base is not yet a question, while
-    /// [`Construct::CountingOnInverse`] is a statement about the DECISION core's completeness
-    /// rather than about the ontology's syntax. So the disclosure stays where a decision is
-    /// prepared — the query layer's finalize, and the key-inference pass — which is exactly
-    /// where it was made before the TBox needed a pass of its own.
+    /// parsed knowledge base is not yet a question, and the encoding is a pure function of the
+    /// TBox that the query layer's finalize and the key-inference pass both re-run after
+    /// interning more concepts.
     ///
     /// Three passes, in this order and for this reason: the negation cache first, because
     /// PARTIAL absorption negates the conjuncts it cannot guard; then [`absorb`], which
@@ -581,28 +587,42 @@ impl Kb {
         false
     }
 
-    /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the
-    /// NN/NI corner neither decision core is complete for.
+    /// Pre-intern the SUB-CARDINALITY concepts `≤m S.C` (`1 ≤ m < n`) of every at-most
+    /// `≤n S.C` counted over an inverse role.
     ///
-    /// Keyed on LOGICAL CONTENT, not on spelling. `≤n r⁻.C` written directly is the obvious
-    /// shape, but `q owl:inverseOf p` with `≤n q.C` denotes exactly the same thing, and an
-    /// earlier revision of this check saw only the first: two logically equivalent knowledge
-    /// bases disclosed the limit differently, which makes the disclosure a fact about syntax
-    /// rather than about the answer. Both spellings are the corner, so both raise it.
-    ///
-    /// `owl:InverseFunctionalProperty` is the everyday case in the first spelling — it IS
-    /// `⊤ ⊑ ≤1 p⁻.⊤` — and the second is how the same restriction reads when a caller names
-    /// the inverse. A counted role with no inverse partner is outside the corner and raises
-    /// nothing.
-    fn counts_over_an_inverse(&self) -> bool {
-        (0..self.table.len() as u32).any(|id| match self.table.decomp(id) {
-            // Counted directly over an inverse role.
-            Decomp::Max(_, Role::Inv(_), _) => true,
-            // Counted over a NAMED role that some `owl:inverseOf` axiom makes an inverse.
-            // The map is symmetric, so one membership test settles either direction.
-            Decomp::Max(_, Role::Named(p), _) => self.inverses.contains_key(p),
-            _ => false,
-        })
+    /// The `NN`/`NI` rule guesses a bound `m ≤ n` and adds `≤m S.C` to a nominal node's label;
+    /// `max_clash` and the `≤`-rules read that concept back out as an interned [`Decomp::Max`].
+    /// The concept table is immutable during a search (a `Graph` holds `&Kb`), so every `≤m`
+    /// the guess can reach must already be interned here, before the table is frozen. Only the
+    /// counting-on-inverse corner is pre-interned — the rule fires nowhere else — so no concept
+    /// outside that corner is added, and a KB with no inverse-counting is byte-for-byte
+    /// unchanged. Only the `cfg(test)` concept-tree `NN`-rule consumes these; the production
+    /// hypertableau's `NI`-rule uses reserved roots, so this is gated to test builds.
+    #[cfg(test)]
+    fn intern_sub_cardinalities(&mut self) {
+        // EVERY at-most `≤n S.C` (n ≥ 2) is covered, not only the ones whose role is DIRECTLY an
+        // inverse or an `owl:inverseOf` partner. The `NN`-rule's trigger fires whenever the
+        // completion has a blockable predecessor that the achiever closure of `S` — which folds
+        // in sub-roles AND their inverses — makes an `S`-neighbour, so a `≤n S.C` counted over a
+        // NAMED role whose sub-role is an inverse can trigger it too. Pre-interning only the
+        // syntactically-inverse roles left that case's `≤m` un-interned, and `NN`'s `find_id`
+        // then panicked. Interning every sub-cardinality removes the mismatch; a concept no
+        // `NN` firing reaches is inert, and this whole pass is `cfg(test)` so production is
+        // byte-for-byte unchanged.
+        let mut wanted: Vec<(u32, Role, Concept)> = Vec::new();
+        for id in 0..self.table.len() as u32 {
+            if let Decomp::Max(n, role, filler) = *self.table.decomp(id)
+                && n >= 2
+            {
+                let filler_concept = self.table.concept(filler).clone();
+                for m in 1..n {
+                    wanted.push((m, role, filler_concept.clone()));
+                }
+            }
+        }
+        for (m, role, filler) in wanted {
+            self.table.intern(Concept::Max(m, role, Box::new(filler)));
+        }
     }
 
     /// Whether the knowledge base (TBox + ABox) is consistent.

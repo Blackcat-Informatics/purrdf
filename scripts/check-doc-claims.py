@@ -4492,7 +4492,7 @@ def build_claims(
             r"\((?P<consistency>\d+) `otest:ConsistencyTest` \+ "
             r"(?P<inconsistency>\d+) `otest:InconsistencyTest`",
             # The two case kinds must account for the whole corpus.
-            {"consistency": owl2_total - 35, "inconsistency": 35},
+            {"consistency": owl2_total - 36, "inconsistency": 36},
             f"{mat} (agreed + ledgered = the vendored corpus size)",
         ),
         Claim(
@@ -4511,8 +4511,8 @@ def build_claims(
             r"\((?P<inconsistency>\d+)\)",
             {
                 "total": owl2_total,
-                "consistency": owl2_total - 35,
-                "inconsistency": 35,
+                "consistency": owl2_total - 36,
+                "inconsistency": 36,
             },
             mat,
         ),

@@ -224,14 +224,16 @@ use crate::EntailError;
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::Role;
-use crate::owl_dl::graph::{Assumptions, Budget, Decision, Exhausted, Graph, State, find};
+use crate::owl_dl::graph::{
+    Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
+};
 
 /// One head atom with its variables replaced by the nodes a match bound them to.
 ///
 /// The `⊔`-rule needs to hold a branch's alternatives across a state clone, so a derived head
 /// is grounded once and then applied — rather than re-matching the clause in each branch,
 /// which would re-derive the same instance from a state the branch has already changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Ground {
     /// Add a concept to a node's label.
     Concept(usize, u32),
@@ -243,6 +245,12 @@ enum Ground {
     Equal(usize, usize),
     /// Identify a node with an individual's root.
     EqualIndividual(usize, u32),
+    /// Motik–Shearer–Horrocks Table 5 `NI`-rule: identify the node with the RESERVED ROOT
+    /// `u.⟨R,B,i⟩` named by the [`GeneratedRoot`], minting it if it does not yet exist. This is
+    /// the annotated equality of the at-most clausification — an equality whose right side is a
+    /// generated root rather than a matched successor — and it is what bounds the blockable
+    /// predecessors of a nominal into a finite reserved set.
+    EqualReserved(usize, GeneratedRoot),
 }
 
 /// One level of the search: the state a `⊔`-rule branched from, and its untried disjuncts.
@@ -641,9 +649,22 @@ impl<'a> Hyper<'a> {
             // The `≥`-rule is the one rule blocking withholds. A blocked node's at-least
             // obligation is not satisfied and not discharged: it is deferred to the blocker,
             // which is what the model construction in the module docs makes good.
-            if disjunct.iter().any(
-                |atom| matches!(atom, Ground::AtLeast(node, ..) if is_blocked(st, blocked, *node)),
-            ) {
+            //
+            // The one exception is an at-least whose filler is a NOMINAL that counts over an
+            // inverse (`≥n R.{o}` with `o` bounded on `R⁻`). Satisfying it mints a witness
+            // labelled `{o}`, but the nominal identification immediately merges that witness into
+            // the EXISTING root `o` (OWL 2 has no unique-name assumption), so no PERSISTENT
+            // blockable node survives and no unbounded blockable chain can grow from it —
+            // termination is preserved, and the unravelling argument is unaffected because the
+            // blocker carries the same obligation to the same root. Withholding it, on the other
+            // hand, hides the blocked node from the nominal's own inverse-role count — exactly the
+            // incompleteness the nominal-introduction rule repairs — so it must fire even under
+            // blocking. See [`crate::owl_dl::tableau`] for the concept-tree's mirror.
+            if disjunct.iter().any(|atom| {
+                matches!(atom, Ground::AtLeast(node, _n, _role, filler)
+                    if is_blocked(st, blocked, *node)
+                        && !self.g.nominal_counts_over_inverse(st, *filler))
+            }) {
                 continue;
             }
             // The head was NOT satisfied, so asserting it moves the graph: every atom's
@@ -744,7 +765,12 @@ impl<'a> Hyper<'a> {
         }
         let mut found: Option<Vec<Vec<Ground>>> = None;
         Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
-            let disjuncts = ground_head(&clause.head, frame);
+            let mut disjuncts = ground_head(&clause.head, frame);
+            // Motik–Shearer–Horrocks Table 5 `NI`-rule: at a NOMINAL at-most node pressed by a
+            // BLOCKABLE predecessor, add the alternatives that branch that predecessor into the
+            // reserved roots `u.⟨R,B,i⟩`. This is what bounds the corner the plain pairwise
+            // `≤`-merges cannot, and it decides beside them rather than replacing them.
+            self.append_ni_alternatives(st, clause, x, &mut disjuncts);
             // Grounding a `≤n` head expands one schematic atom into one alternative per PAIR
             // of counted successors, so the alternatives a single match produces are
             // quadratic in the count. Charged by what came out.
@@ -761,38 +787,107 @@ impl<'a> Hyper<'a> {
         found
     }
 
+    /// Append the Motik–Shearer–Horrocks Table 5 `NI`-rule alternatives for the `≤`-clause
+    /// `clause` at node `x`.
+    ///
+    /// The rule fires only in the corner: `x` is a NOMINAL (named or generated reserved root,
+    /// [`Graph::nominal_id`], never a mere anonymous root) whose at-most bound `≤n R.B` is pressed
+    /// by a BLOCKABLE predecessor `y` satisfying `B` (`x` a completion-successor of `y` —
+    /// [`Graph::blockable_predecessor_neighbours`]). For each such `y`, an alternative merges `y`
+    /// into one of the reserved roots `u.⟨R,B,i⟩` (`u = ` the nominal identity of `x`, `i ∈
+    /// 0..n`), which converts unbounded blockable predecessors into a finite reserved set and is
+    /// what the plain pairwise `≤`-merges cannot do without renaming a named element or looping.
+    /// Non-corner `≤`-clauses gain nothing: `nominal_id` is `None` for anonymous nodes and the
+    /// blockable-predecessor set is empty when no inverse edge makes `y` an `R`-neighbour of `x`.
+    fn append_ni_alternatives(
+        &self,
+        st: &State,
+        clause: &DlClause,
+        x: usize,
+        disjuncts: &mut Vec<Vec<Ground>>,
+    ) {
+        // The `≤`-clause names its counted `(role, filler, n+1)` in a `Successors` body atom.
+        let Some((role, filler, count)) = clause.body.iter().find_map(|atom| match *atom {
+            BodyAtom::Successors {
+                role,
+                filler,
+                count,
+                ..
+            } => Some((role, filler, count)),
+            _ => None,
+        }) else {
+            return;
+        };
+        let n = count.saturating_sub(1);
+        if n == 0 {
+            return;
+        }
+        let Some(origin) = self.g.nominal_id(st, x) else {
+            return;
+        };
+        for y in self.g.blockable_predecessor_neighbours(st, x, role) {
+            // Only a `B`-neighbour presses `≤n R.B`.
+            if !self.g.has_concept(st, y, filler) {
+                continue;
+            }
+            for index in 0..n {
+                disjuncts.push(vec![Ground::EqualReserved(
+                    y,
+                    GeneratedRoot {
+                        origin: origin.clone(),
+                        role,
+                        filler,
+                        index,
+                    },
+                )]);
+            }
+        }
+    }
+
     /// Whether every atom of a grounded disjunct already holds.
     fn satisfied(&self, st: &State, disjunct: &[Ground]) -> bool {
-        disjunct.iter().all(|atom| match *atom {
-            Ground::Concept(node, concept) => self.g.has_concept(st, node, concept),
-            Ground::SelfLoop(node, role) => self.g.has_self_loop(st, node, role),
+        disjunct.iter().all(|atom| match atom {
+            Ground::Concept(node, concept) => self.g.has_concept(st, *node, *concept),
+            Ground::SelfLoop(node, role) => self.g.has_self_loop(st, *node, *role),
             Ground::AtLeast(node, n, role, filler) => {
-                self.g.has_at_least(st, node, n, role, filler)
+                self.g.has_at_least(st, *node, *n, *role, *filler)
             }
-            Ground::Equal(left, right) => find(st, left) == find(st, right),
+            Ground::Equal(left, right) => find(st, *left) == find(st, *right),
             Ground::EqualIndividual(node, individual) => {
-                st.nodes[find(st, node)].nominals.contains(&individual)
+                st.nodes[find(st, *node)].nominals.contains(individual)
             }
+            // Satisfied only once the reserved root exists and is already the node's identity.
+            Ground::EqualReserved(node, key) => st
+                .generated_root_of
+                .get(key)
+                .is_some_and(|&r| find(st, r) == find(st, *node)),
         })
     }
 
     /// Assert every atom of a grounded disjunct. Returns `false` if the state clashed.
     fn apply(&self, st: &mut State, disjunct: &[Ground]) -> bool {
         for atom in disjunct {
-            match *atom {
+            match atom {
                 Ground::Concept(node, concept) => {
-                    self.g.add_concept(st, node, concept);
+                    self.g.add_concept(st, *node, *concept);
                 }
                 Ground::SelfLoop(node, role) => {
-                    self.g.add_self_loop(st, node, role);
+                    self.g.add_self_loop(st, *node, *role);
                 }
                 Ground::AtLeast(node, n, role, filler) => {
-                    self.g.ensure_at_least(st, node, n, role, filler);
+                    self.g.ensure_at_least(st, *node, *n, *role, *filler);
                 }
-                Ground::Equal(left, right) => self.g.merge_nodes(st, left, right),
+                Ground::Equal(left, right) => self.g.merge_nodes(st, *left, *right),
                 Ground::EqualIndividual(node, individual) => {
-                    let root = self.g.root(st, individual);
-                    self.g.merge_nodes(st, root, node);
+                    let root = self.g.root(st, *individual);
+                    self.g.merge_nodes(st, root, *node);
+                }
+                Ground::EqualReserved(node, key) => {
+                    // Mint (or reuse) the reserved root and merge the blockable node INTO it —
+                    // `merge_nodes` keeps the root, the MSH named-/reserved-root merge direction.
+                    let r = self.g.generated_root(st, key.clone());
+                    let node = find(st, *node);
+                    self.g.merge_nodes(st, r, node);
                 }
             }
             if st.clash {
@@ -1167,6 +1262,49 @@ mod tests {
         let again = decide(&kb, &Assumptions::of_kb(), cap);
         assert_eq!(first, again, "two runs, one decision");
         assert!(!first.exhausted && !first.stopped, "{first:?}");
+    }
+
+    /// The Motik–Shearer–Horrocks `NI`-rule's decision is a pure function of the knowledge base,
+    /// and the reserved roots it mints are CHARGED to the work meter — deterministic budget
+    /// accounting for the nominal-introduction path. The spy-point inconsistency (a nominal
+    /// `≤2 p⁻.⊤`, everything `p`-related to it, an individual forced to `≥3 r.⊤`) decides
+    /// INCONSISTENT, byte-identically run to run, having spent work on the reserved roots. The
+    /// byte-identical `Decision` is this crate's replayable certificate: re-deciding reproduces
+    /// the verdict and every cost figure exactly.
+    #[test]
+    fn nn_ni_spy_point_decision_is_deterministic_and_charged() {
+        const P: u32 = 40;
+        const RR: u32 = 41;
+        const SPY: u32 = 50;
+        const U: u32 = 51;
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        let max2 = kb
+            .table
+            .intern(Concept::Max(2, Role::Inv(P), Box::new(Concept::Top)));
+        let min3 = kb
+            .table
+            .intern(Concept::Min(3, Role::Named(RR), Box::new(Concept::Top)));
+        kb.abox_types.push((SPY, max2));
+        kb.abox_types.push((U, min3));
+        kb.individuals.insert(SPY);
+        kb.individuals.insert(U);
+        kb.finalize();
+        let cap = Budget::for_kb(&kb);
+        let first = decide(&kb, &Assumptions::of_kb(), cap);
+        let again = decide(&kb, &Assumptions::of_kb(), cap);
+        assert_eq!(first, again, "the NI decision is byte-identical run to run");
+        assert!(
+            !first.consistent && !first.exhausted,
+            "the spy point is inconsistent, decided (not exhausted): {first:?}"
+        );
+        assert!(
+            first.work > 0,
+            "the reserved-root minting is charged to the work meter: {first:?}"
+        );
     }
 
     /// The `⊔`-rule takes the FIRST open disjunction the derivation order meets, and NOT the
