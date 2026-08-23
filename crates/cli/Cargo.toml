@@ -73,3 +73,17 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
+# Timing harness for the pack-input benchmark (acquisition / verification / reasoning).
+criterion = { workspace = true }
+
+# The real CLI pack path, timed: mmap/immutable vs owned acquisition, verification,
+# and reasoning over a zero-copy `PackView` vs an owned-dataset rebuild.
+[[bench]]
+name = "pack_input"
+harness = false
+
+# Peak-allocation evidence for the same paths, in a separate process so the tracking
+# allocator's atomics do not contaminate the timed bench (mirrors `jsonld_alloc`).
+[[bench]]
+name = "pack_input_alloc"
+harness = false

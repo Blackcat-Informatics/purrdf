@@ -1296,6 +1296,7 @@ name = "purrdf-cli"
 version = "0.12.0"
 dependencies = [
  "clap",
+ "criterion",
  "memmap2",
  "purrdf",
  "purrdf-core",

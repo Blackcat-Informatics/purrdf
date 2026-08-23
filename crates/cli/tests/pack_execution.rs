@@ -5,8 +5,8 @@
 //! (`env!("CARGO_BIN_EXE_purrdf")`) — never the library — so every assertion pins the
 //! shipped executable's behavior.
 //!
-//! These are the correctness tests for issue #210's contract (the Criterion bench is
-//! separate, report-only evidence):
+//! These are the correctness tests for the pack-execution contract (the Criterion
+//! bench is separate, report-only evidence):
 //!
 //! * **entailment-over-pack semantic parity** — an entailment closure materialized
 //!   over a zero-copy `PackView` is BYTE-IDENTICAL to the same closure over the
