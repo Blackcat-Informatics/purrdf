@@ -267,6 +267,33 @@ impl SortOrder {
             _ => None,
         }
     }
+
+    /// Check that this order is a **meet-semilattice**: every pair of sorts that
+    /// shares a common subsort also has a UNIQUE greatest one.
+    ///
+    /// [`unify_sorted`] resolves a pair of sorted metavariables through
+    /// [`Self::meet`], and a pair whose greatest lower bound is AMBIGUOUS (two
+    /// incomparable maximal common subsorts) is reported by `meet` as `None` —
+    /// which `bind_meta` then turns into a [`Unified::Clash`], indistinguishable
+    /// from two genuinely disjoint sorts. That is a sound-but-surprising outcome,
+    /// so a caller that wants order-sorted resolution to be COMPLETE should build
+    /// its sort order to be a meet-semilattice and check it here first: `Ok(())`
+    /// if it is, or `Err((a, b))` naming the first pair (in the order's own
+    /// deterministic sort-name order) that shares a subsort but has no unique
+    /// greatest one. A pair that shares NO common subsort is not a violation — it
+    /// is two properly-disjoint sorts, exactly what an order-sorted clash is for.
+    pub fn validate(&self) -> Result<(), (NodeId, NodeId)> {
+        let sorts: Vec<NodeId> = self.universe.iter().copied().collect();
+        for (index, &a) in sorts.iter().enumerate() {
+            for &b in &sorts[index..] {
+                let shares_a_subsort = sorts.iter().any(|&x| self.leq(x, a) && self.leq(x, b));
+                if shares_a_subsort && self.meet(a, b).is_none() {
+                    return Err((a, b));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Sort information consulted by [`unify_sorted`]: the subsort order, each
@@ -497,15 +524,30 @@ fn bind_meta(
         };
     };
 
+    // Unifying two metavariables yields a variable of their sorts' MEET; `m` is
+    // about to resolve to `m2`, so any sort constraint must be carried onto the
+    // surviving `m2` or it is lost when `m` disappears into it. This is what makes
+    // an order-sorted discipline reach through a chain of variable-to-variable
+    // unifications (e.g. a sorted clause variable unified with an as-yet-unsorted
+    // goal variable) rather than evaporating at the first such step.
+    let mut propagate: Option<(MetaId, NodeId)> = None;
     if let Some(ctx) = ctx {
         if let NodeData::Meta(m2) = *dag.data(lowered) {
-            if let (Some(mine), Some(theirs)) = (s.meta_sort(m), s.meta_sort(m2))
-                && ctx.order().meet(mine, theirs).is_none()
-            {
-                return Unified::Clash {
-                    left: meta_node,
-                    right: t,
-                };
+            let combined = match (s.meta_sort(m), s.meta_sort(m2)) {
+                (Some(mine), Some(theirs)) => match ctx.order().meet(mine, theirs) {
+                    Some(glb) => Some(glb),
+                    None => {
+                        return Unified::Clash {
+                            left: meta_node,
+                            right: t,
+                        };
+                    }
+                },
+                (Some(mine), None) => Some(mine),
+                (None, theirs) => theirs,
+            };
+            if let Some(glb) = combined {
+                propagate = Some((m2, glb));
             }
         } else if let (Some(mine), Some(theirs)) = (s.meta_sort(m), ctx.sort_of(dag, lowered, s))
             && !ctx.order().leq(theirs, mine)
@@ -518,6 +560,9 @@ fn bind_meta(
     }
 
     s.bind(m, lowered);
+    if let Some((m2, glb)) = propagate {
+        s.declare_meta_sort(m2, glb);
+    }
     Unified::Ok
 }
 
@@ -1074,6 +1119,61 @@ mod tests {
         let mut s = Subst::new();
         s.declare_meta_sort(m1, cat);
         s.declare_meta_sort(m2, rock);
+        assert!(matches!(
+            unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx),
+            Unified::Clash { .. }
+        ));
+    }
+
+    /// A non-lattice order — two sorts `A`, `B` with TWO incomparable common
+    /// subsorts `C1`, `C2` — has an ambiguous `meet(A, B)` (`None`), which
+    /// [`SortOrder::validate`] reports by naming the offending `(A, B)` pair. A
+    /// pair sharing no subsort at all is NOT a violation.
+    #[test]
+    fn validate_flags_a_non_meet_semilattice_pair() {
+        let mut dag = TermDag::new();
+        let a = dag.intern_leaf("A");
+        let b = dag.intern_leaf("B");
+        let c1 = dag.intern_leaf("C1");
+        let c2 = dag.intern_leaf("C2");
+        // C1 and C2 are each below both A and B, and are mutually incomparable.
+        let order = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (c2, a), (c2, b)]);
+        assert_eq!(order.meet(a, b), None, "two maximal glbs — ambiguous meet");
+        assert_eq!(
+            order.validate(),
+            Err((a, b)),
+            "validate names the ambiguous pair"
+        );
+
+        // A proper meet-semilattice validates clean, even though disjoint sorts
+        // (no shared subsort) still have a `None` meet that is NOT a violation.
+        let d = dag.intern_leaf("D");
+        let e = dag.intern_leaf("E");
+        let lattice = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (d, e)]);
+        assert_eq!(lattice.validate(), Ok(()));
+        assert_eq!(lattice.meet(a, e), None, "disjoint sorts, not a violation");
+    }
+
+    /// The chosen, pinned contract: two metavariables whose declared sorts have
+    /// an AMBIGUOUS greatest lower bound `Clash` under [`unify_sorted`] — the
+    /// same outcome as two genuinely disjoint sorts. A caller wanting this to be
+    /// a completable unification must supply a meet-semilattice (checkable via
+    /// [`SortOrder::validate`]); ambiguity is deliberately a clash, not a guess.
+    #[test]
+    fn ambiguous_meet_clashes_like_disjoint_sorts() {
+        let mut dag = TermDag::new();
+        let a = dag.intern_leaf("A");
+        let b = dag.intern_leaf("B");
+        let c1 = dag.intern_leaf("C1");
+        let c2 = dag.intern_leaf("C2");
+        let order = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (c2, a), (c2, b)]);
+        let ctx = SortContext::new(order, BTreeMap::new(), BTreeMap::new());
+
+        let (m1, meta1) = dag.fresh_meta();
+        let (m2, meta2) = dag.fresh_meta();
+        let mut s = Subst::new();
+        s.declare_meta_sort(m1, a);
+        s.declare_meta_sort(m2, b);
         assert!(matches!(
             unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx),
             Unified::Clash { .. }

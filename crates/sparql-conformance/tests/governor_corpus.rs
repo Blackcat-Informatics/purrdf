@@ -1350,10 +1350,16 @@ fn render_charge_decomposition(ledger: &[purrdf_sparql_eval::governor::NodeCharg
 /// Whether `name` is one of the two lanes that separate `aggregate-invocation` from
 /// `aggregate-accumulation` — the aggregate lane's counterpart to a relation case's
 /// `relation_spec.is_some()` test, since neither aggregate lane wires an injected seam for
-/// `load_relations`/`load_transport` to key on.
+/// `load_relations`/`load_transport` to key on — OR `exists-inner-counters`, the `EXISTS`
+/// lane's twin of the same shape: `EXISTS`/`NOT EXISTS` is likewise ordinary algebra (no
+/// injected transport, relation, or aggregate registry), so its three evidence counters
+/// (`exists-probe-answered`, `exists-definition-answered`,
+/// `exists-inner-solutions-consumed`) are read off the same plain `explain_query` ledger
+/// the aggregate lane reads.
 fn wants_dataset_charge_decomposition(name: &str) -> bool {
     name.starts_with("aggregate-invocation-fuel-")
         || name.starts_with("aggregate-accumulation-fuel-")
+        || name == "exists-inner-counters"
 }
 
 /// The fuel a rendered decomposition attributes to `point`.

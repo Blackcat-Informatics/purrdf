@@ -32,9 +32,11 @@ Design pillars:
   `DISTINCT`/`REDUCED`.
 - **Property paths in-engine** — the full path algebra (`* + ? / | ^ !()`)
   evaluated over the same indexed surface, wasm-safe.
-- **Query features** — aggregates, `EXISTS` decorrelation, cost-based BGP
-  planning (with an `explain_query` introspection API), SPARQL UPDATE, and a
-  host-injectable `SERVICE` transport so federation stays wasm-portable.
+- **Query features** — aggregates, `EXISTS`/`NOT EXISTS` answered by a
+  memoized existence probe where a prepare-time proof licenses it and by the
+  per-row definition otherwise, cost-based BGP planning (with an
+  `explain_query` introspection API), SPARQL UPDATE, and a host-injectable
+  `SERVICE` transport so federation stays wasm-portable.
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 

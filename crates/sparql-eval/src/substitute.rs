@@ -11,6 +11,13 @@
 //!
 //! The substitution is applied to a **clone** of the cached (un-substituted) parse,
 //! so the plan cache is never poisoned by a focus-node-specific binding.
+//!
+//! [`substitute_in_graph_pattern`]'s walk below is a DIFFERENT, DELIBERATELY DIVERGENT
+//! substitution from `crate::expr`'s `Replace`/Values-Insertion walk (SEP-0007's
+//! mechanism, which [`crate::expr::exists`]'s per-row definition path and `LATERAL`'s
+//! per-row evaluation both use) — see `crate::enf`'s module doc, "The SHACL pre-binding
+//! fork", for the three specific differences and why each is a deliberate design choice
+//! rather than an inconsistency.
 
 use std::collections::HashMap;
 

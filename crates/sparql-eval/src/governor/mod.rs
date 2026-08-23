@@ -760,6 +760,10 @@ impl GovernorState {
         }
 
         let slot = &self.consumed[Self::slot(dimension)];
+        // `try_update`, the non-deprecated name for this atomic, postdates the
+        // workspace MSRV floor, so the original name is kept and its deprecation
+        // suppressed at this one call site.
+        #[allow(deprecated)]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))
@@ -987,6 +991,10 @@ impl GovernorState {
         };
 
         let slot = &self.consumed[Self::slot(dimension)];
+        // `try_update`, the non-deprecated name for this atomic, postdates the
+        // workspace MSRV floor, so the original name is kept and its deprecation
+        // suppressed at this one call site.
+        #[allow(deprecated)]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))
@@ -1246,13 +1254,42 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// point, so a budget sized against v5 for such a query buys exactly the same execution under
 /// v6. The number moves anyway, because the schedule moved and the schedule is what the
 /// digest describes.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 6;
+///
+/// # v7
+///
+/// [`CHARGE_SCHEDULE`] gains three points: deterministic evidence for which of the
+/// evaluator's two `EXISTS`/`NOT EXISTS` strategies (`crate::enf`'s module doc states the
+/// one-definition theorem the two implement) answered a given site, and how much of the
+/// per-row definition path's inner bag a governed evaluation actually consumed.
+///
+/// - [`ChargePoint::ExistsProbeAnswered`] is charged once per DISTINCT memoized-probe
+///   evaluation (an `exists_inner_cache` miss) — not once per outer row a shared index
+///   answers, so `k` distinct sites/schemas evaluated under the probe strategy across `N`
+///   outer rows charge this point `k` times, never `N`.
+/// - [`ChargePoint::ExistsDefinitionAnswered`] is the per-row definition path's twin,
+///   charged once per DISTINCT μ-restriction memo evaluation (an `exists_definition_memo`
+///   miss) — `k` distinct correlated-variable restrictions across `N` outer rows charge
+///   this point `k` times, never `N`. See `crate::expr::exists`'s doc for the memo's
+///   `(pattern, graph, schema, restriction)` key and its per-evaluation lifecycle.
+/// - [`ChargePoint::ExistsInnerSolutionsConsumed`] is charged once per row the definition
+///   path's substituted-and-first-witness-wrapped inner actually materializes, for each
+///   `ExistsDefinitionAnswered` evaluation — bounded at 1 by the `Slice{0, Some(1)}` wrap
+///   (`crate::enf`'s module doc, "truncated-at-one-witness is complete for emptiness") in
+///   every production evaluation; a differential test seam evaluates the unwrapped control
+///   to observe the un-truncated count instead.
+///
+/// No query without a correlated `EXISTS`/`NOT EXISTS` charges any of the three, so a
+/// budget sized against v6 for such a query buys exactly the same execution under v7. The
+/// number moves anyway, because the schedule moved and the schedule is what the digest
+/// describes.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 7;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
 /// Byte-identical from v1 through v3; v4 appends `update-mutated-quad`, v5 appends the two
-/// property-function points, and v6 appends the two aggregate points — see
-/// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
+/// property-function points, v6 appends the two aggregate points, and v7 appends the three
+/// `EXISTS`-strategy evidence points — see [`GOVERNOR_PROFILE_VERSION`] for what each
+/// version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
@@ -1266,9 +1303,12 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 6;
 /// reason: it is one observable event — one quad inserted into, or removed from, the store.
 /// So are `property-function-invocation` (one call into a host relation),
 /// `property-function-row` (one row that relation emitted and this engine accepted),
-/// `aggregate-invocation` (one group folding one aggregate expression), and
-/// `aggregate-accumulation` (one value folded into a group's running aggregate state).
-pub const CHARGE_SCHEDULE: [(&str, u64); 13] = [
+/// `aggregate-invocation` (one group folding one aggregate expression),
+/// `aggregate-accumulation` (one value folded into a group's running aggregate state),
+/// `exists-probe-answered` (one memoized-probe evaluation), `exists-definition-answered`
+/// (one per-row-definition evaluation), and `exists-inner-solutions-consumed` (one row the
+/// definition path's inner materialized).
+pub const CHARGE_SCHEDULE: [(&str, u64); 16] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1282,6 +1322,9 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 13] = [
     ("property-function-row", 1),
     ("aggregate-invocation", 1),
     ("aggregate-accumulation", 1),
+    ("exists-probe-answered", 1),
+    ("exists-definition-answered", 1),
+    ("exists-inner-solutions-consumed", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1378,6 +1421,22 @@ pub enum ChargePoint {
     /// point once per row unconditionally — is not a value this point ever counted: no
     /// expression evaluated to nothing, so no value existed to inspect.
     AggregateAccumulation,
+    /// One `EXISTS`/`NOT EXISTS` site answered via the memoized evaluate-once probe: an
+    /// `exists_inner_cache` miss — the inner pattern (uncorrelated, or correlated but
+    /// probe-admissible per `crate::governor::soundness::probe_admissible`) was evaluated
+    /// and indexed. A cache
+    /// HIT (a later row, or a later site, reusing the same index) charges nothing here — see
+    /// [`GOVERNOR_PROFILE_VERSION`]'s v7 note.
+    ExistsProbeAnswered,
+    /// One `EXISTS`/`NOT EXISTS` site answered via the per-row definition path: an
+    /// `exists_definition_memo` miss for the current μ-restriction. A cache hit (a later
+    /// outer row sharing the same restricted binding) charges nothing here — see
+    /// [`GOVERNOR_PROFILE_VERSION`]'s v7 note.
+    ExistsDefinitionAnswered,
+    /// One row the definition path's substituted, first-witness-wrapped inner pattern
+    /// actually materialized, charged once per row for each [`Self::ExistsDefinitionAnswered`]
+    /// evaluation — see [`GOVERNOR_PROFILE_VERSION`]'s v7 note for the production bound of 1.
+    ExistsInnerSolutionsConsumed,
 }
 
 impl ChargePoint {
@@ -1396,6 +1455,9 @@ impl ChargePoint {
         Self::PropertyFunctionRow,
         Self::AggregateInvocation,
         Self::AggregateAccumulation,
+        Self::ExistsProbeAnswered,
+        Self::ExistsDefinitionAnswered,
+        Self::ExistsInnerSolutionsConsumed,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1420,6 +1482,9 @@ impl ChargePoint {
             Self::PropertyFunctionRow => 10,
             Self::AggregateInvocation => 11,
             Self::AggregateAccumulation => 12,
+            Self::ExistsProbeAnswered => 13,
+            Self::ExistsDefinitionAnswered => 14,
+            Self::ExistsInnerSolutionsConsumed => 15,
         }
     }
 
@@ -1555,7 +1620,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "d1d453f692d3dfae0dcbef58b5f8d9ffdc288ee6e6394441c256bfb200929732";
+    "5bd8735ca1e96104b84c8939958bc065469435db8ad9dfc6de4bbd37c31e38e9";
 
 #[cfg(test)]
 mod tests {

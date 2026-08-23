@@ -176,7 +176,7 @@ pub(crate) fn projected_vars(pats: &[PatTriple]) -> Vec<String> {
                 }
             }
             Pat::Triple(inner) => {
-                for position in inner.iter() {
+                for position in &**inner {
                     walk(position, names);
                 }
             }

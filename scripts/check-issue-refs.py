@@ -6,7 +6,14 @@
 Five token families are rejected, over exactly the same scanned surface.
 
 **Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
-and misleading, so we do not allow new ones.
+and misleading, so we do not allow new ones. The same debt hides in a second
+shape: an issue number baked into a fixture IRI's path segment, such as
+``https://example.org/187-lateral-graph#p``. A reader who meets that host
+after the issue closes has no more of a referent than they would from a bare
+``#187`` — the digits just moved from a comment into a string literal, which
+is exactly the surface the plain ``#NNN`` scan of Rust source does not reach
+(string, not comment). Both shapes are banned outright, with no grandfather
+register, because the codebase carries zero legitimate occurrences of either.
 
 **Process references** — ``Task 28``, ``EPIC``, ``this branch``, a phrase
 that locates something in the repository's own history (``on origin/main``,
@@ -110,6 +117,20 @@ followed by another digit, a hex letter, a hyphen, or a decimal fraction
 (so ``#3.1`` section numbers are not flagged). This avoids 6-digit hex colors
 and markdown anchors while still catching references like ``#16`` or ``#123``.
 
+The issue-in-IRI token pattern is the literal text ``example.org/`` followed
+by 2–4 decimal digits and a hyphen (``example.org/187-...``), matched as a
+plain substring rather than gated by the Rust string/comment lexer's usual
+literal-only filtering: unlike the bare ``#NNN`` shape (which collides with
+format-spec flags and identifier fragments and so needs
+``literal_token_is_a_reference`` to disambiguate), ``example.org/<digits>-``
+has no legitimate non-tracker reading anywhere in this repository's fixture
+vocabulary, so every match is reported. It is scanned everywhere ``TOKEN_RE``
+already runs — Rust comments AND string literals (fixture IRIs live in
+literals, which is the surface the plain issue pattern skips there),
+Markdown/TOML prose, and Python/YAML comments and docstrings — reusing the
+existing scan surfaces rather than adding a new one, since the class differs
+from a comment-borne issue reference only in *shape*, not in *location*.
+
 The process token patterns are ``Task``/``task`` followed by an optional ``#``
 and a number, the bare uppercase acronym ``EPIC`` (so ``EPIC #906`` and
 ``(EPIC \\`text_parse\\`)`` are both caught, while the ordinary English word
@@ -167,6 +188,7 @@ ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
 # keeps the inline-code exclusion applying to the former alone.
 TOKEN_RE = re.compile(
     rf"(?P<issue>{ISSUE_PATTERN})"
+    r"|(?P<issue_iri>example\.org/\d{2,4}-)"
     r"|(?P<task>\b[Tt]ask\s+#?\d+\b)"
     r"|(?P<epic>\bEPIC\b)"
     r"|(?P<branch>(?i:\bthis\ branch\b))"
@@ -665,15 +687,18 @@ def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
     src = path.read_text(encoding="utf-8")
     comments, literals = rust_comments_and_literals(src)
     found = scan_comments(comments, exclude_inline_code=True)
-    # String literals are scanned for ISSUE tokens only. A process reference like
-    # "this branch" is ordinary prose a program may legitimately print, whereas a
-    # `#NNN` in a printed or returned string publishes a tracker id to a caller —
-    # which `.baseline` bans outright, and which three shipped surfaces carried while
-    # this lint reported clean.
+    # String literals are scanned for ISSUE tokens (both shapes) only. A process
+    # reference like "this branch" is ordinary prose a program may legitimately
+    # print, whereas a `#NNN` or an `example.org/<digits>-` fixture host in a
+    # printed, returned, or test-fixture string publishes a tracker id to a
+    # caller — which `.baseline` bans outright, and which three shipped surfaces
+    # (and, for the IRI shape, two fixture-heavy test files) carried while this
+    # lint reported clean.
     found.extend(
         hit
         for hit in scan_comments(literals, exclude_inline_code=False)
-        if hit[4] == "issue" and literal_token_is_a_reference(hit[3], hit[2])
+        if hit[4] == "issue_iri"
+        or (hit[4] == "issue" and literal_token_is_a_reference(hit[3], hit[2]))
     )
     found.sort(key=lambda hit: (hit[0], hit[1]))
     return found
@@ -1013,7 +1038,7 @@ def main() -> int:
     for path in iter_scan_paths(root):
         rel = str(path.relative_to(root))
         for line, col, token, text, kind in scan_path(path):
-            if kind == "issue":
+            if kind in ("issue", "issue_iri"):
                 issues.append((path, line, col, token, text))
                 continue
             key = (rel, token)

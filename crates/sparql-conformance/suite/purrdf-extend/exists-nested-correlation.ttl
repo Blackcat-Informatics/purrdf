@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# `:existsNestedCorrelation` fixture: two `:p` subjects (`:s1`/`:s2`). `:s2` also
+# has its OWN `:q` fact (`:s2 :q :m2`); `:s1` has none. The query is `FILTER
+# EXISTS { FILTER NOT EXISTS { ?s :q ?y } }`, correlating the NESTED `NOT EXISTS`
+# on the OUTER variable `?s` itself (a triple-leaf occurrence inside the nested
+# body, never the outer `FILTER EXISTS`'s own expression position) — nesting a
+# `NOT EXISTS` inside an `EXISTS`, both bodies a group whose sole element is a
+# `FILTER` (no BGP), so each reduces to "does the unit row survive the inner
+# filter". For `:s1`, no `:s1 :q _` triple exists, so the inner `NOT EXISTS` is
+# true, the unit row survives, and the outer `EXISTS` holds. For `:s2`, `:s2 :q
+# :m2` exists, so the inner `NOT EXISTS` is false, the unit row is dropped, and
+# the outer `EXISTS` is empty. The two subjects therefore MUST answer
+# differently, proving the per-row definition path actually threads `?s` into
+# the nested body's triple position instead of evaluating it once, uncorrelated,
+# for every outer row alike.
+@prefix : <https://example.org/exists#> .
+
+:s1 :p :o1 .
+:s2 :p :o2 .
+:s2 :q :m2 .

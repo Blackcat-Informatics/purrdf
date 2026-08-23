@@ -11,3 +11,6 @@ property-function-invocation	1
 property-function-row	12
 aggregate-invocation	0
 aggregate-accumulation	0
+exists-probe-answered	0
+exists-definition-answered	0
+exists-inner-solutions-consumed	0

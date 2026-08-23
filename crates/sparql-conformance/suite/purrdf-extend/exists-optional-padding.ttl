@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# `:existsOptionalPadding`/`:notExistsOptionalPadding` fixture: two `:p` facts and
+# DELIBERATELY no `:q` fact at all. `FILTER EXISTS { OPTIONAL { ?x :q ?y } }` is a
+# tautology regardless of `:q` data — `OPTIONAL` never empties the unit row it is
+# applied to, so `EXISTS` sees a non-empty inner bag either way. The absence of any
+# `:q` triple here is what makes the case discriminating: an engine that (wrongly)
+# treats a group whose sole element is `OPTIONAL { P }` as equivalent to `P` itself
+# would find zero matches and wrongly answer `EXISTS` false / `NOT EXISTS` true.
+@prefix : <https://example.org/exists#> .
+
+:s1 :p :o1 .
+:s2 :p :o2 .

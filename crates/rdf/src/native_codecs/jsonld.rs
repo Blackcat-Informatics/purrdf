@@ -1804,6 +1804,12 @@ fn parse(message: impl Into<String>) -> RdfDiagnostic {
 
 #[cfg(test)]
 mod carrier_law_tests {
+    // Brought into scope for `write!` method resolution; a newer toolchain no
+    // longer needs the explicit import, so the unused warning is suppressed
+    // rather than removing an import older toolchains still require.
+    #[allow(unused_imports)]
+    use std::io::Write as _;
+
     use proptest::prelude::*;
     use serde_json::json;
 

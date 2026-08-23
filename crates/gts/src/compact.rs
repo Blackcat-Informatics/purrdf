@@ -490,7 +490,7 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
             out.push((n >> 16) as u8);
             out.push((n >> 8) as u8);
         }
-        _ => unreachable!("chunks_exact(4) remainder is always shorter than 4"),
+        _ => unreachable!("as_chunks::<4> remainder is always shorter than 4"),
     }
     Ok(out)
 }

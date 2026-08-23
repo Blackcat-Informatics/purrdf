@@ -110,7 +110,9 @@
 // than only through whole-query evaluation — a certificate that can only be observed
 // through the thing it licenses is a certificate nobody can falsify.
 
-use purrdf_sparql_algebra::{Expression, Function, GraphPattern, OrderExpression};
+use purrdf_sparql_algebra::{
+    AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
+};
 
 // ---------------------------------------------------------------------------
 // Per-child transfer functions
@@ -962,7 +964,7 @@ pub(crate) const fn child_row_ceiling(
 /// [`crate::eval::EvalCtx`]'s address-memoized caches already use. Absent means "no
 /// ceiling": every node not named here evaluates exactly as it did before.
 #[derive(Debug, Default)]
-pub(crate) struct CapPushdown(crate::DetHashMap<usize, u64>);
+pub(crate) struct CapPushdown(DetHashMap<usize, u64>);
 
 impl CapPushdown {
     /// The row ceiling for the node at `address`, if the plan admits one there.
@@ -989,7 +991,7 @@ impl CapPushdown {
 /// `root_ceiling` of `None` yields an empty pushdown and does no work beyond the walk,
 /// which is the ungoverned, `LIMIT`-free case.
 pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
-    let mut out = crate::DetHashMap::default();
+    let mut out = DetHashMap::default();
     let Some(root_ceiling) = root_ceiling else {
         return CapPushdown(out);
     };
@@ -1111,6 +1113,1187 @@ pub(crate) const PATTERN_LABELS: [&str; 19] = [
 /// `pattern`'s variant label, for diagnostics and for the coverage test.
 pub(crate) fn pattern_label(pattern: &GraphPattern) -> &'static str {
     PATTERN_LABELS[pattern_label_index(pattern)]
+}
+
+// ---------------------------------------------------------------------------
+// Part B/C: the fourth structural analysis — free variables, certainly-bound
+// variables, stateful-builtin presence, and probe-admissibility.
+// ---------------------------------------------------------------------------
+//
+// # Why a sibling walk, not a fourth [`PatternPart`]/[`ExpressionPart`] output
+//
+// This module's header calls [`visit_pattern_parts`]/[`visit_expression_parts`]
+// "the one exhaustive algebra visitor" three analyses already share. This is a
+// FOURTH analysis, and it does NOT route through that visitor — deliberately, and
+// for a structural reason rather than an oversight: [`visit_pattern_parts`] is a
+// SHALLOW, callback-driven, boolean-search shape (`FnMut(PatternPart) -> bool`,
+// stopping at the first `true`) built for the three consumers that all ask a
+// yes/no question (is there an unsafe builtin anywhere? does a truncation certify
+// a bound?). [`NodeAnalysis`] below is not a search — it SYNTHESIZES a value (two
+// variable sets and a bool) bottom-up from each node's children and combines them
+// with a PER-VARIANT rule (`Join` unions, `Union` intersects, `LeftJoin` keeps only
+// the left, …), which a single shallow callback cannot express: the combination
+// rule needs the CHILDREN'S OWN computed [`NodeAnalysis`] values in hand, not just
+// a bool for whether visiting them would stop early.
+//
+// What IS preserved from that module's doctrine, verbatim: [`analyze_pattern`] and
+// [`analyze_expr`] below are EXHAUSTIVE, WILDCARD-FREE matches over every
+// [`GraphPattern`]/[`Expression`] variant with every field named, for the identical
+// reason this module's header states — a new algebra variant must be a compile
+// error here, not a silent inheritance of the most permissive classification. Kept
+// in the SAME FILE as the shared visitor (rather than a new module) so the
+// relationship — one doctrine, two walk shapes, for a principled reason — stays
+// visible beside it.
+//
+// [`PatternPart`]: PatternPart
+// [`ExpressionPart`]: ExpressionPart
+
+use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
+
+use crate::parallel::function_is_builtin_stateful;
+use crate::{DetHashMap, DetHashSet, VarSchema};
+
+/// One node's output from the fourth structural analysis: every variable free
+/// anywhere within it, the subset of those CERTAINLY bound in every solution it
+/// produces, and whether a stateful builtin (see [`function_is_builtin_stateful`])
+/// is reachable anywhere within it — including through a nested `EXISTS`/`NOT
+/// EXISTS`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct NodeAnalysis {
+    /// Every variable this node's evaluation can reference or produce, anywhere —
+    /// a triple/path term, a `VALUES` column, a `GRAPH`/`SERVICE` name, a
+    /// property-function argument, a `BIND`/`GROUP BY` target, or an expression
+    /// position (including inside a nested `EXISTS`'s own inner pattern).
+    pub(crate) free_vars: DetHashSet<Variable>,
+    /// The subset of [`Self::free_vars`] bound in EVERY solution this node
+    /// produces — see [`analyze_pattern`]'s per-variant derivation.
+    pub(crate) certainly_bound: DetHashSet<Variable>,
+    /// Whether a stateful builtin, an unresolved `Function::Custom` call (whose
+    /// volatility is registry-dependent and therefore unknowable at this
+    /// analysis's evaluation point — see [`function_is_builtin_stateful`]'s doc),
+    /// or a `PropertyFunction` call is reachable anywhere within this node,
+    /// including through a nested `EXISTS`.
+    pub(crate) has_stateful_builtin: bool,
+    /// Whether evaluating this node **to completion** — no `crate::enf` erasure —
+    /// can raise a hard [`EvalError`](crate::EvalError) or an observable remote
+    /// effect, anywhere within it, including through a nested `EXISTS`/`NOT
+    /// EXISTS`.
+    ///
+    /// `crate::enf`'s laws delete a subtree without evaluating it (they are proved
+    /// emptiness-equivalent over ROW SETS, not over side effects), so a law may
+    /// only erase a subtree for which this is `false`: a `true` subtree can hard-fail
+    /// or reach a federation endpoint OUTSIDE the erased `EXISTS`, and deleting it
+    /// would silently make that failure/effect vanish instead of propagating —
+    /// exactly the swallow this field exists to prevent. Conservative (never
+    /// under-reports) by construction: every arm below is a positive trigger or an
+    /// OR of children, never a negative one, so a miss can only make a law skip a
+    /// subtree it could safely have erased, never erase one it should not have.
+    ///
+    /// Conservatively `true` for:
+    /// * a [`GraphPattern::Service`] call, of ANY `silent`-ness — `SILENT` only
+    ///   swallows the federation transport failure itself
+    ///   ([`EvalError::Remote`](crate::EvalError::Remote)); a property-function call
+    ///   forwarded inside the body is refused at the forwarding boundary regardless
+    ///   of `silent` (see [`crate::remote::eval_service`]), and that refusal is a
+    ///   hard [`EvalError::Unsupported`](crate::EvalError::Unsupported) `SILENT`
+    ///   does not touch;
+    /// * a [`GraphPattern::PropertyFunction`] call — an unresolved relation IRI, an
+    ///   access-pattern no declared mode admits, or the relation's own returned
+    ///   `Err`/caught panic is [`EvalError::Function`](crate::EvalError::Function);
+    /// * an expression [`Function::Custom`] call — an IRI resolving to nothing
+    ///   registered is [`EvalError::Unsupported`](crate::EvalError::Unsupported)
+    ///   (`UnsupportedKind::CustomFunction`), and one that DOES resolve (a SHACL-AF
+    ///   SPARQL-bodied function or a host-native closure) can itself raise
+    ///   [`EvalError::Function`](crate::EvalError::Function) — neither is knowable
+    ///   at this analysis's evaluation point, so every `Custom` call is conservative;
+    /// * an expression [`Function::Purrdf`] call — `heldIn` hard-errors
+    ///   ([`UnsupportedKind::HeldInUnconfigured`](crate::error::UnsupportedKind::HeldInUnconfigured))
+    ///   with no caller-supplied standpoint-predicate configuration, and every
+    ///   `rdf:List` function (`listLength`, …) hard-errors
+    ///   ([`EvalError::Data`](crate::EvalError::Data)) over a cyclic or torn list —
+    ///   both conditions this analysis cannot see from the algebra alone;
+    /// * a `GROUP BY` aggregate whose [`AggregateFunction`] is
+    ///   [`AggregateFunction::Custom`] — the same "unresolved or the registered
+    ///   callee's own `Err`/panic" reasoning as `Function::Custom`, restated for
+    ///   the aggregate registry.
+    pub(crate) can_hard_error: bool,
+}
+
+/// Node-identity → [`NodeAnalysis`], covering one `EXISTS`/`NOT EXISTS` inner
+/// pattern and every descendant reachable through its children AND through a
+/// nested `EXISTS`/`NOT EXISTS` inner pattern — populated by [`analyze_pattern`].
+///
+/// Keyed by node address, safe ONLY over the immutable, prepared query algebra
+/// this analysis runs on (never over a per-row substituted temporary — the same
+/// discipline `crate::eval::EvalCtx::exists_inner_cache` and friends already
+/// observe; see that type's doc on why the ABA hazard applies only to
+/// per-row-substituted trees, not to the tree this table is built from).
+pub(crate) type NodeAnalysisTable = DetHashMap<usize, NodeAnalysis>;
+
+/// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern`]
+/// call over the same tree. Returns `None` on a miss, which should not happen when
+/// `table` was built from exactly this tree — `probe_admissible`'s recursion never
+/// descends into a node `analyze_pattern` did not also visit, since both walks
+/// share the same per-variant child set — and is unreachable today only by that
+/// caller-discipline argument, not by construction.
+///
+/// # Fail closed on a miss — deliberately `Option`, not a synthesized default
+///
+/// An earlier version of this function papered over a miss with a synthesized
+/// "empty `free_vars`, empty `certainly_bound`, `has_stateful_builtin: true`,
+/// `can_hard_error: true`" [`NodeAnalysis`] and called that "maximally
+/// conservative". That label was true for exactly one of this function's two
+/// kinds of reader — a `certainly_bound` reader (`admissible_rec`'s `Filter`/
+/// `Extend` arms, feeding [`expr_probe_admissible`]) — and FALSE for the other: a
+/// `free_vars` reader (`probe_admissible`'s own root lookup) sees an empty
+/// `free_vars` as "this node touches no outer variable ⇒ uncorrelated ⇒ admit the
+/// probe" — the PERMISSIVE direction, exactly backwards from "conservative".
+/// Which direction a synthesized default is safe in depends on which field the
+/// caller reads, so no single synthesized `NodeAnalysis` can be safe for every
+/// caller at once. Returning `None` instead removes the ambiguity: every caller
+/// below matches on it explicitly and fails closed (treats a miss as
+/// inadmissible/correlated), so a miss can only make a law/probe MORE
+/// conservative, never less, regardless of which field that particular caller
+/// would otherwise have read.
+fn node_analysis<'a>(
+    pattern: &GraphPattern,
+    table: &'a NodeAnalysisTable,
+) -> Option<&'a NodeAnalysis> {
+    table.get(&(std::ptr::from_ref(pattern) as usize))
+}
+
+/// Collect the variables a term pattern mentions, descending into a quoted
+/// triple's own component positions — the analysis-module twin of
+/// `crate::expr::term_pattern_vars`, kept local so this module needs no
+/// visibility change into `crate::expr`'s private helpers.
+fn collect_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+    match term {
+        TermPattern::Variable(v) => {
+            out.insert(v.clone());
+        }
+        TermPattern::Triple(triple) => {
+            collect_term_pattern_vars(&triple.subject, out);
+            if let NamedNodePattern::Variable(v) = &triple.predicate {
+                out.insert(v.clone());
+            }
+            collect_term_pattern_vars(&triple.object, out);
+        }
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+    }
+}
+
+/// Whether a `Path` endpoint term can make `crate::path::resolve_end` raise
+/// [`crate::error::EvalError::unsupported_deferred`] with
+/// [`crate::error::UnsupportedKind::QuotedTripleTermVariable`] — the hard error
+/// `crate::convert::ground_term_pattern_to_value`/`ground_triple_pattern_to_value`
+/// raise for a variable found *inside* a quoted-triple-term endpoint.
+///
+/// A BARE `Variable`/`BlankNode` endpoint never reaches that conversion at all —
+/// `resolve_end`'s own match arms resolve those to `Endpoint::Free` directly,
+/// before `ground_term_pattern_to_value` is ever called (see that function's doc
+/// for why a variable *as* the whole endpoint is a different, fully-supported
+/// shape from a variable *inside* a quoted-triple endpoint) — so only a
+/// `TermPattern::Triple` endpoint is even a candidate, and only when a variable is
+/// reachable somewhere within it (mirroring `collect_term_pattern_vars`'s own
+/// descent through nested quoted-triple components, since that is exactly what
+/// `ground_triple_pattern_to_value` recurses through before it errors).
+fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
+    if !matches!(term, TermPattern::Triple(_)) {
+        return false;
+    }
+    let mut vars = DetHashSet::default();
+    collect_term_pattern_vars(term, &mut vars);
+    !vars.is_empty()
+}
+
+/// Analyze `pattern` and every descendant (through its children and through any
+/// nested `EXISTS`/`NOT EXISTS`), memoizing each into `table`, and return the root's
+/// own [`NodeAnalysis`].
+///
+/// # Per-variant derivation (Part B)
+///
+/// * `Bgp`/`Path`: every mentioned variable is bound whenever the node matches at
+///   all — free and certainly-bound coincide.
+/// * `Values`: free = the column list; certainly-bound = the columns with NO
+///   `UNDEF` cell in ANY row (an empty `VALUES` block, zero rows, vacuously
+///   certainly-binds every column — there is no row to be a counterexample).
+/// * `PropertyFunction`: free = every argument-vector variable; certainly-bound =
+///   ∅ (which side of the call binds which argument is a per-relation, per-mode
+///   decision this analysis cannot see) — moot for admissibility regardless,
+///   since [`probe_admissible`] refuses `PropertyFunction` outright.
+/// * `Join` = union of both sides (a row exists only when both matched, so every
+///   variable either side certainly binds is certainly bound in the join).
+/// * `Union` = free is the union, certainly-bound is the INTERSECTION (a row can
+///   come from either branch, so only what BOTH branches guarantee is certain).
+/// * `LeftJoin`/`Minus` = the LEFT (required) side's certainly-bound set — the
+///   right/subtracted side never adds a guarantee.
+/// * `Lateral` = union of both sides, exactly like `Join` (a `Lateral` row is
+///   still a genuine solution of the right pattern for that particular left row —
+///   no padding, no partial match — so the right side's own guarantees hold).
+/// * `Graph`/`Service` with a variable name: that variable joins certainly-bound
+///   (a `GRAPH ?g { … }`/`SERVICE ?g { … }` match binds `?g` to the graph/endpoint
+///   it matched against) for `Graph`; `Service` stays conservative (a remote or
+///   `SILENT`-swallowed call has no such guarantee this analysis can make, and —
+///   like `PropertyFunction` — the exact answer is moot: `probe_admissible`
+///   refuses `Service` outright).
+/// * `Filter`/`OrderBy`/`Distinct`/`Reduced`/`Slice` = the inner's own set
+///   (unchanged; these modifiers restrict or reorder ROWS, never which variables
+///   a surviving row binds).
+/// * `Extend` = inner's set ∪ `{target}` (`BIND` always yields a bound target for
+///   this analysis's purposes — see [`analyze_pattern`]'s own doc note on this simplification's
+///   scope, below).
+/// * `Project` = inner's set ∩ the projected list (both free and certainly-bound
+///   narrow at the one true scope boundary the surface language has).
+/// * `Group` = grouping keys ∩ inner's certainly-bound, ∪ every aggregate output
+///   variable (an aggregate always yields SOME value for its output variable,
+///   even over an empty group — the same simplification as `Extend`'s, and the
+///   same doc note below covers its scope too).
+///
+/// # `Extend`/`Group`'s "always bound" simplification's scope
+///
+/// This is that doc note on this simplification's scope, promised by the `Extend` bullet
+/// above: the `Extend` and `Group` bullets both commit `certainly_bound` to a claim this
+/// analysis cannot actually prove from the algebra alone, and both over-claim in
+/// the UNSOUND direction for [`expr_probe_admissible`] — a caller trusting
+/// `certainly_bound` to admit an unconstrained read of a variable that a real
+/// per-row evaluation could leave unbound:
+///
+/// * `Extend` inserts `variable` into `certainly_bound` UNCONDITIONALLY — but a
+///   `BIND` whose expression raises a TYPE error (not a hard
+///   [`EvalError`](crate::EvalError)) leaves the target unbound per SPARQL §18.6,
+///   not bound to some value. This analysis has no per-expression-shape way to
+///   know whether `expression` can type-error.
+/// * `Group` inserts every aggregate output variable into `certainly_bound`
+///   UNCONDITIONALLY — but `MIN`/`MAX`/`SAMPLE` over a group whose every input row
+///   errors on the aggregate's own argument expression yields NO value for that
+///   output variable, not some value.
+///
+/// **Which claims over-approximate**: exactly those two — every other bullet above
+/// derives `certainly_bound` from a guarantee the algebra shape itself gives (a
+/// `Bgp` match, a `VALUES` column with no `UNDEF`, a `Join`'s both-sides
+/// requirement, …), never from an unproven "this expression cannot error"
+/// assumption.
+///
+/// **Which callers neutralize them**: neither over-claim can currently decide a
+/// [`probe_admissible`] outcome, because [`admissible_rec`] never reads it in a
+/// context where the claim's truth would matter:
+///
+/// * [`admissible_rec`]'s `Extend` arm's `&&` chain includes
+///   `!current_row_vars.contains(variable)` as an independent leg, checked
+///   alongside (not gated behind) the `expr_probe_admissible` call that would read
+///   an ENCLOSING node's lookup of this `Extend` node's own over-claimed
+///   `certainly_bound`. The over-claim can only change an outcome when
+///   `variable ∈ current_row_vars` — exactly the case where that collision leg
+///   already forces the whole `Extend` arm (and, by `&&`-chaining, every ancestor
+///   that recurses through it) to `false`, short-circuiting before the
+///   over-claimed value is ever consulted.
+/// * [`admissible_rec`]'s `Group` arm is a blanket
+///   `GraphPattern::Group { .. } => false` — `Group` is NEVER probe-admissible, so
+///   no ancestor's `admissible_rec(inner, ..) && expr_probe_admissible(..,
+///   node_analysis(inner, ..).certainly_bound, ..)` call ever evaluates the
+///   `expr_probe_admissible` half of that `&&` when `inner` is a `Group` node:
+///   `&&` short-circuits on the `false` the blanket refusal already produced.
+///
+/// **What a future consumer must check**: a new caller of `certainly_bound`
+/// OUTSIDE `probe_admissible`'s recursion — or any change to either neutralizing
+/// arm above — must not trust an `Extend` target or a `Group` aggregate output as
+/// unconditionally bound without re-deriving one of the two guards this doc note
+/// describes (a collision check that forces refusal exactly when the over-claim
+/// could matter, or a blanket refusal of the whole node). The precise fix —
+/// conditioning the two insertions on whether `expression`/the aggregate's
+/// argument can type-error — is deliberately NOT attempted here: SPARQL's "type
+/// error leaves unbound" rule is a per-expression-shape judgment `analyze_expr`
+/// does not currently make, so doing this exactly would need a new, third boolean
+/// output threaded through every `analyze_expr` arm, for a case only reachable
+/// today by caller accident.
+pub(crate) fn analyze_pattern(
+    pattern: &GraphPattern,
+    table: &mut NodeAnalysisTable,
+) -> NodeAnalysis {
+    let addr = std::ptr::from_ref(pattern) as usize;
+    if let Some(existing) = table.get(&addr) {
+        return existing.clone();
+    }
+    let analysis = match pattern {
+        GraphPattern::Bgp { patterns } => {
+            let mut vars = DetHashSet::default();
+            for tp in patterns {
+                collect_term_pattern_vars(&tp.subject, &mut vars);
+                if let NamedNodePattern::Variable(v) = &tp.predicate {
+                    vars.insert(v.clone());
+                }
+                collect_term_pattern_vars(&tp.object, &mut vars);
+            }
+            NodeAnalysis {
+                certainly_bound: vars.clone(),
+                free_vars: vars,
+                has_stateful_builtin: false,
+                can_hard_error: false,
+            }
+        }
+        GraphPattern::Path {
+            subject, object, ..
+        } => {
+            let mut vars = DetHashSet::default();
+            collect_term_pattern_vars(subject, &mut vars);
+            collect_term_pattern_vars(object, &mut vars);
+            NodeAnalysis {
+                certainly_bound: vars.clone(),
+                free_vars: vars,
+                has_stateful_builtin: false,
+                // A variable-bearing quoted-triple-term endpoint (`?s :p { ?x :q ?y }` as
+                // a path subject/object) raises `UnsupportedKind::QuotedTripleTermVariable`
+                // — see `path_endpoint_can_hard_error`'s doc — so an ENF law that erases a
+                // `Path` bearing one must not silently swallow that error along with it.
+                can_hard_error: path_endpoint_can_hard_error(subject)
+                    || path_endpoint_can_hard_error(object),
+            }
+        }
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => {
+            let free: DetHashSet<Variable> = variables.iter().cloned().collect();
+            let mut certainly = DetHashSet::default();
+            for (i, v) in variables.iter().enumerate() {
+                if bindings
+                    .iter()
+                    .all(|row| row.get(i).is_some_and(Option::is_some))
+                {
+                    certainly.insert(v.clone());
+                }
+            }
+            NodeAnalysis {
+                free_vars: free,
+                certainly_bound: certainly,
+                has_stateful_builtin: false,
+                can_hard_error: false,
+            }
+        }
+        GraphPattern::PropertyFunction(call) => {
+            let mut vars = DetHashSet::default();
+            for term in call.subject_args.iter().chain(&call.object_args) {
+                collect_term_pattern_vars(term, &mut vars);
+            }
+            NodeAnalysis {
+                free_vars: vars,
+                certainly_bound: DetHashSet::default(),
+                // A relation is host code of unknown volatility; conservatively stateful
+                // (moot for `probe_admissible`, which refuses `PropertyFunction` outright).
+                has_stateful_builtin: true,
+                // An unresolved relation IRI, an access pattern no declared mode
+                // admits, or the relation's own returned `Err`/caught panic is
+                // `EvalError::Function` — see `NodeAnalysis::can_hard_error`'s doc.
+                can_hard_error: true,
+            }
+        }
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            let l = analyze_pattern(left, table);
+            let r = analyze_pattern(right, table);
+            NodeAnalysis {
+                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
+                certainly_bound: l
+                    .certainly_bound
+                    .union(&r.certainly_bound)
+                    .cloned()
+                    .collect(),
+                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
+            }
+        }
+        GraphPattern::Union { left, right } => {
+            let l = analyze_pattern(left, table);
+            let r = analyze_pattern(right, table);
+            NodeAnalysis {
+                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
+                certainly_bound: l
+                    .certainly_bound
+                    .intersection(&r.certainly_bound)
+                    .cloned()
+                    .collect(),
+                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
+            }
+        }
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            let l = analyze_pattern(left, table);
+            let r = analyze_pattern(right, table);
+            let (expr_free, expr_stateful, expr_hard_error) = match expression {
+                Some(e) => analyze_expr(e, table),
+                None => (DetHashSet::default(), false, false),
+            };
+            NodeAnalysis {
+                free_vars: l
+                    .free_vars
+                    .union(&r.free_vars)
+                    .cloned()
+                    .collect::<DetHashSet<_>>()
+                    .union(&expr_free)
+                    .cloned()
+                    .collect(),
+                certainly_bound: l.certainly_bound,
+                has_stateful_builtin: l.has_stateful_builtin
+                    || r.has_stateful_builtin
+                    || expr_stateful,
+                can_hard_error: l.can_hard_error || r.can_hard_error || expr_hard_error,
+            }
+        }
+        GraphPattern::Minus { left, right } => {
+            let l = analyze_pattern(left, table);
+            let r = analyze_pattern(right, table);
+            NodeAnalysis {
+                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
+                certainly_bound: l.certainly_bound,
+                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                can_hard_error: l.can_hard_error || r.can_hard_error,
+            }
+        }
+        GraphPattern::Filter { expr, inner } => {
+            let i = analyze_pattern(inner, table);
+            let (expr_free, expr_stateful, expr_hard_error) = analyze_expr(expr, table);
+            NodeAnalysis {
+                free_vars: i.free_vars.union(&expr_free).cloned().collect(),
+                certainly_bound: i.certainly_bound,
+                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
+                can_hard_error: i.can_hard_error || expr_hard_error,
+            }
+        }
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            let i = analyze_pattern(inner, table);
+            let (expr_free, expr_stateful, expr_hard_error) = analyze_expr(expression, table);
+            let mut free_vars: DetHashSet<Variable> =
+                i.free_vars.union(&expr_free).cloned().collect();
+            free_vars.insert(variable.clone());
+            let mut certainly_bound = i.certainly_bound;
+            certainly_bound.insert(variable.clone());
+            NodeAnalysis {
+                free_vars,
+                certainly_bound,
+                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
+                can_hard_error: i.can_hard_error || expr_hard_error,
+            }
+        }
+        GraphPattern::Graph { name, inner } => {
+            let i = analyze_pattern(inner, table);
+            let mut free_vars = i.free_vars;
+            let mut certainly_bound = i.certainly_bound;
+            if let NamedNodePattern::Variable(v) = name {
+                free_vars.insert(v.clone());
+                certainly_bound.insert(v.clone());
+            }
+            NodeAnalysis {
+                free_vars,
+                certainly_bound,
+                has_stateful_builtin: i.has_stateful_builtin,
+                can_hard_error: i.can_hard_error,
+            }
+        }
+        GraphPattern::Service {
+            name,
+            inner,
+            silent: _,
+        } => {
+            let i = analyze_pattern(inner, table);
+            let mut free_vars = i.free_vars;
+            if let NamedNodePattern::Variable(v) = name {
+                free_vars.insert(v.clone());
+            }
+            NodeAnalysis {
+                free_vars,
+                // No guarantee a remote/possibly-SILENT call binds anything; moot for
+                // `probe_admissible`, which refuses `Service` outright.
+                certainly_bound: DetHashSet::default(),
+                has_stateful_builtin: true,
+                // Unconditional, regardless of `silent`: `SILENT` only swallows the
+                // federation transport failure itself, never a property-function call
+                // forwarded inside the body, which is refused at the forwarding
+                // boundary either way — see `NodeAnalysis::can_hard_error`'s doc.
+                can_hard_error: true,
+            }
+        }
+        GraphPattern::OrderBy { inner, expression } => {
+            let i = analyze_pattern(inner, table);
+            let mut free_vars = i.free_vars;
+            let mut stateful = i.has_stateful_builtin;
+            let mut hard_error = i.can_hard_error;
+            for oe in expression {
+                let e = match oe {
+                    OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
+                };
+                let (f, s, h) = analyze_expr(e, table);
+                free_vars.extend(f);
+                stateful |= s;
+                hard_error |= h;
+            }
+            NodeAnalysis {
+                free_vars,
+                certainly_bound: i.certainly_bound,
+                has_stateful_builtin: stateful,
+                can_hard_error: hard_error,
+            }
+        }
+        GraphPattern::Project { inner, variables } => {
+            let i = analyze_pattern(inner, table);
+            let proj: DetHashSet<Variable> = variables.iter().cloned().collect();
+            NodeAnalysis {
+                free_vars: i.free_vars.intersection(&proj).cloned().collect(),
+                certainly_bound: i.certainly_bound.intersection(&proj).cloned().collect(),
+                has_stateful_builtin: i.has_stateful_builtin,
+                can_hard_error: i.can_hard_error,
+            }
+        }
+        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+            analyze_pattern(inner, table)
+        }
+        GraphPattern::Slice { inner, .. } => analyze_pattern(inner, table),
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
+            let i = analyze_pattern(inner, table);
+            let keys: DetHashSet<Variable> = variables.iter().cloned().collect();
+            let mut free_vars = i.free_vars;
+            free_vars.extend(keys.iter().cloned());
+            let mut certainly_bound: DetHashSet<Variable> =
+                i.certainly_bound.intersection(&keys).cloned().collect();
+            let mut stateful = i.has_stateful_builtin;
+            let mut hard_error = i.can_hard_error
+                || aggregates
+                    .iter()
+                    .any(|(_, agg)| matches!(agg.function(), AggregateFunction::Custom(_)));
+            for (v, agg) in aggregates {
+                free_vars.insert(v.clone());
+                certainly_bound.insert(v.clone());
+                for arg in agg.args() {
+                    let (f, s, h) = analyze_expr(arg, table);
+                    free_vars.extend(f);
+                    stateful |= s;
+                    hard_error |= h;
+                }
+            }
+            NodeAnalysis {
+                free_vars,
+                certainly_bound,
+                has_stateful_builtin: stateful,
+                can_hard_error: hard_error,
+            }
+        }
+    };
+    table.insert(addr, analysis.clone());
+    analysis
+}
+
+/// Analyze `expr`, returning its free variables, whether a stateful builtin is
+/// reachable within it, and whether a hard error/effect is reachable within it (see
+/// [`NodeAnalysis::can_hard_error`]) — recursing into a nested `EXISTS`'s inner
+/// pattern via [`analyze_pattern`] (so that pattern's own table entry is populated
+/// too, for [`probe_admissible`]'s later lookup).
+pub(crate) fn analyze_expr(
+    expr: &Expression,
+    table: &mut NodeAnalysisTable,
+) -> (DetHashSet<Variable>, bool, bool) {
+    match expr {
+        Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false, false),
+        Expression::Variable(v) | Expression::Bound(v) => {
+            let mut out = DetHashSet::default();
+            out.insert(v.clone());
+            (out, false, false)
+        }
+        Expression::Or(a, b)
+        | Expression::And(a, b)
+        | Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b)
+        | Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => {
+            let (mut fa, sa, ha) = analyze_expr(a, table);
+            let (fb, sb, hb) = analyze_expr(b, table);
+            fa.extend(fb);
+            (fa, sa || sb, ha || hb)
+        }
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            analyze_expr(a, table)
+        }
+        Expression::If(c, t, e) => {
+            let (mut f, mut s, mut h) = analyze_expr(c, table);
+            let (ft, st, ht) = analyze_expr(t, table);
+            let (fe, se, he) = analyze_expr(e, table);
+            f.extend(ft);
+            f.extend(fe);
+            s = s || st || se;
+            h = h || ht || he;
+            (f, s, h)
+        }
+        Expression::In(needle, haystack) => {
+            let (mut f, mut s, mut h) = analyze_expr(needle, table);
+            for hay in haystack {
+                let (fh, sh, hh) = analyze_expr(hay, table);
+                f.extend(fh);
+                s |= sh;
+                h |= hh;
+            }
+            (f, s, h)
+        }
+        Expression::Coalesce(items) => {
+            let mut f = DetHashSet::default();
+            let mut s = false;
+            let mut h = false;
+            for item in items {
+                let (fi, si, hi) = analyze_expr(item, table);
+                f.extend(fi);
+                s |= si;
+                h |= hi;
+            }
+            (f, s, h)
+        }
+        Expression::FunctionCall(function, args) => {
+            let mut f = DetHashSet::default();
+            let mut s =
+                function_is_builtin_stateful(function) || matches!(function, Function::Custom(_));
+            // `Function::Custom` may hard-fail unresolved (`UnsupportedKind::CustomFunction`)
+            // or, once resolved, raise `EvalError::Function` from the registered callee's
+            // own body — neither is knowable here. `Function::Purrdf` covers `heldIn`
+            // (`UnsupportedKind::HeldInUnconfigured` with no standpoint-predicate
+            // configuration) and every `rdf:List` function (`EvalError::Data` over a
+            // cyclic/torn list) — see `NodeAnalysis::can_hard_error`'s doc.
+            let mut h =
+                matches!(function, Function::Custom(_)) || matches!(function, Function::Purrdf(_));
+            for a in args {
+                let (fa, sa, ha) = analyze_expr(a, table);
+                f.extend(fa);
+                s |= sa;
+                h |= ha;
+            }
+            (f, s, h)
+        }
+        Expression::Exists(inner) => {
+            let a = analyze_pattern(inner, table);
+            (
+                a.free_vars.clone(),
+                a.has_stateful_builtin,
+                a.can_hard_error,
+            )
+        }
+    }
+}
+
+/// Whether evaluating `pattern` **to completion** — no `crate::enf` erasure — can
+/// raise a hard [`EvalError`](crate::EvalError) or an observable remote effect
+/// anywhere within it; see [`NodeAnalysis::can_hard_error`].
+///
+/// `crate::enf`'s laws call this (and [`expr_can_hard_error`]) on the PORTION they
+/// are about to erase — a `LeftJoin`'s right operand and join condition, an
+/// `ORDER BY`'s sort keys, or a folded `Slice`'s whole inner — before erasing it, so
+/// a law never deletes a subtree whose evaluation could have failed loudly or
+/// reached a federation endpoint. Builds a fresh, throwaway [`NodeAnalysisTable`]:
+/// sound because `can_hard_error`, unlike [`probe_admissible`], needs no lookup
+/// into an enclosing table — it is a pure bottom-up fold over `pattern` alone.
+pub(crate) fn pattern_can_hard_error(pattern: &GraphPattern) -> bool {
+    let mut table = NodeAnalysisTable::default();
+    analyze_pattern(pattern, &mut table).can_hard_error
+}
+
+/// The expression twin of [`pattern_can_hard_error`], for a `LeftJoin` join
+/// condition or an `ORDER BY` sort key `crate::enf` is about to erase.
+pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+    let mut table = NodeAnalysisTable::default();
+    analyze_expr(expr, &mut table).2
+}
+
+/// Whether `pattern` (its top level ALREADY known to be correlated with the
+/// enclosing row — see [`crate::expr::exists`], this predicate's sole caller) may
+/// be evaluated via the memoized evaluate-once probe instead of per-row
+/// substitution, and still agree with the one-definition theorem
+/// (`crate::enf`'s module doc) for every μ.
+///
+/// # Exhaustive, wildcard-free (Part C)
+///
+/// Every arm below is named explicitly — no `_ =>` — for the same reason
+/// [`visit_pattern_parts`] is: a new [`GraphPattern`] variant must be a compile
+/// error here, not a silent inheritance of the permissive answer (`true`, which
+/// here would license a WRONG probe).
+///
+/// `outer_schema` is the caller's actual enclosing-row schema — [`crate::expr::exists`]'s
+/// own `schema` parameter, the FULL column set the row being filtered could ever bind
+/// (not narrowed to which columns THIS particular row happens to have a value in — see
+/// this function's "Per-row vs per-schema" section below for why that distinction
+/// matters). `current_row_vars`, the set every arm below actually tests membership
+/// against, is `pattern`'s OWN root [`NodeAnalysis::free_vars`] (from `table`, populated
+/// by an enclosing [`analyze_pattern`] call over this exact tree) INTERSECTED with
+/// `outer_schema`'s columns: a variable only counts as a potential SEP-0007 rebinding
+/// collision when it is BOTH still visible at `pattern`'s own root (not scoped away by
+/// an internal `Project` boundary — `NodeAnalysis::free_vars`'s `Project` rule) AND a
+/// column the caller's row could actually carry. A `pattern`-internal variable with no
+/// counterpart in `outer_schema` — a `BIND`/`VALUES` target the caller's row could never
+/// have bound under any name collision, or a nested `EXISTS`'s own free variable that is
+/// simply disjoint from the enclosing schema — is therefore no longer a
+/// false-positive refusal: before this parameter existed, EVERY tree-internal variable
+/// was conservatively treated as a potential collision regardless of whether the caller's
+/// schema could ever have produced it, which refused every `BIND`/`VALUES`/nested-`EXISTS`
+/// shape not walled off by an enclosing `Project`, independent of whether a real collision
+/// was even possible.
+///
+/// # Per-row vs per-schema (never over-precise)
+///
+/// `outer_schema` deliberately stays at SCHEMA granularity, not "this row's actually-bound
+/// columns" (`crate::expr::exists`'s own `outer_bound`, computed per μ): the memoized probe
+/// index this predicate licenses is built ONCE per site and reused for EVERY row of that
+/// site (`EvalCtx::exists_inner_cache`, keyed by pattern address + graph + schema
+/// fingerprint — never by a row's own bound-ness), so the admissibility decision must hold
+/// for every row the site could ever see, not merely the one row that happened to trigger
+/// the build. Using `outer_bound` instead would admit a shape for a row where a
+/// same-named column happens to be unbound and refuse it for another row of the SAME site
+/// where that column is bound — two different verdicts about whether ONE shared cached
+/// index may be trusted, which is incoherent. `outer_schema` is still an over-approximation
+/// relative to any one row's own `outer_bound` (never under-admits), exactly as the
+/// pre-fix, whole-tree `current_row_vars` was an over-approximation relative to
+/// `outer_schema` — this parameter narrows that over-approximation to the caller's real
+/// schema, it does not eliminate it.
+///
+/// # Per-arm equivalence argument
+///
+/// * `Bgp`/`Path`: a leaf's shared-column probe (`crate::binop::probe_has_match`
+///   over the columns it shares with the outer schema) IS Values-Insertion,
+///   computed the other way round — restricting a materialized bag to rows
+///   compatible with μ on the shared columns is exactly what joining μ in as a
+///   `VALUES` row and re-matching would produce, because the leaf's own match is
+///   independent of anything but the dataset and μ's OWN bound columns. Always
+///   admissible.
+/// * `Values`: admissible UNLESS one of its OWN columns collides with a
+///   current-row variable — SEP-0007 forbids an `EXISTS` body rebinding a variable
+///   already in scope on the row it filters (and this engine's parser now refuses
+///   exactly that at parse time — see `find_scope_conflict`'s doc), so a real
+///   collision should never reach this predicate on parsed input, but this check
+///   is stated independently of that parser guarantee (never lean on the parser)
+///   because `probe_admissible` also runs over hand-built algebra (SHACL/chase
+///   rewrites, unit tests) the parser never saw. A column NOT in `outer_schema` is
+///   genuinely fresh — no outer row could ever supply a value under that name — and
+///   admits.
+/// * `PropertyFunction`: never admissible. A relation's argument is an invocation
+///   INPUT the evaluator reads from the CURRENT row (`crate::property_fn_eval`),
+///   not a join key a post-hoc `VALUES` probe can supply — the same "fusion
+///   contract" `crate::expr::substitute_term_pattern`'s doc states for why
+///   substitution rewrites property-function arguments literally rather than via
+///   Values Insertion. Evaluating the call once, unconstrained, and probing its
+///   output afterward is not equivalent to invoking it WITH μ's own arguments.
+/// * `Graph`: admissible iff the inner is (the graph-name column, when `?g` is a
+///   variable, already lands in the node's own schema per Part 3's pinning, and
+///   the shared-column probe covers it exactly like any other column).
+/// * `Join`/`Union`: admissible iff BOTH operands are — each operand's own probe
+///   is independent of the other's.
+/// * `Filter`/`Extend`: admissible iff the inner is, AND [`expr_probe_admissible`]
+///   accepts the filter/bind expression against the inner's own certainly-bound
+///   set, AND (`Extend` only) the target is not itself a current-row variable
+///   (SEP-0007's rebinding rule again, checked independently of the parser for
+///   the same reason as `Values`, above). A target NOT in `outer_schema` is fresh
+///   and admits, for the same reason as `Values`.
+/// * `OrderBy`/`Project`/`Distinct`/`Reduced`: admissible iff the inner is — none
+///   of the four can change whether a ROW exists, only its order, its column set,
+///   or whether a duplicate survives, none of which the shared-column probe
+///   (an existence-only question) is sensitive to.
+/// * `LeftJoin` (an off-spine survivor — the ENF laws already erased every
+///   top-of-spine occurrence), `Minus`, `Slice` (ANY — not only a restricting
+///   offset: even `Slice(0, k)` picks a `k`-row PREFIX of whatever the correlated
+///   variable's specific value produced, which the shared-column probe's
+///   evaluate-ONCE-unconstrained pass cannot reproduce per row), `Group`,
+///   `Lateral`, and `Service` (a variable endpoint needs per-row resolution to a
+///   concrete IRI; a `SILENT` call can swallow a per-row failure that an
+///   evaluate-once pass would never see) are never admissible: each can give an
+///   answer that depends on WHICH outer row drove the evaluation, which a single
+///   evaluate-once-and-probe pass cannot reproduce — unconditionally, regardless of
+///   `outer_schema`.
+pub(crate) fn probe_admissible(
+    pattern: &GraphPattern,
+    table: &NodeAnalysisTable,
+    outer_schema: &VarSchema,
+) -> bool {
+    // A miss here (see `node_analysis`'s doc) fails closed: refuse the probe
+    // rather than treat a synthesized empty `free_vars` as "uncorrelated".
+    let Some(root) = node_analysis(pattern, table) else {
+        return false;
+    };
+    let current_row_vars: DetHashSet<Variable> = root
+        .free_vars
+        .iter()
+        .filter(|v| outer_schema.contains(v))
+        .cloned()
+        .collect();
+    admissible_rec(pattern, &current_row_vars, table)
+}
+
+fn admissible_rec(
+    pattern: &GraphPattern,
+    current_row_vars: &DetHashSet<Variable>,
+    table: &NodeAnalysisTable,
+) -> bool {
+    match pattern {
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => true,
+        GraphPattern::Values { variables, .. } => {
+            !variables.iter().any(|v| current_row_vars.contains(v))
+        }
+        GraphPattern::PropertyFunction(_) => false,
+        GraphPattern::Graph { name: _, inner } => admissible_rec(inner, current_row_vars, table),
+        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+            admissible_rec(left, current_row_vars, table)
+                && admissible_rec(right, current_row_vars, table)
+        }
+        GraphPattern::Filter { expr, inner } => {
+            // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
+            // rather than read a synthesized empty `certainly_bound`.
+            let Some(inner_analysis) = node_analysis(inner, table) else {
+                return false;
+            };
+            admissible_rec(inner, current_row_vars, table)
+                && expr_probe_admissible(
+                    expr,
+                    current_row_vars,
+                    &inner_analysis.certainly_bound,
+                    table,
+                )
+        }
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            let Some(inner_analysis) = node_analysis(inner, table) else {
+                return false;
+            };
+            admissible_rec(inner, current_row_vars, table)
+                && expr_probe_admissible(
+                    expression,
+                    current_row_vars,
+                    &inner_analysis.certainly_bound,
+                    table,
+                )
+                && !current_row_vars.contains(variable)
+        }
+        GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner } => admissible_rec(inner, current_row_vars, table),
+        GraphPattern::LeftJoin { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Group { .. }
+        | GraphPattern::Lateral { .. }
+        | GraphPattern::Service { .. } => false,
+    }
+}
+
+/// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
+/// `(expr AS ?v)` target or a `VALUES` column — the same two shapes, and the
+/// same message wording, as `purrdf_sparql_algebra`'s parser-side
+/// `ScopeIntro` (that type is private to the parser crate, so this is a
+/// separate, deliberately identical, enum rather than a shared one — see
+/// [`exists_row_collision`]'s doc for why the eval crate needs its own copy
+/// of the same theorem).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowCollisionIntro {
+    /// A `BIND(expr AS ?v)` target, a sub-`SELECT`'s `(expr AS ?v)`
+    /// projection target, a `GROUP BY (expr AS ?v)` condition, or a `GROUP
+    /// BY` aggregate's output variable.
+    Bind,
+    /// A `VALUES` block's column variable.
+    Values,
+}
+
+impl RowCollisionIntro {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Bind => "BIND target",
+            Self::Values => "VALUES variable",
+        }
+    }
+}
+
+/// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
+/// `(expr AS ?v)` projection target, a `GROUP BY` aggregate's output
+/// variable, or `VALUES`) that collides with a variable in `row_scope` — the
+/// CALLER'S ACTUAL current-row variables for one specific μ (`crate::expr::exists`'s
+/// own `outer_bound`: the schema columns THIS row concretely binds), never
+/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
+/// with the caller's outer SCHEMA — see that function's doc — a PER-SITE
+/// over-approximation computed once for the whole pattern, not a per-row one).
+/// The two must not be conflated: `current_row_vars` is sized to answer "is the
+/// memoized probe EVER valid for this shape", which must hold for EVERY row the
+/// site could ever see (the probe index it licenses is built once and reused
+/// across every row — see `probe_admissible`'s "Per-row vs per-schema" doc), so it
+/// deliberately over-includes relative to any one row's own bound-ness; using it
+/// here would hard-fail rows whose OWN binding of the colliding-by-NAME variable is
+/// simply absent, even though the SITE's schema could carry it. `row_scope` carries
+/// no such ambiguity: it is read directly off `row`/`schema` for the exact μ being
+/// evaluated.
+///
+/// # Why this exists (SEP-0007 Part 3, enforced at evaluation admission too)
+///
+/// `purrdf_sparql_algebra`'s parser refuses this exact shape at parse time
+/// (`find_scope_conflict`, private to that crate) — a `BIND`/`VALUES`
+/// introduction inside `EXISTS`/`NOT EXISTS` that rebinds a variable already
+/// bound on the row being filtered has NO DEFINED ANSWER under the
+/// substitution theorem `crate::expr::exists`'s doc states (`crate::enf`'s
+/// module doc): `inject`/substitution exposes the outer row's bindings to the
+/// inner pattern as ALREADY bound, and a construct that then tries to give
+/// one of them a NEW value is exactly the "observable rebinding" the theorem
+/// excludes. But algebra reaching this evaluator WITHOUT going through that
+/// parser — a SHACL-AF pre-binding, an entailment-chase rewrite, or any other
+/// caller of the public algebra API — never had that check run over it, and
+/// neither `exists()` strategy checks for it on its own: the memoized probe
+/// path's `probe_admissible` gate refuses the shape (see [`admissible_rec`]'s
+/// `Values`/`Extend` arms), but that refusal only steers `exists()` to the
+/// OTHER (per-row definition) strategy — which then evaluates the collision
+/// unchecked and answers based on whatever the substituted rebinding happens
+/// to produce, a FABRICATED answer neither this engine's `EXISTS` definition
+/// nor SPARQL's own permits. [`crate::expr::exists`] calls this function
+/// FIRST, before deciding between the two strategies, so a genuine collision
+/// hard-errors ([`EvalError::exists_scope_collision`]) instead of silently
+/// reaching either one.
+///
+/// # Same scope-transparency rules as the parser's walk
+///
+/// Deliberately the SAME shape as `find_scope_conflict` (mirrored rather than
+/// shared, since that function is private to the parser crate): every binary
+/// node transparent to scope (`Join`/`Union`/`Lateral`/`LeftJoin`) recurses
+/// both operands at the SAME scope level; `Minus`'s right operand is skipped
+/// entirely (§18.2.1 puts it out of scope: its bindings never survive
+/// `Minus`, so nothing it introduces can ever be an observable rebinding);
+/// `Project` narrows `row_scope` to the variables it actually carries out and
+/// stops once nothing survives the narrowing; `Group` is checked only for its
+/// own aggregate outputs and lowered grouping-extend chain (never the pattern
+/// being grouped, which no longer determines the group's own output row);
+/// every other unary wrapper (`Filter`/`Graph`/`Service`/`OrderBy`/
+/// `Distinct`/`Reduced`/`Slice`) is transparent. Never descends into an
+/// `Expression` — a nested `EXISTS` inside one is its own, independently
+/// evaluated pattern, checked at its OWN call to `crate::expr::exists`
+/// (hence its own, independent call to this function), not by this walk.
+pub(crate) fn exists_row_collision<'a>(
+    pattern: &'a GraphPattern,
+    row_scope: &DetHashSet<Variable>,
+) -> Option<(&'a Variable, RowCollisionIntro)> {
+    match pattern {
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => None,
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            exists_row_collision(left, row_scope).or_else(|| exists_row_collision(right, row_scope))
+        }
+        GraphPattern::Minus { left, .. } => exists_row_collision(left, row_scope),
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => exists_row_collision(inner, row_scope),
+        GraphPattern::Extend {
+            inner, variable, ..
+        } => {
+            if row_scope.contains(variable) {
+                Some((variable, RowCollisionIntro::Bind))
+            } else {
+                exists_row_collision(inner, row_scope)
+            }
+        }
+        GraphPattern::Values { variables, .. } => variables
+            .iter()
+            .find(|v| row_scope.contains(v))
+            .map(|v| (v, RowCollisionIntro::Values)),
+        GraphPattern::Project { inner, variables } => {
+            let narrowed: DetHashSet<Variable> = row_scope
+                .iter()
+                .filter(|v| variables.contains(v))
+                .cloned()
+                .collect();
+            if narrowed.is_empty() {
+                None
+            } else {
+                exists_row_collision(inner, &narrowed)
+            }
+        }
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => {
+            for (v, _) in aggregates {
+                if row_scope.contains(v) {
+                    return Some((v, RowCollisionIntro::Bind));
+                }
+            }
+            find_group_extend_row_collision(inner, variables, row_scope)
+        }
+    }
+}
+
+/// [`exists_row_collision`]'s `Group` arm: find every `Extend` node reachable from
+/// `inner` through the SAME scope-transparent constructs `exists_row_collision`'s
+/// own top-level match already walks (`Join`/`Union`/`Lateral`/`LeftJoin` both
+/// operands, `Minus`'s LEFT operand only, and the unary `Filter`/`Graph`/
+/// `Service`/`OrderBy`/`Distinct`/`Reduced`/`Slice` wrappers), reporting a
+/// collision for the first one whose target is BOTH one of `Group`'s own
+/// grouping-key `variables` AND present in `row_scope`.
+///
+/// The parser only ever lowers each expression-valued `GROUP BY (expr AS ?v)`
+/// condition to a chain of `Extend`s directly beneath `Group` (mirrors
+/// `find_group_extend_conflict`, private to the parser crate) — an adjacent-only
+/// walk was exactly right for that shape, and is still what this one degrades to
+/// when `inner` really is such a chain. But this function is also the evaluator's
+/// OWN backstop for algebra that never went through the parser at all (a
+/// SHACL-AF pre-binding, an entailment-chase rewrite, or any other caller of the
+/// public algebra API) — see [`exists_row_collision`]'s own "Why this exists"
+/// section — and nothing stops hand-built algebra from putting a grouping-key
+/// `Extend` behind a `Join`/`Filter`/other transparent wrapper instead of
+/// directly beneath `Group` (`Group{ inner: Join(Extend(?x, ..), Bgp),
+/// variables: [?x] }`, unreachable from surface SPARQL but a legal
+/// [`GraphPattern`] value all the same). An adjacent-only walk misses that
+/// `Extend` entirely, silently admitting a genuine SEP-0007 Part 3 rebinding
+/// this function exists to catch.
+///
+/// Recurses into an `Extend`'s own `inner` regardless of whether ITS target is
+/// one of `variables` — a non-qualifying `Extend` (binding some OTHER value the
+/// pattern being grouped needs, not a grouping key) is not itself a collision
+/// candidate, but a further, DEEPER qualifying `Extend` may still be nested
+/// beneath it, and the same "keep searching past a non-match" discipline the
+/// binary/unary wrappers already need applies here too. `Bgp`/`Path`/
+/// `PropertyFunction`/`Values`/`Project`/a nested `Group` are the terminal
+/// case: the walk stops there, same as [`exists_row_collision`]'s own
+/// `Values`/`Project`/`Group` arms are handled separately (by that function, for
+/// ITS OWN scope) rather than folded into this narrower grouping-key search.
+fn find_group_extend_row_collision<'a>(
+    inner: &'a GraphPattern,
+    variables: &[Variable],
+    row_scope: &DetHashSet<Variable>,
+) -> Option<(&'a Variable, RowCollisionIntro)> {
+    match inner {
+        GraphPattern::Extend {
+            inner: next,
+            variable,
+            ..
+        } => {
+            if variables.contains(variable) && row_scope.contains(variable) {
+                return Some((variable, RowCollisionIntro::Bind));
+            }
+            find_group_extend_row_collision(next, variables, row_scope)
+        }
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            find_group_extend_row_collision(left, variables, row_scope)
+                .or_else(|| find_group_extend_row_collision(right, variables, row_scope))
+        }
+        GraphPattern::Minus { left, .. } => {
+            find_group_extend_row_collision(left, variables, row_scope)
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => {
+            find_group_extend_row_collision(inner, variables, row_scope)
+        }
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_)
+        | GraphPattern::Values { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Group { .. } => None,
+    }
+}
+
+/// Whether a `Filter` condition or `Extend`/`BIND` expression may run against the
+/// evaluate-once-unconstrained inner and still agree with per-row substitution:
+/// every current-row variable it reads must be certainly bound by the inner
+/// itself (so the unconstrained pass already gives it a concrete value, which the
+/// later shared-column probe then restricts to μ's own — the same value
+/// substitution would have supplied), no nested `EXISTS`/`NOT EXISTS` it contains
+/// reaches a current-row variable (that inner would otherwise be evaluated once,
+/// shared across every outer row, instead of per-row) OR is itself stateful (a
+/// stateful builtin reachable through the nested `EXISTS`'s own inner would then be
+/// evaluated once, shared across every outer row, instead of once per row — the
+/// same observable-difference reasoning [`function_is_builtin_stateful`]'s doc
+/// states, just reached through a nested pattern instead of a direct call), and no
+/// stateful builtin is directly reachable in THIS expression (a stateful builtin
+/// evaluated once instead of once per row is an observably different execution —
+/// see [`function_is_builtin_stateful`]'s doc).
+fn expr_probe_admissible(
+    expr: &Expression,
+    current_row_vars: &DetHashSet<Variable>,
+    inner_certainly_bound: &DetHashSet<Variable>,
+    table: &NodeAnalysisTable,
+) -> bool {
+    match expr {
+        Expression::NamedNode(_) | Expression::Literal(_) => true,
+        Expression::Variable(v) | Expression::Bound(v) => {
+            !current_row_vars.contains(v) || inner_certainly_bound.contains(v)
+        }
+        Expression::Or(a, b)
+        | Expression::And(a, b)
+        | Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b)
+        | Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => {
+            expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
+                && expr_probe_admissible(b, current_row_vars, inner_certainly_bound, table)
+        }
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
+        }
+        Expression::If(c, t, e) => {
+            expr_probe_admissible(c, current_row_vars, inner_certainly_bound, table)
+                && expr_probe_admissible(t, current_row_vars, inner_certainly_bound, table)
+                && expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)
+        }
+        Expression::In(needle, haystack) => {
+            expr_probe_admissible(needle, current_row_vars, inner_certainly_bound, table)
+                && haystack.iter().all(|h| {
+                    expr_probe_admissible(h, current_row_vars, inner_certainly_bound, table)
+                })
+        }
+        Expression::Coalesce(items) => items
+            .iter()
+            .all(|e| expr_probe_admissible(e, current_row_vars, inner_certainly_bound, table)),
+        Expression::FunctionCall(function, args) => {
+            !function_is_builtin_stateful(function)
+                && !matches!(function, Function::Custom(_))
+                && args.iter().all(|a| {
+                    expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
+                })
+        }
+        // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
+        // rather than read a synthesized `free_vars`/`has_stateful_builtin`.
+        Expression::Exists(inner) => match node_analysis(inner, table) {
+            Some(a) => {
+                !a.has_stateful_builtin && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
+            }
+            None => false,
+        },
+    }
 }
 
 #[cfg(test)]
