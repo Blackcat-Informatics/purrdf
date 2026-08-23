@@ -563,8 +563,9 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 49 cases total, of which 42 form zero, boundary, or over-bound lanes and the
-remaining 7 are transport, relation, charge-seam, and wall-clock cases.
+are 50 cases total, of which 42 form zero, boundary, or over-bound lanes and the
+remaining 8 are transport, relation, charge-seam, `EXISTS`-evidence, and wall-clock
+cases.
 
 Boundaries are **measured, never authored**. For each caller-settable dimension the
 corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost (must

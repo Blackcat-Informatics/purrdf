@@ -1135,18 +1135,27 @@ fn exists<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
     let prepared = ctx.prepared_exists(pattern);
-    let (normalized, witness_wrapped, analysis, free_vars, stateful) = match prepared.as_ref() {
-        // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
-        // every μ — the whole EXISTS is constant `false`, no evaluation needed.
-        crate::eval::PreparedExists::FoldedFalse => return Ok(false),
-        crate::eval::PreparedExists::Pattern {
-            normalized,
-            witness_wrapped,
-            analysis,
-            free_vars,
-            stateful,
-        } => (normalized, witness_wrapped, analysis, free_vars, *stateful),
-    };
+    let (normalized, witness_wrapped, analysis, free_vars, stateful, ledger_source) =
+        match prepared.as_ref() {
+            // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
+            // every μ — the whole EXISTS is constant `false`, no evaluation needed.
+            crate::eval::PreparedExists::FoldedFalse => return Ok(false),
+            crate::eval::PreparedExists::Pattern {
+                normalized,
+                witness_wrapped,
+                analysis,
+                free_vars,
+                stateful,
+                ledger_source,
+            } => (
+                normalized,
+                witness_wrapped,
+                analysis,
+                free_vars,
+                *stateful,
+                ledger_source,
+            ),
+        };
 
     // The outer-bound variables (a concrete binding in the current row).
     let outer_bound: DetHashSet<Variable> = schema
@@ -1310,7 +1319,27 @@ fn exists<D: DatasetView + Sync>(
         } else {
             normalized
         };
-        let inner = crate::binop::eval_correlated(to_evaluate, row, schema, ctx)?;
+        // Push this site's ledger-source correspondence (`PreparedExists::Pattern::
+        // ledger_source` — `crate::enf::ledger_source_map`) as the enclosing window
+        // `eval_correlated` reads BEFORE pushing its own per-row map: that is what makes
+        // `EvalCtx::resolve_ledger_ordinal`'s existing one-hop-per-window chase resolve
+        // `to_evaluate`'s (and every node beneath it) charges to the ORIGINAL, ledger-indexed
+        // `EXISTS` inner instead of collapsing them into the enclosing `FILTER`/`BIND` — the
+        // same mechanism a `LATERAL` right operand already gets for free because its root IS
+        // a plan address. Gated on a ledger actually being installed (nothing to resolve
+        // against otherwise) and on the map being non-empty (`ledger_source_map` declines to
+        // track a `Project`/`Union`-shaped site — see its doc — so there is nothing to push).
+        // Popped manually, not via a guard, because the only fallible call in this scope is
+        // the one line below and its `?` is applied AFTER the pop.
+        let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+        if track_ledger {
+            ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+        }
+        let inner_result = crate::binop::eval_correlated(to_evaluate, row, schema, ctx);
+        if track_ledger {
+            ctx.correlated_node_maps.pop();
+        }
+        let inner = inner_result?;
         if let Evaluated::Truncated(truncation) = &inner {
             ctx.expression_barrier.record(truncation.tripped());
             return Ok(false);
@@ -1761,7 +1790,7 @@ fn substitute_pattern_impl(
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Filter {
-                    expr: substitute_expr(expr, row),
+                    expr: substitute_expr(expr, row, map),
                     inner: inner_final,
                 },
                 pattern,
@@ -1781,7 +1810,7 @@ fn substitute_pattern_impl(
                 GraphPattern::Extend {
                     inner: inner_final,
                     variable: variable.clone(),
-                    expression: substitute_expr(expression, row),
+                    expression: substitute_expr(expression, row, map),
                 },
                 pattern,
                 map,
@@ -1832,7 +1861,7 @@ fn substitute_pattern_impl(
                 GraphPattern::LeftJoin {
                     left: left_final,
                     right: right_sub,
-                    expression: expression.as_ref().map(|e| substitute_expr(e, row)),
+                    expression: expression.as_ref().map(|e| substitute_expr(e, row, map)),
                 },
                 pattern,
                 map,
@@ -1971,11 +2000,13 @@ fn substitute_pattern_impl(
                         .iter()
                         .map(|oe| match oe {
                             purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(e, row))
+                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(
+                                    e, row, &mut *map,
+                                ))
                             }
                             purrdf_sparql_algebra::OrderExpression::Desc(e) => {
                                 purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(
-                                    e, row,
+                                    e, row, &mut *map,
                                 ))
                             }
                         })
@@ -2005,7 +2036,11 @@ fn substitute_pattern_impl(
                     aggregates: aggregates
                         .iter()
                         .map(|(v, agg)| {
-                            let args = agg.args().iter().map(|e| substitute_expr(e, row)).collect();
+                            let args = agg
+                                .args()
+                                .iter()
+                                .map(|e| substitute_expr(e, row, &mut *map))
+                                .collect();
                             // `substitute_expr` rewrites each argument in place and never
                             // changes the argument COUNT, so this can never turn a valid
                             // `agg` into an invalid one.
@@ -2364,7 +2399,11 @@ fn substitute_term_pattern(
 /// `Expression::Bound`, by contrast, IS total here: it only needs to know
 /// THAT `v` is bound, which `row.term` (not `row.expr`) answers for every
 /// term kind.
-fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
+fn substitute_expr(
+    expr: &Expression,
+    row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+) -> Expression {
     let bindings = &row.expr;
     match expr {
         Expression::Variable(v) => {
@@ -2394,78 +2433,93 @@ fn substitute_expr(expr: &Expression, row: &SubstitutionRow) -> Expression {
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
         Expression::Or(a, b) => Expression::Or(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::And(a, b) => Expression::And(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Equal(a, b) => Expression::Equal(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::SameTerm(a, b) => Expression::SameTerm(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Greater(a, b) => Expression::Greater(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Less(a, b) => Expression::Less(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Add(a, b) => Expression::Add(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Subtract(a, b) => Expression::Subtract(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Multiply(a, b) => Expression::Multiply(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
         Expression::Divide(a, b) => Expression::Divide(
-            Box::new(substitute_expr(a, row)),
-            Box::new(substitute_expr(b, row)),
+            Box::new(substitute_expr(a, row, map)),
+            Box::new(substitute_expr(b, row, map)),
         ),
-        Expression::UnaryPlus(a) => Expression::UnaryPlus(Box::new(substitute_expr(a, row))),
-        Expression::UnaryMinus(a) => Expression::UnaryMinus(Box::new(substitute_expr(a, row))),
-        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row))),
+        Expression::UnaryPlus(a) => Expression::UnaryPlus(Box::new(substitute_expr(a, row, map))),
+        Expression::UnaryMinus(a) => Expression::UnaryMinus(Box::new(substitute_expr(a, row, map))),
+        Expression::Not(a) => Expression::Not(Box::new(substitute_expr(a, row, map))),
         Expression::If(c, t, e) => Expression::If(
-            Box::new(substitute_expr(c, row)),
-            Box::new(substitute_expr(t, row)),
-            Box::new(substitute_expr(e, row)),
+            Box::new(substitute_expr(c, row, map)),
+            Box::new(substitute_expr(t, row, map)),
+            Box::new(substitute_expr(e, row, map)),
         ),
         Expression::In(needle, haystack) => Expression::In(
-            Box::new(substitute_expr(needle, row)),
-            haystack.iter().map(|h| substitute_expr(h, row)).collect(),
+            Box::new(substitute_expr(needle, row, map)),
+            haystack
+                .iter()
+                .map(|h| substitute_expr(h, row, &mut *map))
+                .collect(),
         ),
-        Expression::Coalesce(items) => {
-            Expression::Coalesce(items.iter().map(|i| substitute_expr(i, row)).collect())
-        }
+        Expression::Coalesce(items) => Expression::Coalesce(
+            items
+                .iter()
+                .map(|i| substitute_expr(i, row, &mut *map))
+                .collect(),
+        ),
         Expression::FunctionCall(f, args) => Expression::FunctionCall(
             f.clone(),
-            args.iter().map(|a| substitute_expr(a, row)).collect(),
+            args.iter()
+                .map(|a| substitute_expr(a, row, &mut *map))
+                .collect(),
         ),
-        // Untracked (`map = None`): a nested `EXISTS`'s inner pattern is not walked by
-        // `walk_spine` even in its un-substituted form (see the ledger module doc's
-        // "Attribution of work that is not a plan node"), so it has no plan identity for
-        // any map to preserve — its charges fold into the enclosing node exactly as
-        // before.
-        Expression::Exists(inner_pat) => Expression::Exists(substitute_pattern(inner_pat, row)),
+        // Tracked exactly like every `GraphPattern`-position substitution
+        // (`substitute_pattern_impl`, this arm's sibling call sites) — a nested `EXISTS`'s
+        // inner pattern DOES have ledger identity now: `crate::eval::PreparedExists::build`
+        // pushes it as the enclosing window (via `crate::enf::ledger_source_map`) BEFORE
+        // `crate::binop::eval_correlated` walks the OUTER inner that carries this
+        // `Expression::Exists`, so `inner_pat`'s address already resolves one hop through
+        // `map`'s `enclosing` to the ORIGINAL, ledger-indexed nested-`EXISTS` AST node (see
+        // `boxed_and_mapped_as`). Threading `map` through is what lets the nested site's
+        // OWN charges resolve too, and what lets `EvalCtx::prepared_exists` key its cache by
+        // a stable address instead of rebuilding on every outer row.
+        Expression::Exists(inner_pat) => {
+            Expression::Exists(substitute_pattern_impl(inner_pat, row, map))
+        }
     }
 }
 
@@ -6101,6 +6155,145 @@ mod tests {
         assert!(
             consumed_unwrapped >= 3,
             "the unwrapped control must consume every witness (>= 3), got {consumed_unwrapped}"
+        );
+    }
+
+    /// A correlated `EXISTS`'s definition-path inner used to push no
+    /// [`crate::expr::SubstitutionSourceMap`] at all (`crate::binop::eval_correlated`
+    /// had "no plan identity to preserve" for an `EXISTS` inner) — so EVERY charge made
+    /// while evaluating it rolled into the enclosing `FILTER`, and the inner's own plan
+    /// nodes (a `MINUS` here) rendered `fuel=0 rows=0` in `--explain` even though they did
+    /// all the real work. `crate::enf::ledger_source_map` plus the push around
+    /// `crate::binop::eval_correlated` in `crate::expr::exists`'s definition-path branch fix
+    /// this: the `MINUS` node's own ledger line must now show nonzero fuel/rows.
+    ///
+    /// Revert check: reverting either the `ledger_source` field/its construction in
+    /// `crate::eval::PreparedExists::build` or the push/pop around `eval_correlated`
+    /// reproduces the pre-fix `fuel=0 rows=0` reading on the `MINUS` line — this test then
+    /// fails, which is the intended regression signal.
+    #[test]
+    fn exists_inner_charges_attribute_to_real_plan_nodes() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let a = b.intern_iri("http://example.org/a");
+        let x = b.intern_iri("http://example.org/x1");
+        // `?s :p ?o` has a match; `MINUS { ?s :q ?o }` removes nothing (no `:q` triple at
+        // all), so the EXISTS inner is non-empty for the outer row `?outer = :a`.
+        b.push_quad(a, p, x, None);
+        let ds = b.freeze().expect("freeze");
+
+        // `FILTER(?a = ?outer)` inside the inner (correlated on `?outer`, not certainly
+        // bound by the inner's own BGP alone) forces the per-row DEFINITION path, same
+        // shape `exists_definition_memo_evaluates_once_per_distinct_restriction` uses —
+        // `MINUS` sits on the inner's spine so its own charges are what this test reads
+        // back from the ledger.
+        // The braces below are SPARQL group-graph-pattern syntax, not a missed `format!`
+        // call — clippy's `literal_string_with_formatting_args` false-positives on the
+        // `{ :a }`/`{ ?s :q ?o }` shapes a `VALUES`/nested-group literal naturally spells.
+        #[allow(clippy::literal_string_with_formatting_args)]
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?outer WHERE { \
+                        VALUES ?outer { :a } \
+                        FILTER EXISTS { \
+                          ?s :p ?o \
+                          MINUS { ?s :q ?o } \
+                          FILTER(?s = ?outer) \
+                        } \
+                      }";
+        let engine = crate::engine::NativeSparqlEngine::default();
+        let explanation = engine.explain_query(&ds, query, None).expect("explain");
+        let minus_line = explanation
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Minus")
+            .expect("the EXISTS inner's MINUS must have its own ledger line");
+        assert!(
+            minus_line.fuel_total() > 0,
+            "the MINUS node's own charges must land on its own ledger line, not fuel=0 \
+             (rendered: {})",
+            explanation.render()
+        );
+        assert!(
+            minus_line.rows > 0,
+            "the MINUS node's own committed output rows must attribute to it, not roll into \
+             the enclosing FILTER (rendered: {})",
+            explanation.render()
+        );
+    }
+
+    /// Before this fix, `EvalCtx::prepared_exists` early-returned a FRESH
+    /// `PreparedExists::build` (ENF-normalize, clone, full structural analysis) EVERY time
+    /// it was reached while `EvalCtx::in_substituted_exists` was set — which is exactly what
+    /// happens for a nested `EXISTS` reached while an OUTER correlated `EXISTS`'s definition
+    /// path substitutes and re-evaluates its inner once per distinct μ-restriction. With
+    /// `crate::enf::ledger_source_map` tracking installed and
+    /// `crate::expr::substitute_expr`'s `Expression::Exists`
+    /// arm threaded through the tracked substitution walk, `prepared_exists` now resolves
+    /// the nested site's per-row copy address one hop back to its STABLE, un-substituted
+    /// AST address and hits `EvalCtx::exists_prepared_cache` under that address instead.
+    ///
+    /// Observable via `crate::eval::PREPARED_EXISTS_BUILD_COUNT` (test-only,
+    /// thread-local — see its doc): 3 outer rows, 3 DISTINCT μ-restrictions (so the OUTER
+    /// `EXISTS`'s own μ-restriction memo cannot mask this), and therefore 3 separate
+    /// definition-path reaches of the nested `EXISTS` site. Before this fix: 1 build for the
+    /// OUTER site + 3 rebuilds for the NESTED site (once per reach) = 4. After: 1 + 1 = 2 —
+    /// the nested site built once, reused for the other two reaches.
+    ///
+    /// Revert check: reverting the `Expression::Exists` arm in `crate::expr::substitute_expr`
+    /// back to the untracked `Expression::Exists(substitute_pattern(inner_pat, row))`, OR
+    /// reverting `EvalCtx::prepared_exists`'s one-hop resolve back to an unconditional
+    /// build-fresh under `in_substituted_exists`, reproduces the pre-fix count of 4 — this
+    /// test then fails, which is the intended regression signal.
+    #[test]
+    fn nested_exists_prepare_is_cached_across_rows() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p");
+        let q = b.intern_iri("http://example.org/q");
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let s3 = b.intern_iri("http://example.org/s3");
+        let o1 = b.intern_iri("http://example.org/o1");
+        let o2 = b.intern_iri("http://example.org/o2");
+        let o3 = b.intern_iri("http://example.org/o3");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        // One `:p` triple per outer value, so every one of the 3 distinct `?a` restrictions
+        // reaches the nested `EXISTS` (rather than being filtered out by `?s :p ?o` before
+        // `?s = ?a` is even reached).
+        b.push_quad(s1, p, o1, None);
+        b.push_quad(s2, p, o2, None);
+        b.push_quad(s3, p, o3, None);
+        b.push_quad(x, q, y, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?a WHERE { \
+                        VALUES ?a { :s1 :s2 :s3 } \
+                        FILTER EXISTS { \
+                          ?s :p ?o \
+                          FILTER(?s = ?a) \
+                          FILTER EXISTS { ?x :q ?y } \
+                        } \
+                      }";
+        // `force_sequential` keeps every reach of `PreparedExists::build` on this test's own
+        // thread — see `PREPARED_EXISTS_BUILD_COUNT`'s doc for why that is load-bearing for
+        // the thread-local counter to be a sound observable here.
+        let engine = crate::engine::NativeSparqlEngine::default().with_eval_options(
+            crate::eval::EvalOptions {
+                force_sequential: true,
+                ..crate::eval::EvalOptions::default()
+            },
+        );
+        crate::eval::PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(0));
+        let explanation = engine.explain_query(&ds, query, None).expect("explain");
+        let builds = crate::eval::PREPARED_EXISTS_BUILD_COUNT.with(std::cell::Cell::get);
+        assert_eq!(
+            builds,
+            2,
+            "3 outer rows over 3 DISTINCT restrictions must prepare each of the two EXISTS \
+             sites (outer, nested) exactly ONCE, not once per reach — got {builds} builds \
+             (rendered: {})",
+            explanation.render()
         );
     }
 

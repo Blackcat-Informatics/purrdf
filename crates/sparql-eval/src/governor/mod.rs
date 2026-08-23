@@ -1612,7 +1612,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "94c81272c1d464b95cfe2f464a62e1cad845cbf12adf192614d1ab3953826a10";
+    "5bd8735ca1e96104b84c8939958bc065469435db8ad9dfc6de4bbd37c31e38e9";
 
 #[cfg(test)]
 mod tests {

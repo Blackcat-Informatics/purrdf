@@ -229,6 +229,7 @@
 
 use purrdf_sparql_algebra::{GraphPattern, OrderExpression};
 
+use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
 use crate::governor::soundness;
 
 /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
@@ -244,6 +245,31 @@ pub(crate) enum Enf {
     /// `EXISTS` is always `false` (and `NOT EXISTS`, `Not(Exists(..))` in this
     /// algebra, always `true`).
     FoldedEmpty,
+}
+
+/// Law 1's gate: `LeftJoin{left, right, expression}` erases to `left` only when
+/// everything it would ERASE (`right`, the join condition) is effect-free. Shared
+/// verbatim by [`normalize`] and [`ledger_source_map`]'s spine walk — see that
+/// function's doc for why the two must never diverge.
+fn left_join_erasable(
+    right: &GraphPattern,
+    expression: Option<&purrdf_sparql_algebra::Expression>,
+) -> bool {
+    let right_clean = !soundness::pattern_can_hard_error(right);
+    let condition_clean = expression.is_none_or(|e| !soundness::expr_can_hard_error(e));
+    right_clean && condition_clean
+}
+
+/// Law 2's gate: `OrderBy` erases entirely only when its sort keys — the ERASED
+/// portion — are effect-free. Shared verbatim by [`normalize`] and
+/// [`ledger_source_map`]'s spine walk.
+fn order_by_erasable(expression: &[OrderExpression]) -> bool {
+    !expression.iter().any(|oe| {
+        let e = match oe {
+            OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
+        };
+        soundness::expr_can_hard_error(e)
+    })
 }
 
 /// Normalize `pattern` — an `EXISTS`/`NOT EXISTS` inner — to Existential Normal Form
@@ -263,11 +289,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             right,
             expression,
         } => {
-            let right_clean = !soundness::pattern_can_hard_error(right);
-            let condition_clean = expression
-                .as_ref()
-                .is_none_or(|e| !soundness::expr_can_hard_error(e));
-            if right_clean && condition_clean {
+            if left_join_erasable(right, expression.as_ref()) {
                 normalize(left)
             } else {
                 Enf::Pattern(pattern.clone())
@@ -275,13 +297,7 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         }
         // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
         GraphPattern::OrderBy { inner, expression } => {
-            let keys_clean = !expression.iter().any(|oe| {
-                let e = match oe {
-                    OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
-                };
-                soundness::expr_can_hard_error(e)
-            });
-            if keys_clean {
+            if order_by_erasable(expression) {
                 normalize(inner)
             } else {
                 Enf::Pattern(pattern.clone())
@@ -341,6 +357,140 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
         // Extend/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
         // PropertyFunction/Service/Group/Lateral) — the spine stops here, unmodified.
         other => Enf::Pattern(other.clone()),
+    }
+}
+
+/// Map every node address inside `normalized` — an already-computed `Enf::Pattern` result
+/// from calling [`normalize`] on `original` — back to the ORIGINAL, un-normalized
+/// `original` tree's node address.
+///
+/// # Why this is needed at all
+///
+/// `ChargeLedger::for_plan`'s walk ([`crate::governor::ledger`]) assigns a ledger
+/// ordinal to every node [`crate::governor::soundness::walk_spine`] visits —
+/// including an `EXISTS`/`NOT EXISTS` inner pattern reached through an expression
+/// (`crate::governor::soundness::visit_exists_patterns`), so `original`'s own nodes
+/// already have ledger identity. But `normalize`'s `other => Enf::Pattern(other.clone())`
+/// arm (and its two erasure-fallback arms) allocate a FRESH clone: `normalized`'s own
+/// addresses never equal `original`'s, so a charge made while evaluating `normalized`
+/// can never resolve to the ledger ordinal `original` already has. This walk is the
+/// bridge: [`crate::binop::eval_correlated`]'s `EXISTS` caller pushes the returned map
+/// onto [`crate::eval::EvalCtx::correlated_node_maps`] before evaluating `normalized`
+/// (or the `witness_wrapped` form built from it), so `EvalCtx::resolve_ledger_ordinal`'s
+/// existing one-hop-per-window chase resolves straight through to `original`'s ordinal —
+/// no new resolution machinery, the same one `LATERAL`'s per-row substitution already
+/// uses.
+///
+/// # What this walk covers, and what it deliberately does not
+///
+/// Mirrors [`normalize`]'s own recursion for the two erasure-only wrappers (a
+/// spine-erasing `LeftJoin`/`OrderBy`/`Distinct`/`Reduced`/`Slice(0, _)`: no address of
+/// its own, pure delegation to whatever its child resolves to) and the common terminal
+/// case (every other variant, which `normalize` clones wholesale — `normalized` is then
+/// a 1:1 structural copy of `original`, walked in lockstep via
+/// [`crate::governor::soundness::visit_classified_children`], the SAME child order
+/// [`crate::governor::soundness::walk_spine`] used to assign `original`'s own
+/// ordinals). This also walks into any `EXISTS` pattern nested inside an expression the
+/// clone carries, so a doubly-nested `EXISTS` reached this way gets its own entry too —
+/// which is what lets [`crate::eval::EvalCtx::prepared_exists`] resolve a nested site's
+/// cache key back to a stable address instead of rebuilding every outer row.
+///
+/// Declines to track — returning the map unchanged, with no entry for that node — for
+/// `normalize`'s two SYNTHESIZING cases, `Project` and `Union`: their own root is a
+/// freshly built combination, not a clone of one single node, and reconstructing that
+/// correspondence needs the same `counts_rows` arbitration
+/// [`crate::expr::substitute_pattern_tracked`] already does for `LATERAL`'s Values-Insertion
+/// wrappers. Left as a documented, deliberate limitation rather than attempted here: a
+/// query whose `EXISTS` inner is directly `{ SELECT/DISTINCT/UNION ... }`-shaped at its
+/// OWN top level still charges correctly — its charges simply keep rolling into the
+/// enclosing `FILTER`/`BIND`, exactly the behavior before this function existed, never
+/// a regression.
+pub(crate) fn ledger_source_map(
+    original: &GraphPattern,
+    normalized: &GraphPattern,
+) -> SubstitutionSourceMap {
+    let mut map = SubstitutionSourceMap::default();
+    map_spine(original, normalized, &mut map);
+    map
+}
+
+/// [`ledger_source_map`]'s recursive spine walk. See that function's doc.
+fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut SubstitutionSourceMap) {
+    match original {
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } if left_join_erasable(right, expression.as_ref()) => {
+            map_spine(left, normalized, map);
+        }
+        GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
+            map_spine(inner, normalized, map);
+        }
+        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+            map_spine(inner, normalized, map);
+        }
+        // Mirrors law 4a: an offset-zero slice with room for at least one row erases.
+        // A `Slice(_, Some(0))` reached here is, by construction, the can-hard-error
+        // terminal-clone case (see `normalize`'s law 4b): if it had folded empty
+        // instead, EVERY enclosing step that transparently forwarded it here would
+        // have folded empty too, and `ledger_source_map`'s caller would never have had
+        // an `Enf::Pattern` — and therefore a `normalized` tree — to walk in the first
+        // place. It falls through to the terminal arm below, exactly like `normalize`'s
+        // own `(_, Some(0)) if can_hard_error` branch.
+        GraphPattern::Slice {
+            inner,
+            start: 0,
+            length,
+        } if *length != Some(0) => {
+            map_spine(inner, normalized, map);
+        }
+        // `Project`/`Union`: synthesizing cases this walk declines to track — see
+        // [`ledger_source_map`]'s doc.
+        GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
+        // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`, is
+        // the terminal shape `normalize` clones wholesale.
+        _ => map_clone_1to1(original, normalized, map),
+    }
+}
+
+/// Record `normalized` (a 1:1 structural clone of `original` — see [`map_spine`]) and
+/// every one of its descendants, INCLUDING any `EXISTS` pattern reached through a
+/// nested expression, against the corresponding node of `original`. `counts_rows` is
+/// unconditionally `true` throughout: unlike `LATERAL`'s Values-Insertion machinery,
+/// this walk never adds a node `original` did not already have, so there is no
+/// wrapper/wrapped ambiguity to arbitrate — every node here really is the one true
+/// output of the real node it corresponds to.
+fn map_clone_1to1(
+    original: &GraphPattern,
+    normalized: &GraphPattern,
+    map: &mut SubstitutionSourceMap,
+) {
+    map.insert(
+        std::ptr::from_ref(normalized) as usize,
+        SubstitutionSource {
+            source: std::ptr::from_ref(original) as usize,
+            counts_rows: true,
+        },
+    );
+    let mut original_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
+    soundness::visit_classified_children(original, &mut |child, _edge| {
+        original_children.push(child);
+        false
+    });
+    let mut normalized_children: smallvec::SmallVec<[&GraphPattern; 4]> = smallvec::SmallVec::new();
+    soundness::visit_classified_children(normalized, &mut |child, _edge| {
+        normalized_children.push(child);
+        false
+    });
+    debug_assert_eq!(
+        original_children.len(),
+        normalized_children.len(),
+        "normalized is a structural clone of original at this point in the walk, so their \
+         classified children must pair up 1:1"
+    );
+    for (o, n) in original_children.into_iter().zip(normalized_children) {
+        map_clone_1to1(o, n, map);
     }
 }
 

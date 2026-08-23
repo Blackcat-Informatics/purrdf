@@ -245,7 +245,37 @@ pub(crate) enum PreparedExists {
         /// per evaluation, `crate::parallel::function_is_builtin_stateful`'s doc), so
         /// caching one row's answer under the other would be observably wrong.
         stateful: bool,
+        /// Every node address inside [`Self::normalized`] AND [`Self::witness_wrapped`],
+        /// mapped ONE HOP straight to the corresponding node address in the ORIGINAL,
+        /// un-normalized `pattern` the ledger already indexed — see
+        /// [`crate::enf::ledger_source_map`]. [`crate::binop::eval_correlated`]'s `EXISTS`
+        /// caller pushes this onto [`EvalCtx::correlated_node_maps`] for the span of the
+        /// per-row evaluation, which is what makes the inner's charges land on real ledger
+        /// ordinals instead of the enclosing `FILTER`/`BIND`, and lets
+        /// [`EvalCtx::prepared_exists`] resolve a doubly-nested `EXISTS` site's cache key
+        /// back to a stable address instead of rebuilding every outer row. Empty whenever
+        /// `ledger_source_map` declined to track this site's top-level shape (see its doc)
+        /// — tracking then simply does not engage, exactly the behavior before this field
+        /// existed.
+        ledger_source: Arc<crate::expr::SubstitutionSourceMap>,
     },
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only counter of [`PreparedExists::build`] calls: the deterministic observable
+    /// `nested_exists_prepare_is_cached_across_rows` reads to prove a nested `EXISTS` site
+    /// is prepared once per evaluation rather than once per outer row. THREAD-local rather
+    /// than a process-global counter, so it is immune to two
+    /// independent sources of cross-test interference `cargo test`'s default parallelism
+    /// would otherwise introduce: another test's unrelated `EXISTS` evaluations running
+    /// concurrently on a different thread, and this crate's OWN row-chunk worker fork
+    /// (`EvalCtx::may_fork_row_loop`) — a test reading this counter runs its query with
+    /// [`EvalOptions::force_sequential`] set so every reach of [`PreparedExists::build`]
+    /// happens on the SAME thread the test itself is running on, and the thread-local keeps
+    /// that thread's count from ever being touched by another test's thread.
+    pub(crate) static PREPARED_EXISTS_BUILD_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 impl PreparedExists {
@@ -253,6 +283,8 @@ impl PreparedExists {
     /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
     /// per-evaluation cache and the substituted-temporary ABA guard).
     fn build(pattern: &GraphPattern) -> Self {
+        #[cfg(test)]
+        PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
         match crate::enf::normalize(pattern) {
             crate::enf::Enf::FoldedEmpty => Self::FoldedFalse,
             crate::enf::Enf::Pattern(normalized) => {
@@ -269,11 +301,42 @@ impl PreparedExists {
                 // as "not a current-row variable" and admit a probe that should have been
                 // refused.
                 let normalized = Arc::new(normalized);
+                // `ledger_source_map` is called against EACH tree's OWN permanent address
+                // (never a pre-move stack local — see that function's doc and
+                // `crate::expr::boxed_and_mapped`'s "permanent address" discipline, the
+                // same rule this mirrors): `normalized` is already at its final `Arc`
+                // location, and `witness_inner` is boxed BEFORE its address is taken, so
+                // both walks key every entry by the address the node actually ends up at.
+                let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
+                let witness_inner = Box::new((*normalized).clone());
+                let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
+                let root_source = ledger_source
+                    .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
+                    .map(|entry| entry.source);
+                ledger_source.extend(witness_inner_map);
                 let witness_wrapped = Arc::new(GraphPattern::Slice {
-                    inner: Box::new((*normalized).clone()),
+                    inner: witness_inner,
                     start: 0,
                     length: Some(1),
                 });
+                // The witness `Slice` wrapper itself is pure prepare-time scaffolding — no
+                // original counterpart of its own, exactly like the synthetic `Join`/`Values`
+                // wrapper `crate::expr::substitute_pattern_tracked` mints for `LATERAL`'s Values
+                // Insertion — so it is mapped to the SAME real address its child resolves to,
+                // `counts_rows: false`: its own (very small) fuel still lands on the right
+                // ledger line, but its trivially-one-row output must not double-count the real
+                // node's rows. `None` only when `ledger_source_map` declined to track this
+                // site's top-level shape at all (see that function's doc) — the wrapper then
+                // stays unmapped too, consistently.
+                if let Some(source) = root_source {
+                    ledger_source.insert(
+                        std::ptr::from_ref(witness_wrapped.as_ref()) as usize,
+                        crate::expr::SubstitutionSource {
+                            source,
+                            counts_rows: false,
+                        },
+                    );
+                }
                 let mut analysis = crate::governor::soundness::NodeAnalysisTable::default();
                 let root = crate::governor::soundness::analyze_pattern(&normalized, &mut analysis);
                 Self::Pattern {
@@ -282,6 +345,7 @@ impl PreparedExists {
                     analysis: Arc::new(analysis),
                     free_vars: Arc::new(root.free_vars),
                     stateful: root.has_stateful_builtin,
+                    ledger_source: Arc::new(ledger_source),
                 }
             }
         }
@@ -417,8 +481,13 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// form, and the fourth structural analysis table), keyed by the `EXISTS`/`NOT EXISTS`
     /// AST node's immutable address. Populated lazily, once per distinct site — see
     /// [`Self::prepared_exists`], the sole accessor, for the substituted-temporary ABA
-    /// guard this cache observes (the same discipline [`Self::exists_inner_cache`] and
-    /// [`Self::const_atom_cache`] already apply).
+    /// guard this cache observes. UNLIKE [`Self::exists_inner_cache`] and
+    /// [`Self::const_atom_cache`], that guard is not a blanket bypass: a nested `EXISTS`
+    /// reached through a per-row substituted copy first tries to resolve back to a
+    /// stable address via [`Self::correlated_node_maps`] and, on success, still reads
+    /// and writes this cache under that resolved address — see
+    /// [`Self::in_substituted_exists`]'s doc for why this one member can do that and the
+    /// other two cannot.
     pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
     /// The `EXISTS` definition path's μ-restriction memo: `key = μ` restricted to the
     /// inner's own correlated-variable set (from [`PreparedExists::free_vars`]), `value =
@@ -497,11 +566,30 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// temporary pattern (see `expr::exists`'s correlated branch). That
     /// temporary's `Expression`/`GraphPattern` nodes are heap-allocated fresh for
     /// the current outer row and dropped at the end of it — they do NOT outlive
-    /// this context's `query()` call — so address-keyed memoization
-    /// ([`Self::const_atom_cache`], [`Self::exists_prepared_cache`],
-    /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`]) is unsound over
-    /// them (a later row's allocation can reuse a dropped node's address) and must be
-    /// bypassed entirely while this flag is set.
+    /// this context's `query()` call — so a per-row copy's OWN address is never a sound
+    /// cache key: a later row's allocation can reuse a dropped node's address (the ABA
+    /// hazard), and a hit keyed by it would return an earlier row's answer.
+    ///
+    /// This crate keeps exactly FOUR address-keyed, per-query caches subject to that
+    /// hazard — [`Self::const_atom_cache`], [`Self::exists_prepared_cache`],
+    /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`] — none of them
+    /// deleted, disabled, or replaced by this flag; each one stays exactly as lazy,
+    /// address-keyed, and per-evaluation as its own doc describes. What this flag
+    /// changes is narrower than "bypass the cache class": [`Self::const_atom_cache`],
+    /// [`Self::exists_inner_cache`], and [`Self::exists_definition_memo`] have no way to
+    /// tell a per-row temporary's address from a real one, so all three skip both the
+    /// read and the write, unconditionally, whenever this flag is set — a fresh,
+    /// unshared answer every reach, same as before this field existed.
+    /// [`Self::exists_prepared_cache`] is the one exception: [`Self::prepared_exists`]
+    /// first tries to resolve the reached node's address one hop through
+    /// [`Self::correlated_node_maps`] (the SAME tracked-window resolution
+    /// [`Self::resolve_ledger_ordinal`] uses for the charge ledger) to the STABLE,
+    /// un-substituted AST address a nested `EXISTS` site's copy is standing in for —
+    /// when that resolves, the cache is read and written keyed by the stable address,
+    /// same as an ordinary (non-substituted) reach; only when it does NOT resolve (a
+    /// node the substitution walk genuinely synthesized, with no AST identity of its
+    /// own) does it fall back to the unshared, build-fresh behavior the other three
+    /// caches always take here.
     pub(crate) in_substituted_exists: bool,
     /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
     /// last — see [`crate::expr::SubstitutionSourceMap`].
@@ -1871,17 +1959,40 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// it fresh on the first reach and reusing it for every later reach of the SAME AST
     /// node within this evaluation (`crate::enf`'s module doc, "Prepare-seam choice").
     ///
-    /// Bypasses [`Self::exists_prepared_cache`] entirely (both the read and the write)
-    /// while [`Self::in_substituted_exists`] is set: `pattern`'s address is then a per-row
-    /// heap temporary that can alias a dropped-and-reused allocation from an earlier
-    /// outer row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
-    /// already guard against, restated here for a third cache rather than left for a new
-    /// caller to rediscover.
+    /// While [`Self::in_substituted_exists`] is set, `pattern`'s OWN address is a per-row
+    /// heap temporary that can alias a dropped-and-reused allocation from an earlier outer
+    /// row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
+    /// already guard against — so it can never be used as the cache key directly. This is
+    /// reached for exactly one shape: a nested `EXISTS` inside an enclosing correlated
+    /// `EXISTS`/`LATERAL` window's per-row substituted copy (`crate::binop::eval_correlated`
+    /// via [`crate::expr::substitute_pattern_tracked`]'s tracked `Expression::Exists` arm).
+    /// That nested site's OWN AST node, unlike the per-row copy, is perfectly stable across
+    /// every outer row — so [`Self::resolve_ledger_ordinal`]'s own one-hop-per-window chase
+    /// (through [`Self::correlated_node_maps`]) is tried FIRST: when `pattern`'s address
+    /// resolves to a stable one, the cache is keyed by THAT address instead, turning what
+    /// would otherwise be a fresh [`PreparedExists::build`] (ENF-normalize, clone, full
+    /// structural analysis) on every single outer row into one build per site, exactly like
+    /// the un-substituted fast path below. Only when no window's map covers `pattern` at
+    /// all — a node the substitution walk genuinely synthesized, with no AST identity of
+    /// its own — does this fall back to the old build-fresh-and-discard behavior.
     pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
-        if self.in_substituted_exists {
-            return Arc::new(PreparedExists::build(pattern));
-        }
         let key = std::ptr::from_ref(pattern) as usize;
+        if self.in_substituted_exists {
+            let Some(resolved) = self
+                .correlated_node_maps
+                .last()
+                .and_then(|map| map.get(&key))
+                .map(|entry| entry.source)
+            else {
+                return Arc::new(PreparedExists::build(pattern));
+            };
+            if let Some(existing) = self.exists_prepared_cache.get(&resolved) {
+                return existing.clone();
+            }
+            let built = Arc::new(PreparedExists::build(pattern));
+            self.exists_prepared_cache.insert(resolved, built.clone());
+            return built;
+        }
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
             return existing.clone();
         }

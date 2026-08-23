@@ -199,6 +199,21 @@ relation seam says why that is the honest shape for the property-function
 lanes, and the aggregate section below says why the same shape holds for the
 aggregate lanes.
 
+### `EXISTS`/`NOT EXISTS` evidence counters
+
+| Case | Covers |
+|---|---|
+| `exists-inner-counters` | all three `EXISTS` evidence charge points nonzero in one case: `exists-probe-answered` (a probe-admissible correlated `EXISTS` sharing its outer variable's name), `exists-definition-answered` and `exists-inner-solutions-consumed` (a second, definition-path `EXISTS` correlated only through a `FILTER` expression, evaluated once per distinct outer restriction) |
+
+`exists-inner-counters` is `n/a`-banded like `property-function-first-row-fuel-ceiling`:
+an authored, generous `fuel` ceiling names the seam rather than a boundary, and
+`.charges` is read straight off `explain_query`'s ledger the same way the
+`aggregate-invocation-fuel-*`/`aggregate-accumulation-fuel-*` lanes are (see
+`wants_dataset_charge_decomposition` in `governor_corpus.rs`) — `EXISTS` is
+ordinary algebra, not an injected transport, relation, or aggregate registry.
+Before this case existed, every other vector in this corpus read all three
+`EXISTS` counters as zero.
+
 ### RDF 1.2 — the statement layer is inside the perimeter
 
 | Case | Covers |

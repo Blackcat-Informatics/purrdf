@@ -593,7 +593,14 @@ ledger reports the decision through three evidence counters:
 answered` (one per-row-definition evaluation), and
 `exists-inner-solutions-consumed` (one row the definition path's inner
 actually materialized — bounded at 1 per evaluation by the first-witness
-stop).
+stop). The definition path's own inner plan nodes — a `MINUS`, a `Bgp`, a
+nested `EXISTS`, whatever the body contains — carry their own ledger lines
+too, decomposed exactly like an ordinary node's rather than folded into the
+enclosing `FILTER`/`BIND`; a node that legitimately reads `fuel=0 rows=0` is
+one Existential Normal Form erased from the evaluated tree entirely (an
+`OPTIONAL`/`ORDER BY`/`DISTINCT`/`LIMIT` wrapper the emptiness-preserving
+laws proved transparent — see "Existential Normal Form" above) and therefore
+never ran, not a charge that went missing.
 
 **The performance characteristic, stated plainly**: an uncorrelated inner, or
 a correlated one built only from `Bgp`/`Path`/`Values`/`Graph`/`Join`/

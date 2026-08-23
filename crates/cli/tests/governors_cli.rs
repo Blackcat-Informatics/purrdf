@@ -593,6 +593,79 @@ fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
     );
 }
 
+/// `--explain` renders all three `EXISTS`/`NOT EXISTS` evidence counters —
+/// `exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`
+/// — with NONZERO values, and the definition path's own inner plan node (the `Bgp` under
+/// the second `FILTER EXISTS`) carries its own nonzero ledger line rather than folding into
+/// the enclosing `Filter`.
+///
+/// This is the release-CLI twin of the frozen `exists-inner-counters` governor vector
+/// (`vectors/sparql-governors/`): same query shape, same data, so a reader can compare this
+/// test's assertions directly against `expected/exists-inner-counters.charges`.
+#[test]
+fn exists_counters_render_in_cli_explain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:s1 ex:p ex:o1 .\n",
+            "ex:s2 ex:p ex:o2 .\n",
+            "ex:s1 ex:q ex:y1 .\n",
+            "ex:s2 ex:q ex:y2 .\n",
+        ),
+    );
+    let query = "PREFIX ex: <http://example.org/> \
+                 SELECT ?a WHERE { \
+                   VALUES ?a { ex:s1 ex:s2 } \
+                   FILTER EXISTS { ?a ex:p ?o } \
+                   FILTER EXISTS { ?s ex:q ?o2 . FILTER(?s = ?a) } \
+                 }";
+
+    let first = run(&["query", "--data", &ttl, "--explain", query]);
+    assert_eq!(code(&first), 0, "stderr:\n{}", stderr(&first));
+    let second = run(&["query", "--data", &ttl, "--explain", query]);
+    assert_eq!(
+        first.stdout, second.stdout,
+        "two --explain runs of the same EXISTS query over the same data must be byte-identical"
+    );
+
+    let body = stdout(&first);
+    assert!(
+        body.contains("  exists-probe-answered\t1\n"),
+        "the probe-admissible FILTER EXISTS must charge exactly one memoized-probe \
+         evaluation: {body}"
+    );
+    assert!(
+        body.contains("  exists-definition-answered\t2\n"),
+        "the second, definition-path FILTER EXISTS must charge once per distinct outer \
+         restriction (two, for ?a = ex:s1 and ex:s2): {body}"
+    );
+    assert!(
+        body.contains("  exists-inner-solutions-consumed\t2\n"),
+        "the definition path's inner must consume exactly one witness per evaluation \
+         (two, first-witness-stopped): {body}"
+    );
+    // The definition path's own inner `Bgp` (`?s ex:q ?o2`) must carry its own nonzero
+    // ledger line, not `fuel=0 rows=0` folded into the enclosing `Filter`. It renders AFTER
+    // the first (probe-path) `FILTER EXISTS`'s own `Bgp` line in the ledger's pre-order —
+    // the probe path is untouched by this fix and legitimately still reads `fuel=0 rows=0`
+    // (see `crate::enf::ledger_source_map`'s doc for why that is scoped to the definition
+    // path only) — so the LAST `Bgp` line, not the first, is the one this assertion is
+    // about.
+    let bgp_line = body
+        .lines()
+        .rev()
+        .find(|line| line.contains("Bgp fuel="))
+        .unwrap_or_else(|| panic!("no Bgp ledger line at all in:\n{body}"));
+    assert!(
+        !bgp_line.contains("fuel=0 rows=0"),
+        "the EXISTS definition path's own Bgp must show real charges, not fuel=0 rows=0: \
+         {bgp_line}\nfull explanation:\n{body}"
+    );
+}
+
 /// `--explain` REFUSES WHAT IT CANNOT HONOR — and that is now the WHOLE list.
 ///
 /// Each refusal is a usage error (exit 2) naming the flag to drop, because the alternative

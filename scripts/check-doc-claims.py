@@ -3033,7 +3033,7 @@ def governor_corpus_count_claim(matrix: dict[str, tuple[int, int]]) -> list[str]
             _GOVERNOR_PROFILE,
             _flow(
                 r"the\s+remaining (?P<seam>\d+) are transport, relation, "
-                r"charge-seam, and wall-clock cases"
+                r"charge-seam, `EXISTS`-evidence, and wall-clock cases"
             ),
         ),
     ]
