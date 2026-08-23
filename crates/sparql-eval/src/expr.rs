@@ -795,15 +795,42 @@ fn is_literal(v: &TermValue) -> bool {
 /// constant, so an outer-bound variable a nested `EXISTS`'s inner pattern shares
 /// SOLELY through a triple position (never its own FILTER/BIND) still needs the
 /// leaf substitution `wrap_with_expr_term_only_values` supplies where an
-/// `Expression` constant cannot reach. This is the widened reachability
-/// [`crate::governor::soundness::analyze_pattern`]'s `free_vars` output ALSO
-/// computes, independently, for the [`exists`] decision site's own correlation
-/// test — the two walks are used for different purposes (this one feeds
-/// substitution's Values-Insertion wrapping; that one feeds the prepare-time
-/// analysis table) but must never diverge on which variables a pattern reaches,
-/// or an outer-bound variable correlated only through a nested `EXISTS`'s triple
-/// position could reach [`exists`]'s decision correctly while still reaching
-/// substitution's wrapping incorrectly (or vice versa).
+/// `Expression` constant cannot reach.
+///
+/// # Relationship to `analyze_pattern`'s `free_vars` — deliberately asymmetric, not "never diverge"
+///
+/// [`crate::governor::soundness::analyze_pattern`]'s `free_vars` output computes a
+/// SEPARATE "every variable reachable anywhere" set, independently, for the
+/// [`exists`] decision site's own correlation test. The two walks are NOT required
+/// to agree and in fact do not: [`pattern_all_vars`]'s doc identifies the one point
+/// where they diverge (`Project`: this walk unions the projected list with
+/// everything reachable through the inner pattern; `analyze_pattern` INTERSECTS the
+/// inner's own free set with the projected list, since `Project` is the one true
+/// scope boundary the surface language has). Every other variant's arm computes the
+/// identical union in both walks, so the divergence is one-directional:
+/// `pattern_all_vars(P)` — and therefore this function's `Expression::Exists`
+/// reach — is always a SUPERSET of (or equal to) `analyze_pattern(P).free_vars` for
+/// the same inner pattern `P`.
+///
+/// That over-approximation is safe for THIS walk's actual consumer. Correlation
+/// DETECTION never reads this function's output at all — [`crate::eval::
+/// PreparedExists::build`] calls `analyze_pattern` directly for that decision, and
+/// an earlier task's revert-check confirmed as much: the widened
+/// `Expression::Exists` arm below is VESTIGIAL for correlation detection today.
+/// Its one live purpose is column preservation: `substitute_pattern_impl`'s
+/// `Filter`/`Extend`/`LeftJoin`/`OrderBy`/`Group` arms call this function to build
+/// the `free` set handed to `wrap_with_expr_term_only_values`, which decides which
+/// outer bindings need joining in as a one-row `VALUES` table before the
+/// expression evaluates. A variable this walk includes past a real `Project`
+/// boundary that `analyze_pattern` would have excluded costs nothing there: a
+/// candidate absent from the caller's actual `SubstitutionRow` wraps nothing, and
+/// any spuriously retained variable is narrowed back out by the SEPARATE
+/// `SubstitutionRow::narrow_to` mechanism the substitution walk itself applies
+/// when it descends through `GraphPattern::Project` (see that method's doc) — the
+/// over-approximation here, the later narrowing there, never a false negative in
+/// between. Do not "optimize away" the widened `Exists` arm on the mistaken
+/// assumption it still drives the correlation decision, and do not double-trust it
+/// against `analyze_pattern`'s output — the two are allowed to differ.
 fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -849,10 +876,16 @@ fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
                 expr_vars(a, out);
             }
         }
-        // Nested EXISTS: widened to `pattern_all_vars` (this function's doc) — a
-        // correlation reaching the nested inner ONLY through a triple/leaf position
-        // (never that inner's own expression positions) must still surface here, or
-        // the enclosing `exists()` call wrongly takes the uncorrelated fast path.
+        // Nested EXISTS: widened to `pattern_all_vars` (this function's doc,
+        // "Relationship to `analyze_pattern`'s `free_vars`" section). VESTIGIAL for
+        // correlation detection — `PreparedExists::build` walks `analyze_pattern`
+        // independently for that decision, never this function's output. Its live
+        // purpose is column preservation: the result feeds
+        // `wrap_with_expr_term_only_values` (via this function's callers in
+        // `substitute_pattern_impl`), so a correlation reaching the nested inner
+        // ONLY through a triple/leaf position (never that inner's own expression
+        // positions) still gets joined in as a one-row `VALUES` table rather than
+        // silently dropped from the substituted subtree.
         Expression::Exists(inner_pat) => {
             pattern_all_vars(inner_pat, out);
         }
@@ -882,16 +915,26 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
 /// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, every
 /// expression position, and every variable a construct itself INTRODUCES
-/// (`BIND`/`GROUP BY`/a projection list). Used by [`expr_vars`]'s widened
+/// (`BIND`/`GROUP BY`/a projection list). Used ONLY by [`expr_vars`]'s widened
 /// `Expression::Exists` arm (a nested `EXISTS`'s Values-Insertion substitution
 /// reaches its inner's LEAF positions too, not just its own expression
-/// positions — see that arm's doc) and, at the [`exists`] decision site, by
-/// [`crate::eval::PreparedExists::build`]'s call into
-/// [`crate::governor::soundness::analyze_pattern`] (the fourth structural
-/// analysis, which computes this same "every variable reachable anywhere" set —
-/// [`crate::governor::soundness::NodeAnalysis::free_vars`] — as ONE of its four
-/// per-node outputs, replacing what a bespoke widened-reachability walk here
-/// used to compute on its own for exactly the [`exists`] correlation test).
+/// positions — see that arm's doc and [`expr_vars`]'s own "Relationship to
+/// `analyze_pattern`'s `free_vars`" section for how this walk's output relates to
+/// the SEPARATE, independent walk [`crate::governor::soundness::analyze_pattern`]
+/// runs — via [`crate::eval::PreparedExists::build`] — for the [`exists`] decision
+/// site's own correlation test; this function's output never feeds that decision).
+///
+/// # Diverges from `analyze_pattern`'s `free_vars` at exactly one point
+///
+/// Every arm below computes the same union [`crate::governor::soundness::
+/// analyze_pattern`] does for the matching [`purrdf_sparql_algebra::GraphPattern`]
+/// variant — EXCEPT `Project`: this walk unions the projection LIST with
+/// everything reachable through the inner pattern (no narrowing), while
+/// `analyze_pattern` INTERSECTS the inner's own free set with the projection list
+/// (`Project` is the one true scope boundary the surface language has). So
+/// `pattern_all_vars(P)` is always a SUPERSET of (or equal to)
+/// `analyze_pattern(P).free_vars` for the same `P` — see [`expr_vars`]'s doc for
+/// why that one-directional divergence is safe for this walk's actual consumer.
 fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::NamedNodePattern;
 

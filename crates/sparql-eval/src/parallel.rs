@@ -475,15 +475,90 @@ fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'
 /// compensates (treating ANY `Custom` call as conservatively stateful, since
 /// under-reporting statefulness would be the unsound direction, while
 /// over-reporting only costs a fallback to the always-correct per-row path).
+///
+/// # Exhaustive over [`Function`] — no wildcard arm
+///
+/// Both readers of this function's answer (fork-safety in [`is_parallel_safe`] and
+/// probe admission in `crate::governor::soundness::expr_probe_admissible`) treat
+/// `false` as "safe to run once, unconstrained, or in parallel" — the UNSOUND
+/// default for anything actually stateful. A wildcard arm here would silently
+/// classify a NEW [`Function`] variant `false` until someone remembered to add it
+/// above; matching every variant (and, inside the `Purrdf` arm, every
+/// [`purrdf_sparql_algebra::PurrdfFn`] variant) by name instead makes a future
+/// addition to either enum a compile error at this exact match, not a silent
+/// unsound default.
 pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
     match f {
         Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
-        Function::Purrdf(call) => matches!(
-            call.fn_kind,
+        Function::Purrdf(call) => match call.fn_kind {
             purrdf_sparql_algebra::PurrdfFn::ListSlice
-                | purrdf_sparql_algebra::PurrdfFn::ListConcat
-        ),
-        _ => false,
+            | purrdf_sparql_algebra::PurrdfFn::ListConcat => true,
+            purrdf_sparql_algebra::PurrdfFn::HeldIn
+            | purrdf_sparql_algebra::PurrdfFn::ListLength
+            | purrdf_sparql_algebra::PurrdfFn::ListGet
+            | purrdf_sparql_algebra::PurrdfFn::ListIndexOf
+            | purrdf_sparql_algebra::PurrdfFn::ListContains => false,
+        },
+        // Registry-independent builtins with no mutable engine state — see this
+        // function's own doc comment (above the `# Exhaustive` section) for why
+        // `Custom` belongs in this `false` group too: its volatility is
+        // registry-dependent and decided separately, by `function_is_unsafe`'s own
+        // `Custom` arm, never here.
+        Function::Str
+        | Function::Lang
+        | Function::LangMatches
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::Concat
+        | Function::SubStr
+        | Function::StrLen
+        | Function::Replace
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Adjust
+        | Function::Now
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::StrLang
+        | Function::StrDt
+        | Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::Regex
+        | Function::Triple
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::IsTriple
+        | Function::LangDir
+        | Function::StrLangDir
+        | Function::HasLang
+        | Function::HasLangDir
+        | Function::Custom(_) => false,
     }
 }
 

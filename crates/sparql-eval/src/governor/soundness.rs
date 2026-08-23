@@ -1231,25 +1231,35 @@ pub(crate) struct NodeAnalysis {
 pub(crate) type NodeAnalysisTable = DetHashMap<usize, NodeAnalysis>;
 
 /// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern`]
-/// call over the same tree. Falls back to the empty (maximally conservative)
-/// analysis on a miss, which should not happen when `table` was built from exactly
-/// this tree — `probe_admissible`'s recursion never descends into a node
-/// `analyze_pattern` did not also visit, since both walks share the same per-variant
-/// child set.
-fn node_analysis(pattern: &GraphPattern, table: &NodeAnalysisTable) -> NodeAnalysis {
-    table
-        .get(&(std::ptr::from_ref(pattern) as usize))
-        .cloned()
-        .unwrap_or_else(|| NodeAnalysis {
-            // Maximally conservative on a miss: no variable certainly bound, a
-            // stateful builtin assumed present, a hard error assumed reachable.
-            // Should not happen when `table` was built from exactly the tree being
-            // walked (see this type's doc).
-            free_vars: DetHashSet::default(),
-            certainly_bound: DetHashSet::default(),
-            has_stateful_builtin: true,
-            can_hard_error: true,
-        })
+/// call over the same tree. Returns `None` on a miss, which should not happen when
+/// `table` was built from exactly this tree — `probe_admissible`'s recursion never
+/// descends into a node `analyze_pattern` did not also visit, since both walks
+/// share the same per-variant child set — and is unreachable today only by that
+/// caller-discipline argument, not by construction.
+///
+/// # Fail closed on a miss — deliberately `Option`, not a synthesized default
+///
+/// An earlier version of this function papered over a miss with a synthesized
+/// "empty `free_vars`, empty `certainly_bound`, `has_stateful_builtin: true`,
+/// `can_hard_error: true`" [`NodeAnalysis`] and called that "maximally
+/// conservative". That label was true for exactly one of this function's two
+/// kinds of reader — a `certainly_bound` reader (`admissible_rec`'s `Filter`/
+/// `Extend` arms, feeding [`expr_probe_admissible`]) — and FALSE for the other: a
+/// `free_vars` reader (`probe_admissible`'s own root lookup) sees an empty
+/// `free_vars` as "this node touches no outer variable ⇒ uncorrelated ⇒ admit the
+/// probe" — the PERMISSIVE direction, exactly backwards from "conservative".
+/// Which direction a synthesized default is safe in depends on which field the
+/// caller reads, so no single synthesized `NodeAnalysis` can be safe for every
+/// caller at once. Returning `None` instead removes the ambiguity: every caller
+/// below matches on it explicitly and fails closed (treats a miss as
+/// inadmissible/correlated), so a miss can only make a law/probe MORE
+/// conservative, never less, regardless of which field that particular caller
+/// would otherwise have read.
+fn node_analysis<'a>(
+    pattern: &GraphPattern,
+    table: &'a NodeAnalysisTable,
+) -> Option<&'a NodeAnalysis> {
+    table.get(&(std::ptr::from_ref(pattern) as usize))
 }
 
 /// Collect the variables a term pattern mentions, descending into a quoted
@@ -1306,13 +1316,72 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>)
 ///   (unchanged; these modifiers restrict or reorder ROWS, never which variables
 ///   a surviving row binds).
 /// * `Extend` = inner's set ∪ `{target}` (`BIND` always yields a bound target for
-///   this analysis's purposes — see [`analyze_pattern`]'s own doc note on this
-///   simplification's scope).
+///   this analysis's purposes — see [`analyze_pattern`]'s own doc note on this simplification's
+///   scope, below).
 /// * `Project` = inner's set ∩ the projected list (both free and certainly-bound
 ///   narrow at the one true scope boundary the surface language has).
 /// * `Group` = grouping keys ∩ inner's certainly-bound, ∪ every aggregate output
 ///   variable (an aggregate always yields SOME value for its output variable,
-///   even over an empty group).
+///   even over an empty group — the same simplification as `Extend`'s, and the
+///   same doc note below covers its scope too).
+///
+/// # `Extend`/`Group`'s "always bound" simplification's scope
+///
+/// This is that doc note on this simplification's scope, promised by the `Extend` bullet
+/// above: the `Extend` and `Group` bullets both commit `certainly_bound` to a claim this
+/// analysis cannot actually prove from the algebra alone, and both over-claim in
+/// the UNSOUND direction for [`expr_probe_admissible`] — a caller trusting
+/// `certainly_bound` to admit an unconstrained read of a variable that a real
+/// per-row evaluation could leave unbound:
+///
+/// * `Extend` inserts `variable` into `certainly_bound` UNCONDITIONALLY — but a
+///   `BIND` whose expression raises a TYPE error (not a hard
+///   [`EvalError`](crate::EvalError)) leaves the target unbound per SPARQL §18.6,
+///   not bound to some value. This analysis has no per-expression-shape way to
+///   know whether `expression` can type-error.
+/// * `Group` inserts every aggregate output variable into `certainly_bound`
+///   UNCONDITIONALLY — but `MIN`/`MAX`/`SAMPLE` over a group whose every input row
+///   errors on the aggregate's own argument expression yields NO value for that
+///   output variable, not some value.
+///
+/// **Which claims over-approximate**: exactly those two — every other bullet above
+/// derives `certainly_bound` from a guarantee the algebra shape itself gives (a
+/// `Bgp` match, a `VALUES` column with no `UNDEF`, a `Join`'s both-sides
+/// requirement, …), never from an unproven "this expression cannot error"
+/// assumption.
+///
+/// **Which callers neutralize them**: neither over-claim can currently decide a
+/// [`probe_admissible`] outcome, because [`admissible_rec`] never reads it in a
+/// context where the claim's truth would matter:
+///
+/// * [`admissible_rec`]'s `Extend` arm's `&&` chain includes
+///   `!current_row_vars.contains(variable)` as an independent leg, checked
+///   alongside (not gated behind) the `expr_probe_admissible` call that would read
+///   an ENCLOSING node's lookup of this `Extend` node's own over-claimed
+///   `certainly_bound`. The over-claim can only change an outcome when
+///   `variable ∈ current_row_vars` — exactly the case where that collision leg
+///   already forces the whole `Extend` arm (and, by `&&`-chaining, every ancestor
+///   that recurses through it) to `false`, short-circuiting before the
+///   over-claimed value is ever consulted.
+/// * [`admissible_rec`]'s `Group` arm is a blanket
+///   `GraphPattern::Group { .. } => false` — `Group` is NEVER probe-admissible, so
+///   no ancestor's `admissible_rec(inner, ..) && expr_probe_admissible(..,
+///   node_analysis(inner, ..).certainly_bound, ..)` call ever evaluates the
+///   `expr_probe_admissible` half of that `&&` when `inner` is a `Group` node:
+///   `&&` short-circuits on the `false` the blanket refusal already produced.
+///
+/// **What a future consumer must check**: a new caller of `certainly_bound`
+/// OUTSIDE `probe_admissible`'s recursion — or any change to either neutralizing
+/// arm above — must not trust an `Extend` target or a `Group` aggregate output as
+/// unconditionally bound without re-deriving one of the two guards this doc note
+/// describes (a collision check that forces refusal exactly when the over-claim
+/// could matter, or a blanket refusal of the whole node). The precise fix —
+/// conditioning the two insertions on whether `expression`/the aggregate's
+/// argument can type-error — is deliberately NOT attempted here: SPARQL's "type
+/// error leaves unbound" rule is a per-expression-shape judgment `analyze_expr`
+/// does not currently make, so doing this exactly would need a new, third boolean
+/// output threaded through every `analyze_expr` arm, for a case only reachable
+/// today by caller accident.
 pub(crate) fn analyze_pattern(
     pattern: &GraphPattern,
     table: &mut NodeAnalysisTable,
@@ -1823,10 +1892,16 @@ pub(crate) fn probe_admissible(
     table: &NodeAnalysisTable,
     outer_schema: &VarSchema,
 ) -> bool {
-    let current_row_vars: DetHashSet<Variable> = node_analysis(pattern, table)
+    // A miss here (see `node_analysis`'s doc) fails closed: refuse the probe
+    // rather than treat a synthesized empty `free_vars` as "uncorrelated".
+    let Some(root) = node_analysis(pattern, table) else {
+        return false;
+    };
+    let current_row_vars: DetHashSet<Variable> = root
         .free_vars
-        .into_iter()
+        .iter()
         .filter(|v| outer_schema.contains(v))
+        .cloned()
         .collect();
     admissible_rec(pattern, &current_row_vars, table)
 }
@@ -1848,11 +1923,16 @@ fn admissible_rec(
                 && admissible_rec(right, current_row_vars, table)
         }
         GraphPattern::Filter { expr, inner } => {
+            // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
+            // rather than read a synthesized empty `certainly_bound`.
+            let Some(inner_analysis) = node_analysis(inner, table) else {
+                return false;
+            };
             admissible_rec(inner, current_row_vars, table)
                 && expr_probe_admissible(
                     expr,
                     current_row_vars,
-                    &node_analysis(inner, table).certainly_bound,
+                    &inner_analysis.certainly_bound,
                     table,
                 )
         }
@@ -1861,11 +1941,14 @@ fn admissible_rec(
             variable,
             expression,
         } => {
+            let Some(inner_analysis) = node_analysis(inner, table) else {
+                return false;
+            };
             admissible_rec(inner, current_row_vars, table)
                 && expr_probe_admissible(
                     expression,
                     current_row_vars,
-                    &node_analysis(inner, table).certainly_bound,
+                    &inner_analysis.certainly_bound,
                     table,
                 )
                 && !current_row_vars.contains(variable)
@@ -2127,10 +2210,14 @@ fn expr_probe_admissible(
                     expr_probe_admissible(a, current_row_vars, inner_certainly_bound, table)
                 })
         }
-        Expression::Exists(inner) => {
-            let a = node_analysis(inner, table);
-            !a.has_stateful_builtin && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
-        }
+        // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
+        // rather than read a synthesized `free_vars`/`has_stateful_builtin`.
+        Expression::Exists(inner) => match node_analysis(inner, table) {
+            Some(a) => {
+                !a.has_stateful_builtin && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
+            }
+            None => false,
+        },
     }
 }
 

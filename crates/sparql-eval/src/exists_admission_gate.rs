@@ -2315,6 +2315,34 @@ mod tests {
         );
         let engine = crate::engine::NativeSparqlEngine::new();
 
+        // Two independent claims, asserted separately so a misattributed barrier cannot
+        // hide behind the OTHER claim's `false`:
+        //
+        // (a) the sweep actually reaches a trip attributed to the `Filter` barrier at
+        // least once — the precondition that makes this test say anything about that
+        // specific certificate at all.
+        //
+        // (b) EVERY barrier this sweep EVER records, at ANY fuel level, names `Filter` —
+        // never a different operator — checked on every iteration, independent of (a), so
+        // a regression that misattributes the barrier to the wrong node cannot hide behind
+        // (a) still succeeding at some OTHER fuel level. `Filter` is the only non-monotone
+        // operator anywhere in this plan (no `Group`/restricting `Slice`/answer-cap is in
+        // play, and the `MINUS` inside the correlated `EXISTS` is folded through
+        // `Truncation::barred_at` at the `Filter` node itself the instant a trip lands
+        // anywhere inside that `EXISTS`'s inner pattern — `crate::governor::soundness`'s
+        // module doc, "EXISTS is opaque, deliberately" — never through the `MINUS`'s own
+        // antitone edge), so no OTHER node should ever be blamed for withholding rows.
+        //
+        // This is deliberately NOT "every `BudgetExhausted` trip is `Unknown`, never
+        // `Certain`/`AtMost`": `PartialAnswers::barrier()` is `None` for BOTH, and a
+        // Certain/AtMost trip is expected — and sound — at some fuel levels in this exact
+        // sweep, both BEFORE the correlated candidate row (`?s ex:tag ?w`) is even found
+        // (a trivial lower bound: no candidate examined yet) and AGAIN AFTER `Filter` has
+        // already fully committed that row but a later, unrelated monotone stage (e.g. the
+        // query's own answer materialization) runs out of budget on its own. Neither one
+        // is a trip that landed inside `Filter`'s correlated `EXISTS` at all, so this check
+        // has nothing to say about them — only a trip that DOES carry a barrier is
+        // constrained here, and every one of THOSE must name `Filter`.
         let mut saw_filter_barrier = false;
         for fuel in 1..=64_u64 {
             let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(fuel);
@@ -2331,10 +2359,18 @@ mod tests {
                 )
                 .expect("the query parses and evaluates under every fuel level");
 
-            if let crate::GovernedOutcome::BudgetExhausted(exhausted) = outcome
-                && let crate::PartialAnswers::Unknown(barrier) = &exhausted.partial
-                && barrier.operator() == "Filter"
-            {
+            let crate::GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
+                continue;
+            };
+            if let Some(barrier) = exhausted.partial.barrier() {
+                assert_eq!(
+                    barrier.operator(),
+                    "Filter",
+                    "fuel={fuel} attributed a non-monotone barrier to `{}`, not `Filter` — \
+                     this plan's only non-monotone operator is the `Filter EXISTS`, so no \
+                     other node should ever be blamed for withholding rows",
+                    barrier.operator()
+                );
                 saw_filter_barrier = true;
             }
         }
