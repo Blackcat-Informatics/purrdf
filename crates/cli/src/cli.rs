@@ -68,10 +68,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
-use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile};
+use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat};
 use purrdf_sparql_results::SparqlResultsFormat;
-
-use crate::format::CliFormat;
 
 /// The `purrdf` command-line interface.
 #[derive(Parser, Debug)]
@@ -569,6 +567,29 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
+    /// Pack container utilities.
+    Pack {
+        /// The pack subcommand to run.
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+}
+
+/// The `pack` subcommands.
+#[derive(Subcommand, Debug)]
+pub(crate) enum PackCommand {
+    /// Verify a pack container's full integrity — every section digest AND the
+    /// RDFC-1.0 canonical-identity digest. Prints the verified 64-hex digest and
+    /// exits 0; a corrupt or non-pack input exits non-zero with a message.
+    ///
+    /// The ordinary read/reason paths already verify a pack on every open (nothing
+    /// enters the pipeline unverified); this is the explicit surface for confirming a
+    /// pack in isolation, without running a conversion or query.
+    Verify {
+        /// Pack path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
 }
 
 /// Projection profiles accepted by `purrdf project`.
@@ -770,25 +791,28 @@ pub(crate) enum CliRdfFormat {
     #[value(name = "yamlld", alias = "yaml-ld")]
     Yamlld,
     /// The native PurRDF pack container.
-    #[value(name = "pack")]
+    // No explicit `#[value(name = ...)]`: clap's default kebab-case rendering of this
+    // variant IS the pack container's clap spelling, so it is not re-declared as a
+    // literal here — the identifier lives once, in `purrdf_rdf::PACK_EXTENSIONS`.
     Pack,
 }
 
 impl CliRdfFormat {
-    /// Resolve this explicit choice to the pipeline's [`CliFormat`].
-    pub(crate) fn to_cli_format(self) -> CliFormat {
+    /// Resolve this explicit choice to the pipeline's [`SourceFormat`].
+    pub(crate) fn to_source_format(self) -> SourceFormat {
         use purrdf_rdf::NativeRdfFormat as N;
+        use purrdf_rdf::SourceFormat as S;
         match self {
-            Self::Turtle => CliFormat::Rdf(N::Turtle),
-            Self::Trig => CliFormat::Rdf(N::TriG),
-            Self::Ntriples => CliFormat::Rdf(N::NTriples),
-            Self::Nquads => CliFormat::Rdf(N::NQuads),
-            Self::Rdfxml => CliFormat::Rdf(N::RdfXml),
-            Self::Trix => CliFormat::Rdf(N::TriX),
-            Self::Hextuples => CliFormat::Rdf(N::HexTuples),
-            Self::Jsonld => CliFormat::Rdf(N::JsonLd),
-            Self::Yamlld => CliFormat::Rdf(N::YamlLd),
-            Self::Pack => CliFormat::Pack,
+            Self::Turtle => S::Native(N::Turtle),
+            Self::Trig => S::Native(N::TriG),
+            Self::Ntriples => S::Native(N::NTriples),
+            Self::Nquads => S::Native(N::NQuads),
+            Self::Rdfxml => S::Native(N::RdfXml),
+            Self::Trix => S::Native(N::TriX),
+            Self::Hextuples => S::Native(N::HexTuples),
+            Self::Jsonld => S::Native(N::JsonLd),
+            Self::Yamlld => S::Native(N::YamlLd),
+            Self::Pack => S::Pack,
         }
     }
 }

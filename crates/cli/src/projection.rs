@@ -5,6 +5,7 @@
 
 use purrdf_core::{DatasetView, LossLedger};
 use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::SourceFormat;
 use purrdf_rdf::{
     ProjectionArchive, ProjectionConfig, RoCrateAssets, lift_archive, project_archive,
     project_archive_with_assets,
@@ -14,7 +15,7 @@ use crate::cli::{
     CliLiftProfile, CliNativeRdfFormat, CliProjectionProfile, CliRdfFormat, LedgerTarget,
 };
 use crate::error::CliError;
-use crate::format::{self, CliFormat};
+use crate::format;
 use crate::ledger;
 use crate::sink;
 use crate::source::{self, ViewOp};
@@ -100,14 +101,14 @@ pub(crate) fn run_lift(
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
-    sink::validate_jsonld_options(CliFormat::Rdf(to.to_native()), jsonld_options)?;
+    sink::validate_jsonld_options(SourceFormat::Native(to.to_native()), jsonld_options)?;
     let config = read_config(config_path, input)?;
     let archive = source::read_bytes(input)?;
     let mut outcome = lift_archive(&archive, profile.to_profile(), &config)?;
     let serialization_ledger = sink::write_rdf(
         &*outcome.dataset,
         output,
-        CliFormat::Rdf(to.to_native()),
+        SourceFormat::Native(to.to_native()),
         base,
         None,
         jsonld_options,

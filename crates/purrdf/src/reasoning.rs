@@ -13,8 +13,8 @@ use purrdf_entail::{
     materialize_combined, materialize_combined_until,
 };
 use purrdf_rdf::{
-    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
-    SparqlRequest, SparqlResult, TermValue,
+    DatasetView, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
+    SparqlRequest, SparqlResult, TermValue, dataset_from_view,
 };
 use purrdf_sparql_algebra::{
     BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
@@ -216,9 +216,9 @@ impl From<EntailError> for ReasoningError {
 ///
 /// Returns [`ReasoningError::Query`] for SPARQL failures and
 /// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases.
-pub fn query_with_entailment(
+pub fn query_with_entailment<D: DatasetView>(
     engine: &NativeSparqlEngine,
-    dataset: &Arc<RdfDataset>,
+    dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
     options: QueryOptions<'_>,
@@ -250,7 +250,11 @@ pub fn query_with_entailment(
     // `Materialization`, so this lane no longer splits into "the regimes that
     // materialize" and "the two that need their own entry point".
     let (prepared, report) = match entailment {
-        QueryEntailment::Simple => (Arc::clone(dataset), simple_report()),
+        // Simple runs no fixpoint; it needs an owned closure to query over. A view is
+        // materialized once here (a degenerate path — a caller wanting no entailment
+        // queries the source directly); the reasoning lanes below seed the reasoner
+        // from the view with no such rebuild.
+        QueryEntailment::Simple => (dataset_from_view(dataset)?, simple_report()),
         QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Materialization::Rdf)?,
         QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Materialization::Rdfs)?,
         QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Materialization::OwlRl)?,
@@ -509,9 +513,9 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases. A tripped
 /// governor is **not** an error in either phase: it is one of the two arms of
 /// [`GovernedEntailment`].
-pub fn query_with_entailment_governed(
+pub fn query_with_entailment_governed<D: DatasetView>(
     engine: &NativeSparqlEngine,
-    dataset: &Arc<RdfDataset>,
+    dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
     options: QueryOptions<'_>,
@@ -543,7 +547,9 @@ pub fn query_with_entailment_governed(
 
     let mut combined_surrogates = None;
     let materialized = match entailment {
-        QueryEntailment::Simple => Ok((Arc::clone(dataset), simple_report())),
+        // Simple runs no fixpoint (it cannot be stopped), so it builds its owned
+        // closure directly; the reasoning lanes seed from the view with no rebuild.
+        QueryEntailment::Simple => Ok((dataset_from_view(dataset)?, simple_report())),
         QueryEntailment::Rdf => {
             purrdf_entail::materialize_until(dataset, Materialization::Rdf, closure_stop)
         }
@@ -1406,7 +1412,7 @@ fn literal_to_term_value(literal: &Literal) -> TermValue {
 #[cfg(test)]
 mod tests {
     use purrdf_entail::{Atom, RifTerm, Rule, RuleSet};
-    use purrdf_rdf::{BlankScope, RdfDatasetBuilder, TermValue};
+    use purrdf_rdf::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::*;
 

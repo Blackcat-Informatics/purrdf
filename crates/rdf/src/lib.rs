@@ -118,10 +118,10 @@ pub use native_codecs::okf::{
     write_okf_bundle,
 };
 pub use native_codecs::{
-    GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome, SpanTable, classify,
-    parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_with_jsonld_options,
+    GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions, SerializeOutcome,
+    SourceFormat, SpanTable, classify, classify_source, parse_dataset, parse_dataset_with,
+    serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_with_jsonld_options,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,

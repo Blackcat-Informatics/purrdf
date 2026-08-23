@@ -116,7 +116,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::RdfDataset;
+use purrdf_core::{DatasetView, RdfDataset};
 use purrdf_datalog::StopSignal;
 
 pub(crate) mod axioms;
@@ -599,8 +599,8 @@ impl std::error::Error for EntailError {
 /// let (_, dl) = materialize(&dataset, Materialization::OwlDirect(&[])).expect("owl-direct");
 /// assert_eq!(dl.regime(), Regime::OwlDirect);
 /// ```
-pub fn materialize(
-    ds: &RdfDataset,
+pub fn materialize<D: DatasetView>(
+    ds: &D,
     plan: Materialization<'_>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     materialize_until(ds, plan, None)
@@ -650,8 +650,8 @@ pub fn materialize(
 /// # Errors
 ///
 /// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize`] returns.
-pub fn materialize_until(
-    ds: &RdfDataset,
+pub fn materialize_until<D: DatasetView>(
+    ds: &D,
     plan: Materialization<'_>,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {

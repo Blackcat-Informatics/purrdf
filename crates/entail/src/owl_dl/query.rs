@@ -77,10 +77,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
+use crate::engine::{copy_into, resolve_value};
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::data::DataRangeTable;
@@ -215,8 +216,8 @@ enum Task {
 /// entailed, so there is no meaningful answer set); [`EntailError::Parse`] on a
 /// malformed class-expression graph; [`EntailError::Build`] on tableau step-cap
 /// exhaustion.
-pub fn materialize_dl_reported(
-    ds: &RdfDataset,
+pub fn materialize_dl_reported<D: DatasetView>(
+    ds: &D,
     query_bgp: &[QTriple],
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     materialize_dl_reported_until(ds, query_bgp, None)
@@ -239,8 +240,8 @@ pub fn materialize_dl_reported(
 ///
 /// [`EntailError::Stopped`] if the signal fired, plus every error
 /// [`materialize_dl_reported`] returns.
-pub fn materialize_dl_reported_until(
-    ds: &RdfDataset,
+pub fn materialize_dl_reported_until<D: DatasetView>(
+    ds: &D,
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
@@ -304,9 +305,11 @@ pub fn materialize_dl_reported_until(
     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
     kb.finalize();
 
-    // Build the output: the data verbatim, plus every entailed augmentation.
+    // Build the output: the data verbatim, plus every entailed augmentation. The copy
+    // preserves blank-node scopes so an augmentation naming one of the input's blank nodes
+    // lands on the SAME term — `push_dataset` would have re-scoped the input and split them.
     let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(ds);
+    copy_into(&mut b, ds);
     let mut fresh = Fresh::new();
 
     // ONE consequence-based saturation over the whole clause set, shared by the
@@ -349,15 +352,15 @@ fn resolve_node(interner: &mut Interner, node: &QNode) -> Option<u32> {
 }
 
 /// Index the data's default-graph triples over the (already-populated) interner.
-pub(crate) fn build_data_index(ds: &RdfDataset, interner: &mut Interner) -> TripleIndex {
+pub(crate) fn build_data_index<D: DatasetView>(ds: &D, interner: &mut Interner) -> TripleIndex {
     let mut index: TripleIndex = BTreeMap::new();
     for q in ds.quads() {
         if q.g.is_some() {
             continue;
         }
-        let s = interner.intern(ds.term_value(q.s));
-        let p = interner.intern(ds.term_value(q.p));
-        let o = interner.intern(ds.term_value(q.o));
+        let s = interner.intern(resolve_value(ds, q.s));
+        let p = interner.intern(resolve_value(ds, q.p));
+        let o = interner.intern(resolve_value(ds, q.o));
         index_insert(&mut index, s, p, o);
     }
     index

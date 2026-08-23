@@ -1296,6 +1296,7 @@ name = "purrdf-cli"
 version = "0.12.0"
 dependencies = [
  "clap",
+ "criterion",
  "memmap2",
  "purrdf",
  "purrdf-core",
@@ -1304,6 +1305,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
+ "rustix",
  "serde_json",
  "sha2",
  "tempfile",

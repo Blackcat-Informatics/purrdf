@@ -21,31 +21,34 @@
 //! [`run_over_input`] calls `op.run(&view)` in each arm so the compiler emits one
 //! monomorphization per concrete view.
 //!
-//! ## Pack sources and mmap
+//! ## Pack sources and immutable acquisition
 //!
-//! A pack file on disk is opened **read-only** and memory-mapped, then handed to
-//! [`PackView::from_bytes`] zero-copy; the mapping is held alive for the whole
-//! operation. A pack arriving on **stdin** cannot be mmap'd, so it is read into a
-//! `Vec<u8>` and viewed over that buffer instead. Either way the bytes are
-//! **unconditionally** run through [`verify_pack`] (fail-closed integrity) before
-//! any view is opened.
+//! A pack source is acquired through [`ImmutableInput`](crate::immutable::ImmutableInput),
+//! which yields bytes guaranteed **stable and un-truncatable** for the lifetime of
+//! the owner: a disk pack is memory-mapped only when the mapping cannot be faulted
+//! by a hostile concurrent pathname writer (a verified kernel seal, or our own
+//! sealed `memfd` snapshot), and otherwise — and always for a **stdin** pack —
+//! read into an owned buffer. The verified bytes are then handed to
+//! [`PackView::from_bytes`] zero-copy, and the owner is held alive for the whole
+//! operation, so the `PackView` reads it with no materialization.
 //!
-//! SAFETY / caveat: the mmap is a read-only view of a file this process does not
-//! mutate. `Mmap::map` is `unsafe` because the OS cannot guarantee another process
-//! won't mutate the backing file underneath the mapping; the CLI's contract is
-//! that a pack file it reads is not concurrently rewritten for the brief duration
-//! of the operation. No concurrent mutation of the mapped file is performed or
-//! tolerated.
+//! Integrity is verified **once**, unconditionally, via [`verify_pack`] over the
+//! already-immutable bytes — *after* acquisition, closing the
+//! time-of-check/time-of-use gap the previous "map then verify a mutable file" seam
+//! left open. There is no longer any raw, memory-unsafe `mmap` of an unverified,
+//! mutable file: the safety is enforced by [`ImmutableInput`](crate::immutable), not
+//! promised by a contract on the caller.
 
-use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, PackView, RdfDataset, dataset_from_view, verify_pack};
-use purrdf_rdf::parse_dataset;
+use purrdf_rdf::{
+    NativeRdfFormat, SerializeOutcome, SourceFormat, parse_dataset, serialize_dataset_to_format,
+};
 
 use crate::error::CliError;
-use crate::format::CliFormat;
+use crate::immutable::ImmutableInput;
 
 /// A generic operation to run over whichever concrete [`DatasetView`] the input
 /// resolves to.
@@ -73,88 +76,111 @@ pub(crate) fn read_bytes(path: &str) -> Result<Vec<u8>, CliError> {
     }
 }
 
-/// Open a DISK pack `path` read-only, mmap it, and verify its integrity.
+/// Acquire a pack `path` (or stdin when `path` is `-`) as an immutable byte owner,
+/// **without** verifying it.
 ///
-/// This is the mmap seam factored out of the pack arms of [`run_over_input`] and
-/// [`load_dataset`] so a caller that only needs the verified bytes (not a
-/// `PackView`) — e.g. `convert`'s pack→pack byte passthrough — can borrow them
-/// without materializing a `Vec<u8>` copy of the pack. Callers on **stdin** cannot
-/// use this (there is no file to map); they must fall back to [`read_bytes`] +
-/// [`verify_pack`].
+/// The bytes are obtained through [`ImmutableInput`] — memory-safe against a hostile
+/// concurrent pathname writer. Almost every consumer wants [`verified_pack_input`],
+/// which additionally runs [`verify_pack`]; the standalone `pack verify` verb uses
+/// this raw acquisition so it can surface the [`PackDigest`](purrdf_core::PackDigest)
+/// that `verify_pack` returns rather than discard it.
+pub(crate) fn acquire_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+    if path == "-" {
+        ImmutableInput::from_stdin()
+    } else {
+        ImmutableInput::from_disk_path(path)
+    }
+}
+
+/// Acquire a pack `path` (or stdin) as an immutable owner and verify it **once**.
 ///
-/// SAFETY / caveat: identical to the pack arms above — a read-only mapping of a
-/// file this process does not mutate (nor tolerates concurrent external mutation
-/// of) for the brief lifetime of the mapping, which the caller holds alive only as
-/// long as it needs the borrowed bytes.
-pub(crate) fn verified_pack_mmap(path: &str) -> Result<memmap2::Mmap, CliError> {
-    let file = File::open(path)?;
-    // SAFETY: see the module docs and the identical comment on the pack arms of
-    // `run_over_input` / `load_dataset` — a read-only, non-concurrently-mutated
-    // mapping confined to the caller's use of the returned `Mmap`.
-    let mmap = unsafe { memmap2::Mmap::map(&file)? };
-    verify_pack(&mmap[..])?;
-    Ok(mmap)
+/// [`verify_pack`] (fail-closed, canonical integrity) runs over the already-immutable
+/// bytes, so nothing enters the pipeline unverified. The returned owner must be held
+/// alive for as long as its bytes are used: a [`PackView`] borrows them zero-copy, so
+/// callers keep the [`ImmutableInput`] in scope for the whole operation. This is the
+/// single acquisition seam the pipeline arms below and `convert`'s pack→pack byte
+/// passthrough route through.
+pub(crate) fn verified_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+    let input = acquire_pack_input(path)?;
+    // Unconditional canonical integrity, once, over the stable bytes.
+    verify_pack(input.as_bytes())?;
+    Ok(input)
 }
 
 /// Open `path` as the concrete view its `format` implies and run `op` over it.
 ///
-/// The text arm parses into an `RdfDataset`; the pack arm mmaps the file (or reads
-/// stdin into a `Vec`), verifies its integrity, and opens a zero-copy `PackView`.
-/// The mmap/`Vec` backing store is held alive for the whole `op.run` call.
+/// The text arm parses into an `RdfDataset`; the pack arm acquires a verified,
+/// immutable byte owner ([`verified_pack_input`]) and opens a zero-copy `PackView`
+/// over it. The owner is held alive for the whole `op.run` call.
 pub(crate) fn run_over_input<Op: ViewOp>(
     path: &str,
-    format: CliFormat,
+    format: SourceFormat,
     base: Option<&str>,
     op: Op,
 ) -> Result<Op::Output, CliError> {
     match format {
-        CliFormat::Rdf(rdf_format) => {
+        SourceFormat::Native(rdf_format) => {
             let bytes = read_bytes(path)?;
             let dataset = parse_dataset(&bytes, rdf_format.media_type(), base)?;
             op.run(&*dataset)
         }
-        CliFormat::Pack => {
-            if path == "-" {
-                let bytes = read_bytes(path)?;
-                verify_pack(&bytes)?;
-                let view = PackView::from_bytes(&bytes)?;
-                op.run(&view)
-            } else {
-                let mmap = verified_pack_mmap(path)?;
-                let view = PackView::from_bytes(&mmap[..])?;
-                op.run(&view)
-            }
+        SourceFormat::Pack => {
+            let input = verified_pack_input(path)?;
+            let view = PackView::from_bytes(input.as_bytes())?;
+            op.run(&view)
         }
     }
 }
 
 /// Open `path` and reconstruct a concrete `Arc<RdfDataset>`, whatever its kind.
 ///
-/// The text arm parses directly; the pack arm opens a `PackView` (verified) and
-/// reconstructs a concrete dataset via [`dataset_from_view`]. This is the entry
-/// point for steps that genuinely need an owned dataset (e.g. entailment
-/// materialization, whose `materialize` takes a `&RdfDataset`).
+/// The text arm parses directly; the pack arm opens a verified zero-copy `PackView`
+/// (over an immutable byte owner) and reconstructs a concrete dataset via
+/// [`dataset_from_view`]. This is the entry point for steps that genuinely need an
+/// owned MUTABLE dataset (e.g. SPARQL UPDATE), which cannot run over an immutable
+/// view; read-only reasoning enters the reasoner over the `PackView` directly
+/// through [`run_over_input`] instead.
 pub(crate) fn load_dataset(
     path: &str,
-    format: CliFormat,
+    format: SourceFormat,
     base: Option<&str>,
 ) -> Result<Arc<RdfDataset>, CliError> {
     match format {
-        CliFormat::Rdf(rdf_format) => {
+        SourceFormat::Native(rdf_format) => {
             let bytes = read_bytes(path)?;
             Ok(parse_dataset(&bytes, rdf_format.media_type(), base)?)
         }
-        CliFormat::Pack => {
-            if path == "-" {
-                let bytes = read_bytes(path)?;
-                verify_pack(&bytes)?;
-                let view = PackView::from_bytes(&bytes)?;
-                Ok(dataset_from_view(&view)?)
-            } else {
-                let mmap = verified_pack_mmap(path)?;
-                let view = PackView::from_bytes(&mmap[..])?;
-                Ok(dataset_from_view(&view)?)
-            }
+        SourceFormat::Pack => {
+            let input = verified_pack_input(path)?;
+            let view = PackView::from_bytes(input.as_bytes())?;
+            Ok(dataset_from_view(&view)?)
         }
     }
+}
+
+/// Serialize the input at `path` (text or pack) to N-Quads over its zero-copy view.
+///
+/// A pack is **not** rebuilt into an owned `RdfDataset` to be serialized: the
+/// `PackView` is serialized directly. This is the read side of the `entails` and
+/// `consistency` string boundaries, which decide over N-Quads text.
+pub(crate) fn serialize_input_to_nquads(
+    path: &str,
+    format: SourceFormat,
+    base: Option<&str>,
+) -> Result<SerializeOutcome, CliError> {
+    struct NQuadsOp;
+
+    impl ViewOp for NQuadsOp {
+        type Output = SerializeOutcome;
+
+        fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+            Ok(serialize_dataset_to_format(
+                view,
+                NativeRdfFormat::NQuads,
+                None,
+            )?)
+        }
+    }
+
+    run_over_input(path, format, base, NQuadsOp)
 }

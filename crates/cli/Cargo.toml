@@ -57,6 +57,11 @@ purrdf-validate = { workspace = true }
 # this crate is never built for wasm32 (it is absent from the `make wasm`
 # `-p` allowlist), so mmap's absence there is a non-issue.
 memmap2 = { workspace = true }
+# The immutable-input authority's kernel-seal path: `memfd_create` + `fcntl`
+# add/get-seals make a mapped pack un-truncatable, so a disk pack maps
+# memory-safely even under a hostile concurrent pathname writer. Linux-gated in
+# code (`#[cfg(target_os = "linux")]`); other targets take the owned-buffer tier.
+rustix = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 # `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
@@ -68,3 +73,17 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
+# Timing harness for the pack-input benchmark (acquisition / verification / reasoning).
+criterion = { workspace = true }
+
+# The real CLI pack path, timed: mmap/immutable vs owned acquisition, verification,
+# and reasoning over a zero-copy `PackView` vs an owned-dataset rebuild.
+[[bench]]
+name = "pack_input"
+harness = false
+
+# Peak-allocation evidence for the same paths, in a separate process so the tracking
+# allocator's atomics do not contaminate the timed bench (mirrors `jsonld_alloc`).
+[[bench]]
+name = "pack_input_alloc"
+harness = false

@@ -24,12 +24,11 @@ use purrdf_core::{
     DatasetView, LossEntry, LossLedger, PackBuilder, dataset_from_view, pair_loss_ledger,
 };
 use purrdf_rdf::{
-    JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format,
+    JsonLdSerializeOptions, NativeRdfFormat, SourceFormat, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options,
 };
 
 use crate::error::CliError;
-use crate::format::CliFormat;
 
 /// The runtime loss code recording how many RDF-1.2 statement-layer rows the
 /// serializer dropped because the target format does not carry the star layer.
@@ -70,14 +69,14 @@ pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
 pub(crate) fn write_rdf<D: DatasetView>(
     view: &D,
     out: &str,
-    target: CliFormat,
+    target: SourceFormat,
     base: Option<&str>,
     src_codec: Option<&str>,
     jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<LossLedger, CliError> {
     validate_jsonld_options(target, jsonld_options)?;
     match target {
-        CliFormat::Rdf(format) => {
+        SourceFormat::Native(format) => {
             let outcome = if let Some(options) = jsonld_options {
                 serialize_dataset_to_format_with_jsonld_options(view, format, base, options)?
             } else {
@@ -91,7 +90,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
                 outcome.directional_literals_dropped,
             ))
         }
-        CliFormat::Pack => {
+        SourceFormat::Pack => {
             let dataset = dataset_from_view(view)?;
             let bytes = PackBuilder::build_bytes(&dataset)?;
             write_out(out, &bytes)?;
@@ -103,13 +102,13 @@ pub(crate) fn write_rdf<D: DatasetView>(
 
 /// Reject a JSON-LD options document unless the selected sink is JSON-LD/YAML-LD.
 pub(crate) fn validate_jsonld_options(
-    target: CliFormat,
+    target: SourceFormat,
     options: Option<&JsonLdSerializeOptions>,
 ) -> Result<(), CliError> {
     if options.is_some()
         && !matches!(
             target,
-            CliFormat::Rdf(NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
+            SourceFormat::Native(NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
         )
     {
         return Err(CliError::Usage(

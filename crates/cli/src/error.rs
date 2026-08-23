@@ -115,7 +115,7 @@ impl CliOutcome {
 
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
-pub(crate) enum CliError {
+pub enum CliError {
     /// An argument / usage error (exit code 2).
     Usage(String),
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O

@@ -13,13 +13,14 @@
 //! ## Transforms: `--entailment` and `--canonical`
 //!
 //! Two optional transforms compose in a fixed order (entail first, then
-//! canonicalize), and both need a concrete owned dataset — so when either is
-//! present the pipeline reconstructs an `Arc<RdfDataset>` up front (a text source is
-//! parsed, a pack source is rebuilt via [`source::load_dataset`]) instead of taking
-//! the zero-copy view path:
+//! canonicalize). The entailment lane enters the reasoner over the source's zero-copy
+//! view — a pack is NOT rebuilt into an owned dataset to materialize; the closure a
+//! run produces is then serialized. Without `--entailment`, canonicalization and
+//! serialization operate on an owned `Arc<RdfDataset>` reconstructed from the source
+//! (a text source is parsed, a pack source read via [`source::load_dataset`]):
 //!
-//! * `--entailment REGIME` materializes the regime's closure in memory (through the
-//!   same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
+//! * `--entailment REGIME` materializes the regime's closure over the view (through
+//!   the same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
 //!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
@@ -29,13 +30,14 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
+use purrdf_core::{DatasetView, LossLedger, RdfDataset};
 use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::SourceFormat;
 use purrdf_rdf::canonical_flat_nquads;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
-use crate::format::{self, CliFormat};
+use crate::format;
 use crate::ledger;
 use crate::reason;
 use crate::report;
@@ -46,7 +48,7 @@ use crate::source::{self, ViewOp};
 /// source resolved to into the target format.
 struct ConvertOp<'a> {
     out: &'a str,
-    target: CliFormat,
+    target: SourceFormat,
     base: Option<&'a str>,
     src_codec: Option<&'a str>,
     jsonld_options: Option<&'a JsonLdSerializeOptions>,
@@ -147,21 +149,17 @@ pub(crate) fn run(
         );
     }
 
-    // Pack → pack: a verified byte passthrough (no decode/re-encode churn). A DISK
-    // pack is mmap-borrowed (no `Vec<u8>` copy of the pack contents); stdin has no
-    // file to map, so it still buffers into a `Vec`.
+    // Pack → pack: a verified byte passthrough (no decode/re-encode churn). The pack
+    // is acquired through the one immutable-input seam — a DISK pack is borrowed from
+    // a memory-safe mapping (no `Vec<u8>` copy of the contents where the platform can
+    // guarantee immutability), stdin is owned — and verified once before its bytes
+    // are written straight through.
     let target_format = format::resolve(options.to, output)?;
     format::refuse_base_with_pack(target_format, options.base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
-    if matches!(source_format, CliFormat::Pack) && matches!(target_format, CliFormat::Pack) {
-        if input == "-" {
-            let bytes = source::read_bytes(input)?;
-            verify_pack(&bytes)?;
-            sink::write_out(output, &bytes)?;
-        } else {
-            let mmap = source::verified_pack_mmap(input)?;
-            sink::write_out(output, &mmap[..])?;
-        }
+    if source_format.is_pack() && target_format.is_pack() {
+        let owner = source::verified_pack_input(input)?;
+        sink::write_out(output, owner.as_bytes())?;
         return ledger::surface(ledger_target, &LossLedger::new());
     }
 
@@ -185,7 +183,7 @@ pub(crate) fn run(
 /// materialize its entailment closure, then either emit canonical N-Quads or
 /// serialize to the `--to` target.
 fn run_with_transforms(
-    source_format: CliFormat,
+    source_format: SourceFormat,
     options: &ConvertOptions<'_>,
     input: &str,
     output: &str,
@@ -200,18 +198,25 @@ fn run_with_transforms(
         sink::validate_jsonld_options(target, options.jsonld_options)?;
         Some(target)
     };
-    let dataset = source::load_dataset(input, source_format, options.base)?;
-
-    // Entail first: materialize the regime's closure, through the same
-    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here.
+    // Entail first: materialize the regime's closure over the source, through the same
+    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here. A pack
+    // source enters the reasoner as a zero-copy `PackView` (no `dataset_from_view`
+    // rebuild). Without `--entailment` the source is reconstructed as an owned dataset,
+    // which the canonicalization/serialization below need.
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
             let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
-            report::materialize_reported(&dataset, plan.materialization(), report_target)?
+            report::materialize_reported_over_input(
+                input,
+                source_format,
+                options.base,
+                plan.materialization(),
+                report_target,
+            )?
         }
-        None => dataset,
+        None => source::load_dataset(input, source_format, options.base)?,
     };
 
     // Then canonicalize: RDFC-1.0 canonical N-Quads always override `--to`.
