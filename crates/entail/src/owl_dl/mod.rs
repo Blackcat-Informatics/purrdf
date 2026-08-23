@@ -420,6 +420,13 @@ impl Kb {
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
     pub(crate) fn finalize(&mut self) {
+        // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
+        // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
+        // so those sub-cardinalities must be interned now, before encoding. The production
+        // hypertableau's `NI`-rule uses reserved roots instead, so production needs none of this
+        // and its concept table is left byte-for-byte as it was.
+        #[cfg(test)]
+        self.intern_sub_cardinalities();
         match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
             Ok(()) => {}
             Err(never) => match never {},
@@ -594,6 +601,37 @@ impl Kb {
     /// `⊤ ⊑ ≤1 p⁻.⊤` — and the second is how the same restriction reads when a caller names
     /// the inverse. A counted role with no inverse partner is outside the corner and raises
     /// nothing.
+    /// Pre-intern the SUB-CARDINALITY concepts `≤m S.C` (`1 ≤ m < n`) of every at-most
+    /// `≤n S.C` counted over an inverse role.
+    ///
+    /// The `NN`/`NI` rule guesses a bound `m ≤ n` and adds `≤m S.C` to a nominal node's label;
+    /// `max_clash` and the `≤`-rules read that concept back out as an interned [`Decomp::Max`].
+    /// The concept table is immutable during a search (a `Graph` holds `&Kb`), so every `≤m`
+    /// the guess can reach must already be interned here, before the table is frozen. Only the
+    /// counting-on-inverse corner is pre-interned — the rule fires nowhere else — so no concept
+    /// outside that corner is added, and a KB with no inverse-counting is byte-for-byte
+    /// unchanged. Only the `cfg(test)` concept-tree `NN`-rule consumes these; the production
+    /// hypertableau's `NI`-rule uses reserved roots, so this is gated to test builds.
+    #[cfg(test)]
+    fn intern_sub_cardinalities(&mut self) {
+        let mut wanted: Vec<(u32, Role, Concept)> = Vec::new();
+        for id in 0..self.table.len() as u32 {
+            if let Decomp::Max(n, role, filler) = *self.table.decomp(id) {
+                let over_inverse = matches!(role, Role::Inv(_))
+                    || matches!(role, Role::Named(p) if self.inverses.contains_key(&p));
+                if over_inverse && n >= 2 {
+                    let filler_concept = self.table.concept(filler).clone();
+                    for m in 1..n {
+                        wanted.push((m, role, filler_concept.clone()));
+                    }
+                }
+            }
+        }
+        for (m, role, filler) in wanted {
+            self.table.intern(Concept::Max(m, role, Box::new(filler)));
+        }
+    }
+
     fn counts_over_an_inverse(&self) -> bool {
         (0..self.table.len() as u32).any(|id| match self.table.decomp(id) {
             // Counted directly over an inverse role.

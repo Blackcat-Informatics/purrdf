@@ -74,10 +74,10 @@ use crate::EntailError;
 use crate::owl_dl::Kb;
 use crate::owl_dl::absorb::GuardedClause;
 use crate::owl_dl::clause::BodyAtom;
-use crate::owl_dl::concept::{Decomp, Role};
+use crate::owl_dl::concept::{Concept, Decomp, Role};
 use crate::owl_dl::graph::{
-    Assumptions, Budget, Decision, Exhausted, Graph, State, are_distinct, find, max_clique,
-    set_distinct,
+    Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, NominalId, State, are_distinct,
+    find, max_clique, set_distinct,
 };
 
 /// A non-deterministic expansion alternative.
@@ -90,6 +90,20 @@ enum Branch {
     /// Identify a node with the root of the named individual with this term id — the
     /// `o`-rule's choice for a nominal set with more than one member.
     MergeNominal(usize, u32),
+    /// Horrocks & Sattler `NN`-rule guess at a nominal node: bound `≤m S.C` (the concept id
+    /// `bound` = `Max(m, S, C)`, pre-interned by [`Kb::intern_sub_cardinalities`]) and generate
+    /// `m` pairwise-distinct **nominal** `S`-neighbours labelled `C`. Carries the origin node,
+    /// the counted role, the filler `C`, the guessed `m`, and `bound`.
+    NnGuess {
+        /// The completion-graph node the guess is made at (its representative at branch time).
+        node: usize,
+        /// The STABLE nominal identity of that node — the `u` of the reserved roots minted.
+        origin: NominalId,
+        role: Role,
+        filler: u32,
+        m: u32,
+        bound: u32,
+    },
 }
 
 /// The tableau driver: the shared completion graph, and a step cap.
@@ -721,6 +735,105 @@ impl<'a> Tableau<'a> {
         }
     }
 
+    /// The Horrocks & Sattler `NN`-rule alternatives at node `x` for `≤nmax role.filler`, or
+    /// `None` when the rule does not apply.
+    ///
+    /// The rule fires only when `x` is a NOMINAL (root) node that has a BLOCKABLE `role`-neighbour
+    /// of which `x` is a successor — the inverse-role counting corner
+    /// ([`Graph::blockable_predecessor_neighbours`]) — and it has not already been discharged by
+    /// an earlier guess ([`Tableau::nn_satisfied`]). Each alternative guesses a bound `m ∈ 1..=n`.
+    fn nn_branches(
+        &self,
+        st: &State,
+        x: usize,
+        nmax: u32,
+        role: Role,
+        filler: u32,
+    ) -> Option<Vec<Branch>> {
+        // Horrocks & Sattler Figure 2, condition (1): `x` is a NOMINAL node — a NAMED or
+        // generated nominal, NOT merely a structurally-unblocked root (an anonymous `fresh_types`
+        // witness is a root but no nominal, and must not trigger the rule).
+        let origin = self.g.nominal_id(st, x)?;
+        if nmax == 0 {
+            return None;
+        }
+        // Condition (2): there is a BLOCKABLE `role`-predecessor `y` of `x` (so `x` is a
+        // successor of `y`) that satisfies the filler `C`. The `C ∈ L(y)` filter is required —
+        // a predecessor that is not a `C`-neighbour does not press the `≤n role.C` bound, so the
+        // rule must not fire on it (and must never mint a `C` nominal where no `C` predecessor
+        // demanded one).
+        let has_blockable_c_predecessor = self
+            .g
+            .blockable_predecessor_neighbours(st, x, role)
+            .into_iter()
+            .any(|y| self.g.has_concept(st, y, filler));
+        if !has_blockable_c_predecessor {
+            return None;
+        }
+        // The guess mints up to `nmax` nominal neighbours; past the counting ceiling the honest
+        // answer is exhaustion, exactly as the `≥`-rule caps its witness minting.
+        if nmax as usize > crate::owl_dl::graph::MAX_COUNTING_WITNESSES {
+            st.clique_exhausted.set(true);
+            return None;
+        }
+        if self.nn_satisfied(st, x, nmax, role, filler) {
+            return None;
+        }
+        let filler_concept = self.g.kb().table.concept(filler).clone();
+        let mut branches = Vec::with_capacity(nmax as usize);
+        for m in 1..=nmax {
+            let bound = self
+                .g
+                .kb()
+                .table
+                .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
+                .expect("sub-cardinality `≤m S.C` pre-interned by Kb::intern_sub_cardinalities");
+            branches.push(Branch::NnGuess {
+                node: x,
+                origin: origin.clone(),
+                role,
+                filler,
+                m,
+                bound,
+            });
+        }
+        Some(branches)
+    }
+
+    /// Whether the `NN`-rule has already been discharged at `x`: some guessed `≤m role.filler`
+    /// (`m ≤ nmax`) is in `L(x)` AND `x` has `m` pairwise-distinct NOMINAL `role`-neighbours
+    /// labelled `filler`. This is Horrocks & Sattler's precondition (2); without it the rule
+    /// would re-fire forever.
+    fn nn_satisfied(&self, st: &State, x: usize, nmax: u32, role: Role, filler: u32) -> bool {
+        let nominal_c: Vec<usize> = self
+            .g
+            .neighbors(st, x, role)
+            .into_iter()
+            .filter(|&y| self.g.nominal_id(st, y).is_some() && self.g.has_concept(st, y, filler))
+            .collect();
+        let filler_concept = self.g.kb().table.concept(filler).clone();
+        for m in 1..=nmax {
+            let Some(bound) = self
+                .g
+                .kb()
+                .table
+                .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
+            else {
+                continue;
+            };
+            if !st.nodes[x].label.contains(&bound) {
+                continue;
+            }
+            match max_clique(&nominal_c, &|a, b| are_distinct(st, a, b), self.g.work()) {
+                Some(clique) if clique.len() >= m as usize => return true,
+                Some(_) => {}
+                // Budget exhausted mid-count: withhold the rule; the driver surfaces exhaustion.
+                None => return true,
+            }
+        }
+        false
+    }
+
     /// Find the next non-deterministic expansion (the alternatives to try in order),
     /// or `None` if the graph is complete.
     fn find_branch(&self, st: &State) -> Option<Vec<Branch>> {
@@ -761,6 +874,16 @@ impl<'a> Tableau<'a> {
                         }
                     }
                     Decomp::Max(nmax, role, filler) => {
+                        // `NN`-rule (Horrocks & Sattler), PRIORITY over the generic `≤`: a
+                        // NOMINAL node counting `≤n S.C` that has a BLOCKABLE predecessor
+                        // `S`-neighbour is the corner where inverse-role counting can force
+                        // anonymous predecessors to be identified with named ones. Guess the
+                        // exact number `m ≤ n` of nominal `S`-neighbours by generating them,
+                        // rather than letting the generic `≤`-merge fold blockable predecessors
+                        // together (which would destroy tree shape and termination).
+                        if let Some(branches) = self.nn_branches(st, i, nmax, role, filler) {
+                            return Some(branches);
+                        }
                         let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
                         for &y in &neigh {
@@ -784,6 +907,34 @@ impl<'a> Tableau<'a> {
                             .filter(|&y| self.g.has_concept(st, y, filler))
                             .collect();
                         if with_c.len() > nmax as usize {
+                            // `≤o`-rule (Horrocks & Sattler), PRIORITY over the generic
+                            // `≤`-merge: when the counting node `i` is a NOMINAL, a blockable
+                            // C-neighbour must be merged INTO a nominal C-neighbour, never a
+                            // nominal into a blockable and never two blockables together — that
+                            // is what keeps the named part of the model named and the tree part
+                            // a tree. Only when no such nominal target exists does the generic
+                            // pairwise merge below apply.
+                            if self.g.nominal_id(st, i).is_some() {
+                                let mut o_branches: Vec<Branch> = Vec::new();
+                                for &a in &with_c {
+                                    for &b in &with_c {
+                                        if a == b || are_distinct(st, a, b) {
+                                            continue;
+                                        }
+                                        // Keep the NOMINAL `b`, discard the BLOCKABLE `a`. A
+                                        // blockable node is a tree node (`!root`); the target must
+                                        // carry a nominal identity, not merely be unblocked.
+                                        if !st.nodes[find(st, a)].root
+                                            && self.g.nominal_id(st, b).is_some()
+                                        {
+                                            o_branches.push(Branch::Merge(b, a));
+                                        }
+                                    }
+                                }
+                                if !o_branches.is_empty() {
+                                    return Some(o_branches);
+                                }
+                            }
                             let mut branches: Vec<Branch> = Vec::new();
                             for a in 0..with_c.len() {
                                 for b in (a + 1)..with_c.len() {
@@ -820,6 +971,48 @@ impl<'a> Tableau<'a> {
                 let x = find(st, x);
                 let ra = self.g.root(st, a);
                 self.g.merge_nodes(st, ra, x);
+                !st.clash
+            }
+            Branch::NnGuess {
+                node,
+                ref origin,
+                role,
+                filler,
+                m,
+                bound,
+            } => {
+                let x = find(st, node);
+                // Bound the count at exactly `m`.
+                st.nodes[x].label.insert(bound);
+                // Generate `m` NOMINAL `role`-neighbours of `x`, each labelled `filler`, and
+                // force them pairwise distinct so they realize the lower bound of `≤m` without a
+                // separate `≥m` concept. The reserved roots are keyed by `origin` (the `u` of
+                // `u.⟨R,B,i⟩`), so two independent at-most roots never share them.
+                let mut minted: Vec<usize> = Vec::with_capacity(m as usize);
+                for index in 0..m {
+                    let g = self.g.generated_root(
+                        st,
+                        GeneratedRoot {
+                            origin: origin.clone(),
+                            role,
+                            filler,
+                            index,
+                        },
+                    );
+                    self.g.add_concept(st, g, filler);
+                    // The edge that makes `g` a `role`-neighbour of `x`, in the direction the
+                    // role's spelling requires — see [`Graph::step`].
+                    match role {
+                        Role::Named(q) => st.edges.push((x, g, q)),
+                        Role::Inv(p) => st.edges.push((g, x, p)),
+                    }
+                    minted.push(g);
+                }
+                for a in 0..minted.len() {
+                    for b in (a + 1)..minted.len() {
+                        set_distinct(st, minted[a], minted[b]);
+                    }
+                }
                 !st.clash
             }
         }
@@ -891,6 +1084,97 @@ mod tests {
              concept-tree tableau {concept_tree}"
         );
         hyper
+    }
+
+    /// TERMINATION in the NN corner: a nominal with a functional (`≤1`) INVERSE role plus a
+    /// cyclic `∃` over that inverse regenerates blockable predecessors forever unless the
+    /// nominal-introduction rule bounds them into a finite reserved set. The completion must
+    /// DECIDE (return without exhausting the budget), not hang — the concept-tree once looped
+    /// here because it mistook the nominal's own `∃r⁻` SUCCESSORS for predecessors.
+    #[test]
+    fn nn_cyclic_counting_on_inverse_terminates() {
+        let inv = Role::Inv(20);
+        let mut b = Builder::new();
+        b.gci(
+            Concept::Named(10),
+            Concept::Some(inv, Box::new(Concept::Named(10))),
+        );
+        b.gci(
+            Concept::Some(inv, Box::new(Concept::Named(10))),
+            Concept::Named(10),
+        );
+        b.ty(30, Concept::Named(10));
+        let c = Concept::And(vec![Concept::Named(13), Concept::Named(10)]);
+        b.gci(Concept::Named(11), Concept::All(inv, Box::new(c.clone())));
+        b.gci(Concept::All(inv, Box::new(c)), Concept::Named(11));
+        b.ty(30, Concept::Named(11));
+        let f = Concept::And(vec![
+            Concept::Min(1, inv, Box::new(Concept::Top)),
+            Concept::Max(1, inv, Box::new(Concept::Top)),
+        ]);
+        b.gci(Concept::Named(12), f.clone());
+        b.gci(f, Concept::Named(12));
+        b.ty(30, Concept::Named(12));
+        b.gci(
+            Concept::Named(13),
+            Concept::Some(inv, Box::new(Concept::Named(11))),
+        );
+        b.gci(
+            Concept::Some(inv, Box::new(Concept::Named(11))),
+            Concept::Named(13),
+        );
+        b.ty(30, Concept::Named(13));
+        let kb = b.finish();
+        // A DECIDED verdict, not budget exhaustion. `is_consistent_by_concept_tree` returns
+        // `Err(EntailError::Build)` if the search hits its budget — the non-termination symptom.
+        let decided = kb
+            .is_consistent_by_concept_tree()
+            .expect("the concept-tree must decide the cyclic NN corner, not exhaust its budget");
+        assert!(decided, "this cyclic inverse-counting knowledge base is consistent");
+    }
+
+    /// NN must NOT fire on an ordinary `role`-SUCCESSOR of a nominal. Counting `≤1 r.C` over a
+    /// NAMED role whose neighbours are the nominal's own successors is decided by the plain
+    /// `≤`-merge; the nominal is not a successor of any blockable node, so the completion-origin
+    /// trigger stays empty and no reserved nominal is minted. Both cores agree it is consistent.
+    #[test]
+    fn nn_does_not_trigger_on_an_ordinary_successor() {
+        // a : ≤1 r.C ⊓ ∃r.C — one ordinary r-successor in C; ≤1 is satisfied, nothing merges.
+        let mut b = Builder::new();
+        b.ty(
+            1,
+            Concept::And(vec![
+                Concept::Max(1, role(5), Box::new(Concept::Named(10))),
+                Concept::Some(role(5), Box::new(Concept::Named(10))),
+            ]),
+        );
+        let kb = b.finish();
+        assert!(
+            consistent_by_both(&kb),
+            "an ordinary r-successor under ≤1 r.C is consistent and needs no nominal introduction"
+        );
+    }
+
+    /// NN must NOT fire on an ANONYMOUS satisfiability witness. A `fresh_types` witness is an
+    /// unblocked root but carries no nominal identity ([`Node::nominal_id`] is `None`), so a
+    /// corner-shaped concept placed on it is decided satisfiable without minting reserved
+    /// nominals — the `root != nominal` distinction the trigger depends on.
+    #[test]
+    fn nn_does_not_trigger_on_an_anonymous_witness() {
+        let inv = Role::Inv(20);
+        let mut b = Builder::new();
+        let corner = b.concept(Concept::And(vec![
+            Concept::Max(1, inv, Box::new(Concept::Top)),
+            Concept::Some(inv, Box::new(Concept::Named(10))),
+        ]));
+        let bottom = b.concept(Concept::Bottom);
+        let kb = b.finish();
+        assert!(
+            !kb.entails_subclass_by_concept_tree(corner, bottom)
+                .expect("the anonymous-witness corner must decide, not exhaust"),
+            "≤1 r⁻.⊤ ⊓ ∃r⁻.A on an anonymous witness is satisfiable; NN does not fire on a \
+             non-nominal root"
+        );
     }
 
     #[test]

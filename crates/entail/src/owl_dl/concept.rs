@@ -363,6 +363,23 @@ impl ConceptTable {
         &self.decomp[id as usize]
     }
 
+    /// The id of an ALREADY-interned concept (normalized to NNF), or `None` if it was never
+    /// interned.
+    ///
+    /// The read-only sibling of [`ConceptTable::intern`]: the concept-tree `NN`-rule looks up a
+    /// pre-interned sub-cardinality `≤m S.C` DURING a search, when the table is frozen behind
+    /// `&Kb` and minting a new id is impossible. It performs `intern`'s lookup and nothing else.
+    /// Only the `cfg(test)` concept-tree reference guesses `≤m`; the production hypertableau's
+    /// `NI`-rule uses reserved roots and never needs a sub-cardinality concept.
+    #[cfg(test)]
+    pub(crate) fn find_id(&self, c: &Concept) -> Option<u32> {
+        let c = c.clone().nnf();
+        let hash = hash_concept(&c);
+        self.index
+            .find(hash, |&id| self.concepts[id as usize] == c)
+            .copied()
+    }
+
     /// The canonical NNF concept behind a concept id.
     ///
     /// The one reader is [`crate::owl_dl::absorb`], which DERIVES concepts from interned ones
