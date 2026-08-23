@@ -1,0 +1,17 @@
+# DEFICIENCY EMERGENCY LEDGER
+
+ALL ITEMS BELOW THE MARKER ARE 100% UNAUTHORIZED, CRITICALLY UNDONE WORK,
+AND 100% BUGS. EACH ENTRY MEANS THE ISSUE OR PULL REQUEST THAT PRODUCED IT
+FAILED.
+
+This is the log of last resort for work misrepresented to pass PR gates, work
+misrepresented by an agent, or a discovery that an agent was fundamentally
+defective. An entry is literally a cry for help from a failing agent. It is
+never an accepted risk, authorized descope, backlog, or success with caveats.
+
+The normal state is this notice and marker with no entries below it. Any entry
+blocks completion, PR creation, and merge of the work that produced it until
+the defect is verified and has a durable, visible remediation owner. Removing
+the emergency entry does not resolve the bug or make the failed work successful.
+
+--- ENTRIES BELOW THIS LINE ---
