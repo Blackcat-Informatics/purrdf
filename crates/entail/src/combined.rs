@@ -96,13 +96,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{BlankScope, DatasetView, RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::StopSignal;
 use purrdf_datalog::chase::{ChaseError, certify, chase_until};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::store::RelationStore;
 
-use crate::engine::surface_of;
+use crate::engine::{resolve_value, surface_of};
 use crate::interner::intern_into;
 use crate::owl_dl::constructs::is_reserved;
 use crate::report::ReasoningReport;
@@ -185,12 +185,12 @@ const RECOGNIZED_TYPES: &[&str] = &[
 /// A predicate OUTSIDE the reserved namespaces is an ordinary property assertion: it is ABox
 /// data the chase seeds from and matches, it states no axiom, and admitting it is what keeps
 /// a caller's own vocabulary readable rather than turning every property into a boundary.
-fn every_statement_is_recognized(ds: &RdfDataset) -> bool {
+fn every_statement_is_recognized<D: DatasetView>(ds: &D) -> bool {
     for quad in ds.quads() {
         if quad.g.is_some() {
             return false;
         }
-        let TermValue::Iri(predicate) = ds.term_value(quad.p) else {
+        let TermValue::Iri(predicate) = resolve_value(ds, quad.p) else {
             // A blank node or literal in predicate position is generalized RDF, which no
             // OWL 2 axiom is written in.
             return false;
@@ -202,7 +202,7 @@ fn every_statement_is_recognized(ds: &RdfDataset) -> bool {
             return false;
         }
         if predicate == RDF_TYPE {
-            let object = ds.term_value(quad.o);
+            let object = resolve_value(ds, quad.o);
             let TermValue::Iri(class) = &object else {
                 return false;
             };
@@ -260,8 +260,8 @@ pub struct CombinedMaterialization {
 /// Propagates [`EntailError`] from the underlying reverse mapping or the restricted chase
 /// (an inconsistent knowledge base, a malformed class-expression graph, or — unreachable in
 /// practice since [`certify`] gates every call — a chase budget refusal).
-pub fn materialize_combined(
-    ds: &RdfDataset,
+pub fn materialize_combined<D: DatasetView>(
+    ds: &D,
     query_bgp: &[QTriple],
 ) -> Result<Option<CombinedMaterialization>, EntailError> {
     materialize_combined_until(ds, query_bgp, None)
@@ -279,8 +279,8 @@ pub fn materialize_combined(
 ///
 /// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize_combined`]
 /// returns.
-pub fn materialize_combined_until(
-    ds: &RdfDataset,
+pub fn materialize_combined_until<D: DatasetView>(
+    ds: &D,
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<Option<CombinedMaterialization>, EntailError> {
@@ -318,9 +318,9 @@ pub fn materialize_combined_until(
             continue;
         }
         let (s, p, o) = (
-            ds.term_value(quad.s),
-            ds.term_value(quad.p),
-            ds.term_value(quad.o),
+            resolve_value(ds, quad.s),
+            resolve_value(ds, quad.p),
+            resolve_value(ds, quad.o),
         );
         let (ss, ps, os) = (surface_of(&s), surface_of(&p), surface_of(&o));
         by_surface.entry(ss.clone()).or_insert(s);
@@ -441,7 +441,7 @@ fn resolve_surface(
 ///
 /// See the module docs for why this module refuses a PARTIAL lowering rather than skipping
 /// the one axiom it cannot read.
-fn lower_horn_tbox(ds: &RdfDataset) -> Option<Vec<DlClause>> {
+fn lower_horn_tbox<D: DatasetView>(ds: &D) -> Option<Vec<DlClause>> {
     if !every_statement_is_recognized(ds) {
         return None;
     }
@@ -453,11 +453,11 @@ fn lower_horn_tbox(ds: &RdfDataset) -> Option<Vec<DlClause>> {
         if quad.g.is_some() {
             continue;
         }
-        let subject = ds.term_value(quad.s);
-        let TermValue::Iri(predicate) = ds.term_value(quad.p) else {
+        let subject = resolve_value(ds, quad.s);
+        let TermValue::Iri(predicate) = resolve_value(ds, quad.p) else {
             continue;
         };
-        let object = ds.term_value(quad.o);
+        let object = resolve_value(ds, quad.o);
         let entry = index
             .entry(surface_of(&subject))
             .or_insert_with(|| (subject, BTreeMap::new()));

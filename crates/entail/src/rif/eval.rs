@@ -27,11 +27,11 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{DatasetView, FastMap, FastSet, RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::StopSignal;
 use purrdf_datalog::seminaive::BudgetReport;
 
-use crate::engine::surface_of;
+use crate::engine::{copy_into, resolve_value, surface_of};
 use crate::interner::{Interner, intern_into};
 use crate::report::{Boundary, Construct, ReasoningReport};
 use crate::rif::model::{Atom, RifTerm, RuleSet};
@@ -222,8 +222,8 @@ impl Terms {
 /// contradicts its own evidence is unrepresentable rather than refused — completeness is
 /// computed from the boundary list by [`ReasoningReport::completeness`] and is not a field
 /// that could disagree with it.
-pub fn materialize_rif(
-    ds: &RdfDataset,
+pub fn materialize_rif<D: DatasetView>(
+    ds: &D,
     rules: &RuleSet,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     materialize_rif_until(ds, rules, None)
@@ -241,8 +241,8 @@ pub fn materialize_rif(
 ///
 /// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize_rif`]
 /// returns.
-pub fn materialize_rif_until(
-    ds: &RdfDataset,
+pub fn materialize_rif_until<D: DatasetView>(
+    ds: &D,
     rules: &RuleSet,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
@@ -263,9 +263,9 @@ pub fn materialize_rif_until(
             named_graph = true;
             continue; // entailment operates over the default graph
         }
-        let s = terms.intern(ds.term_value(q.s));
-        let p = terms.intern(ds.term_value(q.p));
-        let o = terms.intern(ds.term_value(q.o));
+        let s = terms.intern(resolve_value(ds, q.s));
+        let p = terms.intern(resolve_value(ds, q.p));
+        let o = terms.intern(resolve_value(ds, q.o));
         push_fact(&mut facts, &mut seed, [s, p, o]);
     }
     let original: FastSet<[u32; 3]> = facts.clone();
@@ -292,7 +292,10 @@ pub fn materialize_rif_until(
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
     // original default-graph triple, in a deterministic order.
     let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(ds);
+    // The original quads are copied verbatim, preserving blank-node scopes, so a derived
+    // fact naming one of the input's blank nodes lands on the SAME term the copy carries —
+    // `push_dataset` would have re-scoped the input and split the two apart.
+    copy_into(&mut b, ds);
     // Set iteration order is not stable across runs, so sort the accumulated
     // facts by their interned term ids to get a deterministic (not insertion-order)
     // emission order.

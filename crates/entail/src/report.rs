@@ -57,7 +57,7 @@
 
 use core::fmt;
 
-use purrdf_core::{RdfDataset, TermRef, TermValue};
+use purrdf_core::{DatasetView, TermRef, TermValue};
 use purrdf_datalog::cache::ContractHash;
 use purrdf_datalog::chase::ChaseTermination;
 use purrdf_datalog::seminaive::BudgetReport;
@@ -1097,9 +1097,9 @@ impl DatasetSurvey {
     /// already settled as `false`, so the exit guard treats "no id to match" the same as
     /// "already found"; either way the loop still stops the moment the other two flags are
     /// set, rather than draining the rest of the dataset.
-    fn of(ds: &RdfDataset) -> Self {
+    fn of<D: DatasetView>(ds: &D) -> Self {
         let mut survey = Self::default();
-        let imports = ds.term_id_by_iri(crate::vocab::OWL_IMPORTS);
+        let imports = ds.term_id_by_value(&TermValue::iri(crate::vocab::OWL_IMPORTS));
         for (ids, quad) in ds.quads().zip(ds.quad_refs()) {
             if quad.g.is_some() {
                 survey.named_graph = true;
@@ -1238,7 +1238,7 @@ impl ReasoningReport {
     }
 
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
-    pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Self {
+    pub(crate) fn of_run<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Self {
         Self::of_chase_run(ds, regime, stats, None)
     }
 
@@ -1256,8 +1256,8 @@ impl ReasoningReport {
     /// triple — so this report reaches the caller on
     /// [`EntailError::Inconsistent`](crate::EntailError), inside the
     /// [`InconsistentRun`] that also carries the witness.
-    pub(crate) fn of_inconsistent_run(
-        ds: &RdfDataset,
+    pub(crate) fn of_inconsistent_run<D: DatasetView>(
+        ds: &D,
         regime: Regime,
         stats: &RunStats,
         witness: InconsistencyWitness,
@@ -1266,8 +1266,8 @@ impl ReasoningReport {
     }
 
     /// The shared body of [`Self::of_run`] and [`Self::of_inconsistent_run`].
-    fn of_chase_run(
-        ds: &RdfDataset,
+    fn of_chase_run<D: DatasetView>(
+        ds: &D,
         regime: Regime,
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
@@ -1664,7 +1664,7 @@ fn fired_rules(regime: Regime, stats: &RunStats) -> Vec<(RuleId, u64)> {
 /// `Simple` meets none of them: the identity closure copies every quad of every graph
 /// faithfully, triple terms and literals included, so there is nothing it failed to
 /// handle. That is also what keeps [`Completeness::Exact`] honest for that regime.
-fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary> {
+fn boundaries<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Vec<Boundary> {
     let survey = match regime {
         Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => DatasetSurvey::of(ds),
         // Not this chase's lanes: `Simple` copies faithfully, and the other two never

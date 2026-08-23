@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The OWL-2-RDF reverse-mapping parser: an [`RdfDataset`] default graph → a DL
+//! The OWL-2-RDF reverse-mapping parser: a [`DatasetView`] default graph → a DL
 //! knowledge base ([`Kb`]).
 //!
 //! The mapping follows the OWL 2 "Mapping to RDF Graphs" specification, read in
@@ -68,7 +68,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
+
+use crate::engine::resolve_value;
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet};
@@ -1003,8 +1005,8 @@ fn poll(stop: Option<&dyn StopSignal>) -> Result<(), EntailError> {
 ///
 /// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
 /// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
-pub(crate) fn build_until(
-    ds: &RdfDataset,
+pub(crate) fn build_until<D: DatasetView>(
+    ds: &D,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Kb, EntailError> {
     poll(stop)?;
@@ -1022,9 +1024,9 @@ pub(crate) fn build_until(
         if q.g.is_some() {
             continue;
         }
-        let s = interner.intern(ds.term_value(q.s));
-        let p = interner.intern(ds.term_value(q.p));
-        let o = interner.intern(ds.term_value(q.o));
+        let s = interner.intern(resolve_value(ds, q.s));
+        let p = interner.intern(resolve_value(ds, q.p));
+        let o = interner.intern(resolve_value(ds, q.o));
         triples.push((s, p, o));
         index_insert(&mut index, s, p, o);
     }

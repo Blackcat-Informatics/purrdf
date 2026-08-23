@@ -5,7 +5,7 @@
 //!
 //! Eight layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
-//! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
+//! datatype map fixes rather than the ontology; [`parser`] reverse-maps a [`DatasetView`]
 //! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`absorb`] decides,
 //! per general concept inclusion, whether it becomes a GUARDED CLAUSE or is internalized into
 //! every node's label; [`clause`] compiles the concept table and that decision into
@@ -33,7 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::RdfDataset;
+use purrdf_core::DatasetView;
 use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
@@ -276,7 +276,7 @@ impl Kb {
         self.stop.as_ref().is_some_and(|stop| stop.stopped())
     }
 
-    /// Reverse-map an [`RdfDataset`]'s default graph into a knowledge base.
+    /// Reverse-map a [`DatasetView`]'s default graph into a knowledge base.
     ///
     /// # Errors
     ///
@@ -285,7 +285,7 @@ impl Kb {
     /// cap; [`EntailError::Unsatisfiable`] if a key axiom is present over a knowledge base
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
-    pub(crate) fn from_dataset(ds: &RdfDataset) -> Result<Self, EntailError> {
+    pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
         Self::from_dataset_until(ds, None)
     }
 
@@ -295,8 +295,8 @@ impl Kb {
     ///
     /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
     /// signal fires before or during reverse mapping or key inference.
-    pub(crate) fn from_dataset_until(
-        ds: &RdfDataset,
+    pub(crate) fn from_dataset_until<D: DatasetView>(
+        ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
     ) -> Result<Self, EntailError> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
@@ -747,7 +747,7 @@ impl Kb {
 mod tests {
     use super::*;
     use crate::owl_dl::concept::{Concept, Role};
-    use purrdf_core::{RdfDatasetBuilder, TermId};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId};
 
     const NS: &str = "http://example.org/test#";
 
