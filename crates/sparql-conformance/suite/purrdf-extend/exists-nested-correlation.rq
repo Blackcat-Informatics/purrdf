@@ -1,5 +1,5 @@
 PREFIX : <https://example.org/exists#>
 SELECT ?s WHERE {
   ?s :p ?o .
-  FILTER EXISTS { FILTER NOT EXISTS { ?x :q ?y } }
+  FILTER EXISTS { FILTER NOT EXISTS { ?s :q ?y } }
 }

@@ -5,12 +5,19 @@
 # file is loaded TWICE by the harness — once untagged (`qt:data`, into the default
 # graph) and once tagged with its own file IRI (`qt:graphData`), exactly like the
 # vendored `w3c-sparql11/exists/exists-graph-variable` case this fixture follows
-# byte-for-byte. `<>` self-references the file's own graph IRI, so `:s1 :p <>`
-# puts a pointer to this very named graph in the default graph, and `:a1 :q :b1`
-# becomes visible inside `GRAPH ?g { … }` once `?g` is bound to that pointer — the
-# definition-path Graph-substitution shape (`GraphPattern::Graph(Var, ·)` in
-# `crate::enf`'s `Replace` sites).
+# byte-for-byte, including that case's second `:p` row. `<>` self-references the
+# file's own graph IRI, so `:s1 :p <>` puts a pointer to this very named graph in
+# the default graph, and `:a1 :q :b1` becomes visible inside `GRAPH ?g { … }` once
+# `?g` is bound to that pointer — the definition-path Graph-substitution shape
+# (`GraphPattern::Graph(Var, ·)` in `crate::enf`'s `Replace` sites). `:s2 :p :o2`
+# points `?g` at `:o2` instead — a plain local name never tagged as ANY file's
+# graph IRI, so the named graph it denotes holds zero quads (no `:q` fact, no
+# anything). A `?g` substitution that leaves the variable unresolved instead of
+# restricting `GRAPH ?g { … }` to the row's own term would enumerate every named
+# graph in the dataset — including `<>`'s, which DOES hold `:a1 :q :b1` — and
+# wrongly admit `:s2` too; only `:s1` may pass.
 @prefix : <https://example.org/exists#> .
 
 :s1 :p <> .
 :a1 :q :b1 .
+:s2 :p :o2 .

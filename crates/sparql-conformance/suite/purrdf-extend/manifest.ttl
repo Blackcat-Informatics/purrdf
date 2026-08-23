@@ -109,14 +109,21 @@
 #     `:existsGraphVariableCorrelated` is the Graph-substitution shape (`GRAPH
 #     ?g { … }` with `?g` bound from the row being filtered — the vendored
 #     `w3c-sparql11/exists/exists-graph-variable` case's own self-referencing
-#     `qt:data`/`qt:graphData` shape, copied byte-for-byte). `:existsOptionalPadding`/
+#     `qt:data`/`qt:graphData` shape, copied byte-for-byte, including its second
+#     `:p` row bound to a graph that holds NOTHING: a `?g` left unresolved by
+#     substitution enumerates every named graph instead of the row's own,
+#     wrongly finding the OTHER row's graph a match). `:existsOptionalPadding`/
 #     `:notExistsOptionalPadding` pin the `OPTIONAL` padding tautology: a group
 #     whose sole element is `OPTIONAL { P }` never empties the unit row it wraps,
 #     so `FILTER EXISTS { OPTIONAL { P } }` is always true and `FILTER NOT EXISTS
 #     { OPTIONAL { P } }` is always false, REGARDLESS of whether `P` matches
-#     anything. `:existsNestedCorrelation` nests a `NOT EXISTS` inside an `EXISTS`,
-#     both bodies filter-only groups, proving the composition threads through
-#     without wrongly capturing a fresh (uncorrelated) inner variable.
+#     anything. `:existsNestedCorrelation` nests a `NOT EXISTS` inside an
+#     `EXISTS`, both bodies filter-only groups, correlating the nested body on
+#     the OUTER row variable through a triple-leaf position (never the nested
+#     body's own expression position) — a shape only visible to the widened
+#     free-variable walk `EXISTS`'s per-row substitution consults, proving the
+#     composition threads a real correlation through instead of evaluating the
+#     nested body once, uncorrelated, for every outer row alike.
 #     `:existsSubselectLimit` correlates via a sub-`SELECT`'s own projected
 #     variable with `LIMIT 1` sitting above the substitution site — a shape only
 #     the per-row definition path answers correctly (a once-only unconstrained
@@ -464,7 +471,7 @@
     mf:action <lateral-syntax-scope-violation.rq> .
 
 :existsGraphVariableCorrelated a mf:QueryEvaluationTest ;
-    mf:name "SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered" ;
+    mf:name "SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered — a second :p row bound to a graph holding NOTHING must be excluded, not wrongly admitted by an unresolved ?g enumerating every named graph" ;
     mf:action [ qt:query <exists-graph-variable-correlated.rq> ; qt:data <exists.ttl> ; qt:graphData <exists.ttl> ] ;
     mf:result <exists-graph-variable-correlated.srx> .
 
@@ -479,7 +486,7 @@
     mf:result <not-exists-optional-padding.srx> .
 
 :existsNestedCorrelation a mf:QueryEvaluationTest ;
-    mf:name "SEP-0007: FILTER EXISTS { FILTER NOT EXISTS { ?x :q ?y } } — nested EXISTS/NOT EXISTS through filter-only groups, without capturing the inner's fresh variable as if it were correlated" ;
+    mf:name "SEP-0007: FILTER EXISTS { FILTER NOT EXISTS { ?s :q ?y } } — the nested NOT EXISTS is correlated on the OUTER ?s through a triple-leaf position only, so :s1 (no :q of its own) and :s2 (has one) must answer differently, not agree as if ?s were an uncorrelated fresh variable" ;
     mf:action [ qt:query <exists-nested-correlation.rq> ; qt:data <exists-nested-correlation.ttl> ] ;
     mf:result <exists-nested-correlation.srx> .
 

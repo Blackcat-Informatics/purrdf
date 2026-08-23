@@ -4,5 +4,8 @@
     <variable name="s"/>
   </head>
   <results>
+    <result>
+      <binding name="s"><uri>https://example.org/exists#s1</uri></binding>
+    </result>
   </results>
 </sparql>
