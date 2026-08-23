@@ -102,15 +102,17 @@ The flattened source holds five W3C OWL 2 buckets. Exactly one is vendored here:
 | `w3c-owl2-full` | 261 | **yes** | The mainline bucket of `all.rdf`, taken whole. 226 consistency + 35 inconsistency cases, 202 KB, graded end-to-end in ~180 ms in a debug build. |
 | `w3c-owl2-el` | 19 | no | All 19 case names are, name-for-name, a subset of `w3c-owl2-full`. Vendoring them would duplicate payload for zero additional coverage. |
 | `w3c-owl2-full-decided` | 32 | no | Named for premises on which PurRDF's SHOIQ(D) tableau once did not terminate inside any budget a required gate could carry. That is **measured** rather than inherited — see *The exclusions, measured* below — and the current measurement finds **0** non-terminating cases at a 40 s ceiling: `webont-i5-8-001`, the case an earlier revision of this bucket was named for, now decides. The bucket is still excluded on size grounds, not on the termination grounds that motivated it originally. |
-| `w3c-owl2-full-divergence` | 122 | no | 3.9 MB — roughly twenty times the vendored payload — dominated by `webont-description-logic-*` premises of 100–220 KB each. Left out under the size discipline that governs this tree. |
+| `w3c-owl2-full-divergence` | 122 | **1 of 122** | 3.9 MB — roughly twenty times the vendored payload — dominated by `webont-description-logic-*` premises of 100–220 KB each, still left out under the size discipline that governs this tree. The one exception is `webont-description-logic-035` (a 2.8 KB spy-point one-of/inverse/counting **inconsistency**): it is the authoritative test for the `NN`/`NI` nominal-introduction reasoning and must be graded on every run, and at 2.8 KB it does not offend the size discipline the rest of the bucket does. |
 | `w3c-owl2-el-divergence` | 2 | no | Two cases from the same triage bucket as `w3c-owl2-full-divergence`, excluded with it. |
 
 ### The exclusions, measured
 
 The bucket table above describes the *flattened source*. Measured against the
-**upstream manifest**, this tree vendors 261 of the 482 consistency-shaped cases
-W3C publishes. The other **221** were, until now, invisible: the harness reported
-`agreed 256 / total 261` over a set the hard cases had been removed from.
+**upstream manifest**, this tree vendors 262 of the 482 consistency-shaped cases
+W3C publishes (261 from `w3c-owl2-full`, plus `webont-description-logic-035` drawn
+from `w3c-owl2-full-divergence` as the nominal-introduction proof). The other **220**
+were, until now, invisible: the harness reported `agreed 256 / total 261` over a set
+the hard cases had been removed from.
 
 They are invisible no longer. Every one of them is named, with its measured
 disposition, in `../w3c-owl2-rl/census.tsv` (`dl_corpus` / `dl_probe` columns),
@@ -121,10 +123,10 @@ cannot enter or leave the exclusion set unnoticed:
 | Disposition | Cases |
 |-------------|------:|
 | the tableau **cannot decide** it (no answer within a 40 s per-case ceiling) | **0** |
-| the tableau decides it today (would grade if vendored) | 173 |
+| the tableau decides it today (would grade if vendored) | 172 |
 | the run withholds with an honest error (step cap, unread construct, codec refusal) | 25 |
 | no `otest:rdfXmlPremiseOntology` at all (functional syntax only) | 23 |
-| **total excluded** | **221** |
+| **total excluded** | **220** |
 
 Measured 2026-08-10, release build, one process per case, four concurrent, 40 s
 wall-clock ceiling each — re-measured from the 2026-07-29 debug-build figures

@@ -248,7 +248,7 @@ WebOnt-description-logic-031	webont-description-logic-031	ConsistencyTest;Profil
 WebOnt-description-logic-032	webont-description-logic-032	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-inconsistent
 WebOnt-description-logic-033	webont-description-logic-033	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-inconsistent
 WebOnt-description-logic-034	webont-description-logic-034	ConsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-consistent
-WebOnt-description-logic-035	webont-description-logic-035	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-consistent
+WebOnt-description-logic-035	webont-description-logic-035	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	graded	graded
 WebOnt-description-logic-040	webont-description-logic-040	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	withholds-reasoner
 WebOnt-description-logic-101	webont-description-logic-101	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	RL	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-inconsistent
 WebOnt-description-logic-102	webont-description-logic-102	InconsistencyTest;ProfileIdentificationTest	DIRECT;RDF-BASED	-	Approved	RDFXML	yes	none	not-an-entailment-test	not-vendored	decides-inconsistent

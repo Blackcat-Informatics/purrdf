@@ -931,6 +931,37 @@ impl<'a> Graph<'a> {
         st.nodes[find(st, x)].nominal_id.clone()
     }
 
+    /// Whether `filler` is a nominal `{o₁,…}` at least one of whose roots counts over an INVERSE
+    /// role (`≤n S.C` with `S` an inverse role, or a named role some `owl:inverseOf` makes one).
+    ///
+    /// This is the ONLY case in which a blocked node's `∃R.{o}` / `≥n R.{o}` obligation must fire:
+    /// the nominal's inverse-role count has to see the blocked predecessor, or the bound is
+    /// silently under-counted (the incompleteness the nominal-introduction rule repairs). A
+    /// nominal that counts nothing over an inverse has no such bound, so blocking may withhold
+    /// the obligation as usual — which is what keeps the exemption from firing on every blocked
+    /// node and blowing up the search.
+    pub(crate) fn nominal_counts_over_inverse(&self, st: &State, filler: u32) -> bool {
+        let Decomp::Nominal(members) = self.kb.table.decomp(filler) else {
+            return false;
+        };
+        for &o in members {
+            let Some(&n) = st.root_of.get(&o) else {
+                continue;
+            };
+            let node = find(st, n);
+            for &cid in &st.nodes[node].label {
+                if let Decomp::Max(_, role, _) = *self.kb.table.decomp(cid) {
+                    let over_inverse = matches!(role, Role::Inv(_))
+                        || matches!(role, Role::Named(p) if self.kb.inverses.contains_key(&p));
+                    if over_inverse {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// The BLOCKABLE `role`-neighbours `y` of `x` for which `x` is a completion-graph SUCCESSOR of
     /// `y` — `y` GENERATED (the representative of) `x`, and the generating edge, read through the
     /// role hierarchy and inverse closure, makes `y` a `role`-neighbour of `x`.

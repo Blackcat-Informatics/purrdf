@@ -649,9 +649,20 @@ impl<'a> Hyper<'a> {
             // The `≥`-rule is the one rule blocking withholds. A blocked node's at-least
             // obligation is not satisfied and not discharged: it is deferred to the blocker,
             // which is what the model construction in the module docs makes good.
-            if disjunct.iter().any(
-                |atom| matches!(atom, Ground::AtLeast(node, ..) if is_blocked(st, blocked, *node)),
-            ) {
+            //
+            // The one exception is an at-least whose filler is a NOMINAL (`≥n R.{o}`). That
+            // obligation is met by an edge to an EXISTING nominal root, not by minting a fresh
+            // blockable successor, so it threatens neither termination (no new blockable node)
+            // nor the unravelling argument (the blocker carries the same edge to the same root).
+            // Withholding it, on the other hand, hides the blocked node from the nominal's own
+            // inverse-role count — which is exactly the incompleteness the nominal-introduction
+            // rule exists to repair, so the count must SEE those edges. It therefore fires even
+            // under blocking. See [`crate::owl_dl::tableau`] for the concept-tree's mirror.
+            if disjunct.iter().any(|atom| {
+                matches!(atom, Ground::AtLeast(node, _n, _role, filler)
+                    if is_blocked(st, blocked, *node)
+                        && !self.g.nominal_counts_over_inverse(st, *filler))
+            }) {
                 continue;
             }
             // The head was NOT satisfied, so asserting it moves the graph: every atom's

@@ -425,10 +425,14 @@ impl<'a> Tableau<'a> {
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
             changed |= self.rule_self(st, i);
-            if !self.blocked(st, i) {
-                changed |= self.rule_exists(st, i);
-                changed |= self.rule_min(st, i);
-            }
+            // Blocking withholds the `∃`- and `≥`-rules — EXCEPT for a NOMINAL filler
+            // (`∃r.{o}` / `≥n r.{o}`), which is met by an edge to an existing root, mints no
+            // blockable successor, and must fire even under blocking so the nominal's own
+            // inverse count sees the blocked node. The hypertableau's [`crate::owl_dl::hyper`]
+            // mirrors this exemption.
+            let blk = self.blocked(st, i);
+            changed |= self.rule_exists(st, i, blk);
+            changed |= self.rule_min(st, i, blk);
             if st.clash {
                 return changed;
             }
@@ -551,7 +555,11 @@ impl<'a> Tableau<'a> {
     }
 
     /// `∃`-rule: `∃r.C ∈ L(x)` with no `r`-neighbour satisfying `C` creates one.
-    fn rule_exists(&self, st: &mut State, x: usize) -> bool {
+    ///
+    /// When `blocked`, only a NOMINAL filler fires: `∃r.{o}` connects to an existing root and
+    /// mints no blockable successor, so it is exempt from blocking; a blockable-successor
+    /// existential is withheld as before.
+    fn rule_exists(&self, st: &mut State, x: usize, blocked: bool) -> bool {
         let somes: Vec<(Role, u32)> = st.nodes[x]
             .label
             .iter()
@@ -562,6 +570,9 @@ impl<'a> Tableau<'a> {
             .collect();
         let mut changed = false;
         for (role, c) in somes {
+            if blocked && !self.g.nominal_counts_over_inverse(st, c) {
+                continue;
+            }
             let has = self
                 .g
                 .neighbors(st, x, role)
@@ -576,7 +587,9 @@ impl<'a> Tableau<'a> {
     }
 
     /// `≥`-rule: `≥n r.C ∈ L(x)` ensures `n` pairwise-`≠` `r`-neighbours with `C`.
-    fn rule_min(&self, st: &mut State, x: usize) -> bool {
+    ///
+    /// When `blocked`, only a NOMINAL filler fires, for the reason [`Tableau::rule_exists`] gives.
+    fn rule_min(&self, st: &mut State, x: usize, blocked: bool) -> bool {
         let mins: Vec<(u32, Role, u32)> = st.nodes[x]
             .label
             .iter()
@@ -587,6 +600,9 @@ impl<'a> Tableau<'a> {
             .collect();
         let mut changed = false;
         for (n, role, c) in mins {
+            if blocked && !self.g.nominal_counts_over_inverse(st, c) {
+                continue;
+            }
             let n = n as usize;
             if n == 0 {
                 continue;
@@ -1174,6 +1190,55 @@ mod tests {
                 .expect("the anonymous-witness corner must decide, not exhaust"),
             "≤1 r⁻.⊤ ⊓ ∃r⁻.A on an anonymous witness is satisfiable; NN does not fire on a \
              non-nominal root"
+        );
+    }
+
+    /// The spy-point INCONSISTENCY over an inverse role — the shape of W3C
+    /// `webont-description-logic-035`, decided by hand here. A nominal `spy` with `≤2 p⁻.⊤`,
+    /// everything `p`-related to it (`⊤ ⊑ ∃p.{spy}`), and an individual forced to `≥3 r.⊤`:
+    /// three domain elements press a bound of two, and only the nominal-introduction rule
+    /// (which must see the blocked `p`-predecessors) catches it. Both cores must agree it is
+    /// **inconsistent** — the red test for the `NN`/`NI` corner.
+    #[test]
+    fn nn_spy_point_over_inverse_is_inconsistent() {
+        const P: u32 = 5;
+        const R: u32 = 6;
+        const SPY: u32 = 1;
+        const U: u32 = 2;
+        let mut b = Builder::new();
+        b.gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        b.ty(SPY, Concept::Max(2, Role::Inv(P), Box::new(Concept::Top)));
+        b.ty(U, Concept::Min(3, Role::Named(R), Box::new(Concept::Top)));
+        let kb = b.finish();
+        assert!(
+            !consistent_by_both(&kb),
+            "≤2 p⁻ on a spy everything p-relates to, with 3 forced r-successors, is unsatisfiable"
+        );
+    }
+
+    /// The green sibling of [`nn_spy_point_over_inverse_is_inconsistent`]: widen the spy's bound
+    /// to `≤3 p⁻.⊤` and the same three elements fit, so the ontology is **consistent**. This is
+    /// what separates the fix from one that simply reports the corner inconsistent.
+    #[test]
+    fn nn_spy_point_over_inverse_is_consistent_when_the_bound_fits() {
+        const P: u32 = 5;
+        const R: u32 = 6;
+        const SPY: u32 = 1;
+        const U: u32 = 2;
+        let mut b = Builder::new();
+        b.gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        b.ty(SPY, Concept::Max(3, Role::Inv(P), Box::new(Concept::Top)));
+        b.ty(U, Concept::Min(3, Role::Named(R), Box::new(Concept::Top)));
+        let kb = b.finish();
+        assert!(
+            consistent_by_both(&kb),
+            "≤3 p⁻ admits the three p-predecessors the spy point forces, so it is satisfiable"
         );
     }
 

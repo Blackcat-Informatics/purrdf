@@ -48,15 +48,18 @@ use purrdf_sparql_conformance::owl2_rl;
 
 /// Exactly what was vendored. A case directory silently dropped or added on a
 /// re-vendor would otherwise change the measured totals with nothing failing.
-const EXPECTED_CASES: usize = 261;
+const EXPECTED_CASES: usize = 262;
 /// The published-verdict split of the vendored corpus: `otest:ConsistencyTest`
 /// and `otest:InconsistencyTest` respectively.
 const EXPECTED_CONSISTENT: usize = 226;
-/// See [`EXPECTED_CONSISTENT`].
-const EXPECTED_INCONSISTENT: usize = 35;
+/// See [`EXPECTED_CONSISTENT`]. Raised from 35 to 36 when `webont-description-logic-035` —
+/// the spy-point one-of/inverse/counting inconsistency the `NN`/`NI` rule now decides — was
+/// vendored into the graded DL corpus.
+const EXPECTED_INCONSISTENT: usize = 36;
 
-/// Consistency-shaped upstream cases this corpus does NOT vendor.
-const EXPECTED_EXCLUDED: usize = 221;
+/// Consistency-shaped upstream cases this corpus does NOT vendor. Lowered from 221 to 220 as
+/// `webont-description-logic-035` moved from the excluded set into the graded corpus.
+const EXPECTED_EXCLUDED: usize = 220;
 /// …of which PurRDF's tableau does not terminate on. These are the cases the
 /// reasoner genuinely cannot decide; they are pinned here so their number is a
 /// checked fact on the scoreboard rather than a claim in a document. Zero as of
