@@ -1072,6 +1072,13 @@ mod tests {
             self.kb.individuals.insert(b);
         }
 
+        /// `p owl:inverseOf q` — records the symmetric inverse-role relation, so counting a
+        /// NAMED role `q` here counts `p⁻` (the `S=Named(p)`-made-inverse spelling of the corner).
+        fn inverse_of(&mut self, p: u32, q: u32) {
+            self.kb.inverses.entry(p).or_default().insert(q);
+            self.kb.inverses.entry(q).or_default().insert(p);
+        }
+
         fn finish(mut self) -> Kb {
             self.kb.finalize();
             self.kb
@@ -1239,6 +1246,56 @@ mod tests {
         assert!(
             consistent_by_both(&kb),
             "≤3 p⁻ admits the three p-predecessors the spy point forces, so it is satisfiable"
+        );
+    }
+
+    /// The `S=Named(p)`-made-inverse form of the spy point, decided by BOTH cores. `q owl:inverseOf
+    /// p`, so `≤2 q.⊤` on the spy counts its `p`-predecessors even though `q` is a NAMED role —
+    /// the same corner `owl:InverseFunctionalProperty` and `webont-description-logic-035` reach.
+    /// Three forced elements exceed the bound of two, so it is **inconsistent** (the S=Named red).
+    #[test]
+    fn nn_spy_point_named_inverse_is_inconsistent() {
+        const P: u32 = 5;
+        const Q: u32 = 7;
+        const R: u32 = 6;
+        const SPY: u32 = 1;
+        const U: u32 = 2;
+        let mut b = Builder::new();
+        b.inverse_of(P, Q);
+        b.gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        b.ty(SPY, Concept::Max(2, Role::Named(Q), Box::new(Concept::Top)));
+        b.ty(U, Concept::Min(3, Role::Named(R), Box::new(Concept::Top)));
+        let kb = b.finish();
+        assert!(
+            !consistent_by_both(&kb),
+            "≤2 q (q=p⁻) on a spy everything p-relates to, with 3 forced elements, is unsatisfiable"
+        );
+    }
+
+    /// The green sibling: widen the named-inverse bound to `≤3 q.⊤` and the three elements fit,
+    /// so it is **consistent** — the S=Named green.
+    #[test]
+    fn nn_spy_point_named_inverse_is_consistent_when_the_bound_fits() {
+        const P: u32 = 5;
+        const Q: u32 = 7;
+        const R: u32 = 6;
+        const SPY: u32 = 1;
+        const U: u32 = 2;
+        let mut b = Builder::new();
+        b.inverse_of(P, Q);
+        b.gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        b.ty(SPY, Concept::Max(3, Role::Named(Q), Box::new(Concept::Top)));
+        b.ty(U, Concept::Min(3, Role::Named(R), Box::new(Concept::Top)));
+        let kb = b.finish();
+        assert!(
+            consistent_by_both(&kb),
+            "≤3 q (q=p⁻) admits the three p-predecessors the spy point forces, so it is satisfiable"
         );
     }
 
