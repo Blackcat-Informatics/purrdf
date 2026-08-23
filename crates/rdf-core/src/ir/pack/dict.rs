@@ -642,6 +642,13 @@ pub struct PackDict {
     entries: Vec<DictEntry>,
 }
 
+/// The deepest triple-term (RDF 1.2 quoted triple) nesting a decoded dictionary will
+/// resolve. Real quoted-triple nesting is only a handful of levels; a chain deeper
+/// than this is malformed or hostile, and is rejected at decode so the recursive
+/// [`term_value`](PackDict::term_value)/`resolve` can never overflow the stack. Chosen
+/// far above any legitimate document yet well within a comfortable call-stack budget.
+const MAX_TRIPLE_TERM_DEPTH: usize = 128;
+
 impl PackDict {
     /// Scan `dataset`'s base quads and build the unified dictionary (see the
     /// [module docs](self) for the exact id-assignment rule), returning the
@@ -974,7 +981,89 @@ impl PackDict {
                 DictEntry::Iri(_) | DictEntry::Blank { .. } => {}
             }
         }
+        // Every id reference is now in range. The last hazard is the SHAPE of the
+        // triple-term reference graph: [`term_value`](Self::term_value) and the
+        // reasoner's `resolve` recurse through a triple term's `s`/`p`/`o`, so a
+        // CYCLE (an id whose component transitively references it) or an adversarially
+        // DEEP chain — neither of which any `encode` of a finite dataset can produce,
+        // but both of which hostile pack bytes can — would recurse without bound and
+        // overflow the stack: a denial of service on an ordinary pack open. Reject
+        // them here so every id a decoded dictionary hands out resolves in bounded
+        // depth. (Component ids are NOT ordered relative to their triple's own id — a
+        // triple term's object may itself be a triple term that sorts after it — so a
+        // plain id-comparison cannot stand in for this reachability check.)
+        self.validate_triple_terms_bounded()
+    }
+
+    /// Reject a cyclic or over-deep triple-term reference graph — see the tail of
+    /// [`validate_references`](Self::validate_references) for why.
+    ///
+    /// Both the traversal and the resolver it protects are bounded to
+    /// [`MAX_TRIPLE_TERM_DEPTH`] frames: a descending depth budget stops before the
+    /// stack can blow, and a per-entry memo means a sub-term shared by many triple
+    /// terms (a "diamond" DAG) is expanded ONCE rather than exponentially. The pass is
+    /// therefore `O(n_terms)` and cannot itself be a denial of service.
+    fn validate_triple_terms_bounded(&self) -> Result<(), PackDictError> {
+        // Intrinsic nesting depth of each entry (`None` until computed); `on_path`
+        // marks the entries on the current DFS path so a back-edge (a cycle) is caught
+        // precisely rather than only as budget exhaustion.
+        let mut depth: Vec<Option<usize>> = vec![None; self.entries.len()];
+        let mut on_path = vec![false; self.entries.len()];
+        for root in 1..=self.n_terms() {
+            self.triple_term_depth(root, MAX_TRIPLE_TERM_DEPTH, &mut depth, &mut on_path)?;
+        }
         Ok(())
+    }
+
+    /// The triple-term nesting depth reachable from `id`, or [`PackDictError::Malformed`]
+    /// if a cycle or a chain deeper than `budget` frames is found. Memoized in `depth`;
+    /// `on_path` is the cycle-detection coloring. See
+    /// [`validate_triple_terms_bounded`](Self::validate_triple_terms_bounded).
+    fn triple_term_depth(
+        &self,
+        id: PackTermId,
+        budget: usize,
+        depth: &mut [Option<usize>],
+        on_path: &mut [bool],
+    ) -> Result<usize, PackDictError> {
+        let idx = usize::try_from(id - 1).expect("PackDict: id exceeds usize on this platform");
+        if let Some(d) = depth[idx] {
+            return Ok(d);
+        }
+        if on_path[idx] {
+            return Err(PackDictError::Malformed(
+                "dict: cyclic triple-term reference",
+            ));
+        }
+        // A non-triple entry is a leaf: an IRI/blank is atomic, and a literal resolves
+        // its datatype IRI in O(1) without recursing, so its depth is 0.
+        let DictEntry::Triple { s, p, o } = self.entries[idx] else {
+            depth[idx] = Some(0);
+            return Ok(0);
+        };
+        // Stop BEFORE descending past the ceiling, so neither this pass nor the
+        // resolver it mirrors can exceed `MAX_TRIPLE_TERM_DEPTH` stack frames.
+        let Some(child_budget) = budget.checked_sub(1) else {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        };
+        on_path[idx] = true;
+        let ds = self.triple_term_depth(s, child_budget, depth, on_path)?;
+        let dp = self.triple_term_depth(p, child_budget, depth, on_path)?;
+        let dobj = self.triple_term_depth(o, child_budget, depth, on_path)?;
+        on_path[idx] = false;
+        let d = 1 + ds.max(dp).max(dobj);
+        // A memoized sub-term reached via a short path can still push a triple built
+        // ON it past the ceiling; re-check the assembled depth so every cached value —
+        // and thus every `term_value` recursion — is provably within the bound.
+        if d > MAX_TRIPLE_TERM_DEPTH {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        }
+        depth[idx] = Some(d);
+        Ok(d)
     }
 }
 
@@ -1475,5 +1564,103 @@ mod tests {
             prop_assert_eq!(dict.id_by_value(&absent), None);
             prop_assert_eq!(dict.predicate_id_by_value(&absent), None);
         }
+    }
+
+    #[test]
+    fn validate_references_rejects_a_self_referential_triple_term() {
+        // A triple term at id 1 whose components all point at id 1 (itself). No encoder
+        // of a finite dataset could mint this, and resolving it would recurse forever.
+        // Validation must reject it at open: the fail-closed guard against a
+        // stack-overflow denial of service on hostile pack bytes.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![DictEntry::Triple { s: 1, p: 1, o: 1 }],
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("a self-referential triple term must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    #[test]
+    fn validate_references_rejects_a_mutually_cyclic_triple_pair() {
+        // id 1 quotes id 2 and id 2 quotes id 1: a two-node cycle. The reachability
+        // walk detects the back-edge and rejects, even though every id is in range.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![
+                DictEntry::Triple { s: 2, p: 2, o: 2 },
+                DictEntry::Triple { s: 1, p: 1, o: 1 },
+            ],
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("a mutually cyclic triple-term pair must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    #[test]
+    fn validate_references_accepts_a_triple_whose_object_is_a_later_triple() {
+        // A triple term's object may itself be a triple term that sorts AFTER it, so a
+        // component id larger than its triple's own id is legitimate — this is exactly
+        // the shape a strict id-ordering check would have wrongly rejected. What
+        // matters is only that the reference graph is acyclic and shallow: id 2 quotes
+        // id 3 (a later triple term), which quotes the IRI leaf id 1. It must pass.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![
+                DictEntry::Iri(StrRange { offset: 0, len: 0 }),
+                DictEntry::Triple { s: 1, p: 1, o: 3 },
+                DictEntry::Triple { s: 1, p: 1, o: 1 },
+            ],
+        };
+        dict.validate_references()
+            .expect("an acyclic, shallow triple-term graph is valid regardless of id order");
+    }
+
+    #[test]
+    fn validate_references_accepts_nesting_at_the_depth_ceiling() {
+        // A linear chain nested exactly to the ceiling: an IRI leaf, then
+        // `MAX_TRIPLE_TERM_DEPTH` triple terms each quoting the one below. The deepest
+        // entry has nesting depth `MAX_TRIPLE_TERM_DEPTH`, which is still valid.
+        let mut entries = vec![DictEntry::Iri(StrRange { offset: 0, len: 0 })];
+        for _ in 0..MAX_TRIPLE_TERM_DEPTH {
+            let below = entries.len() as u64; // 1-based id of the entry just pushed
+            entries.push(DictEntry::Triple {
+                s: below,
+                p: below,
+                o: below,
+            });
+        }
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries,
+        };
+        dict.validate_references()
+            .expect("nesting exactly at the ceiling is valid");
+    }
+
+    #[test]
+    fn validate_references_rejects_nesting_past_the_depth_ceiling() {
+        // One level deeper than the ceiling: the same linear chain with an extra triple
+        // term on top. A chain this deep would overflow the resolver's stack, so it is
+        // rejected before any id it decodes can be resolved.
+        let mut entries = vec![DictEntry::Iri(StrRange { offset: 0, len: 0 })];
+        for _ in 0..=MAX_TRIPLE_TERM_DEPTH {
+            let below = entries.len() as u64;
+            entries.push(DictEntry::Triple {
+                s: below,
+                p: below,
+                o: below,
+            });
+        }
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries,
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("nesting past the ceiling must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
     }
 }
