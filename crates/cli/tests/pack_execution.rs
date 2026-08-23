@@ -60,13 +60,21 @@ fn run_with_stdin(args: &[&str], stdin_bytes: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn the built purrdf binary");
-    child
-        .stdin
-        .take()
-        .expect("child stdin is piped")
-        .write_all(stdin_bytes)
-        .expect("write pack bytes to stdin");
-    child.wait_with_output().expect("wait for purrdf")
+    let mut stdin = child.stdin.take().expect("child stdin is piped");
+    // Feed stdin from a separate thread so the parent can drain stdout/stderr
+    // concurrently. Writing the whole pack inline before reading the child's output
+    // would deadlock the moment the child's output fills the OS pipe buffer before it
+    // has consumed all of stdin — invisible with a tiny fixture, real with a large one.
+    let bytes = stdin_bytes.to_vec();
+    let writer = std::thread::spawn(move || {
+        // A broken pipe (the child exited early — e.g. rejecting a bad pack before
+        // reading all of stdin) is not a test failure: the child's exit status carries
+        // the verdict, so the write result is deliberately ignored.
+        let _ = stdin.write_all(&bytes);
+    });
+    let output = child.wait_with_output().expect("wait for purrdf");
+    writer.join().expect("join the stdin writer thread");
+    output
 }
 
 /// `dir/name` as an owned UTF-8 path string.

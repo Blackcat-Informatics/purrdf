@@ -3,7 +3,7 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as eight subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as nine subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
@@ -13,7 +13,12 @@
 //!   graph pattern's certain answers, under an entailment regime;
 //! * `consistency` — decide whether an OWL-Direct ontology has a model at all;
 //! * `project` — materialize a deterministic graph/tabular carrier archive;
-//! * `lift` — reconstruct RDF from a strict bidirectional carrier.
+//! * `lift` — reconstruct RDF from a strict bidirectional carrier;
+//! * `pack` — operate on the binary pack container directly; its `verify` verb runs
+//!   the full canonical (RDFC-1.0) integrity check over a pack and prints the pack's
+//!   digest. This is the SAME unconditional verification every read/reason path
+//!   already performs when it opens a pack, surfaced as an explicit standalone verb —
+//!   additive, never a substitute for that on-open check.
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on

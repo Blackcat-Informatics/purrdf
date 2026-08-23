@@ -45,6 +45,34 @@
 //!   (a zero-length mapping is invalid): read the descriptor (rewound to offset 0)
 //!   whole into a `Vec<u8>` we own — no external process can truncate our heap.
 //!
+//! ## Memory ceiling per tier
+//!
+//! The tiers trade zero-copy for safety, and that trade has a *peak-memory* cost
+//! worth stating plainly — it is the ceiling a large pack has to fit under:
+//!
+//! * **Tier 0** adds nothing. The mapping aliases the already-immutable backing
+//!   pages, so resident growth is only the pages actually touched (paged in on
+//!   demand, shared with the backing object) — no second copy of the input exists.
+//! * **Tier 1 holds one full copy of the input for the value's whole lifetime.** The
+//!   sealed `memfd` *is* the bytes: a snapshot the size of the source. So a
+//!   `PackView` over a Tier-1 acquisition has a resident ceiling of about the source
+//!   size (the memfd) plus a small fixed transient — the reused 64 KiB `pread` chunk
+//!   in `tier1_sealed_snapshot`, released the moment the snapshot completes. The
+//!   copy is O(n) in the input's *byte* length and does **not** grow per term or per
+//!   quad: there is no allocation that scales with the pack's *logical* size layered
+//!   on top of its byte size. Because the snapshot lives in a `memfd`, this copy
+//!   counts toward the process RSS but **not** toward the global allocator's byte
+//!   accounting (it is not a heap `Vec`) — which is exactly why the `pack_input_alloc`
+//!   bench reports peak *allocated bytes* and *RSS delta* as two separate figures.
+//! * **Tier 2** is the same one-copy ceiling as Tier 1, but on the heap: the owned
+//!   `Vec<u8>` is a full copy of the input and *does* count toward allocated bytes.
+//!
+//! In every tier the ceiling is **at most one copy** of the input — never a
+//! per-element blow-up — so a pack costs resident memory proportional to its size,
+//! not a multiple of it. That bound is what the large-pack coverage
+//! (`memory_ceiling_of_a_large_pack_acquisition_is_about_one_copy` in
+//! `crate::immutable`'s tests) pins.
+//!
 //! Integrity (`verify_pack`) is checked by the caller **after** acquisition, over
 //! the already-immutable [`as_bytes`](ImmutableInput::as_bytes), closing the
 //! time-of-check/time-of-use gap. Acquisition never trusts the input's *contents*; a
@@ -429,5 +457,32 @@ mod tests {
             bytes.iter().map(|&b| u64::from(b)).sum::<u64>(),
             payload.iter().map(|&b| u64::from(b)).sum::<u64>()
         );
+    }
+
+    #[test]
+    fn memory_ceiling_of_a_large_pack_acquisition_is_about_one_copy() {
+        // A representatively large input — 4 MiB, far beyond a page and beyond the
+        // 64 KiB snapshot chunk, so any per-element or per-chunk blow-up would show. The
+        // module docs promise the acquired handle holds AT MOST ONE copy of the input,
+        // so its byte footprint must equal the source exactly, whichever tier is
+        // reached — a large pack costs resident memory proportional to its size, not a
+        // multiple of it.
+        let payload: Vec<u8> = (0u8..=255).cycle().take(4 * 1024 * 1024).collect();
+        let file = temp_with(&payload);
+
+        let input = ImmutableInput::from_disk_path(path_of(&file)).expect("acquire large input");
+
+        // Exactly the source bytes: one copy, no duplication and no expansion that
+        // scales with the element count.
+        assert_eq!(input.as_bytes().len(), payload.len());
+        assert_eq!(input.as_bytes(), payload.as_slice());
+
+        // On Linux that one copy lives in a sealed `memfd` (it counts toward RSS, not
+        // the heap allocator's byte accounting — see the `pack_input_alloc` bench);
+        // elsewhere it is the owned heap buffer. Either way it is a single copy.
+        #[cfg(target_os = "linux")]
+        assert_eq!(input.tier(), InputTier::SealedSnapshotMmap);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(input.tier(), InputTier::Owned);
     }
 }
