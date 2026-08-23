@@ -31,11 +31,12 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
 use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::SourceFormat;
 use purrdf_rdf::canonical_flat_nquads;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
-use crate::format::{self, CliFormat};
+use crate::format;
 use crate::ledger;
 use crate::reason;
 use crate::report;
@@ -46,7 +47,7 @@ use crate::source::{self, ViewOp};
 /// source resolved to into the target format.
 struct ConvertOp<'a> {
     out: &'a str,
-    target: CliFormat,
+    target: SourceFormat,
     base: Option<&'a str>,
     src_codec: Option<&'a str>,
     jsonld_options: Option<&'a JsonLdSerializeOptions>,
@@ -153,7 +154,7 @@ pub(crate) fn run(
     let target_format = format::resolve(options.to, output)?;
     format::refuse_base_with_pack(target_format, options.base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
-    if matches!(source_format, CliFormat::Pack) && matches!(target_format, CliFormat::Pack) {
+    if source_format.is_pack() && target_format.is_pack() {
         if input == "-" {
             let bytes = source::read_bytes(input)?;
             verify_pack(&bytes)?;
@@ -185,7 +186,7 @@ pub(crate) fn run(
 /// materialize its entailment closure, then either emit canonical N-Quads or
 /// serialize to the `--to` target.
 fn run_with_transforms(
-    source_format: CliFormat,
+    source_format: SourceFormat,
     options: &ConvertOptions<'_>,
     input: &str,
     output: &str,

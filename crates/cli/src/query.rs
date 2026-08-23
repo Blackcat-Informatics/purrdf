@@ -118,6 +118,7 @@ use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::SourceFormat;
 use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
     QueryGovernors, QueryOptions as EngineQueryOptions,
@@ -129,7 +130,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::{CliError, CliOutcome};
-use crate::format::{self, CliFormat};
+use crate::format;
 use crate::governors::{self, GovernorFlags};
 use crate::ledger;
 use crate::reason;
@@ -385,7 +386,7 @@ fn emit_result(
             let ledger = sink::write_rdf(
                 &**graph,
                 "-",
-                CliFormat::Rdf(fmt),
+                SourceFormat::Native(fmt),
                 base,
                 None,
                 jsonld_options,

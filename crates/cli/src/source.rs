@@ -42,10 +42,9 @@ use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, PackView, RdfDataset, dataset_from_view, verify_pack};
-use purrdf_rdf::parse_dataset;
+use purrdf_rdf::{SourceFormat, parse_dataset};
 
 use crate::error::CliError;
-use crate::format::CliFormat;
 
 /// A generic operation to run over whichever concrete [`DatasetView`] the input
 /// resolves to.
@@ -103,17 +102,17 @@ pub(crate) fn verified_pack_mmap(path: &str) -> Result<memmap2::Mmap, CliError> 
 /// The mmap/`Vec` backing store is held alive for the whole `op.run` call.
 pub(crate) fn run_over_input<Op: ViewOp>(
     path: &str,
-    format: CliFormat,
+    format: SourceFormat,
     base: Option<&str>,
     op: Op,
 ) -> Result<Op::Output, CliError> {
     match format {
-        CliFormat::Rdf(rdf_format) => {
+        SourceFormat::Native(rdf_format) => {
             let bytes = read_bytes(path)?;
             let dataset = parse_dataset(&bytes, rdf_format.media_type(), base)?;
             op.run(&*dataset)
         }
-        CliFormat::Pack => {
+        SourceFormat::Pack => {
             if path == "-" {
                 let bytes = read_bytes(path)?;
                 verify_pack(&bytes)?;
@@ -136,15 +135,15 @@ pub(crate) fn run_over_input<Op: ViewOp>(
 /// materialization, whose `materialize` takes a `&RdfDataset`).
 pub(crate) fn load_dataset(
     path: &str,
-    format: CliFormat,
+    format: SourceFormat,
     base: Option<&str>,
 ) -> Result<Arc<RdfDataset>, CliError> {
     match format {
-        CliFormat::Rdf(rdf_format) => {
+        SourceFormat::Native(rdf_format) => {
             let bytes = read_bytes(path)?;
             Ok(parse_dataset(&bytes, rdf_format.media_type(), base)?)
         }
-        CliFormat::Pack => {
+        SourceFormat::Pack => {
             if path == "-" {
                 let bytes = read_bytes(path)?;
                 verify_pack(&bytes)?;

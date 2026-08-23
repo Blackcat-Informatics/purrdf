@@ -68,10 +68,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
-use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile};
+use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat};
 use purrdf_sparql_results::SparqlResultsFormat;
-
-use crate::format::CliFormat;
 
 /// The `purrdf` command-line interface.
 #[derive(Parser, Debug)]
@@ -770,25 +768,28 @@ pub(crate) enum CliRdfFormat {
     #[value(name = "yamlld", alias = "yaml-ld")]
     Yamlld,
     /// The native PurRDF pack container.
-    #[value(name = "pack")]
+    // No explicit `#[value(name = ...)]`: clap's default kebab-case rendering of this
+    // variant IS the pack container's clap spelling, so it is not re-declared as a
+    // literal here — the identifier lives once, in `purrdf_rdf::PACK_EXTENSIONS`.
     Pack,
 }
 
 impl CliRdfFormat {
-    /// Resolve this explicit choice to the pipeline's [`CliFormat`].
-    pub(crate) fn to_cli_format(self) -> CliFormat {
+    /// Resolve this explicit choice to the pipeline's [`SourceFormat`].
+    pub(crate) fn to_source_format(self) -> SourceFormat {
         use purrdf_rdf::NativeRdfFormat as N;
+        use purrdf_rdf::SourceFormat as S;
         match self {
-            Self::Turtle => CliFormat::Rdf(N::Turtle),
-            Self::Trig => CliFormat::Rdf(N::TriG),
-            Self::Ntriples => CliFormat::Rdf(N::NTriples),
-            Self::Nquads => CliFormat::Rdf(N::NQuads),
-            Self::Rdfxml => CliFormat::Rdf(N::RdfXml),
-            Self::Trix => CliFormat::Rdf(N::TriX),
-            Self::Hextuples => CliFormat::Rdf(N::HexTuples),
-            Self::Jsonld => CliFormat::Rdf(N::JsonLd),
-            Self::Yamlld => CliFormat::Rdf(N::YamlLd),
-            Self::Pack => CliFormat::Pack,
+            Self::Turtle => S::Native(N::Turtle),
+            Self::Trig => S::Native(N::TriG),
+            Self::Ntriples => S::Native(N::NTriples),
+            Self::Nquads => S::Native(N::NQuads),
+            Self::Rdfxml => S::Native(N::RdfXml),
+            Self::Trix => S::Native(N::TriX),
+            Self::Hextuples => S::Native(N::HexTuples),
+            Self::Jsonld => S::Native(N::JsonLd),
+            Self::Yamlld => S::Native(N::YamlLd),
+            Self::Pack => S::Pack,
         }
     }
 }
