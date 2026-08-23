@@ -707,7 +707,7 @@ mod tests {
     fn de_morgan_interns_to_one_id_over_the_generated_corpus() {
         let mut t = ConceptTable::default();
         let members = corpus();
-        for group in members.chunks_exact(3) {
+        for group in members.as_chunks::<3>().0 {
             let parts: Vec<Concept> = group.to_vec();
             let negated: Vec<Concept> = parts.iter().cloned().map(Concept::neg).collect();
 

@@ -595,9 +595,12 @@ fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
 
 /// `--explain` renders all three `EXISTS`/`NOT EXISTS` evidence counters —
 /// `exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`
-/// — with NONZERO values, and the definition path's own inner plan node (the `Bgp` under
-/// the second `FILTER EXISTS`) carries its own nonzero ledger line rather than folding into
-/// the enclosing `Filter`.
+/// — with NONZERO values, and BOTH `FILTER EXISTS` inners' own plan nodes (the probe path's
+/// `Bgp` under the first `FILTER EXISTS`, and the definition path's `Bgp` under the second)
+/// carry their own nonzero ledger lines rather than folding into the enclosing `Filter` —
+/// the probe path attributes too, via the same `PreparedExists::ledger_source` push the
+/// definition path uses, just around its one once-per-site evaluation instead of a
+/// per-restriction one (`crate::expr::exists`'s probe arm).
 ///
 /// This is the release-CLI twin of the frozen `exists-inner-counters` governor vector
 /// (`vectors/sparql-governors/`): same query shape, same data, so a reader can compare this
@@ -647,23 +650,25 @@ fn exists_counters_render_in_cli_explain() {
         "the definition path's inner must consume exactly one witness per evaluation \
          (two, first-witness-stopped): {body}"
     );
-    // The definition path's own inner `Bgp` (`?s ex:q ?o2`) must carry its own nonzero
-    // ledger line, not `fuel=0 rows=0` folded into the enclosing `Filter`. It renders AFTER
-    // the first (probe-path) `FILTER EXISTS`'s own `Bgp` line in the ledger's pre-order —
-    // the probe path is untouched by this fix and legitimately still reads `fuel=0 rows=0`
-    // (see `crate::enf::ledger_source_map`'s doc for why that is scoped to the definition
-    // path only) — so the LAST `Bgp` line, not the first, is the one this assertion is
-    // about.
-    let bgp_line = body
+    // BOTH inners' own `Bgp` lines must carry real charges, not `fuel=0 rows=0` folded into
+    // the enclosing `Filter`: the first (probe-path, `?a ex:p ?o`) and the last
+    // (definition-path, `?s ex:q ?o2`), in the ledger's pre-order.
+    let bgp_lines: Vec<&str> = body
         .lines()
-        .rev()
-        .find(|line| line.contains("Bgp fuel="))
-        .unwrap_or_else(|| panic!("no Bgp ledger line at all in:\n{body}"));
-    assert!(
-        !bgp_line.contains("fuel=0 rows=0"),
-        "the EXISTS definition path's own Bgp must show real charges, not fuel=0 rows=0: \
-         {bgp_line}\nfull explanation:\n{body}"
+        .filter(|line| line.contains("Bgp fuel="))
+        .collect();
+    assert_eq!(
+        bgp_lines.len(),
+        2,
+        "exactly two `Bgp` ledger lines, one per `FILTER EXISTS` inner: {body}"
     );
+    for bgp_line in &bgp_lines {
+        assert!(
+            !bgp_line.contains("fuel=0 rows=0"),
+            "every EXISTS inner's own Bgp must show real charges, not fuel=0 rows=0: \
+             {bgp_line}\nfull explanation:\n{body}"
+        );
+    }
 }
 
 /// `--explain` REFUSES WHAT IT CANNOT HONOR — and that is now the WHOLE list.

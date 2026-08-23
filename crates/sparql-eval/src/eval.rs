@@ -1126,20 +1126,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// ledger-resolvable address rather than another window's synthetic one — the loop
     /// below almost always resolves on its first map probe as a consequence, and the
     /// further-map fallback is what is left for the rare case a translation is not yet
-    /// resolvable that way. `counts_rows` is read from the FIRST map entry consulted — the
-    /// one describing `address` itself — and carried through any further translation
-    /// unchanged: it answers a question about THIS node, not about whatever address it is
-    /// chased through on the way to an ordinal, and it is already the fully-arbitrated
-    /// answer (at most one synthetic node per real ordinal per window keeps `true` — see
-    /// [`crate::expr::SubstitutionSource`]'s doc), not a locally-decided one that a caller
-    /// would still need to reconcile against an enclosing window's own claim.
+    /// resolvable that way. `counts_rows` is read from the FIRST map entry that actually
+    /// matches `address` — the one describing `address` itself — and carried through any
+    /// further translation unchanged: it answers a question about THIS node, not about
+    /// whatever address it is chased through on the way to an ordinal, and it is already
+    /// the fully-arbitrated answer (at most one synthetic node per real ordinal per window
+    /// keeps `true` — see [`crate::expr::SubstitutionSource`]'s doc), not a locally-decided
+    /// one that a caller would still need to reconcile against an enclosing window's own
+    /// claim.
     ///
-    /// A miss at any step — `address` absent from the map being consulted — stops the
-    /// search and returns `None` rather than trying an outer map with the SAME address: a
-    /// map miss means the node at THIS level is synthetic (introduced by Values Insertion,
-    /// never present in any source tree), and its charges are meant to fall to whatever
-    /// node is already the ledger cursor — the nearest enclosing node that DID resolve —
-    /// not to be guessed at by skipping a level.
+    /// A miss at one step — `address` absent from the map being consulted — does NOT stop
+    /// the search: it tries the SAME `address` against the next map out instead. A nested
+    /// `EXISTS`'s own `ledger_source` (built by [`crate::enf::ledger_source_map`] against
+    /// whatever tree the nested site's `PreparedExists` was built from) only ever resolves
+    /// one hop, straight to `PreparedExists::build`'s own `pattern` argument — and when
+    /// that nested site was itself reached while evaluating an ENCLOSING correlated
+    /// `EXISTS`'s per-row substituted copy, `pattern`'s address is not a real plan address
+    /// either, only a further substitution-window's synthetic one, resolvable only by the
+    /// ENCLOSING window's own map (a different map than the one that just matched, and not
+    /// necessarily the very next one on the stack — depth alone cannot predict which map
+    /// holds the composing entry). Trying the same address further out is exactly the
+    /// "outward chain" the paragraph above already documents for nested `LATERAL`; nested
+    /// `EXISTS` needs the identical generalization because its own per-window maps are not
+    /// pre-resolved past their immediate enclosing window the way `boxed_and_mapped_as`
+    /// pre-resolves a `LATERAL` window's. A miss against every remaining map (the address
+    /// stops matching anywhere) still stops the search and returns `None`: an address that
+    /// resolves nowhere really is synthetic bookkeeping with no source of its own, and its
+    /// charges are meant to fall to whatever node is already the ledger cursor — the
+    /// nearest enclosing node that DID resolve.
     pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<(usize, bool)> {
         let ledger = self.ledger.as_ref()?;
         if let Some(ordinal) = ledger.ordinal_of(address) {
@@ -1147,10 +1161,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
         let mut address = address;
         let mut counts_rows = true;
-        for (depth, map) in self.correlated_node_maps.iter().rev().enumerate() {
-            let entry = map.get(&address)?;
-            if depth == 0 {
+        let mut counts_rows_set = false;
+        for map in self.correlated_node_maps.iter().rev() {
+            let Some(entry) = map.get(&address) else {
+                // This map does not carry `address` — it may belong to a DIFFERENT
+                // substitution window than the one that produced `address`, or (for the
+                // window that DID produce it) `address` may be scaffolding that window
+                // never mapped. Either way, try the same address against the next map
+                // out rather than giving up: see this function's doc.
+                continue;
+            };
+            if !counts_rows_set {
                 counts_rows = entry.counts_rows;
+                counts_rows_set = true;
             }
             address = entry.source;
             if let Some(ordinal) = ledger.ordinal_of(address) {

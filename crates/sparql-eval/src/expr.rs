@@ -1151,9 +1151,26 @@ fn exists_apply_first_witness_wrap() -> bool {
 
 /// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`
 /// the per-row definition. Production logic is the one-line boolean this function
-/// still computes as its fallback (`!correlated || probe_admissible(..)`); the
-/// `cfg(test)` branch lets a differential test override it in either direction — see
-/// [`FORCE_EXISTS_STRATEGY`]'s doc.
+/// still computes as its fallback (`(!correlated && !stateful) ||
+/// probe_admissible(..)`); the `cfg(test)` branch lets a differential test override
+/// it in either direction — see [`FORCE_EXISTS_STRATEGY`]'s doc.
+///
+/// `stateful` gates the UNCORRELATED shortcut on top of `correlated`: an uncorrelated
+/// inner that reaches a stateful builtin (`EXISTS { FILTER(RAND() > 0.5) }`, no
+/// variable at all, so `correlated` is unconditionally `false`) must still take the
+/// per-row definition — the memoized probe evaluates its inner exactly ONCE and
+/// reuses that one answer for every outer row, which is observably wrong for a
+/// builtin that draws a fresh value per evaluation
+/// (`crate::parallel::function_is_builtin_stateful`'s doc: a fresh
+/// `RAND()`/`UUID()`/`BNODE()` per evaluation, not per site). `probe_admissible`
+/// itself already refuses a directly-reachable stateful builtin unconditionally
+/// (`expr_probe_admissible`'s `FunctionCall` arm, which does not consult
+/// `current_row_vars` at all for that check), so routing the `stateful` case through
+/// it — rather than special-casing it here — is what makes `stateful &&
+/// correlated` fall through to the SAME correct refusal `probe_admissible` already
+/// gives a correlated stateful inner; only the `!correlated` shortcut needed its own
+/// gate, because it is the one path that bypassed `probe_admissible` (hence
+/// `expr_probe_admissible`'s stateful check) entirely.
 ///
 /// `outer_schema` is threaded straight through to [`probe_admissible`] — the caller's
 /// (`exists`'s own) `schema` parameter, never row-restricted — so the admission arms
@@ -1169,6 +1186,7 @@ fn exists_apply_first_witness_wrap() -> bool {
 /// `outer_schema`.
 fn exists_use_probe(
     correlated: bool,
+    stateful: bool,
     normalized: &GraphPattern,
     analysis: &crate::governor::soundness::NodeAnalysisTable,
     outer_schema: &VarSchema,
@@ -1177,7 +1195,8 @@ fn exists_use_probe(
     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
         return forced == ForcedExistsStrategy::Probe;
     }
-    !correlated || crate::governor::soundness::probe_admissible(normalized, analysis, outer_schema)
+    (!correlated && !stateful)
+        || crate::governor::soundness::probe_admissible(normalized, analysis, outer_schema)
 }
 
 /// Evaluate `EXISTS { pattern }` for the current solution.
@@ -1207,7 +1226,15 @@ fn exists_use_probe(
 ///    Otherwise the per-row definition runs.
 /// 3. **Probe path**: unchanged from before this rewrite except that it now
 ///    evaluates the ENF-normalized inner (never a difference in ANSWER — the ENF
-///    laws are emptiness-preserving — only, sometimes, in cost).
+///    laws are emptiness-preserving — only, sometimes, in cost). Ledger
+///    attribution is NOT scoped to the definition path only: the probe path's own
+///    once-per-site evaluation pushes the SAME `PreparedExists::ledger_source`
+///    map (below, in the probe arm itself) around its one call into
+///    `eval_evaluated`, so the inner's own plan nodes attribute to themselves
+///    rather than folding into the enclosing `FILTER`/`BIND` — a single push
+///    charging a single evaluation, which is correct for a path that, by
+///    construction, runs at most once per site regardless of how many outer
+///    rows later probe the resulting index.
 /// 4. **Definition path**: substitutes μ into the normalized inner (via
 ///    [`crate::binop::eval_correlated`]) wrapped in a first-witness `Slice{0,
 ///    Some(1)}` (`crate::enf`'s module doc — emptiness-preserving in reverse), with
@@ -1326,7 +1353,7 @@ fn exists<D: DatasetView + Sync>(
 
     let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
 
-    if exists_use_probe(correlated, normalized, analysis, schema) {
+    if exists_use_probe(correlated, stateful, normalized, analysis, schema) {
         // ---- Memoized probe path ----
         //
         // Evaluate the (ENF-normalized) inner — and build the probe index over it —
@@ -1350,7 +1377,33 @@ fn exists<D: DatasetView + Sync>(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let evaluated = eval_evaluated(normalized, ctx)?;
+                // Push this site's ledger-source correspondence around the ONE evaluation
+                // this arm ever runs, same mechanism and same reason the definition path
+                // pushes it around its own (per-row) `eval_correlated` call below: without
+                // it, every node `eval_evaluated` walks below `normalized` resolves to no
+                // real plan address at all (`normalized` is a fresh ENF clone, never a
+                // plan node itself), so `EvalCtx::resolve_ledger_ordinal` falls through to
+                // `None` and every charge folds into the enclosing `FILTER`/`BIND` instead
+                // of attributing to the inner's own nodes — even though the probe path
+                // evaluates `normalized` UNSUBSTITUTED (no per-row copy, hence no
+                // `eval_correlated`/`enter_substituted_exists` push of its own). Gated
+                // identically to the definition path's push: nothing to resolve against
+                // without a ledger, and `ledger_source_map` may have declined to track a
+                // `Project`/`Union`-shaped site (see its doc), leaving nothing to push.
+                // Popped manually (not via a guard) because the only fallible call in this
+                // scope is the one line below, and its `?` is applied after the pop — the
+                // probe runs exactly once per site, so these charges attribute once, which
+                // is correct: this is scoped to a single evaluation of the definition path,
+                // not to every outer row the probe later serves.
+                let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+                if track_ledger {
+                    ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+                }
+                let evaluated = eval_evaluated(normalized, ctx);
+                if track_ledger {
+                    ctx.correlated_node_maps.pop();
+                }
+                let evaluated = evaluated?;
                 if let Evaluated::Truncated(truncation) = &evaluated {
                     ctx.expression_barrier.record(truncation.tripped());
                     return Ok(false);
@@ -6330,6 +6383,71 @@ mod tests {
             "the MINUS node's own committed output rows must attribute to it, not roll into \
              the enclosing FILTER (rendered: {})",
             explanation.render()
+        );
+    }
+
+    /// `exists_use_probe`'s production fallback used to be the one-line
+    /// `!correlated || probe_admissible(..)` — an UNCORRELATED inner (no free variable at
+    /// all, so `correlated` is unconditionally `false`) short-circuited straight to the
+    /// memoized probe with `probe_admissible` never even consulted, regardless of what the
+    /// inner contained. `EXISTS { FILTER(BNODE() != BNODE()) }` is uncorrelated (no
+    /// variable anywhere) but reaches a stateful builtin (`BNode` — see
+    /// `crate::parallel::function_is_builtin_stateful`): the memoized probe evaluates its
+    /// inner exactly ONCE and reuses that one answer for every outer row, which is an
+    /// observably different execution from evaluating a fresh `BNode` per row (the same
+    /// reasoning that already gates the per-row-definition μ-restriction memo on
+    /// statefulness — see `crate::expr::exists`'s own doc). `BNODE() != BNODE()` is always
+    /// `true` (two freshly minted blank nodes are never term-equal) regardless of HOW
+    /// often it runs, so this test's assertion is on WHICH strategy ran (a deterministic
+    /// `--explain` evidence counter), never on a nondeterministic value.
+    ///
+    /// Revert check: reverting `exists_use_probe`'s fallback back to `!correlated ||
+    /// probe_admissible(..)` (dropping the `!stateful` conjunct) makes this query take the
+    /// probe path — `exists-probe-answered` reads 1 and `exists-definition-answered` reads
+    /// 0 — and this test then fails, which is the intended regression signal.
+    #[test]
+    fn uncorrelated_stateful_exists_takes_the_definition_path() {
+        use purrdf_core::RdfLiteral;
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri("http://example.org/tag");
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        let s1 = b.intern_iri("http://example.org/s1");
+        let s2 = b.intern_iri("http://example.org/s2");
+        let s3 = b.intern_iri("http://example.org/s3");
+        b.push_quad(s1, tag, anything, None);
+        b.push_quad(s2, tag, anything, None);
+        b.push_quad(s3, tag, anything, None);
+        let ds = b.freeze().expect("freeze");
+
+        let query = "PREFIX : <http://example.org/> \
+                      SELECT ?s WHERE { \
+                        ?s :tag ?w \
+                        FILTER EXISTS { FILTER(BNODE() != BNODE()) } \
+                      }";
+        let engine = crate::engine::NativeSparqlEngine::default();
+        let explanation = engine.explain_query(&ds, query, None).expect("explain");
+        let definition_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        let probe_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
+            .sum();
+        assert_eq!(
+            definition_answered, 3,
+            "the uncorrelated, STATEFUL `EXISTS` must take the per-row definition path — \
+             once per outer row (three: `s1`/`s2`/`s3`), not the once-shared memoized \
+             probe: {definition_answered} `exists-definition-answered` charges, expected \
+             3 — before the fix this counter reads 0, because `!correlated` alone \
+             short-circuited straight to the probe"
+        );
+        assert_eq!(
+            probe_answered, 0,
+            "no `exists-probe-answered` charge — the stateful inner never takes the \
+             once-shared probe path: before the fix this counter reads 1"
         );
     }
 

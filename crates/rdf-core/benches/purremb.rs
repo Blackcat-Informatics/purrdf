@@ -203,7 +203,7 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
                                 .targets
                                 .iter()
                                 .copied()
-                                .zip(fixture.row_values.chunks_exact(F32_DIMENSION)),
+                                .zip(fixture.row_values.as_chunks::<F32_DIMENSION>().0),
                         )
                         .expect("stream matrix");
                     let (output, root) = writer.finish().expect("finish stream");

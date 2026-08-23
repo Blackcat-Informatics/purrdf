@@ -593,14 +593,32 @@ ledger reports the decision through three evidence counters:
 `exists-definition-answered` (one per-row-definition evaluation), and
 `exists-inner-solutions-consumed` (one row the definition path's inner
 actually materialized — bounded at 1 per evaluation by the first-witness
-stop). The definition path's own inner plan nodes — a `MINUS`, a `Bgp`, a
-nested `EXISTS`, whatever the body contains — carry their own ledger lines
-too, decomposed exactly like an ordinary node's rather than folded into the
-enclosing `FILTER`/`BIND`; a node that legitimately reads `fuel=0 rows=0` is
-one Existential Normal Form erased from the evaluated tree entirely (an
+stop). An `EXISTS`/`NOT EXISTS` inner's own plan nodes — a `MINUS`, a `Bgp`, a
+nested `EXISTS` (however deeply nested), whatever the body contains — carry
+their own ledger lines too, decomposed exactly like an ordinary node's rather
+than folded into the enclosing `FILTER`/`BIND`, under EITHER strategy: the
+memoized probe's one once-per-site evaluation attributes exactly like the
+per-row definition's, just charged once rather than once per distinct
+restriction. A node that legitimately reads `fuel=0 rows=0` is one
+Existential Normal Form erased from the evaluated tree entirely (an
 `OPTIONAL`/`ORDER BY`/`DISTINCT`/`LIMIT` wrapper the emptiness-preserving
 laws proved transparent — see "Existential Normal Form" above) and therefore
 never ran, not a charge that went missing.
+
+**The one named exception**: an `EXISTS`/`NOT EXISTS` inner whose OWN
+ENF-normalized top-level shape is a `Project` (a sub-`SELECT`) or a `Union`
+(a top-level `{ A } UNION { B }`, not one nested further down) does NOT
+attribute — every node inside it, however deep, folds into the enclosing
+`FILTER`/`BIND` as `fuel=0 rows=0`, under either strategy, regardless of what
+the body itself contains. `Project`/`Union` synthesize their output from more
+than one child rather than being a 1:1 structural clone of anything in the
+original tree, and reconstructing the same original-address correspondence
+for them would need the same wrapper/wrapped `counts_rows` arbitration the
+`LATERAL` Values-Insertion machinery already does — deliberately not
+attempted, so the correspondence is simply absent for that one site rather
+than guessed at. This is not a regression: it is exactly the behavior every
+`EXISTS`/`NOT EXISTS` inner had before per-node attribution existed at all,
+now confined to this one shape instead of the whole feature.
 
 **The performance characteristic, stated plainly**: an uncorrelated inner, or
 a correlated one built only from `Bgp`/`Path`/`Values`/`Graph`/`Join`/

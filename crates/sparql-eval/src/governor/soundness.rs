@@ -1282,6 +1282,30 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>)
     }
 }
 
+/// Whether a `Path` endpoint term can make `crate::path::resolve_end` raise
+/// [`crate::error::EvalError::unsupported_deferred`] with
+/// [`crate::error::UnsupportedKind::QuotedTripleTermVariable`] — the hard error
+/// `crate::convert::ground_term_pattern_to_value`/`ground_triple_pattern_to_value`
+/// raise for a variable found *inside* a quoted-triple-term endpoint.
+///
+/// A BARE `Variable`/`BlankNode` endpoint never reaches that conversion at all —
+/// `resolve_end`'s own match arms resolve those to `Endpoint::Free` directly,
+/// before `ground_term_pattern_to_value` is ever called (see that function's doc
+/// for why a variable *as* the whole endpoint is a different, fully-supported
+/// shape from a variable *inside* a quoted-triple endpoint) — so only a
+/// `TermPattern::Triple` endpoint is even a candidate, and only when a variable is
+/// reachable somewhere within it (mirroring `collect_term_pattern_vars`'s own
+/// descent through nested quoted-triple components, since that is exactly what
+/// `ground_triple_pattern_to_value` recurses through before it errors).
+fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
+    if !matches!(term, TermPattern::Triple(_)) {
+        return false;
+    }
+    let mut vars = DetHashSet::default();
+    collect_term_pattern_vars(term, &mut vars);
+    !vars.is_empty()
+}
+
 /// Analyze `pattern` and every descendant (through its children and through any
 /// nested `EXISTS`/`NOT EXISTS`), memoizing each into `table`, and return the root's
 /// own [`NodeAnalysis`].
@@ -1417,7 +1441,12 @@ pub(crate) fn analyze_pattern(
                 certainly_bound: vars.clone(),
                 free_vars: vars,
                 has_stateful_builtin: false,
-                can_hard_error: false,
+                // A variable-bearing quoted-triple-term endpoint (`?s :p { ?x :q ?y }` as
+                // a path subject/object) raises `UnsupportedKind::QuotedTripleTermVariable`
+                // — see `path_endpoint_can_hard_error`'s doc — so an ENF law that erases a
+                // `Path` bearing one must not silently swallow that error along with it.
+                can_hard_error: path_endpoint_can_hard_error(subject)
+                    || path_endpoint_can_hard_error(object),
             }
         }
         GraphPattern::Values {
@@ -2031,7 +2060,7 @@ impl RowCollisionIntro {
 /// to produce, a FABRICATED answer neither this engine's `EXISTS` definition
 /// nor SPARQL's own permits. [`crate::expr::exists`] calls this function
 /// FIRST, before deciding between the two strategies, so a genuine collision
-/// hard-errors ([`EvalError::exists_row_collision`]) instead of silently
+/// hard-errors ([`EvalError::exists_scope_collision`]) instead of silently
 /// reaching either one.
 ///
 /// # Same scope-transparency rules as the parser's walk
@@ -2113,36 +2142,82 @@ pub(crate) fn exists_row_collision<'a>(
     }
 }
 
-/// [`exists_row_collision`]'s `Group` arm: walk the chain of `Extend` nodes
-/// the parser lowers each expression-valued `GROUP BY (expr AS ?v)` condition
-/// to (directly beneath `Group` — mirrors `find_group_extend_conflict`,
-/// private to the parser crate). Stops the instant a node is not one of these
-/// lowered `Extend`s: `variables` is `Group`'s full grouping-key list, so an
-/// `Extend` whose target is not in it is the top of the pattern actually
-/// being grouped, which this walker never descends into.
+/// [`exists_row_collision`]'s `Group` arm: find every `Extend` node reachable from
+/// `inner` through the SAME scope-transparent constructs `exists_row_collision`'s
+/// own top-level match already walks (`Join`/`Union`/`Lateral`/`LeftJoin` both
+/// operands, `Minus`'s LEFT operand only, and the unary `Filter`/`Graph`/
+/// `Service`/`OrderBy`/`Distinct`/`Reduced`/`Slice` wrappers), reporting a
+/// collision for the first one whose target is BOTH one of `Group`'s own
+/// grouping-key `variables` AND present in `row_scope`.
+///
+/// The parser only ever lowers each expression-valued `GROUP BY (expr AS ?v)`
+/// condition to a chain of `Extend`s directly beneath `Group` (mirrors
+/// `find_group_extend_conflict`, private to the parser crate) — an adjacent-only
+/// walk was exactly right for that shape, and is still what this one degrades to
+/// when `inner` really is such a chain. But this function is also the evaluator's
+/// OWN backstop for algebra that never went through the parser at all (a
+/// SHACL-AF pre-binding, an entailment-chase rewrite, or any other caller of the
+/// public algebra API) — see [`exists_row_collision`]'s own "Why this exists"
+/// section — and nothing stops hand-built algebra from putting a grouping-key
+/// `Extend` behind a `Join`/`Filter`/other transparent wrapper instead of
+/// directly beneath `Group` (`Group{ inner: Join(Extend(?x, ..), Bgp),
+/// variables: [?x] }`, unreachable from surface SPARQL but a legal
+/// [`GraphPattern`] value all the same). An adjacent-only walk misses that
+/// `Extend` entirely, silently admitting a genuine SEP-0007 Part 3 rebinding
+/// this function exists to catch.
+///
+/// Recurses into an `Extend`'s own `inner` regardless of whether ITS target is
+/// one of `variables` — a non-qualifying `Extend` (binding some OTHER value the
+/// pattern being grouped needs, not a grouping key) is not itself a collision
+/// candidate, but a further, DEEPER qualifying `Extend` may still be nested
+/// beneath it, and the same "keep searching past a non-match" discipline the
+/// binary/unary wrappers already need applies here too. `Bgp`/`Path`/
+/// `PropertyFunction`/`Values`/`Project`/a nested `Group` are the terminal
+/// case: the walk stops there, same as [`exists_row_collision`]'s own
+/// `Values`/`Project`/`Group` arms are handled separately (by that function, for
+/// ITS OWN scope) rather than folded into this narrower grouping-key search.
 fn find_group_extend_row_collision<'a>(
     inner: &'a GraphPattern,
     variables: &[Variable],
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
-    let GraphPattern::Extend {
-        inner: next,
-        variable,
-        ..
-    } = inner
-    else {
-        return None;
-    };
-    if !variables.contains(variable) {
-        return None;
-    }
-    find_group_extend_row_collision(next, variables, row_scope).or_else(|| {
-        if row_scope.contains(variable) {
-            Some((variable, RowCollisionIntro::Bind))
-        } else {
-            None
+    match inner {
+        GraphPattern::Extend {
+            inner: next,
+            variable,
+            ..
+        } => {
+            if variables.contains(variable) && row_scope.contains(variable) {
+                return Some((variable, RowCollisionIntro::Bind));
+            }
+            find_group_extend_row_collision(next, variables, row_scope)
         }
-    })
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            find_group_extend_row_collision(left, variables, row_scope)
+                .or_else(|| find_group_extend_row_collision(right, variables, row_scope))
+        }
+        GraphPattern::Minus { left, .. } => {
+            find_group_extend_row_collision(left, variables, row_scope)
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => {
+            find_group_extend_row_collision(inner, variables, row_scope)
+        }
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_)
+        | GraphPattern::Values { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Group { .. } => None,
+    }
 }
 
 /// Whether a `Filter` condition or `Extend`/`BIND` expression may run against the

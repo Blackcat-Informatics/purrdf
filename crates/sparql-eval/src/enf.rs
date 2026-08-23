@@ -747,7 +747,7 @@ mod effect_free_gate_tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{
         Expression, Function, GraphPattern, NamedNode, NamedNodePattern, OrderExpression,
-        TermPattern, TriplePattern, Variable,
+        PropertyPathExpression, TermPattern, TriplePattern, Variable,
     };
 
     use super::{Enf, normalize};
@@ -813,6 +813,19 @@ mod effect_free_gate_tests {
         assert!(
             matches!(err, EvalError::Remote(_)),
             "expected EvalError::Remote, got {err:?}"
+        );
+    }
+
+    fn assert_quoted_triple_term_variable_error(err: &EvalError) {
+        assert!(
+            matches!(
+                err,
+                EvalError::Unsupported {
+                    kind: Some(UnsupportedKind::QuotedTripleTermVariable),
+                    ..
+                }
+            ),
+            "expected UnsupportedKind::QuotedTripleTermVariable, got {err:?}"
         );
     }
 
@@ -1017,5 +1030,39 @@ mod effect_free_gate_tests {
                 .as_ref()
                 .expect_err("Law 1 must not delete a B carrying a non-SILENT SERVICE call"),
         );
+    }
+
+    /// Law 1, `B` is a `Path` whose OBJECT endpoint is a quoted-triple term bearing
+    /// a variable (`?o :p { ?x :q ?y }`): `crate::path::resolve_end` sends that
+    /// endpoint through `crate::convert::ground_term_pattern_to_value`, which
+    /// hard-errors (`UnsupportedKind::QuotedTripleTermVariable`) on the variable
+    /// component — see that function's doc, and `crate::governor::soundness::
+    /// path_endpoint_can_hard_error`'s. Before this fix, `GraphPattern::Path`'s
+    /// `can_hard_error` was hardcoded `false`, so `LeftJoin(A, B, None)` erased to
+    /// `A` and this hard error vanished along with `B` — an ENF-erased subtree
+    /// containing this shape must not swallow it.
+    #[test]
+    fn enf_law_respects_path_quoted_triple_hard_error() {
+        let right = GraphPattern::Path {
+            subject: tvar("o"),
+            path: PropertyPathExpression::NamedNode(nn(&format!("{EX}p"))),
+            object: TermPattern::Triple(Box::new(triple(tvar("x"), &format!("{EX}q"), tvar("y")))),
+        };
+        let inner = GraphPattern::LeftJoin {
+            left: bx(GraphPattern::Bgp { patterns: vec![] }),
+            right: bx(right),
+            expression: None,
+        };
+
+        let ds = ds();
+        assert_quoted_triple_term_variable_error(
+            &outside_result(&ds, &inner).expect_err("the Path must hard-error outside EXISTS too"),
+        );
+
+        let results = exists_results(&ds, &inner);
+        assert_eq!(results.len(), 1);
+        assert_quoted_triple_term_variable_error(results[0].as_ref().expect_err(
+            "Law 1 must not erase a B whose Path endpoint bears a quoted-triple-term variable",
+        ));
     }
 }

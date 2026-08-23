@@ -239,7 +239,7 @@ impl F32Fixture {
                     .targets
                     .iter()
                     .copied()
-                    .zip(self.row_values.chunks_exact(F32_DIMENSION)),
+                    .zip(self.row_values.as_chunks::<F32_DIMENSION>().0),
             )
             .expect("stream matrix");
         let (output, _) = writer.finish().expect("finish stream");
@@ -269,7 +269,7 @@ pub(crate) fn build_f32_fixture() -> F32Fixture {
             .targets
             .iter()
             .copied()
-            .zip(row_values.chunks_exact(F32_DIMENSION))
+            .zip(row_values.as_chunks::<F32_DIMENSION>().0)
             .map(|(target, values)| MatrixRow::new(target, values.to_vec()))
             .collect(),
         projections: family

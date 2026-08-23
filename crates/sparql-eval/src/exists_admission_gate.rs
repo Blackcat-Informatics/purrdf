@@ -1153,6 +1153,60 @@ mod tests {
         assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "BIND target");
     }
 
+    /// `EXISTS { GROUP BY (expr AS ?v) ... }` cannot be written this way from
+    /// surface SPARQL — the parser only ever lowers `GROUP BY (expr AS ?v)` to an
+    /// `Extend` directly beneath `Group` — so this is hand-built algebra, exactly
+    /// the shape `crate::governor::soundness::find_group_extend_row_collision`'s
+    /// own doc names as the reason that walk exists as a BACKSTOP (a SHACL-AF
+    /// pre-binding, an entailment-chase rewrite, or any other caller of the public
+    /// algebra API can hand the evaluator algebra the parser never validated):
+    /// `Group{ inner: Join(Extend(?s, "fixed"), Bgp), variables: [?s] }`. The
+    /// `Extend` introducing `?s` — the SAME variable name the outer row binds —
+    /// sits behind a `Join`, not directly beneath `Group`. Before this fix, the
+    /// adjacent-only walk (`let GraphPattern::Extend { .. } = inner else { return
+    /// None }`) stopped the instant it saw the `Join` and never found the
+    /// `Extend` at all, silently admitting a genuine SEP-0007 Part 3 rebinding
+    /// instead of hard-erroring.
+    #[test]
+    fn exists_hard_errors_on_non_adjacent_group_extend_collision() {
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let holder_a = b.intern_iri(&format!("{EX}holderA"));
+        let holder_b = b.intern_iri(&format!("{EX}holderB"));
+        let anything = b.intern_literal(RdfLiteral::simple("x"));
+        b.push_quad(holder_a, tag, anything, None);
+        b.push_quad(holder_b, tag, anything, None);
+        let ds = b.freeze().expect("freeze");
+
+        // `?s` is the OBJECT here, same reasoning as
+        // `exists_hard_errors_on_extend_collision_regardless_of_strategy`: the
+        // `Extend` target it collides with is a string literal, which cannot
+        // occupy a triple's subject position.
+        let outer = bgp1(tvar("w"), &format!("{EX}tag"), tvar("s"));
+        let inner = GraphPattern::Group {
+            inner: bx(GraphPattern::Join {
+                left: bx(GraphPattern::Extend {
+                    inner: bx(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
+                    variable: var("s"),
+                    expression: Expression::Literal(Literal::new_simple("fixed")),
+                }),
+                right: bx(GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                }),
+            }),
+            variables: vec![var("s")],
+            aggregates: Vec::new(),
+        };
+
+        // `Group` is never probe-admissible at all (`probe_admissible`'s own
+        // `Group { .. } => false` arm) — this asserts that blanket refusal, not
+        // anything specific to the collision this test is actually about.
+        assert_classified_inadmissible(&outer, &inner);
+        assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "BIND target");
+    }
+
     /// Build `SELECT ?x (EXISTS { inner } AS ?z) WHERE { ?x :tag ?w }` as raw
     /// [`purrdf_sparql_algebra`] algebra — no `SparqlParser` involved anywhere —
     /// wrap it in a [`PreparedQuery`] via [`PreparedQuery::rewritten`] (the exact
@@ -1891,6 +1945,15 @@ mod tests {
         // already computed correctly through the nested `EXISTS` (see
         // `analyze_expr`'s `Exists` arm) but read by nothing at the admission site —
         // this test pins that it is now consulted.
+        //
+        // A SECOND, independent bug lived in the NESTED site's OWN probe-vs-definition
+        // decision (`crate::expr::exists_use_probe`): the nested inner is itself
+        // UNCORRELATED (no free variables), which used to short-circuit straight to the
+        // once-shared memoized probe via `!correlated` alone, with `probe_admissible`
+        // (hence the stateful check `expr_probe_admissible`'s `FunctionCall` arm makes)
+        // never even consulted for THIS site's own decision. Now the uncorrelated
+        // shortcut also requires statelessness, so the nested site's `RAND()` correctly
+        // forces it onto the per-row definition too — see the ledger assertions below.
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}tag"));
         let q = b.intern_iri(&format!("{EX}q"));
@@ -1903,9 +1966,11 @@ mod tests {
         b.push_quad(sa, tag, anything, None);
         b.push_quad(sb, tag, anything, None);
         // Only `sA` has a `?s :q ?z` witness — `sB`'s row never reaches the nested
-        // EXISTS at all (its own `Bgp` is already empty), so the ledger assertion
-        // below (`ExistsDefinitionAnswered == 2`) also proves the per-row definition
-        // is charged even for a row whose inner never touches the stateful builtin.
+        // EXISTS at all (its own `Bgp` is already empty), so the OUTER-site component
+        // of the ledger assertion below (2 of the 3 `exists-definition-answered`
+        // charges) proves the per-row definition is charged even for a row whose inner
+        // never touches the stateful builtin; the THIRD charge is the nested site's own
+        // single reach, via `sA` alone.
         b.push_quad(sa, q, z1, None);
         b.push_quad(e, q, y1, None);
         let ds = b.freeze().expect("freeze");
@@ -1955,20 +2020,132 @@ mod tests {
             .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
             .sum();
         assert_eq!(
-            definition_answered, 2,
-            "both outer rows (`sA`, `sB`) must now take the per-row DEFINITION path for \
-             the OUTER FILTER EXISTS: {definition_answered} `exists-definition-answered` \
-             charges, expected 2 (one per outer row) — before the fix this counter reads \
-             0, because the outer body was (wrongly) classified admissible and the \
-             memoized probe path ran instead"
+            definition_answered, 3,
+            "both outer rows (`sA`, `sB`) must take the per-row DEFINITION path for \
+             the OUTER FILTER EXISTS (2), AND the NESTED EXISTS's own reach (via \
+             `sA`'s single `?z` witness) must ALSO take the definition path now (1) — \
+             it is uncorrelated but STATEFUL (`RAND()`), and `exists_use_probe`'s \
+             uncorrelated shortcut requires statelessness too (see that function's \
+             doc): {definition_answered} `exists-definition-answered` charges, \
+             expected 3 — before the OUTER admissibility fix this counter read 0 \
+             (the outer body was wrongly classified admissible); before the \
+             uncorrelated-shortcut fix it read 2 (the nested site still took the \
+             once-shared memoized probe despite being stateful)"
         );
         assert_eq!(
-            probe_answered, 1,
-            "the ONE surviving `exists-probe-answered` charge is the NESTED EXISTS's \
-             own — it is genuinely uncorrelated (no free variables at all), so it \
-             legitimately takes the probe path and is cached once; the OUTER site no \
-             longer contributes to this counter — before the fix this counter reads 2 \
-             (one for the outer site, one for the nested one)"
+            probe_answered, 0,
+            "no `exists-probe-answered` charge survives: the OUTER site never \
+             contributed to this counter (correlated, and inadmissible because its \
+             own nested `EXISTS` is stateful), and the NESTED site is uncorrelated \
+             but STATEFUL, so it no longer qualifies for the once-shared memoized \
+             probe either (`exists_use_probe`'s `!correlated && !stateful` \
+             shortcut): {probe_answered} `exists-probe-answered` charges, expected \
+             0 — before the uncorrelated-shortcut fix this counter read 1, the \
+             nested site's own once-shared probe evaluation"
+        );
+    }
+
+    /// A depth-2 nested `EXISTS`, BOTH levels forced onto the per-row DEFINITION
+    /// path (each carries a `MINUS`, which `probe_admissible` never serves), and the
+    /// level-2 inner correlated not on the top-level outer row but on `?z` — a
+    /// variable level-1's OWN `Bgp` binds, reachable only once level-1's substituted
+    /// copy is actually being evaluated. Before `EvalCtx::resolve_ledger_ordinal`
+    /// composed a miss into a retry against the NEXT map rather than aborting the
+    /// whole chase, level-2's own `ledger_source` (`PreparedExists::build`, keyed off
+    /// `pattern` = level-2's inner AS EMBEDDED in level-1's per-row substituted copy,
+    /// never the true static tree) resolved only one hop — to that embedded address,
+    /// itself still not a real plan address — and the SECOND hop needed to finish
+    /// landing on the real, ledger-indexed level-2 `Bgp` lived in level-1's OWN
+    /// substitution map, a DIFFERENT map than the one that produced the first hop.
+    /// The old strict `map.get(&address)?` aborted right there, so level-2's `Bgp`
+    /// read `fuel=0 rows=0`, its real charges folded into the enclosing `Filter`.
+    #[test]
+    fn nested_exists_definition_path_attributes_depth_two_ledger_charges() {
+        let mut b = RdfDatasetBuilder::new();
+        let tag = b.intern_iri(&format!("{EX}tag"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let r = b.intern_iri(&format!("{EX}r"));
+        let w = b.intern_literal(RdfLiteral::simple("w"));
+        let sa = b.intern_iri(&format!("{EX}sA"));
+        let za = b.intern_iri(&format!("{EX}zA"));
+        let va = b.intern_iri(&format!("{EX}vA"));
+        b.push_quad(sa, tag, w, None);
+        b.push_quad(sa, q, za, None);
+        b.push_quad(za, r, va, None);
+        // No `:nope1`/`:nope2` facts at all — both `MINUS` right operands are empty,
+        // so neither removes anything, and both witnesses (`?z`, `?v`) survive.
+        let ds = b.freeze().expect("freeze");
+
+        let query = format!(
+            "PREFIX : <{EX}> \
+             SELECT ?s WHERE {{ \
+               ?s :tag ?w \
+               FILTER EXISTS {{ \
+                 ?s :q ?z \
+                 MINUS {{ ?s :nope1 ?d1 }} \
+                 FILTER EXISTS {{ \
+                   ?z :r ?v \
+                   MINUS {{ ?z :nope2 ?d2 }} \
+                 }} \
+               }} \
+             }}"
+        );
+        let engine = crate::engine::NativeSparqlEngine::new();
+        let explanation = engine.explain_query(&ds, &query, None).expect("explain");
+        assert_eq!(
+            explanation
+                .evidence()
+                .consumed
+                .get(purrdf_core::ResourceDimension::AnswerRows),
+            1,
+            "the one outer row (`sA`) has both witnesses, so the query answers exactly \
+             one row: {}",
+            explanation.render()
+        );
+
+        let bgp_nodes: Vec<&crate::governor::ledger::NodeCharges> = explanation
+            .ledger()
+            .iter()
+            .filter(|node| node.label == "Bgp")
+            .collect();
+        // One `Bgp` per triple pattern: `?s :tag ?w`, `?s :q ?z`, `?s :nope1 ?d1`
+        // (level-1's `MINUS` right operand), `?z :r ?v` (the depth-2 nested
+        // `EXISTS`'s own body), and `?z :nope2 ?d2` (level-2's `MINUS` right
+        // operand).
+        assert_eq!(
+            bgp_nodes.len(),
+            5,
+            "one `Bgp` per triple pattern: {}",
+            explanation.render()
+        );
+        for node in &bgp_nodes {
+            // `fuel_total() > 0`, not `rows > 0`: two of these five (both `MINUS`
+            // right operands, scanning `:nope1`/`:nope2`) legitimately commit ZERO
+            // rows — no such facts exist in the fixture — so `rows == 0` is the
+            // CORRECT answer for them, not the folding bug. `fuel == 0` together
+            // with `rows == 0` is the folding bug's signature (the CLI's own
+            // `exists_counters_render_in_cli_explain` test names it the same way);
+            // `fuel > 0` alone already proves this node attributed its own
+            // `algebra-node-entry`/scan work rather than reading nothing at all.
+            assert!(
+                node.fuel_total() > 0,
+                "every `Bgp`, including the depth-2 nested `EXISTS`'s own `?z :r ?v` and \
+                 its `MINUS` right operand, must attribute its own real charges rather \
+                 than reading fuel=0 folded into the enclosing `Filter`: {node:?}\n\
+                 full explanation:\n{}",
+                explanation.render()
+            );
+        }
+        // The two witness-bearing `Bgp`s (`?s :q ?z`, `?z :r ?v`) must each commit
+        // exactly the one row the fixture provides — proving they are not just
+        // burning entry fuel but genuinely attributing their own scan's real output.
+        let nonzero_rows = bgp_nodes.iter().filter(|node| node.rows > 0).count();
+        assert_eq!(
+            nonzero_rows,
+            3,
+            "`?s :tag ?w`, `?s :q ?z`, and `?z :r ?v` each commit one row; the two \
+             `MINUS` right operands commit zero (no `:nope1`/`:nope2` facts exist): {}",
+            explanation.render()
         );
     }
 
