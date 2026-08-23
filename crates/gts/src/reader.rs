@@ -117,7 +117,7 @@ fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> b
         .enumerate()
         .filter(|(_, term)| term.kind == TermKind::Triple && term.reifier == Some(rid))
         .any(|(anchor, _)| {
-            [triple.0, triple.1, triple.2].into_iter().any(|component| {
+            <[usize; 3]>::from(triple).into_iter().any(|component| {
                 let mut seen = HashSet::new();
                 term_depends_on_anchor(graph, component, anchor, (rid, triple), &mut seen)
             })

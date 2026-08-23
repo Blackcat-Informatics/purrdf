@@ -760,6 +760,10 @@ impl GovernorState {
         }
 
         let slot = &self.consumed[Self::slot(dimension)];
+        // `try_update`, the non-deprecated name for this atomic, postdates the
+        // workspace MSRV floor, so the original name is kept and its deprecation
+        // suppressed at this one call site.
+        #[allow(deprecated)]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))
@@ -987,6 +991,10 @@ impl GovernorState {
         };
 
         let slot = &self.consumed[Self::slot(dimension)];
+        // `try_update`, the non-deprecated name for this atomic, postdates the
+        // workspace MSRV floor, so the original name is kept and its deprecation
+        // suppressed at this one call site.
+        #[allow(deprecated)]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))

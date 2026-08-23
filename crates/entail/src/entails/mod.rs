@@ -874,7 +874,7 @@ fn blank_labels(pats: &[PatTriple]) -> BTreeSet<String> {
                 out.insert(label.clone());
             }
             Pat::Triple(inner) => {
-                for position in inner.iter() {
+                for position in &**inner {
                     walk(position, out);
                 }
             }

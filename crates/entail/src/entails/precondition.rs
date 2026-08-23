@@ -360,7 +360,7 @@ fn axiomatic_terms(pats: &[PatTriple]) -> Vec<String> {
                 found.push(iri.clone());
             }
             Pat::Triple(inner) => {
-                for position in inner.iter() {
+                for position in &**inner {
                     walk(position, found);
                 }
             }
