@@ -1349,6 +1349,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "purrdf-core",
  "rayon",
+ "sha1",
  "smallvec",
 ]
 

@@ -1553,12 +1553,17 @@ mod tests {
     impl StopSignal for AfterNPolls {
         fn stopped(&self) -> bool {
             use std::sync::atomic::Ordering;
-            self.0
+            // `try_update`, the non-deprecated name a newer toolchain prefers for this
+            // API, postdates this workspace's MSRV floor, so the original `fetch_update`
+            // name is kept and its deprecation suppressed at this single call site.
+            #[allow(deprecated)]
+            let previous = self
+                .0
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                     Some(left.saturating_sub(1))
                 })
-                .unwrap_or(0)
-                == 0
+                .unwrap_or(0);
+            previous == 0
         }
     }
 

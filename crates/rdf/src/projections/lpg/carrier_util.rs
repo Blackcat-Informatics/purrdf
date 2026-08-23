@@ -234,7 +234,7 @@ pub(super) fn hex_decode(
         .at_path(path));
     }
     let mut bytes = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().chunks_exact(2) {
+    for pair in value.as_bytes().as_chunks::<2>().0 {
         let high = hex_nibble(pair[0]).ok_or_else(|| {
             ProjectionError::syntax(format!("{description} contains a non-lowercase-hex digit"))
                 .at_path(path)

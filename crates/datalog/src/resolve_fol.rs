@@ -28,27 +28,44 @@
 //! [`FolOutcome::truth_of`] is the three-valued verdict a caller reads it back
 //! through.
 //!
-//! # Every `True` answer carries a checkable proof
+//! # Every `True` answer carries a caller-reproducible, checkable proof
 //!
-//! [`FolProof`] is deliberately not hash-consed into the term arena and does not
-//! carry a content-addressed rule identity — unlike its upstream ancestor. This
-//! crate already has an answer to "a small, independently checkable proof
-//! structure that names its rule by a plain index": [`crate::proof::ProofArena`].
-//! There is no RDF-projection need here that would justify a digest-addressed
-//! rule name, so [`FolProof::ByRule`] simply carries a `usize` rule index, and
 //! [`check_fol_proof`] RE-DERIVES the stated conclusion from the premises and the
 //! named clause exactly as [`crate::proof::ProofArena::check`] does — a step the
 //! rule does not license fails to check however well-formed the record of it is.
 //!
-//! # No caller-supplied sort context
+//! Beyond that, a [`FolProof`] carries a **content-addressed rule identity** and
+//! splits an unconditional fact ([`FolProof::Assert`]) from a conditional
+//! derivation ([`FolProof::ByRule`]), mirroring [`crate::proof::ProofArena`]'s own
+//! `Axiom`/`ByRule` split. The rule identity is [`clause_identity`]: a length-prefixed
+//! [`canon_sorted`] encoding of the clause TEMPLATE (head plus polarity-tagged
+//! body literals), so it is stable across arenas and independent of the run's
+//! metavariable numbering — the stable thing a plain authored `usize` index is
+//! not. [`check_fol_proof`] re-derives that identity from the cited clause and
+//! rejects a proof whose carried identity does not match, so the address is a
+//! CHECKED invariant, never a decorative field.
 //!
-//! [`crate::unify::SortContext`] threads an order-sorted discipline through
-//! unification, but nothing in this crate currently needs order-sorted
-//! GOAL-DIRECTED resolution, so every unification this module performs uses
-//! [`crate::unify::SortContext::default`] internally — a deliberate scope
-//! reduction versus an upstream that threaded a caller-supplied context through.
-//! A future caller that needs one can extend [`FolProgram`]; today, doing so
-//! would only be plumbing nobody exercises.
+//! From those two exposed fields a caller reconstructs a **derivation identity**
+//! byte-for-byte through the published recipe in [`derivation_id`]: the SHA-1
+//! Merkle fold `sha1(rule_identity ++ "\n" ++ sorted(child identities))` over an
+//! [`FolProof::ByRule`], bottoming out at `sha1(rule_identity ++ "\n" ++ content
+//! key)` for an [`FolProof::Assert`]. A consumer that keys its own cross-lane
+//! derivation IDs on that digest reproduces purrdf's proof identity exactly; the
+//! digest is the content address, and minting an IRI from it is caller-supplied
+//! vocabulary this crate never learns.
+//!
+//! # Caller-supplied order-sorted resolution
+//!
+//! [`resolve_fol`] threads a caller [`crate::unify::SortContext`] and a program's
+//! per-metavariable [`FolProgram::meta_sorts`] through grounding, so an
+//! order-sorted discipline reaches GOAL-DIRECTED resolution: a clause fires only
+//! where every binding respects its variable's declared sort, and each declared
+//! sort is folded into [`canon`]'s tabling key (via [`canon_sorted`]) so two
+//! otherwise-identical call patterns that differ only by a metavariable's sort
+//! table SEPARATELY. When a program declares no sorts and the caller passes
+//! [`crate::unify::SortContext::default`], every key and every unification is
+//! byte-identical to the sort-blind path — the sort machinery costs an empty
+//! program nothing.
 //!
 //! # The bridge to this crate's own Datalog IR
 //!
@@ -61,6 +78,8 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+
+use sha1::{Digest, Sha1};
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::id::{MetaId, NodeId};
@@ -112,7 +131,8 @@ pub struct FolClause {
     pub rule: usize,
 }
 
-/// A program: a clause set, a goal atom, and the goal's own named variables.
+/// A program: a clause set, a goal atom, the goal's own named variables, and each
+/// metavariable's declared sort for order-sorted resolution.
 #[derive(Debug, Clone)]
 pub struct FolProgram {
     /// The clause set, in authored order (an authored [`FolClause::rule`] index
@@ -125,6 +145,18 @@ pub struct FolProgram {
     /// substitution be projected back to named bindings rather than raw
     /// [`NodeId`]s.
     pub goal_vars: Vec<(NodeId, String)>,
+    /// Each metavariable's declared sort, keyed by the AUTHORED [`MetaId`] it
+    /// appears under in a clause or the goal, mapped to the [`NodeId`] naming its
+    /// sort in the caller's [`crate::unify::SortContext`].
+    ///
+    /// A metavariable absent from this map is UNSORTED — it binds anything, and
+    /// contributes nothing to a tabling key. An EMPTY map is exactly the
+    /// sort-blind program: every key and every unification is byte-identical to a
+    /// resolution that never consulted a sort, so an ordinary Datalog caller pays
+    /// the order-sorted machinery no cost at all. A clause's authored metavariable
+    /// is freshened per firing, and its declared sort travels to the fresh
+    /// metavariable so the discipline follows the clause into every instantiation.
+    pub meta_sorts: BTreeMap<MetaId, NodeId>,
 }
 
 /// A three-valued well-founded-semantics verdict.
@@ -142,23 +174,88 @@ pub enum Truth {
 
 /// A proof tree over [`FolClause`]s.
 ///
-/// Not hash-consed into the term arena and not content-addressed by digest — see
-/// the [module docs](self) for why this deliberately differs from its upstream
-/// ancestor: this crate already has [`crate::proof::ProofArena`] for that job,
-/// and there is no RDF-projection need here to justify duplicating it.
+/// Each node carries both a plain authored `rule` index (what [`check_fol_proof`]
+/// re-derives against) and a content-addressed `rule_identity` (what a caller
+/// reproduces a derivation identity from — see [`clause_identity`] and
+/// [`derivation_id`]). The [`Self::Assert`]/[`Self::ByRule`] split mirrors
+/// [`crate::proof::ProofArena`]'s own `Axiom`/`ByRule` split:
+/// an unconditional fact is an assertion, a conditional consequence is a rule
+/// firing. See the [module docs](self).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FolProof {
+    /// `goal` is asserted directly by the UNCONDITIONAL clause at `rule` — a
+    /// clause with no positive AND no negative body literals. A proof leaf.
+    Assert {
+        /// The producing clause's authored index.
+        rule: usize,
+        /// The producing clause's content-addressed identity — see
+        /// [`clause_identity`]. Re-derived and matched, never trusted, by
+        /// [`check_fol_proof`].
+        rule_identity: String,
+        /// The STATED conclusion — compared against, never trusted, by
+        /// [`check_fol_proof`].
+        goal: NodeId,
+    },
     /// `goal` follows from `premises` (one per POSITIVE body literal, in
     /// authored body order) by the clause at `rule`.
     ByRule {
         /// The producing clause's authored index.
         rule: usize,
+        /// The producing clause's content-addressed identity — see
+        /// [`clause_identity`]. Re-derived and matched, never trusted, by
+        /// [`check_fol_proof`].
+        rule_identity: String,
         /// The STATED conclusion — compared against, never trusted, by
         /// [`check_fol_proof`].
         goal: NodeId,
         /// One proof per positive body literal, in authored body order.
         premises: Vec<Self>,
     },
+}
+
+impl FolProof {
+    /// Whether this proof node is an unconditional [`Self::Assert`] leaf.
+    #[must_use]
+    pub fn is_assert(&self) -> bool {
+        matches!(self, Self::Assert { .. })
+    }
+
+    /// The producing clause's authored index, regardless of variant.
+    #[must_use]
+    pub fn rule(&self) -> usize {
+        match self {
+            Self::Assert { rule, .. } | Self::ByRule { rule, .. } => *rule,
+        }
+    }
+
+    /// The producing clause's content-addressed identity, regardless of variant —
+    /// see [`clause_identity`].
+    #[must_use]
+    pub fn rule_identity(&self) -> &str {
+        match self {
+            Self::Assert { rule_identity, .. } | Self::ByRule { rule_identity, .. } => {
+                rule_identity
+            }
+        }
+    }
+
+    /// The STATED conclusion this proof is of, regardless of variant.
+    #[must_use]
+    pub fn goal(&self) -> NodeId {
+        match self {
+            Self::Assert { goal, .. } | Self::ByRule { goal, .. } => *goal,
+        }
+    }
+
+    /// This node's positive premises, in authored body order (empty for an
+    /// [`Self::Assert`]).
+    #[must_use]
+    pub fn premises(&self) -> &[Self] {
+        match self {
+            Self::Assert { .. } => &[],
+            Self::ByRule { premises, .. } => premises,
+        }
+    }
 }
 
 /// One projected answer: the goal's named variables bound to rendered values,
@@ -308,14 +405,41 @@ fn frame(out: &mut String, s: &str) {
 /// [`crate::proof::ProofArena::encode`]'s wire discipline, so distinct shapes can
 /// never collide through concatenation ambiguity.
 pub fn canon(dag: &TermDag, node: NodeId) -> String {
+    canon_sorted(dag, node, &|_| None)
+}
+
+/// [`canon`], but each metavariable's DECLARED SORT — as reported by `sort_of` —
+/// is folded into the key.
+///
+/// Right after a metavariable's first-visit index frame, if `sort_of` gives it a
+/// sort, a distinct `S` frame carrying that sort's own [`canon`] is appended, so
+/// two otherwise-identical patterns that differ only in a metavariable's sort
+/// produce DIFFERENT keys — the order-sorted call patterns table apart. The `S`
+/// tag is deliberately outside the node-tag alphabet (`L`/`F`/`M`/`B`/`A`/`D`), so
+/// it can never be confused with a following sibling node. When `sort_of` returns
+/// `None` for every metavariable — the sort-blind case, and exactly what [`canon`]
+/// passes — no `S` frame is ever emitted and the bytes are IDENTICAL to a
+/// resolution that never knew about sorts.
+#[must_use]
+pub fn canon_sorted(
+    dag: &TermDag,
+    node: NodeId,
+    sort_of: &impl Fn(MetaId) -> Option<NodeId>,
+) -> String {
     let mut numbering: Vec<MetaId> = Vec::new();
     let mut out = String::new();
-    canon_at(dag, node, &mut numbering, &mut out);
+    canon_sorted_at(dag, node, sort_of, &mut numbering, &mut out);
     out
 }
 
-/// The recursive core of [`canon`].
-fn canon_at(dag: &TermDag, node: NodeId, numbering: &mut Vec<MetaId>, out: &mut String) {
+/// The recursive core of [`canon_sorted`].
+fn canon_sorted_at(
+    dag: &TermDag,
+    node: NodeId,
+    sort_of: &impl Fn(MetaId) -> Option<NodeId>,
+    numbering: &mut Vec<MetaId>,
+    out: &mut String,
+) {
     match dag.data(node) {
         NodeData::Leaf(sym) => {
             out.push('L');
@@ -335,6 +459,10 @@ fn canon_at(dag: &TermDag, node: NodeId, numbering: &mut Vec<MetaId>, out: &mut 
             };
             out.push('M');
             frame(out, &index.to_string());
+            if let Some(sort) = sort_of(*m) {
+                out.push('S');
+                frame(out, &canon(dag, sort));
+            }
         }
         NodeData::Bound { debruijn, slot } => {
             out.push('B');
@@ -344,21 +472,55 @@ fn canon_at(dag: &TermDag, node: NodeId, numbering: &mut Vec<MetaId>, out: &mut 
         NodeData::App { op, args } => {
             out.push('A');
             frame(out, &args.len().to_string());
-            canon_at(dag, *op, numbering, out);
+            canon_sorted_at(dag, *op, sort_of, numbering, out);
             for &arg in args {
-                canon_at(dag, arg, numbering, out);
+                canon_sorted_at(dag, arg, sort_of, numbering, out);
             }
         }
         NodeData::Binder { op, sorts, body } => {
             out.push('D');
             frame(out, &sorts.len().to_string());
-            canon_at(dag, *op, numbering, out);
+            canon_sorted_at(dag, *op, sort_of, numbering, out);
             for &sort in sorts {
-                canon_at(dag, sort, numbering, out);
+                canon_sorted_at(dag, sort, sort_of, numbering, out);
             }
-            canon_at(dag, *body, numbering, out);
+            canon_sorted_at(dag, *body, sort_of, numbering, out);
         }
     }
+}
+
+/// The content-addressed identity of a clause TEMPLATE: a length-prefixed,
+/// sort-aware [`canon_sorted`] encoding of the head followed by every
+/// polarity-tagged body literal, all numbered under ONE shared metavariable
+/// numbering so a variable occurring in both head and body is identified as the
+/// same variable.
+///
+/// This is the stable name a plain authored `usize` index is not: it depends only
+/// on the clause's structure and its variables' declared sorts, never on the
+/// arena, the run, or the order clauses were authored in. Two clauses with
+/// identical text but different `meta_sorts` are DIFFERENT order-sorted clauses
+/// and get different identities; the sort signature is part of what the clause IS.
+/// The resolver stamps this onto every [`FolProof`] node and [`check_fol_proof`]
+/// re-derives it from the cited clause and rejects a mismatch.
+#[must_use]
+pub fn clause_identity(
+    dag: &TermDag,
+    clause: &FolClause,
+    meta_sorts: &BTreeMap<MetaId, NodeId>,
+) -> String {
+    let sort_of = |m: MetaId| meta_sorts.get(&m).copied();
+    let mut numbering: Vec<MetaId> = Vec::new();
+    let mut out = String::new();
+    canon_sorted_at(dag, clause.head, &sort_of, &mut numbering, &mut out);
+    frame(&mut out, &clause.body.len().to_string());
+    for lit in &clause.body {
+        match lit {
+            FolLit::Pos(_) => out.push('+'),
+            FolLit::Neg(_) => out.push('-'),
+        }
+        canon_sorted_at(dag, lit.atom(), &sort_of, &mut numbering, &mut out);
+    }
+    out
 }
 
 // ── The tabling engine (private) ────────────────────────────────────────────────
@@ -397,13 +559,38 @@ struct Engine {
     exhausted: bool,
     /// Whether a negative body literal ever had no safe selection order.
     floundered: bool,
+    /// Every metavariable's declared sort, accumulated across the run: the goal's
+    /// authored metavariables (seeded from [`FolProgram::meta_sorts`]) and every
+    /// clause firing's FRESH metavariables (declared when the clause is freshened).
+    ///
+    /// [`MetaId`]s are globally unique within an arena, so one flat map is a
+    /// sufficient source of truth for both the sort folded into a call key
+    /// ([`canon_sorted`]) and the sort declared into a firing's [`Subst`] before
+    /// [`unify::unify_sorted`]. Empty exactly when the program declares no sorts,
+    /// in which case every key and every unification is byte-identical to the
+    /// sort-blind path.
+    meta_sort: BTreeMap<MetaId, NodeId>,
 }
 
 impl Engine {
     /// Register `atom` as demanded, returning its call key. A call already
     /// demanded under the same key keeps its ORIGINAL call node.
-    fn register_call(&mut self, dag: &TermDag, atom: NodeId) -> String {
-        let key = canon(dag, atom);
+    ///
+    /// The key folds in each metavariable's declared sort (from [`Self::meta_sort`]),
+    /// so two call patterns differing only in a variable's sort table apart.
+    ///
+    /// A sort PROPAGATED onto one of `atom`'s metavariables during the firing that
+    /// demanded it — e.g. a goal variable that inherited a clause variable's sort
+    /// through unification — lives only in that firing's `subst`; it is persisted
+    /// into the run-wide registry here so a later round grounding this same call
+    /// declares it too, and folded into the key.
+    fn register_call(&mut self, dag: &TermDag, atom: NodeId, subst: &Subst) -> String {
+        for &meta in dag.free_meta(atom) {
+            if let Some(sort) = subst.meta_sort(meta) {
+                self.meta_sort.entry(meta).or_insert(sort);
+            }
+        }
+        let key = canon_sorted(dag, atom, &|m| self.meta_sort.get(&m).copied());
         if let Entry::Vacant(slot) = self.calls.entry(key.clone()) {
             slot.insert(atom);
             // A NEW demanded call is work. Charging only answer unifications leaves this
@@ -419,6 +606,20 @@ impl Engine {
     fn record_answer(&mut self, call_key: &str, atom_key: String, atom: NodeId) {
         let table = self.tables.entry(call_key.to_owned()).or_default();
         table.entry(atom_key).or_insert(atom);
+    }
+
+    /// Declare, into `subst`, the known sort of every free metavariable of `node`,
+    /// so a subsequent [`unify::unify_sorted`] enforces the order-sorted discipline
+    /// for those variables. A no-op when the program declared no sorts.
+    fn declare_known_sorts(&self, dag: &TermDag, subst: &mut Subst, node: NodeId) {
+        if self.meta_sort.is_empty() {
+            return;
+        }
+        for &meta in dag.free_meta(node) {
+            if let Some(&sort) = self.meta_sort.get(&meta) {
+                subst.declare_meta_sort(meta, sort);
+            }
+        }
     }
 }
 
@@ -478,20 +679,33 @@ fn may_unify(dag: &TermDag, head: NodeId, call: NodeId) -> bool {
 }
 
 /// Freshen `clause`: mint a brand-new metavariable for every distinct
-/// metavariable its head and body mention, and return the renamed head and body.
+/// metavariable its head and body mention, and return the renamed head and body,
+/// plus the fresh metavariables' declared sorts.
 ///
 /// Every clause firing needs its own fresh variables — two simultaneous uses of
 /// the same authored clause must not share a binding just because they share
-/// authored variable names.
-fn freshen_clause(dag: &mut TermDag, clause: &FolClause) -> (NodeId, Vec<FolLit>) {
+/// authored variable names. An authored metavariable's declared sort (looked up
+/// in `meta_sorts`) travels to its fresh counterpart, returned as `(fresh, sort)`
+/// pairs so the caller can declare them into the firing's substitution before
+/// unifying — this is how the order-sorted discipline follows a clause into every
+/// instantiation. The list is empty when the clause mentions no sorted variable.
+fn freshen_clause(
+    dag: &mut TermDag,
+    clause: &FolClause,
+    meta_sorts: &BTreeMap<MetaId, NodeId>,
+) -> (NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>) {
     let mut nodes: Vec<NodeId> = vec![clause.head];
     nodes.extend(clause.body.iter().map(|lit| lit.atom()));
     let metas = distinct_metas(dag, &nodes);
 
     let mut renaming = Subst::new();
+    let mut sort_decls: Vec<(MetaId, NodeId)> = Vec::new();
     for old in metas {
-        let (_, fresh) = dag.fresh_meta();
+        let (fresh_id, fresh) = dag.fresh_meta();
         renaming.bind_renaming(old, fresh);
+        if let Some(&sort) = meta_sorts.get(&old) {
+            sort_decls.push((fresh_id, sort));
+        }
     }
 
     let head = unify::apply(dag, &renaming, clause.head);
@@ -503,7 +717,7 @@ fn freshen_clause(dag: &mut TermDag, clause: &FolClause) -> (NodeId, Vec<FolLit>
             FolLit::Neg(atom) => FolLit::Neg(unify::apply(dag, &renaming, *atom)),
         })
         .collect();
-    (head, body)
+    (head, body, sort_decls)
 }
 
 /// Whether `atom` is fully ground under `s` — i.e. has no remaining free
@@ -527,19 +741,32 @@ fn is_ground(dag: &mut TermDag, s: &Subst, atom: NodeId) -> bool {
 /// the well-founded fixpoint): selection continues over the remaining literals
 /// with the SAME substitution. If no remaining literal is safe, the clause
 /// floundered.
+/// The two invariants carried unchanged through [`solve_body`]'s recursion: the
+/// caller's order-sorted context and the step-budget ceiling. Bundling them keeps
+/// the recursive call's argument list within reach (it threads the mutable search
+/// state — `selected`, `subst`, `out` — separately, which genuinely changes per
+/// frame).
+#[derive(Clone, Copy)]
+struct SolveLimits<'a> {
+    /// The caller's order-sorted context.
+    ctx: &'a SortContext,
+    /// The grounding step-budget ceiling this search is charged against.
+    cap: u64,
+}
+
 fn solve_body(
     dag: &mut TermDag,
     engine: &mut Engine,
     body: &[FolLit],
     selected: &mut [bool],
     subst: &Subst,
-    cap: u64,
+    limits: SolveLimits<'_>,
     out: &mut Vec<Subst>,
 ) {
     // THE SEARCH IS WHERE THE WORK IS. Charging only committed rules bounds the OUTPUT
     // and leaves the enumeration that produces it unbounded, which is how a fully-variable
     // rule head turns one round into a cross-product over every constant in the program.
-    if engine.steps >= cap {
+    if engine.steps >= limits.cap {
         engine.exhausted = true;
         return;
     }
@@ -569,30 +796,29 @@ fn solve_body(
     match &body[i] {
         FolLit::Pos(atom) => {
             let instantiated = unify::apply(dag, subst, *atom);
-            let call_key = engine.register_call(dag, instantiated);
+            let call_key = engine.register_call(dag, instantiated, subst);
             let answers: Vec<NodeId> = engine
                 .tables
                 .get(&call_key)
                 .map(|table| table.values().copied().collect())
                 .unwrap_or_default();
-            let ctx = SortContext::default();
             for answer in answers {
-                if engine.steps >= cap {
+                if engine.steps >= limits.cap {
                     engine.exhausted = true;
                     break;
                 }
                 engine.steps += 1;
                 let mut candidate = subst.clone();
                 if matches!(
-                    unify::unify_sorted(dag, instantiated, answer, &mut candidate, &ctx),
+                    unify::unify_sorted(dag, instantiated, answer, &mut candidate, limits.ctx),
                     Unified::Ok
                 ) {
-                    solve_body(dag, engine, body, selected, &candidate, cap, out);
+                    solve_body(dag, engine, body, selected, &candidate, limits, out);
                 }
             }
         }
         FolLit::Neg(_) => {
-            solve_body(dag, engine, body, selected, subst, cap, out);
+            solve_body(dag, engine, body, selected, subst, limits, out);
         }
     }
     selected[i] = false;
@@ -618,6 +844,7 @@ fn expand_round(
     dag: &mut TermDag,
     engine: &mut Engine,
     program: &FolProgram,
+    ctx: &SortContext,
     cap: u64,
 ) -> Vec<Produced> {
     let mut produced = Vec::new();
@@ -640,11 +867,20 @@ fn expand_round(
             if !may_unify(dag, clause.head, call_node) {
                 continue;
             }
-            let (head, body) = freshen_clause(dag, clause);
+            let (head, body, sort_decls) = freshen_clause(dag, clause, &program.meta_sorts);
+            // The fresh metavariables' sorts join the run-wide registry, so a later call
+            // key over one of them folds its sort in, exactly as its home firing did.
+            for &(meta, sort) in &sort_decls {
+                engine.meta_sort.insert(meta, sort);
+            }
             let mut base = Subst::new();
-            let ctx = SortContext::default();
+            // Both the freshened clause head and the demanded call may carry sorted
+            // metavariables; declaring both sides' known sorts before unifying is what lets
+            // an order-sorted clash prune a firing that a sort-blind unifier would accept.
+            engine.declare_known_sorts(dag, &mut base, head);
+            engine.declare_known_sorts(dag, &mut base, call_node);
             if !matches!(
-                unify::unify_sorted(dag, head, call_node, &mut base, &ctx),
+                unify::unify_sorted(dag, head, call_node, &mut base, ctx),
                 Unified::Ok
             ) {
                 continue;
@@ -658,7 +894,7 @@ fn expand_round(
                 &body,
                 &mut selected,
                 &base,
-                cap,
+                SolveLimits { ctx, cap },
                 &mut solutions,
             );
 
@@ -727,8 +963,23 @@ fn ground_rule_key(
 /// round that only demands a new call must still be given one more pass, since
 /// a recursive rule's positive premise can only be satisfied once that call has
 /// itself accumulated an answer. Returns `true` if the resolution floundered.
-fn ground(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram, budget: FolBudget) -> bool {
-    let goal_key = canon(dag, program.goal);
+fn ground(
+    dag: &mut TermDag,
+    engine: &mut Engine,
+    program: &FolProgram,
+    ctx: &SortContext,
+    budget: FolBudget,
+) -> bool {
+    // Seed the goal's own metavariables' sorts into the run-wide registry FIRST, so the
+    // goal call is both keyed (`canon_sorted`) and later unified (`declare_known_sorts`)
+    // under the same sort — otherwise a sorted goal would register under one key and be
+    // looked up under another, and silently find none of its own answers.
+    for &meta in dag.free_meta(program.goal) {
+        if let Some(&sort) = program.meta_sorts.get(&meta) {
+            engine.meta_sort.insert(meta, sort);
+        }
+    }
+    let goal_key = canon_sorted(dag, program.goal, &|m| engine.meta_sort.get(&m).copied());
     engine.calls.entry(goal_key).or_insert(program.goal);
 
     loop {
@@ -739,7 +990,7 @@ fn ground(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram, budget: 
             engine.exhausted = true;
             return false;
         }
-        let produced = expand_round(dag, engine, program, budget.max_steps);
+        let produced = expand_round(dag, engine, program, ctx, budget.max_steps);
         if engine.floundered {
             return true;
         }
@@ -889,6 +1140,7 @@ fn well_founded(
 fn build_proofs(
     dag: &TermDag,
     engine: &Engine,
+    program: &FolProgram,
     w: &BTreeSet<String>,
     not_false: &BTreeSet<String>,
 ) -> BTreeMap<String, FolProof> {
@@ -921,14 +1173,29 @@ fn build_proofs(
             if !all_ready {
                 continue;
             }
-            proofs.insert(
-                head_key,
+            let rule_identity =
+                clause_identity(dag, &program.clauses[rule.rule], &program.meta_sorts);
+            // An UNCONDITIONAL fact — no positive AND no negative literal — is an
+            // `Assert` leaf. A clause with ANY literal, including a negation-only
+            // guard (`pos` empty, `neg` non-empty), is a `ByRule`, so its negation
+            // is never laundered into an unconditional assertion. The gate is
+            // therefore on the literal counts, NOT on `premises.len()` (which is the
+            // positive arity and would wrongly call a neg-only guard an assertion).
+            let proof = if rule.pos.is_empty() && rule.neg.is_empty() {
+                FolProof::Assert {
+                    rule: rule.rule,
+                    rule_identity,
+                    goal: rule.head,
+                }
+            } else {
                 FolProof::ByRule {
                     rule: rule.rule,
+                    rule_identity,
                     goal: rule.head,
                     premises,
-                },
-            );
+                }
+            };
+            proofs.insert(head_key, proof);
             changed = true;
         }
         if !changed {
@@ -945,6 +1212,7 @@ fn project(
     dag: &mut TermDag,
     engine: &Engine,
     program: &FolProgram,
+    ctx: &SortContext,
     w: &BTreeSet<String>,
     proofs: &BTreeMap<String, FolProof>,
 ) -> Vec<FolBinding> {
@@ -960,9 +1228,12 @@ fn project(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (atom_key, atom) in candidates {
         let mut subst = Subst::new();
-        let ctx = SortContext::default();
+        // A goal metavariable's declared sort must gate projection too: an answer
+        // whose ground value violates the goal variable's sort is not an answer to
+        // THIS (sorted) goal.
+        engine.declare_known_sorts(dag, &mut subst, program.goal);
         if !matches!(
-            unify::unify_sorted(dag, program.goal, atom, &mut subst, &ctx),
+            unify::unify_sorted(dag, program.goal, atom, &mut subst, ctx),
             Unified::Ok
         ) {
             continue;
@@ -1010,7 +1281,25 @@ fn project(
 /// checked against `MAX_BODY_LITERALS` BEFORE any grounding happens, so a
 /// program this module cannot represent is refused up front rather than after
 /// partial work.
-pub fn resolve_fol(dag: &mut TermDag, program: &FolProgram, budget: &FolBudget) -> FolControl {
+///
+/// `ctx` is the caller's order-sorted [`crate::unify::SortContext`]; paired with
+/// the program's [`FolProgram::meta_sorts`] it makes every unification
+/// sort-aware and folds each declared sort into the tabling key. Pass
+/// [`crate::unify::SortContext::default`] with an empty `meta_sorts` for ordinary
+/// sort-blind resolution — the result is then byte-identical to a resolver that
+/// never knew about sorts.
+///
+/// A caller that needs order-sorted resolution to be COMPLETE (not merely sound)
+/// should first confirm its sort order is a meet-semilattice via
+/// [`crate::unify::SortOrder::validate`]: an order with an AMBIGUOUS greatest
+/// lower bound resolves soundly but may prune a unification a lattice would
+/// complete (the pinned clash-on-ambiguity contract).
+pub fn resolve_fol(
+    dag: &mut TermDag,
+    program: &FolProgram,
+    ctx: &SortContext,
+    budget: &FolBudget,
+) -> FolControl {
     for (index, clause) in program.clauses.iter().enumerate() {
         if clause.body.len() > MAX_BODY_LITERALS {
             return FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide {
@@ -1021,7 +1310,7 @@ pub fn resolve_fol(dag: &mut TermDag, program: &FolProgram, budget: &FolBudget) 
     }
 
     let mut engine = Engine::default();
-    let floundered = ground(dag, &mut engine, program, *budget);
+    let floundered = ground(dag, &mut engine, program, ctx, *budget);
     if floundered || engine.floundered {
         return FolControl::Unsupported(FolUnsupported::Floundering);
     }
@@ -1032,8 +1321,8 @@ pub fn resolve_fol(dag: &mut TermDag, program: &FolProgram, budget: &FolBudget) 
     } else {
         FolStatus::Complete
     };
-    let proofs = build_proofs(dag, &engine, &true_set, &not_false);
-    let answers = project(dag, &engine, program, &true_set, &proofs);
+    let proofs = build_proofs(dag, &engine, program, &true_set, &not_false);
+    let answers = project(dag, &engine, program, ctx, &true_set, &proofs);
 
     FolControl::Decided(Box::new(FolOutcome {
         answers,
@@ -1093,58 +1382,95 @@ pub enum FolProofError {
         /// The unlicensed literal's position in the clause's AUTHORED body.
         position: usize,
     },
+    /// The proof's carried content-addressed [`clause_identity`] does not match
+    /// the one re-derived from the cited clause — the content address is a checked
+    /// invariant, so a forged or stale identity is rejected even when the
+    /// re-derivation itself would otherwise succeed.
+    RuleIdentityMismatch {
+        /// The cited clause index.
+        rule: usize,
+    },
+    /// A [`FolProof::Assert`] cites a clause that HAS a body: an assertion is only
+    /// valid for an UNCONDITIONAL clause (no positive and no negative literal).
+    AssertHasBody {
+        /// The cited clause index.
+        rule: usize,
+    },
 }
 
 /// Independently check `proof` against `clauses`, RE-DERIVING its conclusion
 /// rather than trusting the one it states.
 ///
-/// `not_false` answers "is this ground atom confirmed not false" — a caller
-/// backs it with the SAME well-founded computation [`resolve_fol`] produced, via
+/// `meta_sorts` and `ctx` are the same order-sorted context [`resolve_fol`] ran
+/// under (pass an empty map and [`crate::unify::SortContext::default`] for a
+/// sort-blind program); they make the re-derivation sort-aware and let the
+/// carried [`clause_identity`] be re-derived and matched. `not_false` answers "is
+/// this ground atom confirmed not false" — a caller backs it with the SAME
+/// well-founded computation [`resolve_fol`] produced, via
 /// [`FolOutcome::confirms_not_false`].
 ///
-/// Every premise is checked FIRST, recursively bottom-up; the clause is
-/// freshened exactly as `ground` freshens it, its positive body literals are
-/// unified against the checked premises' re-derived atoms into one shared
-/// substitution, its negative body literals are re-decided against
-/// `not_false` under that substitution, and the clause head is instantiated
-/// under the final substitution and compared — never assumed — against the
-/// proof's stated `goal`.
+/// Every premise is checked FIRST, recursively bottom-up; the clause is freshened
+/// exactly as `ground` freshens it (its variables' sorts declared), its positive
+/// body literals are unified against the checked premises' re-derived atoms into
+/// one shared substitution, its negative body literals are re-decided against
+/// `not_false` under that substitution, and the clause head is instantiated under
+/// the final substitution and compared — never assumed — against the proof's
+/// stated `goal`. Finally the proof's content-addressed rule identity is
+/// re-derived from the cited clause and matched, so a forged identity is rejected
+/// even on an otherwise well-formed record. A [`FolProof::Assert`] is the
+/// zero-premise case restricted to an UNCONDITIONAL clause.
 pub fn check_fol_proof(
     dag: &mut TermDag,
     proof: &FolProof,
     clauses: &[FolClause],
+    meta_sorts: &BTreeMap<MetaId, NodeId>,
+    ctx: &SortContext,
     not_false: &impl Fn(&TermDag, NodeId) -> bool,
 ) -> Result<NodeId, FolProofError> {
-    let FolProof::ByRule {
-        rule,
-        goal,
-        premises,
-    } = proof;
+    let rule = proof.rule();
+    let goal = proof.goal();
     let clause = clauses
-        .get(*rule)
-        .ok_or(FolProofError::UnknownRule { rule: *rule })?;
+        .get(rule)
+        .ok_or(FolProofError::UnknownRule { rule })?;
 
-    let positive_count = clause
-        .body
-        .iter()
-        .filter(|lit| matches!(lit, FolLit::Pos(_)))
-        .count();
-    if premises.len() != positive_count {
-        return Err(FolProofError::PremiseCountMismatch {
-            rule: *rule,
-            body: positive_count,
-            premises: premises.len(),
-        });
-    }
+    // Re-derive the positive premises bottom-up (an `Assert` has none), then
+    // freshen the clause with its variables' sorts declared so the re-derivation
+    // enforces the same order-sorted discipline the resolver did.
+    let derived_premises = match proof {
+        FolProof::Assert { .. } => {
+            if !clause.body.is_empty() {
+                return Err(FolProofError::AssertHasBody { rule });
+            }
+            Vec::new()
+        }
+        FolProof::ByRule { premises, .. } => {
+            let positive_count = clause
+                .body
+                .iter()
+                .filter(|lit| matches!(lit, FolLit::Pos(_)))
+                .count();
+            if premises.len() != positive_count {
+                return Err(FolProofError::PremiseCountMismatch {
+                    rule,
+                    body: positive_count,
+                    premises: premises.len(),
+                });
+            }
+            let mut derived = Vec::with_capacity(premises.len());
+            for premise in premises {
+                derived.push(check_fol_proof(
+                    dag, premise, clauses, meta_sorts, ctx, not_false,
+                )?);
+            }
+            derived
+        }
+    };
 
-    let mut derived_premises = Vec::with_capacity(premises.len());
-    for premise in premises {
-        derived_premises.push(check_fol_proof(dag, premise, clauses, not_false)?);
-    }
-
-    let (head, body) = freshen_clause(dag, clause);
+    let (head, body, sort_decls) = freshen_clause(dag, clause, meta_sorts);
     let mut subst = Subst::new();
-    let ctx = SortContext::default();
+    for &(meta, sort) in &sort_decls {
+        subst.declare_meta_sort(meta, sort);
+    }
     let mut premise_iter = derived_premises.into_iter();
     for (position, lit) in body.iter().enumerate() {
         if let FolLit::Pos(atom) = lit {
@@ -1152,13 +1478,10 @@ pub fn check_fol_proof(
                 .next()
                 .expect("premise count already matched the positive body arity");
             if !matches!(
-                unify::unify_sorted(dag, *atom, derived_atom, &mut subst, &ctx),
+                unify::unify_sorted(dag, *atom, derived_atom, &mut subst, ctx),
                 Unified::Ok
             ) {
-                return Err(FolProofError::PremiseMismatch {
-                    rule: *rule,
-                    position,
-                });
+                return Err(FolProofError::PremiseMismatch { rule, position });
             }
         }
     }
@@ -1172,14 +1495,14 @@ pub fn check_fol_proof(
     // (under the premises already checked) cannot actually produce fails this
     // unification outright, which is exactly a `HeadMismatch`.
     if !matches!(
-        unify::unify_sorted(dag, head, *goal, &mut subst, &ctx),
+        unify::unify_sorted(dag, head, goal, &mut subst, ctx),
         Unified::Ok
     ) {
         let derived_head = unify::apply(dag, &subst, head);
         return Err(FolProofError::HeadMismatch {
-            rule: *rule,
+            rule,
             derived: render(dag, derived_head),
-            stated: render(dag, *goal),
+            stated: render(dag, goal),
         });
     }
 
@@ -1187,15 +1510,127 @@ pub fn check_fol_proof(
         if let FolLit::Neg(atom) = lit {
             let ground_atom = unify::apply(dag, &subst, *atom);
             if not_false(dag, ground_atom) {
-                return Err(FolProofError::NegatedPremiseNotExcluded {
-                    rule: *rule,
-                    position,
-                });
+                return Err(FolProofError::NegatedPremiseNotExcluded { rule, position });
             }
         }
     }
 
+    // The content address is a CHECKED invariant, verified LAST so a structurally
+    // forged proof still reports the structural fault (a mismatched head or
+    // premise) rather than this — but a proof whose re-derivation is otherwise
+    // clean cannot carry an identity that does not belong to the cited clause.
+    if proof.rule_identity() != clause_identity(dag, clause, meta_sorts) {
+        return Err(FolProofError::RuleIdentityMismatch { rule });
+    }
+
     Ok(unify::apply(dag, &subst, head))
+}
+
+// ── Caller-reproducible derivation identity (the published recipe) ───────────────
+
+/// The **content key** of a proof node: the canonical content key ([`canon`]) of
+/// the ground atom it concludes — the stable "term identity" of what was proved.
+///
+/// A caller that reads the issue's derivation recipe as a fold over premise TERM
+/// keys builds `sha1(rule_identity ++ "\n" ++ sorted(child content keys))` from
+/// this and [`FolProof::rule_identity`]. [`derivation_id`] instead folds over
+/// child DERIVATION ids (a Merkle recursion); both readings are exposed and
+/// documented so a consumer keys on whichever its own lane uses.
+#[must_use]
+pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
+    canon(dag, proof.goal())
+}
+
+/// A caller-reproducible **derivation identity** for `proof`: the SHA-1 Merkle
+/// fold of each node's content-addressed rule identity over its premises' own
+/// derivation identities.
+///
+/// Exactly:
+/// - [`FolProof::Assert`] → `sha1(rule_identity ++ "\n" ++ content_key)`, where
+///   `content_key` is [`canon`] of the asserted ground atom.
+/// - [`FolProof::ByRule`] → `sha1(rule_identity ++ "\n" ++ ids)`, where `ids` is
+///   the derivation ids of the premises, each recursively computed, STABLE-SORTED
+///   as a MULTISET (duplicates kept — two premises proving the same atom two ways
+///   both contribute), and joined by a single `\n`.
+///
+/// The result is 40 lowercase hex characters. Because every input is
+/// content-derived — the rule identity from the clause template and its variables'
+/// sorts, the leaves from the ground atoms — two lanes that build the same
+/// derivation reproduce the same identity byte-for-byte, which is the whole point:
+/// the digest is the content address, and minting an IRI from it is caller-supplied
+/// vocabulary this crate never learns.
+///
+/// # Example
+///
+/// ```
+/// use purrdf_datalog::resolve_fol::{derivation_id, FolProof};
+/// use purrdf_datalog::term::TermDag;
+///
+/// let mut dag = TermDag::new();
+/// let goal = dag.intern_leaf("fact");
+/// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
+/// let id = derivation_id(&dag, &proof);
+/// assert_eq!(id.len(), 40);
+/// assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+/// ```
+#[must_use]
+pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(proof.rule_identity().as_bytes());
+    hasher.update(b"\n");
+    match proof {
+        FolProof::Assert { goal, .. } => {
+            hasher.update(canon(dag, *goal).as_bytes());
+        }
+        FolProof::ByRule { premises, .. } => {
+            let mut child_ids: Vec<String> =
+                premises.iter().map(|p| derivation_id(dag, p)).collect();
+            child_ids.sort();
+            for (index, id) in child_ids.iter().enumerate() {
+                if index > 0 {
+                    hasher.update(b"\n");
+                }
+                hasher.update(id.as_bytes());
+            }
+        }
+    }
+    hex_lower(&hasher.finalize())
+}
+
+/// The **flat** derivation identity — the issue's literal recipe, folding a node's
+/// rule identity over its PREMISES' term content keys ONE level, rather than
+/// recursively over their derivation ids ([`derivation_id`]).
+///
+/// Exactly `sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`, where
+/// each premise's content key is [`content_key`] (the [`canon`] of the atom it
+/// proves), stable-sorted as a MULTISET (duplicates kept). This coincides with
+/// [`derivation_id`] on a single-level proof and diverges on a deeper one: the two
+/// are the two readings of the issue's `sorted(premise_content_keys)` (term keys
+/// here; child derivation ids in [`derivation_id`]), both published so a consumer
+/// keys on whichever its own lane uses.
+#[must_use]
+pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
+    let mut premise_keys: Vec<String> = proof
+        .premises()
+        .iter()
+        .map(|premise| content_key(dag, premise))
+        .collect();
+    premise_keys.sort();
+    let mut hasher = Sha1::new();
+    hasher.update(proof.rule_identity().as_bytes());
+    hasher.update(b"\n");
+    hasher.update(premise_keys.join("\n").as_bytes());
+    hex_lower(&hasher.finalize())
+}
+
+/// Lowercase hexadecimal rendering of `bytes`, built with the same `write!`
+/// discipline the rest of this module uses (never `format!` + `push_str`).
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(out, "{byte:02x}").expect("writing to a String never fails");
+    }
+    out
 }
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
@@ -1351,8 +1786,12 @@ pub fn solve_datalog_goal(
         clauses: fol_clauses,
         goal: goal_node,
         goal_vars,
+        // Datalog lowering has no sorts, so this bridge stays sort-blind: an empty
+        // `meta_sorts` with the default context makes the resolution byte-identical
+        // to the pre-order-sorted resolver over the same program.
+        meta_sorts: BTreeMap::new(),
     };
-    let control = resolve_fol(&mut dag, &program, budget);
+    let control = resolve_fol(&mut dag, &program, &SortContext::default(), budget);
     Ok((dag, control))
 }
 
@@ -1479,10 +1918,11 @@ mod tests {
             clauses: clauses.clone(),
             goal,
             goal_vars: vec![(r_meta, "R".to_owned())],
+            meta_sorts: BTreeMap::new(),
         };
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &budget);
+        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget);
         let FolControl::Decided(outcome) = control else {
             panic!("Peano addition must be decidable");
         };
@@ -1495,8 +1935,15 @@ mod tests {
             "a projected answer is always in the true set"
         );
 
-        let checked = check_fol_proof(&mut dag, &answer.proof, &clauses, &always_not_false)
-            .expect("the derivation re-derives cleanly");
+        let checked = check_fol_proof(
+            &mut dag,
+            &answer.proof,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect("the derivation re-derives cleanly");
         assert_eq!(checked, answer.atom);
     }
 
@@ -1548,10 +1995,11 @@ mod tests {
             clauses: clauses.clone(),
             goal,
             goal_vars: vec![(x_goal, "X".to_owned())],
+            meta_sorts: BTreeMap::new(),
         };
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &budget);
+        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget);
         let FolControl::Decided(outcome) = control else {
             panic!("member/2 over a finite ground list must be decidable");
         };
@@ -1564,8 +2012,15 @@ mod tests {
         assert_eq!(found, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
 
         for answer in &outcome.answers {
-            let checked = check_fol_proof(&mut dag, &answer.proof, &clauses, &always_not_false)
-                .unwrap_or_else(|error| panic!("{error:?}"));
+            let checked = check_fol_proof(
+                &mut dag,
+                &answer.proof,
+                &clauses,
+                &BTreeMap::new(),
+                &SortContext::default(),
+                &always_not_false,
+            )
+            .unwrap_or_else(|error| panic!("{error:?}"));
             assert_eq!(checked, answer.atom);
         }
     }
@@ -1606,9 +2061,10 @@ mod tests {
                 clauses,
                 goal: goal_atom,
                 goal_vars: vec![],
+                meta_sorts: BTreeMap::new(),
             };
             let budget = FolBudget { max_steps: 10_000 };
-            match resolve_fol(dag, &program, &budget) {
+            match resolve_fol(dag, &program, &SortContext::default(), &budget) {
                 FolControl::Decided(outcome) => *outcome,
                 FolControl::Unsupported(reason) => panic!("expected a decision, got {reason:?}"),
             }
@@ -1654,9 +2110,12 @@ mod tests {
             clauses: vec![clause],
             goal: p,
             goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &budget) else {
+        let FolControl::Decided(outcome) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
             panic!("a direct negative loop is decidable (as Undefined), not Unsupported");
         };
         assert_eq!(outcome.truth_of(&dag, p), Truth::Undefined);
@@ -1698,6 +2157,7 @@ mod tests {
             clauses,
             goal: goal_atom,
             goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
         };
         // 4 work units, not 1. `max_steps` now charges every newly demanded call as well
         // as every committed rule, so 1 unit is spent before the `base` FACT is committed
@@ -1705,7 +2165,9 @@ mod tests {
         // intended shape and is truer to this test's name than the old value ever was:
         // the goal comes back `Undefined` here, where 1 and 2 units yield `False`.
         let budget = FolBudget { max_steps: 4 };
-        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &budget) else {
+        let FolControl::Decided(outcome) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
             panic!("a budget cut is Partial, not Unsupported");
         };
         assert_eq!(outcome.status, FolStatus::Partial);
@@ -1732,12 +2194,17 @@ mod tests {
             clauses,
             goal: goal_atom,
             goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 4 };
-        let FolControl::Decided(first) = resolve_fol(&mut dag, &program, &budget) else {
+        let FolControl::Decided(first) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
             panic!("expected a decision");
         };
-        let FolControl::Decided(second) = resolve_fol(&mut dag, &program, &budget) else {
+        let FolControl::Decided(second) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
             panic!("expected a decision");
         };
         assert_eq!(first.answers, second.answers);
@@ -1766,9 +2233,10 @@ mod tests {
             clauses: vec![clause],
             goal,
             goal_vars: vec![(goal_x, "X".to_owned())],
+            meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &budget) {
+        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
             FolControl::Unsupported(FolUnsupported::Floundering) => {}
             other => panic!("expected Floundering, got {other:?}"),
         }
@@ -1793,9 +2261,10 @@ mod tests {
             clauses: vec![clause],
             goal: head,
             goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &budget) {
+        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
             FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals }) => {
                 assert_eq!(literals, literal_count);
             }
@@ -1820,6 +2289,8 @@ mod tests {
         let wrong_goal = leaf(&mut dag, "not_p_of_anything");
         let forged = FolProof::ByRule {
             rule: 0,
+            // Any identity here — the forged HEAD is caught before the identity check.
+            rule_identity: String::new(),
             goal: wrong_goal,
             premises: vec![],
         };
@@ -1827,6 +2298,8 @@ mod tests {
             &mut dag,
             &forged,
             std::slice::from_ref(&clause),
+            &BTreeMap::new(),
+            &SortContext::default(),
             &always_not_false,
         )
         .expect_err("a forged head must be rejected");
@@ -1849,15 +2322,24 @@ mod tests {
 
         let extra_premise = FolProof::ByRule {
             rule: 0,
+            rule_identity: String::new(),
             goal: head,
             premises: vec![FolProof::ByRule {
                 rule: 0,
+                rule_identity: String::new(),
                 goal: head,
                 premises: vec![],
             }],
         };
-        let error = check_fol_proof(&mut dag, &extra_premise, &clauses, &always_not_false)
-            .expect_err("an extra premise on a zero-premise rule must be rejected");
+        let error = check_fol_proof(
+            &mut dag,
+            &extra_premise,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect_err("an extra premise on a zero-premise rule must be rejected");
         assert!(matches!(
             error,
             FolProofError::PremiseCountMismatch {
@@ -1869,12 +2351,535 @@ mod tests {
 
         let unknown_rule = FolProof::ByRule {
             rule: 7,
+            rule_identity: String::new(),
             goal: head,
             premises: vec![],
         };
-        let error = check_fol_proof(&mut dag, &unknown_rule, &clauses, &always_not_false)
-            .expect_err("citing a rule the program does not have must be rejected");
+        let error = check_fol_proof(
+            &mut dag,
+            &unknown_rule,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect_err("citing a rule the program does not have must be rejected");
         assert_eq!(error, FolProofError::UnknownRule { rule: 7 });
+    }
+
+    // ── Characterization: today's canon bytes are frozen ────────────────────
+
+    /// The sort-blind `canon` bytes are pinned exactly, so the sort-aware
+    /// [`canon_sorted`] change is provably byte-identical on the no-sort path:
+    /// `canon` is exactly `canon_sorted` with no sorts.
+    #[test]
+    fn canon_bytes_are_stable_and_sort_blind_matches_today() {
+        let mut dag = TermDag::new();
+        let a = leaf(&mut dag, "a");
+        let b = leaf(&mut dag, "b");
+        assert_eq!(canon(&dag, a), "L1:a");
+        let p_ab = app(&mut dag, "p", vec![a, b]);
+        assert_eq!(canon(&dag, p_ab), "A1:2L1:pL1:aL1:b");
+
+        let (_, x) = dag.fresh_meta();
+        let (_, y) = dag.fresh_meta();
+        let p_xyx = app(&mut dag, "p", vec![x, y, x]);
+        assert_eq!(canon(&dag, p_xyx), "A1:3L1:pM1:0M1:1M1:0");
+
+        // `canon` IS `canon_sorted` with the empty sort assignment — on the same
+        // atoms and on harder shapes (a binder `D`, a nested app) the bytes match
+        // exactly, so nothing that never declared a sort can shift.
+        let none = |_: MetaId| None;
+        for node in [a, p_ab, p_xyx] {
+            assert_eq!(canon(&dag, node), canon_sorted(&dag, node, &none));
+        }
+        let forall = leaf(&mut dag, "forall");
+        let sort = leaf(&mut dag, "thing");
+        let body = app(&mut dag, "q", vec![x]);
+        let binder = dag.intern_binder(forall, vec![sort], body);
+        let nested = app(&mut dag, "f", vec![p_ab, binder]);
+        assert_eq!(canon(&dag, nested), canon_sorted(&dag, nested, &none));
+    }
+
+    /// The SAME metavariable canonicalizes to DIFFERENT keys under different
+    /// declared sorts, and a sorted key is never the sort-blind one — the `S`
+    /// frame's tag is outside the node-tag alphabet, so it can never alias a
+    /// following sibling.
+    #[test]
+    fn canon_folds_the_metavariable_sort_into_the_key() {
+        let mut dag = TermDag::new();
+        let s = leaf(&mut dag, "S");
+        let t = leaf(&mut dag, "T");
+        let (m_id, m) = dag.fresh_meta();
+
+        let as_s = |q: MetaId| (q == m_id).then_some(s);
+        let as_t = |q: MetaId| (q == m_id).then_some(t);
+        let none = |_: MetaId| None;
+
+        assert_ne!(canon_sorted(&dag, m, &as_s), canon_sorted(&dag, m, &as_t));
+        assert_ne!(canon_sorted(&dag, m, &as_s), canon_sorted(&dag, m, &none));
+        assert_eq!(canon(&dag, m), canon_sorted(&dag, m, &none));
+        assert!(
+            canon_sorted(&dag, m, &as_s).contains('S') && !canon(&dag, m).contains('S'),
+            "the S frame appears only when a sort is declared"
+        );
+    }
+
+    // ── Order-sorted resolution ──────────────────────────────────────────────
+
+    /// With `Cat ⊑ Animal`, a clause variable declared `Cat` REJECTS an
+    /// `Animal`-only value that a `Cat` value satisfies — the sort-correct
+    /// verdict. The identical program resolved sort-blind wrongly accepts the
+    /// wider value, so a sort-blind resolver gives the wrong answer here.
+    #[test]
+    fn order_sorted_control_clause_rejects_a_wider_binding() {
+        let mut dag = TermDag::new();
+        let cat = leaf(&mut dag, "Cat");
+        let animal = leaf(&mut dag, "Animal");
+        let felix = leaf(&mut dag, "felix"); // sort Cat — the narrower, accepted value
+        let generic = leaf(&mut dag, "generic"); // sort Animal only — must be rejected
+        let order = unify::SortOrder::from_subclass_edges(&[(cat, animal)]);
+        let mut term_sorts = BTreeMap::new();
+        term_sorts.insert(felix, cat);
+        term_sorts.insert(generic, animal);
+        let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
+
+        // ok(X) :- has(X).   has(felix).   has(generic).   goal: ok(?R).
+        let (x_id, x) = dag.fresh_meta();
+        let ok_head = app(&mut dag, "ok", vec![x]);
+        let has_x = app(&mut dag, "has", vec![x]);
+        let ok_clause = FolClause {
+            head: ok_head,
+            body: vec![FolLit::Pos(has_x)],
+            rule: 0,
+        };
+        let has_felix = app(&mut dag, "has", vec![felix]);
+        let has_generic = app(&mut dag, "has", vec![generic]);
+        let fact_felix = FolClause {
+            head: has_felix,
+            body: vec![],
+            rule: 1,
+        };
+        let fact_generic = FolClause {
+            head: has_generic,
+            body: vec![],
+            rule: 2,
+        };
+        let clauses = vec![ok_clause, fact_felix, fact_generic];
+        let (_, r) = dag.fresh_meta();
+        let goal = app(&mut dag, "ok", vec![r]);
+        let budget = FolBudget { max_steps: 10_000 };
+
+        let mut meta_sorts = BTreeMap::new();
+        meta_sorts.insert(x_id, cat);
+        let sorted = FolProgram {
+            clauses: clauses.clone(),
+            goal,
+            goal_vars: vec![(r, "R".to_owned())],
+            meta_sorts,
+        };
+        let FolControl::Decided(sorted_outcome) = resolve_fol(&mut dag, &sorted, &ctx, &budget)
+        else {
+            panic!("the sorted program is decidable, and a sort clash is not floundering");
+        };
+        let sorted_answers: Vec<&String> = sorted_outcome
+            .answers
+            .iter()
+            .map(|answer| answer.bindings.get("R").expect("R is bound"))
+            .collect();
+        assert_eq!(
+            sorted_answers,
+            vec![&"felix".to_owned()],
+            "only the Cat-sorted value satisfies a Cat-declared variable"
+        );
+
+        // The SAME program, sort-blind (empty meta_sorts, default context) — today's
+        // resolver — wrongly admits the Animal-only value too.
+        let unsorted = FolProgram {
+            clauses,
+            goal,
+            goal_vars: vec![(r, "R".to_owned())],
+            meta_sorts: BTreeMap::new(),
+        };
+        let FolControl::Decided(unsorted_outcome) =
+            resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget)
+        else {
+            panic!("the sort-blind program is decidable");
+        };
+        assert_eq!(
+            unsorted_outcome.answers.len(),
+            2,
+            "sort-blind resolution admits BOTH values — the verdict the sort corrects"
+        );
+        // A sort clash pruned a candidate; it must NOT be reported as floundering.
+        assert_eq!(sorted_outcome.status, FolStatus::Complete);
+    }
+
+    // ── Content-addressed proof identity ─────────────────────────────────────
+
+    /// The Peano-addition program, its clause list, and one decided answer proof.
+    fn peano_answer_proof() -> (TermDag, Vec<FolClause>, FolProof) {
+        let mut dag = TermDag::new();
+        let z = leaf(&mut dag, "z");
+        let (_, y0) = dag.fresh_meta();
+        let head0 = app(&mut dag, "add", vec![z, y0, y0]);
+        let clause0 = FolClause {
+            head: head0,
+            body: vec![],
+            rule: 0,
+        };
+        let (_, x1) = dag.fresh_meta();
+        let (_, y1) = dag.fresh_meta();
+        let (_, z1) = dag.fresh_meta();
+        let s_x = app(&mut dag, "s", vec![x1]);
+        let s_z = app(&mut dag, "s", vec![z1]);
+        let head1 = app(&mut dag, "add", vec![s_x, y1, s_z]);
+        let premise = app(&mut dag, "add", vec![x1, y1, z1]);
+        let clause1 = FolClause {
+            head: head1,
+            body: vec![FolLit::Pos(premise)],
+            rule: 1,
+        };
+        let clauses = vec![clause0, clause1];
+        let two = peano(&mut dag, z, 2);
+        let one = peano(&mut dag, z, 1);
+        let (_, r_meta) = dag.fresh_meta();
+        let goal = app(&mut dag, "add", vec![two, one, r_meta]);
+        let program = FolProgram {
+            clauses: clauses.clone(),
+            goal,
+            goal_vars: vec![(r_meta, "R".to_owned())],
+            meta_sorts: BTreeMap::new(),
+        };
+        let budget = FolBudget { max_steps: 10_000 };
+        let FolControl::Decided(outcome) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
+            panic!("Peano addition is decidable");
+        };
+        let proof = outcome.answers[0].proof.clone();
+        (dag, clauses, proof)
+    }
+
+    /// A proof exposes a content-addressed rule identity and splits the
+    /// unconditional base fact (`Assert`) from the recursive step (`ByRule`).
+    #[test]
+    fn proof_exposes_rule_identity_and_assert_variant() {
+        let (dag, clauses, proof) = peano_answer_proof();
+        // The top of the derivation is the recursive rule.
+        assert!(!proof.is_assert(), "the sum step is a rule firing");
+        assert!(!proof.rule_identity().is_empty());
+
+        // Walk down the single-premise chain to the base fact: it is an Assert.
+        let mut node = &proof;
+        while let [premise] = node.premises() {
+            node = premise;
+        }
+        assert!(
+            node.is_assert(),
+            "the base `add(z, Y, Y)` fact is an unconditional Assert leaf"
+        );
+        assert_eq!(node.rule(), 0);
+        assert!(!node.rule_identity().is_empty());
+        // The carried identity is exactly the clause's re-derived content address.
+        assert_eq!(
+            node.rule_identity(),
+            clause_identity(&dag, &clauses[0], &BTreeMap::new())
+        );
+    }
+
+    /// Every proof `resolve_fol` produces re-validates, INCLUDING its
+    /// content-addressed identity (which `check_fol_proof` re-derives and matches).
+    #[test]
+    fn resolved_proofs_revalidate_with_their_identity() {
+        let (mut dag, clauses, proof) = peano_answer_proof();
+        let checked = check_fol_proof(
+            &mut dag,
+            &proof,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect("a genuine proof re-derives and its identity matches");
+        assert_eq!(checked, proof.goal());
+
+        // Corrupting the carried identity is caught even though the derivation is
+        // otherwise well-formed.
+        let forged = match proof {
+            FolProof::ByRule {
+                rule,
+                goal,
+                premises,
+                ..
+            } => FolProof::ByRule {
+                rule,
+                rule_identity: "not-the-real-identity".to_owned(),
+                goal,
+                premises,
+            },
+            FolProof::Assert { .. } => unreachable!("the sum proof is a ByRule"),
+        };
+        let error = check_fol_proof(
+            &mut dag,
+            &forged,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect_err("a forged identity is rejected");
+        assert_eq!(error, FolProofError::RuleIdentityMismatch { rule: 1 });
+    }
+
+    /// The published derivation-identity recipe is byte-for-byte
+    /// reproducible — a second, independent resolution of the same program
+    /// (standing in for the caller) computes the identical 40-hex digest, and the
+    /// literal `sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`
+    /// formula reproduces likewise.
+    #[test]
+    fn derivation_id_is_reproducible_across_independent_resolutions() {
+        let (dag_a, _, proof_a) = peano_answer_proof();
+        let (dag_b, _, proof_b) = peano_answer_proof();
+
+        let id_a = derivation_id(&dag_a, &proof_a);
+        let id_b = derivation_id(&dag_b, &proof_b);
+        assert_eq!(
+            id_a, id_b,
+            "the caller reproduces the identity byte-for-byte"
+        );
+        assert_eq!(id_a.len(), 40);
+        assert!(id_a.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        // Frozen contract: the exact published-recipe digest for this program, so an
+        // accidental change to the recipe's byte layout is caught, not silently absorbed.
+        assert_eq!(id_a, "53555bbd09ce3202c40ed2048f97fde7eadd31b2");
+
+        // The issue's literal formula is the public `flat_derivation_id`
+        // (`sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`), and it
+        // reproduces byte-for-byte across the two independent resolutions too.
+        assert_eq!(
+            flat_derivation_id(&dag_a, &proof_a),
+            flat_derivation_id(&dag_b, &proof_b)
+        );
+    }
+
+    /// The recipe keeps DUPLICATE premise keys — two premises proving the same
+    /// atom two ways are both folded in, so the identity is a function of the
+    /// actual premise multiset, not a set.
+    #[test]
+    fn derivation_id_keeps_duplicate_premises() {
+        let mut dag = TermDag::new();
+        let a = leaf(&mut dag, "a");
+        let child = FolProof::Assert {
+            rule: 0,
+            rule_identity: "child".to_owned(),
+            goal: a,
+        };
+        let one = FolProof::ByRule {
+            rule: 1,
+            rule_identity: "parent".to_owned(),
+            goal: a,
+            premises: vec![child.clone()],
+        };
+        let two = FolProof::ByRule {
+            rule: 1,
+            rule_identity: "parent".to_owned(),
+            goal: a,
+            premises: vec![child.clone(), child],
+        };
+        assert_ne!(
+            derivation_id(&dag, &one),
+            derivation_id(&dag, &two),
+            "a duplicated premise must change the derivation identity"
+        );
+    }
+
+    /// T1: `clause_identity` is SORT-AWARE, so the same clause text under
+    /// different `meta_sorts` is a different order-sorted clause with a different
+    /// identity — sort-discriminated derivations never collide.
+    #[test]
+    fn clause_identity_folds_in_the_variable_sorts() {
+        let mut dag = TermDag::new();
+        let cat = leaf(&mut dag, "Cat");
+        let dog = leaf(&mut dag, "Dog");
+        let (x_id, x) = dag.fresh_meta();
+        let head = app(&mut dag, "p", vec![x]);
+        let clause = FolClause {
+            head,
+            body: vec![],
+            rule: 0,
+        };
+        let mut cat_sorts = BTreeMap::new();
+        cat_sorts.insert(x_id, cat);
+        let mut dog_sorts = BTreeMap::new();
+        dog_sorts.insert(x_id, dog);
+
+        let unsorted = clause_identity(&dag, &clause, &BTreeMap::new());
+        let as_cat = clause_identity(&dag, &clause, &cat_sorts);
+        let as_dog = clause_identity(&dag, &clause, &dog_sorts);
+        assert_ne!(as_cat, as_dog);
+        assert_ne!(as_cat, unsorted);
+        assert_ne!(as_dog, unsorted);
+    }
+
+    /// A purely negative-body clause that FIRES (its negand is false) yields a
+    /// `ByRule` proof with no premises — NEVER an `Assert`. The emission gate is on
+    /// the literal counts, not the premise count: a neg-only clause has zero
+    /// positive premises yet a negation that must stay re-checkable. A regression
+    /// keying `Assert` off `premises.is_empty()` would fail this test.
+    #[test]
+    fn neg_only_clause_proof_is_by_rule_not_assert() {
+        let mut dag = TermDag::new();
+        let holds = leaf(&mut dag, "holds");
+        let absent = leaf(&mut dag, "absent");
+        // holds :- not absent.   (there is no `absent` fact, so the negation succeeds)
+        let clause = FolClause {
+            head: holds,
+            body: vec![FolLit::Neg(absent)],
+            rule: 0,
+        };
+        let clauses = vec![clause];
+        let program = FolProgram {
+            clauses: clauses.clone(),
+            goal: holds,
+            goal_vars: vec![],
+            meta_sorts: BTreeMap::new(),
+        };
+        let budget = FolBudget { max_steps: 10_000 };
+        let FolControl::Decided(outcome) =
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+        else {
+            panic!("a neg-only clause with a false negand is decidable");
+        };
+        assert_eq!(outcome.truth_of(&dag, holds), Truth::True);
+        assert_eq!(outcome.answers.len(), 1);
+        let proof = &outcome.answers[0].proof;
+        assert!(
+            !proof.is_assert(),
+            "a negation-guarded fact is a ByRule (its negation must be re-checkable), not an Assert"
+        );
+        assert!(
+            proof.premises().is_empty(),
+            "no positive premises, but still ByRule"
+        );
+        let checked = check_fol_proof(
+            &mut dag,
+            proof,
+            &clauses,
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect("the neg-only derivation re-validates");
+        assert_eq!(checked, holds);
+    }
+
+    /// A hand-forged `Assert` citing a clause that HAS a body is rejected — an
+    /// assertion is only valid for an unconditional clause, the dual of the
+    /// emission gate above.
+    #[test]
+    fn check_fol_proof_rejects_an_assert_over_a_bodied_clause() {
+        let mut dag = TermDag::new();
+        let holds = leaf(&mut dag, "holds");
+        let absent = leaf(&mut dag, "absent");
+        let clause = FolClause {
+            head: holds,
+            body: vec![FolLit::Neg(absent)],
+            rule: 0,
+        };
+        let forged = FolProof::Assert {
+            rule: 0,
+            rule_identity: String::new(),
+            goal: holds,
+        };
+        let error = check_fol_proof(
+            &mut dag,
+            &forged,
+            std::slice::from_ref(&clause),
+            &BTreeMap::new(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .expect_err("an Assert over a bodied clause is rejected");
+        assert_eq!(error, FolProofError::AssertHasBody { rule: 0 });
+    }
+
+    // ── Sort discipline composed with negation-as-failure ────────────────────
+
+    /// A negation-as-failure clause over a SORTED variable decides correctly, and
+    /// a `not_false` verdict flip makes `check_fol_proof` reject the licensed
+    /// negation — the sort discipline and the three-valued negation compose.
+    #[test]
+    fn sorted_negation_decides_and_rechecks() {
+        let mut dag = TermDag::new();
+        let cat = leaf(&mut dag, "Cat");
+        let felix = leaf(&mut dag, "felix");
+        let order = unify::SortOrder::from_subclass_edges(&[(cat, cat)]);
+        let mut term_sorts = BTreeMap::new();
+        term_sorts.insert(felix, cat);
+        let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
+
+        // safe(X) :- cat(X), not danger(X).   cat(felix).   (no danger facts)
+        let (x_id, x) = dag.fresh_meta();
+        let safe_head = app(&mut dag, "safe", vec![x]);
+        let cat_x = app(&mut dag, "cat", vec![x]);
+        let danger_x = app(&mut dag, "danger", vec![x]);
+        let safe_clause = FolClause {
+            head: safe_head,
+            body: vec![FolLit::Pos(cat_x), FolLit::Neg(danger_x)],
+            rule: 0,
+        };
+        let cat_felix = app(&mut dag, "cat", vec![felix]);
+        let cat_fact = FolClause {
+            head: cat_felix,
+            body: vec![],
+            rule: 1,
+        };
+        let clauses = vec![safe_clause, cat_fact];
+        let (_, r) = dag.fresh_meta();
+        let goal = app(&mut dag, "safe", vec![r]);
+        let mut meta_sorts = BTreeMap::new();
+        meta_sorts.insert(x_id, cat);
+        let program = FolProgram {
+            clauses: clauses.clone(),
+            goal,
+            goal_vars: vec![(r, "R".to_owned())],
+            meta_sorts: meta_sorts.clone(),
+        };
+        let budget = FolBudget { max_steps: 10_000 };
+        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget) else {
+            panic!("a sorted NAF program is decidable, not floundering");
+        };
+        assert_eq!(outcome.answers.len(), 1, "safe(felix) holds");
+        assert_eq!(
+            outcome.answers[0].bindings.get("R"),
+            Some(&"felix".to_owned())
+        );
+        let proof = outcome.answers[0].proof.clone();
+        // The proof is a rule firing (it has a negation to re-check), NOT an Assert.
+        assert!(
+            !proof.is_assert(),
+            "a negation-guarded fact is never an Assert"
+        );
+
+        // Re-checking with a `not_false` that now claims `danger(felix)` is not
+        // false unlicenses the negation.
+        let danger_felix = app(&mut dag, "danger", vec![felix]);
+        let danger_key = canon(&dag, danger_felix);
+        let danger_is_not_false = |dag: &TermDag, node: NodeId| canon(dag, node) == danger_key;
+        let error = check_fol_proof(
+            &mut dag,
+            &proof,
+            &clauses,
+            &meta_sorts,
+            &ctx,
+            &danger_is_not_false,
+        )
+        .expect_err("an unlicensed negation is rejected");
+        assert!(matches!(
+            error,
+            FolProofError::NegatedPremiseNotExcluded { rule: 0, .. }
+        ));
     }
 
     // ── Datalog bridge ───────────────────────────────────────────────────────
@@ -1972,6 +2977,8 @@ mod tests {
                 &mut dag,
                 &outcome.answers[0].proof,
                 &fol_clauses,
+                &BTreeMap::new(),
+                &SortContext::default(),
                 &always_not_false,
             )
             .expect("the backward derivation re-derives cleanly");
