@@ -30,7 +30,6 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
         exists_memo: true,
         force_structural_bgp_order: !cost,
         force_sequential: false,
-        exists_first_witness_wrap: true,
     };
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {

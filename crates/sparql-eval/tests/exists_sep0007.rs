@@ -1133,22 +1133,32 @@ fn exists_triple_nesting_alternating_polarity() {
 // Matrix completeness.
 // ===========================================================================
 
-/// The number of enumerated `EXISTS`/`NOT EXISTS` shapes this file is contracted
-/// to cover — one per shape in the enumerated matrix
+/// The number of `#[test]` functions this file is contracted to carry — the
+/// 24 enumerated `EXISTS`/`NOT EXISTS` shapes
 /// (`exists_optional_padding_answers_per_spec` through
-/// `exists_triple_nesting_alternating_polarity`, tests 1-24 above). This constant
-/// is the pin; [`matrix_is_complete`] is the (trivial, but load-bearing) assertion
-/// that ties it to the number actually written — a reviewer who removes or merges
-/// one of the 24 tests above without also editing this constant gets a
-/// failing build, not a silently shrunk matrix.
-const EXPECTED_TESTS: usize = 24;
+/// `exists_triple_nesting_alternating_polarity`, tests 1-24 above) plus this
+/// completeness check itself. [`matrix_is_complete`] does not compare this
+/// constant against a copy of itself: it re-reads this file's OWN source text
+/// via `include_str!` and counts the lines that are exactly a bare `#[test]`
+/// attribute, then checks that LIVE count against the number below.
+/// A reviewer who deletes or merges one of the 24 shape tests shrinks the
+/// live count while this constant stays put, so the comparison fails —
+/// a build a reviewer cannot pass by leaving the matrix silently shrunk.
+const EXPECTED_TESTS: usize = 25;
 
 #[test]
 fn matrix_is_complete() {
+    let live_tests = include_str!("exists_sep0007.rs")
+        .lines()
+        .filter(|line| line.trim() == "#[test]")
+        .count();
     assert_eq!(
-        EXPECTED_TESTS, 24,
+        live_tests, EXPECTED_TESTS,
         "this file is contracted to carry exactly 24 EXISTS/NOT EXISTS shapes \
-         (tests 1-24 in the module doc's enumeration), plus this completeness pin \
-         itself — 25 #[test] functions in total"
+         (tests 1-24 in the module doc's enumeration) plus this completeness \
+         check itself — {EXPECTED_TESTS} `#[test]` functions in total; the \
+         file's own source text now has {live_tests}. If a shape test was \
+         deleted or merged, either restore it or update the module doc's \
+         enumeration and this constant together"
     );
 }

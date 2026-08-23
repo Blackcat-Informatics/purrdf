@@ -76,14 +76,6 @@ pub struct EvalOptions {
     /// This is a measurement seam for Criterion comparisons against the ordered
     /// parallel fold, and for differential tests. Production leaves it `false`.
     pub force_sequential: bool,
-    /// Wrap the `EXISTS` definition path's substituted inner in `Slice{0, Some(1)}`
-    /// before evaluating it (see `crate::enf`'s module doc, "truncated-at-one-witness
-    /// is complete for emptiness"). `true` (the wrap applied) in production. `false` is
-    /// an UNWRAPPED CONTROL for the differential test that checks the wrap changes no
-    /// `EXISTS` boolean answer while consuming far fewer inner solutions —
-    /// `crate::expr::exists_definition_path_stops_at_first_witness` — never a degraded
-    /// production mode.
-    pub exists_first_witness_wrap: bool,
 }
 
 impl Default for EvalOptions {
@@ -92,7 +84,6 @@ impl Default for EvalOptions {
             exists_memo: true,
             force_structural_bgp_order: false,
             force_sequential: false,
-            exists_first_witness_wrap: true,
         }
     }
 }

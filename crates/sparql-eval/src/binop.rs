@@ -2391,14 +2391,14 @@ mod tests {
     /// graph `:g1`); `:g2` is never used as a graph name.
     fn graph_variable_lateral_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/187-lateral-graph#p");
-        let q = b.intern_iri("https://example.org/187-lateral-graph#q");
-        let s1 = b.intern_iri("https://example.org/187-lateral-graph#s1");
-        let s2 = b.intern_iri("https://example.org/187-lateral-graph#s2");
-        let g1 = b.intern_iri("https://example.org/187-lateral-graph#g1");
-        let g2 = b.intern_iri("https://example.org/187-lateral-graph#g2");
-        let x = b.intern_iri("https://example.org/187-lateral-graph#x");
-        let y = b.intern_iri("https://example.org/187-lateral-graph#y");
+        let p = b.intern_iri("https://example.org/lateral-graph#p");
+        let q = b.intern_iri("https://example.org/lateral-graph#q");
+        let s1 = b.intern_iri("https://example.org/lateral-graph#s1");
+        let s2 = b.intern_iri("https://example.org/lateral-graph#s2");
+        let g1 = b.intern_iri("https://example.org/lateral-graph#g1");
+        let g2 = b.intern_iri("https://example.org/lateral-graph#g2");
+        let x = b.intern_iri("https://example.org/lateral-graph#x");
+        let y = b.intern_iri("https://example.org/lateral-graph#y");
         b.push_quad(s1, p, g1, None);
         b.push_quad(s2, p, g2, None);
         b.push_quad(x, q, y, Some(g1));
@@ -2419,14 +2419,14 @@ mod tests {
         let node = GraphPattern::Lateral {
             left: Box::new(bgp(
                 vp("s"),
-                pred("https://example.org/187-lateral-graph#p"),
+                pred("https://example.org/lateral-graph#p"),
                 vp("g"),
             )),
             right: Box::new(GraphPattern::Graph {
                 name: NamedNodePattern::Variable(Variable::new("g")),
                 inner: Box::new(bgp(
                     vp("a"),
-                    pred("https://example.org/187-lateral-graph#q"),
+                    pred("https://example.org/lateral-graph#q"),
                     vp("b"),
                 )),
             }),
@@ -2447,10 +2447,10 @@ mod tests {
         assert_eq!(
             rendered,
             vec![vec![
-                Some("https://example.org/187-lateral-graph#s1".to_owned()),
-                Some("https://example.org/187-lateral-graph#g1".to_owned()),
-                Some("https://example.org/187-lateral-graph#x".to_owned()),
-                Some("https://example.org/187-lateral-graph#y".to_owned()),
+                Some("https://example.org/lateral-graph#s1".to_owned()),
+                Some("https://example.org/lateral-graph#g1".to_owned()),
+                Some("https://example.org/lateral-graph#x".to_owned()),
+                Some("https://example.org/lateral-graph#y".to_owned()),
             ]],
             "only :s1's row survives — :s2's ?g (:g2) owns no quads, so its GRAPH \
              scan is empty"

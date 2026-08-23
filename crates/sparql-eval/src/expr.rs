@@ -1096,6 +1096,59 @@ impl Drop for ForceExistsStrategyGuard {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only override suppressing [`exists`]'s definition-path first-witness
+    /// `Slice{0, Some(1)}` wrap, so the differential test
+    /// `exists_definition_path_stops_at_first_witness` can compare an UNWRAPPED
+    /// control's consumption against the wrapped production path — the same
+    /// `#[cfg(test)]` thread-local-override idiom [`FORCE_EXISTS_STRATEGY`] above
+    /// uses for its own measurement/differential seam.
+    ///
+    /// Never consulted outside `cfg(test)`: production always applies the wrap.
+    /// This was formerly a shipped `EvalOptions::exists_first_witness_wrap` public
+    /// field, which is not what a differential-test-only control should be —
+    /// moved behind this thread-local so the seam cannot be reached from outside
+    /// a test build.
+    static SUPPRESS_FIRST_WITNESS_WRAP: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Suppress [`exists`]'s first-witness wrap for the current thread until the
+/// returned guard is dropped (restores the prior override). Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn suppress_first_witness_wrap_for_test() -> SuppressFirstWitnessWrapGuard {
+    let previous = SUPPRESS_FIRST_WITNESS_WRAP.with(|cell| cell.replace(true));
+    SuppressFirstWitnessWrapGuard { previous }
+}
+
+/// RAII guard restoring the prior [`SUPPRESS_FIRST_WITNESS_WRAP`] override on drop.
+#[cfg(test)]
+pub(crate) struct SuppressFirstWitnessWrapGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for SuppressFirstWitnessWrapGuard {
+    fn drop(&mut self) {
+        SUPPRESS_FIRST_WITNESS_WRAP.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Whether [`exists`]'s definition path should apply the first-witness
+/// `Slice{0, Some(1)}` wrap. Always `true` outside `cfg(test)` — the wrap is
+/// unconditional production behavior, never a runtime-configurable option; the
+/// `cfg(test)` branch lets [`suppress_first_witness_wrap_for_test`] force it off
+/// for the one differential test that needs an unwrapped control.
+fn exists_apply_first_witness_wrap() -> bool {
+    #[cfg(test)]
+    if SUPPRESS_FIRST_WITNESS_WRAP.with(std::cell::Cell::get) {
+        return false;
+    }
+    true
+}
+
 /// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`
 /// the per-row definition. Production logic is the one-line boolean this function
 /// still computes as its fallback (`!correlated || probe_admissible(..)`); the
@@ -1369,10 +1422,10 @@ fn exists<D: DatasetView + Sync>(
         // `witness_wrapped` is `normalized` wrapped in `Slice{0, Some(1)}` — the ENF
         // law 4a proof sketch read in reverse (`crate::enf`'s module doc): emptiness
         // is preserved, so the substituted evaluation may stop at the first witness.
-        // `exists_first_witness_wrap` (default `true`) is the differential-test seam
-        // that evaluates `normalized` unwrapped instead, to compare consumption without
-        // changing the boolean answer — see [`EvalOptions::exists_first_witness_wrap`].
-        let to_evaluate: &GraphPattern = if ctx.options.exists_first_witness_wrap {
+        // Applied unconditionally in production; [`suppress_first_witness_wrap_for_test`]
+        // is a `cfg(test)`-only seam that evaluates `normalized` unwrapped instead, to
+        // compare consumption without changing the boolean answer.
+        let to_evaluate: &GraphPattern = if exists_apply_first_witness_wrap() {
             witness_wrapped
         } else {
             normalized
@@ -6148,14 +6201,14 @@ mod tests {
                       }";
 
         // Identical boolean answer with and without the wrap (the test seam:
-        // `EvalOptions::exists_first_witness_wrap`).
+        // `suppress_first_witness_wrap_for_test`).
         let rows_wrapped = run_rows(&ds, query, true);
         let rows_unwrapped = {
             let parsed = purrdf_sparql_algebra::SparqlParser::new()
                 .parse_query(query)
                 .expect("parse");
             let mut ctx = EvalCtx::new(&ds);
-            ctx.options.exists_first_witness_wrap = false;
+            let _guard = suppress_first_witness_wrap_for_test();
             match crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval") {
                 crate::eval::Outcome::Solutions(seq) => seq
                     .rows
@@ -6196,15 +6249,13 @@ mod tests {
             "the wrap must stop at exactly one witness"
         );
 
-        let unwrapped_engine = crate::engine::NativeSparqlEngine::default().with_eval_options(
-            crate::eval::EvalOptions {
-                exists_first_witness_wrap: false,
-                ..crate::eval::EvalOptions::default()
-            },
-        );
-        let unwrapped = unwrapped_engine
-            .explain_query(&ds, query, None)
-            .expect("explain (unwrapped)");
+        let unwrapped_engine = crate::engine::NativeSparqlEngine::default();
+        let unwrapped = {
+            let _guard = suppress_first_witness_wrap_for_test();
+            unwrapped_engine
+                .explain_query(&ds, query, None)
+                .expect("explain (unwrapped)")
+        };
         let consumed_unwrapped: u64 = unwrapped
             .ledger()
             .iter()
@@ -7395,16 +7446,16 @@ mod tests {
         use purrdf_core::RdfLiteral;
 
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("https://example.org/188-nested-exists-lateral#knows");
-        let tag = b.intern_iri("https://example.org/188-nested-exists-lateral#tag");
-        let has_item = b.intern_iri("https://example.org/188-nested-exists-lateral#hasItem");
-        let flag = b.intern_iri("https://example.org/188-nested-exists-lateral#flag");
-        let s1 = b.intern_iri("https://example.org/188-nested-exists-lateral#s1");
-        let s2 = b.intern_iri("https://example.org/188-nested-exists-lateral#s2");
-        let o1 = b.intern_iri("https://example.org/188-nested-exists-lateral#o1");
-        let o2 = b.intern_iri("https://example.org/188-nested-exists-lateral#o2");
-        let v1 = b.intern_iri("https://example.org/188-nested-exists-lateral#v1");
-        let v2 = b.intern_iri("https://example.org/188-nested-exists-lateral#v2");
+        let knows = b.intern_iri("https://example.org/nested-exists-lateral#knows");
+        let tag = b.intern_iri("https://example.org/nested-exists-lateral#tag");
+        let has_item = b.intern_iri("https://example.org/nested-exists-lateral#hasItem");
+        let flag = b.intern_iri("https://example.org/nested-exists-lateral#flag");
+        let s1 = b.intern_iri("https://example.org/nested-exists-lateral#s1");
+        let s2 = b.intern_iri("https://example.org/nested-exists-lateral#s2");
+        let o1 = b.intern_iri("https://example.org/nested-exists-lateral#o1");
+        let o2 = b.intern_iri("https://example.org/nested-exists-lateral#o2");
+        let v1 = b.intern_iri("https://example.org/nested-exists-lateral#v1");
+        let v2 = b.intern_iri("https://example.org/nested-exists-lateral#v2");
         let ok = b.intern_literal(RdfLiteral::simple("ok"));
         let t = b.intern_literal(RdfLiteral::simple("true"));
         let f = b.intern_literal(RdfLiteral::simple("false"));
@@ -7436,7 +7487,7 @@ mod tests {
         // which is identical for both outer rows) — so the wrong, constant answer
         // passes both `s1` and `s2`. The correct per-row answer keeps only `s1`.
         let ds = nested_exists_lateral_ds();
-        let q = "PREFIX : <https://example.org/188-nested-exists-lateral#> \
+        let q = "PREFIX : <https://example.org/nested-exists-lateral#> \
                  SELECT ?s WHERE { \
                    ?s :knows ?o \
                    FILTER EXISTS { \
@@ -7450,7 +7501,7 @@ mod tests {
         assert_eq!(
             rows,
             vec![vec![
-                "<https://example.org/188-nested-exists-lateral#s1>".to_owned()
+                "<https://example.org/nested-exists-lateral#s1>".to_owned()
             ]],
             "only s1 (whose :hasItem is :flag \"true\") may satisfy the outer EXISTS; \
              the pre-fix classifier let s2 through on a constant, ?s-independent answer"
