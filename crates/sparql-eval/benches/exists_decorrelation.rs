@@ -158,16 +158,42 @@ fn run(ds: &RdfDataset, query: &str, memo: bool) {
     criterion::black_box(outcome);
 }
 
-/// Bench one query/dataset twice (memo off vs on) under `group_name`.
-fn bench_pair(c: &mut Criterion, group_name: &str, ds: &RdfDataset, query: &str) {
+/// Arm labels for the probe path's index-reuse win: memo off rebuilds the inner
+/// index on every outer row, memo on builds it once and reuses it.
+const PROBE_PATH_ARMS: (&str, &str) = ("naive_per_row_rebuild", "decorrelated_reused_index");
+
+/// Arm labels for the definition path's μ-restriction memo win: memo off
+/// substitutes and re-evaluates the inner for every outer row, memo on collapses
+/// repeated correlated-variable restrictions onto a single evaluation each.
+const DEFINITION_MEMO_ARMS: (&str, &str) = (
+    "naive_per_row_definition_eval",
+    "memoized_restriction_reused",
+);
+
+/// Bench one query/dataset twice (memo off vs on) under `group_name`, with arm
+/// labels describing what the pair actually measures for that shape.
+fn bench_pair_labeled(
+    c: &mut Criterion,
+    group_name: &str,
+    ds: &RdfDataset,
+    query: &str,
+    arm_labels: (&str, &str),
+) {
+    let (off_label, on_label) = arm_labels;
     let mut group = c.benchmark_group(group_name);
-    group.bench_function("naive_per_row_rebuild", |bencher| {
+    group.bench_function(off_label, |bencher| {
         bencher.iter(|| run(ds, query, false));
     });
-    group.bench_function("decorrelated_reused_index", |bencher| {
+    group.bench_function(on_label, |bencher| {
         bencher.iter(|| run(ds, query, true));
     });
     group.finish();
+}
+
+/// Bench one query/dataset twice (memo off vs on) under `group_name`, using the
+/// probe path's index-reuse arm labels (the common case for these benches).
+fn bench_pair(c: &mut Criterion, group_name: &str, ds: &RdfDataset, query: &str) {
+    bench_pair_labeled(c, group_name, ds, query, PROBE_PATH_ARMS);
 }
 
 fn bench_exists_decorrelation(c: &mut Criterion) {
@@ -190,11 +216,12 @@ fn bench_exists_decorrelation(c: &mut Criterion) {
     // μ-restriction memo win, not the probe path's index-reuse win — 1000 outer
     // rows over 20 distinct correlated-variable restrictions.
     let hub_optional = hub_optional_dataset(1_000, 20);
-    bench_pair(
+    bench_pair_labeled(
         c,
         "exists_optional_inside_exists_definition_memo",
         &hub_optional,
         OPTIONAL_INSIDE_EXISTS_QUERY,
+        DEFINITION_MEMO_ARMS,
     );
 }
 

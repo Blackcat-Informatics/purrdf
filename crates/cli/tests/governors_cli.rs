@@ -587,9 +587,9 @@ fn explain_over_lateral_graph_variable_is_byte_identical_across_runs() {
     );
     assert!(body.contains("\nledger\n"), "{body}");
     assert!(
-        body.contains("Lateral") && body.contains("Graph"),
-        "the ledger must name both the LATERAL and the Graph node it substitutes \
-         per left row: {body}"
+        body.contains(" Lateral fuel=") && body.contains(" Graph fuel="),
+        "the ledger must carry a node-line entry for both the LATERAL and the Graph \
+         node it substitutes per left row: {body}"
     );
 }
 

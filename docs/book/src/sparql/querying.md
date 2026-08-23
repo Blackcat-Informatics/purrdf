@@ -589,8 +589,8 @@ still does, rather than vanishing merely for having been written inside one.
 A prepare-time analysis decides, once per site per evaluation, which strategy
 answers each `EXISTS`/`NOT EXISTS`. `--explain`'s per-algebra-node charge
 ledger reports the decision through three evidence counters:
-`exists-probe-answered` (one memoized-probe evaluation), `exists-definition-
-answered` (one per-row-definition evaluation), and
+`exists-probe-answered` (one memoized-probe evaluation),
+`exists-definition-answered` (one per-row-definition evaluation), and
 `exists-inner-solutions-consumed` (one row the definition path's inner
 actually materialized — bounded at 1 per evaluation by the first-witness
 stop). The definition path's own inner plan nodes — a `MINUS`, a `Bgp`, a

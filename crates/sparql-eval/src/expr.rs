@@ -1508,13 +1508,16 @@ fn definition_restriction_key<I: ViewTermId>(
     schema: &VarSchema,
     free_vars: &DetHashSet<Variable>,
 ) -> Vec<Option<SolutionTerm<I>>> {
-    schema
-        .vars()
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| free_vars.contains(*v))
-        .map(|(i, _)| row[i])
-        .collect()
+    let mut key = Vec::with_capacity(free_vars.len());
+    key.extend(
+        schema
+            .vars()
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| free_vars.contains(*v))
+            .map(|(i, _)| row[i]),
+    );
+    key
 }
 
 /// The per-row μ used by pattern substitution — SEP-0007's `Replace` mechanism,

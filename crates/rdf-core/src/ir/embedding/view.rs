@@ -350,7 +350,9 @@ impl<'a> TargetSetView<'a> {
     /// Target IDs in authoritative matrix row order.
     pub fn targets(self) -> impl ExactSizeIterator<Item = TargetId> + 'a {
         self.rows
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|bytes| TargetId::from_raw(array32(bytes, 0)))
     }
 }
@@ -4348,10 +4350,8 @@ fn validate_relation_endpoints(
 fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
-    for (column, chunk) in bytes.chunks_exact(4).enumerate() {
-        let value = f32::from_bits(u32::from_le_bytes(
-            chunk.try_into().map_err(|_| EmbeddingError::Truncated)?,
-        ));
+    for (column, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        let value = f32::from_bits(u32::from_le_bytes(*chunk));
         if !value.is_finite() {
             return Err(EmbeddingError::NonFiniteScalar {
                 row,
@@ -4366,10 +4366,8 @@ fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
 fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
-    for (column, chunk) in bytes.chunks_exact(8).enumerate() {
-        let value = f64::from_bits(u64::from_le_bytes(
-            chunk.try_into().map_err(|_| EmbeddingError::Truncated)?,
-        ));
+    for (column, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
+        let value = f64::from_bits(u64::from_le_bytes(*chunk));
         if !value.is_finite() {
             return Err(EmbeddingError::NonFiniteScalar {
                 row,
@@ -4629,8 +4627,10 @@ fn validate_zero_padding_usize(
 
 fn validate_sorted_ids(bytes: &[u8], context: &'static str) -> Result<(), EmbeddingError> {
     if bytes
-        .chunks_exact(32)
-        .zip(bytes.chunks_exact(32).skip(1))
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .zip(bytes.as_chunks::<32>().0.iter().skip(1))
         .any(|(left, right)| left >= right)
     {
         return Err(EmbeddingError::NonCanonicalOrder(context));

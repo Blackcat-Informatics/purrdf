@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn exists_paths_agree_on_path() {
         let ds = arm_ds();
-        // { ?s :member/^:member ?s } via a Path node rather than a Bgp leaf —
+        // { ?s :member ?m } via a Path node rather than a Bgp leaf —
         // structurally the same "always admissible" family, exercised through the
         // OTHER leaf variant `probe_admissible` names explicitly.
         let inner = GraphPattern::Path {
@@ -861,6 +861,17 @@ mod tests {
              behind — one for each distinct `?s` value — so BOTH values probe as \
              non-empty, even though `cB`'s own (single-match) per-value slice is empty"
         );
+        // This exact `vec![true, true]` pin (and therefore the divergence this
+        // `assert_ne!` demonstrates) depends on the engine dropping one of the TWO
+        // `cA` rows for the OFFSET, not the lone `cB` row: `cA` has two `:item`
+        // facts (`zA`, `zB`) and `cB` has one (`zC`), so if the engine's raw-scan
+        // enumeration order instead offset away the `cB` row, the surviving pair
+        // would be `{zA, zB}` (both `cA`) and the probe would answer `[true,
+        // false]` — coincidentally EQUAL to `correct`, which would make this
+        // `assert_ne!` fail even though the underlying strategies still diverge in
+        // general. The scan order that makes this deterministic today is not a
+        // documented contract; a future change to leaf-scan enumeration order
+        // could flip this pin.
         assert_ne!(
             correct, probed,
             "the forced probe must diverge from the correct per-value answer"
@@ -1017,7 +1028,7 @@ mod tests {
             correct,
             vec![true, false],
             "correct per-row answer: TRUE for `cA` (one matching `:item` fact), FALSE \
-             for `cZ` (none) — outer rows are `[cA, cZ]` in `?s :tag ?w`'s solution order"
+             for `cZ` (none) — outer rows are `[cA, cZ]` in `?s :tag ?otag`'s solution order"
         );
         assert_eq!(
             probed,
