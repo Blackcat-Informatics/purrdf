@@ -74,22 +74,32 @@ pub(crate) fn read_bytes(path: &str) -> Result<Vec<u8>, CliError> {
     }
 }
 
-/// Acquire a pack `path` (or stdin when `path` is `-`) as an immutable, verified
-/// byte owner.
+/// Acquire a pack `path` (or stdin when `path` is `-`) as an immutable byte owner,
+/// **without** verifying it.
 ///
 /// The bytes are obtained through [`ImmutableInput`] — memory-safe against a hostile
-/// concurrent pathname writer — and then run **once** through [`verify_pack`]
-/// (fail-closed integrity) over those already-immutable bytes. The returned owner
-/// must be held alive for as long as its bytes are used: a [`PackView`] borrows them
-/// zero-copy, so callers keep the [`ImmutableInput`] in scope for the whole
-/// operation. This is the single acquisition seam every pack consumer routes
-/// through (the pipeline arms below, and `convert`'s pack→pack byte passthrough).
-pub(crate) fn verified_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
-    let input = if path == "-" {
-        ImmutableInput::from_stdin()?
+/// concurrent pathname writer. Almost every consumer wants [`verified_pack_input`],
+/// which additionally runs [`verify_pack`]; the standalone `pack verify` verb uses
+/// this raw acquisition so it can surface the [`PackDigest`](purrdf_core::PackDigest)
+/// that `verify_pack` returns rather than discard it.
+pub(crate) fn acquire_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+    if path == "-" {
+        ImmutableInput::from_stdin()
     } else {
-        ImmutableInput::from_disk_path(path)?
-    };
+        ImmutableInput::from_disk_path(path)
+    }
+}
+
+/// Acquire a pack `path` (or stdin) as an immutable owner and verify it **once**.
+///
+/// [`verify_pack`] (fail-closed, canonical integrity) runs over the already-immutable
+/// bytes, so nothing enters the pipeline unverified. The returned owner must be held
+/// alive for as long as its bytes are used: a [`PackView`] borrows them zero-copy, so
+/// callers keep the [`ImmutableInput`] in scope for the whole operation. This is the
+/// single acquisition seam the pipeline arms below and `convert`'s pack→pack byte
+/// passthrough route through.
+pub(crate) fn verified_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+    let input = acquire_pack_input(path)?;
     // Unconditional canonical integrity, once, over the stable bytes.
     verify_pack(input.as_bytes())?;
     Ok(input)

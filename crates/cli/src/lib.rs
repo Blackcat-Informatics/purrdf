@@ -50,6 +50,7 @@ mod format;
 mod governors;
 pub mod immutable;
 mod ledger;
+mod pack;
 mod projection;
 mod query;
 mod reason;
@@ -64,7 +65,7 @@ use std::io::Read as _;
 use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
-use crate::cli::{Cli, Command, ReportTarget};
+use crate::cli::{Cli, Command, PackCommand, ReportTarget};
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
 
@@ -324,6 +325,10 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             jsonld_options.as_ref(),
             &ledger_target,
         )
+        .map(|()| CliOutcome::Complete),
+        Command::Pack { command } => match command {
+            PackCommand::Verify { input } => pack::verify(input),
+        }
         .map(|()| CliOutcome::Complete),
     }
 }

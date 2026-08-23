@@ -567,6 +567,29 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
+    /// Pack container utilities.
+    Pack {
+        /// The pack subcommand to run.
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+}
+
+/// The `pack` subcommands.
+#[derive(Subcommand, Debug)]
+pub(crate) enum PackCommand {
+    /// Verify a pack container's full integrity — every section digest AND the
+    /// RDFC-1.0 canonical-identity digest. Prints the verified 64-hex digest and
+    /// exits 0; a corrupt or non-pack input exits non-zero with a message.
+    ///
+    /// The ordinary read/reason paths already verify a pack on every open (nothing
+    /// enters the pipeline unverified); this is the explicit surface for confirming a
+    /// pack in isolation, without running a conversion or query.
+    Verify {
+        /// Pack path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
 }
 
 /// Projection profiles accepted by `purrdf project`.
