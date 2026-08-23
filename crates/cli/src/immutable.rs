@@ -398,4 +398,36 @@ mod tests {
         assert_eq!(input.as_bytes(), original.as_slice());
         assert_ne!(input.as_bytes(), replacement.as_slice());
     }
+
+    #[test]
+    fn acquired_bytes_survive_truncation_of_the_source_file() {
+        // Multi-page payload so any mapping spans several pages.
+        let payload: Vec<u8> = (0u8..=255).cycle().take(256 * 1024).collect();
+        let file = temp_with(&payload);
+
+        let input = ImmutableInput::from_disk_path(path_of(&file)).expect("acquire");
+
+        // A hostile writer truncates the SOURCE file to zero AFTER acquisition
+        // (deterministically ordered: acquisition has fully returned). A naive `mmap`
+        // of the source would fault the process with SIGBUS on the next access; the
+        // sealed-`memfd` snapshot (Tier 1) or owned buffer (Tier 2) is independent of
+        // the source file, so the mapping cannot be shrunk under us.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(file.path())
+            .expect("truncate source");
+
+        // Touch EVERY byte of the acquired mapping: this both reads the whole span
+        // (where a truncated mapping would fault) and confirms the bytes are the
+        // originals, unaffected by the truncation. Reaching the assertions at all is
+        // the proof that no SIGBUS occurred.
+        let bytes = input.as_bytes();
+        assert_eq!(bytes.len(), payload.len());
+        assert_eq!(bytes, payload.as_slice());
+        assert_eq!(
+            bytes.iter().map(|&b| u64::from(b)).sum::<u64>(),
+            payload.iter().map(|&b| u64::from(b)).sum::<u64>()
+        );
+    }
 }
