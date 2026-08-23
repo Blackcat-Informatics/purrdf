@@ -150,6 +150,16 @@ _RL_MECHANISM_PIN = (
     _REPO / "crates" / "sparql-conformance" / "tests" / "owl2_rl_conformance.rs"
 )
 
+# The first-party `purrdf-extend` manifest. `docs/CONFORMANCE.md`'s SPARQL
+# 1.1/1.2 scoreboard row hand-counts three of its case families in prose
+# ("nine temporal", "six LATERAL", "eight SEP-0007" as originally written) —
+# each a restatement of `mf:entries`'s own list, and none of the three was
+# derived from it, which is how the SEP-0007 figure fell one short of the
+# nine cases actually shipped (:existsScopeProjectionViolation went uncounted).
+_EXTEND_MANIFEST = (
+    _REPO / "crates" / "sparql-conformance" / "suite" / "purrdf-extend" / "manifest.ttl"
+)
+
 _MATRIX_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
 _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
 
@@ -377,6 +387,56 @@ def load_never_published() -> list[str]:
             "cannot be checked, so do not leave it unchecked"
         )
     return sorted(names)
+
+
+# Case-id prefix -> the family name the prose hand-counts it under. Order matters:
+# `notExists` is checked before `exists` would ever be tried against it, but since
+# no id starts with both, checked in listed order with the first match winning.
+# A prefix here is deliberately a case-ID convention, not a `mf:` type: SEP-0007
+# ships both `mf:QueryEvaluationTest` and `mf:NegativeSyntaxTest` cases under one
+# family, so counting by RDF type would split what the prose counts as one figure.
+_EXTEND_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("temporal", "temporal"),
+    ("lateral", "LATERAL"),
+    ("notExists", "SEP-0007"),
+    ("exists", "SEP-0007"),
+)
+
+
+def load_extend_manifest_family_counts() -> dict[str, int]:
+    """How many `purrdf-extend` manifest cases each hand-counted family actually holds.
+
+    Counted from `mf:entries`'s own list — the manifest's real structure, not a
+    hand-maintained tally — by each entry id's own prefix (`_EXTEND_FAMILY_PREFIXES`),
+    so a case added to or removed from the manifest changes this count without
+    anyone updating a second number to match. This is the ground truth
+    `docs/CONFORMANCE.md`'s prose restates; see `_EXTEND_MANIFEST`'s own comment
+    for the drift this closes.
+    """
+    text = _read(_EXTEND_MANIFEST)
+    entries_block = re.search(r"mf:entries\s*\((.*?)\)\s*\.", text, re.DOTALL)
+    if not entries_block:
+        raise SystemExit(
+            f"check-doc-claims: no 'mf:entries ( ... )' list in "
+            f"{_EXTEND_MANIFEST.relative_to(_REPO)}; the family-count claim "
+            f"cannot be checked, so do not leave it unchecked"
+        )
+    ids = re.findall(r":([A-Za-z0-9]+)", entries_block.group(1))
+    if not ids:
+        raise SystemExit(
+            f"check-doc-claims: the mf:entries list in "
+            f"{_EXTEND_MANIFEST.relative_to(_REPO)} parsed to zero case ids"
+        )
+    # Ids outside all three prefixes (VERSION/AGG/base-direction/etc.) are not
+    # hand-counted anywhere in prose, so they are simply not tallied — this
+    # function's contract is the three families it names, not every id.
+    counts: dict[str, int] = {family: 0 for _, family in _EXTEND_FAMILY_PREFIXES}
+    for entry_id in ids:
+        for prefix, family in _EXTEND_FAMILY_PREFIXES:
+            if entry_id.startswith(prefix):
+                counts[family] += 1
+                break
+    return counts
 
 
 _SPELLED = {
@@ -3814,6 +3874,7 @@ def build_claims(
     census: dict[str, int],
     lanes: dict[str, int],
     mechanisms: dict[str, int],
+    extend_families: dict[str, int],
 ) -> list[Claim]:
     owl2_pass, owl2_ledger = matrix["Entailment (OWL 2 DL consistency)"]
     owl2_total = owl2_pass + owl2_ledger
@@ -3837,6 +3898,10 @@ def build_claims(
     led = (
         "crates/sparql-conformance/src/owl2_rl.rs::LEDGER cross-referenced against "
         "census.tsv (the harness asserts 0 unledgered and 0 stale)"
+    )
+    ext = (
+        "crates/sparql-conformance/suite/purrdf-extend/manifest.ttl's `mf:entries` "
+        "list, counted per family by each case id's own prefix"
     )
     mech = (
         "the `OWL2-RL-MECHANISMS` line pinned in "
@@ -4567,6 +4632,41 @@ def build_claims(
             {"passed": compat_pass, "xfail": compat_x},
             mat,
         ),
+        # --- purrdf-extend manifest per-family case counts, hand-counted in the
+        # SPARQL 1.1/1.2 scoreboard row's prose. Each is sourced from the manifest's
+        # own `mf:entries` list (`load_extend_manifest_family_counts`), not from a
+        # second hand-maintained number, which is how "eight SEP-0007" survived
+        # shipping a ninth case.
+        Claim(
+            "the purrdf-extend temporal-family case count in the SPARQL 1.1/1.2 row",
+            _CONFORMANCE,
+            _flow(
+                r"purrdf-extend` manifest additionally walks "
+                r"(?P<temporal>[A-Za-z]+|\d+) temporal arithmetic cases"
+            ),
+            {"temporal": extend_families["temporal"]},
+            ext,
+        ),
+        Claim(
+            "the purrdf-extend LATERAL-family case count in the SPARQL 1.1/1.2 row",
+            _CONFORMANCE,
+            _flow(
+                r"the same manifest also walks (?P<lateral>[A-Za-z]+|\d+) "
+                r"`LATERAL` \(SEP-0006\) cases"
+            ),
+            {"lateral": extend_families["LATERAL"]},
+            ext,
+        ),
+        Claim(
+            "the purrdf-extend SEP-0007-family case count in the SPARQL 1.1/1.2 row",
+            _CONFORMANCE,
+            _flow(
+                r"the same manifest also walks (?P<exists>[A-Za-z]+|\d+) SEP-0007 "
+                r"`EXISTS`/`NOT EXISTS` cases"
+            ),
+            {"exists": extend_families["SEP-0007"]},
+            ext,
+        ),
     ]
 
 
@@ -4618,6 +4718,7 @@ def main(argv: list[str]) -> int:
     census = census_counts()
     lanes = rl_lane_counts()
     mechanisms = rl_mechanism_counts()
+    extend_families = load_extend_manifest_family_counts()
 
     problems: list[str] = []
     checked = 0
@@ -4668,7 +4769,9 @@ def main(argv: list[str]) -> int:
     problems.extend(overclaim_problems)
     checked += 1
 
-    for claim in build_claims(inventory, matrix, census, lanes, mechanisms):
+    for claim in build_claims(
+        inventory, matrix, census, lanes, mechanisms, extend_families
+    ):
         claim.check()
         problems.extend(claim.failures)
         checked += 1
