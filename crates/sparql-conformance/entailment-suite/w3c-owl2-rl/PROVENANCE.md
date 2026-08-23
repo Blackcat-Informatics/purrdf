@@ -410,20 +410,17 @@ both are named here rather than folded silently into the tally above:
   positive `float` — whose value space a discrete datatype makes empty, so the
   ontology is unsatisfiable; the prior search evidently never reached that
   data-range check.
-- `webont-description-logic-035` moved `decides-inconsistent` → `decides-consistent`,
-  the one direction this file's own doctrine treats as suspect rather than a
-  quiet win. The published verdict is `InconsistencyTest`, so the new answer
-  disagrees with W3C — but it is rendered `completeness decided-within-boundaries`
-  with a `boundary counting-on-inverse`: a nominal ("spy point") bounded by an
-  `owl:maxCardinality` over an *inverse* role, textbook of the one completeness
-  gap this reasoner already discloses by name (the missing NN/NI
-  nominal-introduction rule; see `Construct::CountingOnInverse` in
-  `crates/entail/src/report.rs`). The prior measurement, on a reasoner that took
-  a different search path through the same axioms, apparently found the clash
-  without ever exercising that gap; the current path does not, and says so
-  rather than guessing. This is a genuine, pre-existing incompleteness corner
-  surfacing on a case it previously missed, not a new defect — and it is why
-  this row is not silently absorbed into the tally.
+- `webont-description-logic-035` is now `graded` and decides **inconsistent**,
+  agreeing with its `InconsistencyTest` published verdict. It is the spy-point
+  nominal bounded by an `owl:maxCardinality` over an *inverse* role — the textbook
+  case for the nominal-introduction rule — and both decision cores now implement
+  that rule (Horrocks–Sattler `NN` in the concept-tree reference,
+  Motik–Shearer–Horrocks Table 5 `NI` in the production hypertableau), so the
+  former `counting-on-inverse` completeness boundary is gone: the reasoner decides
+  the corner rather than disclosing a gap. An earlier revision recorded this row
+  as `decides-consistent` within that boundary; the boundary and that disclosure no
+  longer exist, and the case is vendored into the DL corpus so the verdict is
+  checked on every conformance run.
 
 The other headline the probe produced: of the 221 consistency-shaped cases the DL
 corpus leaves out, **173 the tableau decided when probed** (up from 156). Their

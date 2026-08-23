@@ -40,7 +40,11 @@ use crate::EntailError;
 use crate::interner::Interner;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::ConceptTable;
-use crate::owl_dl::concept::{Concept, Decomp, Role};
+use crate::owl_dl::concept::Concept;
+// `Decomp`/`Role` are used only by the `cfg(test)` sub-cardinality interning for the
+// concept-tree `NN`-rule; production no longer reads either here.
+#[cfg(test)]
+use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
@@ -431,19 +435,14 @@ impl Kb {
             Ok(()) => {}
             Err(never) => match never {},
         }
-        if self.counts_over_an_inverse() {
-            self.boundaries.insert(Construct::CountingOnInverse);
-        }
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
     ///
     /// The ENCODING half of [`Self::finalize`], and the half the reverse mapping needs: a
-    /// parsed knowledge base is not yet a question, while
-    /// [`Construct::CountingOnInverse`] is a statement about the DECISION core's completeness
-    /// rather than about the ontology's syntax. So the disclosure stays where a decision is
-    /// prepared — the query layer's finalize, and the key-inference pass — which is exactly
-    /// where it was made before the TBox needed a pass of its own.
+    /// parsed knowledge base is not yet a question, and the encoding is a pure function of the
+    /// TBox that the query layer's finalize and the key-inference pass both re-run after
+    /// interning more concepts.
     ///
     /// Three passes, in this order and for this reason: the negation cache first, because
     /// PARTIAL absorption negates the conjuncts it cannot guard; then [`absorb`], which
@@ -588,19 +587,6 @@ impl Kb {
         false
     }
 
-    /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the
-    /// NN/NI corner neither decision core is complete for.
-    ///
-    /// Keyed on LOGICAL CONTENT, not on spelling. `≤n r⁻.C` written directly is the obvious
-    /// shape, but `q owl:inverseOf p` with `≤n q.C` denotes exactly the same thing, and an
-    /// earlier revision of this check saw only the first: two logically equivalent knowledge
-    /// bases disclosed the limit differently, which makes the disclosure a fact about syntax
-    /// rather than about the answer. Both spellings are the corner, so both raise it.
-    ///
-    /// `owl:InverseFunctionalProperty` is the everyday case in the first spelling — it IS
-    /// `⊤ ⊑ ≤1 p⁻.⊤` — and the second is how the same restriction reads when a caller names
-    /// the inverse. A counted role with no inverse partner is outside the corner and raises
-    /// nothing.
     /// Pre-intern the SUB-CARDINALITY concepts `≤m S.C` (`1 ≤ m < n`) of every at-most
     /// `≤n S.C` counted over an inverse role.
     ///
@@ -630,17 +616,6 @@ impl Kb {
         for (m, role, filler) in wanted {
             self.table.intern(Concept::Max(m, role, Box::new(filler)));
         }
-    }
-
-    fn counts_over_an_inverse(&self) -> bool {
-        (0..self.table.len() as u32).any(|id| match self.table.decomp(id) {
-            // Counted directly over an inverse role.
-            Decomp::Max(_, Role::Inv(_), _) => true,
-            // Counted over a NAMED role that some `owl:inverseOf` axiom makes an inverse.
-            // The map is symmetric, so one membership test settles either direction.
-            Decomp::Max(_, Role::Named(p), _) => self.inverses.contains_key(p),
-            _ => false,
-        })
     }
 
     /// Whether the knowledge base (TBox + ABox) is consistent.

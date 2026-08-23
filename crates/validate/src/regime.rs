@@ -4034,17 +4034,17 @@ mod tests {
         ]
     }
 
-    /// The nominal/inverse/counting corner carries its NAMED boundary.
+    /// The nominal/inverse/counting corner is DECIDED, not bounded.
     ///
-    /// Neither decision core implements the NN/NI nominal-introduction rule, a SHARED
-    /// absence the differential between them cannot see — so the disclosure has to be
-    /// machine-carried, not prose. An at-most over an INVERSE role is the shape the
-    /// missing rule fires on; `owl:InverseFunctionalProperty` is exactly `≤1 r⁻.⊤`, so
-    /// an ontology declaring one carries `counting-on-inverse` and its completeness
-    /// reads decided-within-boundaries rather than a bare decided. An ontology without
-    /// the shape carries no such line.
+    /// Both decision cores now implement the nominal-introduction rule (Horrocks–Sattler `NN`
+    /// in the concept-tree reference, Motik–Shearer–Horrocks Table 5 `NI` in the production
+    /// hypertableau), so an at-most over an INVERSE role — `owl:InverseFunctionalProperty` is
+    /// exactly `≤1 r⁻.⊤` — is decided outright, with no `counting-on-inverse` boundary and no
+    /// `decided-within-boundaries` disclosure. The stale blanket boundary is gone; keeping it
+    /// would be a false claim of incompleteness against a rule the differential and the vendored
+    /// W3C `webont-description-logic-035` now prove is present.
     #[test]
-    fn counting_on_inverse_is_a_named_boundary() {
+    fn counting_on_inverse_is_decided_by_nominal_introduction() {
         let ifp = "<http://example.org/ssn> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
 <http://www.w3.org/2002/07/owl#InverseFunctionalProperty> .\n\
@@ -4055,24 +4055,19 @@ mod tests {
             "{answer:?}"
         );
         assert!(
-            answer
-                .certificate()
-                .contains("boundary counting-on-inverse"),
-            "the NN/NI corner must be disclosed on the certificate: {}",
+            !answer.certificate().contains("counting-on-inverse"),
+            "the NN/NI corner is now decided, so no boundary is raised: {}",
             answer.certificate()
         );
         assert!(
-            answer
-                .certificate()
-                .contains("completeness decided-within-boundaries"),
-            "{}",
+            !answer.certificate().contains("decided-within-boundaries"),
+            "an inverse-functional property is decided outright, not within boundaries: {}",
             answer.certificate()
         );
 
-        // THE SPELLING-INDEPENDENCE CASE. `q owl:inverseOf p` with `⊤ ⊑ ≤1 q.⊤` denotes
-        // exactly what `owl:InverseFunctionalProperty p` denotes, so it must disclose the
-        // same limit: an earlier revision keyed on the syntactic `≤n r⁻` shape alone, and
-        // two logically equivalent ontologies then reported different completeness.
+        // THE SPELLING-INDEPENDENCE CASE. `q owl:inverseOf p` with `⊤ ⊑ ≤1 q.⊤` denotes exactly
+        // what `owl:InverseFunctionalProperty p` denotes (the `S=Named(p)`-made-inverse form),
+        // and it is likewise decided outright with no boundary.
         let named_inverse = "<http://example.org/q> \
 <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/p> .\n\
 <http://www.w3.org/2002/07/owl#Thing> \
@@ -4085,14 +4080,12 @@ _:c <http://www.w3.org/2002/07/owl#maxCardinality> \
 <http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
         let answer = consistency_to_string(named_inverse, 0, 0).expect("decides");
         assert!(
-            answer
-                .certificate()
-                .contains("boundary counting-on-inverse"),
-            "counting a NAMED role that owl:inverseOf makes an inverse is the same corner: {}",
+            !answer.certificate().contains("counting-on-inverse"),
+            "counting a NAMED role owl:inverseOf makes an inverse is decided, not bounded: {}",
             answer.certificate()
         );
 
-        // A counted role with no inverse partner is OUTSIDE the corner.
+        // A counted role with no inverse partner never was the corner, and still is not.
         let counted_only = "<http://www.w3.org/2002/07/owl#Thing> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:c .\n\
 _:c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
