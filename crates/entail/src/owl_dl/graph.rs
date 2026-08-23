@@ -91,17 +91,6 @@ pub(crate) struct Node {
     pub(crate) value_class: Option<u32>,
 }
 
-/// A TYPED, collision-free identity for a nominal-introduction root node.
-///
-/// The nominal/inverse/counting corner of `SHOIQ` needs the completion to mint *new nominal
-/// roots* — Horrocks & Sattler's `NN`-rule and Motik–Shearer–Horrocks' Table 5 `NI`-rule — and
-/// those roots must be identifiable so a repeated firing reuses one rather than growing the graph
-/// forever. A term-space individual is a `u32`; a generated root is a value of THIS type, so the
-/// two identity spaces are disjoint *by type* and no generated root can ever be confused with,
-/// or collide with, a named individual (which is exactly the caterpillar-nontermination the
-/// published calculi guard against). It is `Ord` so it can key [`State::generated_root_of`], and
-/// every field is deterministic, so the identity a run mints for a given trigger is byte-identical
-/// run to run.
 /// The STABLE identity of a nominal — either a named individual or a generated reserved one.
 ///
 /// Not every structurally-unblocked (`root`) node is a nominal: an anonymous `fresh_types`
@@ -998,8 +987,7 @@ impl<'a> Graph<'a> {
             if find(st, n) != x {
                 continue;
             }
-            let (Some(parent), Some((prop, inverted))) =
-                (st.nodes[n].parent, st.nodes[n].incoming)
+            let (Some(parent), Some((prop, inverted))) = (st.nodes[n].parent, st.nodes[n].incoming)
             else {
                 continue;
             };

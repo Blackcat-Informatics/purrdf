@@ -16,7 +16,7 @@ against the verdict the W3C published for it.
 
 **It validates the DL / tableau lane's verdicts, and nothing else.**
 
-Every one of the 261 vendored cases is a `otest:ConsistencyTest` or an
+Every one of the 262 vendored cases is a `otest:ConsistencyTest` or an
 `otest:InconsistencyTest`: the published ground truth is a *satisfiability*
 verdict over an ontology, decided here by `purrdf_entail::materialize_dl_reported`. There
 is not one `otest:PositiveEntailmentTest` or `otest:NegativeEntailmentTest` in
@@ -30,7 +30,7 @@ the sibling tree `../w3c-owl2-rl/`. A reader looking at the `Entailment` row of
 the conformance matrix is looking at open-world DL consistency, not at rule
 coverage.
 
-It is also a **subset**: 261 of the 482 consistency-shaped cases the upstream
+It is also a **subset**: 262 of the 482 consistency-shaped cases the upstream
 manifest publishes. See *What was left behind*.
 
 ## Source
@@ -52,7 +52,7 @@ manifest publishes. See *What was left behind*.
 
 | File | Fidelity |
 |------|----------|
-| `cases/<case>/source/premise.rdf` | **near-verbatim**: each test's `otest:rdfXmlPremiseOntology` literal, with **trailing whitespace stripped from every line and a final newline appended** by the upstream flattening. No SPDX header was injected and no namespace was rewritten, but the bytes are not the W3C's bytes. Re-extracting all 261 premises from `all.rdf` reproduces this tree byte-for-byte only under that normalization: **0 of 261 match raw, 261 of 261 match normalized**. (An earlier revision of this document claimed "byte-for-byte … no whitespace was normalized". That was wrong, and it is corrected here. The sibling tree `../w3c-owl2-rl/` vendors the literal values with no normalization at all.) |
+| `cases/<case>/source/premise.rdf` | **near-verbatim**: each test's `otest:rdfXmlPremiseOntology` literal, with **trailing whitespace stripped from every line and a final newline appended** by the upstream flattening. No SPDX header was injected and no namespace was rewritten, but the bytes are not the W3C's bytes. Re-extracting the 261 `w3c-owl2-full` premises from `all.rdf` reproduces those cases byte-for-byte only under that normalization: **0 of 261 match raw, 261 of 261 match normalized**. The 262nd case, `webont-description-logic-035`, is not inlined in `all.rdf` (the manifest imports it by URI), so it is vendored from its own W3C document under the SAME normalization. (An earlier revision of this document claimed "byte-for-byte … no whitespace was normalized". That was wrong, and it is corrected here. The sibling tree `../w3c-owl2-rl/` vendors the literal values with no normalization at all.) |
 | `cases/<case>/profile.json` | **derived**, mechanically, by the flattening. `w3c_published_verdict` is the suite's own classification of the case: `consistent` for an `otest:ConsistencyTest`, `inconsistent` for an `otest:InconsistencyTest`. The remaining keys (`mode`, `native_verdict`, `verdict_mode`) are the flattening tool's own bookkeeping and are **ignored** by this repository's grader — in particular `native_verdict` is a *different* reasoner's answer and is never treated as ground truth here. |
 
 Every file is a byte-exact copy of its counterpart in the *pinned sibling source*
@@ -79,15 +79,17 @@ The flattened source also carries a per-case `source/manifest.ttl` naming the
 
 The one fact the manifest carries that the grader needs — the published verdict —
 is preserved in `profile.json`'s `w3c_published_verdict`, and the two agree on
-all 261 cases (226 `ConsistencyTest` → `consistent`, 35 `InconsistencyTest` →
-`inconsistent`).
+all 261 flattened-source cases (226 `ConsistencyTest` → `consistent`, 35
+`InconsistencyTest` → `inconsistent`). The separately-vendored
+`webont-description-logic-035` carries a `profile.json` only (`inconsistent`),
+bringing the tree to 226 consistent + 36 inconsistent = 262 graded cases.
 
 ## Base IRI
 
 Each `premise.rdf` is parsed by PurRDF's first-party RDF/XML codec with a
 synthetic, deterministic base IRI (`http://example.org/w3c-owl2/<case>` — an
 `example.org` fixture IRI, per the repository's no-fabricated-vocabulary rule).
-That base is never actually consulted: **0 of the 261 vendored premises contain a
+That base is never actually consulted: **0 of the 262 vendored premises contain a
 relative RDF/XML reference (`rdf:about` / `rdf:resource` / `rdf:ID` /
 `rdf:datatype`) without also declaring their own `xml:base`**, so every IRI in
 every case resolves from the document itself and no verdict depends on the
@@ -132,11 +134,13 @@ Measured 2026-08-10, release build, one process per case, four concurrent, 40 s
 wall-clock ceiling each — re-measured from the 2026-07-29 debug-build figures
 (30 / 156 / 12 / 23) after clausification and search-refinement work changed
 what the tableau does with every one of these premises. The headline is the
-second row: **173 of the 221 exclusions are cases the reasoner decides** (up
-from 156), and the non-terminating row is now empty — every case that used to
-exhaust its wall-clock budget resolves one way or the other today. The
+second row: **172 of the 220 exclusions are cases the reasoner decides** (up
+from 156; the count fell from 173 to 172 and the excluded set from 221 to 220
+when `webont-description-logic-035` moved out of the exclusions and into the
+graded corpus), and the non-terminating row is now empty — every case that used
+to exhaust its wall-clock budget resolves one way or the other today. The
 exclusion remains a payload-size and triage decision and not a capability
-limit, and the 261 denominator understates neither the reasoner nor overstates
+limit, and the 262 denominator understates neither the reasoner nor overstates
 it by accident — it simply is not the W3C denominator, and the harness now
 says so out loud. See `../w3c-owl2-rl/PROVENANCE.md`'s census section for the
 two decided cases whose verdict direction moved between the two

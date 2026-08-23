@@ -650,14 +650,16 @@ impl<'a> Hyper<'a> {
             // obligation is not satisfied and not discharged: it is deferred to the blocker,
             // which is what the model construction in the module docs makes good.
             //
-            // The one exception is an at-least whose filler is a NOMINAL (`≥n R.{o}`). That
-            // obligation is met by an edge to an EXISTING nominal root, not by minting a fresh
-            // blockable successor, so it threatens neither termination (no new blockable node)
-            // nor the unravelling argument (the blocker carries the same edge to the same root).
-            // Withholding it, on the other hand, hides the blocked node from the nominal's own
-            // inverse-role count — which is exactly the incompleteness the nominal-introduction
-            // rule exists to repair, so the count must SEE those edges. It therefore fires even
-            // under blocking. See [`crate::owl_dl::tableau`] for the concept-tree's mirror.
+            // The one exception is an at-least whose filler is a NOMINAL that counts over an
+            // inverse (`≥n R.{o}` with `o` bounded on `R⁻`). Satisfying it mints a witness
+            // labelled `{o}`, but the nominal identification immediately merges that witness into
+            // the EXISTING root `o` (OWL 2 has no unique-name assumption), so no PERSISTENT
+            // blockable node survives and no unbounded blockable chain can grow from it —
+            // termination is preserved, and the unravelling argument is unaffected because the
+            // blocker carries the same obligation to the same root. Withholding it, on the other
+            // hand, hides the blocked node from the nominal's own inverse-role count — exactly the
+            // incompleteness the nominal-introduction rule repairs — so it must fire even under
+            // blocking. See [`crate::owl_dl::tableau`] for the concept-tree's mirror.
             if disjunct.iter().any(|atom| {
                 matches!(atom, Ground::AtLeast(node, _n, _role, filler)
                     if is_blocked(st, blocked, *node)

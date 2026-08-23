@@ -39,8 +39,8 @@ use purrdf_datalog::StopSignal;
 use crate::EntailError;
 use crate::interner::Interner;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
-use crate::owl_dl::concept::ConceptTable;
 use crate::owl_dl::concept::Concept;
+use crate::owl_dl::concept::ConceptTable;
 // `Decomp`/`Role` are used only by the `cfg(test)` sub-cardinality interning for the
 // concept-tree `NN`-rule; production no longer reads either here.
 #[cfg(test)]
@@ -600,16 +600,23 @@ impl Kb {
     /// hypertableau's `NI`-rule uses reserved roots, so this is gated to test builds.
     #[cfg(test)]
     fn intern_sub_cardinalities(&mut self) {
+        // EVERY at-most `≤n S.C` (n ≥ 2) is covered, not only the ones whose role is DIRECTLY an
+        // inverse or an `owl:inverseOf` partner. The `NN`-rule's trigger fires whenever the
+        // completion has a blockable predecessor that the achiever closure of `S` — which folds
+        // in sub-roles AND their inverses — makes an `S`-neighbour, so a `≤n S.C` counted over a
+        // NAMED role whose sub-role is an inverse can trigger it too. Pre-interning only the
+        // syntactically-inverse roles left that case's `≤m` un-interned, and `NN`'s `find_id`
+        // then panicked. Interning every sub-cardinality removes the mismatch; a concept no
+        // `NN` firing reaches is inert, and this whole pass is `cfg(test)` so production is
+        // byte-for-byte unchanged.
         let mut wanted: Vec<(u32, Role, Concept)> = Vec::new();
         for id in 0..self.table.len() as u32 {
-            if let Decomp::Max(n, role, filler) = *self.table.decomp(id) {
-                let over_inverse = matches!(role, Role::Inv(_))
-                    || matches!(role, Role::Named(p) if self.inverses.contains_key(&p));
-                if over_inverse && n >= 2 {
-                    let filler_concept = self.table.concept(filler).clone();
-                    for m in 1..n {
-                        wanted.push((m, role, filler_concept.clone()));
-                    }
+            if let Decomp::Max(n, role, filler) = *self.table.decomp(id)
+                && n >= 2
+            {
+                let filler_concept = self.table.concept(filler).clone();
+                for m in 1..n {
+                    wanted.push((m, role, filler_concept.clone()));
                 }
             }
         }

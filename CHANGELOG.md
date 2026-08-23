@@ -17,6 +17,19 @@ called out below with what a consumer must do.
 
 ### Bug Fixes
 
+- **entail:** OWL-Direct now DECIDES the `SHOIQ` nominal / inverse-role / qualified-number-restriction
+  corner. Both decision cores implement the nominal-introduction rule — Horrocks & Sattler's `NN`-rule
+  in the `cfg(test)` concept-tree reference and Motik–Shearer–Horrocks' Table 5 `NI`-rule in the
+  production hypertableau — so an ontology with an at-most over an inverse role (an
+  `owl:InverseFunctionalProperty`, or the vendored W3C spy-point `webont-description-logic-035`) is
+  decided rather than answered `consistent-within-boundaries`; `webont-description-logic-035` now
+  decides **inconsistent**, matching its published verdict, and is graded on every conformance run.
+- **entail:** **Removed** the `counting-on-inverse` completeness boundary
+  (`report::Construct::CountingOnInverse` and its `"counting-on-inverse"` certificate line, plus the
+  `decided-within-boundaries` completeness it forced there). The corner is now decided, so a
+  reasoning report over it no longer carries that boundary; a consumer that matched the
+  `"counting-on-inverse"` boundary name or expected `decided-within-boundaries` there will instead
+  see a plain `decided` verdict (or, past the counting ceiling, an honest `budget-exhausted`).
 - **BREAKING** **sparql:** The `VERSION "1.2-basic"` declaration is now actually enforced as the
   SPARQL 1.2 Basic profile (full 1.2 syntax minus RDF 1.2 triple terms), not merely retained and
   round-tripped. Evaluation admission now refuses a triple term in any triple/quad pattern or path

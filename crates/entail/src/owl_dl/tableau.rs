@@ -425,11 +425,12 @@ impl<'a> Tableau<'a> {
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
             changed |= self.rule_self(st, i);
-            // Blocking withholds the `∃`- and `≥`-rules — EXCEPT for a NOMINAL filler
-            // (`∃r.{o}` / `≥n r.{o}`), which is met by an edge to an existing root, mints no
-            // blockable successor, and must fire even under blocking so the nominal's own
-            // inverse count sees the blocked node. The hypertableau's [`crate::owl_dl::hyper`]
-            // mirrors this exemption.
+            // Blocking withholds the `∃`- and `≥`-rules — EXCEPT for a NOMINAL filler that counts
+            // over an inverse (`∃r.{o}` / `≥n r.{o}`). Such a rule mints a successor labelled
+            // `{o}`, but [`Tableau::rule_nominal`] immediately merges it into the existing root
+            // `o`, so no PERSISTENT blockable node survives and termination is preserved; it must
+            // fire even under blocking so the nominal's own inverse count sees the blocked node.
+            // The hypertableau's [`crate::owl_dl::hyper`] mirrors this exemption.
             let blk = self.blocked(st, i);
             changed |= self.rule_exists(st, i, blk);
             changed |= self.rule_min(st, i, blk);
@@ -798,12 +799,20 @@ impl<'a> Tableau<'a> {
         let filler_concept = self.g.kb().table.concept(filler).clone();
         let mut branches = Vec::with_capacity(nmax as usize);
         for m in 1..=nmax {
-            let bound = self
-                .g
-                .kb()
-                .table
-                .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
-                .expect("sub-cardinality `≤m S.C` pre-interned by Kb::intern_sub_cardinalities");
+            // Every `≤m S.C` the guess reaches is pre-interned by
+            // [`Kb::intern_sub_cardinalities`], which now covers EVERY at-most (not only the
+            // syntactically-inverse ones), so this lookup succeeds. Should the invariant ever be
+            // broken, withhold `NN` and surface exhaustion rather than PANIC — a missing bound is
+            // an incomplete search, not a decided verdict.
+            let Some(bound) =
+                self.g
+                    .kb()
+                    .table
+                    .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
+            else {
+                st.clique_exhausted.set(true);
+                return None;
+            };
             branches.push(Branch::NnGuess {
                 node: x,
                 origin: origin.clone(),
@@ -829,11 +838,11 @@ impl<'a> Tableau<'a> {
             .collect();
         let filler_concept = self.g.kb().table.concept(filler).clone();
         for m in 1..=nmax {
-            let Some(bound) = self
-                .g
-                .kb()
-                .table
-                .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
+            let Some(bound) =
+                self.g
+                    .kb()
+                    .table
+                    .find_id(&Concept::Max(m, role, Box::new(filler_concept.clone())))
             else {
                 continue;
             };
@@ -843,8 +852,15 @@ impl<'a> Tableau<'a> {
             match max_clique(&nominal_c, &|a, b| are_distinct(st, a, b), self.g.work()) {
                 Some(clique) if clique.len() >= m as usize => return true,
                 Some(_) => {}
-                // Budget exhausted mid-count: withhold the rule; the driver surfaces exhaustion.
-                None => return true,
+                // Budget exhausted mid-count: the clique is INCOMPLETE, so this satisfaction
+                // check is not an answer. Record it on the state — the `saturate` loop turns
+                // `clique_exhausted` into `Exhausted`, so the search reports "undecided" rather
+                // than treating a withheld `NN` firing as a decided completion. Returning `true`
+                // here without recording it could yield a FALSE decided verdict.
+                None => {
+                    st.clique_exhausted.set(true);
+                    return true;
+                }
             }
         }
         false
@@ -1153,7 +1169,10 @@ mod tests {
         let decided = kb
             .is_consistent_by_concept_tree()
             .expect("the concept-tree must decide the cyclic NN corner, not exhaust its budget");
-        assert!(decided, "this cyclic inverse-counting knowledge base is consistent");
+        assert!(
+            decided,
+            "this cyclic inverse-counting knowledge base is consistent"
+        );
     }
 
     /// NN must NOT fire on an ordinary `role`-SUCCESSOR of a nominal. Counting `≤1 r.C` over a
@@ -1296,6 +1315,29 @@ mod tests {
         assert!(
             consistent_by_both(&kb),
             "≤3 q (q=p⁻) admits the three p-predecessors the spy point forces, so it is satisfiable"
+        );
+    }
+
+    /// Regression for the sub-cardinality pre-interning gap (was a CRITICAL reachable panic).
+    ///
+    /// The `NN`-rule guesses `≤m S.C` and looks the concept up with [`ConceptTable::find_id`];
+    /// the table is frozen during a search, so every reachable `≤m` must be interned at build
+    /// time. The trigger can fire on a `≤n S.C` whose role is NOT syntactically an inverse — its
+    /// achiever closure reaches a blockable predecessor through a sub-role's inverse — so pinning
+    /// pre-interning to the syntactically-inverse roles left that case's `≤m` un-interned and
+    /// `find_id().expect()` panicked. Every at-most's sub-cardinalities are now interned; this
+    /// pins that breadth on a PLAIN named role with no `owl:inverseOf` at all.
+    #[test]
+    fn sub_cardinalities_are_pre_interned_for_every_at_most() {
+        let mut b = Builder::new();
+        b.ty(1, Concept::Max(2, role(5), Box::new(Concept::Named(10))));
+        let kb = b.finish();
+        assert!(
+            kb.table
+                .find_id(&Concept::Max(1, role(5), Box::new(Concept::Named(10))))
+                .is_some(),
+            "the sub-cardinality ≤1 p.C must be pre-interned even for a non-inverse role, so the \
+             NN-rule's find_id lookup can never panic"
         );
     }
 
