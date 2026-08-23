@@ -1262,6 +1262,49 @@ mod tests {
         assert!(!first.exhausted && !first.stopped, "{first:?}");
     }
 
+    /// The Motik–Shearer–Horrocks `NI`-rule's decision is a pure function of the knowledge base,
+    /// and the reserved roots it mints are CHARGED to the work meter — deterministic budget
+    /// accounting for the nominal-introduction path. The spy-point inconsistency (a nominal
+    /// `≤2 p⁻.⊤`, everything `p`-related to it, an individual forced to `≥3 r.⊤`) decides
+    /// INCONSISTENT, byte-identically run to run, having spent work on the reserved roots. The
+    /// byte-identical `Decision` is this crate's replayable certificate: re-deciding reproduces
+    /// the verdict and every cost figure exactly.
+    #[test]
+    fn nn_ni_spy_point_decision_is_deterministic_and_charged() {
+        const P: u32 = 40;
+        const RR: u32 = 41;
+        const SPY: u32 = 50;
+        const U: u32 = 51;
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Top,
+            Concept::Some(Role::Named(P), Box::new(Concept::Nominal(vec![SPY]))),
+        );
+        let max2 = kb
+            .table
+            .intern(Concept::Max(2, Role::Inv(P), Box::new(Concept::Top)));
+        let min3 = kb
+            .table
+            .intern(Concept::Min(3, Role::Named(RR), Box::new(Concept::Top)));
+        kb.abox_types.push((SPY, max2));
+        kb.abox_types.push((U, min3));
+        kb.individuals.insert(SPY);
+        kb.individuals.insert(U);
+        kb.finalize();
+        let cap = Budget::for_kb(&kb);
+        let first = decide(&kb, &Assumptions::of_kb(), cap);
+        let again = decide(&kb, &Assumptions::of_kb(), cap);
+        assert_eq!(first, again, "the NI decision is byte-identical run to run");
+        assert!(
+            !first.consistent && !first.exhausted,
+            "the spy point is inconsistent, decided (not exhausted): {first:?}"
+        );
+        assert!(
+            first.work > 0,
+            "the reserved-root minting is charged to the work meter: {first:?}"
+        );
+    }
+
     /// The `⊔`-rule takes the FIRST open disjunction the derivation order meets, and NOT the
     /// narrowest — the rule the measurements at [`Hyper::find_branch`] retired.
     ///
