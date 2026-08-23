@@ -3266,6 +3266,36 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// True when the upcoming token can start a bare (non-parenthesized)
+    /// `Constraint` — a `BuiltInCall` or `FunctionCall` (SPARQL 1.1/1.2
+    /// `Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`).
+    /// Used by `HAVING`'s `Constraint+` list (both to decide whether the
+    /// first, mandatory constraint is bare, and whether a SUBSEQUENT one
+    /// begins) and by `ORDER BY`'s `OrderCondition ::= ... | (Constraint |
+    /// Var)` alternative. The bracketed form (`Token::LParen`) is recognized
+    /// separately at each call site — this only covers the bare spelling, so
+    /// it deliberately excludes a bare `Var` or literal (neither is a
+    /// `Constraint`, only an `OrderCondition`'s OTHER alternative or a
+    /// non-constraint primary expression).
+    ///
+    /// Same shape as [`Self::at_bare_group_condition`] (a callee token —
+    /// IRI/prefixed name/keyword — modulo the clause-terminator words that
+    /// can legally follow a `Constraint+`/`OrderCondition*` list), kept
+    /// separate because the terminator set differs slightly (`HAVING` can
+    /// recur inside itself as a callee-shaped word is never in question
+    /// here, since `HAVING` itself cannot re-appear mid-list, but excluding
+    /// it is harmless and keeps the two helpers independently auditable).
+    fn at_bare_constraint(&self) -> bool {
+        match self.peek() {
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
+            Some(Token::Word(w)) => !matches!(
+                w.to_ascii_uppercase().as_str(),
+                "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "VALUES" | "BINDINGS" | "TRUE" | "FALSE"
+            ),
+            _ => false,
+        }
+    }
+
     fn parse_solution_modifiers(
         &mut self,
         aggregates: &mut Vec<(Variable, AggregateExpression)>,
@@ -3313,10 +3343,13 @@ impl<'a> Parser<'a, '_> {
             loop {
                 let expr = self.parse_having_constraint(aggregates)?;
                 // A long `HAVING (c1) (c2) … (cN)` condition list lowers to a
-                // chain of `Filter` nodes — same class, same budget.
+                // chain of `Filter` nodes — same class, same budget. Each
+                // `cN` is itself a `Constraint` (`BrackettedExpression |
+                // BuiltInCall | FunctionCall`, §Constraint) — bracketed
+                // (`Token::LParen`) or bare (`Self::at_bare_constraint`).
                 self.charge_pattern_nodes(1)?;
                 m.having.push(expr);
-                if !self.at(&Token::LParen) {
+                if !(self.at(&Token::LParen) || self.at_bare_constraint()) {
                     break;
                 }
             }
@@ -3355,11 +3388,14 @@ impl<'a> Parser<'a, '_> {
         Ok(m)
     }
 
+    /// True when an `OrderCondition`'s bare alternative starts here —
+    /// `Constraint | Var` (SPARQL 1.1/1.2 §OrderCondition), where a bare
+    /// `Constraint` is `Token::LParen` (`BrackettedExpression`) or
+    /// [`Self::at_bare_constraint`] (`BuiltInCall`/`FunctionCall`, e.g.
+    /// `BOUND(?x)`, `EXISTS { ... }`, or a `FunctionCall` under an IRI/
+    /// prefixed-name callee).
     fn order_key_ahead(&self) -> bool {
-        matches!(
-            self.peek(),
-            Some(Token::Variable(_) | Token::LParen | Token::Iri(_))
-        ) || matches!(self.peek(), Some(Token::Word(w)) if is_builtin_function(w))
+        matches!(self.peek(), Some(Token::Variable(_) | Token::LParen)) || self.at_bare_constraint()
     }
 
     fn expect_integer(&mut self) -> Result<usize> {
@@ -3389,14 +3425,26 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// One element of `HAVING`'s `Constraint+` list (§Constraint):
+    /// `BrackettedExpression | BuiltInCall | FunctionCall`. The bracketed
+    /// form is `'(' Expression ')'`; the bare forms (`BOUND(?x)`,
+    /// `EXISTS { ... }`, a custom `FunctionCall`, …) are parsed exactly like
+    /// any other primary expression, with aggregates lifted into `aggs` —
+    /// `HAVING (COUNT(?x) > 1)` needs that lift for the bracketed form, and a
+    /// bare aggregate `BuiltInCall` (e.g. `HAVING COUNT(?x)`, unusual but
+    /// grammar-legal) needs the same treatment.
     fn parse_having_constraint(
         &mut self,
         aggregates: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        self.expect(&Token::LParen)?;
-        let e = self.parse_expression_lifting_aggs(aggregates)?;
-        self.expect(&Token::RParen)?;
-        Ok(e)
+        if self.at(&Token::LParen) {
+            self.pos += 1;
+            let e = self.parse_expression_lifting_aggs(aggregates)?;
+            self.expect(&Token::RParen)?;
+            Ok(e)
+        } else {
+            self.parse_primary_with_aggs(aggregates)
+        }
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
@@ -4853,10 +4901,6 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
     })
 }
 
-fn is_builtin_function(name: &str) -> bool {
-    builtin_function(&name.to_ascii_uppercase()).is_some()
-}
-
 fn builtin_function(upper: &str) -> Option<Function> {
     Some(match upper {
         "STR" => Function::Str,
@@ -5354,6 +5398,188 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    // ── `HAVING`/`ORDER BY` bare `Constraint` forms ──────────────────────────
+    //    SPARQL 1.1/1.2: `HAVING ::= 'HAVING' Constraint+`,
+    //    `OrderCondition ::= (('ASC'|'DESC') BrackettedExpression) |
+    //    (Constraint | Var)`, `Constraint ::= BrackettedExpression |
+    //    BuiltInCall | FunctionCall`. Previously only the bracketed form
+    //    (`HAVING (…)`, `ORDER BY ASC(…)`/`DESC(…)`, and a narrow set of
+    //    bare builtins in `ORDER BY`) parsed; `EXISTS`/`NOT EXISTS`, `BOUND`,
+    //    and a bare `FunctionCall` refused at both sites.
+
+    #[test]
+    fn having_accepts_a_bare_exists_constraint() {
+        // `EXISTS` is a `BuiltInCall`, so a bare (non-parenthesized) `HAVING
+        // EXISTS { … }` is REC-legal — only `HAVING (EXISTS { … })` parsed
+        // before this fix.
+        let q = format!(
+            "{GM}SELECT ?m (COUNT(?c) AS ?n) WHERE {{ ?c purrdf:vantage ?m . }} GROUP BY ?m \
+             HAVING EXISTS {{ ?w purrdf:q ?a }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Filter { expr, inner: group } = *inner else {
+            panic!("expected Filter (HAVING), got {inner:?}");
+        };
+        assert!(
+            matches!(expr, Expression::Exists(_)),
+            "expected the bare EXISTS to parse as Expression::Exists, got {expr:?}"
+        );
+        assert!(
+            matches!(*group, GraphPattern::Group { .. }),
+            "expected the HAVING Filter to sit directly over Group, got {group:?}"
+        );
+    }
+
+    #[test]
+    fn having_accepts_multiple_bare_constraints() {
+        // `HAVING`'s `Constraint+` is a SPACE-SEPARATED list with no
+        // connective — each element may independently be bracketed or bare.
+        // `HAVING (a) (b) …` lowers to a `Filter`-over-`Filter` chain (see
+        // `serialize.rs`'s `extend_chain_reaches_group` doc); this proves the
+        // same lowering for a bare-then-bare pair.
+        let q = format!(
+            "{GM}SELECT ?m (COUNT(?c) AS ?n) WHERE {{ ?c purrdf:vantage ?m . }} GROUP BY ?m \
+             HAVING BOUND(?m) EXISTS {{ ?w purrdf:q ?a }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::Extend { inner, .. } = where_pat else {
+            panic!("expected Extend, got {where_pat:?}");
+        };
+        let GraphPattern::Filter {
+            expr: outer_expr,
+            inner: mid,
+        } = *inner
+        else {
+            panic!("expected outer Filter (2nd HAVING condition), got {inner:?}");
+        };
+        assert!(
+            matches!(outer_expr, Expression::Exists(_)),
+            "expected the 2nd condition (EXISTS) outermost, got {outer_expr:?}"
+        );
+        let GraphPattern::Filter {
+            expr: inner_expr,
+            inner: group,
+        } = *mid
+        else {
+            panic!("expected inner Filter (1st HAVING condition), got {mid:?}");
+        };
+        assert!(
+            matches!(inner_expr, Expression::Bound(_)),
+            "expected the 1st condition (BOUND) innermost, got {inner_expr:?}"
+        );
+        assert!(
+            matches!(*group, GraphPattern::Group { .. }),
+            "expected the innermost HAVING Filter to sit directly over Group, got {group:?}"
+        );
+    }
+
+    #[test]
+    fn order_by_accepts_a_bare_exists_constraint() {
+        let q = format!(
+            "{GM}SELECT ?x WHERE {{ ?x purrdf:p ?c }} ORDER BY EXISTS {{ ?w purrdf:q ?a }}"
+        );
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::OrderBy { expression, .. } = where_pat else {
+            panic!("expected OrderBy, got {where_pat:?}");
+        };
+        assert_eq!(expression.len(), 1);
+        let OrderExpression::Asc(e) = &expression[0] else {
+            panic!(
+                "OrderCondition's bare Constraint alternative lowers to Asc, got {:?}",
+                expression[0]
+            );
+        };
+        assert!(
+            matches!(e, Expression::Exists(_)),
+            "expected the bare EXISTS to parse as Expression::Exists, got {e:?}"
+        );
+    }
+
+    #[test]
+    fn order_by_accepts_a_bare_builtin_call() {
+        let q = format!("{GM}SELECT ?x WHERE {{ ?x purrdf:p ?c }} ORDER BY BOUND(?c)");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::OrderBy { expression, .. } = where_pat else {
+            panic!("expected OrderBy, got {where_pat:?}");
+        };
+        assert_eq!(expression.len(), 1);
+        let OrderExpression::Asc(e) = &expression[0] else {
+            panic!(
+                "OrderCondition's bare Constraint alternative lowers to Asc, got {:?}",
+                expression[0]
+            );
+        };
+        assert!(
+            matches!(e, Expression::Bound(_)),
+            "expected the bare BOUND(...) to parse as Expression::Bound, got {e:?}"
+        );
+    }
+
+    #[test]
+    fn order_by_accepts_a_bare_function_call() {
+        // `purrdf:` here is the test-fixture prefix (`{GM}` → `<https://x/>`),
+        // NOT a configured extension-function namespace — so
+        // `purrdf:custom(?x)` parses as an ordinary `Function::Custom`
+        // FunctionCall, exactly the `Constraint`'s `FunctionCall`
+        // alternative.
+        let q = format!("{GM}SELECT ?x WHERE {{ ?x purrdf:p ?c }} ORDER BY purrdf:custom(?x)");
+        let where_pat = unproject(select_pattern(&q));
+        let GraphPattern::OrderBy { expression, .. } = where_pat else {
+            panic!("expected OrderBy, got {where_pat:?}");
+        };
+        assert_eq!(expression.len(), 1);
+        let OrderExpression::Asc(e) = &expression[0] else {
+            panic!(
+                "OrderCondition's bare Constraint alternative lowers to Asc, got {:?}",
+                expression[0]
+            );
+        };
+        assert!(
+            matches!(e, Expression::FunctionCall(Function::Custom(_), _)),
+            "expected the bare purrdf:custom(?x) to parse as a custom FunctionCall, got {e:?}"
+        );
+    }
+
+    #[test]
+    fn subselect_having_bare_constraint_parses() {
+        // The same `parse_solution_modifiers` call site backs a `SubSelect`
+        // (`parse_select` is called recursively for `{ SELECT ... }` —
+        // `parse_group_graph_pattern_inner`) — no separate production to fix.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ {{ SELECT ?m (COUNT(?c) AS ?n) WHERE {{ ?c purrdf:vantage ?m . \
+             }} GROUP BY ?m HAVING EXISTS {{ ?w purrdf:q ?a }} }} }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("a bare HAVING EXISTS constraint inside a sub-SELECT must parse");
+    }
+
+    #[test]
+    fn having_bare_exists_scope_collision_is_rejected() {
+        // Proof that broadening HAVING's grammar did not bypass SEP-0007
+        // Part 3: `Parser::parse_exists_body`'s doc states a solution-modifier
+        // expression's (`GROUP BY`/`HAVING`/`ORDER BY`) in-scope set is the
+        // complete `WHERE` clause's scope — so `?c`, bound by WHERE, cannot be
+        // rebound inside a bare `HAVING EXISTS { … }` body either, exactly as
+        // it cannot inside the bracketed form.
+        let q = format!(
+            "{GM}SELECT ?m (COUNT(?c) AS ?n) WHERE {{ ?c purrdf:vantage ?m . }} GROUP BY ?m \
+             HAVING EXISTS {{ BIND(1 AS ?c) }}"
+        );
+        let err = SparqlParser::new().parse_query(&q).expect_err(
+            "a BIND target inside a bare HAVING EXISTS colliding with the WHERE row must fail",
+        );
+        assert!(
+            err.to_string().contains(
+                "BIND target ?c inside EXISTS is already in scope on the row being filtered"
+            ),
+            "unexpected message: {err}"
+        );
     }
 
     #[test]
