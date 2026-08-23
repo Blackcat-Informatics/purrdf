@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
+use purrdf_core::{DatasetView, LossLedger, RdfDataset};
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::SourceFormat;
 use purrdf_rdf::canonical_flat_nquads;
@@ -148,21 +148,17 @@ pub(crate) fn run(
         );
     }
 
-    // Pack → pack: a verified byte passthrough (no decode/re-encode churn). A DISK
-    // pack is mmap-borrowed (no `Vec<u8>` copy of the pack contents); stdin has no
-    // file to map, so it still buffers into a `Vec`.
+    // Pack → pack: a verified byte passthrough (no decode/re-encode churn). The pack
+    // is acquired through the one immutable-input seam — a DISK pack is borrowed from
+    // a memory-safe mapping (no `Vec<u8>` copy of the contents where the platform can
+    // guarantee immutability), stdin is owned — and verified once before its bytes
+    // are written straight through.
     let target_format = format::resolve(options.to, output)?;
     format::refuse_base_with_pack(target_format, options.base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
     if source_format.is_pack() && target_format.is_pack() {
-        if input == "-" {
-            let bytes = source::read_bytes(input)?;
-            verify_pack(&bytes)?;
-            sink::write_out(output, &bytes)?;
-        } else {
-            let mmap = source::verified_pack_mmap(input)?;
-            sink::write_out(output, &mmap[..])?;
-        }
+        let owner = source::verified_pack_input(input)?;
+        sink::write_out(output, owner.as_bytes())?;
         return ledger::surface(ledger_target, &LossLedger::new());
     }
 

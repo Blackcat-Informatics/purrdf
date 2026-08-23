@@ -57,6 +57,11 @@ purrdf-validate = { workspace = true }
 # this crate is never built for wasm32 (it is absent from the `make wasm`
 # `-p` allowlist), so mmap's absence there is a non-issue.
 memmap2 = { workspace = true }
+# The immutable-input authority's kernel-seal path: `memfd_create` + `fcntl`
+# add/get-seals make a mapped pack un-truncatable, so a disk pack maps
+# memory-safely even under a hostile concurrent pathname writer. Linux-gated in
+# code (`#[cfg(target_os = "linux")]`); other targets take the owned-buffer tier.
+rustix = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 # `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
