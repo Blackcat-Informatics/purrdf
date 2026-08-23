@@ -681,28 +681,27 @@ pub(crate) fn seed<D: DatasetView>(
         if !in_seed {
             continue;
         }
-        let subject = terms.record(&resolve_value(ds, quad.s));
-        let predicate = terms.record(&resolve_value(ds, quad.p));
-        let object = terms.record(&resolve_value(ds, quad.o));
+        // Resolve each position's value ONCE and reuse it: `record` interns it, and the
+        // datatype/surrogate observers below read the very same value. Resolving again
+        // per observer would re-walk the view and re-allocate the term for every quad on
+        // the seeding hot path.
+        let s_val = resolve_value(ds, quad.s);
+        let p_val = resolve_value(ds, quad.p);
+        let o_val = resolve_value(ds, quad.o);
+        let subject = terms.record(&s_val);
+        let predicate = terms.record(&p_val);
+        let object = terms.record(&o_val);
         if walks_collections(regime) {
             lists.observe(&subject, &predicate, &object);
         }
         if decides_datatypes(regime) {
-            for (surface, value) in [
-                (&subject, resolve_value(ds, quad.s)),
-                (&predicate, resolve_value(ds, quad.p)),
-                (&object, resolve_value(ds, quad.o)),
-            ] {
-                observe_literal(&mut literals, surface, &value);
+            for (surface, value) in [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)] {
+                observe_literal(&mut literals, surface, value);
             }
         }
         if mints_surrogates(regime) {
-            for (surface, value) in [
-                (&subject, resolve_value(ds, quad.s)),
-                (&predicate, resolve_value(ds, quad.p)),
-                (&object, resolve_value(ds, quad.o)),
-            ] {
-                surrogates.observe(surface, &value);
+            for (surface, value) in [(&subject, &s_val), (&predicate, &p_val), (&object, &o_val)] {
+                surrogates.observe(surface, value);
             }
         }
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
