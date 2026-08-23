@@ -2370,8 +2370,8 @@ mod tests {
     // ── Characterization: today's canon bytes are frozen ────────────────────
 
     /// The sort-blind `canon` bytes are pinned exactly, so the sort-aware
-    /// [`canon_sorted`] change is provably byte-identical on the no-sort path
-    /// (AC1c) — and `canon` is exactly `canon_sorted` with no sorts.
+    /// [`canon_sorted`] change is provably byte-identical on the no-sort path:
+    /// `canon` is exactly `canon_sorted` with no sorts.
     #[test]
     fn canon_bytes_are_stable_and_sort_blind_matches_today() {
         let mut dag = TermDag::new();
@@ -2388,7 +2388,7 @@ mod tests {
 
         // `canon` IS `canon_sorted` with the empty sort assignment — on the same
         // atoms and on harder shapes (a binder `D`, a nested app) the bytes match
-        // exactly, so nothing that never declared a sort can shift (AC1c, R6).
+        // exactly, so nothing that never declared a sort can shift.
         let none = |_: MetaId| None;
         for node in [a, p_ab, p_xyx] {
             assert_eq!(canon(&dag, node), canon_sorted(&dag, node, &none));
@@ -2401,10 +2401,10 @@ mod tests {
         assert_eq!(canon(&dag, nested), canon_sorted(&dag, nested, &none));
     }
 
-    /// AC1b: the SAME metavariable canonicalizes to DIFFERENT keys under different
+    /// The SAME metavariable canonicalizes to DIFFERENT keys under different
     /// declared sorts, and a sorted key is never the sort-blind one — the `S`
     /// frame's tag is outside the node-tag alphabet, so it can never alias a
-    /// following sibling (R6).
+    /// following sibling.
     #[test]
     fn canon_folds_the_metavariable_sort_into_the_key() {
         let mut dag = TermDag::new();
@@ -2427,10 +2427,10 @@ mod tests {
 
     // ── Order-sorted resolution ──────────────────────────────────────────────
 
-    /// AC1a: with `Cat ⊑ Animal`, a clause variable declared `Cat` REJECTS an
+    /// With `Cat ⊑ Animal`, a clause variable declared `Cat` REJECTS an
     /// `Animal`-only value that a `Cat` value satisfies — the sort-correct
-    /// verdict. The identical program resolved sort-blind (today's resolver)
-    /// wrongly accepts the wider value, so this test fails against it.
+    /// verdict. The identical program resolved sort-blind wrongly accepts the
+    /// wider value, so a sort-blind resolver gives the wrong answer here.
     #[test]
     fn order_sorted_control_clause_rejects_a_wider_binding() {
         let mut dag = TermDag::new();
@@ -2561,7 +2561,7 @@ mod tests {
         (dag, clauses, proof)
     }
 
-    /// AC2b: a proof exposes a content-addressed rule identity and splits the
+    /// A proof exposes a content-addressed rule identity and splits the
     /// unconditional base fact (`Assert`) from the recursive step (`ByRule`).
     #[test]
     fn proof_exposes_rule_identity_and_assert_variant() {
@@ -2588,7 +2588,7 @@ mod tests {
         );
     }
 
-    /// AC2c: every proof `resolve_fol` produces re-validates, INCLUDING its
+    /// Every proof `resolve_fol` produces re-validates, INCLUDING its
     /// content-addressed identity (which `check_fol_proof` re-derives and matches).
     #[test]
     fn resolved_proofs_revalidate_with_their_identity() {
@@ -2632,7 +2632,7 @@ mod tests {
         assert_eq!(error, FolProofError::RuleIdentityMismatch { rule: 1 });
     }
 
-    /// AC2a: the published derivation-identity recipe is byte-for-byte
+    /// The published derivation-identity recipe is byte-for-byte
     /// reproducible — a second, independent resolution of the same program
     /// (standing in for the caller) computes the identical 40-hex digest, and the
     /// literal `sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`
