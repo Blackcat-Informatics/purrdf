@@ -198,12 +198,14 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
                     .expect("stream writer");
                     writer
                         .write_f32_matrix(
-                            fixture
-                                .target_set
-                                .targets
-                                .iter()
-                                .copied()
-                                .zip(fixture.row_values.as_chunks::<F32_DIMENSION>().0),
+                            fixture.target_set.targets.iter().copied().zip(
+                                fixture
+                                    .row_values
+                                    .as_chunks::<F32_DIMENSION>()
+                                    .0
+                                    .iter()
+                                    .map(<[f32; F32_DIMENSION]>::as_slice),
+                            ),
                         )
                         .expect("stream matrix");
                     let (output, root) = writer.finish().expect("finish stream");

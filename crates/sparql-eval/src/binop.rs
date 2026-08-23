@@ -2064,6 +2064,9 @@ mod tests {
 
     impl crate::StopSignal for StopOnPoll {
         fn poll(&self) -> Option<purrdf_core::StopCause> {
+            // `try_update` (the non-deprecated name for this atomic) postdates the
+            // workspace MSRV floor, so the original name is kept here.
+            #[allow(deprecated)]
             let previous = self
                 .remaining
                 .fetch_update(

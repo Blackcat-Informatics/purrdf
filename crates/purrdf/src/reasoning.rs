@@ -2121,7 +2121,7 @@ mod tests {
             format!(
                 "SELECT ?x ?y WHERE {{ ?x a <{a}> . OPTIONAL {{ ?x <{r}> ?y . ?y a <{big_b}> }} }}"
             ),
-            format!("SELECT DISTINCT ?x WHERE {{ ?x a ?t }}"),
+            "SELECT DISTINCT ?x WHERE { ?x a ?t }".to_string(),
             format!("SELECT ?x WHERE {{ ?x a <{a}> }} ORDER BY ?x"),
             format!("SELECT ?x WHERE {{ ?x a <{a}> . FILTER(?x = <{little_a}>) }}"),
             format!("SELECT ?x ?y WHERE {{ {{ ?x a <{a}> }} UNION {{ ?y a <{big_b}> }} }}"),
