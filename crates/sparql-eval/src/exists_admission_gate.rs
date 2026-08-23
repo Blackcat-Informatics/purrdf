@@ -192,12 +192,14 @@ fn natural_results_with_registry(
 }
 
 /// Whether `crate::governor::soundness::probe_admissible` classifies `inner` as
-/// admissible — the exact prepare-time computation `crate::eval::PreparedExists::build`
-/// performs (ENF-normalize, then run the fourth structural analysis over the result),
-/// reproduced here so a test can ask the same question the real decision site asks. See
-/// [`classify`] for the shared computation and its panic condition.
-fn is_classified_admissible(inner: &GraphPattern) -> bool {
-    classify(inner).0
+/// admissible against `outer`'s schema — the exact prepare-time-plus-decision-site
+/// computation `crate::eval::PreparedExists::build`/`crate::expr::exists` perform
+/// together (ENF-normalize, run the fourth structural analysis over the result, then
+/// consult the caller's actual outer schema), reproduced here so a test can ask the
+/// same question the real decision site asks. See [`classify`] for the shared
+/// computation and its panic condition.
+fn is_classified_admissible(outer: &GraphPattern, inner: &GraphPattern) -> bool {
+    classify(outer, inner).0
 }
 
 /// Whether `inner`'s root [`crate::governor::soundness::NodeAnalysis::has_stateful_builtin`]
@@ -206,16 +208,23 @@ fn is_classified_admissible(inner: &GraphPattern) -> bool {
 /// deterministic one: a stateful shape's raw per-evaluation answer is not itself
 /// asserted (it can legitimately differ between two SEPARATE evaluations — see
 /// [`crate::expr::exists`]'s doc), only its CLASSIFICATION (never probe-admitted).
-fn is_classified_stateful(inner: &GraphPattern) -> bool {
-    classify(inner).1
+/// Takes `outer` only for symmetry with [`is_classified_admissible`] (`classify`'s
+/// shared computation needs it); statefulness itself never depends on the outer
+/// schema.
+fn is_classified_stateful(outer: &GraphPattern, inner: &GraphPattern) -> bool {
+    classify(outer, inner).1
 }
 
 /// Shared computation for [`is_classified_admissible`]/[`is_classified_stateful`]: the
-/// exact prepare-time sequence [`crate::eval::PreparedExists::build`] performs
-/// (ENF-normalize, then run the fourth structural analysis over the result), run ONCE
-/// per call so a caller that wants both classifications never normalizes/analyzes
-/// `inner` twice. Panics if ENF folds `inner` to constant `false` (a degenerate
-/// fixture no admissibility test wants).
+/// exact prepare-time-plus-decision-site sequence `crate::eval::PreparedExists::build`
+/// and `crate::expr::exists` perform together (ENF-normalize, run the fourth structural
+/// analysis over the result, then classify against `outer`'s own syntactic schema —
+/// `crate::eval::syntactic_schema`, the same structural-schema derivation the real
+/// evaluator falls back to on an early-stop/known-empty path, standing in here for the
+/// real `schema` a live evaluation of `outer` would produce), run ONCE per call so a
+/// caller that wants both classifications never normalizes/analyzes `inner` twice.
+/// Panics if ENF folds `inner` to constant `false` (a degenerate fixture no
+/// admissibility test wants).
 ///
 /// `normalized` is moved into its own `Box` FIRST, and `analyze_pattern` walks it
 /// THROUGH that `Box` — never through the pre-move local — for the identical reason
@@ -224,7 +233,7 @@ fn is_classified_stateful(inner: &GraphPattern) -> bool {
 /// later `probe_admissible` call can never match, silently falling back to
 /// `node_analysis`'s conservative-EMPTY-free-vars default and reporting every shape
 /// admissible regardless of its actual `Values`/`Extend` collisions.
-fn classify(inner: &GraphPattern) -> (bool, bool) {
+fn classify(outer: &GraphPattern, inner: &GraphPattern) -> (bool, bool) {
     let normalized = match crate::enf::normalize(inner) {
         crate::enf::Enf::Pattern(p) => Box::new(p),
         crate::enf::Enf::FoldedEmpty => {
@@ -233,28 +242,32 @@ fn classify(inner: &GraphPattern) -> (bool, bool) {
     };
     let mut table = crate::governor::soundness::NodeAnalysisTable::default();
     let root = crate::governor::soundness::analyze_pattern(&normalized, &mut table);
-    let admissible = crate::governor::soundness::probe_admissible(&normalized, &table);
+    let outer_schema = crate::eval::syntactic_schema(outer);
+    let admissible =
+        crate::governor::soundness::probe_admissible(&normalized, &table, &outer_schema);
     (admissible, root.has_stateful_builtin)
 }
 
 /// Assert that `crate::governor::soundness::probe_admissible` classifies `inner` as
-/// ADMISSIBLE — the precondition every `exists_paths_agree_on_*` test needs for its
-/// "natural == forced-definition" comparison to actually exercise the probe path
-/// naturally, rather than passing vacuously because the gate already refused it.
-fn assert_classified_admissible(inner: &GraphPattern) {
+/// ADMISSIBLE against `outer`'s schema — the precondition every
+/// `exists_paths_agree_on_*` test needs for its "natural == forced-definition"
+/// comparison to actually exercise the probe path naturally, rather than passing
+/// vacuously because the gate already refused it.
+fn assert_classified_admissible(outer: &GraphPattern, inner: &GraphPattern) {
     assert!(
-        is_classified_admissible(inner),
+        is_classified_admissible(outer, inner),
         "expected this shape to be classified ADMISSIBLE by probe_admissible"
     );
 }
 
 /// Assert that `crate::governor::soundness::probe_admissible` classifies `inner` as
-/// INADMISSIBLE — the "committed negative control" every `probe_would_*` divergence
-/// witness needs: proof the exclusion is real (the gate really does refuse this
-/// shape), before forcing the probe onto it anyway to observe the wrong answer.
-fn assert_classified_inadmissible(inner: &GraphPattern) {
+/// INADMISSIBLE against `outer`'s schema — the "committed negative control" every
+/// `probe_would_*` divergence witness needs: proof the exclusion is real (the gate
+/// really does refuse this shape), before forcing the probe onto it anyway to observe
+/// the wrong answer.
+fn assert_classified_inadmissible(outer: &GraphPattern, inner: &GraphPattern) {
     assert!(
-        !is_classified_admissible(inner),
+        !is_classified_admissible(outer, inner),
         "expected this shape to be classified INADMISSIBLE by probe_admissible — if it is \
          now admitted, this is no longer a valid divergence witness for the arm it names"
     );
@@ -271,7 +284,7 @@ fn assert_probe_and_definition_agree(
     outer: &GraphPattern,
     inner: &GraphPattern,
 ) {
-    assert_classified_admissible(inner);
+    assert_classified_admissible(outer, inner);
     let natural = natural_answers(ds, outer, inner);
     let forced_definition = forced_answers(ds, outer, inner, ForcedExistsStrategy::Definition);
     assert_eq!(
@@ -347,15 +360,17 @@ mod tests {
     #[test]
     fn exists_paths_agree_on_values() {
         // `probe_admissible`'s `Values` arm refuses a VALUES block whenever one of its
-        // OWN columns is in `current_row_vars` — and `current_row_vars` is the WHOLE
-        // (root) pattern's free-variable set (`probe_admissible`'s doc, "self-contained"),
-        // not merely the outer schema — so a VALUES column only avoids the collision
-        // when it is narrowed OUT of the root's own free-variable set by an enclosing
-        // `Project` that does not list it. This shape supplies that: the correlation
-        // channel is the ordinary Bgp leaf on `?s`; a sibling VALUES block enumerates
-        // two `?dummy` rows (doubling multiplicity, never emptiness) and is projected
-        // away by the outer `Project { variables: [s] }`, so `?dummy` never reaches the
-        // root's free-variable set and the VALUES node is admissible.
+        // OWN columns is in `current_row_vars` — `pattern`'s root free-variable set
+        // INTERSECTED with the caller's outer schema (`probe_admissible`'s doc). Here
+        // `?dummy` is narrowed out TWICE over: it is projected away by the outer
+        // `Project { variables: [s] }` (so it never reaches the root's own
+        // free-variable set at all) AND, independently, `?dummy` is not a column of
+        // `arm_outer`'s schema (`{s, o}`) either — either narrowing alone would already
+        // make this shape admissible after the outer-schema fix (see
+        // `fresh_values_column_inner_probe_admits` for the same shape with the
+        // `Project` wrapper removed, relying on the outer-schema intersection alone).
+        // The correlation channel is the ordinary Bgp leaf on `?s`; the sibling VALUES
+        // block enumerates two `?dummy` rows (doubling multiplicity, never emptiness).
         let ds = arm_ds();
         let inner = GraphPattern::Project {
             inner: bx(GraphPattern::Join {
@@ -445,13 +460,15 @@ mod tests {
     fn exists_paths_agree_on_extend_fresh_target() {
         let ds = arm_ds();
         // `SELECT ?s WHERE { ?s :member ?m BIND("x" AS ?fresh) }` — `admissible_rec`'s
-        // own `Extend` arm inserts `fresh` into the (root-computed) `current_row_vars`
-        // set (`crate::governor::soundness::analyze_pattern`'s `Extend` rule), so an
-        // Extend target is only ever "fresh" (non-colliding) when an ENCLOSING `Project`
-        // narrows it back out of the root's free-variable set — exactly the same trick
-        // `exists_paths_agree_on_values` needs, and for the identical structural reason
-        // (only `Project`'s intersection narrows `probe_admissible`'s conservative,
-        // whole-tree `current_row_vars`).
+        // own `Extend` arm inserts `fresh` into the root's own free-variable set
+        // (`crate::governor::soundness::analyze_pattern`'s `Extend` rule), but
+        // `probe_admissible`'s `current_row_vars` intersects that with the outer
+        // schema (`{s, o}`, from `arm_outer`), and `?fresh` is not one of its columns
+        // either way — so this shape is admissible both because the outer `Project {
+        // variables: [s] }` narrows `?fresh` back out of the root's own free-variable
+        // set, AND independently because of the outer-schema intersection (see
+        // `fresh_extend_target_inner_probe_admits` for the same shape with the
+        // `Project` wrapper removed).
         let inner = GraphPattern::Project {
             inner: bx(GraphPattern::Extend {
                 inner: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
@@ -461,6 +478,192 @@ mod tests {
             variables: vec![var("s")],
         };
         assert_probe_and_definition_agree(&ds, &arm_outer(), &inner);
+    }
+
+    // =========================================================================
+    // `probe_admissible` receives the caller's ACTUAL outer schema (`outer_schema ∩
+    // pattern`'s own free vars — `probe_admissible`'s doc), rather than treating
+    // `pattern`'s own root free-variable set as a stand-in for it. The three tests below are the SAME
+    // families as `exists_paths_agree_on_values`/`exists_paths_agree_on_extend_fresh_target`
+    // above and the nested-`EXISTS` arm of `expr_probe_admissible`, but with the
+    // `Project`-narrowing trick those two needed REMOVED — before this fix, EVERY
+    // one of these three shapes was refused unconditionally (no `Project` narrows
+    // them here), regardless of whether the outer schema (`{s, o}`, from
+    // `arm_outer`) could ever actually have supplied a colliding binding.
+    // =========================================================================
+
+    #[test]
+    fn fresh_extend_target_inner_probe_admits() {
+        // `EXISTS { ?s :member ?m BIND("x" AS ?fresh) }` — no enclosing `Project`
+        // narrows `?fresh` out of the tree's own free-variable set (unlike
+        // `exists_paths_agree_on_extend_fresh_target`), so this shape is admissible
+        // ONLY through the outer-schema intersection: `?fresh` is not a column of
+        // `arm_outer`'s schema (`{s, o}`), so it can never collide with anything the
+        // outer row could bind, and `admissible_rec`'s `Extend` arm admits it.
+        let ds = arm_ds();
+        let inner = GraphPattern::Extend {
+            inner: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
+            variable: var("fresh"),
+            expression: Expression::Literal(Literal::new_simple("x")),
+        };
+        assert_classified_admissible(&arm_outer(), &inner);
+        assert_probe_and_definition_agree(&ds, &arm_outer(), &inner);
+
+        // Ledger counters: through the full governed engine, this site must be
+        // answered by the memoized probe (`exists-probe-answered`), never the
+        // per-row definition — the direct observable the CLI's `--explain` also
+        // reports (see this gap's acceptance demonstration).
+        let query = format!(
+            "PREFIX ex: <{EX}> \
+             SELECT ?s WHERE {{ \
+               ?s ex:knows ?o \
+               FILTER EXISTS {{ ?s ex:member ?m BIND(\"x\" AS ?fresh) }} \
+             }}"
+        );
+        let engine = crate::engine::NativeSparqlEngine::new();
+        let explanation = engine.explain_query(&ds, &query, None).expect("explain");
+        let definition_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        let probe_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
+            .sum();
+        assert_eq!(
+            definition_answered, 0,
+            "a fresh BIND target must never fall back to the per-row definition path"
+        );
+        assert_eq!(
+            probe_answered, 1,
+            "the memoized probe must answer this site exactly once (cached across both \
+             outer rows)"
+        );
+    }
+
+    #[test]
+    fn fresh_values_column_inner_probe_admits() {
+        // `EXISTS { ?s :member ?m . VALUES ?fresh { "x" } }` — the `VALUES` twin of
+        // `fresh_extend_target_inner_probe_admits`: no enclosing `Project` narrows
+        // `?fresh` out of the tree's own free-variable set, so this shape is
+        // admissible only through the outer-schema intersection (`?fresh` is not a
+        // column of `arm_outer`'s `{s, o}` schema).
+        let ds = arm_ds();
+        let inner = GraphPattern::Join {
+            left: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
+            right: bx(GraphPattern::Values {
+                variables: vec![var("fresh")],
+                bindings: vec![vec![Some(GroundTerm::Literal(Literal::new_simple("x")))]],
+            }),
+        };
+        assert_classified_admissible(&arm_outer(), &inner);
+        assert_probe_and_definition_agree(&ds, &arm_outer(), &inner);
+
+        // Ledger counters, same discipline as `fresh_extend_target_inner_probe_admits`.
+        let query = format!(
+            "PREFIX ex: <{EX}> \
+             SELECT ?s WHERE {{ \
+               ?s ex:knows ?o \
+               FILTER EXISTS {{ ?s ex:member ?m . VALUES ?fresh {{ \"x\" }} }} \
+             }}"
+        );
+        let engine = crate::engine::NativeSparqlEngine::new();
+        let explanation = engine.explain_query(&ds, &query, None).expect("explain");
+        let definition_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        let probe_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
+            .sum();
+        assert_eq!(
+            definition_answered, 0,
+            "a fresh VALUES column must never fall back to the per-row definition path"
+        );
+        assert_eq!(
+            probe_answered, 1,
+            "the memoized probe must answer this site exactly once (cached across both \
+             outer rows)"
+        );
+    }
+
+    #[test]
+    fn nested_exists_with_disjoint_free_vars_probe_admits() {
+        // `EXISTS { ?s :member ?m FILTER EXISTS { ?nx :club ?ny } }` — the NESTED
+        // `EXISTS`'s own free variables (`?nx`, `?ny`) are disjoint from the outer
+        // schema (`{s, o}`). Before this fix, `expr_probe_admissible`'s `Exists` arm
+        // tested the nested inner's free vars against the WHOLE enclosing tree's own
+        // free-variable set — which, per `NodeAnalysis::free_vars`'s doc, already
+        // includes a nested `EXISTS`'s own free variables as part of the enclosing
+        // `Filter` expression's free vars — so `?nx`/`?ny` were (wrongly) treated as
+        // potential outer-row collisions and the whole tree was refused, regardless
+        // of whether `arm_outer`'s schema could ever have bound them. After the fix,
+        // `current_row_vars` is intersected with the real outer schema first, so
+        // `?nx`/`?ny` — never a column of it — no longer trip the refusal.
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(&format!("{EX}knows"));
+        let member = b.intern_iri(&format!("{EX}member"));
+        let club = b.intern_iri(&format!("{EX}club"));
+        let s1 = b.intern_iri(&format!("{EX}s1"));
+        let s2 = b.intern_iri(&format!("{EX}s2"));
+        let o1 = b.intern_iri(&format!("{EX}o1"));
+        let witness = b.intern_iri(&format!("{EX}witness"));
+        let anyone = b.intern_iri(&format!("{EX}anyone"));
+        b.push_quad(s1, knows, o1, None);
+        b.push_quad(s2, knows, o1, None);
+        // Only `s2` has the `:member` fact — the correlation channel, matching
+        // `arm_ds`'s own `s1`/`s2` split.
+        b.push_quad(s2, member, club, None);
+        // A witness fact totally unrelated to `?s`/`?o`, making the nested EXISTS
+        // unconditionally true — its own variables (`?nx`, `?ny`) never appear
+        // anywhere else in this shape.
+        b.push_quad(witness, club, anyone, None);
+        let ds = b.freeze().expect("freeze");
+
+        let outer = bgp1(tvar("s"), &format!("{EX}knows"), tvar("o"));
+        let inner = GraphPattern::Filter {
+            expr: Expression::Exists(bx(bgp1(tvar("nx"), &format!("{EX}club"), tvar("ny")))),
+            inner: bx(bgp1(tvar("s"), &format!("{EX}member"), tvar("m"))),
+        };
+
+        assert_classified_admissible(&outer, &inner);
+        assert_probe_and_definition_agree(&ds, &outer, &inner);
+
+        // Ledger counters: BOTH the outer `FILTER EXISTS` site and the nested one
+        // must be answered by the memoized probe.
+        let query = format!(
+            "PREFIX ex: <{EX}> \
+             SELECT ?s WHERE {{ \
+               ?s ex:knows ?o \
+               FILTER EXISTS {{ ?s ex:member ?m FILTER EXISTS {{ ?nx ex:club ?ny }} }} \
+             }}"
+        );
+        let engine = crate::engine::NativeSparqlEngine::new();
+        let explanation = engine.explain_query(&ds, &query, None).expect("explain");
+        let definition_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsDefinitionAnswered))
+            .sum();
+        let probe_answered: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(crate::governor::ChargePoint::ExistsProbeAnswered))
+            .sum();
+        assert_eq!(
+            definition_answered, 0,
+            "neither the outer nor the nested EXISTS site may fall back to the per-row \
+             definition path — both are disjoint from the outer schema"
+        );
+        assert_eq!(
+            probe_answered, 2,
+            "one memoized-probe answer per site (outer + nested), each cached once"
+        );
     }
 
     #[test]
@@ -575,7 +778,7 @@ mod tests {
             right: bx(bgp1(tvar("z"), &format!("{EX}excluded"), tvar("s"))),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -638,7 +841,7 @@ mod tests {
             length: None,
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -727,7 +930,7 @@ mod tests {
             inner: bx(group),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -805,7 +1008,7 @@ mod tests {
             }),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -897,7 +1100,7 @@ mod tests {
             bindings: vec![vec![Some(GroundTerm::NamedNode(nn(&format!("{EX}cA"))))]],
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
         assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "VALUES variable");
     }
 
@@ -935,7 +1138,7 @@ mod tests {
             expression: Expression::Literal(Literal::new_simple("fixed")),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
         assert_hard_errors_on_every_strategy(&ds, &outer, &inner, "s", "BIND target");
     }
 
@@ -1140,7 +1343,7 @@ mod tests {
             }])),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let answers = natural_answers(&ds, &outer, &inner);
         assert_eq!(
@@ -1214,7 +1417,7 @@ mod tests {
             inner: bx(left_join),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -1357,7 +1560,7 @@ mod tests {
             object_args: vec![tvar("out")],
         });
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let correct = natural_results_with_registry(&ds, &outer, &inner, &registry);
         assert_eq!(
@@ -1455,7 +1658,7 @@ mod tests {
             inner: bx(bgp1(tvar("z"), &format!("{EX}val"), tvar("m"))),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         // Correct (definition, natural — the gate always refuses this shape): hard
         // errors on the `trigger` row, succeeds cleanly on `safe`.
@@ -1547,7 +1750,7 @@ mod tests {
             }),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         let natural = natural_answers(&ds, &outer, &inner);
         let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
@@ -1591,7 +1794,11 @@ mod tests {
             inner: bx(bgp1(tvar("s"), &format!("{EX}p"), tvar("o"))),
             silent: false,
         };
-        assert_classified_inadmissible(&inner);
+        // `Service` is a blanket, outer-schema-independent refusal (`admissible_rec`'s
+        // `Service` arm), so an empty outer schema exercises the exact same arm a
+        // non-empty one would.
+        let outer = bgp(Vec::new());
+        assert_classified_inadmissible(&outer, &inner);
     }
 
     #[test]
@@ -1639,7 +1846,7 @@ mod tests {
             }),
         };
 
-        assert_classified_inadmissible(&inner);
+        assert_classified_inadmissible(&outer, &inner);
 
         for memo in [true, false] {
             let mut ctx = EvalCtx::new(&ds);
@@ -1711,7 +1918,9 @@ mod tests {
             inner: bx(bgp1(tvar("s"), &format!("{EX}q"), tvar("z"))),
         };
 
-        assert_classified_inadmissible(&inner);
+        // The outer pattern the SPARQL text below lowers to: `?s :tag ?w`.
+        let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
+        assert_classified_inadmissible(&outer, &inner);
 
         // `--explain`-level ledger counters, through the full governed engine, over
         // the same shape as SPARQL text.
@@ -1993,7 +2202,7 @@ mod tests {
         let mut admissible_checked = 0_usize;
         let mut stateful_checked = 0_usize;
         for inner in &shapes {
-            if is_classified_stateful(inner) {
+            if is_classified_stateful(&outer, inner) {
                 // A stateful inner (reachable `RAND()`, directly or through the
                 // generator's nested-`EXISTS` operator) draws a FRESH value on every
                 // evaluation, so the raw per-row booleans from two SEPARATE
@@ -2006,7 +2215,7 @@ mod tests {
                 // (unasserted against one another) so a stateful shape is proven not
                 // to hard-error either way.
                 assert!(
-                    !is_classified_admissible(inner),
+                    !is_classified_admissible(&outer, inner),
                     "a shape with a reachable stateful builtin was classified \
                      ADMISSIBLE for the memoized probe — has_stateful_builtin must \
                      refuse it: {inner:?}"
@@ -2025,7 +2234,7 @@ mod tests {
                  {inner:?}"
             );
 
-            if is_classified_admissible(inner) {
+            if is_classified_admissible(&outer, inner) {
                 let natural = natural_answers(&ds, &outer, inner);
                 let forced_definition =
                     forced_answers(&ds, &outer, inner, ForcedExistsStrategy::Definition);

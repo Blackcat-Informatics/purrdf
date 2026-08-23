@@ -1058,16 +1058,30 @@ impl Drop for ForceExistsStrategyGuard {
 /// still computes as its fallback (`!correlated || probe_admissible(..)`); the
 /// `cfg(test)` branch lets a differential test override it in either direction — see
 /// [`FORCE_EXISTS_STRATEGY`]'s doc.
+///
+/// `outer_schema` is threaded straight through to [`probe_admissible`] — the caller's
+/// (`exists`'s own) `schema` parameter, never row-restricted — so the admission arms
+/// can tell a genuinely fresh `BIND`/`VALUES` target or a disjoint nested `EXISTS`'s
+/// free variables apart from an actual SEP-0007 rebinding collision with the row being
+/// filtered, instead of conservatively refusing every one of them regardless of
+/// whether the caller's schema could ever have produced the colliding name. Recomputed
+/// on every call (this function already runs once per outer row, never cached across
+/// rows — the tree walk it performs is `O(pattern size)`, unrelated to `outer_schema`'s
+/// own O(1) column lookups), so no [`crate::eval::PreparedExists`] cache-key change is
+/// needed: `analysis` stays schema-independent (built once per site,
+/// `crate::eval::PreparedExists::build`), and only this per-call admission check reads
+/// `outer_schema`.
 fn exists_use_probe(
     correlated: bool,
     normalized: &GraphPattern,
     analysis: &crate::governor::soundness::NodeAnalysisTable,
+    outer_schema: &VarSchema,
 ) -> bool {
     #[cfg(test)]
     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
         return forced == ForcedExistsStrategy::Probe;
     }
-    !correlated || crate::governor::soundness::probe_admissible(normalized, analysis)
+    !correlated || crate::governor::soundness::probe_admissible(normalized, analysis, outer_schema)
 }
 
 /// Evaluate `EXISTS { pattern }` for the current solution.
@@ -1191,9 +1205,10 @@ fn exists<D: DatasetView + Sync>(
     // synthetic `Values{outer_var: [[μ's value]]}` at exactly the leaf a
     // correlated variable occurs in, which is by construction never a
     // rebinding (it is a JOIN restricting to μ's own value, not a fresh
-    // binding — the same distinction `probe_admissible`'s "Self-contained"
-    // doc draws for its own tree-level analysis, which never sees a
-    // substituted copy either). This window's own inner (a nested `EXISTS`
+    // binding — the same distinction `probe_admissible`'s doc draws for its
+    // own tree-level analysis, which never sees a substituted copy either;
+    // it is always run against the caller's static, un-substituted algebra
+    // and the caller's own `outer_schema`). This window's own inner (a nested `EXISTS`
     // reached while evaluating that substituted tree) was already checked
     // — soundly, against a real `outer_bound` — on its OWN un-substituted
     // entry to this function, before any substitution ran; skipping here
@@ -1215,7 +1230,7 @@ fn exists<D: DatasetView + Sync>(
 
     let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
 
-    if exists_use_probe(correlated, normalized, analysis) {
+    if exists_use_probe(correlated, normalized, analysis, schema) {
         // ---- Memoized probe path ----
         //
         // Evaluate the (ENF-normalized) inner — and build the probe index over it —

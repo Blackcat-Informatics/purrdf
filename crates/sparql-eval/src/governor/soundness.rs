@@ -1151,7 +1151,7 @@ pub(crate) fn pattern_label(pattern: &GraphPattern) -> &'static str {
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
 
 use crate::parallel::function_is_builtin_stateful;
-use crate::{DetHashMap, DetHashSet};
+use crate::{DetHashMap, DetHashSet, VarSchema};
 
 /// One node's output from the fourth structural analysis: every variable free
 /// anywhere within it, the subset of those CERTAINLY bound in every solution it
@@ -1722,19 +1722,49 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 /// substitution, and still agree with the one-definition theorem
 /// (`crate::enf`'s module doc) for every μ.
 ///
-/// # Exhaustive, wildcard-free, self-contained (Part C)
+/// # Exhaustive, wildcard-free (Part C)
 ///
 /// Every arm below is named explicitly — no `_ =>` — for the same reason
 /// [`visit_pattern_parts`] is: a new [`GraphPattern`] variant must be a compile
 /// error here, not a silent inheritance of the permissive answer (`true`, which
-/// here would license a WRONG probe). "Self-contained" means this predicate takes
-/// no outer-schema parameter: `current_row_vars` is `pattern`'s OWN root
-/// [`NodeAnalysis::free_vars`] (from `table`, populated by an enclosing
-/// [`analyze_pattern`] call over this exact tree) — the maximal, tree-internal set
-/// of variables that COULD be shared with an enclosing row, without consulting the
-/// caller's actual schema. Treating every one of them as a potential correlation
-/// is conservative (never under-admits) and needs nothing from outside this
-/// pattern's own analysis.
+/// here would license a WRONG probe).
+///
+/// `outer_schema` is the caller's actual enclosing-row schema — [`crate::expr::exists`]'s
+/// own `schema` parameter, the FULL column set the row being filtered could ever bind
+/// (not narrowed to which columns THIS particular row happens to have a value in — see
+/// this function's "Per-row vs per-schema" section below for why that distinction
+/// matters). `current_row_vars`, the set every arm below actually tests membership
+/// against, is `pattern`'s OWN root [`NodeAnalysis::free_vars`] (from `table`, populated
+/// by an enclosing [`analyze_pattern`] call over this exact tree) INTERSECTED with
+/// `outer_schema`'s columns: a variable only counts as a potential SEP-0007 rebinding
+/// collision when it is BOTH still visible at `pattern`'s own root (not scoped away by
+/// an internal `Project` boundary — `NodeAnalysis::free_vars`'s `Project` rule) AND a
+/// column the caller's row could actually carry. A `pattern`-internal variable with no
+/// counterpart in `outer_schema` — a `BIND`/`VALUES` target the caller's row could never
+/// have bound under any name collision, or a nested `EXISTS`'s own free variable that is
+/// simply disjoint from the enclosing schema — is therefore no longer a
+/// false-positive refusal: before this parameter existed, EVERY tree-internal variable
+/// was conservatively treated as a potential collision regardless of whether the caller's
+/// schema could ever have produced it, which refused every `BIND`/`VALUES`/nested-`EXISTS`
+/// shape not walled off by an enclosing `Project`, independent of whether a real collision
+/// was even possible.
+///
+/// # Per-row vs per-schema (never over-precise)
+///
+/// `outer_schema` deliberately stays at SCHEMA granularity, not "this row's actually-bound
+/// columns" (`crate::expr::exists`'s own `outer_bound`, computed per μ): the memoized probe
+/// index this predicate licenses is built ONCE per site and reused for EVERY row of that
+/// site (`EvalCtx::exists_inner_cache`, keyed by pattern address + graph + schema
+/// fingerprint — never by a row's own bound-ness), so the admissibility decision must hold
+/// for every row the site could ever see, not merely the one row that happened to trigger
+/// the build. Using `outer_bound` instead would admit a shape for a row where a
+/// same-named column happens to be unbound and refuse it for another row of the SAME site
+/// where that column is bound — two different verdicts about whether ONE shared cached
+/// index may be trusted, which is incoherent. `outer_schema` is still an over-approximation
+/// relative to any one row's own `outer_bound` (never under-admits), exactly as the
+/// pre-fix, whole-tree `current_row_vars` was an over-approximation relative to
+/// `outer_schema` — this parameter narrows that over-approximation to the caller's real
+/// schema, it does not eliminate it.
 ///
 /// # Per-arm equivalence argument
 ///
@@ -1752,7 +1782,9 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 ///   collision should never reach this predicate on parsed input, but this check
 ///   is stated independently of that parser guarantee (never lean on the parser)
 ///   because `probe_admissible` also runs over hand-built algebra (SHACL/chase
-///   rewrites, unit tests) the parser never saw.
+///   rewrites, unit tests) the parser never saw. A column NOT in `outer_schema` is
+///   genuinely fresh — no outer row could ever supply a value under that name — and
+///   admits.
 /// * `PropertyFunction`: never admissible. A relation's argument is an invocation
 ///   INPUT the evaluator reads from the CURRENT row (`crate::property_fn_eval`),
 ///   not a join key a post-hoc `VALUES` probe can supply — the same "fusion
@@ -1769,7 +1801,8 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 ///   accepts the filter/bind expression against the inner's own certainly-bound
 ///   set, AND (`Extend` only) the target is not itself a current-row variable
 ///   (SEP-0007's rebinding rule again, checked independently of the parser for
-///   the same reason as `Values`, above).
+///   the same reason as `Values`, above). A target NOT in `outer_schema` is fresh
+///   and admits, for the same reason as `Values`.
 /// * `OrderBy`/`Project`/`Distinct`/`Reduced`: admissible iff the inner is — none
 ///   of the four can change whether a ROW exists, only its order, its column set,
 ///   or whether a duplicate survives, none of which the shared-column probe
@@ -1783,9 +1816,18 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 ///   concrete IRI; a `SILENT` call can swallow a per-row failure that an
 ///   evaluate-once pass would never see) are never admissible: each can give an
 ///   answer that depends on WHICH outer row drove the evaluation, which a single
-///   evaluate-once-and-probe pass cannot reproduce.
-pub(crate) fn probe_admissible(pattern: &GraphPattern, table: &NodeAnalysisTable) -> bool {
-    let current_row_vars = node_analysis(pattern, table).free_vars;
+///   evaluate-once-and-probe pass cannot reproduce — unconditionally, regardless of
+///   `outer_schema`.
+pub(crate) fn probe_admissible(
+    pattern: &GraphPattern,
+    table: &NodeAnalysisTable,
+    outer_schema: &VarSchema,
+) -> bool {
+    let current_row_vars: DetHashSet<Variable> = node_analysis(pattern, table)
+        .free_vars
+        .into_iter()
+        .filter(|v| outer_schema.contains(v))
+        .collect();
     admissible_rec(pattern, &current_row_vars, table)
 }
 
@@ -1872,18 +1914,18 @@ impl RowCollisionIntro {
 /// variable, or `VALUES`) that collides with a variable in `row_scope` — the
 /// CALLER'S ACTUAL current-row variables for one specific μ (`crate::expr::exists`'s
 /// own `outer_bound`: the schema columns THIS row concretely binds), never
-/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars`, a
-/// STATIC, tree-level OVER-APPROXIMATION computed once for the whole pattern
-/// with no per-row knowledge — see that function's "Self-contained" doc).
-/// The two must not be conflated: `current_row_vars` is sized to answer "is
-/// the memoized probe EVER valid for this shape", which must hold for every
-/// possible outer schema/row a correlated `EXISTS` could face, so it
-/// deliberately over-includes; using it here would hard-fail rows whose
-/// OWN binding of the colliding-by-NAME variable is simply absent (a
-/// genuinely fresh target this engine's `current_row_vars` plumbing cannot
-/// yet tell apart from a real collision — a later task widens that
-/// precision). `row_scope` carries no such ambiguity: it is read directly off
-/// `row`/`schema` for the exact μ being evaluated.
+/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
+/// with the caller's outer SCHEMA — see that function's doc — a PER-SITE
+/// over-approximation computed once for the whole pattern, not a per-row one).
+/// The two must not be conflated: `current_row_vars` is sized to answer "is the
+/// memoized probe EVER valid for this shape", which must hold for EVERY row the
+/// site could ever see (the probe index it licenses is built once and reused
+/// across every row — see `probe_admissible`'s "Per-row vs per-schema" doc), so it
+/// deliberately over-includes relative to any one row's own bound-ness; using it
+/// here would hard-fail rows whose OWN binding of the colliding-by-NAME variable is
+/// simply absent, even though the SITE's schema could carry it. `row_scope` carries
+/// no such ambiguity: it is read directly off `row`/`schema` for the exact μ being
+/// evaluated.
 ///
 /// # Why this exists (SEP-0007 Part 3, enforced at evaluation admission too)
 ///
