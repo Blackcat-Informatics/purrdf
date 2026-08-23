@@ -267,7 +267,7 @@ _CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--base"})
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
 _CLI_MODULE = Path("crates/cli/src/entails.rs")
-_CLI_DISPATCH = Path("crates/cli/src/main.rs")
+_CLI_DISPATCH = Path("crates/cli/src/lib.rs")
 
 # The clap variant that carries the conclusion-directed surface.
 _CLI_VARIANT = "Entails"
@@ -1200,15 +1200,15 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         lambda text: _cut(text, f"{_names('boundary')}, "),
     ),
     (
-        "the clap variant is renamed out from under `main`",
-        "crates/cli/src/main.rs",
+        "the clap variant is renamed out from under the dispatcher",
+        "crates/cli/src/lib.rs",
         lambda text: _swap(
             text, f"Command::{_CLI_VARIANT} {{", f"Command::{_CLI_VARIANT}Legacy {{"
         ),
     ),
     (
         "the dispatch arm routes elsewhere, leaving the name in a comment",
-        "crates/cli/src/main.rs",
+        "crates/cli/src/lib.rs",
         lambda text: _swap(text, "} => entails::run(", "} => elsewhere::run(")
         + "\n// was: entails::run(\n",
     ),
