@@ -43,7 +43,9 @@ use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, PackView, RdfDataset, dataset_from_view, verify_pack};
-use purrdf_rdf::{SourceFormat, parse_dataset};
+use purrdf_rdf::{
+    NativeRdfFormat, SerializeOutcome, SourceFormat, parse_dataset, serialize_dataset_to_format,
+};
 
 use crate::error::CliError;
 use crate::immutable::ImmutableInput;
@@ -154,4 +156,31 @@ pub(crate) fn load_dataset(
             Ok(dataset_from_view(&view)?)
         }
     }
+}
+
+/// Serialize the input at `path` (text or pack) to N-Quads over its zero-copy view.
+///
+/// A pack is **not** rebuilt into an owned `RdfDataset` to be serialized: the
+/// `PackView` is serialized directly. This is the read side of the `entails` and
+/// `consistency` string boundaries, which decide over N-Quads text.
+pub(crate) fn serialize_input_to_nquads(
+    path: &str,
+    format: SourceFormat,
+    base: Option<&str>,
+) -> Result<SerializeOutcome, CliError> {
+    struct NQuadsOp;
+
+    impl ViewOp for NQuadsOp {
+        type Output = SerializeOutcome;
+
+        fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+            Ok(serialize_dataset_to_format(
+                view,
+                NativeRdfFormat::NQuads,
+                None,
+            )?)
+        }
+    }
+
+    run_over_input(path, format, base, NQuadsOp)
 }

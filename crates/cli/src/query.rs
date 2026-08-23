@@ -10,8 +10,8 @@
 //! ## `--entailment`: query the closure, not the raw view
 //!
 //! Without `--entailment` the query runs over the raw view (text `RdfDataset` or a
-//! zero-copy `PackView`). With `--entailment REGIME` the pipeline reconstructs an
-//! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`])
+//! zero-copy `PackView`). With `--entailment REGIME` the pipeline enters the reasoner
+//! over that SAME view — a pack is NOT rebuilt into an owned dataset to materialize —
 //! and answers the query UNDER the regime through
 //! [`purrdf::query_with_entailment_governed`] — the library's own entailment-aware query
 //! entry point — using the same `EntailmentPlan` `reason` resolves, so `--rules` means the
@@ -445,9 +445,9 @@ fn emit_result(
               the aggregate registry, and the report target); bundling them into a struct \
               would not shrink the call sites, which already name every field"
 )]
-fn entailed_query(
+fn entailed_query<D: DatasetView>(
     engine: &NativeSparqlEngine,
-    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    dataset: &D,
     query: &str,
     base: Option<&str>,
     plan: &reason::EntailmentPlan,
@@ -496,6 +496,36 @@ fn entailed_query(
         // the message is what there is to say, and saying it is strictly better than
         // exiting on a diagnostic the user never sees.
         Err(other) => Err(CliError::Runtime(other.to_string())),
+    }
+}
+
+/// The `--entailment` query as a [`ViewOp`], so a pack source answers under the regime
+/// directly over a zero-copy `PackView` — no `dataset_from_view` rebuild to cross the
+/// reasoner boundary. A text source parses to an `RdfDataset` and answers over that.
+struct EntailedQueryOp<'a> {
+    engine: &'a NativeSparqlEngine,
+    query: &'a str,
+    base: Option<&'a str>,
+    plan: &'a reason::EntailmentPlan,
+    governors: &'a QueryGovernors,
+    aggregates: Option<&'a AggregateRegistry>,
+    report_target: &'a ReportTarget,
+}
+
+impl ViewOp for EntailedQueryOp<'_> {
+    type Output = GovernedEntailment;
+
+    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+        entailed_query(
+            self.engine,
+            view,
+            self.query,
+            self.base,
+            self.plan,
+            self.governors,
+            self.aggregates,
+            self.report_target,
+        )
     }
 }
 
@@ -607,27 +637,31 @@ pub(crate) fn run(
     )?;
 
     if let Some(regime) = options.entailment {
-        // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
-        // answer the query UNDER the regime through the library's own entailment-aware
-        // query entry point — governed, so a ceiling named beside `--entailment` is in force
-        // rather than refused.
+        // The `--entailment` lane: answer the query UNDER the regime through the library's
+        // own entailment-aware query entry point — governed, so a ceiling named beside
+        // `--entailment` is in force rather than refused. A pack source enters the reasoner
+        // as a zero-copy `PackView` (no `dataset_from_view` rebuild); a text source parses
+        // to an `RdfDataset`.
         let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
-        let dataset = source::load_dataset(options.data, data_format, options.base)?;
         // Built HERE, with the source already read and the closure not yet started, for the
         // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
         // names, and reading a large file is not that work.
         let governors = options.governors.to_governors();
         // The rows go to stdout and the certificate to `--report`: a solution set that
         // depends on a closure is not readable without knowing what closed it.
-        let answered = entailed_query(
-            &engine,
-            &dataset,
-            options.query,
+        let answered = source::run_over_input(
+            options.data,
+            data_format,
             options.base,
-            &plan,
-            &governors,
-            aggregates.as_ref(),
-            report_target,
+            EntailedQueryOp {
+                engine: &engine,
+                query: options.query,
+                base: options.base,
+                plan: &plan,
+                governors: &governors,
+                aggregates: aggregates.as_ref(),
+                report_target,
+            },
         )?;
         return emit_entailed(
             options,

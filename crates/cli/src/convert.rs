@@ -13,13 +13,14 @@
 //! ## Transforms: `--entailment` and `--canonical`
 //!
 //! Two optional transforms compose in a fixed order (entail first, then
-//! canonicalize), and both need a concrete owned dataset — so when either is
-//! present the pipeline reconstructs an `Arc<RdfDataset>` up front (a text source is
-//! parsed, a pack source is rebuilt via [`source::load_dataset`]) instead of taking
-//! the zero-copy view path:
+//! canonicalize). The entailment lane enters the reasoner over the source's zero-copy
+//! view — a pack is NOT rebuilt into an owned dataset to materialize; the closure a
+//! run produces is then serialized. Without `--entailment`, canonicalization and
+//! serialization operate on an owned `Arc<RdfDataset>` reconstructed from the source
+//! (a text source is parsed, a pack source read via [`source::load_dataset`]):
 //!
-//! * `--entailment REGIME` materializes the regime's closure in memory (through the
-//!   same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
+//! * `--entailment REGIME` materializes the regime's closure over the view (through
+//!   the same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
 //!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
@@ -197,18 +198,25 @@ fn run_with_transforms(
         sink::validate_jsonld_options(target, options.jsonld_options)?;
         Some(target)
     };
-    let dataset = source::load_dataset(input, source_format, options.base)?;
-
-    // Entail first: materialize the regime's closure, through the same
-    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here.
+    // Entail first: materialize the regime's closure over the source, through the same
+    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here. A pack
+    // source enters the reasoner as a zero-copy `PackView` (no `dataset_from_view`
+    // rebuild). Without `--entailment` the source is reconstructed as an owned dataset,
+    // which the canonicalization/serialization below need.
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
             let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
-            report::materialize_reported(&dataset, plan.materialization(), report_target)?
+            report::materialize_reported_over_input(
+                input,
+                source_format,
+                options.base,
+                plan.materialization(),
+                report_target,
+            )?
         }
-        None => dataset,
+        None => source::load_dataset(input, source_format, options.base)?,
     };
 
     // Then canonicalize: RDFC-1.0 canonical N-Quads always override `--to`.

@@ -3,14 +3,15 @@
 
 //! The `reason` subcommand: `Source → materialize → Sink`.
 //!
-//! Map the requested regime and its `--rules` document to an [`EntailmentPlan`], load the
-//! source as a concrete dataset, compute the entailment closure, and write it through the
-//! [`sink`] to the output. Both `--from`/`--to` are resolved up front (mirroring
-//! `convert`): an explicit choice always wins, otherwise the format is inferred
-//! from the input/output path's extension; `-` (stdin/stdout) has no extension and
-//! REQUIRES the explicit override. Resolving both before `load_dataset`/
-//! `materialize` runs means an unresolvable output format fails fast, not after
-//! the source has already been loaded and closed over. The resulting loss ledger
+//! Map the requested regime and its `--rules` document to an [`EntailmentPlan`], enter the
+//! reasoner over the source's zero-copy view (a pack is NOT rebuilt into an owned dataset
+//! to materialize; a text source parses to an `RdfDataset`), compute the entailment
+//! closure, and write it through the [`sink`] to the output. Both `--from`/`--to` are
+//! resolved up front (mirroring `convert`): an explicit choice always wins, otherwise the
+//! format is inferred from the input/output path's extension; `-` (stdin/stdout) has no
+//! extension and REQUIRES the explicit override. Resolving both before materialization
+//! runs means an unresolvable output format fails fast, not after the closure has already
+//! been computed. The resulting loss ledger
 //! is surfaced under `--loss-ledger`, and the run's reasoning report under
 //! `--report` — on the refusal path as well as the success path, because an
 //! inconsistent knowledge base has no closure and still had a run.
@@ -35,7 +36,6 @@ use crate::format;
 use crate::ledger;
 use crate::report;
 use crate::sink;
-use crate::source;
 
 /// A resolved entailment plan: the regime, plus the input that regime is defined by.
 ///
@@ -178,13 +178,18 @@ pub(crate) fn run(
     format::refuse_base_with_pack(target_format, base, "a pack --to target")?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
 
-    let dataset = source::load_dataset(input, source_format, base)?;
-
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
     // and the evidence of what produced it is a second output rather than a discarded one.
     // An INCONSISTENT input has no closure and still gets its report written — see
-    // `report::materialize_reported`.
-    let closure = report::materialize_reported(&dataset, plan.materialization(), report_target)?;
+    // `report::materialize_reported`. A pack source enters the reasoner as a zero-copy
+    // `PackView` (no `dataset_from_view` rebuild); a text source parses to an `RdfDataset`.
+    let closure = report::materialize_reported_over_input(
+        input,
+        source_format,
+        base,
+        plan.materialization(),
+        report_target,
+    )?;
 
     let src_codec = source_format.loss_codec_name();
     let ledger = sink::write_rdf(

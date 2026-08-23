@@ -44,13 +44,15 @@
 //! which triples, after how much work. Writing nothing was the previous behaviour and it
 //! left the one operator who most needed the certificate with only an exit code.
 
-use purrdf_core::RdfDataset;
+use purrdf_core::{DatasetView, RdfDataset};
 use purrdf_entail::{EntailError, Materialization, ReasoningReport, materialize};
+use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::render_reasoning_report;
 use std::sync::Arc;
 
 use crate::cli::ReportTarget;
 use crate::error::CliError;
+use crate::source::{self, ViewOp};
 
 /// Materialize `plan` over `dataset`, surfacing the run's report to `target` either way.
 ///
@@ -62,8 +64,8 @@ use crate::error::CliError;
 /// Every other [`EntailError`] is the absence of a run — an exhausted ceiling, a malformed
 /// rule document, an unsatisfiable tableau — with no report to write, so nothing is
 /// surfaced and nothing is implied about a closure that was never assembled.
-pub(crate) fn materialize_reported(
-    dataset: &RdfDataset,
+pub(crate) fn materialize_reported<D: DatasetView>(
+    dataset: &D,
     plan: Materialization<'_>,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
@@ -80,6 +82,34 @@ pub(crate) fn materialize_reported(
         }
         Err(other) => Err(other.into()),
     }
+}
+
+/// Materialize `plan`'s closure over the input at `path` (text or pack), surfacing the
+/// report to `target`, **without rebuilding a pack into an owned dataset to enter the
+/// reasoner**: a pack source is seeded into the reasoner directly from its zero-copy
+/// `PackView`, and a text source parses to an `RdfDataset`. The shared entry point for
+/// `reason` and `convert --entailment`.
+pub(crate) fn materialize_reported_over_input(
+    path: &str,
+    format: SourceFormat,
+    base: Option<&str>,
+    plan: Materialization<'_>,
+    target: &ReportTarget,
+) -> Result<Arc<RdfDataset>, CliError> {
+    struct Op<'a> {
+        plan: Materialization<'a>,
+        target: &'a ReportTarget,
+    }
+
+    impl ViewOp for Op<'_> {
+        type Output = Arc<RdfDataset>;
+
+        fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+            materialize_reported(view, self.plan, self.target)
+        }
+    }
+
+    source::run_over_input(path, format, base, Op { plan, target })
 }
 
 /// Surface `report` per the decoded `--report` target.
