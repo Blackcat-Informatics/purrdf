@@ -469,8 +469,8 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
         ));
     }
     let mut out = Vec::with_capacity((bytes.len() / 4 + 1) * 3);
-    let mut chunks = bytes.chunks_exact(4);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = bytes.as_chunks::<4>();
+    for chunk in chunks {
         let n = (sextet(chunk[0])? << 18)
             | (sextet(chunk[1])? << 12)
             | (sextet(chunk[2])? << 6)
@@ -479,7 +479,7 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
         out.push((n >> 8) as u8);
         out.push(n as u8);
     }
-    match chunks.remainder() {
+    match remainder {
         [] => {}
         [a, b] => {
             let n = (sextet(*a)? << 18) | (sextet(*b)? << 12);

@@ -486,9 +486,10 @@ impl core::fmt::Display for GraphUpdateOperation {
     /// Serialize one update operation to SPARQL Update surface syntax.
     ///
     /// The `WHERE` clause of a [`Self::DeleteInsert`] is rendered through
-    /// [`crate::serialize::fmt_group_body`] — the SAME group-graph-pattern
-    /// renderer [`crate::pattern_to_select_query`] uses for a query's own WHERE
-    /// body — rather than a second, duplicate pattern-to-text implementation.
+    /// the private `serialize::fmt_group_body` helper — the SAME
+    /// group-graph-pattern renderer [`crate::pattern_to_select_query`] uses for
+    /// a query's own WHERE body — rather than a second, duplicate
+    /// pattern-to-text implementation.
     /// The two call sites want the identical shape: [`crate::parser::SparqlParser`]
     /// parses an UPDATE's `WHERE { … }` with the very same
     /// `parse_group_graph_pattern` a `SELECT`'s `WHERE { … }` goes through, so

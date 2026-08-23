@@ -1804,8 +1804,6 @@ fn parse(message: impl Into<String>) -> RdfDiagnostic {
 
 #[cfg(test)]
 mod carrier_law_tests {
-    use std::io::Write as _;
-
     use proptest::prelude::*;
     use serde_json::json;
 
