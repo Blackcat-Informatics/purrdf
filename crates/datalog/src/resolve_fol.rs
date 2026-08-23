@@ -50,7 +50,7 @@
 //! Merkle fold `sha1(rule_identity ++ "\n" ++ sorted(child identities))` over an
 //! [`FolProof::ByRule`], bottoming out at `sha1(rule_identity ++ "\n" ++ content
 //! key)` for an [`FolProof::Assert`]. A consumer that keys its own cross-lane
-//! derivation IDs on that digest reproduces purrdf's proof identity exactly; the
+//! derivation IDs on that digest reproduces PurRDF's proof identity exactly; the
 //! digest is the content address, and minting an IRI from it is caller-supplied
 //! vocabulary this crate never learns.
 //!
