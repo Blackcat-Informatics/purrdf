@@ -3,7 +3,7 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as nine subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as twelve subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
@@ -12,6 +12,12 @@
 //! * `entails` — decide whether a premise entails a conclusion, or answer a basic
 //!   graph pattern's certain answers, under an entailment regime;
 //! * `consistency` — decide whether an OWL-Direct ontology has a model at all;
+//! * `validate` — decide a data graph against a SHACL shapes graph, emitting the W3C
+//!   validation report (or its SARIF 2.1.0 projection);
+//! * `shex` — decide RDF nodes against a ShEx 2.1 schema through a query shape map,
+//!   emitting the ShapeMap specification's result shape map;
+//! * `describe` — extract the Symmetric Concise Bounded Description of one or more
+//!   resources;
 //! * `project` — materialize a deterministic graph/tabular carrier archive;
 //! * `lift` — reconstruct RDF from a strict bidirectional carrier;
 //! * `pack` — operate on the binary pack container directly; its `verify` verb runs
@@ -29,6 +35,15 @@
 //! no closure for `entails` to decide a conclusion against, so it is its own
 //! subcommand rather than a mode of either — see [`consistency`].
 //!
+//! `validate` and `shex` are the two SHAPE languages, and neither is the other's
+//! dialect: SHACL decides a data graph against target-selected focus nodes and answers
+//! with an RDF validation report, while ShEx decides a caller-supplied `(node, shape)`
+//! shape map and answers with a result shape map. Neither entails anything — see
+//! [`validate`] and [`shex`] for what each refuses rather than answering weakly.
+//! `describe` is the one verb that transforms without deciding: it extracts a resource's
+//! Symmetric Concise Bounded Description through the same `Describer` SPARQL `DESCRIBE`
+//! evaluates to — see [`describe`] for why that earns a verb.
+//!
 //! plus the global `--loss-ledger` flag, which surfaces the machine-readable
 //! loss ledger for a conversion, projection, or lift, and the `--report` flag the
 //! four reasoning subcommands carry, which surfaces the reasoning certificate:
@@ -44,11 +59,23 @@
 //! because the mutation was not applied — see [`error::CliOutcome`]. `consistency`
 //! reuses the same **3**, for the same reason, when its answer is `unknown`: the
 //! hypertableau reached its round cap rather than saturating, and `true`/`false` both
-//! exit **0** as decided verdicts.
+//! exit **0** as decided verdicts. `validate` reuses it once more when a SHACL-SPARQL
+//! governor stopped a validation, and writes NO report when it does — the engine
+//! deliberately has no partial-report outcome, because every SHACL constraint is a
+//! negative claim and a truncated solution bag cannot license one.
+//!
+//! A DECIDED negative verdict is never an exit code in this binary. A `false` ASK, a
+//! `not-entailed` conclusion, an inconsistent ontology, a non-conforming SHACL data
+//! graph and a nonconformant ShEx node all exit **0** and put the answer on stdout: the
+//! run did exactly what it was asked to, and mapping "the answer is no" onto a failure
+//! code would put it in the same bucket as a corrupt pack. `validate` and `shex` also
+//! write their one-line verdict to **stderr**, unconditionally, so a shell can branch on
+//! it without parsing the RDF or JSON artifact stdout must stay.
 
 mod cli;
 mod consistency;
 mod convert;
+mod describe;
 mod entails;
 mod error;
 mod format;
@@ -60,9 +87,11 @@ mod projection;
 mod query;
 mod reason;
 mod report;
+mod shex;
 mod sink;
 mod source;
 mod update;
+mod validate;
 
 use std::fs::File;
 use std::io::Read as _;
@@ -293,6 +322,89 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &ledger_target,
             jsonld_options.as_ref(),
         ),
+        Command::Validate {
+            shapes,
+            shapes_from,
+            shapes_graph,
+            from,
+            base,
+            format,
+            fuel,
+            deadline,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            input,
+            output,
+        } => validate::run(
+            &validate::ValidateOptions {
+                input,
+                output,
+                shapes,
+                shapes_from: *shapes_from,
+                shapes_graph: shapes_graph.as_deref(),
+                from: *from,
+                base: base.as_deref(),
+                format: *format,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    // A validation answers with a report rather than an answer SEQUENCE, so
+                    // there is nothing for `--max-answers` to bound and the flag is not
+                    // offered — see `cli`'s module documentation.
+                    max_answers: None,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                },
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        ),
+        Command::Shex {
+            schema,
+            schema_from,
+            imports,
+            data,
+            from,
+            base,
+            map,
+            output,
+        } => shex::run(
+            &shex::ShexOptions {
+                schema,
+                schema_from: *schema_from,
+                imports,
+                data,
+                from: *from,
+                base: base.as_deref(),
+                map,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Describe {
+            iris,
+            from,
+            to,
+            base,
+            input,
+            output,
+        } => describe::run(
+            &describe::DescribeOptions {
+                iris,
+                from: *from,
+                to: *to,
+                base: base.as_deref(),
+                input,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
         Command::Project {
             profile,
             config,

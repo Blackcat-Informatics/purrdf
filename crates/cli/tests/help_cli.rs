@@ -23,13 +23,32 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// Every subcommand the binary carries, in `Command`'s declaration order.
+///
+/// The list is exhaustive on purpose: a capability the top-level help does not list is a
+/// capability no operator will find, which is indistinguishable from not shipping it. This
+/// pinned list is what keeps a new verb from being added to the tree and left off the surface
+/// an installed consumer actually meets.
+const SUBCOMMANDS: [&str; 12] = [
+    "convert",
+    "query",
+    "update",
+    "reason",
+    "entails",
+    "consistency",
+    "validate",
+    "shex",
+    "describe",
+    "project",
+    "lift",
+    "pack",
+];
+
 #[test]
 fn top_level_help_lists_all_subcommands() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "`--help` exits 0");
-    for subcommand in [
-        "convert", "query", "update", "reason", "entails", "project", "lift",
-    ] {
+    for subcommand in SUBCOMMANDS {
         assert!(
             stdout.contains(subcommand),
             "top-level help must list `{subcommand}`; got:\n{stdout}"
@@ -39,6 +58,118 @@ fn top_level_help_lists_all_subcommands() {
         stdout.contains("--loss-ledger"),
         "top-level help must mention the global --loss-ledger flag"
     );
+    assert!(
+        stdout.contains("--jsonld-options"),
+        "top-level help must mention the global --jsonld-options flag"
+    );
+}
+
+/// Every subcommand answers its OWN `--help` with exit 0.
+///
+/// A verb in the tree whose help panics or errors is not a shipped surface; this is the cheap
+/// total check that each one is at least reachable and self-describing.
+#[test]
+fn every_subcommand_has_its_own_help() {
+    for subcommand in SUBCOMMANDS {
+        let (code, stdout, stderr) = run(&[subcommand, "--help"]);
+        assert_eq!(code, 0, "`{subcommand} --help` exits 0; stderr:\n{stderr}");
+        assert!(
+            !stdout.is_empty(),
+            "`{subcommand} --help` must describe itself"
+        );
+    }
+}
+
+/// `validate --help` names every input, the output-format choices, and the five governors.
+///
+/// The `--format` enumeration is the one an operator has to read to learn that SARIF is
+/// available at all, and the governor list is what makes the ceilings settable; a flag the
+/// help does not name is a ceiling nobody sets.
+#[test]
+fn validate_help_lists_its_inputs_formats_and_governors() {
+    let (code, stdout, _) = run(&["validate", "--help"]);
+    assert_eq!(code, 0, "`validate --help` exits 0");
+    for option in [
+        "--shapes",
+        "--shapes-from",
+        "--shapes-graph",
+        "--from",
+        "--base",
+        "--format",
+        "--fuel",
+        "--deadline",
+        "--max-intermediate-cells",
+        "--max-scratch-bytes",
+        "--max-remote-requests",
+        "IN",
+        "OUT",
+    ] {
+        assert!(
+            stdout.contains(option),
+            "validate help must list `{option}` (IN/OUT are positional); got:\n{stdout}"
+        );
+    }
+    for choice in ["ntriples", "turtle", "rdfxml", "jsonld", "sarif"] {
+        assert!(
+            stdout.contains(choice),
+            "validate help must list the `{choice}` output format; got:\n{stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("--max-answers"),
+        "a validation has no answer sequence to bound: {stdout}"
+    );
+    assert!(
+        stdout.contains("exits 3") || stdout.contains("exit"),
+        "the help must say what a trip does to the exit code; got:\n{stdout}"
+    );
+}
+
+/// `shex --help` names the schema, the data, the imports, the map and the syntax choices.
+#[test]
+fn shex_help_lists_its_inputs_and_schema_syntaxes() {
+    let (code, stdout, _) = run(&["shex", "--help"]);
+    assert_eq!(code, 0, "`shex --help` exits 0");
+    for option in [
+        "--schema",
+        "--schema-from",
+        "--import",
+        "--data",
+        "--from",
+        "--base",
+        "MAP",
+        "OUT",
+    ] {
+        assert!(
+            stdout.contains(option),
+            "shex help must list `{option}` (MAP/OUT are positional); got:\n{stdout}"
+        );
+    }
+    for choice in ["shexc", "shexj"] {
+        assert!(
+            stdout.contains(choice),
+            "shex help must list the `{choice}` schema syntax; got:\n{stdout}"
+        );
+    }
+}
+
+/// `describe --help` names the subject flag and the ordinary source/target plumbing.
+#[test]
+fn describe_help_lists_its_subject_and_format_flags() {
+    let (code, stdout, _) = run(&["describe", "--help"]);
+    assert_eq!(code, 0, "`describe --help` exits 0");
+    for option in ["--iri", "--from", "--to", "--base", "IN", "OUT"] {
+        assert!(
+            stdout.contains(option),
+            "describe help must list `{option}` (IN/OUT are positional); got:\n{stdout}"
+        );
+    }
+    for choice in ["turtle", "ntriples", "jsonld", "pack"] {
+        assert!(
+            stdout.contains(choice),
+            "describe help must list the `{choice}` format choice; got:\n{stdout}"
+        );
+    }
 }
 
 #[test]

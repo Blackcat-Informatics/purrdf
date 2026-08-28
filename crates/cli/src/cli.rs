@@ -3,8 +3,9 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, seven subcommands ([`Command`]), and one global flag
-//! (`--loss-ledger`). The format / regime / results-format choices are modeled as
+//! One pipeline, twelve subcommands ([`Command`]), and two global flags
+//! (`--loss-ledger`, `--jsonld-options`). The format / regime / results-format
+//! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
 //! its library counterpart.
@@ -38,7 +39,11 @@
 //! global flag would be accepted by `project` and `lift`, which run no reasoner, and would
 //! then have to do nothing — a silent no-op being precisely the shape this repository
 //! refuses. For the same reason `convert --report` / `query --report` WITHOUT `--entailment`
-//! is a usage error rather than an empty file.
+//! is a usage error rather than an empty file. `validate`, `shex` and `describe` carry no
+//! `--report` for exactly that reason: SHACL and ShEx conformance are decided WITHOUT
+//! entailment (neither engine closes the data graph under any regime), and a Symmetric CBD
+//! is a bounded walk over asserted quads — none of the three infers anything, so there is no
+//! reasoning certificate for the flag to carry.
 //!
 //! ## The `query` governor flags
 //!
@@ -63,6 +68,19 @@
 //! numeric ceiling on a reasoning run would change the closure itself. That split is stated
 //! on `--entailment`'s own help — an operator meets it at the flag rather than in a refusal
 //! after the fact — and argued in [`query`](crate::query).
+//!
+//! ## `validate`'s five governors, and the sixth it does not take
+//!
+//! `validate` reaches `purrdf_shapes::engine::validate_dataset_with_governors`, whose budget
+//! bounds every SPARQL path ONE validation decomposes into — `sh:SPARQLTarget` resolution,
+//! each `sh:sparql` constraint, each SHACL-AF node expression — against a single
+//! [`QueryGovernors`](purrdf_sparql_eval::QueryGovernors). So five of the six flags carry
+//! over unchanged. `--max-answers` does not: it bounds the ANSWER SEQUENCE a caller asked
+//! for, and a validation's answer is a conformance report rather than a row sequence. Every
+//! solution a SHACL constraint query produces is an internal intermediate, which is what
+//! `--max-intermediate-cells` already bounds — so `validate` omits `--max-answers` for the
+//! same reason `update` does, rather than accepting it and quietly re-interpreting it as a
+//! per-constraint row cap.
 
 use std::path::PathBuf;
 
@@ -77,7 +95,7 @@ use purrdf_sparql_results::SparqlResultsFormat;
     name = "purrdf",
     version,
     about = "PurRDF: convert, query, update, reason, decide entailment, decide consistency, \
-             project, and lift RDF 1.2 data",
+             validate with SHACL or ShEx, describe a resource, project, and lift RDF 1.2 data",
     propagate_version = true
 )]
 pub(crate) struct Cli {
@@ -177,7 +195,7 @@ impl Cli {
     }
 }
 
-/// The eight pipeline subcommands.
+/// The twelve pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -567,12 +585,281 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
+    /// Validate an RDF data graph against a SHACL shapes graph.
+    ///
+    /// The answer is the W3C SHACL **validation report** — the artifact the SHACL
+    /// specification defines the validation process to produce — serialized through
+    /// `--format` into any of the nine native RDF syntaxes, or projected into SARIF 2.1.0
+    /// for an editor or a code-scanning dashboard. Both come from the SAME
+    /// `purrdf_shapes::engine` run and the SAME `purrdf_validate` writer the Python,
+    /// WebAssembly and C-ABI hosts reach; there is no CLI-local validator and no CLI-local
+    /// SARIF mapping.
+    ///
+    /// Exit codes: **0** whether the data CONFORMS or does not — both are decided verdicts,
+    /// exactly as `consistency true|false` and a `false` ASK are, and the report on stdout is
+    /// the answer either way. **1** for a malformed data or shapes document and for an
+    /// unsupported SHACL construct (the engine hard-fails rather than skipping it). **2** for
+    /// a usage error. **3** when a `--fuel`/`--deadline`/`--max-*` ceiling stopped the run:
+    /// the engine returns no partial report by design (every SHACL constraint is a negative
+    /// claim, so a truncated solution bag and a complete empty one read identically), so
+    /// stdout carries NOTHING and stderr carries the governor report.
+    ///
+    /// The one-line verdict (`shacl conforms true|false`) and the result count are ALWAYS
+    /// written to stderr, so a shell learns the answer without parsing the artifact on
+    /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
+    /// the verdict were interleaved into it.
+    Validate {
+        /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
+        #[arg(long, value_name = "FILE")]
+        shapes: String,
+        /// Shapes-graph format override; inferred from the shapes path's extension when
+        /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
+        /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's
+        /// `@prefix`/`PREFIX` map as the fallback prefix environment for SHACL-AF `sh:select`
+        /// queries. Every other syntax is parsed by the native codec into the same IR and
+        /// carries no such fallback (it is a recovery from Turtle source text), so a SHACL-AF
+        /// query in a non-Turtle shapes graph must declare its own `sh:prefixes`.
+        #[arg(long = "shapes-from", value_enum)]
+        shapes_from: Option<CliRdfFormat>,
+        /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
+        /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
+        /// vocabulary IRIs, so there is no default: without this flag and without a
+        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed.
+        #[arg(long = "shapes-graph", value_name = "IRI")]
+        shapes_graph: Option<String>,
+        /// Data-graph format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
+        /// graph is parsed by the shared boundary, which takes no base — a Turtle shapes
+        /// document resolves its own relative IRIs with `@base`.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// How to serialize the validation report: an RDF syntax for the SHACL results
+        /// graph (the default, `ntriples`), or `sarif` for SARIF 2.1.0 JSON.
+        #[arg(long, value_enum, default_value = "ntriples")]
+        format: ValidateFormat,
+        /// Bound the abstract execution steps every SHACL-SPARQL and SHACL-AF path in the
+        /// validation charges, against ONE budget for the whole run. Inclusive; `0` trips at
+        /// the first charge. Core constraint evaluation reads the IR directly and charges
+        /// nothing, so a shapes graph with no SPARQL in it validates under any budget.
+        #[arg(long, value_name = "UNITS")]
+        fuel: Option<u64>,
+        /// Wall-clock VALIDATION budget (`750ms`, `30s`, `1m30s`, `2h`). A trip writes no
+        /// report, prints the governor receipt to stderr, and exits 3.
+        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+        deadline: Option<std::time::Duration>,
+        /// Bound the largest intermediate solution bag, in cells (rows × columns), across
+        /// every SPARQL path the validation runs.
+        #[arg(long, value_name = "CELLS")]
+        max_intermediate_cells: Option<u64>,
+        /// Bound the bytes minted into the per-validation scratch arena.
+        #[arg(long, value_name = "BYTES")]
+        max_scratch_bytes: Option<u64>,
+        /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
+        #[arg(long, value_name = "REQUESTS")]
+        max_remote_requests: Option<u64>,
+        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Report path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Validate RDF nodes against a ShEx 2.1 schema through a query shape map.
+    ///
+    /// The answer is the ShapeMap specification's **result shape map**: a JSON array of
+    /// `{"node","shape","status","reason"?}` objects, one per resolved association, in the
+    /// engine's own deterministic order (query selectors de-duplicate and sort by term
+    /// string). That is `purrdf_shex`'s single rendered form, so there is no `--format`
+    /// choice to make and no second renderer to disagree with it.
+    ///
+    /// Exit codes: **0** whether every association CONFORMS or none does. **1** for a
+    /// malformed schema, a schema that violates the spec §5.7 structural requirements, an
+    /// unresolved `IMPORT`, an `EXTERNAL` shape with no semantics to decide against, a
+    /// malformed shape map, or an unreadable data graph. **2** for a usage error. There is no
+    /// **3**: the ShEx engine takes no execution governors.
+    ///
+    /// The one-line verdict (`shex conformant true|false`) and the entry counts are ALWAYS
+    /// written to stderr, for the reason `validate`'s are.
+    Shex {
+        /// The ShEx schema `FILE`, or `-` for stdin (which requires `--schema-from`).
+        #[arg(long, value_name = "FILE")]
+        schema: String,
+        /// Schema syntax override; inferred from the schema path's extension when omitted
+        /// (`.shex`/`.shexc` → `shexc`, `.json`/`.shexj` → `shexj`).
+        #[arg(long = "schema-from", value_enum)]
+        schema_from: Option<CliShexFormat>,
+        /// An `IMPORT` the schema declares, resolved to a local document: repeatable,
+        /// `IRI=FILE`. PurRDF fetches nothing, so an import no pair resolves is refused by
+        /// name rather than treated as an empty schema — and a pair the schema's import
+        /// closure never reaches is refused too, rather than silently unused. Each imported
+        /// document's syntax is inferred from its own extension.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Data-graph path, or `-` for stdin (which requires `--from`).
+        #[arg(long)]
+        data: String,
+        /// Data-graph format override; inferred from `--data`'s extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the data graph, the schema
+        /// (ShExC only — ShExJ has no relative-IRI syntax), and the shape map.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// The query shape map: `<node>@<shape>` associations separated by commas, where a
+        /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
+        /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
+        /// `<label>`.
+        #[arg(value_name = "MAP")]
+        map: String,
+        /// Result-shape-map path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Extract the Symmetric Concise Bounded Description of one or more resources.
+    ///
+    /// The SCBD is what `purrdf_core::describe` computes and what SPARQL `DESCRIBE` returns
+    /// in this engine — one authority, reached here through the same `Describer` rather than
+    /// re-derived. It is symmetric (incoming links as well as outgoing), closes blank nodes
+    /// transitively in both directions, and carries the RDF 1.2 statement layer: the reifiers
+    /// whose reified triple touches the closure, and their annotations.
+    ///
+    /// A dedicated verb rather than sugar over `query "DESCRIBE <iri>"`, for three reasons an
+    /// operator meets immediately. The SPARQL route's `--results-format` defaults to `json`,
+    /// which is illegal for a graph result — so the obvious `purrdf query --data d.ttl
+    /// 'DESCRIBE <x>'` HARD-FAILS, while `describe` resolves `--to`/the `OUT` extension
+    /// exactly as `convert` and `reason` do. It takes IRIs as ARGUMENTS, so a script naming
+    /// a resource does not have to build SPARQL text around it. And being an RDF-emitting
+    /// verb, `--loss-ledger` and `--jsonld-options` apply to it exactly as they do to
+    /// `convert` — a description whose statement layer cannot survive the target syntax
+    /// records the drop instead of losing it silently.
+    Describe {
+        /// A resource to describe: repeatable, and at least one is required. Several are
+        /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
+        /// as several documents.
+        #[arg(long = "iri", value_name = "IRI", required = true)]
+        iris: Vec<String>,
+        /// Input format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Output format override; inferred from the output extension when omitted.
+        #[arg(long, value_enum)]
+        to: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the input; also threaded into
+        /// the serializer as its base.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Input path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
     /// Pack container utilities.
     Pack {
         /// The pack subcommand to run.
         #[command(subcommand)]
         command: PackCommand,
     },
+}
+
+/// The `--format` choices `validate` accepts: the nine native RDF syntaxes, which serialize
+/// the W3C SHACL **validation report graph**, plus `sarif`, which projects the same report
+/// into a SARIF 2.1.0 log.
+///
+/// # Why the results graph is the default and SARIF is the option
+///
+/// Both already ship, and both come from the same engine run, so the choice is about which
+/// one is the ANSWER and which is a projection of it.
+///
+/// The SHACL specification defines the validation process to produce a **validation report**,
+/// an RDF graph of `sh:ValidationResult` nodes hung off a `sh:ValidationReport`. That graph is
+/// the answer in the language of the question: it names the focus node, the value node, the
+/// result path, the source shape and the source constraint component as RDF terms, and it
+/// composes with the rest of this binary — a report is a document `purrdf query` can query,
+/// `purrdf convert` can transcode, and `purrdf validate` can itself validate. Making it the
+/// default means the command's out-of-the-box answer is the artifact the specification names.
+///
+/// SARIF is a projection of that report into a different vocabulary for a different consumer:
+/// a `level`, a `ruleId` and a `physicalLocation` an editor or a code-scanning dashboard can
+/// render. It is genuinely lossy in the direction that matters here — several SHACL severities
+/// collapse onto SARIF's three levels (the verbatim IRI survives only in a property bag), and
+/// the RDF term structure becomes strings. That makes it exactly right for the CI consumer and
+/// exactly wrong as the artifact everything else is derived from, so it is a named opt-in
+/// rather than the default.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValidateFormat {
+    /// The SHACL results graph as N-Triples (the default).
+    #[value(name = "ntriples", alias = "nt", alias = "n-triples")]
+    Ntriples,
+    /// The SHACL results graph as Turtle.
+    #[value(name = "turtle", alias = "ttl")]
+    Turtle,
+    /// The SHACL results graph as TriG.
+    #[value(name = "trig")]
+    Trig,
+    /// The SHACL results graph as N-Quads.
+    #[value(name = "nquads", alias = "nq", alias = "n-quads")]
+    Nquads,
+    /// The SHACL results graph as RDF/XML.
+    #[value(name = "rdfxml", alias = "rdf", alias = "xml")]
+    Rdfxml,
+    /// The SHACL results graph as TriX.
+    #[value(name = "trix")]
+    Trix,
+    /// The SHACL results graph as HexTuples.
+    #[value(name = "hextuples", alias = "hext")]
+    Hextuples,
+    /// The SHACL results graph as JSON-LD.
+    #[value(name = "jsonld", alias = "json-ld")]
+    Jsonld,
+    /// The SHACL results graph as YAML-LD.
+    #[value(name = "yamlld", alias = "yaml-ld")]
+    Yamlld,
+    /// SARIF 2.1.0 JSON, for an editor or a code-scanning dashboard.
+    #[value(name = "sarif")]
+    Sarif,
+}
+
+impl ValidateFormat {
+    /// The [`NativeRdfFormat`] this choice serializes the results GRAPH through, or `None`
+    /// for [`Self::Sarif`], which is not RDF at all.
+    ///
+    /// `None` is the single discriminator the `validate` lane branches on, so the SARIF
+    /// arm is never reached by a fallible unwrap of a format that does not exist.
+    pub(crate) const fn to_rdf_format(self) -> Option<NativeRdfFormat> {
+        use NativeRdfFormat as N;
+        match self {
+            Self::Ntriples => Some(N::NTriples),
+            Self::Turtle => Some(N::Turtle),
+            Self::Trig => Some(N::TriG),
+            Self::Nquads => Some(N::NQuads),
+            Self::Rdfxml => Some(N::RdfXml),
+            Self::Trix => Some(N::TriX),
+            Self::Hextuples => Some(N::HexTuples),
+            Self::Jsonld => Some(N::JsonLd),
+            Self::Yamlld => Some(N::YamlLd),
+            Self::Sarif => None,
+        }
+    }
+}
+
+/// The ShEx schema syntaxes `--schema-from` accepts.
+///
+/// Two, because the ShEx 2.1 specification defines two and `purrdf-shex` implements both:
+/// the compact syntax (ShExC, §6) and the JSON wire format (ShExJ, Appendix A). They are the
+/// same schema, and `purrdf shex` decides between them the way every other format in this
+/// binary is decided — an explicit choice wins, otherwise the path's extension classifies it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliShexFormat {
+    /// ShExC, the compact syntax (`.shex`, `.shexc`).
+    #[value(name = "shexc", alias = "shex", alias = "compact")]
+    Shexc,
+    /// ShExJ, the JSON wire format (`.shexj`, `.json`).
+    #[value(name = "shexj", alias = "json")]
+    Shexj,
 }
 
 /// The `pack` subcommands.

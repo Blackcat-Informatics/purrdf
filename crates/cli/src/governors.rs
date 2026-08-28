@@ -279,15 +279,46 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
 /// Render a governed UPDATE trip. The request is atomic, so there is deliberately no
 /// partial-result vocabulary: `mutation none` is the complete mutation receipt.
 pub(crate) fn render_update_trip(tripped: TrippedGovernor, evidence: &GovernorEvidence) -> String {
+    render_all_or_nothing_trip("update", "mutation none", tripped, evidence)
+}
+
+/// Render a governed VALIDATION trip.
+///
+/// Shares [`render_update_trip`]'s shape because it shares its situation: SHACL validation is
+/// all-or-nothing for exactly the reason an UPDATE is. Every SHACL constraint is a NEGATIVE
+/// claim — "no solution of this query violates the shape" — so a truncated solution bag and a
+/// complete one that found nothing yield the identical sentence, and the engine's own
+/// `GovernedValidation` refuses to hand back a partial report because of it. `report none` is
+/// therefore the complete receipt, exactly as `mutation none` is: there is no partial-answer
+/// vocabulary to print, because there is structurally no partial answer.
+pub(crate) fn render_validation_trip(
+    tripped: TrippedGovernor,
+    evidence: &GovernorEvidence,
+) -> String {
+    render_all_or_nothing_trip("validate", "report none", tripped, evidence)
+}
+
+/// The shared rendering for an operation whose governed outcome is all-or-nothing.
+///
+/// `operation` names the verb and `effect` is its one-line receipt for having produced
+/// nothing. The banner, the `key value` grammar and the full per-dimension
+/// consumption-and-ceiling vector are identical to [`render_trip`]'s, so a shell parses one
+/// governor report regardless of which subcommand emitted it.
+fn render_all_or_nothing_trip(
+    operation: &str,
+    effect: &str,
+    tripped: TrippedGovernor,
+    evidence: &GovernorEvidence,
+) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::new();
     let _ = writeln!(out, "{GOVERNOR_REPORT_BANNER}");
     let _ = writeln!(out, "outcome budget-exhausted");
-    let _ = writeln!(out, "operation update");
+    let _ = writeln!(out, "operation {operation}");
     let _ = writeln!(out, "tripped {}", tripped.label());
     let _ = writeln!(out, "detail {tripped}");
-    let _ = writeln!(out, "mutation none");
+    let _ = writeln!(out, "{effect}");
     for dimension in ResourceDimension::ALL {
         let _ = writeln!(
             out,

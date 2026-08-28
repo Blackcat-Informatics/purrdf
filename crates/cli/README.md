@@ -20,18 +20,23 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seven
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as twelve
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
+| `update` | atomically apply a SPARQL UPDATE to an RDF source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
 | [`entails`](#entails) | decide whether a premise entails a conclusion, or answer a pattern's certain answers |
 | [`consistency`](#consistency) | decide whether an OWL-Direct ontology has a model at all |
+| [`validate`](#validate) | validate a data graph against a SHACL shapes graph |
+| [`shex`](#shex) | validate RDF nodes against a ShEx 2.1 schema through a query shape map |
+| [`describe`](#describe) | extract a resource's Symmetric Concise Bounded Description |
 | [`project`](#project) | materialize a deterministic graph/tabular USTAR carrier |
 | [`lift`](#lift) | reconstruct RDF from a strict bidirectional carrier |
+| `pack` | verify a pack container's full canonical integrity |
 
 A single global flag, [`--loss-ledger`](#the-loss-ledger), surfaces the
 machine-readable loss record for a conversion, projection, or lift.
@@ -545,6 +550,178 @@ echo $?   # 3
 purrdf consistency ontology.purrpck
 ```
 
+## `validate`
+
+```text
+purrdf validate --shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
+                [--from <F>] [--base <IRI>] [--format <F>]
+                [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
+                [--max-scratch-bytes <N>] [--max-remote-requests <N>]
+                [IN] [OUT]
+```
+
+Validate an RDF data graph against a SHACL shapes graph — full SHACL Core plus
+SHACL-SPARQL and SHACL-AF, over the same `purrdf-shapes` engine the Rust,
+Python, WebAssembly and C surfaces reach.
+
+**The answer is the W3C validation report.** The SHACL specification defines the
+validation process to produce a validation *report* — an RDF graph of
+`sh:ValidationResult` nodes under a `sh:ValidationReport` — and that graph is
+what `--format` serializes, defaulting to `ntriples`. Being ordinary RDF, it
+composes with the rest of this binary: a report can be queried, transcoded, or
+itself validated.
+
+| `--format` | Artifact |
+|---|---|
+| `ntriples` (default), `turtle`, `trig`, `nquads`, `rdfxml`, `trix`, `hextuples`, `jsonld`, `yamlld` | the SHACL results **graph** in that syntax |
+| `sarif` | SARIF 2.1.0 JSON, for an editor or a code-scanning dashboard |
+
+SARIF is a *projection* of the same report rather than a second answer: several
+SHACL severities collapse onto SARIF's three levels (the verbatim severity IRI
+survives only in a property bag) and the RDF term structure becomes strings.
+That is exactly right for a CI consumer and exactly wrong as the artifact
+everything else derives from — hence an opt-in, not the default. Both come from
+one engine run and one writer (`purrdf_validate::report_to_sarif_string`, the
+same one the WASM and C-ABI hosts use), so they can never disagree.
+
+**The verdict is always on stderr.** stdout carries a well-formed RDF or SARIF
+document, which it could not if the verdict were interleaved into it, so two
+`key value` lines — `shacl conforms true|false` and `shacl results N` — go to
+stderr on every run. A shell branches on those without parsing the artifact.
+
+**Exit codes.** `0` whether the data conforms **or not** — both are decided
+verdicts, exactly like `consistency true|false` and a `false` ASK; `1` for a
+malformed document or an unsupported/structurally incomplete SHACL construct
+(hard-failed, never silently skipped); `2` for a usage error; `3` when a
+governor stopped the run — and then **no report is written at all**, because
+every SHACL constraint is a negative claim and a truncated solution bag cannot
+license a `conforms`.
+
+**Inputs.** The data graph is any of the nine syntaxes or a verified pack,
+resolved by `--from`/extension. The shapes graph is resolved by
+`--shapes-from`/extension; Turtle takes the shared `parse_shapes` boundary (the
+one that also recovers the document's `@prefix` map as the fallback prefix
+environment for SHACL-AF `sh:select`), every other syntax is parsed by the
+native codec. `--shapes-graph <IRI>` exposes the shapes graph to SHACL-SPARQL
+paths as a named graph; there is no default IRI, because PurRDF mints no
+vocabulary.
+
+```sh
+# The results graph, N-Triples on stdout, verdict on stderr.
+purrdf validate --shapes shapes.ttl data.ttl
+
+# SARIF for CI.
+purrdf validate --shapes shapes.ttl --format sarif data.ttl > results.sarif
+
+# A verified pack data source and a Turtle report file.
+purrdf validate --shapes shapes.ttl --format turtle data.purrpck report.ttl
+
+# Query the report the binary just produced.
+purrdf validate --shapes shapes.ttl data.ttl report.nt
+purrdf query --data report.nt --results-format csv \
+  'SELECT ?focus WHERE { ?r <http://www.w3.org/ns/shacl#focusNode> ?focus }'
+
+# Bound the SHACL-SPARQL paths; a trip writes no report and exits 3.
+purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
+```
+
+## `shex`
+
+```text
+purrdf shex --schema <FILE> [--schema-from <shexc|shexj>] [--import <IRI=FILE>]…
+            --data <FILE> [--from <F>] [--base <IRI>] MAP [OUT]
+```
+
+Validate RDF nodes against a **ShEx 2.1** schema through a query shape map. The
+schema is ShExC or ShExJ (resolved by `--schema-from`, or from the `.shex` /
+`.shexc` / `.shexj` / `.json` extension); `MAP` is the ShapeMap specification's
+compact syntax, so a node is `<iri>` / `_:label` / a Turtle literal / a
+triple-pattern selector (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`) and
+a shape is `START` or `<label>`.
+
+The answer is the ShapeMap specification's **result shape map**: a JSON array of
+`{"node","shape","status","reason"?}` objects in the engine's own deterministic
+order. That is `purrdf-shex`'s single rendered form, so there is no `--format`
+to choose. As with `validate`, both verdicts exit `0` and the summary — `shex
+conformant true|false`, `shex entries N`, `shex nonconformant N` — goes to
+stderr.
+
+**Three constructs are refused by name rather than answered weakly.** Each has a
+documented library fallback that is honest as a *behavior* and a lie as a
+printed *verdict*:
+
+| Construct | Why it is refused (exit `1`) |
+|---|---|
+| an unresolved `IMPORT` | the imported labels would dangle, so the validated schema is not the one you wrote. Supply it with `--import IRI=FILE` — PurRDF fetches nothing. A pair the import closure never reaches is refused too, rather than read and unused. |
+| an `EXTERNAL` shape | with no resolver it "fails every node" — a definite `nonconformant` derived from semantics nobody supplied. A resolver is host code, not a document. |
+| a semantic action | the empty extension registry makes every action an *inert success*, which would report a conformance the check never granted. |
+
+**RDF 1.2.** A triple term is an ordinary node: it matches an arc's object and
+may be named as a focus node (`<< s p o >>` in the result map). The RDF 1.2
+*statement layer* (a `{| … |}` reifier and its annotations) is not an arc, so a
+selector over an annotation predicate selects nothing and reports `entries 0` —
+a true statement about ShEx 2.1's arc-based data model, not a hidden failure.
+`purrdf validate` **does** see that layer, because SHACL projects it into quads
+first.
+
+```sh
+# One fixed association.
+purrdf shex --schema user.shex --data data.ttl \
+  '<http://example.org/alice>@<http://example.org/UserShape>'
+
+# Every node typed ex:Person, selected by a query shape map.
+purrdf shex --schema user.shex --data data.ttl \
+  '{FOCUS a <http://example.org/Person>}@<http://example.org/UserShape>'
+
+# A ShExJ schema with a caller-resolved IMPORT, over a verified pack.
+purrdf shex --schema user.shexj --import http://example.org/ages=ages.shex \
+  --data data.purrpck '<http://example.org/alice>@<http://example.org/UserShape>'
+```
+
+## `describe`
+
+```text
+purrdf describe --iri <IRI>… [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+```
+
+Extract the **Symmetric Concise Bounded Description** of one or more resources:
+outgoing *and* incoming arcs, the transitive blank-node closure in both
+directions, and the RDF 1.2 statement layer — the reifiers whose reified triple
+touches the closure, together with their annotations. Named-node neighbours do
+not expand. Several `--iri` values are described as one union subgraph.
+
+This is the same `purrdf_core::describe::Describer` that SPARQL `DESCRIBE`
+evaluates to in this engine, reached rather than re-derived: `purrdf describe
+--iri X` and `purrdf query 'DESCRIBE <X>'` produce byte-identical output. It is
+a verb of its own for three reasons an operator meets immediately —
+`query`'s `--results-format` defaults to `json`, which is illegal for a graph
+result, so the obvious `purrdf query --data d.ttl 'DESCRIBE <x>'` hard-fails,
+while `describe` resolves `--to`/the `OUT` extension like `convert` does; a
+resource is an argument rather than SPARQL text a script has to build around it;
+and being an RDF-emitting verb, `--loss-ledger` and `--jsonld-options` apply
+exactly as they do to `convert`.
+
+Describing a subject the source does not mention yields an empty description and
+exit `0` — a term may legitimately carry no asserted or incoming triples.
+Nothing here infers, so there is no `--report`; describe the output of `purrdf
+reason` if you want the description of a closure.
+
+```sh
+# A resource's full symmetric description, format from the OUT extension.
+purrdf describe --iri http://example.org/alice data.ttl alice.ttl
+
+# Two subjects as one union subgraph, on stdout.
+purrdf describe --iri http://example.org/alice --iri http://example.org/bob \
+  --to ntriples data.ttl
+
+# From a verified pack (zero-copy) into the lossless pack container.
+purrdf describe --iri http://example.org/alice source.purrpck alice.purrpck
+
+# A description carrying RDF 1.2 statement metadata into a star-incapable
+# syntax: the dropped reifier rows are recorded, not lost silently.
+purrdf --loss-ledger describe --iri http://example.org/alice --to rdfxml star.ttl
+```
+
 ## `project`
 
 ```text
@@ -690,13 +867,28 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 
 | Code | Meaning |
 |---|---|
-| `0` | success |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, or a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise) |
-| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, or a malformed `--import` pair |
-| `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
+| `0` | success — including every **decided negative verdict** (see below) |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, or a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action) |
+| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, a malformed `--import` pair, two documents reading stdin, or a flag that names something the selected mode does not produce |
+| `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, an `update` or a [`validate`](#validate); or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `update` and `validate`, nothing was produced (a mutation is atomic and a truncated SHACL run cannot license a verdict) and the receipt is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.
+
+**A decided "no" is not an exit code.** A `false` ASK, a `not-entailed`
+conclusion, an inconsistent ontology, a non-conforming SHACL data graph and a
+nonconformant ShEx node all exit `0` and put the answer on stdout. The run did
+exactly what it was asked to do, and mapping "the answer is no" onto a failure
+code would put it in the same bucket as a corrupt pack — the flattening the
+governor code exists to prevent, in the other direction. Because
+[`validate`](#validate) and [`shex`](#shex) must keep stdout a well-formed RDF
+or JSON document, each also writes its one-line verdict to **stderr** on every
+run, so a shell can branch on conformance without parsing the artifact:
+
+```sh
+purrdf validate --shapes shapes.ttl data.ttl > report.nt 2> verdict.txt
+grep -q 'shacl conforms true' verdict.txt || echo "shapes violated"
+```
 
 **Why a governor trip is its own code.** `1` would put a truncated answer in the same
 bucket as a corrupt pack, so a pipeline could not tell "your query was cut short —
