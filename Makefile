@@ -12,280 +12,19 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
 GIT_CLIFF_VERSION := 2.13.1
 
-# binaryen (wasm-opt / wasm-dis) is pinned so the optimized npm artifact's byte
-# size is reproducible: `wasm-opt -Oz` output — and therefore the size budget
-# below — depends on the binaryen version. `wasm-pkg` hard-fails if the local
-# wasm-opt does not report this version, exactly like the git-cliff pin above.
-# The CI wasm-toolchain composite action reads this same value, so the pin lives
-# in one place. Bump it deliberately (it can move the artifact size — see the
-# WASM_SIZE_BUDGET_BYTES raise procedure).
+# binaryen (wasm-opt / wasm-dis) is pinned so the optimized npm artifact is
+# byte-reproducible across machines. `wasm-pkg` hard-fails if the local wasm-opt
+# does not report this version, exactly like the git-cliff pin above. The CI
+# wasm-toolchain composite action reads this same value, so the pin lives in one
+# place.
 BINARYEN_VERSION := 130
-
-# HARD size ceiling (bytes) for the optimized npm artifact
-# crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm (release +simd128 build, wasm-opt
-# -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
-# artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
-# engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, SVG export, all sixteen graph/tabular/
-# dataset-description/research-object projection profiles, the compiled JSON-LD
-# context/options/registry engine, validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
-# nine OWL reasoner services, the concrete domain, the conclusion-directed
-# entailment service with its seven mechanisms and its caller-supplied import
-# map, the governed query/update lane with its typed outcome, the first-party
-# statistical aggregate namespace, AND the SPARQL-results provenance extension —
-# measures 10_969_188 bytes against the 12_112_500 ceiling, which is 9.439%
-# headroom. That figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED
-# rather than enforced; the ceiling is the check that fails.
-#
-# The ceiling moved 9_690_000 -> 12_112_500 (+25%) as a deliberate decision to
-# stop measuring the wrong thing. The recorded byte count had been an EQUALITY
-# gate, and an exact byte count is not a property of the source: it moved with
-# the operator's username (`paudley` is one character longer than CI's `runner`,
-# worth 124 bytes across the embedded paths), with the build path, and with the
-# version string (0.9.0 -> 0.10.0 moved it 9_506_455 -> 9_504_607). It blocked
-# two merges
-# and a release while the artifact sat comfortably inside its ceiling the whole
-# time. What is worth failing a build over is BLOAT, which the ceiling catches;
-# what is not is which machine ran the compiler. The generous headroom is the
-# point — this should not need touching again for real growth.
-#
-# The ceiling moved 9_430_000 -> 9_690_000 here, and the reason is a capability
-# rather than a red gate: purrdf-xsd gained a datatype-range satisfiability
-# decider (facet intersection and complement over the XSD value space, deciding
-# whether a data range is EMPTY), and owl_dl wired it in so OWL 2 data ranges are
-# decided instead of being read and set aside at a boundary. The artifact fit the
-# old ceiling with 0.355% left, which is below the 'few percent' this procedure
-# asks for — and a ceiling that tight is one that gets raised under pressure by
-# whoever next adds anything, which is the failure this procedure exists to
-# prevent. Taking the raise here, with the capability that earned it named, is
-# the honest form of that decision.
-#
-# Two reviewed increases, in order. First, crates/rdf-wasm/src/entail.rs began
-# exporting regimes, rule inventories and materialization, so purrdf-entail and
-# the purrdf-datalog engine under it became reachable from an exported symbol
-# and linked in for the first time — the 78-rule OWL 2 RL table, the RDF/RDFS/D
-# tables, the existential chase, the 93-entry construct table and the OWL-Direct
-# tableau — taking 8_148_368 to 8_779_131.
-#
-# Second, the same module now exports the nine reasoner services (consistency,
-# classify, realize, instances, entails, profile, extract_module, justify,
-# explain_conclusion). Before them, roughly ten thousand lines of reasoning were
-# reachable from no host at all; leaving them Rust-only would have been a
-# producer with no consumer, and dropping the three largest from wasm alone
-# would have left one of the four hosts unable to reach what the other three
-# can. Attributed by ablation, three full builds on the pinned toolchain. The
-# rows below are HISTORICAL-MEASUREMENTS: each is what the artifact measured
-# when that capability landed, not what it measures today.
-#
-#   baseline (materialize + inventories)          8_779_131
-#   + six tableau services                        9_011_119   (+231_988)
-#   + profile, extract_module                     9_075_983   (+64_864)
-#   + explain_conclusion                          9_148_895   (+72_912)
-#
-# Those four rows are the attribution measured when the services landed; the
-# deltas are what they cost, and the last row is not the current artifact.
-# END-HISTORICAL. The growth between 9_148_895 and 9_288_106 is the
-# extension rule family, the call-scoped plan cache, the surfaced termination
-# certificate and the extension inventory binding, all of which reached wasm
-# afterwards.
-#
-# The largest single item is explain_conclusion: it is the only reachable
-# consumer of purrdf-datalog's proof terms, so the proof arena, its canonical
-# encoding and its re-deriving checker link in for the first time. The
-# artifact's size is a joint function of
-# rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
-# (pinned via BINARYEN_VERSION), so a moved number is attributable.
-#
-# TO RAISE DELIBERATELY: rebuild `make wasm-pkg`, read the size printed by
-# `make wasm-pkg-size`, and set this to that size rounded up with a few percent
-# of headroom. A raise is a reviewed decision — the commit MUST state WHY the
-# artifact grew: a new capability or dependency, or a routine rustc-stable /
-# binaryen bump (a valid, must-be-explained reason). Never raise it merely to
-# turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 12112500
-
-# The size the artifact ACTUALLY measures on the pinned toolchain, gated by
-# `wasm-pkg-size` so it cannot fall behind the build the way the comment above
-# once did. Unlike the ceiling this is not a limit: any change moves it, and the
-# gate fails until it is updated in the same commit that moved it. That is the
-# point — it converts "someone will notice the artifact grew" into a red gate,
-# and it is why the growth attribution above can be trusted.
-#
-# The 25_735 bytes between 9_288_106 and 9_313_841 were the
-# consequence-based classifier (crates/entail/src/owl_dl/saturate.rs): a
-# normalization pass over the concept table plus the saturation fixpoint that
-# derives the whole class taxonomy at once, which the exported `classify` and
-# `realize` services now reach instead of running one tableau refutation per
-# ordered pair of named classes. It replaced an algorithm rather than adding a
-# capability, and did not move the ceiling; the concrete domain, which followed
-# it, is what moved the ceiling to 9_690_000.
-#
-# The decrease 9_396_985 -> 9_396_718 is the combined approach
-# (crates/entail/src/combined.rs) and the goal-directed backward-resolution
-# modules under crates/datalog/src/{term,unify,resolve_fol}.rs: neither is
-# reachable from any symbol crates/rdf-wasm/src/entail.rs exports, so both are
-# dead-code-eliminated from this artifact entirely, and the byte delta is
-# ordinary codegen jitter from the touched-but-still-linked `Construct` enum
-# and id-brand additions rather than a capability moving the artifact at all.
-#
-# The decrease 9_504_607 -> 9_502_971 is not a code change: the build now passes
-# --remap-path-prefix, so the artifact no longer embeds the absolute path it was
-# built at. It had carried 116 of them, all under the builder's home directory,
-# which made the byte size depend on the OPERATOR'S USERNAME — `paudley` is one
-# character longer than CI's `runner`, so the same commit measured 124 bytes
-# larger here than in CI and this equality gate could not be green in both places
-# at once. It was red in CI for two merges before anyone read it. The figure below
-# is now a property of the source rather than of who built it.
-#
-# The change 9_506_455 -> 9_504_607 is the 0.10.0 version bump alone: the version
-# string is embedded in the artifact and the crate metadata around it repacks
-# slightly smaller. No capability moved; the figure is re-recorded because this gate
-# checks EQUALITY, so even a shrink has to be acknowledged rather than ignored.
-# The increase 9_405_331 -> 9_506_455 is the backward cross-check reaching the
-# artifact: every chase explanation is now re-derived by SLG resolution over the same
-# clause program, so `resolve_fol` and `unify` link in. It is the largest single
-# addition on this branch and it buys a second, independent derivation of every
-# conclusion the explanation path reports — a disagreement fails the call rather than
-# being handed back as a proof. Still under WASM_SIZE_BUDGET_BYTES, so this is a
-# measurement update and not a ceiling raise.
-# The increase 9_396_449 -> 9_405_331 is the reasoning session reaching the
-# artifact: a `Reasoner` class over the shared boundary's `ReasonerSession`, so a
-# browser pays one parse and one reverse mapping for N questions instead of N of
-# each. It is nine methods and a handle over code the artifact already carried —
-# the services themselves did not change — which is why a whole new host-facing
-# class costs under nine kilobytes. Still far below WASM_SIZE_BUDGET_BYTES, so
-# this is a measurement update and not a ceiling raise.
-# The increase 9_393_818 -> 9_396_449 is the combined approach's algebra
-# restriction and witness scrub reaching the artifact through the umbrella's
-# query path, plus the counting-on-inverse boundary: the shared limit of both
-# decision cores carried on every certificate instead of stated in one module
-# doc.
-# The decrease 9_396_718 -> 9_393_818 is the OWL-Direct decision core becoming a
-# hypertableau over DL-clauses (crates/entail/src/owl_dl/{clause,graph,hyper}.rs).
-# It is a REPLACEMENT, not an addition: the concept-tree tableau it supersedes is
-# now compiled under cfg(test) as the new core's differential reference, so it
-# leaves the artifact entirely, and the clause compiler plus the three-rule search
-# that replace it come to slightly less than it cost. The completion graph itself
-# is shared by both, so it is linked exactly once either way.
-#
-# The increase 9_502_971 -> 9_700_232 is the CONCLUSION-DIRECTED entailment service
-# reaching the artifact. `purrdf_entail::entails`, `certain_answers` and `verify` were
-# already in the workspace and reachable from no wasm-exported symbol, so the linker
-# dead-code-eliminated the whole of them — the chase-and-graph-match search, the
-# refutation re-chase, the freeze-and-chase generalisation, the comprehension mint, the
-# reflexivity read, the datatype-containment decision, the `owl:imports` resolver and
-# their six warrant arms with their reasoner-free checkers. `entailCertainAnswers`,
-# `entailGraphEntails` and `entailVerifyEntailment` now reach all of it, and the growth
-# is that machinery rather than the three thin wrappers over it. It is a NEW CAPABILITY
-# on this host: a browser could close a document under a regime and could not ask whether
-# one document entailed another, which is the question a caller with one question has.
-# Still 80% of WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling
-# raise.
-#
-# The increase 9_762_944 -> 9_764_851 is the basic-graph-pattern boundary refusing a
-# variable in a literal's DATATYPE. The stand-in a variable is rewritten to became an IRI
-# so that a variable could sit in predicate position, and an IRI is legal as a datatype —
-# so a pattern like "5"^^?d parsed straight into that slot and the stand-in reached the
-# matcher, where it matched this library's own namespace instead of the caller's data. The
-# demotion walk is now total over the term and returns a refusal naming the position, which
-# is the fallible plumbing and the refusal text the artifact grew by. It is a correctness
-# fix rather than a capability, which is why under two kilobytes buys it.
-#
-# The increase 9_764_851 -> 9_765_514 is the same boundary reading a pattern the way the
-# PARSER reads it. Two silent wrong answers closed: the stand-in namespace is now swept
-# against the pattern with its `UCHAR` escapes expanded, so an IRI the caller wrote with an
-# escaped letter is no longer reconstructed by the parser and read back as a variable; and a
-# query node gained a triple-term form, so a name used inside an RDF 1.2 triple term and
-# outside it is ONE variable whose join the matcher enforces instead of two that constrain
-# each other in no way. The growth is the escape expander and the extra node arm, and it is
-# a correctness fix rather than a capability, which is why well under a kilobyte buys it.
-#
-# The DECREASE 9_765_514 -> 9_758_312 is two conclusion-directed fixes, and the direction
-# is worth stating because a shrink is as much a moved number as a growth. The
-# comprehension warrant's witness check compared one collection against itself — two
-# scaffold nodes sharing a witness collapsed on both sides and passed — and now compares
-# the labels against the map's own length, which deletes a `BTreeSet<&TermValue>`
-# instantiation and its ordering code from the artifact. Beside it, a lane's evidence grew
-# a `declined` list so a construct it recognized and refused travels with a mint made in
-# the same pass instead of being dropped. The first removes more than the second adds.
-#
-# The increase 9_758_312 -> 9_760_099 is three depth-driven searches that stopped living on
-# the call stack. Each one's depth was a function of how BIG the caller's input is rather
-# than how complicated it is — one level per conclusion triple in the homomorphism match,
-# one per disjunction in the OWL-Direct hypertableau, one per nesting level in the
-# class-expression parser — so a large-but-ordinary document overflowed the stack, which is
-# not a refusal a caller can catch: the process aborts, nothing unwinds, and a host
-# embedding the library dies with it. The first two now carry their frames on the heap and
-# the third refuses past a measured ceiling. The growth is the explicit frame types and
-# their loops, which cost more instructions than the recursion they replace; it buys the
-# ability to answer questions the artifact previously aborted on.
-#
-# The increase 9_760_099 -> 9_765_497 is the text and XML parse front ends learning to
-# refuse a nesting depth instead of dying of one. Every text grammar here nests without
-# limit on paper and reads that nesting with recursion, so an input was an instruction
-# about how much stack to burn: twenty thousand nested quoted triple terms in one
-# N-Triples line, or twenty thousand nested `rdf:Description` elements, aborted the
-# process. The cost is a depth parameter threaded through the recursive-descent term
-# grammar, a source-level element-nesting scan in front of the XML tokenizer (whose own
-# recursion is in a dependency and cannot be bounded from here), and an explicit work
-# stack for XML-literal canonicalization. It buys documents that used to kill the host
-# returning an ordinary located diagnostic.
-#
-# The increase 9_765_497 -> 9_963_673 is the GOVERNED evaluation lane reaching the
-# artifact. `query_governed`, `update_governed` and `explain_query` were already in the
-# workspace and reachable from no wasm-exported symbol, so the linker dead-code-eliminated
-# all of them: the per-node charge ledger and its plan survey, the predictive admission
-# check, the partial-lift channel with the exhaustive soundness visitor that decides what
-# a truncated bag still certifies about the root answer, the answer-cap pushdown, the
-# order-stable chunk-local charge fold, and the wall-deadline clock. `queryGoverned`,
-# `updateGoverned` and `explainQuery` now reach every one of them, and the growth is that
-# machinery plus the five host-facing outcome classes over it rather than the wrappers.
-# It is a NEW CAPABILITY on this host, and the one it most needed: a browser tab runs the
-# evaluator on the UI thread, so before this an accidental cross product had no ceiling
-# and no deadline — it froze the page with no way back. The ceiling was unchanged, so
-# this was a measurement update and NOT a ceiling raise.
-#
-# The increase 9_963_673 -> 10_456_984 carries the rest of the governed contract into
-# the same artifact: entailment-query phase outcomes, certificate-safe partial filtering,
-# pre-allocation intermediate-cell admission, polynomial bounded property paths, and the
-# parser/evaluator nesting refusal. This is the optimized output measured with the pinned
-# wasm-bindgen 0.2.125 and binaryen 130 under rustc stable 1.97.1. The 12_112_500-byte
-# ceiling was unchanged.
-#
-# The increase 10_456_984 -> 10_458_685 makes governed OWL reverse mapping poll the
-# caller's stop signal before and throughout its dataset-sized construction passes,
-# including high-fanout role expansion. The ceiling remains unchanged.
-#
-# The increase 10_458_685 -> 10_969_188 threads the statistical-aggregate namespace and
-# result provenance through this host: a new `aggregate_namespace` parameter on
-# `queryGoverned`/`explainQuery` and their siblings registers purrdf's first-party
-# statistical aggregate set (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`,
-# `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`), the aggregate-registry builder and the
-# dual-registry explain path it reaches were already in the workspace and reachable
-# from no wasm-exported symbol, so the linker dead-code-eliminated all of them — the
-# same shape of growth `query_governed`/`update_governed`/`explain_query` caused above.
-# The new `provenanceFromJson`/`provenanceFromXml` free functions and `queryRaw`'s new
-# `provenance_prefix`/`provenance_iri` parameters carry the additive SPARQL-results
-# provenance extension the rest of the way. The ceiling was unchanged, so this was a
-# measurement update and NOT a ceiling raise.
-#
-# The increase 10_969_188 -> 10_971_207 came from refusing command-line flag
-# combinations by name rather than accepting and ignoring them, and from the
-# scalar-parameter grammar accepting signed numerals and bare booleans: both add
-# rejection paths and their diagnostic strings to code the wasm entry points
-# already reach. The ceiling was again unchanged; the artifact now measures
-# 10_971_207 bytes, 9.422% headroom beneath it.
-#
-# The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 10971207
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -507,11 +246,11 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# package) reject the module without them. --enable-simd is REQUIRED for the
 	@# +simd128 build above (binaryen rejects the SIMD-carrying module without it).
 	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency:"; echo "  install binaryen version $(BINARYEN_VERSION)"; exit 1; }
-	@# Pin binaryen so the optimized artifact — and the size budget — is byte-reproducible.
+	@# Pin binaryen so the optimized artifact is byte-reproducible.
 	@FOUND=$$(wasm-opt --version | grep -oE '[0-9]+' | head -1); \
 		test "$$FOUND" = "$(BINARYEN_VERSION)" || { \
 			echo "ERROR: binaryen (wasm-opt) version mismatch — found $$FOUND, expected $(BINARYEN_VERSION)."; \
-			echo "  wasm-opt output feeds WASM_SIZE_BUDGET_BYTES; install binaryen $(BINARYEN_VERSION) so the artifact size is reproducible."; \
+			echo "  install binaryen $(BINARYEN_VERSION) so the optimized artifact is reproducible."; \
 			exit 1; \
 		}
 	wasm-opt -Oz \
@@ -529,46 +268,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		echo "OK: verified $$count SIMD opcode(s) present in the optimized wasm artifact"
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
 
-wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WASM_SIZE_BUDGET_BYTES (hard-fails on overshoot).
-	@art=crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm; \
-	 budget=$(WASM_SIZE_BUDGET_BYTES); \
-	 case "$$budget" in ''|*[!0-9]*) echo "ERROR: WASM_SIZE_BUDGET_BYTES ('$$budget') is not a positive integer"; exit 1;; esac; \
-	 [ "$$budget" -gt 0 ] || { echo "ERROR: WASM_SIZE_BUDGET_BYTES must be > 0"; exit 1; }; \
-	 test -s "$$art" || { echo "ERROR: $$art missing or empty — wasm-pkg did not produce the optimized artifact"; exit 1; }; \
-	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
-	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
-	 pct=$$(( size * 100 / budget )); \
-	 recorded=$(WASM_SIZE_MEASURED_BYTES); \
-	 if [ "$$size" != "$$recorded" ]; then \
-	   echo "NOTE: the artifact measures $$size bytes; WASM_SIZE_MEASURED_BYTES records $$recorded."; \
-	   echo "  Reported, not enforced. Update it when you want the recorded figure to track the"; \
-	   echo "  build; the ceiling above (WASM_SIZE_BUDGET_BYTES) is the check that fails."; \
-	 fi; \
-	 raw="$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm"; \
-	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
-	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
-	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
-	 rustcv=$$(rustc --version); \
-	 wbver=$$(sed -n 's/.*wasm-bindgen[[:space:]]*=[[:space:]]*"=\([0-9.]*\)".*/\1/p' Cargo.toml); \
-	 woptver=$$(wasm-opt --version); \
-	 line="wasm artifact: $$size bytes / budget $$budget bytes ($$pct%); gzip -9: $$gz bytes"; \
-	 echo "$$line"; echo "  $$ratio"; \
-	 echo "  toolchain: $$rustcv | wasm-bindgen =$$wbver | $$woptver"; \
-	 if [ -n "$${GITHUB_STEP_SUMMARY:-}" ]; then \
-	   { printf '### WASM size budget\n\n'; \
-	     printf -- '- %s\n' "$$line"; \
-	     printf -- '- %s\n' "$$ratio"; \
-	     printf -- '- toolchain: %s | wasm-bindgen =%s | %s\n' "$$rustcv" "$$wbver" "$$woptver"; \
-	   } >> "$$GITHUB_STEP_SUMMARY"; \
-	 fi; \
-	 if [ "$$size" -gt "$$budget" ]; then \
-	   echo "FAIL: wasm artifact $$size bytes exceeds budget $$budget bytes."; \
-	   echo "  If this growth is intended, raise WASM_SIZE_BUDGET_BYTES in the Makefile per the documented procedure (justify WHY in the commit)."; \
-	   exit 1; \
-	 fi; \
-	 echo "OK: wasm artifact within budget"
-
-wasm-pkg-test: wasm-pkg-size ## Build, size-gate, and test the optimized npm/wasm package.
+wasm-pkg-test: wasm-pkg ## Build and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).

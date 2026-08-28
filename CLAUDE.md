@@ -1,5 +1,8 @@
 # Claude Code Instructions (CLAUDE.md)
 
+**WE DO NOT CARE ABOUT BINARY SIZE OR WASM SIZE. IF YOU FIND YOURSELF OBSESSING
+OVER BINARY SIZE - STOP.**
+
 Read [AGENTS.md](./AGENTS.md) — it is the canonical contract for this repository
 (crate map, hard constraints, commands, performance discipline, brand rules).
 

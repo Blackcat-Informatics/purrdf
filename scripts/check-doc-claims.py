@@ -130,7 +130,6 @@ _CLI_README = _REPO / "crates" / "cli" / "README.md"
 _PY_README = _REPO / "bindings" / "python" / "README.md"
 _PY_STUB = _REPO / "bindings" / "python" / "python" / "src" / "purrdf" / "__init__.pyi"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
-_MAKEFILE = _REPO / "Makefile"
 _AGENTS = _REPO / "AGENTS.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
@@ -2754,136 +2753,6 @@ def regime_count_claim() -> list[str]:
     return problems
 
 
-def makefile_measured_size_claim() -> list[str]:
-    r"""EVERY byte figure and percentage in the Makefile's budget comment must be current.
-
-    `WASM_SIZE_MEASURED_BYTES` is REPORTED by the build rather than enforced by it — an
-    exact byte count moved with the builder's username and path, so equality could not hold
-    locally and in CI at once. That makes this claim the only thing keeping the constant and
-    the prose around it honest, where before the equality gate backstopped it. The prose has
-    drifted before: a "Currently 9_313_841" line outlived the constant by 82,660 bytes,
-    inside the very comment block that says "a comment is the one part of this file nothing
-    checks".
-
-    The first attempt at this claim keyed on the verbs "Currently" and "measures" followed by
-    a figure. It inspected ZERO figures, because the comment wraps as `— measures` / newline /
-    `# 9_396_501 bytes`, and no amount of `\s+` crosses the `# ` that opens a continuation
-    line. It was "verified" against a single-line phrasing introduced to test it, which is the
-    error of checking a gate against the shape you wrote rather than the shape in the file.
-
-    So this reads the block with comment markers stripped, keys on nothing, and requires every
-    underscored byte figure to be either a current constant or part of a `A -> B` / `between A
-    and B` range that the prose marks as historical. Percentages must match the real headroom.
-    A vacuity guard asserts a figure was actually inspected, because the whole failure this
-    replaces was a check that quietly matched nothing.
-    """
-    problems: list[str] = []
-    text = _read(_MAKEFILE)
-    rel = _MAKEFILE.relative_to(_REPO)
-    measured = re.search(r"^WASM_SIZE_MEASURED_BYTES := (\d+)$", text, re.MULTILINE)
-    budget = re.search(r"^WASM_SIZE_BUDGET_BYTES := (\d+)$", text, re.MULTILINE)
-    if not measured or not budget:
-        raise SystemExit(
-            f"check-doc-claims: {rel} no longer defines both wasm size constants; the "
-            f"claim cannot be checked, so do not leave it unchecked"
-        )
-    measured_bytes = int(measured.group(1))
-    budget_bytes = int(budget.group(1))
-    current = {measured_bytes, budget_bytes}
-
-    # The comment block, with the `# ` continuation markers removed so a figure that wrapped
-    # onto its own line reads as ordinary running prose.
-    block = re.sub(r"(?m)^#[ \t]?", "", text[: measured.start()])
-
-    # A figure is HISTORICAL when the prose puts it in a range: `A -> B`, `A to B`,
-    # `between A and B`, `above A`, `behind`/`drifted`. Those describe a movement rather than
-    # asserting today's size, and the branch's own attribution needs them.
-    historical: set[int] = set()
-    # A region the prose TAGS as a past measurement. The ablation table records what each
-    # capability cost when it landed, which is exactly the evidence the attribution above
-    # rests on; those figures are history by construction and must not be forced to today's
-    # value. The tag is machine-readable rather than prose, because a gate that has to infer
-    # "this paragraph is historical" from wording is the kind of gate that inspects nothing.
-    # The region must be TERMINATED. An unbounded `\Z` fallback would let an unclosed tag
-    # swallow every figure after it, which is the loophole shape this whole claim exists to
-    # close — and moving the tag above the live measurement was exactly how it was exploited.
-    for region in re.finditer(
-        r"HISTORICAL-MEASUREMENTS:(.*?)END-HISTORICAL", block, re.DOTALL
-    ):
-        for figure in re.finditer(r"((?:\d{1,3}_)+\d{3})", region.group(1)):
-            historical.add(int(figure.group(1).replace("_", "")))
-    if "HISTORICAL-MEASUREMENTS:" in block and "END-HISTORICAL" not in block:
-        problems.append(
-            f"{rel}: the budget comment opens a HISTORICAL-MEASUREMENTS region and never "
-            f"closes it with END-HISTORICAL, so every figure after it would be exempt. "
-            f"Terminate the region."
-        )
-
-    # The two CURRENT constants must each be stated somewhere OUTSIDE a historical region.
-    # Without this, tagging a region so that it covers the live measurement exempts the very
-    # figures this claim exists to check, and the block reads as documented while asserting
-    # nothing about today.
-    live_text = re.sub(
-        r"HISTORICAL-MEASUREMENTS:.*?END-HISTORICAL", "", block, flags=re.DOTALL
-    )
-    live_figures = {
-        int(m.group(1).replace("_", ""))
-        for m in re.finditer(r"((?:\d{1,3}_)+\d{3})", live_text)
-    }
-    for name, value in (
-        ("WASM_SIZE_MEASURED_BYTES", measured_bytes),
-        ("WASM_SIZE_BUDGET_BYTES", budget_bytes),
-    ):
-        if value not in live_figures:
-            problems.append(
-                f"{rel}: the budget comment never states {name} ({value}) outside a "
-                f"HISTORICAL-MEASUREMENTS region. The block must say what the artifact "
-                f"measures TODAY; a figure reachable only inside a historical region is a "
-                f"record of the past, and tagging a region so it covers the live measurement "
-                f"is how this check gets hollowed out"
-            )
-    for pair in re.finditer(
-        r"((?:\d{1,3}_)+\d{3})\s*(?:->|to|and)\s*((?:\d{1,3}_)+\d{3})", block
-    ):
-        historical.add(int(pair.group(1).replace("_", "")))
-        historical.add(int(pair.group(2).replace("_", "")))
-    for delta in re.finditer(
-        r"(?:above|behind|drifted|between)\D{0,40}?((?:\d{1,3}_)+\d{3})", block
-    ):
-        historical.add(int(delta.group(1).replace("_", "")))
-
-    inspected = 0
-    for figure in re.finditer(r"((?:\d{1,3}_)+\d{3})", block):
-        value = int(figure.group(1).replace("_", ""))
-        inspected += 1
-        if value in current or value in historical:
-            continue
-        problems.append(
-            f"{rel}: the budget comment names {figure.group(1)}, which is neither the "
-            f"measured size ({measured_bytes}) nor the ceiling ({budget_bytes}), and is not "
-            f"presented as part of a range the prose marks as historical. A figure in this "
-            f"block either describes TODAY — in which case it must be one of those two — or "
-            f"a movement, in which case write it as `A -> B` or `between A and B`"
-        )
-
-    real_headroom = 100.0 * (budget_bytes - measured_bytes) / budget_bytes
-    for pct in re.finditer(r"(\d+\.\d+)% headroom", block):
-        inspected += 1
-        if abs(float(pct.group(1)) - real_headroom) > 0.01:
-            problems.append(
-                f"{rel}: the budget comment claims {pct.group(1)}% headroom, but "
-                f"{measured_bytes} against {budget_bytes} is {real_headroom:.3f}%"
-            )
-
-    if inspected == 0:
-        raise SystemExit(
-            f"check-doc-claims: found no byte figure or percentage in {rel}'s budget "
-            f"comment. The first version of this claim inspected nothing for exactly this "
-            f"kind of reason; fix the extraction rather than leaving the block unchecked"
-        )
-    return problems
-
-
 def xfail_ledger_prose_claim(sizes: dict[str, int]) -> list[str]:
     """The prose naming each Python xfail ledger must state its real size.
 
@@ -4736,8 +4605,6 @@ def main(argv: list[str]) -> int:
     checked += 1
     problems.extend(xfail_ledger_prose_claim(load_xfail_ledger_sizes()))
     checked += 2
-    problems.extend(makefile_measured_size_claim())
-    checked += 1
     problems.extend(regime_count_claim())
     checked += 1
     codec_problems, codec_checked = codec_table_claim()

@@ -6,17 +6,14 @@
 `crates/rdf-wasm/src/` must be re-exported from the npm package root,
 `crates/rdf-wasm/js/index.mjs`.
 
-The wasm size budget (`WASM_SIZE_BUDGET_BYTES` in the Makefile) is a reviewed
-decision paid for exactly once, at the point a new `#[wasm_bindgen]` export links a
-capability into the shipped artifact. That payment is worthless if the JS wrapper
-module never re-exports the symbol: the bytes ship, the budget was raised to make
-room for them, and no consumer of `@blackcatinformatics/purrdf` (whose `exports` map
-in `crates/rdf-wasm/js/package.json` refuses a deep `./pkg/` import) can ever call
-it. That is exactly how nine Description-Logic reasoning services — `entailClassify`,
-`entailConsistency`, `entailEntails`, `entailExplainConclusion`,
+A new `#[wasm_bindgen]` export links a capability into the shipped artifact. That
+work is worthless if the JS wrapper module never re-exports the symbol: the
+capability ships and no consumer of `@blackcatinformatics/purrdf` (whose `exports`
+map in `crates/rdf-wasm/js/package.json` refuses a deep `./pkg/` import) can ever
+call it. That is exactly how nine Description-Logic reasoning services —
+`entailClassify`, `entailConsistency`, `entailEntails`, `entailExplainConclusion`,
 `entailExtractModule`, `entailInstances`, `entailJustify`, `entailProfile`,
-`entailRealize` — came to be a dark feature: compiled in, budgeted for, and
-unreachable.
+`entailRealize` — came to be a dark feature: compiled in and unreachable.
 
 This script is a structural gate, not a doc-claims one (contrast
 `scripts/check-doc-claims.py`, which restates generated NUMBERS): it discovers every

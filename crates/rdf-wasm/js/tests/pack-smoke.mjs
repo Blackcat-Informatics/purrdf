@@ -14,71 +14,9 @@ import { fileURLToPath } from "node:url";
 import { parsePackument } from "./npm-pack-output.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-// The wasm package ships the RDF 1.2 model, SPARQL/SHACL/ShEx engines, the
-// native format registry (Turtle/N-Quads/TriG/JSON-LD/YAML-LD/…), layout, the
-// SVG renderer, and all sixteen graph/tabular/dataset-description/research-object
-// projection profiles. Both ceilings track the optimized wasm artifact (see the
-// Makefile WASM_SIZE_BUDGET_BYTES note), and both were raised 25% alongside it so
-// package growth is judged by a ceiling rather than by an exact byte count. The five strict bidirectional research-object codecs, configured
-// JSON-LD context engine, and scoped LPG mapper account for earlier reviewed
-// increases. The always-on curated CSVW and OKF terms mappers, their closed
-// located-loss contracts, and shared host dispatch account for one increase;
-// bounded CONSTRUCT, mapped native DCAT RDF, and VoID generation account for
-// one increase; validation-scoped asserted-subclass membership shared by native
-// SHACL and SHACL-SPARQL accounts for one. The latest is the reasoning surface:
-// the exported entailment API in crates/rdf-wasm/src/entail.rs links
-// purrdf-entail and purrdf-datalog into the wasm artifact, so both ceilings move
-// with the WASM_SIZE_BUDGET_BYTES raise that records it. The most recent is the
-// concrete domain, which moved the wasm artifact and both of these with it. The most
-// recent is the CONCLUSION-DIRECTED entailment service: `entailCertainAnswers`,
-// `entailGraphEntails` and `entailVerifyEntailment` reach `purrdf_entail::entails` and
-// its six mechanisms, which the linker had dead-code-eliminated entirely while no
-// exported symbol reached them. The most recent is the GOVERNED evaluation lane:
-// `queryGoverned`, `updateGoverned` and `explainQuery` reach the charge ledger, the
-// predictive admission check, the partial-lift certificate and the wall deadline, none of
-// which any exported symbol had reached before. The most recent is the statistical
-// aggregate namespace and the SPARQL-results provenance extension (see the matching
-// Makefile WASM_SIZE_MEASURED_BYTES entry): `aggregate_namespace` on the entailment-aware
-// governed entries, and `provenanceFromJson`/`provenanceFromXml`, both reach code the
-// linker had previously dead-code-eliminated. Both ceilings hold; only the measured
-// figures move.
-//
-// The MEASURED figures below are REPORTED, not enforced. They were equality-gated,
-// but a packaged byte count is not a property of the source: it moves with the
-// builder's username and path (rustc embeds absolute paths, and `paudley` is one
-// character longer than CI's `runner`), with the version string, and with
-// compression behaviour downstream of both. Even after the wasm artifact was made
-// path-independent this tarball still differed by 263 bytes between a local build
-// and CI. Equality could not hold in both places at once, and it blocked merges and
-// a release while the package sat well inside its ceiling. Update these when you
-// want the printed note to track the build.
-const MEASURED_TARBALL_BYTES = 3_726_378;
-const MEASURED_UNPACKED_BYTES = 11_340_694;
-const MAX_TARBALL_BYTES = 4_137_500;
-const MAX_UNPACKED_BYTES = 12_400_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;
-
-/**
- * REPORT how `actual` compares to the recorded measurement. Does not fail.
- *
- * This was an equality gate, and an exact packaged byte count is not a property of the
- * source: it moves with the builder's username and path (rustc embeds absolute paths, and
- * `paudley` is one character longer than CI's `runner`), with the version string, and with
- * compression behaviour downstream of both. It blocked merges and a release while the
- * package sat well inside its ceiling. The ceilings above are the checks that fail; bloat
- * is worth stopping a build for, and which machine ran the compiler is not.
- */
-function assertMeasured(label, actual, recorded) {
-  if (actual !== recorded) {
-    console.log(
-      `NOTE: ${label} measures ${actual} bytes; this file records ${recorded}. ` +
-        `Reported, not enforced — update it when you want the recorded figure to track ` +
-        `the build. The ceiling is the check that fails.`,
-    );
-  }
-}
 
 function run(command, args, options = {}) {
   const { timeout = DEFAULT_COMMAND_TIMEOUT_MS, ...execOptions } = options;
@@ -92,16 +30,10 @@ function run(command, args, options = {}) {
   });
 }
 
-function assertBudget(name, size, budget) {
-  if (size > budget) {
-    throw new Error(`${name} ${size} bytes exceeds budget ${budget} bytes`);
-  }
-}
-
 async function writeSummary(packument) {
   const lines = [
-    `npm tarball: ${packument.size} bytes / budget ${MAX_TARBALL_BYTES} bytes`,
-    `npm unpacked: ${packument.unpackedSize} bytes / budget ${MAX_UNPACKED_BYTES} bytes`,
+    `npm tarball: ${packument.size} bytes`,
+    `npm unpacked: ${packument.unpackedSize} bytes`,
     `npm entries: ${packument.entryCount}`,
   ];
   console.log(lines.join("\n"));
@@ -206,10 +138,6 @@ const root = await mkdtemp(join(tmpdir(), "purrdf-pack-smoke-"));
 try {
   const packOutput = run("npm", ["pack", "--json", "--pack-destination", root]);
   const packument = parsePackument(packOutput);
-  assertBudget("tarball", packument.size, MAX_TARBALL_BYTES);
-  assertBudget("unpacked package", packument.unpackedSize, MAX_UNPACKED_BYTES);
-  assertMeasured("tarball", packument.size, MEASURED_TARBALL_BYTES);
-  assertMeasured("unpacked package", packument.unpackedSize, MEASURED_UNPACKED_BYTES);
   await writeSummary(packument);
 
   const project = join(root, "project");
