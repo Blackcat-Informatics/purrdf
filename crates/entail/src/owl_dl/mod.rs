@@ -60,6 +60,8 @@ pub(crate) mod hyper;
 #[cfg(test)]
 mod oracle;
 pub(crate) mod parser;
+/// Independently replayable tableau PROOF TERMS, and the checker that re-derives them.
+pub(crate) mod proof;
 pub(crate) mod query;
 pub(crate) mod saturate;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.

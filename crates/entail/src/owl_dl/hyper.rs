@@ -218,6 +218,8 @@
 //! is asserted rather than merely stated: `a_decision_is_byte_identical_run_to_run` below
 //! decides one knowledge base twice and compares the whole struct.
 
+use std::cell::RefCell;
+
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
@@ -226,6 +228,9 @@ use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::Role;
 use crate::owl_dl::graph::{
     Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
+};
+use crate::owl_dl::proof::{
+    ClashStep, MergeCause, MergeStep, NodeRef, Recorder, frame_refs, node_ref, observe_body,
 };
 
 /// One head atom with its variables replaced by the nodes a match bound them to.
@@ -294,6 +299,20 @@ struct Hyper<'a> {
     disjunctions: u64,
     /// The deepest the branch stack got — see [`Decision::peak_depth`].
     peak_depth: u64,
+    /// Where an INSTRUMENTED run writes its clash witnesses and merge provenance.
+    ///
+    /// `None` for every run every existing caller makes, and that is the whole safety
+    /// argument: a non-recording driver allocates nothing here, and each of the three record
+    /// sites is one `Option` test that reads no state, charges no work and takes no branch.
+    /// A recorded run therefore explores the same search tree in the same order and reports
+    /// the byte-identical [`Decision`] — asserted by
+    /// `a_recorded_decision_is_identical_to_an_unrecorded_one` below, beside the pre-existing
+    /// `a_decision_is_byte_identical_run_to_run`.
+    ///
+    /// A [`RefCell`] because the two rule sites that observe a clash and a merge — [`Hyper::fire`]
+    /// and [`Hyper::apply`] — hold the driver through `&self`, exactly as
+    /// [`Graph`](crate::owl_dl::graph::Graph)'s work meter is a `Cell` for the same reason.
+    trace: Option<RefCell<Recorder>>,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -301,34 +320,63 @@ struct Hyper<'a> {
 pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
     let mut h = Hyper::new(kb, budget);
     let st = h.g.init_state(assumptions);
-    match h.solve(st) {
-        Ok(consistent) => Decision {
-            consistent,
-            steps: h.steps,
-            work: h.g.work().spent(),
-            exhausted: false,
-            stopped: false,
-            peak_nodes: h.peak_nodes,
-            disjunctions: h.disjunctions,
-            peak_depth: h.peak_depth,
-        },
-        // One private refusal, two public facts: `stopped` is what the driver recorded when
-        // it turned the poll into an `Exhausted`, and `exhausted` is therefore reserved for
-        // the cap it is named after.
-        //
-        // The three shape counters are reported for a truncated search too, and they are the
-        // measurements a reader of a `budget-exhausted` certificate most needs: they say
-        // whether the rounds went into a graph, into a branch factor or into a depth.
-        Err(Exhausted) => Decision {
-            consistent: false,
-            steps: h.steps,
-            work: h.g.work().spent(),
-            exhausted: !h.stopped,
-            stopped: h.stopped,
-            peak_nodes: h.peak_nodes,
-            disjunctions: h.disjunctions,
-            peak_depth: h.peak_depth,
-        },
+    h.run(st)
+}
+
+/// Decide as [`decide`] does, and ALSO write down the clash witnesses, the merge provenance
+/// and the concrete-domain clashes the search met.
+///
+/// The recording is an observation and never a lever: it consults no state the search reads,
+/// charges nothing to the work meter, and takes no branch of its own. So the [`Decision`] this
+/// returns is the one [`decide`] returns for the same arguments, which is asserted rather than
+/// stated.
+pub(crate) fn decide_recording(
+    kb: &Kb,
+    assumptions: &Assumptions<'_>,
+    budget: Budget,
+) -> (Decision, Recorder) {
+    let mut h = Hyper::new_recording(kb, budget);
+    let st = h.g.init_state(assumptions);
+    let decision = h.run(st);
+    let trace = h
+        .trace
+        .take()
+        .unwrap_or_else(|| unreachable!("a recording driver holds a recorder"));
+    (decision, trace.into_inner())
+}
+
+impl Hyper<'_> {
+    /// Run the search from `st` and assemble the [`Decision`] it reached.
+    fn run(&mut self, st: State) -> Decision {
+        match self.solve(st) {
+            Ok(consistent) => Decision {
+                consistent,
+                steps: self.steps,
+                work: self.g.work().spent(),
+                exhausted: false,
+                stopped: false,
+                peak_nodes: self.peak_nodes,
+                disjunctions: self.disjunctions,
+                peak_depth: self.peak_depth,
+            },
+            // One private refusal, two public facts: `stopped` is what the driver recorded when
+            // it turned the poll into an `Exhausted`, and `exhausted` is therefore reserved for
+            // the cap it is named after.
+            //
+            // The three shape counters are reported for a truncated search too, and they are the
+            // measurements a reader of a `budget-exhausted` certificate most needs: they say
+            // whether the rounds went into a graph, into a branch factor or into a depth.
+            Err(Exhausted) => Decision {
+                consistent: false,
+                steps: self.steps,
+                work: self.g.work().spent(),
+                exhausted: !self.stopped,
+                stopped: self.stopped,
+                peak_nodes: self.peak_nodes,
+                disjunctions: self.disjunctions,
+                peak_depth: self.peak_depth,
+            },
+        }
     }
 }
 
@@ -356,6 +404,17 @@ pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool,
 impl<'a> Hyper<'a> {
     /// Build a driver over `kb` bounded by `budget`, deriving its clause set.
     fn new(kb: &'a Kb, budget: Budget) -> Self {
+        Self::build(kb, budget, None)
+    }
+
+    /// The same driver, INSTRUMENTED: it writes down every clash witness, merge and
+    /// concrete-domain clash it meets.
+    fn new_recording(kb: &'a Kb, budget: Budget) -> Self {
+        Self::build(kb, budget, Some(RefCell::new(Recorder::default())))
+    }
+
+    /// The one constructor both entry points share.
+    fn build(kb: &'a Kb, budget: Budget, trace: Option<RefCell<Recorder>>) -> Self {
         let g = Graph::new(kb, budget.work);
         Self {
             clauses: derive(g.kb()),
@@ -366,7 +425,52 @@ impl<'a> Hyper<'a> {
             peak_nodes: 0,
             disjunctions: 0,
             peak_depth: 0,
+            trace,
         }
+    }
+
+    /// Write down the clause instance that derived `false`, if this run is recording.
+    ///
+    /// The witness is OBSERVED in the completion graph by
+    /// [`observe_body`](crate::owl_dl::proof::observe_body) rather than grounded from the
+    /// clause, so it is a second reading of the instance and the checker's own grounding has
+    /// something to disagree with. Nothing here consults or charges the work meter.
+    fn record_clash(&self, st: &State, index: usize, x: usize, frame: &[usize]) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let witness = observe_body(self.g.kb(), st, self.clauses.clause(index), frame);
+        trace.borrow_mut().clash(ClashStep::new(
+            index,
+            node_ref(st, x),
+            frame_refs(st, frame),
+            witness,
+        ));
+    }
+
+    /// Write down one identification's provenance, if this run is recording.
+    fn record_merge(
+        &self,
+        st: &State,
+        cause: MergeCause,
+        left: NodeRef,
+        right: NodeRef,
+        joined: NodeRef,
+    ) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        trace
+            .borrow_mut()
+            .merge(MergeStep::new(cause, left, right, joined, st.clash));
+    }
+
+    /// Write down a concrete-domain clash, if this run is recording.
+    fn record_data_clash(&self, st: &State, node: usize) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        trace.borrow_mut().data_clash(node_ref(st, node));
     }
 
     /// The depth-first, deterministic search: saturate, then branch on a derived disjunction.
@@ -465,7 +569,8 @@ impl<'a> Hyper<'a> {
             // measured rather than discarded — that branch is exactly the one a reader of this
             // counter is looking for.
             self.observe(st);
-            if self.concrete_domain_clashes(st) {
+            if let Some(node) = self.concrete_domain_clashes(st) {
+                self.record_data_clash(st, node);
                 st.clash = true;
                 return Ok(false);
             }
@@ -527,12 +632,17 @@ impl<'a> Hyper<'a> {
         Ok(())
     }
 
-    /// Whether any node's CONCRETE-domain constraints have no solution.
+    /// The FIRST node whose CONCRETE-domain constraints have no solution, if any.
     ///
     /// The one decision this calculus does not take through a clause — see the module docs —
     /// and it is [`crate::owl_dl::data`]'s answer, shared verbatim with the incumbent.
-    fn concrete_domain_clashes(&self, st: &State) -> bool {
-        (0..st.nodes.len()).any(|x| find(st, x) == x && self.g.data_clashes(st, x))
+    ///
+    /// It answers with the node rather than a bare `bool` so an instrumented run can NAME the
+    /// node it closed on. The scan is the same scan: `find` short-circuits at the first `true`
+    /// exactly as the `any` it replaced did, so the same nodes are examined, the same work is
+    /// charged, and the same state closes.
+    fn concrete_domain_clashes(&self, st: &State) -> Option<usize> {
+        (0..st.nodes.len()).find(|&x| find(st, x) == x && self.g.data_clashes(st, x))
     }
 
     /// One derivation round: every non-disjunctive clause instance, applied once.
@@ -635,6 +745,12 @@ impl<'a> Hyper<'a> {
             return false;
         }
         if form == HeadForm::Inconsistency {
+            // The clash IS this clause instance, and an instrumented run writes it down before
+            // the state closes over it: `for_each_match` stopped at the first match, so
+            // `instances` holds exactly the frame that derived `false`.
+            if let Some(frame) = instances.first() {
+                self.record_clash(st, index, x, frame);
+            }
             st.clash = true;
             return false;
         }
@@ -877,17 +993,36 @@ impl<'a> Hyper<'a> {
                 Ground::AtLeast(node, n, role, filler) => {
                     self.g.ensure_at_least(st, *node, *n, *role, *filler);
                 }
-                Ground::Equal(left, right) => self.g.merge_nodes(st, *left, *right),
+                Ground::Equal(left, right) => {
+                    // The two identities are read BEFORE the merge, because a merge is exactly
+                    // the event that makes one of them stop being a representative.
+                    let (before_left, before_right) = (node_ref(st, *left), node_ref(st, *right));
+                    self.g.merge_nodes(st, *left, *right);
+                    let joined = node_ref(st, *left);
+                    self.record_merge(st, MergeCause::AtMost, before_left, before_right, joined);
+                }
                 Ground::EqualIndividual(node, individual) => {
                     let root = self.g.root(st, *individual);
+                    let (before_root, before_node) = (node_ref(st, root), node_ref(st, *node));
                     self.g.merge_nodes(st, root, *node);
+                    let joined = node_ref(st, *node);
+                    self.record_merge(st, MergeCause::Nominal, before_root, before_node, joined);
                 }
                 Ground::EqualReserved(node, key) => {
                     // Mint (or reuse) the reserved root and merge the blockable node INTO it —
                     // `merge_nodes` keeps the root, the MSH named-/reserved-root merge direction.
                     let r = self.g.generated_root(st, key.clone());
                     let node = find(st, *node);
+                    let (before_root, before_node) = (node_ref(st, r), node_ref(st, node));
                     self.g.merge_nodes(st, r, node);
+                    let joined = node_ref(st, node);
+                    self.record_merge(
+                        st,
+                        MergeCause::NominalIntroduction,
+                        before_root,
+                        before_node,
+                        joined,
+                    );
                 }
             }
             if st.clash {
@@ -1200,7 +1335,7 @@ fn ground(disjunct: &[HeadAtom], frame: &[usize]) -> Vec<Ground> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hyper, decide};
+    use super::{Hyper, decide, decide_recording};
     use crate::owl_dl::Kb;
     use crate::owl_dl::clause::{HeadAtom, derive};
     use crate::owl_dl::concept::{Concept, Role};
@@ -1246,33 +1381,10 @@ mod tests {
         kb
     }
 
-    /// A [`Decision`](crate::owl_dl::graph::Decision) is a pure function of the knowledge base:
-    /// the same one decided twice gives back the same WHOLE struct — verdict, round count,
-    /// WORK figure and both stop flags.
-    ///
-    /// The determinism doctrine is stated in the module docs; this is what makes it an
-    /// observation. A search that read a `HashMap`, a clock or a float would still answer the
-    /// same verdict most runs, and it is the two cost figures that would move first — the work
-    /// figure soonest of all, because it counts every scan rather than every round.
-    #[test]
-    fn a_decision_is_byte_identical_run_to_run() {
-        let kb = branching_kb();
-        let cap = Budget::for_kb(&kb);
-        let first = decide(&kb, &Assumptions::of_kb(), cap);
-        let again = decide(&kb, &Assumptions::of_kb(), cap);
-        assert_eq!(first, again, "two runs, one decision");
-        assert!(!first.exhausted && !first.stopped, "{first:?}");
-    }
-
-    /// The Motik–Shearer–Horrocks `NI`-rule's decision is a pure function of the knowledge base,
-    /// and the reserved roots it mints are CHARGED to the work meter — deterministic budget
-    /// accounting for the nominal-introduction path. The spy-point inconsistency (a nominal
-    /// `≤2 p⁻.⊤`, everything `p`-related to it, an individual forced to `≥3 r.⊤`) decides
-    /// INCONSISTENT, byte-identically run to run, having spent work on the reserved roots. The
-    /// byte-identical `Decision` is this crate's replayable certificate: re-deciding reproduces
-    /// the verdict and every cost figure exactly.
-    #[test]
-    fn nn_ni_spy_point_decision_is_deterministic_and_charged() {
+    /// The nominal-introduction spy point: a nominal `≤2 p⁻.⊤`, everything `p`-related to it,
+    /// and an individual forced to `≥3 r.⊤`. INCONSISTENT, and it closes through the reserved
+    /// roots — so it is the fixture that actually exercises the clash and merge recorders.
+    fn spy_point_kb() -> Kb {
         const P: u32 = 40;
         const RR: u32 = 41;
         const SPY: u32 = 50;
@@ -1293,6 +1405,78 @@ mod tests {
         kb.individuals.insert(SPY);
         kb.individuals.insert(U);
         kb.finalize();
+        kb
+    }
+
+    /// A [`Decision`](crate::owl_dl::graph::Decision) is a pure function of the knowledge base:
+    /// the same one decided twice gives back the same WHOLE struct — verdict, round count,
+    /// WORK figure and both stop flags.
+    ///
+    /// The determinism doctrine is stated in the module docs; this is what makes it an
+    /// observation. A search that read a `HashMap`, a clock or a float would still answer the
+    /// same verdict most runs, and it is the two cost figures that would move first — the work
+    /// figure soonest of all, because it counts every scan rather than every round.
+    #[test]
+    fn a_decision_is_byte_identical_run_to_run() {
+        let kb = branching_kb();
+        let cap = Budget::for_kb(&kb);
+        let first = decide(&kb, &Assumptions::of_kb(), cap);
+        let again = decide(&kb, &Assumptions::of_kb(), cap);
+        assert_eq!(first, again, "two runs, one decision");
+        assert!(!first.exhausted && !first.stopped, "{first:?}");
+    }
+
+    /// INSTRUMENTATION IS AN OBSERVATION, NOT A LEVER: a recorded run reaches the same
+    /// [`Decision`](crate::owl_dl::graph::Decision) as an unrecorded one, field for field.
+    ///
+    /// This is the standing obligation on [`Hyper::trace`]. Every record site is one `Option`
+    /// test that reads no state the search reads, takes no branch of its own, and — critically
+    /// — never calls a METERED graph operation, so the work figure cannot move. Were any of
+    /// those to change, `work` would move first (it counts every scan rather than every round),
+    /// then `steps`, then the three shape counters, then the verdict; comparing the WHOLE
+    /// struct is what makes a fourth field unable to escape the comparison.
+    ///
+    /// Three knowledge bases, deliberately: the branching fixture (case splits, minted
+    /// witnesses and a cardinality bound), the `NI` spy point (reserved roots, merges and an
+    /// INCONSISTENT verdict — the run that actually records clash witnesses), and a
+    /// concrete-domain-free consistent run.
+    #[test]
+    fn a_recorded_decision_is_identical_to_an_unrecorded_one() {
+        for kb in [branching_kb(), spy_point_kb()] {
+            let cap = Budget::for_kb(&kb);
+            let plain = decide(&kb, &Assumptions::of_kb(), cap);
+            let (recorded, _) = decide_recording(&kb, &Assumptions::of_kb(), cap);
+            assert_eq!(
+                plain, recorded,
+                "recording must not move a single field of the decision"
+            );
+        }
+    }
+
+    /// A recorded refutation actually WRITES SOMETHING DOWN — otherwise the equality above
+    /// would be satisfied by a recorder that recorded nothing.
+    #[test]
+    fn a_recorded_refutation_carries_a_clash_witness() {
+        let kb = spy_point_kb();
+        let (decision, recorder) =
+            decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(!decision.consistent && !decision.exhausted, "{decision:?}");
+        assert!(
+            !recorder.is_empty(),
+            "an inconsistent run closes on something, and the recorder must name it"
+        );
+    }
+
+    /// The Motik–Shearer–Horrocks `NI`-rule's decision is a pure function of the knowledge base,
+    /// and the reserved roots it mints are CHARGED to the work meter — deterministic budget
+    /// accounting for the nominal-introduction path. The spy-point inconsistency (a nominal
+    /// `≤2 p⁻.⊤`, everything `p`-related to it, an individual forced to `≥3 r.⊤`) decides
+    /// INCONSISTENT, byte-identically run to run, having spent work on the reserved roots. The
+    /// byte-identical `Decision` is this crate's replayable certificate: re-deciding reproduces
+    /// the verdict and every cost figure exactly.
+    #[test]
+    fn nn_ni_spy_point_decision_is_deterministic_and_charged() {
+        let kb = spy_point_kb();
         let cap = Budget::for_kb(&kb);
         let first = decide(&kb, &Assumptions::of_kb(), cap);
         let again = decide(&kb, &Assumptions::of_kb(), cap);
