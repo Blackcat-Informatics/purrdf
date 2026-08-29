@@ -457,7 +457,6 @@ impl ClauseSet {
     }
 
     /// How many clauses the knowledge base produced.
-    #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
         self.clauses.len()
     }
