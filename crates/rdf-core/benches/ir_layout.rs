@@ -538,6 +538,49 @@ fn bench_pattern_warm(c: &mut Criterion) {
     group.finish();
 }
 
+/// The subject-narrowed RDF 1.2 reifier lookup vs the full side-table scan it
+/// replaces. The reifier side table is frozen sorted with the reifier as its PRIMARY
+/// key, so `reifier_quads_of` addresses one contiguous run — `partition_point` plus
+/// the run itself — where the baseline visits every row. That is the complexity
+/// change this group exists to exhibit: `O(n)` per probe becomes `O(log n + run)`,
+/// which matters because the ShEx and SPARQL statement-layer probes run the lookup
+/// ONCE PER FOCUS NODE / probe row.
+///
+/// REPORT ONLY, like every bench in this tree: it is not a gate, asserts no speedup,
+/// and the numbers it prints depend entirely on how loaded the host is.
+fn bench_reifier_lookup(c: &mut Criterion) {
+    let ds = build_dataset();
+    let reifiers: Vec<TermId> = ds.reifier_quads().map(|q| q.s).collect();
+    assert!(
+        reifiers.len() > 64,
+        "the representative dataset must carry enough reifiers for the scan to hurt"
+    );
+    // A probe at each end and in the middle of the run, plus a subject that reifies
+    // nothing (the miss the scan still pays full price for).
+    let first = reifiers[0];
+    let middle = reifiers[reifiers.len() / 2];
+    let last = reifiers[reifiers.len() - 1];
+    let absent = ds.quads().next().expect("build_dataset yields quads").p;
+
+    let mut group = c.benchmark_group("ir_reifier_lookup");
+    for (name, probe) in [
+        ("first", first),
+        ("middle", middle),
+        ("last", last),
+        ("absent", absent),
+    ] {
+        // Baseline = the EXACT body of the trait's default `reifier_quads_of` (the full
+        // scan the narrowed lookup replaces), so the comparison is apples-to-apples.
+        group.bench_function(format!("scan_{name}"), |b| {
+            b.iter(|| std::hint::black_box(ds.reifier_quads().filter(|q| q.s == probe).count()));
+        });
+        group.bench_function(format!("narrowed_{name}"), |b| {
+            b.iter(|| std::hint::black_box(ds.reifier_quads_of(probe).count()));
+        });
+    }
+    group.finish();
+}
+
 /// P4b cold cost: a fresh dataset's first predicate-bound query pays the one-time POS
 /// permutation build. `iter_batched` keeps the (expensive) dataset construction in
 /// UN-timed setup so the measured region is just the cold index build + first query.
@@ -618,6 +661,7 @@ criterion_group!(
     bench_resolve,
     bench_value_lookup,
     bench_pattern_warm,
+    bench_reifier_lookup,
     bench_pattern_cold,
     bench_pattern_concurrent
 );

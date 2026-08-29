@@ -1139,7 +1139,9 @@ fn bind_pos<D: DatasetView>(
 /// - **Reifier rows** `(reifier, rdf:reifies, triple-term)` — included only when the
 ///   pattern's predicate *can* be `rdf:reifies` (unbound, or bound exactly to it).
 ///   When the predicate is bound to some other IRI, no reifier row can match, so the
-///   layer is skipped entirely.
+///   layer is skipped entirely. When the pattern's subject is bound,
+///   [`DatasetView::reifier_quads_of`] indexes straight to that reifier's run;
+///   otherwise the whole reifier table is scanned.
 /// - **Annotation rows** `(reifier, annPred, annObj)` — a reifier's statement
 ///   annotations look like ordinary triples whose subject is a reifier. When the
 ///   pattern's subject is bound, [`RdfDataset::annotations_of`] indexes straight to
@@ -1174,13 +1176,27 @@ fn emit_virtual_candidates<D: DatasetView>(
             Pos::Triple(_) => false,
         };
         if predicate_can_reify && object_can_be_triple_term(&cp.o, dataset) {
-            for quad in dataset.reifier_quads().filter(move |q| {
-                gm.matches(q.g)
-                    && s.is_none_or(|id| q.s == id)
-                    && p.is_none_or(|id| q.p == id)
-                    && o.is_none_or(|id| q.o == id)
-            }) {
-                emit(quad);
+            // The residual filters the narrowed and the scanning path share verbatim:
+            // the graph scope plus the predicate/object id-equality the default scan
+            // (`quads_for_pattern`) applies.
+            let residual = move |q: &QuadIds<D::Id>| {
+                gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
+            };
+            match s {
+                // A reifier row's subject IS its reifier key, so a bound subject
+                // addresses that reifier's run directly instead of scanning the whole
+                // side table (`O(log n)` on a backend that keys its reifier table on the
+                // reifier; the trait default is the same filter this replaces).
+                Some(reifier) => {
+                    for quad in dataset.reifier_quads_of(reifier).filter(residual) {
+                        emit(quad);
+                    }
+                }
+                None => {
+                    for quad in dataset.reifier_quads().filter(residual) {
+                        emit(quad);
+                    }
+                }
             }
         }
     }

@@ -710,6 +710,29 @@ impl DatasetView for PagedQueryView<'_> {
         })
     }
 
+    fn reifier_quads_of(
+        &self,
+        reifier: GlobalTermId,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // Per-page narrowing, shaped exactly like `annotations_of_with_graph` below: a
+        // page whose translation lacks the reifier owns no row for it and is skipped
+        // before the page is requested; a page that has it addresses its contiguous run
+        // in `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
+        // frozen order are unchanged, so the row stream is identical to the trait
+        // default's filter over `reifier_quads`.
+        self.dataset.pages.iter().flat_map(move |slot| {
+            slot.translation
+                .to_local(reifier)
+                .into_iter()
+                .flat_map(move |local_reifier| {
+                    self.page(slot.id).into_iter().flat_map(move |page| {
+                        page.reifier_quads_of(local_reifier)
+                            .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    })
+                })
+        })
+    }
+
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {
