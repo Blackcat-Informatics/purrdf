@@ -65,11 +65,18 @@ mod span;
 // `codec_for` resolver every parse/serialize call site routes through (replacing the
 // scattered match-on-format arms). `pub(super)`, never part of the public API.
 mod codec;
+// Parsing from a `Read` without buffering the source: the line-oriented syntaxes
+// (N-Triples / N-Quads / HexTuples) are consumed one line at a time through the SAME
+// per-line grammar and the SAME lowering the buffered paths use, so the frozen dataset
+// is identical while the source text and the intermediate statement list never become
+// resident. Non-line-oriented grammars are read whole, as their syntax requires.
+mod stream;
 
 pub use media_type::{NativeRdfFormat, classify};
 pub use parse::{parse_dataset, parse_dataset_with};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use span::{ParseOptions, SpanTable};
+pub use stream::parse_dataset_from_reader;
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
 // hidden, unstable, not public API.
 #[doc(hidden)]
@@ -103,6 +110,18 @@ impl RdfParserBackend for GtsCodecBackend {
         // Parse to a frozen dataset, then replay it into the caller's sink through the
         // in-repo frozen-IR source (which declares-before-reference and finishes the
         // sink). Driving the source IS the `finish` call, so the sink is left finished.
+        //
+        // This is a REPLAY, not a streaming emit, and the shape is forced rather than
+        // chosen: the RDF 1.2 statement-layer fold is two-pass, so whether a row is a
+        // base quad or an annotation depends on whether a possibly-LATER line binds its
+        // subject with `rdf:reifies`. A row therefore cannot be emitted as an event when
+        // it is read without risking the wrong classification. The request also arrives
+        // as `&[u8]`, so the source is the caller's buffer either way.
+        //
+        // Streaming the SOURCE — reading a document without buffering it — is
+        // [`parse_dataset_from_reader`], which is what the CLI's line-oriented lane
+        // uses. It removes the source-side buffers; it does not and cannot remove the
+        // dataset, for the reason above.
         let dataset = parse_dataset(request.bytes, request.media_type, request.base_iri)?;
         FrozenDatasetSource::new(&dataset)
             .drive(sink)

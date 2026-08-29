@@ -157,6 +157,14 @@ name = "jsonld_alloc"
 harness = false
 
 [[bench]]
+# Peak-allocation evidence for the streaming line-oriented parse against the buffered
+# one. A plain `main` rather than Criterion: the quantity is a memory high-water mark,
+# not a duration, and the tracking allocator's atomics would perturb any timing beside
+# it. Report-only; asserts no bound.
+name = "stream_parse_alloc"
+harness = false
+
+[[bench]]
 # Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
 # Report-only; excluded from check.
 name = "viz_layout"

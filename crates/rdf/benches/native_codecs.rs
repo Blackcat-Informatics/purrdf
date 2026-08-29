@@ -17,7 +17,8 @@ use purrdf_rdf::native_codecs::jsonld::{
     serialize_dataset_to_jsonld, serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{
-    ParseOptions, SerializeGraph, parse_dataset, parse_dataset_with, serialize_dataset,
+    ParseOptions, SerializeGraph, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
+    serialize_dataset,
 };
 
 #[path = "support/jsonld.rs"]
@@ -85,6 +86,40 @@ fn bench_parse_nquads_parallel_vs_sequential(c: &mut Criterion) {
         bencher.iter(|| {
             let dataset = parse_dataset(black_box(text.as_bytes()), "application/n-quads", None)
                 .expect("parse");
+            black_box(dataset);
+        });
+    });
+    group.finish();
+}
+
+/// Streamed vs. buffered N-Quads parse, over the same document.
+///
+/// REPORT-ONLY, like every bench here, and doubly so for this pair: the streamed side
+/// is measured over an in-memory `Cursor`, so it is NOT reading a file and the numbers
+/// say nothing about I/O. What the pair is for is confirming that consuming the source
+/// one line at a time does not cost throughput out of proportion — the streaming lane's
+/// claim is about RESIDENCY, which `stream_parse_alloc` measures instead, and which no
+/// timing here would show.
+fn bench_parse_nquads_streamed_vs_buffered(c: &mut Criterion) {
+    let text = nquads_fixture(LARGE_ROWS);
+    let mut group = c.benchmark_group("native_codecs_parse_50k_stream");
+    group.sample_size(10);
+    group.throughput(Throughput::Bytes(text.len() as u64));
+    group.bench_function("nquads_50k_buffered", |bencher| {
+        bencher.iter(|| {
+            let dataset = parse_dataset(black_box(text.as_bytes()), "application/n-quads", None)
+                .expect("parse");
+            black_box(dataset);
+        });
+    });
+    group.bench_function("nquads_50k_streamed", |bencher| {
+        bencher.iter(|| {
+            let dataset = parse_dataset_from_reader(
+                std::io::Cursor::new(black_box(text.as_bytes())),
+                "application/n-quads",
+                None,
+            )
+            .expect("parse");
             black_box(dataset);
         });
     });
@@ -352,6 +387,7 @@ criterion_group!(
     benches,
     bench_parse_nquads,
     bench_parse_nquads_parallel_vs_sequential,
+    bench_parse_nquads_streamed_vs_buffered,
     bench_parse_nquads_span_tracking,
     bench_serialize_nquads,
     bench_jsonld_expanded,

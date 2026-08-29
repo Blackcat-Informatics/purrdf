@@ -123,14 +123,14 @@ pub use native_codecs::okf::{
 // re-exported here so a consumer that already depends on the codec surface (the CLI)
 // reaches it without a second dependency edge and without a second implementation.
 pub use purrdf_gts::transport::{
-    TransportEncoding, TransportError, decode_detected, decode_transport, detect_transport,
-    strip_transport_suffix,
+    SniffedStream, TransportEncoding, TransportError, TransportReader, decode_detected,
+    decode_transport, detect_transport, sniff_transport, strip_transport_suffix, transport_reader,
 };
 
 pub use native_codecs::{
     GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions,
     SerializeOutcome, SourceFormat, SpanTable, classify, classify_source, parse_dataset,
-    parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
     serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
     serialize_dataset_with_jsonld_options,
 };

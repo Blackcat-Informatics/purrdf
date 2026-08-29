@@ -21,10 +21,25 @@
 //! `read_to_end`, so a truncated or corrupt stream returns `Err` rather than the
 //! prefix it managed to inflate. There is no partial success, and therefore no way
 //! for a downstream parser to be handed a silently-shortened document.
+//!
+//! ## Buffered and streaming halves
+//!
+//! [`decode_transport`] inflates into one `Vec<u8>`; [`transport_reader`] hands back a
+//! `Read` that inflates INCREMENTALLY as its consumer pulls, so a streaming parser
+//! never materializes the payload. Both wrap the same two decoders, so they cannot
+//! disagree about what a stream decodes to. The streaming half preserves the
+//! all-or-nothing property in the only form a stream can: a truncated or corrupt frame
+//! surfaces as a read error at the point it is reached, and every consumer in this
+//! workspace treats a mid-parse read error as a failed parse that produces no output.
+//!
+//! [`sniff_transport`] is the streaming counterpart of [`detect_transport`]'s
+//! content-first sniff: it consumes only the leading magic-byte window and hands back a
+//! reader with those bytes PUT BACK, so detection costs a fixed four bytes rather than
+//! the whole stream. It works on a pipe, where seeking back is not available.
 
 use std::borrow::Cow;
 use std::fmt;
-use std::io::Read;
+use std::io::{self, Chain, Cursor, Read};
 
 /// The gzip magic bytes (RFC 1952 §2.3.1: `ID1 = 0x1f`, `ID2 = 0x8b`).
 const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
@@ -159,6 +174,136 @@ pub fn decode_transport(
     Ok(out)
 }
 
+/// The widest magic-byte signature this module recognizes (zstd's four-byte frame
+/// magic). [`sniff_transport`] consumes exactly this many bytes and puts them back.
+const MAGIC_WINDOW: usize = 4;
+
+/// A stream whose leading magic-byte window has been read and prepended back, so the
+/// consumer still sees every byte of the original stream in order.
+///
+/// Named because [`sniff_transport`] returns it and callers must be able to write the
+/// type down (it is the `R` of the [`TransportReader`] they then build).
+pub type SniffedStream<R> = Chain<Cursor<Vec<u8>>, R>;
+
+/// Detect the transport encoding wrapping a `Read` stream WITHOUT consuming it.
+///
+/// The streaming counterpart of [`detect_transport`], and it applies the identical
+/// content-first-then-name rule to the identical decision function — this reads the
+/// leading four-byte magic window, passes it to [`detect_transport`], and returns a
+/// reader with those bytes put back in front. Nothing is seeked, so this is correct on
+/// a pipe or on standard input.
+///
+/// A stream shorter than that window is not an error here: the short prefix is sniffed
+/// as-is (no signature will match) and handed back intact.
+///
+/// # Errors
+///
+/// Returns the underlying reader's error if the leading window cannot be read.
+pub fn sniff_transport<R: Read>(
+    mut reader: R,
+    source_name: Option<&str>,
+) -> io::Result<(Option<TransportEncoding>, SniffedStream<R>)> {
+    let mut window = [0u8; MAGIC_WINDOW];
+    let mut filled = 0;
+    while filled < MAGIC_WINDOW {
+        match reader.read(&mut window[filled..])? {
+            0 => break,
+            read => filled += read,
+        }
+    }
+    let encoding = detect_transport(&window[..filled], source_name);
+    Ok((
+        encoding,
+        Cursor::new(window[..filled].to_vec()).chain(reader),
+    ))
+}
+
+/// A `Read` stream whose transport wrapper is decoded INCREMENTALLY as the consumer
+/// pulls, rather than inflated into one buffer first.
+///
+/// The streaming twin of [`decode_transport`], built by [`transport_reader`]. The
+/// wrapped decoder types are deliberately private: this is a `Read`, and which
+/// third-party decoder is behind it is an implementation detail rather than API.
+pub struct TransportReader<R: Read> {
+    inner: TransportReaderInner<R>,
+}
+
+/// The decoder behind a [`TransportReader`], or the undecoded stream itself.
+enum TransportReaderInner<R: Read> {
+    /// No transport wrapper: bytes pass through untouched.
+    Plain(R),
+    /// gzip, decoded by `flate2`'s pure-Rust `miniz_oxide` backend.
+    // Boxed: the decoder owns a multi-kilobyte inflate window, and an unboxed variant
+    // would make every `TransportReader` — including `Plain` — that large.
+    Gzip(Box<flate2::read::GzDecoder<R>>),
+    /// zstd, decoded by the pure-Rust `structured-zstd` streaming decoder. Boxed for
+    /// the same reason as [`Self::Gzip`] (its window is larger still).
+    Zstd(
+        Box<
+            structured_zstd::decoding::StreamingDecoder<R, structured_zstd::decoding::FrameDecoder>,
+        >,
+    ),
+}
+
+impl<R: Read> fmt::Debug for TransportReader<R> {
+    /// Names the encoding in force. The wrapped decoders hold multi-kilobyte windows
+    /// and are not themselves `Debug`, so the encoding is the whole of the useful
+    /// state a diagnostic wants.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let encoding = match self.inner {
+            TransportReaderInner::Plain(_) => "none",
+            TransportReaderInner::Gzip(_) => TransportEncoding::Gzip.as_str(),
+            TransportReaderInner::Zstd(_) => TransportEncoding::Zstd.as_str(),
+        };
+        f.debug_struct("TransportReader")
+            .field("encoding", &encoding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: Read> Read for TransportReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match &mut self.inner {
+            TransportReaderInner::Plain(reader) => reader.read(buf),
+            TransportReaderInner::Gzip(decoder) => decoder.read(buf),
+            TransportReaderInner::Zstd(decoder) => decoder.read(buf),
+        }
+    }
+}
+
+/// Wrap `reader` in the decoder for `encoding`, or pass it through when `encoding` is
+/// `None`.
+///
+/// This is the streaming half of [`decode_transport`]: the same two decoders, driven
+/// incrementally. A truncated or corrupt frame surfaces as an `io::Error` from
+/// [`Read::read`] at the point the damage is reached — never as a silent short read —
+/// so a parser driven from this stream fails rather than seeing a shortened document.
+///
+/// # Errors
+///
+/// Returns [`TransportError`] when the zstd frame header itself cannot be read (gzip's
+/// adapter is infallible to construct and reports damage on the first read instead).
+pub fn transport_reader<R: Read>(
+    reader: R,
+    encoding: Option<TransportEncoding>,
+) -> Result<TransportReader<R>, TransportError> {
+    let inner = match encoding {
+        None => TransportReaderInner::Plain(reader),
+        Some(TransportEncoding::Gzip) => {
+            TransportReaderInner::Gzip(Box::new(flate2::read::GzDecoder::new(reader)))
+        }
+        Some(TransportEncoding::Zstd) => TransportReaderInner::Zstd(Box::new(
+            structured_zstd::decoding::StreamingDecoder::new(reader).map_err(|err| {
+                TransportError {
+                    encoding: TransportEncoding::Zstd,
+                    message: err.to_string(),
+                }
+            })?,
+        )),
+    };
+    Ok(TransportReader { inner })
+}
+
 /// Detect and decode in one step, borrowing `data` unchanged when it is not wrapped.
 pub fn decode_detected<'a>(
     data: &'a [u8],
@@ -239,6 +384,70 @@ mod tests {
             Some(("archive", TransportEncoding::Gzip))
         );
         assert_eq!(strip_transport_suffix("data.nt"), None);
+    }
+
+    /// Read a stream through the sniff + streaming-decoder pair, the way a streaming
+    /// parser does.
+    fn stream_decode(data: &[u8], source_name: Option<&str>) -> io::Result<Vec<u8>> {
+        let (encoding, stream) = sniff_transport(data, source_name)?;
+        let mut reader =
+            transport_reader(stream, encoding).map_err(|err| io::Error::other(err.to_string()))?;
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    #[test]
+    fn streaming_decode_matches_the_buffered_decode_byte_for_byte() {
+        // The two halves must never disagree about what a stream decodes to: same
+        // bytes, wrapped or not, gzip or plain.
+        let payload = b"<http://example.org/s> <http://example.org/p> \"o\" .\n".repeat(64);
+        for (data, name) in [(gzip(&payload), None), (payload.clone(), Some("plain.nt"))] {
+            let buffered = decode_detected(&data, name)
+                .expect("buffered decode")
+                .into_owned();
+            let streamed = stream_decode(&data, name).expect("streaming decode");
+            assert_eq!(
+                buffered, streamed,
+                "streaming and buffered decode must agree"
+            );
+            assert_eq!(streamed, payload);
+        }
+    }
+
+    #[test]
+    fn sniff_puts_the_magic_window_back() {
+        // A short, unwrapped stream must survive the sniff with every byte intact,
+        // including one shorter than the magic window itself.
+        for payload in [b"".as_slice(), b"a", b"abc", b"abcdefgh"] {
+            let (encoding, mut stream) = sniff_transport(payload, None).expect("sniff");
+            assert_eq!(encoding, None);
+            let mut out = Vec::new();
+            stream.read_to_end(&mut out).expect("read");
+            assert_eq!(out, payload);
+        }
+    }
+
+    #[test]
+    fn a_truncated_stream_fails_the_streaming_decoder_too() {
+        // All-or-nothing survives the streaming form: the damage is reported as a read
+        // error, so a parser driven from this stream fails instead of seeing a
+        // shortened document.
+        let framed = gzip(&b"<http://example.org/s> <http://example.org/p> \"o\" .\n".repeat(64));
+        let truncated = &framed[..framed.len() - 8];
+        stream_decode(truncated, None).expect_err("a truncated gzip stream must fail");
+    }
+
+    #[test]
+    fn a_stream_that_is_not_the_declared_encoding_fails_the_streaming_decoder() {
+        let mut reader = transport_reader(b"plain text".as_slice(), Some(TransportEncoding::Gzip))
+            .expect("gzip adapter constructs");
+        let mut out = Vec::new();
+        reader
+            .read_to_end(&mut out)
+            .expect_err("plain bytes are not gzip");
+        transport_reader(b"plain text".as_slice(), Some(TransportEncoding::Zstd))
+            .expect_err("plain bytes are not a zstd frame");
     }
 
     #[test]

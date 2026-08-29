@@ -94,36 +94,83 @@ enum HexTerm {
     Literal(RdfLiteral),
 }
 
+/// One decoded HexTuples line: `(subject, predicate, object, graph)`.
+type HexRow = (HexTerm, String, HexTerm, Option<HexTerm>);
+
 /// Parse HexTuples `text` into a frozen [`RdfDataset`].
 pub(super) fn parse_hextuples_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut rows: Vec<(HexTerm, String, HexTerm, Option<HexTerm>)> = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let fields: Vec<String> = serde_json::from_str(line)
-            .map_err(|e| parse_err(format!("line {}: invalid JSON array: {e}", index + 1)))?;
-        if fields.len() != 6 {
-            return Err(parse_err(format!(
-                "line {}: expected 6 fields, found {}",
-                index + 1,
-                fields.len()
-            )));
-        }
-        let [subject, predicate, value, datatype, language, graph] =
-            <[String; 6]>::try_from(fields)
-                .map_err(|_| parse_err("internal: field count mismatch"))?;
-        let subject = node_term(&subject)?;
-        validate_iri(&predicate)?;
-        let object = object_term(&value, &datatype, &language)?;
-        let graph = if graph.is_empty() {
-            None
-        } else {
-            Some(node_term(&graph)?)
-        };
-        rows.push((subject, predicate, object, graph));
+    let mut parser = HexTuplesStreamParser::new();
+    for line in text.lines() {
+        parser.push_line(line)?;
     }
-    freeze_rows(rows)
+    parser.finish()
+}
+
+/// Decode ONE physical HexTuples line, or `None` when the line is blank.
+///
+/// The one copy of the per-line grammar: both [`parse_hextuples_to_dataset`] (which
+/// holds the whole document) and [`HexTuplesStreamParser`] (which never does) call it
+/// with the same 1-based `lineno`, so a malformed line produces the same diagnostic
+/// whichever way the document arrived.
+fn parse_hextuples_line(line: &str, lineno: usize) -> Result<Option<HexRow>, RdfDiagnostic> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    let fields: Vec<String> = serde_json::from_str(line)
+        .map_err(|e| parse_err(format!("line {lineno}: invalid JSON array: {e}")))?;
+    if fields.len() != 6 {
+        return Err(parse_err(format!(
+            "line {lineno}: expected 6 fields, found {}",
+            fields.len()
+        )));
+    }
+    let [subject, predicate, value, datatype, language, graph] =
+        <[String; 6]>::try_from(fields).map_err(|_| parse_err("internal: field count mismatch"))?;
+    let subject = node_term(&subject)?;
+    validate_iri(&predicate)?;
+    let object = object_term(&value, &datatype, &language)?;
+    let graph = if graph.is_empty() {
+        None
+    } else {
+        Some(node_term(&graph)?)
+    };
+    Ok(Some((subject, predicate, object, graph)))
+}
+
+/// The HexTuples parser driven ONE LINE AT A TIME, for a caller reading from a `Read`.
+///
+/// HexTuples is NDJSON: one self-contained JSON array per line, with no cross-line
+/// state at all, so a streamed parse is the buffered parse with the source buffer
+/// removed. Term interning still happens once, over the accumulated rows in document
+/// order, in [`freeze_rows`] — that is the sequential point that fixes every term id,
+/// and moving it would change the frozen IR, so it is left exactly where it was.
+pub(super) struct HexTuplesStreamParser {
+    rows: Vec<HexRow>,
+    /// The 1-based document line number of the NEXT line to be pushed.
+    lineno: usize,
+}
+
+impl HexTuplesStreamParser {
+    pub(super) fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            lineno: 1,
+        }
+    }
+
+    /// Feed the next physical line, in document order (without its terminator).
+    pub(super) fn push_line(&mut self, line: &str) -> Result<(), RdfDiagnostic> {
+        if let Some(row) = parse_hextuples_line(line, self.lineno)? {
+            self.rows.push(row);
+        }
+        self.lineno += 1;
+        Ok(())
+    }
+
+    /// Intern and freeze once the stream is exhausted.
+    pub(super) fn finish(self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        freeze_rows(self.rows)
+    }
 }
 
 /// A subject / graph node: an IRI or a `_:`-prefixed blank node.
@@ -163,9 +210,7 @@ fn object_term(value: &str, datatype: &str, language: &str) -> Result<HexTerm, R
     }
 }
 
-fn freeze_rows(
-    rows: Vec<(HexTerm, String, HexTerm, Option<HexTerm>)>,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+fn freeze_rows(rows: Vec<HexRow>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
     for (subject, predicate, object, graph) in rows {

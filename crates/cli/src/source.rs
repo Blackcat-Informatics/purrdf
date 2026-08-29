@@ -70,6 +70,31 @@
 //! bytes and verified in place, which a decode step would defeat. A transport-wrapped
 //! pack is therefore refused by name in [`acquire_pack_input`] rather than handed to the
 //! verifier as garbage.
+//!
+//! ## Streaming the line-oriented syntaxes
+//!
+//! A LINE-ORIENTED RDF source (N-Triples, N-Quads, HexTuples — the set
+//! [`NativeRdfFormat::is_line_oriented`] names) is never read into a byte buffer at all.
+//! [`load_native`] opens the file (or standard input), sniffs the transport wrapper from
+//! the leading magic-byte window WITHOUT consuming it, wraps the stream in the matching
+//! *streaming* decoder, and hands that `Read` straight to
+//! `purrdf_rdf::parse_dataset_from_reader`, which pulls one line at a time.
+//!
+//! The order matters and is the point: the decoder is a `Read` adapter, so the parser
+//! pulls THROUGH it. Decoding first and parsing second would re-materialize exactly the
+//! buffer this lane exists to avoid.
+//!
+//! What this bounds is the SOURCE side, and nothing more. The dataset the parser builds
+//! is proportional to the document's content and always will be — the RDF 1.2
+//! statement-layer fold is two-pass, so a row cannot be classified until the document
+//! ends — and the OUTPUT side still materializes (`serialize_dataset_to_format` returns
+//! a complete buffer and [`crate::sink::write_out`] takes `&[u8]`). The honest claim is
+//! that the source text and the parser's intermediate statement list, each proportional
+//! to the input, leave peak residency. It is not end-to-end constant memory.
+//!
+//! Every other syntax is read whole, because its grammar requires it: Turtle and TriG
+//! rebind `@prefix` / `@base` mid-document, and RDF/XML, TriX, JSON-LD and YAML-LD are
+//! tree syntaxes with no line structure. Those take [`read_bytes`] exactly as before.
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -81,7 +106,8 @@ use purrdf_core::{
 };
 use purrdf_rdf::{
     NativeRdfFormat, SerializeOutcome, SourceFormat, TransportEncoding, decode_transport,
-    detect_transport, import_gts_events, parse_dataset, serialize_dataset_to_format,
+    detect_transport, import_gts_events, parse_dataset, parse_dataset_from_reader,
+    serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -162,6 +188,76 @@ pub(crate) fn read_bytes_with_transport(
 /// How a source names itself in a diagnostic: `-` reads as `<stdin>`.
 fn display_path(path: &str) -> &str {
     if path == "-" { "<stdin>" } else { path }
+}
+
+/// Open `path` (or standard input when `path` is `-`) as a byte STREAM, reading nothing.
+///
+/// The counterpart of [`read_raw_bytes`] for the streaming lane. Erased behind
+/// `Box<dyn Read>` because the two arms are different types and the parser only needs
+/// `Read`; the one virtual call per 64 KiB refill is not a measurable cost against
+/// tokenizing the bytes it returns.
+fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
+    if path == "-" {
+        Ok(Box::new(std::io::stdin().lock()))
+    } else {
+        Ok(Box::new(std::fs::File::open(path)?))
+    }
+}
+
+/// Read an RDF text source at `path` into a dataset, STREAMING it when its syntax
+/// allows.
+///
+/// This is the one seam every RDF-text input in the CLI passes through, so the decision
+/// "stream or buffer" is made once, from the format's own
+/// [`is_line_oriented`](NativeRdfFormat::is_line_oriented) property, rather than
+/// re-decided per subcommand.
+///
+/// The streaming arm sniffs the transport wrapper off the leading four bytes and puts
+/// them back (correct on a pipe, where seeking back is not available), then wraps the
+/// stream in the matching decoder and parses THROUGH it. A truncated or corrupt frame
+/// surfaces as a read failure part-way through and fails the whole parse: there is no
+/// partial success, and nothing is written, exactly as on the buffered lane.
+///
+/// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
+/// and is what every non-line-oriented syntax takes.
+fn load_native(
+    path: &str,
+    format: NativeRdfFormat,
+    base: Option<&str>,
+    policy: TransportPolicy,
+) -> Result<Arc<RdfDataset>, CliError> {
+    if !format.is_line_oriented() {
+        let bytes = read_bytes_with_transport(path, policy)?;
+        return Ok(parse_dataset(&bytes, format.media_type(), base)?);
+    }
+
+    let stream = open_raw_stream(path)?;
+    // Sniff before decoding, and only ever the magic-byte window: `Verbatim` skips the
+    // sniff entirely (and so reads nothing ahead), `Forced` names the encoding without
+    // consulting the content, and `Detect` applies the same content-first-then-name rule
+    // the buffered lane applies.
+    let (encoding, stream) = match policy {
+        TransportPolicy::Verbatim => (None, sniff_nothing(stream)),
+        TransportPolicy::Detect => sniff_transport(stream, transport_name(path))?,
+        TransportPolicy::Forced(encoding) => {
+            let (_sniffed, stream) = sniff_transport(stream, transport_name(path))?;
+            (Some(encoding), stream)
+        }
+    };
+    let decoded = transport_reader(stream, encoding)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
+    Ok(parse_dataset_from_reader(
+        decoded,
+        format.media_type(),
+        base,
+    )?)
+}
+
+/// Put a stream into the same shape [`sniff_transport`] returns without looking at a
+/// single byte, for the `--transport none` policy that has already decided there is no
+/// wrapper to find.
+fn sniff_nothing<R: Read>(reader: R) -> purrdf_rdf::SniffedStream<R> {
+    std::io::Cursor::new(Vec::new()).chain(reader)
 }
 
 /// Acquire a pack `path` (or stdin when `path` is `-`) as an immutable byte owner,
@@ -352,8 +448,7 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
 ) -> Result<Op::Output, CliError> {
     match format {
         SourceFormat::Native(rdf_format) => {
-            let bytes = read_bytes_with_transport(path, policy)?;
-            let dataset = parse_dataset(&bytes, rdf_format.media_type(), base)?;
+            let dataset = load_native(path, rdf_format, base, policy)?;
             op.run(&*dataset)
         }
         SourceFormat::Pack => {
@@ -399,13 +494,10 @@ pub(crate) fn load_dataset_reporting(
     policy: TransportPolicy,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     match format {
-        SourceFormat::Native(rdf_format) => {
-            let bytes = read_bytes_with_transport(path, policy)?;
-            Ok((
-                parse_dataset(&bytes, rdf_format.media_type(), base)?,
-                LossLedger::new(),
-            ))
-        }
+        SourceFormat::Native(rdf_format) => Ok((
+            load_native(path, rdf_format, base, policy)?,
+            LossLedger::new(),
+        )),
         SourceFormat::Pack => {
             let input = verified_pack_input(path)?;
             let view = PackView::from_bytes(input.as_bytes())?;

@@ -83,6 +83,11 @@ pub(crate) struct FormatDescriptor {
     /// Whether this format's parser records per-statement source spans (see
     /// [`NativeRdfFormat::tokenizer_carries_spans`]).
     pub tokenizer_carries_spans: bool,
+    /// Whether this format is LINE-ORIENTED: every statement occupies one physical
+    /// line and no line's meaning depends on any other (see
+    /// [`NativeRdfFormat::is_line_oriented`]). This is the property that makes a
+    /// format parseable from a `Read` without buffering the source.
+    pub line_oriented: bool,
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` for formats
     /// that carry no loss-ledger codec identity (TriX / HexTuples).
     pub loss_codec_name: Option<&'static str>,
@@ -100,6 +105,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: false,
+        line_oriented: false,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("turtle"),
     },
@@ -112,6 +118,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        line_oriented: false,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("trig"),
     },
@@ -124,6 +131,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: false,
+        line_oriented: true,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("ntriples"),
     },
@@ -136,6 +144,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        line_oriented: true,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("nquads"),
     },
@@ -152,6 +161,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: true,
         supports_datasets: false,
+        line_oriented: false,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("rdfxml"),
     },
@@ -164,6 +174,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: false,
         supports_datasets: true,
+        line_oriented: false,
         tokenizer_carries_spans: false,
         loss_codec_name: None,
     },
@@ -176,6 +187,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: false,
         carries_direction: false,
         supports_datasets: true,
+        line_oriented: true,
         tokenizer_carries_spans: false,
         loss_codec_name: None,
     },
@@ -188,6 +200,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        line_oriented: false,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("jsonld-star"),
     },
@@ -200,6 +213,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         carries_star: true,
         carries_direction: true,
         supports_datasets: true,
+        line_oriented: false,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("yaml-ld-star"),
     },
@@ -266,6 +280,23 @@ impl NativeRdfFormat {
     /// (physical-location fallback by design).
     pub fn tokenizer_carries_spans(self) -> bool {
         descriptor(self).tokenizer_carries_spans
+    }
+
+    /// Whether this format is LINE-ORIENTED — every statement occupies exactly one
+    /// physical line and no line's meaning depends on any other line.
+    ///
+    /// True for N-Triples, N-Quads, and HexTuples. It is FALSE for Turtle and TriG,
+    /// whose `@prefix` / `@base` directives rebind mid-document and whose anonymous
+    /// blank nodes mint labels from a document-ordered counter, so a line cannot be
+    /// interpreted without every line before it; false for RDF/XML, TriX, JSON-LD and
+    /// YAML-LD, which are tree syntaxes with no line structure at all.
+    ///
+    /// This is exactly the set
+    /// [`parse_dataset_from_reader`](super::parse_dataset_from_reader) parses
+    /// INCREMENTALLY from a `Read`; the others are read to a buffer first, because
+    /// their grammars require it.
+    pub fn is_line_oriented(self) -> bool {
+        descriptor(self).line_oriented
     }
 
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this format

@@ -285,7 +285,7 @@ pub(super) fn parse_rdfxml_without_panicking(
     }
 }
 
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_owned()
     } else if let Some(message) = payload.downcast_ref::<String>() {

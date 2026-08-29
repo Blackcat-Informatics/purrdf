@@ -988,3 +988,262 @@ fn the_transform_lane_runs_over_the_whole_source_list() {
         "canonical output over a merged list must be byte-stable"
     );
 }
+
+// --------------------------------------------------------------------------------
+// Streaming the line-oriented codecs
+// --------------------------------------------------------------------------------
+
+/// A line-oriented document large enough that the source buffer the streaming lane
+/// removes is a real quantity rather than a rounding error, and shaped so that the
+/// statement layer's forward references cross every plausible read-buffer boundary:
+/// reifiers are declared in one place and annotated far away.
+fn streamable_nquads(rows: usize) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(rows * 160);
+    out.push_str("# streaming fixture\n\n");
+    for i in 0..rows {
+        match i % 4 {
+            0 => writeln!(
+                out,
+                "<http://example.org/s{}> <http://example.org/p{}> \
+                 <http://example.org/o{}> <http://example.org/g{}> .",
+                i % 313,
+                i % 11,
+                i % 307,
+                i % 5
+            ),
+            // Multi-byte UTF-8, so a sequence straddles the 64 KiB read window.
+            1 => writeln!(
+                out,
+                "<http://example.org/s{}> <http://example.org/label> \
+                 \"\u{6f22}\u{5b57} \u{1f408} {i}\"@ja .",
+                i % 313
+            ),
+            2 => writeln!(
+                out,
+                "_:r{} <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+                 <<( <http://example.org/a{}> <http://example.org/p{}> \
+                 <http://example.org/c{}> )>> .",
+                i % 97,
+                i % 97,
+                (i % 97) % 11,
+                i % 97
+            ),
+            _ => writeln!(
+                out,
+                "_:r{} <http://example.org/confidence> \"0.{}\" .",
+                (i + 50) % 97,
+                i % 100
+            ),
+        }
+        .expect("write row");
+    }
+    out
+}
+
+/// The streamed lane and the buffered lane must produce the SAME document.
+///
+/// The comparison is made across a syntax boundary the CLI itself draws: the same
+/// content is offered as N-Quads (line-oriented → streamed) and as TriG (not
+/// line-oriented → read whole), and both are canonicalized by the binary. Byte-equal
+/// canonical output is an isomorphism proof that streaming changed nothing.
+#[test]
+fn a_streamed_line_source_and_a_buffered_source_agree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+
+    // TriG is a superset of N-Quads' default-graph statements for this fixture's
+    // default-graph rows, so the same text is legal in both — but only the N-Quads
+    // reading is streamed.
+    let body = concat!(
+        "<http://example.org/s> <http://example.org/p> \"o\" .\n",
+        "<http://example.org/s> <http://example.org/q> \"\u{6f22}\u{5b57}\"@ja .\n",
+        "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+        "<<( <http://example.org/a> <http://example.org/b> <http://example.org/c> )>> .\n",
+        "_:r <http://example.org/confidence> \"0.9\" .\n",
+    );
+    let streamed = write_file(dir, "seed.nq", body);
+    let buffered = write_file(dir, "seed.trig", body);
+
+    assert_eq!(
+        canonical_of(dir, &[&streamed]),
+        canonical_of(dir, &[&buffered]),
+        "the streamed line-oriented reading must equal the buffered reading"
+    );
+}
+
+/// A large line-oriented source converts identically whether it arrives as a FILE or on
+/// STDIN — the two open different streams and neither buffers the document.
+#[test]
+fn a_large_line_source_streams_identically_from_a_file_and_from_stdin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let body = streamable_nquads(12_000);
+    assert!(
+        body.len() > (1 << 20),
+        "fixture must be larger than one read buffer's worth many times over, got {}",
+        body.len()
+    );
+    let input = write_file(dir, "big.nq", &body);
+    let from_file = path(dir, "from-file.nq");
+    let from_stdin = path(dir, "from-stdin.nq");
+
+    let o = run(&["convert", "--to", "nquads", &input, &from_file]);
+    assert!(o.status.success(), "file convert failed: {}", stderr(&o));
+
+    let o = run_with_stdin(
+        &[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "nquads",
+            "-",
+            &from_stdin,
+        ],
+        body.as_bytes(),
+    );
+    assert!(o.status.success(), "stdin convert failed: {}", stderr(&o));
+
+    assert_eq!(
+        std::fs::read(&from_file).expect("read file output"),
+        std::fs::read(&from_stdin).expect("read stdin output"),
+        "a file source and a stdin source must stream to the same document"
+    );
+}
+
+/// The streaming lane pulls THROUGH the transport decoder rather than after it: a
+/// gzip/zstd line-oriented source on STDIN — where there is no filename to consult and
+/// no seeking back — is sniffed from its leading bytes and decoded incrementally.
+#[test]
+fn a_compressed_line_source_streams_through_the_decoder_on_stdin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let body = streamable_nquads(4_000);
+    let plain_out = path(dir, "plain.nq");
+
+    let o = run_with_stdin(
+        &[
+            "convert", "--from", "nquads", "--to", "nquads", "-", &plain_out,
+        ],
+        body.as_bytes(),
+    );
+    assert!(o.status.success(), "plain stdin failed: {}", stderr(&o));
+    let expected = std::fs::read(&plain_out).expect("read plain output");
+
+    for (label, framed) in [
+        ("gzip", gzip(body.as_bytes())),
+        ("zstd", zstd(body.as_bytes())),
+    ] {
+        let out = path(dir, "framed.nq");
+        let _ = std::fs::remove_file(&out);
+        let o = run_with_stdin(
+            &["convert", "--from", "nquads", "--to", "nquads", "-", &out],
+            &framed,
+        );
+        assert!(o.status.success(), "{label} stdin failed: {}", stderr(&o));
+        assert_eq!(
+            std::fs::read(&out).expect("read framed output"),
+            expected,
+            "{label}-wrapped stdin must decode to the same document as the plain stream"
+        );
+    }
+}
+
+/// CRLF line endings and a final line with NO trailing newline survive the streamed
+/// read, because the line reader reproduces `str::lines` exactly rather than
+/// approximating it.
+#[test]
+fn crlf_and_a_missing_final_newline_survive_streaming() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let lf = concat!(
+        "# comment\n",
+        "\n",
+        "<http://example.org/s> <http://example.org/p> \"a\" .\n",
+        "<http://example.org/s> <http://example.org/q> \"b\" .",
+    );
+    let crlf = lf.replace('\n', "\r\n");
+    assert!(!lf.ends_with('\n') && !crlf.ends_with('\n'));
+
+    let lf_path = write_file(dir, "lf.nt", lf);
+    let crlf_path = write_file(dir, "crlf.nt", &crlf);
+    assert_eq!(
+        canonical_of(dir, &[&lf_path]),
+        canonical_of(dir, &[&crlf_path]),
+        "CRLF and LF documents must stream to the same dataset"
+    );
+
+    // And the same content on stdin, where the read boundaries fall differently.
+    let out = path(dir, "stdin.nq");
+    let o = run_with_stdin(
+        &["convert", "--from", "nt", "--to", "nquads", "-", &out],
+        crlf.as_bytes(),
+    );
+    assert!(o.status.success(), "crlf stdin failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(text.contains("\"a\""), "first statement survived: {text}");
+    assert!(
+        text.contains("\"b\""),
+        "the unterminated final statement survived: {text}"
+    );
+}
+
+/// Invalid UTF-8 part-way through a streamed source fails the whole conversion and
+/// leaves no partial output: streaming does not turn a hard failure into a short read.
+#[test]
+fn invalid_utf8_in_a_streamed_source_fails_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let mut bytes = b"<http://example.org/s> <http://example.org/p> \"a\" .\n".to_vec();
+    bytes.extend_from_slice(b"<http://example.org/s> <http://example.org/q> \"");
+    bytes.extend_from_slice(&[0xff, 0xfe]);
+    bytes.extend_from_slice(b"\" .\n");
+    let input = write_bytes(dir, "bad.nt", &bytes);
+    let out = path(dir, "out.nq");
+
+    let o = run(&["convert", "--to", "nquads", &input, &out]);
+    assert!(
+        !o.status.success(),
+        "invalid utf-8 must fail the conversion"
+    );
+    assert!(
+        !Path::new(&out).exists(),
+        "invalid utf-8 must leave no partial output"
+    );
+}
+
+/// Every verb that reads an RDF source — not just `convert` — reaches the streaming
+/// lane, because they all share one source seam.
+#[test]
+fn the_streaming_lane_is_shared_by_every_reading_verb() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let input = write_file(dir, "seed.nq", &streamable_nquads(2_000));
+
+    let o = run(&[
+        "query",
+        "--data",
+        &input,
+        "SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }",
+    ]);
+    assert!(
+        o.status.success(),
+        "query over a streamed source: {}",
+        stderr(&o)
+    );
+
+    let described = path(dir, "described.nq");
+    let o = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/s0",
+        &input,
+        &described,
+    ]);
+    assert!(
+        o.status.success(),
+        "describe over a streamed source: {}",
+        stderr(&o)
+    );
+}
