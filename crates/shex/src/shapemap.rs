@@ -19,6 +19,13 @@
 //! [`crate::validate::validate`] consumes. Resolution is deterministic:
 //! selected nodes are de-duplicated and sorted by their term string.
 //!
+//! Selectors see the **RDF 1.2 statement layer** in both directions, not only
+//! the quad table: `{FOCUS <annotationPredicate> _}` selects the annotated
+//! reifiers, `{_ <annotationPredicate> FOCUS}` selects the annotation objects,
+//! and `rdf:reifies` selects reifiers / reified triple terms. (These are RDF
+//! 1.2 *statement* annotations — unrelated to the ShEx *schema* annotations of
+//! [`crate::ast::Annotation`].)
+//!
 //! Node and predicate IRIs are written `<iri>` (resolved against an optional
 //! base); blank nodes `_:label`; literals `"lex"`, `"lex"^^<dt>`, `"lex"@tag`.
 //! The shape label is `@START` or `@<label>`.
@@ -27,6 +34,7 @@ use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
+use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
@@ -191,6 +199,15 @@ fn select_terms(
             Direction::Object => q.o,
         })
         .collect();
+    // The RDF 1.2 statement layer lives in side-tables outside `quads`, so a
+    // selector over `rdf:reifies` or an annotation predicate must consult it
+    // too — in both directions.
+    statement::visit_quads(data, s, Some(pid), o, |qs, _, qo| {
+        ids.push(match direction {
+            Direction::Subject => qs,
+            Direction::Object => qo,
+        });
+    });
     ids.sort_unstable();
     ids.dedup();
     let mut values: Vec<TermValue> = ids.into_iter().map(|id| data.term_value(id)).collect();
