@@ -230,7 +230,8 @@ use crate::owl_dl::graph::{
     Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
 };
 use crate::owl_dl::proof::{
-    ClashStep, MergeCause, MergeStep, NodeRef, Recorder, frame_refs, node_ref, observe_body,
+    BranchOutcome, BranchStep, ClashStep, MergeCause, MergeStep, NodeRef, Recorder, RecorderMark,
+    frame_refs, node_ref, observe_alternative, observe_body, observe_completion,
 };
 
 /// One head atom with its variables replaced by the nodes a match bound them to.
@@ -238,24 +239,86 @@ use crate::owl_dl::proof::{
 /// The `⊔`-rule needs to hold a branch's alternatives across a state clone, so a derived head
 /// is grounded once and then applied — rather than re-matching the clause in each branch,
 /// which would re-derive the same instance from a state the branch has already changed.
+///
+/// # Why the node carrier is a parameter
+///
+/// The SEARCH grounds a head against completion-graph node INDICES (`Ground<usize>`), which is
+/// the only thing it can assert against. A [`DlProof`](crate::owl_dl::proof::DlProof)'s checker
+/// grounds the same head against the merge-invariant
+/// [`NodeRef`](crate::owl_dl::proof::NodeRef) identities a proof term carries
+/// (`Ground<NodeRef>`), because it holds no graph. Both go through [`ground_head`], so
+/// "the checker regenerates the alternatives" is the SAME function on a different carrier
+/// rather than a second implementation that could drift from it — which is precisely why
+/// [`Grounding`](crate::owl_dl::proof::TrustBaseEntry::Grounding) is a named trust-base entry
+/// and the regeneration is reported `trusted` rather than `attested`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Ground {
+pub(crate) enum Ground<N> {
     /// Add a concept to a node's label.
-    Concept(usize, u32),
+    Concept(N, u32),
     /// Give a node an `r`-edge to itself.
-    SelfLoop(usize, Role),
+    SelfLoop(N, Role),
     /// Ensure `n` pairwise-distinct `role`-neighbours satisfying the filler.
-    AtLeast(usize, u32, Role, u32),
+    AtLeast(N, u32, Role, u32),
     /// Identify two nodes.
-    Equal(usize, usize),
+    Equal(N, N),
     /// Identify a node with an individual's root.
-    EqualIndividual(usize, u32),
+    EqualIndividual(N, u32),
     /// Motik–Shearer–Horrocks Table 5 `NI`-rule: identify the node with the RESERVED ROOT
     /// `u.⟨R,B,i⟩` named by the [`GeneratedRoot`], minting it if it does not yet exist. This is
     /// the annotated equality of the at-most clausification — an equality whose right side is a
     /// generated root rather than a matched successor — and it is what bounds the blockable
     /// predecessors of a nominal into a finite reserved set.
-    EqualReserved(usize, GeneratedRoot),
+    EqualReserved(N, GeneratedRoot),
+}
+
+impl<N> Ground<N> {
+    /// The same atom over another node carrier.
+    ///
+    /// Used once, by the recorder, to read a search-time `Ground<usize>` off the state as the
+    /// `Ground<NodeRef>` a proof term carries. It is a structure map and nothing else: no atom
+    /// is dropped, added or reordered, so a recorded alternative is the alternative the search
+    /// actually branched over.
+    pub(crate) fn map<M>(&self, f: &mut impl FnMut(&N) -> M) -> Ground<M> {
+        match self {
+            Self::Concept(node, concept) => Ground::Concept(f(node), *concept),
+            Self::SelfLoop(node, role) => Ground::SelfLoop(f(node), *role),
+            Self::AtLeast(node, n, role, filler) => Ground::AtLeast(f(node), *n, *role, *filler),
+            Self::Equal(left, right) => {
+                let left = f(left);
+                Ground::Equal(left, f(right))
+            }
+            Self::EqualIndividual(node, individual) => {
+                Ground::EqualIndividual(f(node), *individual)
+            }
+            Self::EqualReserved(node, key) => Ground::EqualReserved(f(node), key.clone()),
+        }
+    }
+}
+
+/// The site a `⊔`-rule branch point was found at, captured only by a RECORDING run.
+///
+/// The alternatives alone do not say what generated them, and a proof term that could not name
+/// the clause instance would leave a checker nothing to regenerate them from.
+pub(crate) struct BranchSite {
+    /// The clause whose disjunctive head produced the alternatives.
+    index: usize,
+    /// The node variable `0` was bound to.
+    x: usize,
+    /// The matcher's binding frame.
+    frame: Vec<usize>,
+    /// How many leading alternatives came from [`ground_head`] — the rest are the `NI`-rule's,
+    /// which are appended by [`Hyper::append_ni_alternatives`] and are NOT regenerable from the
+    /// clause alone.
+    head_alternatives: usize,
+}
+
+/// A `⊔`-rule branch point: its alternatives, and (when recording) where they came from.
+pub(crate) struct Branching {
+    /// The grounded alternatives, in the order the search will try them.
+    alternatives: Vec<Vec<Ground<usize>>>,
+    /// The clause instance that generated them — `None` for a non-recording run, which needs
+    /// nothing but the alternatives themselves.
+    site: Option<BranchSite>,
 }
 
 /// One level of the search: the state a `⊔`-rule branched from, and its untried disjuncts.
@@ -269,7 +332,23 @@ struct Branches {
     /// sibling must not see what the branch before it derived.
     state: State,
     /// The disjuncts not yet tried, in authored order.
-    alternatives: std::vec::IntoIter<Vec<Ground>>,
+    alternatives: std::vec::IntoIter<Vec<Ground<usize>>>,
+    /// How many have been dispensed — the ordinal the NEXT one takes in the recorded
+    /// alternative list, so an outcome can be filed against the alternative it belongs to.
+    dispensed: usize,
+    /// The recorded branch step this level is, when the run is recording.
+    record: Option<usize>,
+}
+
+/// The alternative a recording run is currently exploring, and where its outcome is filed.
+struct OpenSlot {
+    /// The recorded branch step.
+    branch: usize,
+    /// Which alternative of it.
+    ordinal: usize,
+    /// What the recorder held before the alternative was applied, so the closure it reached
+    /// can be identified as "whatever was written down since".
+    mark: RecorderMark,
 }
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
@@ -473,6 +552,124 @@ impl<'a> Hyper<'a> {
         trace.borrow_mut().data_clash(node_ref(st, node));
     }
 
+    /// What the recorder held before an alternative was explored, if this run is recording.
+    fn record_mark(&self) -> Option<RecorderMark> {
+        Some(self.trace.as_ref()?.borrow().mark())
+    }
+
+    /// Write down a `⊔`-rule BRANCH POINT: the clause instance, the frame, and ALL of the
+    /// alternatives it generated in the producer's own order.
+    ///
+    /// Returns the recorded step's index, so the alternative that led here can be filed against
+    /// it. `None` when the run is not recording, or when the recording ceiling has been reached
+    /// — in which case the proof is [`DlProof::truncated`](crate::DlProof::truncated) and its
+    /// branch tree is refused wholesale rather than checked with a hole in it.
+    ///
+    /// The alternatives are read off the vector the search is ABOUT TO BRANCH OVER, never
+    /// re-derived by calling [`ground_head`] a second time. That is the same discipline
+    /// [`observe_body`](crate::owl_dl::proof::observe_body) keeps for a clash witness and it is
+    /// what stops the checker's regeneration from being a comparison of one function with
+    /// itself: a search that branched over a SHORTENED alternative list records the shortened
+    /// list, and the checker's regeneration disagrees with it.
+    ///
+    /// Nothing here consults or charges the work meter.
+    fn record_branch(&self, st: &State, branching: &Branching) -> Option<usize> {
+        let trace = self.trace.as_ref()?;
+        let site = branching.site.as_ref()?;
+        let head: Vec<_> = branching.alternatives[..site.head_alternatives]
+            .iter()
+            .map(|disjunct| observe_alternative(st, disjunct))
+            .collect();
+        let introduced: Vec<_> = branching.alternatives[site.head_alternatives..]
+            .iter()
+            .map(|disjunct| observe_alternative(st, disjunct))
+            .collect();
+        trace.borrow_mut().branch(BranchStep::new(
+            site.index,
+            node_ref(st, site.x),
+            frame_refs(st, &site.frame),
+            head,
+            introduced,
+        ))
+    }
+
+    /// File the outcome of the alternative `slot` names.
+    fn record_outcome(&self, slot: &OpenSlot, outcome: BranchOutcome) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        trace
+            .borrow_mut()
+            .outcome(slot.branch, slot.ordinal, outcome);
+    }
+
+    /// File the outcome of the alternative `slot` names as whatever closed it — the clash step,
+    /// data clash or clashing merge the recorder wrote down since the slot was opened.
+    fn record_closure(&self, slot: &OpenSlot) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let mut recorder = trace.borrow_mut();
+        let outcome = recorder.closure_since(&slot.mark);
+        recorder.outcome(slot.branch, slot.ordinal, outcome);
+    }
+
+    /// File the ROOT state's outcome — the one closure or branch point that is not an
+    /// alternative of anything.
+    fn record_root(&self, outcome: BranchOutcome) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        trace.borrow_mut().root(outcome);
+    }
+
+    /// File the root's outcome as whatever closed it.
+    fn record_root_closure(&self, mark: Option<&RecorderMark>) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let mut recorder = trace.borrow_mut();
+        let outcome = mark.map_or(BranchOutcome::Unrecorded, |mark| {
+            recorder.closure_since(mark)
+        });
+        recorder.root(outcome);
+    }
+
+    /// Write down the CLASH-FREE COMPLETION the search stopped at, if this run is recording.
+    ///
+    /// Read straight off the state's node and edge vectors, which is unmetered: recomputing the
+    /// neighbour closure here would call [`Graph::neighbors`], charge the work meter, and so
+    /// make a recorded run reach a different [`Decision`] than an unrecorded one. The checker
+    /// computes the closure itself from the caller's own role axioms instead.
+    ///
+    /// The blocking witnesses are the ones the LAST derivation round computed. That round
+    /// derived nothing — it is the round whose `changed` was false, which is what ended
+    /// [`Hyper::saturate`] — so the graph it read is the graph recorded here.
+    fn record_completion(&self, st: &State) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let blocks = trace.borrow().blocking().to_vec();
+        let completion = observe_completion(st, &blocks);
+        trace.borrow_mut().completion(completion);
+    }
+
+    /// Write down which node blocked which, if this run is recording.
+    ///
+    /// DIRECT blocking pairs only: an indirectly blocked node has no blocker of its own, and a
+    /// checker recomputes indirect blocking from the recorded predecessors rather than being
+    /// told it.
+    fn record_blocking(&self, st: &State, pairs: &[(usize, usize)]) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let pairs = pairs
+            .iter()
+            .map(|&(blocked, blocker)| (node_ref(st, blocked), node_ref(st, blocker)))
+            .collect();
+        trace.borrow_mut().set_blocking(pairs);
+    }
+
     /// The depth-first, deterministic search: saturate, then branch on a derived disjunction.
     ///
     /// One level of the search is one `⊔`-rule application, so the search is as DEEP as the
@@ -493,6 +690,13 @@ impl<'a> Hyper<'a> {
         let mut stack: Vec<Branches> = Vec::new();
         // The state to saturate and expand next — what the recursive form passed down.
         let mut pending = Some(st);
+        // The alternative whose subtree is being explored right now, and where its outcome is
+        // filed. `None` at the root, and `None` for every non-recording run — the whole of the
+        // branch bookkeeping below is inside `if let Some(..)`/`Option::map`, reads no state
+        // the search reads, takes no branch of its own, and charges nothing.
+        let mut open: Option<OpenSlot> = None;
+        // What the recorder held before the ROOT state was saturated, for the same reason.
+        let root_mark = self.record_mark();
         loop {
             let Some(mut st) = pending.take() else {
                 // Nothing to descend into, so back up: take the next alternative of the
@@ -505,8 +709,11 @@ impl<'a> Hyper<'a> {
                     self.check_work()?;
                     return Ok(false);
                 };
+                let ordinal = level.dispensed;
+                let record = level.record;
                 match level.alternatives.next() {
                     Some(disjunct) => {
+                        level.dispensed += 1;
                         // A sibling starts from a COPY of the level's state, and copying a
                         // completion graph costs its size. That is work the round cap cannot
                         // see at all — a clone happens between rounds — and on a knowledge
@@ -516,8 +723,20 @@ impl<'a> Hyper<'a> {
                             .work()
                             .charge((level.state.nodes.len() + level.state.edges.len()) as u64 + 1);
                         let mut next = level.state.clone();
+                        let slot = record.and_then(|branch| {
+                            Some(OpenSlot {
+                                branch,
+                                ordinal,
+                                mark: self.record_mark()?,
+                            })
+                        });
                         if self.apply(&mut next, &disjunct) {
+                            open = slot;
                             pending = Some(next);
+                        } else if let Some(slot) = slot.as_ref() {
+                            // The alternative's own assertion closed the state: it never
+                            // reached a saturation, so its closure is whatever `apply` wrote.
+                            self.record_closure(slot);
                         }
                     }
                     None => {
@@ -528,18 +747,30 @@ impl<'a> Hyper<'a> {
             };
             if !self.saturate(&mut st)? {
                 // A clash: this alternative is dead, and the loop backs up.
+                match open.take() {
+                    Some(slot) => self.record_closure(&slot),
+                    None => self.record_root_closure(root_mark.as_ref()),
+                }
                 continue;
             }
             match self.find_branch(&st) {
-                Some(alternatives) => {
+                Some(branching) => {
                     // One `⊔`-rule application, and one more level of search tree. Counted
                     // here rather than where an alternative is taken, because the rule is
                     // applied once and then its alternatives are walked: counting the walk
                     // would report the tree's EDGES under a name that says rule.
                     self.disjunctions = self.disjunctions.saturating_add(1);
+                    let record = self.record_branch(&st, &branching);
+                    let outcome = record.map_or(BranchOutcome::Unrecorded, BranchOutcome::Branch);
+                    match open.take() {
+                        Some(slot) => self.record_outcome(&slot, outcome),
+                        None => self.record_root(outcome),
+                    }
                     stack.push(Branches {
                         state: st,
-                        alternatives: alternatives.into_iter(),
+                        alternatives: branching.alternatives.into_iter(),
+                        dispensed: 0,
+                        record,
                     });
                     self.peak_depth = self.peak_depth.max(stack.len() as u64);
                 }
@@ -549,6 +780,11 @@ impl<'a> Hyper<'a> {
                 // one does not.
                 None => {
                     self.check_work()?;
+                    match open.take() {
+                        Some(slot) => self.record_outcome(&slot, BranchOutcome::Open),
+                        None => self.record_root(BranchOutcome::Open),
+                    }
+                    self.record_completion(&st);
                     return Ok(true);
                 }
             }
@@ -836,7 +1072,7 @@ impl<'a> Hyper<'a> {
     /// first measured together for is entirely that one's. The measurements above are kept
     /// here, rather than deleted with the rule they retired, so the next reader who reaches for
     /// narrowest-first finds out what it was worth without re-running the corpus.
-    fn find_branch(&self, st: &State) -> Option<Vec<Vec<Ground>>> {
+    fn find_branch(&self, st: &State) -> Option<Branching> {
         for x in 0..st.nodes.len() {
             if find(st, x) != x {
                 continue;
@@ -874,14 +1110,22 @@ impl<'a> Hyper<'a> {
 
     /// The grounded alternatives of clause `index` at node `x`, if it is a disjunction with no
     /// satisfied disjunct.
-    fn branch_of(&self, st: &State, index: usize, x: usize) -> Option<Vec<Vec<Ground>>> {
+    ///
+    /// A RECORDING run also captures the site — the clause, the node, the frame and how many of
+    /// the alternatives came from the clause head rather than from the `NI`-rule — because a
+    /// proof term that named no clause instance would give a checker nothing to regenerate the
+    /// alternatives from. The capture is one `Option` test and a frame clone; it charges
+    /// nothing, decides nothing, and is absent from every non-recording run.
+    fn branch_of(&self, st: &State, index: usize, x: usize) -> Option<Branching> {
         let clause = self.clauses.clause(index);
         if clause.head_form() != HeadForm::Disjunctive {
             return None;
         }
-        let mut found: Option<Vec<Vec<Ground>>> = None;
+        let recording = self.trace.is_some();
+        let mut found: Option<Branching> = None;
         Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
             let mut disjuncts = ground_head(&clause.head, frame);
+            let head_alternatives = disjuncts.len();
             // Motik–Shearer–Horrocks Table 5 `NI`-rule: at a NOMINAL at-most node pressed by a
             // BLOCKABLE predecessor, add the alternatives that branch that predecessor into the
             // reserved roots `u.⟨R,B,i⟩`. This is what bounds the corner the plain pairwise
@@ -897,7 +1141,15 @@ impl<'a> Hyper<'a> {
             {
                 return false;
             }
-            found = Some(disjuncts);
+            found = Some(Branching {
+                alternatives: disjuncts,
+                site: recording.then(|| BranchSite {
+                    index,
+                    x,
+                    frame: frame.to_vec(),
+                    head_alternatives,
+                }),
+            });
             true
         });
         found
@@ -920,7 +1172,7 @@ impl<'a> Hyper<'a> {
         st: &State,
         clause: &DlClause,
         x: usize,
-        disjuncts: &mut Vec<Vec<Ground>>,
+        disjuncts: &mut Vec<Vec<Ground<usize>>>,
     ) {
         // The `≤`-clause names its counted `(role, filler, n+1)` in a `Successors` body atom.
         let Some((role, filler, count)) = clause.body.iter().find_map(|atom| match *atom {
@@ -961,7 +1213,7 @@ impl<'a> Hyper<'a> {
     }
 
     /// Whether every atom of a grounded disjunct already holds.
-    fn satisfied(&self, st: &State, disjunct: &[Ground]) -> bool {
+    fn satisfied(&self, st: &State, disjunct: &[Ground<usize>]) -> bool {
         disjunct.iter().all(|atom| match atom {
             Ground::Concept(node, concept) => self.g.has_concept(st, *node, *concept),
             Ground::SelfLoop(node, role) => self.g.has_self_loop(st, *node, *role),
@@ -981,7 +1233,7 @@ impl<'a> Hyper<'a> {
     }
 
     /// Assert every atom of a grounded disjunct. Returns `false` if the state clashed.
-    fn apply(&self, st: &mut State, disjunct: &[Ground]) -> bool {
+    fn apply(&self, st: &mut State, disjunct: &[Ground<usize>]) -> bool {
         for atom in disjunct {
             match atom {
                 Ground::Concept(node, concept) => {
@@ -1217,6 +1469,10 @@ impl<'a> Hyper<'a> {
         let n = st.nodes.len();
         let mut blocked = vec![false; n];
         let mut candidates: Vec<usize> = Vec::new();
+        // The direct pairs, for a RECORDING run only — a `Vec` that stays empty and is never
+        // pushed to when the run is not recording.
+        let recording = self.trace.is_some();
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
         for x in 0..n {
             if find(st, x) != x || st.nodes[x].root {
                 continue;
@@ -1228,15 +1484,25 @@ impl<'a> Hyper<'a> {
             // against every earlier unblocked node, so this scan is quadratic in the graph
             // and runs once per ROUND — work the round count reports as one.
             self.g.work().charge(candidates.len() as u64 + 1);
+            // `find` rather than `any`: the same scan, the same short-circuit at the same
+            // candidate and the same charge — it just keeps the blocker it stopped on, which
+            // is the witness a countermodel needs and which `any` threw away.
             let directly = candidates
                 .iter()
-                .any(|&y| self.same_signature(st, x, y, parent));
+                .copied()
+                .find(|&y| self.same_signature(st, x, y, parent));
             let indirectly = parent < x && blocked[parent];
-            if directly || indirectly {
+            if directly.is_some() || indirectly {
                 blocked[x] = true;
             } else {
                 candidates.push(x);
             }
+            if let (true, Some(y)) = (recording, directly) {
+                pairs.push((x, y));
+            }
+        }
+        if recording {
+            self.record_blocking(st, &pairs);
         }
         blocked
     }
@@ -1284,8 +1550,29 @@ fn is_blocked(st: &State, blocked: &[bool], node: usize) -> bool {
 /// one disjunct, except [`HeadAtom::EqualSomePair`], which contributes one disjunct per PAIR of
 /// the successors it counted — in ascending `(i, j)` order, so the branch order is a function
 /// of the clause and the graph and nothing else.
-fn ground_head(head: &[Vec<HeadAtom>], frame: &[usize]) -> Vec<Vec<Ground>> {
-    let mut out: Vec<Vec<Ground>> = Vec::with_capacity(head.len());
+///
+/// # This function is the whole of branch EXHAUSTIVENESS, and it is shared
+///
+/// "These were all the alternatives" is exactly the statement that a branch point's recorded
+/// alternative list is this function's output for the cited clause and frame. A
+/// [`DlProof`](crate::owl_dl::proof::DlProof)'s checker therefore calls THIS function — over
+/// the CALLER's own clause set and the recorded frame, with
+/// [`NodeRef`](crate::owl_dl::proof::NodeRef) as the node carrier — and compares. That closes
+/// the dropped-disjunct forgery, and it is honestly a `trusted` check rather than an
+/// `attested` one: it rests on
+/// [`Grounding`](crate::owl_dl::proof::TrustBaseEntry::Grounding), which names this function.
+/// What it is INDEPENDENT of is the search driver — [`Hyper::solve`], [`Hyper::saturate`],
+/// [`Hyper::find_branch`] and the branch stack — which is where the state, and therefore the
+/// bugs, live.
+///
+/// # Panics
+///
+/// Indexes `frame`, so a frame narrower than the head's variables panics. Every producer call
+/// is on a frame the matcher just bound. The checker validates the recorded frame's width
+/// against [`head_frame_width`](crate::owl_dl::proof::head_frame_width) FIRST and rejects a
+/// short one as a malformed proof.
+pub(crate) fn ground_head<N: Clone>(head: &[Vec<HeadAtom>], frame: &[N]) -> Vec<Vec<Ground<N>>> {
+    let mut out: Vec<Vec<Ground<N>>> = Vec::with_capacity(head.len());
     for disjunct in head {
         match disjunct.as_slice() {
             [HeadAtom::EqualSomePair { first, count }] => {
@@ -1294,8 +1581,8 @@ fn ground_head(head: &[Vec<HeadAtom>], frame: &[usize]) -> Vec<Vec<Ground>> {
                 for left in 0..count {
                     for right in (left + 1)..count {
                         out.push(vec![Ground::Equal(
-                            frame[first + left],
-                            frame[first + right],
+                            frame[first + left].clone(),
+                            frame[first + right].clone(),
                         )]);
                     }
                 }
@@ -1307,20 +1594,22 @@ fn ground_head(head: &[Vec<HeadAtom>], frame: &[usize]) -> Vec<Vec<Ground>> {
 }
 
 /// Replace a head disjunct's variables with the nodes `frame` bound them to.
-fn ground(disjunct: &[HeadAtom], frame: &[usize]) -> Vec<Ground> {
+fn ground<N: Clone>(disjunct: &[HeadAtom], frame: &[N]) -> Vec<Ground<N>> {
     disjunct
         .iter()
         .map(|atom| match *atom {
-            HeadAtom::Concept { var, concept } => Ground::Concept(frame[var as usize], concept),
-            HeadAtom::SelfLoop { var, role } => Ground::SelfLoop(frame[var as usize], role),
+            HeadAtom::Concept { var, concept } => {
+                Ground::Concept(frame[var as usize].clone(), concept)
+            }
+            HeadAtom::SelfLoop { var, role } => Ground::SelfLoop(frame[var as usize].clone(), role),
             HeadAtom::AtLeast {
                 var,
                 n,
                 role,
                 filler,
-            } => Ground::AtLeast(frame[var as usize], n, role, filler),
+            } => Ground::AtLeast(frame[var as usize].clone(), n, role, filler),
             HeadAtom::EqualIndividual { var, individual } => {
-                Ground::EqualIndividual(frame[var as usize], individual)
+                Ground::EqualIndividual(frame[var as usize].clone(), individual)
             }
             // `ground_head` above expands this atom into one disjunct per pair, so it never
             // reaches an atom-at-a-time grounding: a single `Ground` cannot stand for a
@@ -1436,13 +1725,20 @@ mod tests {
     /// then `steps`, then the three shape counters, then the verdict; comparing the WHOLE
     /// struct is what makes a fourth field unable to escape the comparison.
     ///
-    /// Three knowledge bases, deliberately: the branching fixture (case splits, minted
-    /// witnesses and a cardinality bound), the `NI` spy point (reserved roots, merges and an
-    /// INCONSISTENT verdict — the run that actually records clash witnesses), and a
-    /// concrete-domain-free consistent run.
+    /// Four knowledge bases, deliberately, so every RECORD SITE is inside the comparison: the
+    /// branching fixture (case splits and a BRANCH-POINT recording, minted witnesses, a
+    /// cardinality bound and a COMPLETION recording), the `NI` spy point (reserved roots, merges
+    /// and an INCONSISTENT verdict — the run that records clash witnesses and a whole refutation
+    /// tree), the blocking chain (whose completion carries BLOCKING WITNESSES, recorded from
+    /// inside the per-round blocking pass), and a refutation that closes through a case split.
     #[test]
     fn a_recorded_decision_is_identical_to_an_unrecorded_one() {
-        for kb in [branching_kb(), spy_point_kb()] {
+        for kb in [
+            branching_kb(),
+            spy_point_kb(),
+            blocking_chain_kb(),
+            closing_disjunction_kb(),
+        ] {
             let cap = Budget::for_kb(&kb);
             let plain = decide(&kb, &Assumptions::of_kb(), cap);
             let (recorded, _) = decide_recording(&kb, &Assumptions::of_kb(), cap);
@@ -1465,6 +1761,80 @@ mod tests {
             !recorder.is_empty(),
             "an inconsistent run closes on something, and the recorder must name it"
         );
+    }
+
+    /// …and so do the two record sites this stage ADDED, for the same reason: the equality
+    /// above is only evidence that recording is free if recording happened.
+    ///
+    /// A branching refutation must write a branch point down; a consistent branching run must
+    /// write a completion down; and the blocking chain's completion must carry the blocking
+    /// witnesses the per-round blocking pass observed. Without this, an instrumentation that
+    /// quietly recorded neither would satisfy every other test here.
+    #[test]
+    fn a_recorded_run_writes_down_its_branch_points_and_its_completion() {
+        let kb = closing_disjunction_kb();
+        let (decision, recorder) =
+            decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(!decision.consistent && !decision.exhausted, "{decision:?}");
+        assert!(
+            decision.disjunctions > 0,
+            "the fixture refutes through a case split: {decision:?}"
+        );
+        assert!(
+            !recorder.branches().is_empty(),
+            "a search that branched must record the branch point it branched at"
+        );
+
+        let kb = branching_kb();
+        let (decision, recorder) =
+            decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(decision.consistent && !decision.exhausted, "{decision:?}");
+        assert!(
+            recorder.recorded_completion().is_some(),
+            "a consistent run stopped at a completion, and must record it"
+        );
+
+        let kb = blocking_chain_kb();
+        let (decision, recorder) =
+            decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(decision.consistent && !decision.exhausted, "{decision:?}");
+        let completion = recorder
+            .recorded_completion()
+            .expect("a consistent run records a completion");
+        assert!(
+            !completion.blocks().is_empty(),
+            "`⊤ ⊑ ∃r.⊤` builds a chain that terminates only by blocking, so the completion \
+             carries blocking witnesses"
+        );
+    }
+
+    /// `⊤ ⊑ ∃r.⊤` over one individual: an infinite chain that terminates ONLY by blocking, so
+    /// its completion is the one that exercises the blocking-witness recorder.
+    fn blocking_chain_kb() -> Kb {
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Top,
+            Concept::Some(Role::Named(R), Box::new(Concept::Top)),
+        );
+        kb.individuals.insert(IND);
+        kb.finalize();
+        kb
+    }
+
+    /// `a : A ⊔ B` with `A ⊑ ⊥` and `B ⊑ ⊥`: INCONSISTENT, and it gets there through a two-way
+    /// case split both of whose alternatives close on a clause instance — a refutation TREE
+    /// rather than a single leaf.
+    fn closing_disjunction_kb() -> Kb {
+        let mut kb = Kb::empty();
+        kb.push_gci(Concept::Named(A), Concept::Bottom);
+        kb.push_gci(Concept::Named(B), Concept::Bottom);
+        let disjunction = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
+        kb.abox_types.push((IND, disjunction));
+        kb.individuals.insert(IND);
+        kb.finalize();
+        kb
     }
 
     /// The Motik–Shearer–Horrocks `NI`-rule's decision is a pure function of the knowledge base,
@@ -1510,9 +1880,10 @@ mod tests {
         );
         let branch = h.find_branch(&st).expect("two disjunctions are open");
         assert_eq!(
-            branch.len(),
+            branch.alternatives.len(),
             3,
-            "the three-way disjunction is met first, so it is the branch point: {branch:?}"
+            "the three-way disjunction is met first, so it is the branch point: {:?}",
+            branch.alternatives
         );
     }
 
