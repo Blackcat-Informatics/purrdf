@@ -3845,6 +3845,190 @@ fn assert_verdict(axioms: &[Axiom], satisfiable: bool) {
     );
 }
 
+// ── Proof-term corroboration ───────────────────────────────────────────────────
+
+/// Put one hand-written case's PROOF TERM in front of the two independent resources this
+/// module already is.
+///
+/// A proof-term checker has no external oracle: no W3C case carries a proof manifest, so its
+/// adversary is the tamper-negatives in [`crate::owl_dl::proof`]. What it CAN be corroborated
+/// against is the two references here, and they answer different halves:
+///
+/// * the BOUNDED-DOMAIN ENUMERATOR exhibits a model or says nothing. It can never rule one out,
+///   so it is used in the one direction it is sound in — if it exhibits a model, the verdict
+///   must be `consistent`, and the recorded completion must then MODEL CHECK. A completion
+///   checker that rejected genuine completions would surface here as a proof failing to check
+///   for a knowledge base the enumerator has a model of;
+/// * the CONCEPT-TREE TABLEAU decides the same fragment by a different rule set, so it is what
+///   says the verdict being proved is the right verdict before the proof term is looked at.
+///
+/// Neither is a completeness oracle and neither is treated as one.
+fn assert_proof_corroborates(axioms: &[Axiom]) {
+    use crate::owl_dl::proof::{DlProofContext, ProofAnswer, prove_consistency_of_kb};
+
+    let case = Case::assemble(HAND, axioms);
+    let cap = graph::Budget::for_kb(&case.kb);
+    let decision = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    let reference = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
+    assert!(
+        !decision.exhausted && !reference.exhausted,
+        "a corroborated case must be decidable inside the step cap:\n{}",
+        case.axioms_text()
+    );
+    assert_eq!(
+        decision.consistent,
+        reference.consistent,
+        "the two calculi must agree before a proof term of either means anything:\n{}",
+        case.axioms_text()
+    );
+    let (answer, proof) = prove_consistency_of_kb(&case.kb);
+    // A SECOND knowledge base, assembled from the axioms again: the checking context must not
+    // share the one the proof was produced from, exactly as `DlProofContext::of_ontology`
+    // rebuilds from the consumer's own dataset.
+    let ctx = DlProofContext::of_kb(Case::assemble(HAND, axioms).kb);
+    let model = case.enumerable().then(|| case.smallest_model()).flatten();
+    match answer {
+        ProofAnswer::Consistent => {
+            let replay = proof.replay_completion(&ctx).unwrap_or_else(|error| {
+                panic!(
+                    "the recorded completion of a knowledge base both calculi call consistent \
+                     must model check: {error}\n{}",
+                    case.axioms_text()
+                )
+            });
+            assert!(
+                replay.nodes() > 0,
+                "a completion has nodes: {replay:?}\n{}",
+                case.axioms_text()
+            );
+            assert_eq!(
+                replay.clauses(),
+                ctx.clause_count(),
+                "the check budget must reach every clause of a case this small: {replay:?}\n{}",
+                case.axioms_text()
+            );
+        }
+        ProofAnswer::Inconsistent => {
+            assert!(
+                model.is_none(),
+                "the hypertableau refuted a knowledge base the ORACLE exhibits a model of, so \
+                 the refutation is unsound whatever its proof term says:\n{}",
+                case.axioms_text()
+            );
+            let replay = proof.replay_refutation(&ctx).unwrap_or_else(|error| {
+                panic!(
+                    "the recorded refutation must walk: {error}\n{}",
+                    case.axioms_text()
+                )
+            });
+            assert!(
+                replay.is_closed(),
+                "every alternative of every branch point must reach a replayed closure: \
+                 {replay:?}\n{}",
+                case.axioms_text()
+            );
+        }
+        ProofAnswer::Undecided => panic!(
+            "a case both calculi decide must not produce an undecided proof:\n{}",
+            case.axioms_text()
+        ),
+    }
+    if model.is_some() {
+        assert!(
+            decision.consistent,
+            "the oracle exhibits a model, so the verdict the proof is bound to must be \
+             consistent:\n{}",
+            case.axioms_text()
+        );
+    }
+}
+
+/// Corroborate a proof term for each shape this stage records, over the two independent
+/// references above.
+///
+/// The families are chosen for what they make the RECORDER do, not for what they make the
+/// calculus do: a case split whose alternatives all close (the refutation TREE), a case split
+/// one alternative of which survives (a completion recorded BELOW a branch point, with `Open`
+/// outcomes beside closed ones), a chain that terminates only by blocking (blocking witnesses),
+/// an at-most bound that closes through the `≤`-rule's pairwise merges, an `o`-clause case
+/// split, and two leaves with no case split at all.
+#[test]
+fn recorded_proof_terms_corroborate_against_both_references() {
+    let r = || Role::Named(role(0));
+    for axioms in [
+        // A consistent subclass chain: one completion, no case split.
+        vec![
+            Axiom::Gci(class(0), class(1)),
+            Axiom::Type(individual(0), class(0)),
+        ],
+        // A refutation with no case split: one leaf.
+        vec![
+            Axiom::Gci(Concept::And(vec![class(0), class(1)]), Concept::Bottom),
+            Axiom::Type(individual(0), class(0)),
+            Axiom::Type(individual(0), class(1)),
+        ],
+        // A refutation THROUGH a case split, both alternatives closing on a clause instance.
+        vec![
+            Axiom::Type(individual(0), Concept::Or(vec![class(0), class(1)])),
+            Axiom::Gci(class(0), Concept::Bottom),
+            Axiom::Gci(class(1), Concept::Bottom),
+        ],
+        // A case split ONE alternative of which survives: the completion is recorded below a
+        // branch point, so the branch tree carries `Open` outcomes beside closed ones.
+        vec![
+            Axiom::Type(individual(0), Concept::Or(vec![class(0), class(1)])),
+            Axiom::Gci(class(0), Concept::Bottom),
+        ],
+        // A chain that terminates only by BLOCKING.
+        vec![Axiom::Gci(
+            Concept::Top,
+            Concept::Some(r(), Box::new(Concept::Top)),
+        )],
+        // Counting: `≥2 r.⊤` against `≤1 r.⊤`, refuted through the `≤`-rule's pairwise merges.
+        vec![
+            Axiom::Type(individual(0), Concept::Min(2, r(), Box::new(Concept::Top))),
+            Axiom::Type(individual(0), Concept::Max(1, r(), Box::new(Concept::Top))),
+        ],
+        // Counting that SUCCEEDS, so the completion carries a `≥`-rule's pairwise-distinct
+        // witnesses and the checker's own distinctness search has something to decide.
+        vec![Axiom::Type(
+            individual(0),
+            Concept::Min(2, r(), Box::new(Concept::Top)),
+        )],
+        // The `o`-clause as a case split: `d : {a, b}` branches over the two members.
+        vec![Axiom::Type(individual(3), nominal(&[0, 1]))],
+        // An asymmetric role's own pair: a refutation whose body instance is ASSERTED.
+        vec![
+            Axiom::Asymmetric(role(0)),
+            Axiom::RoleAssertion(individual(0), role(0), individual(1)),
+            Axiom::RoleAssertion(individual(1), role(0), individual(0)),
+        ],
+        // Inverse roles and a universal, so the completion's neighbour closure — which the
+        // checker recomputes from the caller's own role axioms — is not the identity.
+        vec![
+            Axiom::InverseOf(role(0), role(1)),
+            Axiom::RoleAssertion(individual(0), role(0), individual(1)),
+            Axiom::Gci(
+                Concept::Top,
+                Concept::All(Role::Named(role(1)), Box::new(class(0))),
+            ),
+        ],
+        // A TRANSITIVE role, so the checker's own transitive closure of the recorded edges is
+        // load-bearing rather than decoration.
+        vec![
+            Axiom::Transitive(role(0)),
+            Axiom::RoleAssertion(individual(0), role(0), individual(1)),
+            Axiom::RoleAssertion(individual(1), role(0), individual(2)),
+            Axiom::Gci(
+                Concept::Top,
+                Concept::All(Role::Named(role(0)), Box::new(class(0))),
+            ),
+        ],
+    ] {
+        assert_proof_corroborates(&axioms);
+    }
+}
+
 /// The `i`-th class name of [`HAND`], as a concept.
 fn class(i: usize) -> Concept {
     Concept::Named(CONCEPT_NAMES[i])

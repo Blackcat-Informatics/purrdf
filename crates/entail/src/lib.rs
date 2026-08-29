@@ -151,9 +151,13 @@ pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
 };
 pub use owl_dl::proof::{
-    CALCULUS_VERSION as DL_CALCULUS_VERSION, ClashReplay, ClashStep, DerivedConclusion, DlProof,
-    DlProofContext, DlProofError, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS, MergeCause,
-    MergeStep, NodeRef, ProofAnswer, ProofFact, ProofRole, ReservedRef, prove_consistency,
+    BlockingPair, BranchOutcome, BranchReplay, BranchStep, CALCULUS_VERSION as DL_CALCULUS_VERSION,
+    CheckReport, ClashReplay, ClashStep, Completion, CompletionEdge, CompletionNode,
+    CompletionReplay, DerivedConclusion, DlProof, DlProofContext, DlProofError,
+    MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS, MergeCause,
+    MergeStep, NodeRef, ProofAlternative, ProofAnswer, ProofFact, ProofGround, ProofRole,
+    RefutationReplay, ReservedRef, TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry,
+    prove_consistency,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{

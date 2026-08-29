@@ -17,33 +17,67 @@
 //! never an input to that computation — it is only ever the value the checker's own grounding
 //! is compared against.
 //!
-//! # What Stage 1 establishes, and what it does not
+//! # The TRUST BASE: what "independently" means, exactly
 //!
-//! This module is deliberately narrower than a full tableau proof, and the boundary is stated
-//! here rather than discovered by a consumer:
+//! Full independence from the producer is not achievable and this module does not pretend to
+//! it. Verifying that a branch point enumerated ALL of its alternatives means computing what
+//! the alternatives ARE, and that computation is the producer's own clausification and
+//! grounding. Re-deriving it with a second implementation would only move the question to
+//! "which of the two is right".
+//!
+//! So the shared surface is NAMED instead of hidden. [`TrustBaseEntry`] is an ordered,
+//! versioned enumeration of the producer-shared components a verdict rests on; the set is
+//! carried IN the proof term, covered by [`DlProof::digest`], and pinned by a test, so growing
+//! it is a breaking change rather than a quiet erosion. Every check this module performs is
+//! classified against it, and the classification is reported in three counts that a consumer
+//! reads directly ([`CheckReport`]):
+//!
+//! * **`attested`** — the checker RE-DERIVED it, depending on nothing in the trust base;
+//! * **`trusted`** — the checker verified it, but the verification itself rests on named
+//!   trust-base entries, which the report lists ([`CheckReport::rests_on`]);
+//! * **`unattested`** — the checker did not check it at all.
+//!
+//! A `trusted` result is never presentable as an `attested` one: the counts are separate
+//! fields with separate accessors, and no method adds them together.
+//!
+//! # What this module establishes, and what it does not
 //!
 //! * **[`DlProof::replay_clash`] is real.** For a recorded [`ClashStep`] it establishes that
 //!   the cited clause is a clause of the caller's ontology's own clause set, that its head is
 //!   EMPTY (so the instance derives `false`), that the recorded frame is wide enough for the
 //!   clause's variables, and that the recorded witness is exactly the grounding of that
 //!   clause's body under that frame. It runs no search: it never constructs a
-//!   [`Hyper`](crate::owl_dl::hyper) driver, never opens a
-//!   [`Session`](crate::reasoner::certificate), and never expands a completion graph.
-//! * **REACHABILITY is not established.** The checker does not show that the recorded witness
-//!   facts are derivable in a completion graph of the ontology. It reports how many of them it
-//!   could reduce to an ASSERTED axiom of the caller's ABox
+//!   `Hyper` driver, never opens a
+//!   `Session`, and never expands a completion graph.
+//! * **BRANCH EXHAUSTIVENESS is established, as a `trusted` check.**
+//!   [`DlProof::replay_branch`] regenerates a branch point's alternatives by calling
+//!   `hyper::ground_head` against the CALLER's clause set and
+//!   compares them, atom for atom and in order, against the recorded ones — so a producer that
+//!   dropped a disjunct (the way an unsound `inconsistent` is fabricated), added one, or
+//!   reordered them is rejected. It rests on [`TrustBaseEntry::Clausification`] and
+//!   [`TrustBaseEntry::Grounding`] and says so. What it is INDEPENDENT of is the search driver
+//!   — `solve`, `saturate`, `find_branch` and the branch stack — which is where the state, and
+//!   therefore the bugs, live. [`DlProof::replay_refutation`] walks the whole tree: every
+//!   branch point exhaustive, every alternative closed, every leaf a replayed clash.
+//! * **A CLASH-FREE COMPLETION is MODEL-CHECKED, not searched.**
+//!   [`DlProof::replay_completion`] takes the recorded completion graph and verifies, using
+//!   pure functions over the caller's own clause set, that no empty-headed clause matches it
+//!   (nothing on it clashes), that every clause of the caller's ontology is SATISFIED on it,
+//!   and that every blocking pair really does have equal signatures — recomputed by the
+//!   checker from the recorded labels rather than believed.
+//! * **REACHABILITY is not established.** The checker does not show that a recorded clash's
+//!   witness facts are derivable in a completion graph of the ontology. It reports how many of
+//!   them it could reduce to an ASSERTED axiom of the caller's ABox
 //!   ([`ClashReplay::attested`]) and how many it could not
 //!   ([`ClashReplay::unattested`]); an unattested fact is a fact this stage takes on the
-//!   producer's word. Closing that gap needs a premise DAG per witness fact, which is the
-//!   obvious next step and is deliberately not faked here.
-//! * **BRANCH EXHAUSTIVENESS is not established.** "These were all the alternatives" is a
-//!   claim about the `⊔`-rule's enumeration, and verifying it means re-running the
-//!   hyperresolution matcher — relocating the circularity a proof term exists to break rather
-//!   than removing it. [`DlProof`] is shaped so an exhaustiveness receipt can be added beside
-//!   the clash list later; nothing here claims one exists.
-//! * **CLASH-FREE COMPLETIONS are not certified.** A [`ProofAnswer::Consistent`] proof carries
-//!   the run's merge provenance and its boundary set, and no countermodel: exhibiting one
-//!   needs blocking, unravelling and the concrete-domain solver.
+//!   producer's word. Closing that gap needs a premise DAG per witness fact, which is
+//!   deliberately not faked here.
+//! * **UNRAVELLING is CITED, never re-proved.** That a blocked, clash-free, saturated pre-model
+//!   yields a real model is a metatheorem about the calculus, not a per-instance obligation. It
+//!   is [`TrustBaseEntry::Unravelling`], cited by [`CALCULUS_VERSION`]. The three checks above
+//!   do NOT by themselves prove a model exists, and nothing here says they do.
+//! * **A MERGE is provenance, not a proof**, and the CONCRETE-domain clash has no clause
+//!   instance to replay — see [`MergeStep`] and [`DlProof::data_clashes`].
 //!
 //! # Three recorded kinds, one replayable
 //!
@@ -51,7 +85,7 @@
 //! only clash rule, because in this hypertableau a clash IS a derivation rather than a
 //! detector. [`MergeStep`] is provenance for an identification: which rule forced it, and the
 //! two stable node identities it joined. The data-clash list names the nodes whose CONCRETE
-//! domain constraints the [`data`](crate::owl_dl::data) solver found unsatisfiable — the one
+//! domain constraints the `owl_dl::data` solver found unsatisfiable — the one
 //! decision this calculus does not take through a clause, and therefore the one clash with no
 //! clause instance to replay. Only the first is replayable in this stage; the other two are
 //! records, they are labelled as records, and no method on this type calls them proofs.
@@ -68,8 +102,8 @@
 //!   statement about a quad set rather than about an emission order.
 //! * [`DlProof::contract`] — BLAKE3 over [`CALCULUS_VERSION`] and the canonical encoding of
 //!   the DL-clause set. This is honestly PRODUCER-DERIVED: the clause set is the output of
-//!   [`clause::derive`](crate::owl_dl::clause::derive) over
-//!   [`absorb`](crate::owl_dl::absorb)'s decisions, so it attests WHICH calculus and WHICH
+//!   `clause::derive` over
+//!   `absorb`'s decisions, so it attests WHICH calculus and WHICH
 //!   clausification an answer came from, and it is not a second, independent identity for the
 //!   ontology. The two are never conflated: [`DlProofContext`] recomputes BOTH from the
 //!   caller's own dataset and rejects a proof that disagrees with either.
@@ -77,21 +111,23 @@
 //! # Determinism
 //!
 //! Every field is an integer, a fixed-order enum ordinal or a length-prefixed byte string;
-//! boundaries are emitted in [`Construct::ALL`] order; steps are emitted in the order the
+//! boundaries are emitted in `Construct::ALL` order; steps are emitted in the order the
 //! deterministic search recorded them. Nothing is read out of a hash map and nothing consults
 //! a clock, so [`DlProof::encode`] is byte-identical run to run and on `wasm32`, exactly as
-//! the [`Decision`](crate::owl_dl::graph::Decision) it accompanies is.
+//! the `Decision` it accompanies is.
 
-use std::collections::BTreeSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::RdfDataset;
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
-use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, derive};
-use crate::owl_dl::concept::Role;
+use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
+use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::{Assumptions, Budget, GeneratedRoot, NominalId, State, find};
+use crate::owl_dl::hyper::{Ground, ground_head};
 use crate::report::Construct;
 
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
@@ -100,7 +136,7 @@ use crate::report::Construct;
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v1";
+const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v2";
 
 /// Domain-separation tag for [`contract_digest`].
 const CONTRACT_DIGEST_TAG: &str = "purrdf-owl-dl-contract-v1";
@@ -140,11 +176,227 @@ const FACT_EDGE: u8 = 1;
 /// Wire kind byte: a "denotes this individual" fact.
 const FACT_DENOTES: u8 = 2;
 
+/// The declared ceiling on the work one completion MODEL CHECK may spend.
+///
+/// A resource bound and never a semantic one: a clause the budget did not reach is reported
+/// [`CheckReport::unattested`] rather than assumed satisfied, so exhausting it can only ever
+/// WITHHOLD a claim. Sized far above anything a completion of the size this calculus builds
+/// needs, while keeping the `≤n` body atom's subset enumeration — the one super-linear
+/// enumeration a clause body has — from turning a check into a hang.
+pub const MAX_CHECK_WORK: u64 = 1 << 22;
+
+// ── The trust base ──────────────────────────────────────────────────────────────
+
+/// The identity of the TRUST BASE a proof term's checks are classified against.
+///
+/// Bumped whenever [`TrustBaseEntry::ALL`] changes — which is a BREAKING change, because a
+/// consumer's reading of what it is trusting is a function of this list. `the_trust_base_is_pinned`
+/// asserts the current set element by element so it cannot grow quietly.
+pub const TRUST_BASE_VERSION: &str = "purrdf-owl-dl-trust-base-v1";
+
+/// One PRODUCER-SHARED component a verdict rests on.
+///
+/// A proof term is not a proof from nothing: the checker and the producer share code, and the
+/// only honest thing to do about that is to enumerate the shared surface, carry the enumeration
+/// in the proof, and classify every check against it. An entry here is a standing statement of
+/// the form "if this component is wrong, a check that rests on it can be wrong with it".
+///
+/// The order is the wire order and is fixed. ADDING AN ENTRY IS A BREAKING VERSION BUMP: it
+/// changes what a consumer of an already-issued proof believes they were told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum TrustBaseEntry {
+    /// The OWL REVERSE MAPPING: `Kb::from_dataset` and `Kb::finalize`, which turn the
+    /// caller's RDF graph into a knowledge base — the concept table a proof's concept ids index,
+    /// the ABox a witness atom is attested against, and the role hierarchy, inverse and
+    /// transitivity declarations a completion's neighbour relation is computed from.
+    ///
+    /// The checker runs it over the CALLER's own dataset, so a proof cannot smuggle a knowledge
+    /// base in; but it is the same code the producer ran, and every concept id in a proof term
+    /// is meaningless without it. Stage 1 rested on this silently. It is named here rather than
+    /// left implicit.
+    ReverseMapping,
+    /// CLAUSIFICATION: `owl_dl::clause` and `owl_dl::absorb`, which compile a
+    /// knowledge base into the DL-clause set.
+    ///
+    /// Bound by [`DlProof::contract`], which digests [`CALCULUS_VERSION`] and the whole clause
+    /// set: a checker whose clausification differs from the producer's rejects the proof
+    /// outright rather than checking it against a different compilation.
+    Clausification,
+    /// GROUNDING: `hyper::ground_head` and this module's
+    /// `ground_body`, which map a clause and a binding frame to the atoms a match derives.
+    ///
+    /// Branch exhaustiveness IS this function's output, so a branch check cannot be independent
+    /// of it. What it IS independent of is the search driver that chose the frame.
+    Grounding,
+    /// UNRAVELLING: the metatheorem that a blocked, clash-free, saturated pre-model of this
+    /// calculus yields a model, cited by [`CALCULUS_VERSION`].
+    ///
+    /// A statement about the CALCULUS, not about a run, so there is no per-instance obligation
+    /// to discharge and none is faked. A completion check establishes that nothing on the
+    /// recorded graph clashes, that every clause is satisfied on it, and that every blocking
+    /// pair has equal signatures; that a MODEL follows is this entry.
+    Unravelling,
+}
+
+impl TrustBaseEntry {
+    /// Every entry, in wire order. **Adding to this is a breaking version bump.**
+    pub const ALL: [Self; 4] = [
+        Self::ReverseMapping,
+        Self::Clausification,
+        Self::Grounding,
+        Self::Unravelling,
+    ];
+
+    /// A short, stable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReverseMapping => "reverse-mapping",
+            Self::Clausification => "clausification",
+            Self::Grounding => "grounding",
+            Self::Unravelling => "unravelling",
+        }
+    }
+
+    /// The wire ordinal — the entry's position in [`Self::ALL`].
+    const fn ordinal(self) -> u64 {
+        match self {
+            Self::ReverseMapping => 0,
+            Self::Clausification => 1,
+            Self::Grounding => 2,
+            Self::Unravelling => 3,
+        }
+    }
+}
+
+/// The trust base as a comma-separated list of [`TrustBaseEntry::as_str`], for a diagnostic.
+fn trust_base_text(entries: &[TrustBaseEntry]) -> String {
+    let mut out = String::new();
+    for entry in entries {
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push_str(entry.as_str());
+    }
+    out
+}
+
+// ── What a check established, and what it rested on ─────────────────────────────
+
+/// THREE counts, never two, and never a boolean.
+///
+/// A checker that answered `bool` would let a consumer read "it verified" without reading
+/// "…using the producer's own clausifier". These three are kept apart on purpose and there is
+/// no accessor that sums them:
+///
+/// * [`Self::attested`] — checks the checker RE-DERIVED, resting on nothing in the trust base;
+/// * [`Self::trusted`] — checks the checker verified, whose verification rests on the named
+///   entries [`Self::rests_on`] lists;
+/// * [`Self::unattested`] — obligations the checker did not check at all.
+///
+/// [`Self::is_fully_attested`] is the only way to ask for the strong reading, and it is `true`
+/// only when both of the other counts are zero and nothing is rested on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckReport {
+    /// Checks re-derived independently of the trust base.
+    attested: usize,
+    /// Checks whose verification rests on [`Self::rests_on`].
+    trusted: usize,
+    /// Obligations not checked.
+    unattested: usize,
+    /// The trust-base entries the `trusted` checks rest on, in [`TrustBaseEntry::ALL`] order.
+    rests_on: Vec<TrustBaseEntry>,
+}
+
+impl CheckReport {
+    /// An empty report.
+    const fn new() -> Self {
+        Self {
+            attested: 0,
+            trusted: 0,
+            unattested: 0,
+            rests_on: Vec::new(),
+        }
+    }
+
+    /// Count `n` checks the checker re-derived on its own.
+    fn attest(&mut self, n: usize) {
+        self.attested += n;
+    }
+
+    /// Count `n` checks that rest on `entries`.
+    fn trust(&mut self, n: usize, entries: &[TrustBaseEntry]) {
+        self.trusted += n;
+        self.cite(entries);
+    }
+
+    /// Record that this report rests on `entries`, without counting a check.
+    fn cite(&mut self, entries: &[TrustBaseEntry]) {
+        for entry in entries {
+            if !self.rests_on.contains(entry) {
+                self.rests_on.push(*entry);
+            }
+        }
+        self.rests_on.sort_unstable();
+    }
+
+    /// Count `n` obligations the checker did not check.
+    fn leave(&mut self, n: usize) {
+        self.unattested += n;
+    }
+
+    /// Fold `other` into this report.
+    fn absorb(&mut self, other: &Self) {
+        self.attested += other.attested;
+        self.trusted += other.trusted;
+        self.unattested += other.unattested;
+        self.cite(&other.rests_on);
+    }
+
+    /// Checks the checker RE-DERIVED, depending on nothing in the trust base.
+    #[must_use]
+    pub const fn attested(&self) -> usize {
+        self.attested
+    }
+
+    /// Checks the checker verified whose verification RESTS ON the trust base.
+    ///
+    /// Never add this to [`Self::attested`]. The two are different kinds of claim, and the
+    /// point of this stage is that a consumer can tell them apart.
+    #[must_use]
+    pub const fn trusted(&self) -> usize {
+        self.trusted
+    }
+
+    /// Obligations the checker did not check at all.
+    #[must_use]
+    pub const fn unattested(&self) -> usize {
+        self.unattested
+    }
+
+    /// The trust-base entries the [`Self::trusted`] checks rest on.
+    #[must_use]
+    pub fn rests_on(&self) -> &[TrustBaseEntry] {
+        &self.rests_on
+    }
+
+    /// Whether EVERY check was re-derived independently and nothing was left unchecked.
+    ///
+    /// False for every report this module produces that involved the clause set, and that is
+    /// the honest answer rather than a defect: verifying a claim about a clause set means
+    /// having one.
+    #[must_use]
+    pub fn is_fully_attested(&self) -> bool {
+        self.trusted == 0 && self.unattested == 0 && self.rests_on.is_empty()
+    }
+}
+
 // ── Stable node identity ────────────────────────────────────────────────────────
 
 /// A role of the proof surface: a property id and whether it is read inverted.
 ///
-/// A public mirror of the crate-private [`Role`], so a proof term can name a role without
+/// A public mirror of the crate-private `Role`, so a proof term can name a role without
 /// exposing the reasoner's internal concept vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProofRole {
@@ -167,7 +419,7 @@ impl ProofRole {
         self.inverse
     }
 
-    /// The proof-surface spelling of an internal [`Role`].
+    /// The proof-surface spelling of an internal `Role`.
     pub(crate) const fn of(role: Role) -> Self {
         match role {
             Role::Named(property) => Self {
@@ -197,7 +449,7 @@ pub enum NodeRef {
     Individual(u32),
     /// A node that denotes a GENERATED reserved nominal — Motik–Shearer–Horrocks' `u.⟨R,B,i⟩`.
     ///
-    /// The mirror of [`GeneratedRoot`], which was designed to be stable across merges and
+    /// The mirror of `GeneratedRoot`, which was designed to be stable across merges and
     /// clones for exactly this reason, and which both decision cores mint identically.
     Reserved(Box<ReservedRef>),
     /// An ANONYMOUS node — a `≥`-rule witness with no name of its own.
@@ -211,7 +463,7 @@ pub enum NodeRef {
 
 /// The identity of a generated (nominal-introduction) reserved root, on the proof surface.
 ///
-/// The public mirror of [`GeneratedRoot`]: the at-most root `u` the reserved set belongs to,
+/// The public mirror of `GeneratedRoot`: the at-most root `u` the reserved set belongs to,
 /// the counted role `R`, the at-most filler concept id `B`, and the index `i` within the
 /// bound.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -261,14 +513,19 @@ impl NodeRef {
         }
     }
 
-    /// The proof-surface identity of the internal [`GeneratedRoot`].
+    /// The proof-surface identity of the internal `GeneratedRoot`.
     fn of_generated(root: &GeneratedRoot) -> Self {
-        Self::Reserved(Box::new(ReservedRef {
-            origin: Self::of_nominal(&root.origin),
-            role: ProofRole::of(root.role),
-            filler: root.filler,
-            index: root.index,
-        }))
+        Self::Reserved(Box::new(reserved_ref(root)))
+    }
+}
+
+/// The proof-surface spelling of an internal `GeneratedRoot`.
+fn reserved_ref(root: &GeneratedRoot) -> ReservedRef {
+    ReservedRef {
+        origin: NodeRef::of_nominal(&root.origin),
+        role: ProofRole::of(root.role),
+        filler: root.filler,
+        index: root.index,
     }
 }
 
@@ -449,7 +706,7 @@ pub struct MergeStep {
     /// The other, as it stood before the merge.
     right: NodeRef,
     /// The identity both denote AFTER it — the orientation
-    /// [`Graph::merge_nodes`](crate::owl_dl::graph::Graph::merge_nodes) chose, read off the
+    /// `Graph::merge_nodes` chose, read off the
     /// state rather than predicted, so this record cannot disagree with the graph about which
     /// node survived.
     joined: NodeRef,
@@ -507,15 +764,470 @@ impl MergeStep {
     }
 }
 
+// ── Branch points ───────────────────────────────────────────────────────────────
+
+/// One grounded head atom of a `⊔`-rule alternative, on the proof surface.
+///
+/// The public mirror of the search's own `Ground`, over merge-invariant [`NodeRef`] identities
+/// rather than node indices. It is a MIRROR and not a second vocabulary: a recorded alternative
+/// and the alternative a checker regenerates are both this type, so comparing them is an
+/// equality rather than an interpretation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProofGround {
+    /// Add a concept to a node's label.
+    Concept {
+        /// The node.
+        node: NodeRef,
+        /// The concept id.
+        concept: u32,
+    },
+    /// Give a node an `r`-edge to itself.
+    SelfLoop {
+        /// The node.
+        node: NodeRef,
+        /// The role.
+        role: ProofRole,
+    },
+    /// Ensure `n` pairwise-distinct `role`-neighbours satisfying `filler`.
+    AtLeast {
+        /// The node the restriction is on.
+        node: NodeRef,
+        /// The bound.
+        n: u32,
+        /// The counted role.
+        role: ProofRole,
+        /// The filler concept id.
+        filler: u32,
+    },
+    /// Identify two nodes — one alternative of a `≤n` case split.
+    Equal {
+        /// One node.
+        left: NodeRef,
+        /// The other.
+        right: NodeRef,
+    },
+    /// Identify a node with a named individual's root — the `o`-clause's alternative.
+    EqualIndividual {
+        /// The node.
+        node: NodeRef,
+        /// The individual term id.
+        individual: u32,
+    },
+    /// Identify a node with a RESERVED root `u.⟨R,B,i⟩` — the `NI`-rule's alternative.
+    EqualReserved {
+        /// The blockable node folded into the reserved root.
+        node: NodeRef,
+        /// The reserved root.
+        root: ReservedRef,
+    },
+}
+
+impl ProofGround {
+    /// The proof-surface spelling of a grounded atom over [`NodeRef`] identities.
+    fn of(atom: &Ground<NodeRef>) -> Self {
+        match atom {
+            Ground::Concept(node, concept) => Self::Concept {
+                node: node.clone(),
+                concept: *concept,
+            },
+            Ground::SelfLoop(node, role) => Self::SelfLoop {
+                node: node.clone(),
+                role: ProofRole::of(*role),
+            },
+            Ground::AtLeast(node, n, role, filler) => Self::AtLeast {
+                node: node.clone(),
+                n: *n,
+                role: ProofRole::of(*role),
+                filler: *filler,
+            },
+            Ground::Equal(left, right) => Self::Equal {
+                left: left.clone(),
+                right: right.clone(),
+            },
+            Ground::EqualIndividual(node, individual) => Self::EqualIndividual {
+                node: node.clone(),
+                individual: *individual,
+            },
+            Ground::EqualReserved(node, root) => Self::EqualReserved {
+                node: node.clone(),
+                root: reserved_ref(root),
+            },
+        }
+    }
+}
+
+/// One ALTERNATIVE of a `⊔`-rule branch point: the conjunction of atoms taking it asserts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofAlternative {
+    /// The atoms, in the order the grounding produced them.
+    atoms: Vec<ProofGround>,
+}
+
+impl ProofAlternative {
+    /// The atoms taking this alternative asserts.
+    #[must_use]
+    pub fn atoms(&self) -> &[ProofGround] {
+        &self.atoms
+    }
+}
+
+/// WHAT BECAME of one alternative of a branch point.
+///
+/// The recorded shape of the search tree. It is what makes "every alternative closed" a
+/// structural claim a checker can walk rather than a sentence in a log: an alternative either
+/// names the recorded step that closed it, names the branch point it descended into, or says
+/// out loud that it did neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BranchOutcome {
+    /// The alternative closed on the clause instance at this index of [`DlProof::clashes`].
+    Clash(usize),
+    /// It closed on the concrete-domain clash at this index of [`DlProof::data_clashes`].
+    DataClash(usize),
+    /// It closed on the forced identification at this index of [`DlProof::merges`], whose
+    /// [`MergeStep::clashed`] is set.
+    Merge(usize),
+    /// It reached the further branch point at this index of [`DlProof::branches`].
+    Branch(usize),
+    /// It CLOSED, but nothing replayable was written down for it.
+    ///
+    /// Reachable and therefore recorded rather than swept up: an alternative can close inside
+    /// the `≥`-rule's own distinctness bookkeeping — two witnesses forced `≠` that the datatype
+    /// map already makes one value — which is not a clause instance and has no clause to
+    /// replay. A checker counts one of these [`CheckReport::unattested`] and
+    /// [`RefutationReplay::is_closed`] answers `false`, so it can never be read as a discharged
+    /// obligation.
+    Unrecorded,
+    /// It did NOT close: the search stopped at a clash-free completion, or ran out of budget,
+    /// before exhausting this alternative's subtree.
+    ///
+    /// A [`ProofAnswer::Inconsistent`] proof carrying one is rejected — the answer claims every
+    /// branch closed and this says one did not.
+    Open,
+    /// The alternative was never tried, because the search ended first.
+    ///
+    /// The initial value of every slot, so an alternative whose outcome was never filed reads
+    /// as untried rather than as closed.
+    Unexplored,
+}
+
+impl BranchOutcome {
+    /// The wire kind byte.
+    const fn kind(self) -> u8 {
+        match self {
+            Self::Clash(_) => 0,
+            Self::DataClash(_) => 1,
+            Self::Merge(_) => 2,
+            Self::Branch(_) => 3,
+            Self::Unrecorded => 4,
+            Self::Open => 5,
+            Self::Unexplored => 6,
+        }
+    }
+
+    /// The index the outcome carries, or `0` for the three that carry none.
+    const fn payload(self) -> usize {
+        match self {
+            Self::Clash(index)
+            | Self::DataClash(index)
+            | Self::Merge(index)
+            | Self::Branch(index) => index,
+            Self::Unrecorded | Self::Open | Self::Unexplored => 0,
+        }
+    }
+}
+
+/// One `⊔`-rule BRANCH POINT: the clause instance that generated a case split, ALL of the
+/// alternatives it generated, and what became of each.
+///
+/// This is the record that makes branch EXHAUSTIVENESS checkable. A producer that dropped a
+/// disjunct — the way an unsound `inconsistent` is fabricated — records a short alternative
+/// list, and [`DlProof::replay_branch`] regenerates the list from the caller's own clause set
+/// and disagrees with it.
+///
+/// Fields are private and there is no public constructor: a [`BranchStep`] enters a
+/// [`DlProof`] from the instrumented search or through [`DlProof::decode`], and both are
+/// checked by [`DlProof::replay_branch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchStep {
+    /// The clause whose DISJUNCTIVE head generated the alternatives, into the clause set the
+    /// CHECKER derives from the caller's ontology.
+    clause: usize,
+    /// The node variable `0` was bound to.
+    node: NodeRef,
+    /// The matcher's binding frame, variable by variable.
+    frame: Vec<NodeRef>,
+    /// The alternatives the clause HEAD generated, in the producer's order.
+    ///
+    /// Read off the vector the search branched over, never re-derived by a second call to
+    /// `hyper::ground_head` — the same discipline
+    /// `ClashStep`'s witness keeps, and for the same reason: a record produced by the
+    /// computation it is compared against would make the comparison vacuous.
+    alternatives: Vec<ProofAlternative>,
+    /// The alternatives the Motik–Shearer–Horrocks `NI`-rule APPENDED beside them.
+    ///
+    /// Kept apart because they are not regenerable from the clause: they are a function of
+    /// which blockable predecessors press the at-most bound, which is completion-graph state.
+    /// A checker verifies their SHAPE against the cited clause and counts the set itself
+    /// unattested — see [`DlProof::replay_branch`].
+    introduced: Vec<ProofAlternative>,
+    /// What became of each alternative, `alternatives` first and then `introduced`.
+    outcomes: Vec<BranchOutcome>,
+}
+
+impl BranchStep {
+    /// Record a branch point with every outcome still [`BranchOutcome::Unexplored`].
+    /// Crate-private: the only producer is the instrumented search.
+    pub(crate) fn new(
+        clause: usize,
+        node: NodeRef,
+        frame: Vec<NodeRef>,
+        alternatives: Vec<ProofAlternative>,
+        introduced: Vec<ProofAlternative>,
+    ) -> Self {
+        let outcomes = vec![BranchOutcome::Unexplored; alternatives.len() + introduced.len()];
+        Self {
+            clause,
+            node,
+            frame,
+            alternatives,
+            introduced,
+            outcomes,
+        }
+    }
+
+    /// The clause index the branch point cites.
+    #[must_use]
+    pub const fn clause(&self) -> usize {
+        self.clause
+    }
+
+    /// The node variable `0` was bound to.
+    #[must_use]
+    pub const fn node(&self) -> &NodeRef {
+        &self.node
+    }
+
+    /// The matcher's binding frame.
+    #[must_use]
+    pub fn frame(&self) -> &[NodeRef] {
+        &self.frame
+    }
+
+    /// The alternatives the clause head generated, in the producer's order.
+    #[must_use]
+    pub fn alternatives(&self) -> &[ProofAlternative] {
+        &self.alternatives
+    }
+
+    /// The alternatives the `NI`-rule appended.
+    #[must_use]
+    pub fn introduced(&self) -> &[ProofAlternative] {
+        &self.introduced
+    }
+
+    /// What became of each alternative, head-generated ones first.
+    #[must_use]
+    pub fn outcomes(&self) -> &[BranchOutcome] {
+        &self.outcomes
+    }
+
+    /// How many alternatives the branch point has in total.
+    #[must_use]
+    pub fn width(&self) -> usize {
+        self.alternatives.len() + self.introduced.len()
+    }
+}
+
+// ── The completion ──────────────────────────────────────────────────────────────
+
+/// One node of a recorded CLASH-FREE COMPLETION.
+///
+/// Everything a checker needs to model-check a clause against it and to recompute a blocking
+/// signature, and nothing else: no node index, no union-find pointer, and no state the search
+/// used to get here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionNode {
+    /// The node's merge-invariant identity.
+    node: NodeRef,
+    /// The concept ids in its label, ascending.
+    label: Vec<u32>,
+    /// The named individuals it denotes, ascending.
+    nominals: Vec<u32>,
+    /// The nodes it is forced DISTINCT from.
+    distinct: Vec<NodeRef>,
+    /// Its generating predecessor, if it has one.
+    parent: Option<NodeRef>,
+    /// The role on the edge from that predecessor.
+    incoming: Option<ProofRole>,
+    /// Whether it inhabits the DATA domain rather than the object domain.
+    concrete: bool,
+    /// Whether it is a root node — never blocked.
+    root: bool,
+    /// The VALUE class it denotes, when it denotes a literal whose value is known. Two nodes
+    /// carrying different classes are distinct with nothing having said so.
+    value_class: Option<u32>,
+}
+
+impl CompletionNode {
+    /// The node's identity.
+    #[must_use]
+    pub const fn node(&self) -> &NodeRef {
+        &self.node
+    }
+
+    /// The concept ids in its label, ascending.
+    #[must_use]
+    pub fn label(&self) -> &[u32] {
+        &self.label
+    }
+
+    /// The named individuals it denotes.
+    #[must_use]
+    pub fn nominals(&self) -> &[u32] {
+        &self.nominals
+    }
+
+    /// The nodes it is forced distinct from.
+    #[must_use]
+    pub fn distinct(&self) -> &[NodeRef] {
+        &self.distinct
+    }
+
+    /// Its generating predecessor.
+    #[must_use]
+    pub const fn parent(&self) -> Option<&NodeRef> {
+        self.parent.as_ref()
+    }
+
+    /// The role on the edge from that predecessor.
+    #[must_use]
+    pub const fn incoming(&self) -> Option<ProofRole> {
+        self.incoming
+    }
+
+    /// Whether it inhabits the data domain.
+    #[must_use]
+    pub const fn is_concrete(&self) -> bool {
+        self.concrete
+    }
+
+    /// Whether it is a root node.
+    #[must_use]
+    pub const fn is_root(&self) -> bool {
+        self.root
+    }
+}
+
+/// One role edge of a recorded completion, exactly as the graph stores it.
+///
+/// RAW: the `(from, to, property)` triple, never the role hierarchy's closure of it. Computing
+/// the closure at record time would mean calling the metered neighbour scan and so charging a
+/// recorded run work an unrecorded one does not spend — which would let a proof-carrying run
+/// reach a different verdict. The checker computes the closure itself, from the caller's own
+/// role axioms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionEdge {
+    /// The node the edge leaves.
+    from: NodeRef,
+    /// The node it enters.
+    to: NodeRef,
+    /// The property term id.
+    property: u32,
+}
+
+impl CompletionEdge {
+    /// The node the edge leaves.
+    #[must_use]
+    pub const fn from(&self) -> &NodeRef {
+        &self.from
+    }
+
+    /// The node it enters.
+    #[must_use]
+    pub const fn to(&self) -> &NodeRef {
+        &self.to
+    }
+
+    /// The property term id.
+    #[must_use]
+    pub const fn property(&self) -> u32 {
+        self.property
+    }
+}
+
+/// One DIRECT blocking pair: the node whose `≥`-rule applications were withheld, and the
+/// earlier node that stood in for it.
+///
+/// Only direct pairs are recorded. Indirect blocking — "my predecessor is blocked" — is
+/// recomputed by the checker from the recorded predecessors, so a proof cannot assert it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingPair {
+    /// The blocked node.
+    blocked: NodeRef,
+    /// Its blocker.
+    blocker: NodeRef,
+}
+
+impl BlockingPair {
+    /// The blocked node.
+    #[must_use]
+    pub const fn blocked(&self) -> &NodeRef {
+        &self.blocked
+    }
+
+    /// Its blocker.
+    #[must_use]
+    pub const fn blocker(&self) -> &NodeRef {
+        &self.blocker
+    }
+}
+
+/// The CLASH-FREE COMPLETION a [`ProofAnswer::Consistent`] run stopped at.
+///
+/// A pre-model, and named one: nodes with labels, raw role edges, and the blocking witnesses
+/// that let a finite graph stand for an infinite model. [`DlProof::replay_completion`] MODEL
+/// CHECKS it — it does not search it, and it does not re-derive it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    /// The representative nodes, in the graph's own ascending index order.
+    nodes: Vec<CompletionNode>,
+    /// The role edges, in first-seen order.
+    edges: Vec<CompletionEdge>,
+    /// The direct blocking pairs the search's last derivation round computed.
+    blocks: Vec<BlockingPair>,
+}
+
+impl Completion {
+    /// The representative nodes.
+    #[must_use]
+    pub fn nodes(&self) -> &[CompletionNode] {
+        &self.nodes
+    }
+
+    /// The role edges.
+    #[must_use]
+    pub fn edges(&self) -> &[CompletionEdge] {
+        &self.edges
+    }
+
+    /// The direct blocking pairs.
+    #[must_use]
+    pub fn blocks(&self) -> &[BlockingPair] {
+        &self.blocks
+    }
+}
+
 // ── The recorder ────────────────────────────────────────────────────────────────
 
 /// What an instrumented search wrote down.
 ///
-/// Held by [`crate::owl_dl::hyper`]'s driver behind an `Option`, so a non-recording run — every
+/// Held by `owl_dl::hyper`'s driver behind an `Option`, so a non-recording run — every
 /// run every existing caller makes — allocates nothing, records nothing, and takes the same
 /// branches in the same order. Recording never consults the work meter and never calls a
 /// metered graph operation, which is what makes a recorded run's
-/// [`Decision`](crate::owl_dl::graph::Decision) identical to an unrecorded one's.
+/// `Decision` identical to an unrecorded one's.
 #[derive(Debug, Default)]
 pub(crate) struct Recorder {
     /// The clause instances that derived `false`, in search order.
@@ -524,8 +1236,34 @@ pub(crate) struct Recorder {
     merges: Vec<MergeStep>,
     /// The nodes whose concrete-domain constraints had no solution, in search order.
     data_clashes: Vec<NodeRef>,
-    /// Whether any of the three lists reached [`MAX_RECORDED_STEPS`].
+    /// The `⊔`-rule branch points, in search order. A child is always recorded after its
+    /// parent, which is what makes the recorded tree well-founded by construction.
+    branches: Vec<BranchStep>,
+    /// What became of the ROOT state — the one closure or branch point that is nobody's
+    /// alternative.
+    root: BranchOutcome,
+    /// The clash-free completion the search stopped at, if it found one.
+    completion: Option<Completion>,
+    /// The DIRECT blocking pairs the most recent derivation round computed, as node
+    /// identities. Overwritten every round; read once, when a completion is recorded.
+    blocking: Vec<(NodeRef, NodeRef)>,
+    /// Whether any of the four lists reached [`MAX_RECORDED_STEPS`].
     truncated: bool,
+}
+
+/// What a [`Recorder`] held at a point in the search.
+///
+/// Taken when an alternative is dispensed and read when it closes, so "what closed this
+/// alternative" is "what was written down in between" rather than a guess at the recorder's
+/// most recent entry.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RecorderMark {
+    /// How many clash steps had been recorded.
+    clashes: usize,
+    /// How many merges.
+    merges: usize,
+    /// How many concrete-domain clashes.
+    data_clashes: usize,
 }
 
 impl Recorder {
@@ -550,11 +1288,15 @@ impl Recorder {
     /// Whether the run wrote nothing down at all.
     ///
     /// Read by the instrumentation's own standing obligation in
-    /// [`crate::owl_dl::hyper`]: without it, "a recorded run decides identically" would be
+    /// `owl_dl::hyper`: without it, "a recorded run decides identically" would be
     /// satisfied by a recorder that recorded nothing.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.clashes.is_empty() && self.merges.is_empty() && self.data_clashes.is_empty()
+        self.clashes.is_empty()
+            && self.merges.is_empty()
+            && self.data_clashes.is_empty()
+            && self.branches.is_empty()
+            && self.completion.is_none()
     }
 
     /// Record a concrete-domain clash, up to the declared ceiling.
@@ -564,6 +1306,103 @@ impl Recorder {
             return;
         }
         self.data_clashes.push(node);
+    }
+
+    /// Record a branch point, up to the declared ceiling, answering with its index.
+    ///
+    /// `None` past the ceiling, which also sets [`Self::truncated`] — and a truncated proof's
+    /// branch tree is refused wholesale by [`DlProof::replay_refutation`] rather than walked
+    /// with a hole in it.
+    pub(crate) fn branch(&mut self, step: BranchStep) -> Option<usize> {
+        if self.branches.len() >= MAX_RECORDED_STEPS {
+            self.truncated = true;
+            return None;
+        }
+        self.branches.push(step);
+        Some(self.branches.len() - 1)
+    }
+
+    /// File `outcome` against alternative `ordinal` of branch point `branch`.
+    pub(crate) fn outcome(&mut self, branch: usize, ordinal: usize, outcome: BranchOutcome) {
+        if let Some(slot) = self
+            .branches
+            .get_mut(branch)
+            .and_then(|step| step.outcomes.get_mut(ordinal))
+        {
+            *slot = outcome;
+        }
+    }
+
+    /// File the ROOT state's outcome.
+    pub(crate) fn root(&mut self, outcome: BranchOutcome) {
+        self.root = outcome;
+    }
+
+    /// What the recorder holds now.
+    pub(crate) const fn mark(&self) -> RecorderMark {
+        RecorderMark {
+            clashes: self.clashes.len(),
+            merges: self.merges.len(),
+            data_clashes: self.data_clashes.len(),
+        }
+    }
+
+    /// What closed the alternative that opened at `mark` — the step written down since.
+    ///
+    /// A closing alternative writes at most one clash step (the round that derives `false`
+    /// returns immediately) and at most one concrete-domain clash, so the search order below is
+    /// a total order over what can have happened rather than a preference. An alternative that
+    /// closed without writing anything replayable answers [`BranchOutcome::Unrecorded`], which
+    /// is counted unattested rather than smoothed into a closure.
+    pub(crate) fn closure_since(&self, mark: &RecorderMark) -> BranchOutcome {
+        if self.clashes.len() > mark.clashes {
+            return BranchOutcome::Clash(self.clashes.len() - 1);
+        }
+        if self.data_clashes.len() > mark.data_clashes {
+            return BranchOutcome::DataClash(self.data_clashes.len() - 1);
+        }
+        for index in (mark.merges..self.merges.len()).rev() {
+            if self.merges[index].clashed {
+                return BranchOutcome::Merge(index);
+            }
+        }
+        BranchOutcome::Unrecorded
+    }
+
+    /// The direct blocking pairs the most recent derivation round computed.
+    pub(crate) fn blocking(&self) -> &[(NodeRef, NodeRef)] {
+        &self.blocking
+    }
+
+    /// Replace the direct blocking pairs with this round's.
+    pub(crate) fn set_blocking(&mut self, pairs: Vec<(NodeRef, NodeRef)>) {
+        self.blocking = pairs;
+    }
+
+    /// Record the clash-free completion the search stopped at.
+    pub(crate) fn completion(&mut self, completion: Completion) {
+        self.completion = Some(completion);
+    }
+
+    /// The recorded branch points — read by the instrumentation's standing obligation in
+    /// `owl_dl::hyper`, which has to show that recording HAPPENED before "recording is
+    /// free" means anything.
+    #[cfg(test)]
+    pub(crate) fn branches(&self) -> &[BranchStep] {
+        &self.branches
+    }
+
+    /// The recorded completion, for the same obligation.
+    #[cfg(test)]
+    pub(crate) const fn recorded_completion(&self) -> Option<&Completion> {
+        self.completion.as_ref()
+    }
+}
+
+impl Default for BranchOutcome {
+    /// An outcome nobody filed is an alternative nobody tried.
+    fn default() -> Self {
+        Self::Unexplored
     }
 }
 
@@ -711,6 +1550,133 @@ pub enum DlProofError {
         /// The reverse mapper's own account of the failure.
         detail: String,
     },
+    /// The proof states a TRUST BASE this checker does not implement.
+    ///
+    /// The set is versioned and adding to it is breaking, so a disagreement means the two sides
+    /// mean different things by "verified" — which is a rejection rather than something to
+    /// reconcile.
+    TrustBaseMismatch {
+        /// The trust base this checker classifies against.
+        expected: String,
+        /// The trust base the proof states.
+        stated: String,
+    },
+    /// A branch point cites a clause whose head is NOT a disjunction, so it generates no case
+    /// split at all.
+    ///
+    /// The head form is the CHECKER's own computation over the caller's clause set.
+    NotADisjunction {
+        /// The cited index.
+        clause: usize,
+        /// The head form the checker computed.
+        form: HeadForm,
+    },
+    /// The branch point's recorded alternative list is a different LENGTH than the one the
+    /// checker regenerated from the caller's clause set.
+    ///
+    /// The dropped-disjunct forgery lands here: an `inconsistent` fabricated by omitting an
+    /// alternative claims a narrower case split than the clause licenses.
+    AlternativeCountMismatch {
+        /// The branch point.
+        branch: usize,
+        /// The clause it cites.
+        clause: usize,
+        /// How many alternatives the checker derived.
+        derived: usize,
+        /// How many the proof states.
+        stated: usize,
+    },
+    /// A recorded alternative is not the alternative the checker's own grounding produced at
+    /// that position — a rewritten or REORDERED case split.
+    AlternativeMismatch {
+        /// The branch point.
+        branch: usize,
+        /// The position in the alternative list that disagrees.
+        position: usize,
+        /// The alternative the checker derived.
+        derived: Box<ProofAlternative>,
+        /// The alternative the proof states.
+        stated: Box<ProofAlternative>,
+    },
+    /// A nominal-introduction alternative is not shaped like one the cited clause could
+    /// license.
+    IllFormedIntroduction {
+        /// The branch point.
+        branch: usize,
+        /// The position within the introduced alternatives.
+        position: usize,
+        /// What is wrong with it.
+        detail: String,
+    },
+    /// A branch point records a different number of OUTCOMES than it has alternatives.
+    OutcomeCountMismatch {
+        /// The branch point.
+        branch: usize,
+        /// How many alternatives it has.
+        derived: usize,
+        /// How many outcomes it states.
+        stated: usize,
+    },
+    /// An outcome names a recorded step that is not there, or one that cannot close a branch.
+    DanglingOutcome {
+        /// The branch point.
+        branch: usize,
+        /// Which alternative.
+        ordinal: usize,
+        /// What is wrong with the reference.
+        detail: String,
+    },
+    /// An alternative of a branch point did NOT close, in a proof whose answer claims every
+    /// branch did.
+    BranchNotClosed {
+        /// The branch point.
+        branch: usize,
+        /// Which alternative.
+        ordinal: usize,
+    },
+    /// The proof is bound to a different ANSWER than the check being asked for.
+    WrongAnswer {
+        /// The answer the check requires.
+        expected: ProofAnswer,
+        /// The answer the proof is bound to.
+        stated: ProofAnswer,
+    },
+    /// The recording reached [`MAX_RECORDED_STEPS`], so the trace has a hole in it and a
+    /// whole-tree check would be walking a partial tree.
+    Truncated,
+    /// A [`ProofAnswer::Consistent`] proof carries no completion to check.
+    NoCompletion,
+    /// The recorded completion is not a well-formed graph: a repeated node identity, or an edge
+    /// or blocking pair naming a node that is not in it.
+    MalformedCompletion {
+        /// What is wrong with it.
+        detail: String,
+    },
+    /// An EMPTY-headed clause matches the recorded completion, so the completion derives
+    /// `false` — a concealed clash.
+    ClashInCompletion {
+        /// The clause that matches.
+        clause: usize,
+        /// The node variable `0` was bound to.
+        node: Box<NodeRef>,
+    },
+    /// A clause of the caller's ontology is NOT satisfied on the recorded completion, so the
+    /// completion is not a pre-model of it.
+    ClauseNotSatisfied {
+        /// The clause.
+        clause: usize,
+        /// The node variable `0` was bound to.
+        node: Box<NodeRef>,
+    },
+    /// A recorded blocking pair does not have equal signatures, recomputed by the checker.
+    BlockingSignatureMismatch {
+        /// The node claimed blocked.
+        blocked: Box<NodeRef>,
+        /// The node claimed to block it.
+        blocker: Box<NodeRef>,
+        /// Which half of the signature disagrees.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for DlProofError {
@@ -773,6 +1739,102 @@ impl std::fmt::Display for DlProofError {
                  the clash node"
             ),
             Self::Ontology { detail } => write!(f, "the ontology could not be read: {detail}"),
+            Self::TrustBaseMismatch { expected, stated } => write!(
+                f,
+                "the proof states the trust base [{stated}] but this checker classifies against \
+                 [{expected}]"
+            ),
+            Self::NotADisjunction { clause, form } => write!(
+                f,
+                "clause {clause} has head form {form:?}, so it generates no case split to be \
+                 exhaustive about"
+            ),
+            Self::AlternativeCountMismatch {
+                branch,
+                clause,
+                derived,
+                stated,
+            } => write!(
+                f,
+                "branch point {branch} cites clause {clause}, which grounds to {derived} \
+                 alternatives, but the proof states {stated}"
+            ),
+            Self::AlternativeMismatch {
+                branch,
+                position,
+                derived,
+                stated,
+            } => write!(
+                f,
+                "branch point {branch} alternative {position} grounds to {derived:?} but the \
+                 proof states {stated:?}"
+            ),
+            Self::IllFormedIntroduction {
+                branch,
+                position,
+                detail,
+            } => write!(
+                f,
+                "branch point {branch} nominal-introduction alternative {position} is not one \
+                 the cited clause licenses: {detail}"
+            ),
+            Self::OutcomeCountMismatch {
+                branch,
+                derived,
+                stated,
+            } => write!(
+                f,
+                "branch point {branch} has {derived} alternatives but states {stated} outcomes"
+            ),
+            Self::DanglingOutcome {
+                branch,
+                ordinal,
+                detail,
+            } => write!(
+                f,
+                "branch point {branch} alternative {ordinal} names an outcome that is not \
+                 there: {detail}"
+            ),
+            Self::BranchNotClosed { branch, ordinal } => write!(
+                f,
+                "branch point {branch} alternative {ordinal} did not close, so not every \
+                 alternative was refuted"
+            ),
+            Self::WrongAnswer { expected, stated } => write!(
+                f,
+                "this check applies to a {} proof; this one is bound to {}",
+                expected.as_str(),
+                stated.as_str()
+            ),
+            Self::Truncated => write!(
+                f,
+                "the recording reached its ceiling, so the trace is partial and a whole-tree \
+                 check would be walking a tree with a hole in it"
+            ),
+            Self::NoCompletion => {
+                write!(f, "the proof carries no completion graph to model check")
+            }
+            Self::MalformedCompletion { detail } => {
+                write!(f, "the recorded completion is not a graph: {detail}")
+            }
+            Self::ClashInCompletion { clause, node } => write!(
+                f,
+                "clause {clause} has an empty head and matches the completion at {node:?}, so \
+                 the completion derives false"
+            ),
+            Self::ClauseNotSatisfied { clause, node } => write!(
+                f,
+                "clause {clause} is not satisfied on the completion at {node:?}"
+            ),
+            Self::BlockingSignatureMismatch {
+                blocked,
+                blocker,
+                detail,
+            } => write!(
+                f,
+                "{blocked:?} is recorded as blocked by {blocker:?}, but the two do not have the \
+                 same blocking signature: {detail}"
+            ),
         }
     }
 }
@@ -794,21 +1856,30 @@ pub enum DerivedConclusion {
 
 /// What [`DlProof::replay_clash`] established, and what it did not.
 ///
-/// The two counters are the honest boundary of this stage and are reported rather than
-/// smoothed over: `attested` witness atoms were reduced to an ASSERTED axiom of the caller's
-/// ABox, and `unattested` ones were not, because reducing them needs a premise DAG this stage
-/// does not build. A replay with `unattested > 0` says "this clause instance is a genuine
-/// derivation of `false` over these atoms", not "these atoms are reachable".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The counts are the honest boundary of this stage and are reported rather than smoothed over:
+///
+/// * `attested` — witness atoms the checker reduced to an ASSERTED axiom of the caller's ABox.
+///   Reading the caller's own reverse-mapped ABox and nothing else, so this rests on nothing
+///   the producer computed for this run;
+/// * `trusted` — the step's STRUCTURAL checks: that the cited clause is a clause of the
+///   caller's clause set, that the checker's own computation of its head form is EMPTY, that
+///   the recorded frame is wide enough, that the checker's own grounding of its body is exactly
+///   the recorded witness, and that the clash node is the frame's variable `0`. Every one of
+///   those is about a CLAUSE, so every one rests on [`TrustBaseEntry::Clausification`] and
+///   [`TrustBaseEntry::Grounding`];
+/// * `unattested` — witness atoms the checker could not reduce to an asserted axiom, because
+///   reducing them needs a premise DAG this stage does not build.
+///
+/// A replay with `unattested > 0` says "this clause instance is a genuine derivation of
+/// `false` over these atoms", not "these atoms are reachable".
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClashReplay {
     /// The conclusion the checker derived.
     conclusion: DerivedConclusion,
     /// The clause the checker looked up in the CALLER's clause set.
     clause: usize,
-    /// Witness atoms the checker reduced to an asserted axiom of the caller's ABox.
-    attested: usize,
-    /// Witness atoms the checker could not reduce to an asserted axiom.
-    unattested: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
 }
 
 impl ClashReplay {
@@ -824,10 +1895,26 @@ impl ClashReplay {
         self.clause
     }
 
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
+    }
+
     /// Witness atoms reduced to an asserted axiom of the caller's ABox.
     #[must_use]
     pub const fn attested(&self) -> usize {
-        self.attested
+        self.checks.attested
+    }
+
+    /// The step's structural checks, whose verification rests on the trust base.
+    ///
+    /// Never add this to [`Self::attested`]: a `trusted` check is a check that would be wrong
+    /// if the producer's own clausifier were wrong, and that is exactly the distinction a
+    /// consumer of a proof needs.
+    #[must_use]
+    pub const fn trusted(&self) -> usize {
+        self.checks.trusted
     }
 
     /// Witness atoms the checker took on the producer's word.
@@ -837,7 +1924,191 @@ impl ClashReplay {
     /// it — would let a partial replay read as a total one.
     #[must_use]
     pub const fn unattested(&self) -> usize {
-        self.unattested
+        self.checks.unattested
+    }
+}
+
+/// What [`DlProof::replay_branch`] established about ONE branch point.
+///
+/// The load-bearing field is [`Self::alternatives`] together with [`Self::checks`]: the
+/// alternatives were REGENERATED from the caller's own clause set and compared, so a dropped,
+/// added or reordered one is a rejection. The regeneration rests on
+/// [`TrustBaseEntry::Clausification`] and [`TrustBaseEntry::Grounding`], and is therefore
+/// reported `trusted` — not `attested`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchReplay {
+    /// The clause the checker looked up in the caller's own clause set.
+    clause: usize,
+    /// How many alternatives the checker REGENERATED and matched against the record.
+    alternatives: usize,
+    /// How many nominal-introduction alternatives it could only shape-check.
+    introduced: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl BranchReplay {
+    /// The clause the checker looked up in the caller's own clause set.
+    #[must_use]
+    pub const fn clause(&self) -> usize {
+        self.clause
+    }
+
+    /// How many alternatives the checker regenerated and matched, atom for atom and in order.
+    #[must_use]
+    pub const fn alternatives(&self) -> usize {
+        self.alternatives
+    }
+
+    /// How many nominal-introduction alternatives were shape-checked rather than regenerated.
+    ///
+    /// They are a function of which blockable predecessors press the at-most bound, which is
+    /// completion-graph state a checker holding only a proof term does not have. Their SHAPE is
+    /// checked against the cited clause; the SET is [`CheckReport::unattested`].
+    #[must_use]
+    pub const fn introduced(&self) -> usize {
+        self.introduced
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
+    }
+}
+
+/// What [`DlProof::replay_refutation`] established about the WHOLE search tree.
+///
+/// A refutation is a tree: every internal node an exhaustive case split, every leaf a clause
+/// instance that derives `false`. This report says how much of that tree the checker walked and
+/// what it rested on, and [`Self::is_closed`] is the one place the whole claim is answered —
+/// `true` only when every alternative of every branch point reached a REPLAYED closure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefutationReplay {
+    /// How many branch points the checker verified exhaustive.
+    branches: usize,
+    /// How many clash leaves it re-derived.
+    clashes: usize,
+    /// How many alternatives closed with nothing replayable written down.
+    unrecorded: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl RefutationReplay {
+    /// How many branch points were verified exhaustive.
+    #[must_use]
+    pub const fn branches(&self) -> usize {
+        self.branches
+    }
+
+    /// How many clash leaves were re-derived.
+    #[must_use]
+    pub const fn clashes(&self) -> usize {
+        self.clashes
+    }
+
+    /// How many alternatives closed with nothing replayable written down.
+    ///
+    /// Reachable: an alternative can close inside the `≥`-rule's distinctness bookkeeping,
+    /// which is not a clause instance. Reported rather than hidden, and it is what makes
+    /// [`Self::is_closed`] answer `false`.
+    #[must_use]
+    pub const fn unrecorded(&self) -> usize {
+        self.unrecorded
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
+    }
+
+    /// Whether EVERY alternative of every branch point reached a closure the checker REPLAYED.
+    ///
+    /// Exactly that, and deliberately not more. It does NOT say that every witness atom of
+    /// every leaf was reduced to an asserted axiom of the caller's ABox — reachability is not
+    /// established by this stage, and [`CheckReport::unattested`] is where that is reported.
+    /// What it does say is that no alternative closed on nothing: a branch whose closure was
+    /// [`BranchOutcome::Unrecorded`], a concrete-domain clash or a merge — the three closures
+    /// with no clause instance behind them — makes this `false`.
+    #[must_use]
+    pub const fn is_closed(&self) -> bool {
+        self.unrecorded == 0
+    }
+}
+
+/// What [`DlProof::replay_completion`] established about a clash-free completion — and, just as
+/// importantly, what it did not.
+///
+/// # What it establishes
+///
+/// 1. **No node carries a clash.** No empty-headed clause of the caller's clause set matches
+///    the recorded completion.
+/// 2. **Every clause is SATISFIED on it.** For every match of every clause body, some head
+///    disjunct holds on the completion. This is direct model checking, run by pure functions
+///    over the recorded graph: no `Hyper` driver is constructed and no
+///    `Session` is opened.
+/// 3. **Every blocking pair genuinely has equal signatures**, recomputed by the checker from
+///    the recorded labels, predecessors and incoming edges.
+///
+/// # What it does NOT establish
+///
+/// That a MODEL exists. The step from "a blocked, clash-free, saturated pre-model" to "a model"
+/// is the unravelling metatheorem — [`TrustBaseEntry::Unravelling`], cited by
+/// [`CALCULUS_VERSION`] and always present in [`CheckReport::rests_on`] for a completion. It is
+/// a statement about the CALCULUS, so it is not re-proved per instance and nothing here
+/// pretends it was. The one place the pre-model visibly falls short of a model is an
+/// unsatisfied `≥`-restriction at a BLOCKED node: blocking withholds exactly that rule, and the
+/// discharge is the unravelling argument rather than a check — counted by
+/// [`Self::deferred_to_blockers`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionReplay {
+    /// Nodes in the recorded completion.
+    nodes: usize,
+    /// Clauses the checker model-checked against it.
+    clauses: usize,
+    /// Blocking pairs whose signatures the checker recomputed.
+    blocks: usize,
+    /// At-least obligations left unsatisfied at a BLOCKED node, discharged by unravelling.
+    deferred: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl CompletionReplay {
+    /// Nodes in the recorded completion.
+    #[must_use]
+    pub const fn nodes(&self) -> usize {
+        self.nodes
+    }
+
+    /// Clauses the checker model-checked against the completion.
+    #[must_use]
+    pub const fn clauses(&self) -> usize {
+        self.clauses
+    }
+
+    /// Blocking pairs whose signatures the checker recomputed itself.
+    #[must_use]
+    pub const fn blocks(&self) -> usize {
+        self.blocks
+    }
+
+    /// At-least obligations unsatisfied at a BLOCKED node.
+    ///
+    /// Not a defect and not a check: blocking withholds the `≥`-rule, and the blocker carries
+    /// the obligation instead. Counted so a reader can see exactly how much of the pre-model's
+    /// standing rests on [`TrustBaseEntry::Unravelling`] rather than on a satisfied clause.
+    #[must_use]
+    pub const fn deferred_to_blockers(&self) -> usize {
+        self.deferred
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
     }
 }
 
@@ -848,8 +2119,8 @@ impl ClashReplay {
 /// This type exists to make one property structural rather than promised. It is built from a
 /// [`RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
 /// shipped, so a proof cannot be verified against the very stores that produced it. It
-/// constructs no [`Hyper`](crate::owl_dl::hyper) driver and opens no
-/// [`Session`](crate::reasoner::certificate) — the only thing it runs is the reverse mapper and
+/// constructs no `Hyper` driver and opens no
+/// `Session` — the only thing it runs is the reverse mapper and
 /// the clausifier, which are compilations of the ontology rather than searches over it.
 pub struct DlProofContext {
     /// The knowledge base the consumer's own dataset reverse-maps to.
@@ -895,6 +2166,20 @@ impl DlProofContext {
             input: input_digest(ontology),
             contract,
         })
+    }
+
+    /// A checking context over a knowledge base directly — the companion to
+    /// [`prove_consistency_of_kb`], and `cfg(test)` for the same reason.
+    #[cfg(test)]
+    pub(crate) fn of_kb(kb: Kb) -> Self {
+        let clauses = derive(&kb);
+        let contract = contract_digest(&clauses);
+        Self {
+            kb,
+            clauses,
+            input: [0; 32],
+            contract,
+        }
     }
 
     /// The producer-independent identity of the ontology this context was built from.
@@ -955,7 +2240,7 @@ impl DlProofContext {
 
 /// A deterministic, versioned proof term for one OWL-DL tableau decision.
 ///
-/// See the [module docs](self) for exactly what a replay of one establishes. Fields are
+/// See the module documentation for exactly what a replay of one establishes. Fields are
 /// private and there are exactly TWO constructors — [`prove_consistency`], which records an
 /// instrumented run, and [`DlProof::decode`], which rebuilds one from bytes — so there is no
 /// third way to get an unjustified step into a proof term.
@@ -966,8 +2251,15 @@ pub struct DlProof {
     input: [u8; 32],
     /// BLAKE3 over [`CALCULUS_VERSION`] and the clause set — honestly PRODUCER-DERIVED.
     contract: [u8; 32],
+    /// The PRODUCER-SHARED components this proof's checks rest on, in
+    /// [`TrustBaseEntry::ALL`] order.
+    ///
+    /// Carried in the term and covered by [`DlProof::digest`], so what a consumer is trusting
+    /// travels with the proof rather than being a property of whichever checker happens to read
+    /// it.
+    trust_base: Vec<TrustBaseEntry>,
     /// The constructs the reverse mapping could not turn into DL clauses, in
-    /// [`Construct::ALL`] order.
+    /// `Construct::ALL` order.
     boundaries: Vec<Construct>,
     /// The answer this proof is bound to.
     answer: ProofAnswer,
@@ -977,6 +2269,12 @@ pub struct DlProof {
     merges: Vec<MergeStep>,
     /// The nodes whose concrete-domain constraints had no solution, in search order.
     data_clashes: Vec<NodeRef>,
+    /// The `⊔`-rule branch points, in search order — a child always after its parent.
+    branches: Vec<BranchStep>,
+    /// What became of the ROOT state.
+    root: BranchOutcome,
+    /// The clash-free completion, for a [`ProofAnswer::Consistent`] run.
+    completion: Option<Completion>,
     /// Whether the recording reached [`MAX_RECORDED_STEPS`] for any kind.
     truncated: bool,
 }
@@ -998,7 +2296,7 @@ impl DlProof {
         self.contract
     }
 
-    /// The constructs the reverse mapping bounded, in [`Construct::ALL`] order.
+    /// The constructs the reverse mapping bounded, in `Construct::ALL` order.
     #[must_use]
     pub fn boundaries(&self) -> &[Construct] {
         &self.boundaries
@@ -1028,18 +2326,48 @@ impl DlProof {
     ///
     /// Records, not proofs: the concrete domain is the one decision this calculus does not
     /// take through a clause, so there is no clause instance to replay. Deciding one
-    /// independently means re-running [`crate::owl_dl::data`]'s value-space solver, which is a
+    /// independently means re-running `owl_dl::data`'s value-space solver, which is a
     /// later stage.
     #[must_use]
     pub fn data_clashes(&self) -> &[NodeRef] {
         &self.data_clashes
     }
 
+    /// The `⊔`-rule branch points, in search order — the EXHAUSTIVENESS receipts.
+    #[must_use]
+    pub fn branches(&self) -> &[BranchStep] {
+        &self.branches
+    }
+
+    /// What became of the ROOT state: the closure or branch point that is nobody's alternative.
+    #[must_use]
+    pub const fn root(&self) -> BranchOutcome {
+        self.root
+    }
+
+    /// The clash-free completion, for a [`ProofAnswer::Consistent`] run.
+    #[must_use]
+    pub const fn completion(&self) -> Option<&Completion> {
+        self.completion.as_ref()
+    }
+
+    /// The PRODUCER-SHARED components this proof's checks rest on.
+    ///
+    /// Read this before reading a [`CheckReport`]: it is the vocabulary the report's
+    /// [`CheckReport::rests_on`] is drawn from, and it travels with the proof so that a
+    /// consumer's understanding of "verified" cannot silently change under them.
+    #[must_use]
+    pub fn trust_base(&self) -> &[TrustBaseEntry] {
+        &self.trust_base
+    }
+
     /// Whether the recording reached [`MAX_RECORDED_STEPS`] for any step kind.
     ///
     /// A truncated proof is still sound for every step it DOES carry — each is replayed
     /// independently — but it is not the whole trace, and a consumer that needs the whole
-    /// trace must read this rather than infer completeness from a step count.
+    /// trace must read this rather than infer completeness from a step count. The two
+    /// whole-trace checks, [`Self::replay_refutation`] and [`Self::replay_completion`], refuse
+    /// a truncated proof outright rather than walking a tree with a hole in it.
     #[must_use]
     pub const fn truncated(&self) -> bool {
         self.truncated
@@ -1066,6 +2394,12 @@ impl DlProof {
                 stated: hex(self.contract),
             });
         }
+        if self.trust_base != TrustBaseEntry::ALL {
+            return Err(DlProofError::TrustBaseMismatch {
+                expected: trust_base_text(&TrustBaseEntry::ALL),
+                stated: trust_base_text(&self.trust_base),
+            });
+        }
         Ok(())
     }
 
@@ -1083,9 +2417,9 @@ impl DlProof {
     /// 5. the checker checks the named clash node against the identity the frame binds
     ///    variable `0` to.
     ///
-    /// No [`Hyper`](crate::owl_dl::hyper) driver is constructed, no
-    /// [`Session`](crate::reasoner::certificate) is opened, and no completion graph is
-    /// expanded. See the [module docs](self) for what this does NOT establish.
+    /// No `Hyper` driver is constructed, no
+    /// `Session` is opened, and no completion graph is
+    /// expanded. See the module documentation for what this does NOT establish.
     ///
     /// # Errors
     ///
@@ -1151,12 +2485,356 @@ impl DlProof {
             });
         }
         let attested = derived.iter().filter(|fact| ctx.asserts(fact)).count();
+        let mut checks = CheckReport::new();
+        // The atoms the caller's OWN ABox asserts, read off the caller's own reverse-mapped
+        // knowledge base. Independent of the trust base's grounding and clausification entries;
+        // it does rest on the reverse mapping, which is what makes a concept id mean anything.
+        checks.attest(attested);
+        checks.cite(&[TrustBaseEntry::ReverseMapping]);
+        checks.leave(derived.len() - attested);
+        // The five structural checks above: the clause exists, its head form is EMPTY, the
+        // frame binds every variable the body reads, the grounding matches the witness, and the
+        // clash node is the frame's variable 0. Every one is a statement about a CLAUSE.
+        checks.trust(
+            5,
+            &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
+        );
         Ok(ClashReplay {
             conclusion: DerivedConclusion::False,
             clause: step.clause,
-            attested,
-            unattested: derived.len() - attested,
+            checks,
         })
+    }
+
+    /// RE-DERIVE the ALTERNATIVES of branch point `index` against the consumer's own ontology.
+    ///
+    /// This is what makes "these were all the alternatives" checkable, and it is the check that
+    /// closes the unsound-`inconsistent` forgery: an `inconsistent` fabricated by dropping a
+    /// disjunct records a narrower case split than the clause licenses, and this rejects it.
+    ///
+    /// Nothing about the branch point is believed:
+    ///
+    /// 1. the proof must be bound to `ctx`'s ontology, calculus and trust base;
+    /// 2. the clause is looked up in `ctx`'s OWN clause set at the cited index;
+    /// 3. the checker computes that clause's [`HeadForm`] itself and refuses anything but
+    ///    [`HeadForm::Disjunctive`] — a clause that generates no case split cannot be a branch
+    ///    point, whatever the record calls it;
+    /// 4. the checker grounds that clause's head ITSELF, by calling the search's own
+    ///    `hyper::ground_head` against the recorded frame, and
+    ///    compares the result against the recorded alternatives atom for atom AND IN ORDER;
+    /// 5. the nominal-introduction alternatives are shape-checked against the cited clause: each
+    ///    must be a single reserved-root identification whose role and filler are the clause's
+    ///    own counted `(R, B)`, whose index is inside the bound, and whose origin is the branch
+    ///    node itself;
+    /// 6. the outcome list must have exactly one entry per alternative.
+    ///
+    /// # Classified honestly
+    ///
+    /// Step 4 is `trusted`, not `attested`: it rests on
+    /// [`TrustBaseEntry::Clausification`] and [`TrustBaseEntry::Grounding`]. What it is
+    /// independent of is `Hyper::solve`, `saturate`, `find_branch` and
+    /// the branch stack — the search driver, which holds the state and therefore the bugs. No
+    /// driver is constructed here and no completion graph is expanded.
+    ///
+    /// # Errors
+    ///
+    /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
+    pub fn replay_branch(
+        &self,
+        index: usize,
+        ctx: &DlProofContext,
+    ) -> Result<BranchReplay, DlProofError> {
+        self.bound_to(ctx)?;
+        let step = self
+            .branches
+            .get(index)
+            .ok_or_else(|| malformed(&format!("no branch point at index {index}")))?;
+        let clauses = ctx.clauses.count();
+        if step.clause >= clauses {
+            return Err(DlProofError::UnknownClause {
+                clause: step.clause,
+                clauses,
+            });
+        }
+        let clause = ctx.clauses.clause(step.clause);
+        let form = clause.head_form();
+        if form != HeadForm::Disjunctive {
+            return Err(DlProofError::NotADisjunction {
+                clause: step.clause,
+                form,
+            });
+        }
+        // The frame is attacker-controlled, and `ground_head` indexes it. Its width is checked
+        // against the head's own variables FIRST, so a narrow frame is a rejection rather than
+        // a panic.
+        let width = head_frame_width(&clause.head)
+            .ok_or_else(|| malformed("a head disjunct mixes a schematic pair with other atoms"))?;
+        if (step.frame.len() as u64) < u64::from(width) {
+            return Err(DlProofError::FrameTooShort {
+                clause: step.clause,
+                variable: width - 1,
+                frame: step.frame.len(),
+            });
+        }
+        // THE REGENERATION. The search's own grounding, over the CALLER's clause and the
+        // recorded frame, with the proof's node identities as the carrier.
+        let derived: Vec<ProofAlternative> = ground_head(&clause.head, &step.frame)
+            .iter()
+            .map(|disjunct| ProofAlternative {
+                atoms: disjunct.iter().map(ProofGround::of).collect(),
+            })
+            .collect();
+        if derived.len() != step.alternatives.len() {
+            return Err(DlProofError::AlternativeCountMismatch {
+                branch: index,
+                clause: step.clause,
+                derived: derived.len(),
+                stated: step.alternatives.len(),
+            });
+        }
+        for (position, (derived, stated)) in derived.iter().zip(&step.alternatives).enumerate() {
+            if derived != stated {
+                return Err(DlProofError::AlternativeMismatch {
+                    branch: index,
+                    position,
+                    derived: Box::new(derived.clone()),
+                    stated: Box::new(stated.clone()),
+                });
+            }
+        }
+        check_introduced(index, step, clause)?;
+        if step.outcomes.len() != step.width() {
+            return Err(DlProofError::OutcomeCountMismatch {
+                branch: index,
+                derived: step.width(),
+                stated: step.outcomes.len(),
+            });
+        }
+        let mut checks = CheckReport::new();
+        // One per regenerated alternative, plus the head-form refusal and the frame-width check.
+        checks.trust(
+            derived.len() + 2,
+            &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
+        );
+        // One per shape-checked nominal-introduction alternative — a statement about the cited
+        // clause's counted role and filler.
+        checks.trust(step.introduced.len(), &[TrustBaseEntry::Clausification]);
+        // …but WHICH blockable predecessors press the bound is completion-graph state a proof
+        // term does not carry, so the introduced SET itself is not checked.
+        checks.leave(step.introduced.len());
+        // The outcome list's width against the alternative count is arithmetic over the proof
+        // term alone.
+        checks.attest(1);
+        Ok(BranchReplay {
+            clause: step.clause,
+            alternatives: derived.len(),
+            introduced: step.introduced.len(),
+            checks,
+        })
+    }
+
+    /// Walk the WHOLE refutation tree: every branch point exhaustive, every alternative closed,
+    /// every clash leaf re-derived.
+    ///
+    /// This is the check a consumer of an `inconsistent` verdict actually wants. A refutation is
+    /// a tree — internal nodes are case splits, leaves are derivations of `false` — and this
+    /// verifies both halves of it against the caller's own ontology:
+    ///
+    /// * every branch point passes [`Self::replay_branch`], so its alternatives are exactly the
+    ///   ones the caller's own clause set licenses, in order;
+    /// * every alternative of every branch point reached a recorded CLOSURE, and every closure
+    ///   that names a clash step is re-derived by [`Self::replay_clash`];
+    /// * the tree is well-founded (a child branch point is always recorded after its parent) and
+    ///   reachable from the root, so no branch point is orphaned and no cycle stands in for a
+    ///   closure.
+    ///
+    /// An alternative that closed with nothing replayable written down is counted
+    /// [`RefutationReplay::unrecorded`] and makes [`RefutationReplay::is_closed`] `false`; it is
+    /// never smoothed into a discharged obligation.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::WrongAnswer`] unless the proof is bound to [`ProofAnswer::Inconsistent`];
+    /// [`DlProofError::Truncated`] if the recording hit its ceiling; and any rejection
+    /// [`Self::replay_branch`] or [`Self::replay_clash`] makes.
+    pub fn replay_refutation(
+        &self,
+        ctx: &DlProofContext,
+    ) -> Result<RefutationReplay, DlProofError> {
+        self.bound_to(ctx)?;
+        if self.answer != ProofAnswer::Inconsistent {
+            return Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Inconsistent,
+                stated: self.answer,
+            });
+        }
+        if self.truncated {
+            return Err(DlProofError::Truncated);
+        }
+        let mut report = RefutationReplay {
+            branches: 0,
+            clashes: 0,
+            unrecorded: 0,
+            checks: CheckReport::new(),
+        };
+        // Every branch point must be reached from the root exactly once: an orphaned one is a
+        // case split nothing depends on, and a twice-reached one is a tree that is not one.
+        let mut seen = vec![false; self.branches.len()];
+        self.walk_closure(ctx, self.root, None, &mut seen, &mut report)?;
+        for (index, reached) in seen.iter().enumerate() {
+            if !reached {
+                return Err(malformed(&format!(
+                    "branch point {index} is not reachable from the root, so it closes nothing"
+                )));
+            }
+        }
+        Ok(report)
+    }
+
+    /// Verify one recorded CLOSURE and, when it is a branch point, everything below it.
+    ///
+    /// `at` names where the outcome was filed, for a diagnostic. Recursion is bounded by the
+    /// `seen` marks: a branch point is entered at most once, and there are finitely many.
+    fn walk_closure(
+        &self,
+        ctx: &DlProofContext,
+        outcome: BranchOutcome,
+        at: Option<(usize, usize)>,
+        seen: &mut [bool],
+        report: &mut RefutationReplay,
+    ) -> Result<(), DlProofError> {
+        let (branch, ordinal) = at.unwrap_or((usize::MAX, usize::MAX));
+        let dangling = |detail: &str| DlProofError::DanglingOutcome {
+            branch,
+            ordinal,
+            detail: detail.to_owned(),
+        };
+        match outcome {
+            BranchOutcome::Clash(index) => {
+                if index >= self.clashes.len() {
+                    return Err(dangling("no clash step at that index"));
+                }
+                let replay = self.replay_clash(index, ctx)?;
+                report.clashes += 1;
+                report.checks.absorb(&replay.checks);
+                Ok(())
+            }
+            BranchOutcome::DataClash(index) => {
+                if index >= self.data_clashes.len() {
+                    return Err(dangling("no concrete-domain clash at that index"));
+                }
+                // The concrete domain is the one decision this calculus does not take through a
+                // clause, so there is no clause instance to replay — see
+                // [`DlProof::data_clashes`]. Counted unattested, never as a discharged
+                // obligation.
+                report.checks.leave(1);
+                report.unrecorded += 1;
+                Ok(())
+            }
+            BranchOutcome::Merge(index) => {
+                let merge = self
+                    .merges
+                    .get(index)
+                    .ok_or_else(|| dangling("no merge at that index"))?;
+                if !merge.clashed {
+                    return Err(dangling("the named merge did not close the state"));
+                }
+                // A merge is provenance, not a proof — replaying one needs the premise DAG this
+                // stage does not build. That the record SAYS it clashed is read; that it was
+                // licensed is not established.
+                report.checks.leave(1);
+                report.unrecorded += 1;
+                Ok(())
+            }
+            BranchOutcome::Branch(index) => {
+                if index >= self.branches.len() {
+                    return Err(dangling("no branch point at that index"));
+                }
+                if std::mem::replace(&mut seen[index], true) {
+                    return Err(dangling(
+                        "that branch point closes two alternatives at once",
+                    ));
+                }
+                if let Some((parent, _)) = at
+                    && index <= parent
+                {
+                    // A child is always recorded after its parent, so this is both a
+                    // well-formedness check and what makes the recursion terminate.
+                    return Err(dangling(
+                        "a branch point cannot descend into an earlier one",
+                    ));
+                }
+                let replay = self.replay_branch(index, ctx)?;
+                report.branches += 1;
+                report.checks.absorb(&replay.checks);
+                let step = &self.branches[index];
+                for (ordinal, outcome) in step.outcomes.iter().copied().enumerate() {
+                    if matches!(outcome, BranchOutcome::Open | BranchOutcome::Unexplored) {
+                        return Err(DlProofError::BranchNotClosed {
+                            branch: index,
+                            ordinal,
+                        });
+                    }
+                    self.walk_closure(ctx, outcome, Some((index, ordinal)), seen, report)?;
+                }
+                Ok(())
+            }
+            BranchOutcome::Unrecorded => {
+                report.checks.leave(1);
+                report.unrecorded += 1;
+                Ok(())
+            }
+            BranchOutcome::Open | BranchOutcome::Unexplored => {
+                Err(DlProofError::BranchNotClosed { branch, ordinal })
+            }
+        }
+    }
+
+    /// [`Self::replay_completion`], with the check ceiling as a parameter.
+    ///
+    /// Crate-private and parameterized for exactly one reason: the BUDGET-EXHAUSTED path has to
+    /// be pinned by a test. A clause the budget did not reach is reported
+    /// [`CheckReport::unattested`], never assumed satisfied, and a ceiling nothing can lower is
+    /// a branch no test constrains.
+    pub(crate) fn replay_completion_within(
+        &self,
+        ctx: &DlProofContext,
+        budget: u64,
+    ) -> Result<CompletionReplay, DlProofError> {
+        self.bound_to(ctx)?;
+        if self.answer != ProofAnswer::Consistent {
+            return Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Consistent,
+                stated: self.answer,
+            });
+        }
+        if self.truncated {
+            return Err(DlProofError::Truncated);
+        }
+        let completion = self.completion.as_ref().ok_or(DlProofError::NoCompletion)?;
+        CompletionView::of(&ctx.kb, completion, budget)?.check(&ctx.clauses)
+    }
+
+    /// MODEL CHECK the recorded clash-free completion against the consumer's own ontology.
+    ///
+    /// Not a search and not a re-derivation: the completion is taken as given and the caller's
+    /// own clauses are evaluated ON it. No `Hyper` driver is
+    /// constructed, no `Session` is opened, and no rule is
+    /// applied. See [`CompletionReplay`] for exactly what this does and does not establish —
+    /// in particular, it does NOT by itself prove that a model exists; that step is
+    /// [`TrustBaseEntry::Unravelling`].
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::WrongAnswer`] unless the proof is bound to [`ProofAnswer::Consistent`];
+    /// [`DlProofError::NoCompletion`], [`DlProofError::Truncated`],
+    /// [`DlProofError::MalformedCompletion`], [`DlProofError::ClashInCompletion`],
+    /// [`DlProofError::ClauseNotSatisfied`] or [`DlProofError::BlockingSignatureMismatch`].
+    pub fn replay_completion(
+        &self,
+        ctx: &DlProofContext,
+    ) -> Result<CompletionReplay, DlProofError> {
+        self.replay_completion_within(ctx, MAX_CHECK_WORK)
     }
 
     /// The canonical byte encoding of the proof.
@@ -1170,6 +2848,7 @@ impl DlProof {
     /// 32 bytes contract
     /// u8  answer ordinal
     /// u8  truncated
+    /// u64 trust_base_count, u64 TrustBaseEntry::ALL ordinal each
     /// u64 boundary_count, u64 Construct::ALL ordinal each
     /// u64 clash_count, then per clash:
     ///     u64 clause index
@@ -1179,7 +2858,27 @@ impl DlProof {
     /// u64 merge_count, then per merge:
     ///     u8 cause ordinal, node left, node right, node joined, u8 clashed
     /// u64 data_clash_count, node each
+    /// outcome                                     -- the root's
+    /// u64 branch_count, then per branch:
+    ///     u64 clause index
+    ///     node                                    -- the branch node
+    ///     u64 frame_len, node each
+    ///     u64 alternative_count, alternative each
+    ///     u64 introduced_count, alternative each
+    ///     u64 outcome_count, outcome each
+    /// u8  has_completion, then when set:
+    ///     u64 node_count, then per node:
+    ///         node, u8 concrete, u8 root,
+    ///         u8 has_parent + node, u8 has_incoming + u32 property + u8 inverse,
+    ///         u8 has_value_class + u32,
+    ///         u64 label_len + u32 each, u64 nominal_len + u32 each,
+    ///         u64 distinct_len + node each
+    ///     u64 edge_count, then per edge: node from, node to, u32 property
+    ///     u64 block_count, then per pair: node blocked, node blocker
     /// ```
+    ///
+    /// An alternative is `u64 atom_count` and then one grounded atom each; an outcome is a kind
+    /// byte and a `u64` index, `0` for the kinds that carry none.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1188,6 +2887,10 @@ impl DlProof {
         out.extend_from_slice(&self.contract);
         out.push(self.answer.ordinal());
         out.push(u8::from(self.truncated));
+        out.extend_from_slice(&(self.trust_base.len() as u64).to_le_bytes());
+        for entry in &self.trust_base {
+            out.extend_from_slice(&entry.ordinal().to_le_bytes());
+        }
         out.extend_from_slice(&(self.boundaries.len() as u64).to_le_bytes());
         for boundary in &self.boundaries {
             let ordinal = Construct::ALL
@@ -1225,6 +2928,33 @@ impl DlProof {
         for node in &self.data_clashes {
             encode_node(&mut out, node);
         }
+        encode_outcome(&mut out, self.root);
+        out.extend_from_slice(&(self.branches.len() as u64).to_le_bytes());
+        for step in &self.branches {
+            out.extend_from_slice(&(step.clause as u64).to_le_bytes());
+            encode_node(&mut out, &step.node);
+            out.extend_from_slice(&(step.frame.len() as u64).to_le_bytes());
+            for node in &step.frame {
+                encode_node(&mut out, node);
+            }
+            for list in [&step.alternatives, &step.introduced] {
+                out.extend_from_slice(&(list.len() as u64).to_le_bytes());
+                for alternative in list {
+                    encode_alternative(&mut out, alternative);
+                }
+            }
+            out.extend_from_slice(&(step.outcomes.len() as u64).to_le_bytes());
+            for outcome in &step.outcomes {
+                encode_outcome(&mut out, *outcome);
+            }
+        }
+        match self.completion.as_ref() {
+            Some(completion) => {
+                out.push(1);
+                encode_completion(&mut out, completion);
+            }
+            None => out.push(0),
+        }
         out
     }
 
@@ -1248,7 +2978,7 @@ impl DlProof {
     ///
     /// The UNTRUSTED entrance, and the place a corrupted or forged stream is a REJECTION
     /// rather than a panic: a mis-tagged, truncated or over-long stream, an unknown node,
-    /// fact, cause or answer kind, and a boundary ordinal outside [`Construct::ALL`] are all
+    /// fact, cause or answer kind, and a boundary ordinal outside `Construct::ALL` are all
     /// [`DlProofError::Malformed`]. A forgery that is nonetheless structurally legal — a
     /// tampered clause index, frame or witness — decodes cleanly and is caught where it should
     /// be, by [`Self::replay_clash`]'s re-derivation.
@@ -1268,6 +2998,14 @@ impl DlProof {
         let answer = ProofAnswer::of_ordinal(reader.byte()?)
             .ok_or_else(|| malformed("unknown answer ordinal"))?;
         let truncated = reader.flag()?;
+        let mut trust_base = Vec::new();
+        for _ in 0..reader.length()? {
+            let ordinal = reader.length()?;
+            let entry = TrustBaseEntry::ALL
+                .get(ordinal)
+                .ok_or_else(|| malformed("trust-base ordinal outside TrustBaseEntry::ALL"))?;
+            trust_base.push(*entry);
+        }
         let mut boundaries = Vec::new();
         for _ in 0..reader.length()? {
             let ordinal = reader.length()?;
@@ -1319,17 +3057,52 @@ impl DlProof {
         for _ in 0..reader.length()? {
             data_clashes.push(reader.node()?);
         }
+        let root = reader.outcome()?;
+        let mut branches = Vec::new();
+        for _ in 0..reader.length()? {
+            let clause = reader.length()?;
+            let node = reader.node()?;
+            let mut frame = Vec::new();
+            for _ in 0..reader.length()? {
+                frame.push(reader.node()?);
+            }
+            let mut alternatives = Vec::new();
+            for _ in 0..reader.length()? {
+                alternatives.push(reader.alternative()?);
+            }
+            let mut introduced = Vec::new();
+            for _ in 0..reader.length()? {
+                introduced.push(reader.alternative()?);
+            }
+            let mut outcomes = Vec::new();
+            for _ in 0..reader.length()? {
+                outcomes.push(reader.outcome()?);
+            }
+            branches.push(BranchStep {
+                clause,
+                node,
+                frame,
+                alternatives,
+                introduced,
+                outcomes,
+            });
+        }
+        let completion = reader.flag()?.then(|| reader.completion()).transpose()?;
         if !reader.is_exhausted() {
             return Err(malformed("trailing bytes after the proof's last field"));
         }
         Ok(Self {
             input,
             contract,
+            trust_base,
             boundaries,
             answer,
             clashes,
             merges,
             data_clashes,
+            branches,
+            root,
+            completion,
             truncated,
         })
     }
@@ -1363,17 +3136,58 @@ pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof)
     let proof = DlProof {
         input: input_digest(ontology),
         contract: contract_digest(&clauses),
+        trust_base: TrustBaseEntry::ALL.to_vec(),
         boundaries: boundaries_of(&kb.boundaries),
         answer,
         clashes: recorder.clashes,
         merges: recorder.merges,
         data_clashes: recorder.data_clashes,
+        branches: recorder.branches,
+        root: recorder.root,
+        completion: recorder.completion,
         truncated: recorder.truncated,
     };
     Ok((answer, proof))
 }
 
-/// The knowledge base's boundary set, in [`Construct::ALL`] order.
+/// Prove a knowledge base directly, bypassing the reverse mapper.
+///
+/// `cfg(test)` only, and the reason is the DIFFERENTIAL: [`crate::owl_dl::oracle`]'s generated
+/// corpus and its bounded-domain model enumerator are built over [`Kb`] values rather than over
+/// RDF datasets, so corroborating a recorded completion against the one genuinely independent
+/// model checker this crate has means being able to start from a [`Kb`]. The input identity is
+/// zero — there is no dataset to canonicalize — which is exactly why this is not a public
+/// entrance: a proof that carried no input identity would verify against any store at all.
+#[cfg(test)]
+pub(crate) fn prove_consistency_of_kb(kb: &Kb) -> (ProofAnswer, DlProof) {
+    let clauses = derive(kb);
+    let (decision, recorder) =
+        crate::owl_dl::hyper::decide_recording(kb, &Assumptions::of_kb(), Budget::for_kb(kb));
+    let answer = if decision.exhausted || decision.stopped {
+        ProofAnswer::Undecided
+    } else if decision.consistent {
+        ProofAnswer::Consistent
+    } else {
+        ProofAnswer::Inconsistent
+    };
+    let proof = DlProof {
+        input: [0; 32],
+        contract: contract_digest(&clauses),
+        trust_base: TrustBaseEntry::ALL.to_vec(),
+        boundaries: boundaries_of(&kb.boundaries),
+        answer,
+        clashes: recorder.clashes,
+        merges: recorder.merges,
+        data_clashes: recorder.data_clashes,
+        branches: recorder.branches,
+        root: recorder.root,
+        completion: recorder.completion,
+        truncated: recorder.truncated,
+    };
+    (answer, proof)
+}
+
+/// The knowledge base's boundary set, in `Construct::ALL` order.
 fn boundaries_of(boundaries: &BTreeSet<Construct>) -> Vec<Construct> {
     Construct::ALL
         .into_iter()
@@ -1447,20 +3261,626 @@ fn ground_body(
     Ok(out)
 }
 
+/// How wide a binding frame a clause HEAD reads, or `None` when a disjunct mixes the schematic
+/// pair atom with others.
+///
+/// The checker's guard on an attacker-controlled frame: `ground_head` indexes the frame, so a
+/// proof that recorded a short one would panic the checker rather than be rejected by it. The
+/// `None` case is the second such guard — `ground_head` expands `EqualSomePair` only when it is
+/// a disjunct's sole atom, and reaches an `unreachable!` otherwise.
+pub(crate) fn head_frame_width(head: &[Vec<HeadAtom>]) -> Option<u32> {
+    let mut width = 1_u32;
+    for disjunct in head {
+        let pairs = disjunct
+            .iter()
+            .filter(|atom| matches!(atom, HeadAtom::EqualSomePair { .. }))
+            .count();
+        if pairs > 0 && disjunct.len() != 1 {
+            return None;
+        }
+        for atom in disjunct {
+            match *atom {
+                HeadAtom::Concept { var, .. }
+                | HeadAtom::SelfLoop { var, .. }
+                | HeadAtom::AtLeast { var, .. }
+                | HeadAtom::EqualIndividual { var, .. } => width = width.max(var.saturating_add(1)),
+                HeadAtom::EqualSomePair { first, count } => {
+                    width = width.max(first.saturating_add(count));
+                }
+            }
+        }
+    }
+    Some(width)
+}
+
+/// Shape-check a branch point's NOMINAL-INTRODUCTION alternatives against the clause it cites.
+///
+/// They are not regenerable — which blockable predecessors press an at-most bound is
+/// completion-graph state — but they are not unconstrained either. Each must be a single
+/// reserved-root identification `y ≈ u.⟨R,B,i⟩` whose `(R, B)` are the CITED CLAUSE's own
+/// counted role and filler, whose `i` is inside the bound `n = count - 1`, and whose `u` is the
+/// branch node's own nominal identity. A forger who invents an at-most root, a role, a filler or
+/// an index the clause does not license is rejected here; WHICH predecessors were folded is what
+/// stays [`CheckReport::unattested`].
+fn check_introduced(
+    branch: usize,
+    step: &BranchStep,
+    clause: &DlClause,
+) -> Result<(), DlProofError> {
+    if step.introduced.is_empty() {
+        return Ok(());
+    }
+    let ill = |position: usize, detail: &str| DlProofError::IllFormedIntroduction {
+        branch,
+        position,
+        detail: detail.to_owned(),
+    };
+    let counted = clause.body.iter().find_map(|atom| match *atom {
+        BodyAtom::Successors {
+            role,
+            filler,
+            count,
+            ..
+        } => Some((ProofRole::of(role), filler, count)),
+        _ => None,
+    });
+    let Some((role, filler, count)) = counted else {
+        return Err(ill(
+            0,
+            "the cited clause counts no successors, so its head is not an at-most bound and the \
+             nominal-introduction rule cannot fire at it",
+        ));
+    };
+    let bound = count.saturating_sub(1);
+    for (position, alternative) in step.introduced.iter().enumerate() {
+        let [ProofGround::EqualReserved { root, .. }] = alternative.atoms.as_slice() else {
+            return Err(ill(
+                position,
+                "a nominal-introduction alternative is exactly one reserved-root identification",
+            ));
+        };
+        if root.role != role {
+            return Err(ill(position, "the reserved root counts a different role"));
+        }
+        if root.filler != filler {
+            return Err(ill(position, "the reserved root names a different filler"));
+        }
+        if root.index >= bound {
+            return Err(ill(
+                position,
+                "the reserved index is outside the at-most bound",
+            ));
+        }
+        if root.origin != step.node {
+            return Err(ill(
+                position,
+                "the reserved root belongs to another at-most root than the branch node",
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ── Model checking a completion ─────────────────────────────────────────────────
+
+/// An INDEXED, read-only view of a recorded completion, and the pure functions that decide
+/// clause satisfaction on it.
+///
+/// Everything here reads the proof term and the caller's own knowledge base. It constructs no
+/// `Hyper` driver, no `Graph` and no
+/// `State`: the neighbour closure the calculus's `r`-neighbourhood is defined by is
+/// recomputed from the caller's role axioms rather than taken from the producer, precisely so
+/// that a completion recorded with a wrong edge set cannot pass by supplying its own reading
+/// of it.
+struct CompletionView<'a> {
+    /// The caller's own knowledge base — the concept table, the ABox and the role axioms.
+    kb: &'a Kb,
+    /// The recorded nodes, in the graph's ascending index order.
+    nodes: &'a [CompletionNode],
+    /// The recorded edges, resolved to positions.
+    edges: Vec<(usize, usize, u32)>,
+    /// Whether each node is blocked — DIRECTLY, from a verified recorded pair, or INDIRECTLY,
+    /// because an earlier predecessor is. Computed here, never read out of the proof.
+    blocked: Vec<bool>,
+    /// The `(property, forward?)` closure of each role, memoized.
+    achievers: RefCell<BTreeMap<Role, BTreeSet<(u32, bool)>>>,
+    /// The neighbour set of each `(node, role)`, memoized.
+    neighbours: RefCell<BTreeMap<(usize, Role), Vec<usize>>>,
+    /// Work spent, against [`Self::cap`].
+    work: Cell<u64>,
+    /// The ceiling this check stops at — [`MAX_CHECK_WORK`] for every caller but the test that
+    /// pins the exhaustion path.
+    cap: u64,
+}
+
+/// The schematic successor atom a subset walk is completing, held together so the recursion
+/// carries one reference rather than three parallel parameters that must stay in step.
+struct Selection<'c> {
+    /// The clause being matched.
+    clause: &'c DlClause,
+    /// The body position the schematic atom sits at.
+    at: usize,
+    /// The counted successors the selection is drawn from, ascending and deduplicated.
+    pool: &'c [usize],
+}
+
+impl<'a> CompletionView<'a> {
+    /// Index `completion`, rejecting a graph that is not one and recomputing every blocking
+    /// signature.
+    fn of(kb: &'a Kb, completion: &'a Completion, cap: u64) -> Result<Self, DlProofError> {
+        let mut position = BTreeMap::new();
+        for (at, node) in completion.nodes.iter().enumerate() {
+            if position.insert(node.node.clone(), at).is_some() {
+                return Err(DlProofError::MalformedCompletion {
+                    detail: format!("the node identity {:?} appears twice", node.node),
+                });
+            }
+        }
+        let at = |node: &NodeRef| {
+            position
+                .get(node)
+                .copied()
+                .ok_or_else(|| DlProofError::MalformedCompletion {
+                    detail: format!("{node:?} is named but is not a node of the completion"),
+                })
+        };
+        let mut edges = Vec::with_capacity(completion.edges.len());
+        for edge in &completion.edges {
+            edges.push((at(&edge.from)?, at(&edge.to)?, edge.property));
+        }
+        // THE BLOCKING WITNESSES, recomputed. A pair is believed only when the checker's own
+        // reading of the two nodes' labels, predecessors' labels and incoming edges agrees, the
+        // blocker is earlier and unblocked, and neither is a root.
+        let mut blocked = vec![false; completion.nodes.len()];
+        for pair in &completion.blocks {
+            let (x, y) = (at(&pair.blocked)?, at(&pair.blocker)?);
+            check_blocking(completion, x, y, &position, &blocked)?;
+            blocked[x] = true;
+        }
+        // INDIRECT blocking: a node whose predecessor is an EARLIER blocked node. The same
+        // conservative direction `Hyper::blocking` takes — a predecessor whose position is later
+        // reads as unblocked, which can only ever withhold the unravelling discharge below.
+        for x in 0..completion.nodes.len() {
+            if blocked[x] {
+                continue;
+            }
+            if let Some(parent) = completion.nodes[x].parent.as_ref()
+                && let Some(&p) = position.get(parent)
+                && p < x
+                && blocked[p]
+            {
+                blocked[x] = true;
+            }
+        }
+        Ok(Self {
+            kb,
+            nodes: &completion.nodes,
+            edges,
+            blocked,
+            achievers: RefCell::new(BTreeMap::new()),
+            neighbours: RefCell::new(BTreeMap::new()),
+            work: Cell::new(0),
+            cap,
+        })
+    }
+
+    /// Charge `units` of check work.
+    fn charge(&self, units: u64) {
+        self.work
+            .set(self.work.get().saturating_add(units).min(self.cap));
+    }
+
+    /// Whether the check budget is gone.
+    fn spent(&self) -> bool {
+        self.work.get() >= self.cap
+    }
+
+    /// The `(property, forward?)` patterns that realize `role`, closed over the CALLER's own
+    /// sub-role and inverse declarations.
+    fn achievers(&self, role: Role) -> BTreeSet<(u32, bool)> {
+        if let Some(cached) = self.achievers.borrow().get(&role) {
+            return cached.clone();
+        }
+        let start = match role {
+            Role::Named(p) => (p, true),
+            Role::Inv(p) => (p, false),
+        };
+        let mut set: BTreeSet<(u32, bool)> = BTreeSet::new();
+        let mut stack = vec![start];
+        while let Some((q, dir)) = stack.pop() {
+            self.charge(1);
+            if !set.insert((q, dir)) {
+                continue;
+            }
+            if let Some(subs) = self.kb.role_sub.get(&q) {
+                stack.extend(subs.iter().map(|&s| (s, dir)));
+            }
+            if let Some(invs) = self.kb.inverses.get(&q) {
+                stack.extend(invs.iter().map(|&s| (s, !dir)));
+            }
+        }
+        self.achievers.borrow_mut().insert(role, set.clone());
+        set
+    }
+
+    /// One edge step from `x` over the patterns `ach`.
+    fn step(&self, x: usize, ach: &BTreeSet<(u32, bool)>) -> Vec<usize> {
+        self.charge(self.edges.len() as u64);
+        let mut out = Vec::new();
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for &(from, to, prop) in &self.edges {
+            if ach.contains(&(prop, true)) && from == x && seen.insert(to) {
+                out.push(to);
+            }
+            if ach.contains(&(prop, false)) && to == x && seen.insert(from) {
+                out.push(from);
+            }
+        }
+        out
+    }
+
+    /// The `role`-neighbours of `x`, closed over the role hierarchy, the inverse declarations
+    /// and the transitive-role closure — the calculus's own `r`-neighbourhood, recomputed.
+    fn neighbors(&self, x: usize, role: Role) -> Vec<usize> {
+        if let Some(cached) = self.neighbours.borrow().get(&(x, role)) {
+            return cached.clone();
+        }
+        let ach = self.achievers(role);
+        let mut out = self.step(x, &ach);
+        let mut seen: BTreeSet<usize> = out.iter().copied().collect();
+        for &(prop, dir) in &ach {
+            if !self.kb.transitive.contains(&prop) {
+                continue;
+            }
+            let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
+            let mut frontier = self.step(x, &single);
+            let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
+            while let Some(y) = frontier.pop() {
+                if self.spent() {
+                    break;
+                }
+                if seen.insert(y) {
+                    out.push(y);
+                }
+                for z in self.step(y, &single) {
+                    if visited.insert(z) {
+                        frontier.push(z);
+                    }
+                }
+            }
+        }
+        self.neighbours.borrow_mut().insert((x, role), out.clone());
+        out
+    }
+
+    /// Whether `x`'s label holds `concept`, `⊤` counting as always held.
+    fn has_concept(&self, x: usize, concept: u32) -> bool {
+        matches!(self.kb.table.decomp(concept), Decomp::Top)
+            || self.nodes[x].label.binary_search(&concept).is_ok()
+    }
+
+    /// Whether `a` and `b` are forced DISTINCT: a recorded `≠`, or a disagreement of value
+    /// class, which the datatype map forces whether or not anything said so.
+    fn distinct(&self, a: usize, b: usize) -> bool {
+        if a == b {
+            return false;
+        }
+        if let (Some(left), Some(right)) = (self.nodes[a].value_class, self.nodes[b].value_class)
+            && left != right
+        {
+            return true;
+        }
+        self.nodes[a].distinct.contains(&self.nodes[b].node)
+            || self.nodes[b].distinct.contains(&self.nodes[a].node)
+    }
+
+    /// Whether `items` holds `need` pairwise-distinct members.
+    ///
+    /// A bounded backtracking search, not a greedy one: "are there `n` pairwise `≠` witnesses"
+    /// is a clique question and a greedy answer would withhold satisfaction that holds. Budget
+    /// exhaustion answers `false`, which can only ever WITHHOLD a satisfaction claim — and a
+    /// withheld one surfaces as an unsatisfied clause rather than as a silent pass.
+    fn has_distinct(&self, items: &[usize], need: usize, chosen: &mut Vec<usize>) -> bool {
+        if chosen.len() >= need {
+            return true;
+        }
+        if chosen.len() + items.len() < need || self.spent() {
+            return false;
+        }
+        for (at, &candidate) in items.iter().enumerate() {
+            self.charge(1);
+            if chosen.iter().all(|&other| self.distinct(other, candidate)) {
+                chosen.push(candidate);
+                if self.has_distinct(&items[at + 1..], need, chosen) {
+                    chosen.pop();
+                    return true;
+                }
+                chosen.pop();
+            }
+        }
+        false
+    }
+
+    /// Whether every atom of a grounded disjunct HOLDS on the completion.
+    ///
+    /// The mirror of the search's own satisfaction test, over the recorded graph.
+    fn satisfied(&self, disjunct: &[Ground<usize>]) -> bool {
+        disjunct.iter().all(|atom| match *atom {
+            Ground::Concept(node, concept) => self.has_concept(node, concept),
+            Ground::SelfLoop(node, role) => self.neighbors(node, role).contains(&node),
+            Ground::AtLeast(node, n, role, filler) => {
+                if n == 0 {
+                    return true;
+                }
+                let with_filler: Vec<usize> = self
+                    .neighbors(node, role)
+                    .into_iter()
+                    .filter(|&y| self.has_concept(y, filler))
+                    .collect();
+                self.has_distinct(&with_filler, n as usize, &mut Vec::new())
+            }
+            Ground::Equal(left, right) => left == right,
+            Ground::EqualIndividual(node, individual) => {
+                self.nodes[node].nominals.binary_search(&individual).is_ok()
+            }
+            Ground::EqualReserved(node, ref key) => {
+                self.nodes[node].node == NodeRef::Reserved(Box::new(reserved_ref(key)))
+            }
+        })
+    }
+
+    /// Every binding frame that satisfies `clause`'s body with variable `0` bound to `x`.
+    fn body_matches(&self, clause: &DlClause, x: usize) -> Vec<Vec<usize>> {
+        let mut out = Vec::new();
+        let mut frame = vec![x];
+        self.walk(clause, 0, &mut frame, &mut out);
+        out
+    }
+
+    /// Match `clause.body[at..]`, extending `frame` — the checker's own left-deep join over the
+    /// recorded graph.
+    fn walk(
+        &self,
+        clause: &DlClause,
+        at: usize,
+        frame: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        self.charge(1);
+        if self.spent() {
+            return;
+        }
+        let Some(&atom) = clause.body.get(at) else {
+            out.push(frame.clone());
+            return;
+        };
+        match atom {
+            BodyAtom::Concept { var, concept } => {
+                if self.has_concept(frame[var as usize], concept) {
+                    self.walk(clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Denotes { var, individual } => {
+                if self.nodes[frame[var as usize]]
+                    .nominals
+                    .binary_search(&individual)
+                    .is_ok()
+                {
+                    self.walk(clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Role { from, to, role } => {
+                let source = frame[from as usize];
+                if (to as usize) < frame.len() {
+                    let target = frame[to as usize];
+                    if self.neighbors(source, role).contains(&target) {
+                        self.walk(clause, at + 1, frame, out);
+                    }
+                } else {
+                    for y in self.neighbors(source, role) {
+                        frame.push(y);
+                        self.walk(clause, at + 1, frame, out);
+                        frame.pop();
+                    }
+                }
+            }
+            BodyAtom::Successors {
+                role,
+                filler,
+                first,
+                count,
+            } => {
+                if first as usize != frame.len() {
+                    // The frame is a stack, so a schematic successor atom binds the next
+                    // `count` pushes. A clause set that numbered them otherwise is not this
+                    // calculus's, and grounding its head would name the wrong nodes: refuse to
+                    // match it rather than match it wrongly.
+                    return;
+                }
+                let mut pool: Vec<usize> = self
+                    .neighbors(frame[0], role)
+                    .into_iter()
+                    .filter(|&y| self.has_concept(y, filler))
+                    .collect();
+                pool.sort_unstable();
+                pool.dedup();
+                let selection = Selection {
+                    clause,
+                    at,
+                    pool: &pool,
+                };
+                self.walk_subsets(&selection, frame, 0, count, out);
+            }
+        }
+    }
+
+    /// Extend `frame` with every strictly-increasing `remaining`-element selection from
+    /// `selection.pool[from..]`, continuing the body walk once the selection is complete.
+    fn walk_subsets(
+        &self,
+        selection: &Selection<'_>,
+        frame: &mut Vec<usize>,
+        from: usize,
+        remaining: u32,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        self.charge(1);
+        if self.spent() {
+            return;
+        }
+        if remaining == 0 {
+            self.walk(selection.clause, selection.at + 1, frame, out);
+            return;
+        }
+        if selection.pool.len() - from < remaining as usize {
+            return;
+        }
+        for index in from..selection.pool.len() {
+            frame.push(selection.pool[index]);
+            self.walk_subsets(selection, frame, index + 1, remaining - 1, out);
+            frame.pop();
+        }
+    }
+
+    /// MODEL CHECK every clause of `clauses` against the completion.
+    fn check(&self, clauses: &ClauseSet) -> Result<CompletionReplay, DlProofError> {
+        let mut checks = CheckReport::new();
+        // The structural reading of the completion — one node identity per node, every edge and
+        // every blocking pair naming a node that is there — and the blocking signatures, both
+        // re-derived by this checker from the proof term alone.
+        checks.attest(1 + self.blocked.iter().filter(|&&b| b).count());
+        let mut checked = 0_usize;
+        let mut deferred = 0_usize;
+        for index in 0..clauses.count() {
+            if self.spent() {
+                // A clause the budget did not reach is UNATTESTED, never assumed satisfied.
+                checks.leave(clauses.count() - index);
+                break;
+            }
+            let clause = clauses.clause(index);
+            let empty = clause.head.is_empty();
+            let tbox = clauses.is_tbox(index);
+            for x in 0..self.nodes.len() {
+                // A general concept inclusion quantifies over the object domain, so a TBox
+                // clause is matched from ABSTRACT nodes only — the same restriction the search
+                // applies, and omitting it here would fail a completion for a clause the
+                // calculus never fired on that node.
+                if tbox && self.nodes[x].concrete {
+                    continue;
+                }
+                for frame in self.body_matches(clause, x) {
+                    if empty {
+                        return Err(DlProofError::ClashInCompletion {
+                            clause: index,
+                            node: Box::new(self.nodes[x].node.clone()),
+                        });
+                    }
+                    let disjuncts = ground_head(&clause.head, &frame);
+                    if disjuncts.iter().any(|d| self.satisfied(d)) {
+                        continue;
+                    }
+                    // The one obligation a saturated pre-model is allowed to leave open: an
+                    // at-least restriction at a BLOCKED node. Blocking withholds exactly the
+                    // `≥`-rule, and the blocker carries the obligation instead — which is the
+                    // unravelling argument, cited rather than re-proved.
+                    if disjuncts.iter().flatten().any(
+                        |atom| matches!(atom, Ground::AtLeast(node, ..) if self.blocked[*node]),
+                    ) {
+                        deferred += 1;
+                        continue;
+                    }
+                    return Err(DlProofError::ClauseNotSatisfied {
+                        clause: index,
+                        node: Box::new(self.nodes[x].node.clone()),
+                    });
+                }
+            }
+            checked += 1;
+        }
+        // Each satisfied clause is a statement about the caller's clause set, evaluated through
+        // the caller's own role axioms and this module's grounding.
+        checks.trust(
+            checked,
+            &[
+                TrustBaseEntry::ReverseMapping,
+                TrustBaseEntry::Clausification,
+                TrustBaseEntry::Grounding,
+            ],
+        );
+        // …and that a clash-free, saturated, blocked pre-model yields a MODEL is the
+        // metatheorem, not anything checked above.
+        checks.cite(&[TrustBaseEntry::Unravelling]);
+        Ok(CompletionReplay {
+            nodes: self.nodes.len(),
+            clauses: checked,
+            blocks: self.blocked.iter().filter(|&&b| b).count(),
+            deferred,
+            checks,
+        })
+    }
+}
+
+/// RECOMPUTE one blocking pair's signature from the recorded nodes.
+///
+/// The four conditions the calculus states, checked rather than believed: the blocker is
+/// EARLIER and not itself blocked, neither node is a root, both have a predecessor, and the two
+/// agree on their own label, their predecessor's label and their incoming edge.
+fn check_blocking(
+    completion: &Completion,
+    x: usize,
+    y: usize,
+    position: &BTreeMap<NodeRef, usize>,
+    blocked: &[bool],
+) -> Result<(), DlProofError> {
+    let (blocked_node, blocker) = (&completion.nodes[x], &completion.nodes[y]);
+    let fail = |detail: &str| DlProofError::BlockingSignatureMismatch {
+        blocked: Box::new(blocked_node.node.clone()),
+        blocker: Box::new(blocker.node.clone()),
+        detail: detail.to_owned(),
+    };
+    if y >= x {
+        return Err(fail("the blocker is not earlier than the node it blocks"));
+    }
+    if blocked[y] {
+        return Err(fail("the blocker is itself blocked"));
+    }
+    if blocked_node.root || blocker.root {
+        return Err(fail("a root node is never blocked and never blocks"));
+    }
+    if blocked_node.label != blocker.label {
+        return Err(fail("the two labels differ"));
+    }
+    if blocked_node.incoming != blocker.incoming {
+        return Err(fail("the two incoming edges differ"));
+    }
+    let (Some(left), Some(right)) = (blocked_node.parent.as_ref(), blocker.parent.as_ref()) else {
+        return Err(fail(
+            "a blocking pair is two nodes that both have a predecessor",
+        ));
+    };
+    let (Some(&left), Some(&right)) = (position.get(left), position.get(right)) else {
+        return Err(fail("a predecessor is not a node of the completion"));
+    };
+    if completion.nodes[left].label != completion.nodes[right].label {
+        return Err(fail("the two predecessors' labels differ"));
+    }
+    Ok(())
+}
+
 /// OBSERVE a clause's body instance in the completion graph — the recorder's reading.
 ///
 /// Deliberately a second implementation of the grounding above, and deliberately one that
 /// consults the STATE: a concept or `denotes` atom is emitted only when the node's label or
 /// name set actually holds it, so a matcher that fired on an atom the graph does not carry
 /// produces a SHORT witness and [`DlProof::replay_clash`] rejects the step. A witness produced
-/// by calling [`ground_body`] would make that comparison vacuous, which is why the two are not
+/// by calling `ground_body` would make that comparison vacuous, which is why the two are not
 /// one function.
 ///
 /// Role atoms are recorded as matched: whether a node is an `r`-NEIGHBOUR of another is the
 /// role hierarchy's, the inverse declarations' and the transitive closure's answer, and
 /// re-deciding it here means re-running the metered neighbour scan — which would change the
 /// work a recorded run charges and so change its
-/// [`Decision`](crate::owl_dl::graph::Decision). Nothing in this function consults or charges
+/// `Decision`. Nothing in this function consults or charges
 /// the work meter.
 pub(crate) fn observe_body(
     kb: &Kb,
@@ -1471,10 +3891,8 @@ pub(crate) fn observe_body(
     /// Whether `node`'s label holds `concept`, `⊤` counting as always held — the same reading
     /// [`crate::owl_dl::graph::Graph::has_concept`] gives, and unmetered like it.
     fn holds(kb: &Kb, st: &State, node: usize, concept: u32) -> bool {
-        matches!(
-            kb.table.decomp(concept),
-            crate::owl_dl::concept::Decomp::Top
-        ) || st.nodes[find(st, node)].label.contains(&concept)
+        matches!(kb.table.decomp(concept), Decomp::Top)
+            || st.nodes[find(st, node)].label.contains(&concept)
     }
 
     let mut out = Vec::with_capacity(clause.body.len());
@@ -1542,6 +3960,76 @@ pub(crate) fn observe_body(
         }
     }
     out
+}
+
+/// OBSERVE one `⊔`-rule alternative the search is about to branch over.
+///
+/// A structure map of the vector the search HOLDS, node indices resolved to merge-invariant
+/// identities. It never calls `hyper::ground_head`: a record
+/// produced by the computation the checker compares it against would make the comparison
+/// vacuous, and a search that branched over a shortened alternative list must record the
+/// shortened list. Nothing here consults or charges the work meter.
+pub(crate) fn observe_alternative(st: &State, disjunct: &[Ground<usize>]) -> ProofAlternative {
+    ProofAlternative {
+        atoms: disjunct
+            .iter()
+            .map(|atom| ProofGround::of(&atom.map(&mut |&node| node_ref(st, node))))
+            .collect(),
+    }
+}
+
+/// OBSERVE the clash-free completion the search stopped at.
+///
+/// A direct reading of the state's node and edge vectors: representatives in ascending index
+/// order, edges in first-seen order, both unmetered. The role hierarchy's closure of the edges
+/// is deliberately NOT computed — that is the metered neighbour scan, and charging it would
+/// make a recorded run reach a different `Decision` than an
+/// unrecorded one. The checker closes the edges itself, from the caller's own role axioms.
+pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> Completion {
+    let mut nodes = Vec::new();
+    for x in 0..st.nodes.len() {
+        if find(st, x) != x {
+            continue;
+        }
+        let node = &st.nodes[x];
+        let mut distinct: Vec<NodeRef> = node.neq.iter().map(|&w| node_ref(st, w)).collect();
+        distinct.sort();
+        distinct.dedup();
+        nodes.push(CompletionNode {
+            node: node_ref(st, x),
+            label: node.label.iter().copied().collect(),
+            nominals: node.nominals.iter().copied().collect(),
+            distinct,
+            parent: node.parent.map(|p| node_ref(st, p)),
+            incoming: node
+                .incoming
+                .map(|(property, inverse)| ProofRole { property, inverse }),
+            concrete: node.concrete,
+            root: node.root,
+            value_class: node.value_class,
+        });
+    }
+    let edges = st
+        .edges
+        .iter()
+        .map(|&(from, to, property)| CompletionEdge {
+            from: node_ref(st, from),
+            to: node_ref(st, to),
+            property,
+        })
+        .collect();
+    let blocks = blocks
+        .iter()
+        .map(|(blocked, blocker)| BlockingPair {
+            blocked: blocked.clone(),
+            blocker: blocker.clone(),
+        })
+        .collect();
+    Completion {
+        nodes,
+        edges,
+        blocks,
+    }
 }
 
 // ── Digests ─────────────────────────────────────────────────────────────────────
@@ -1617,8 +4105,7 @@ fn contract_digest(clauses: &ClauseSet) -> [u8; 32] {
 }
 
 /// Fold one head atom into the contract digest.
-fn head_atom_hash(hasher: &mut blake3::Hasher, atom: &crate::owl_dl::clause::HeadAtom) {
-    use crate::owl_dl::clause::HeadAtom;
+fn head_atom_hash(hasher: &mut blake3::Hasher, atom: &HeadAtom) {
     match *atom {
         HeadAtom::Concept { var, concept } => {
             hasher.update(&[0_u8]);
@@ -1732,6 +4219,126 @@ fn encode_fact(out: &mut Vec<u8>, fact: &ProofFact) {
             encode_node(out, node);
             out.extend_from_slice(&individual.to_le_bytes());
         }
+    }
+}
+
+/// Append a [`BranchOutcome`].
+fn encode_outcome(out: &mut Vec<u8>, outcome: BranchOutcome) {
+    out.push(outcome.kind());
+    out.extend_from_slice(&(outcome.payload() as u64).to_le_bytes());
+}
+
+/// Append a [`ProofGround`].
+fn encode_ground(out: &mut Vec<u8>, atom: &ProofGround) {
+    match atom {
+        ProofGround::Concept { node, concept } => {
+            out.push(0);
+            encode_node(out, node);
+            out.extend_from_slice(&concept.to_le_bytes());
+        }
+        ProofGround::SelfLoop { node, role } => {
+            out.push(1);
+            encode_node(out, node);
+            encode_role(out, *role);
+        }
+        ProofGround::AtLeast {
+            node,
+            n,
+            role,
+            filler,
+        } => {
+            out.push(2);
+            encode_node(out, node);
+            out.extend_from_slice(&n.to_le_bytes());
+            encode_role(out, *role);
+            out.extend_from_slice(&filler.to_le_bytes());
+        }
+        ProofGround::Equal { left, right } => {
+            out.push(3);
+            encode_node(out, left);
+            encode_node(out, right);
+        }
+        ProofGround::EqualIndividual { node, individual } => {
+            out.push(4);
+            encode_node(out, node);
+            out.extend_from_slice(&individual.to_le_bytes());
+        }
+        ProofGround::EqualReserved { node, root } => {
+            out.push(5);
+            encode_node(out, node);
+            encode_node(out, &NodeRef::Reserved(Box::new(root.clone())));
+        }
+    }
+}
+
+/// Append a [`ProofRole`].
+fn encode_role(out: &mut Vec<u8>, role: ProofRole) {
+    out.extend_from_slice(&role.property.to_le_bytes());
+    out.push(u8::from(role.inverse));
+}
+
+/// Append a [`ProofAlternative`].
+fn encode_alternative(out: &mut Vec<u8>, alternative: &ProofAlternative) {
+    out.extend_from_slice(&(alternative.atoms.len() as u64).to_le_bytes());
+    for atom in &alternative.atoms {
+        encode_ground(out, atom);
+    }
+}
+
+/// Append an optional `u32`, as a presence flag and then the value.
+fn encode_option_u32(out: &mut Vec<u8>, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            out.push(1);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        None => out.push(0),
+    }
+}
+
+/// Append a [`Completion`].
+fn encode_completion(out: &mut Vec<u8>, completion: &Completion) {
+    out.extend_from_slice(&(completion.nodes.len() as u64).to_le_bytes());
+    for node in &completion.nodes {
+        encode_node(out, &node.node);
+        out.push(u8::from(node.concrete));
+        out.push(u8::from(node.root));
+        match node.parent.as_ref() {
+            Some(parent) => {
+                out.push(1);
+                encode_node(out, parent);
+            }
+            None => out.push(0),
+        }
+        match node.incoming {
+            Some(role) => {
+                out.push(1);
+                encode_role(out, role);
+            }
+            None => out.push(0),
+        }
+        encode_option_u32(out, node.value_class);
+        for list in [&node.label, &node.nominals] {
+            out.extend_from_slice(&(list.len() as u64).to_le_bytes());
+            for &value in list {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&(node.distinct.len() as u64).to_le_bytes());
+        for other in &node.distinct {
+            encode_node(out, other);
+        }
+    }
+    out.extend_from_slice(&(completion.edges.len() as u64).to_le_bytes());
+    for edge in &completion.edges {
+        encode_node(out, &edge.from);
+        encode_node(out, &edge.to);
+        out.extend_from_slice(&edge.property.to_le_bytes());
+    }
+    out.extend_from_slice(&(completion.blocks.len() as u64).to_le_bytes());
+    for pair in &completion.blocks {
+        encode_node(out, &pair.blocked);
+        encode_node(out, &pair.blocker);
     }
 }
 
@@ -1854,6 +4461,160 @@ impl<'a> Reader<'a> {
             }),
             _ => Err(malformed("unknown fact kind")),
         }
+    }
+
+    /// Take a [`ProofRole`].
+    fn role(&mut self) -> Result<ProofRole, DlProofError> {
+        let property = self.u32()?;
+        let inverse = self.flag()?;
+        Ok(ProofRole { property, inverse })
+    }
+
+    /// Take a [`BranchOutcome`], refusing an unknown kind and a payload on a kind that carries
+    /// none — so two byte strings can never decode to one outcome.
+    fn outcome(&mut self) -> Result<BranchOutcome, DlProofError> {
+        let kind = self.byte()?;
+        let index = self.length()?;
+        match kind {
+            0 => Ok(BranchOutcome::Clash(index)),
+            1 => Ok(BranchOutcome::DataClash(index)),
+            2 => Ok(BranchOutcome::Merge(index)),
+            3 => Ok(BranchOutcome::Branch(index)),
+            4..=6 if index != 0 => Err(malformed(
+                "an outcome kind that carries no index states one",
+            )),
+            4 => Ok(BranchOutcome::Unrecorded),
+            5 => Ok(BranchOutcome::Open),
+            6 => Ok(BranchOutcome::Unexplored),
+            _ => Err(malformed("unknown branch outcome kind")),
+        }
+    }
+
+    /// Take a [`ProofGround`].
+    fn ground(&mut self) -> Result<ProofGround, DlProofError> {
+        match self.byte()? {
+            0 => Ok(ProofGround::Concept {
+                node: self.node()?,
+                concept: self.u32()?,
+            }),
+            1 => Ok(ProofGround::SelfLoop {
+                node: self.node()?,
+                role: self.role()?,
+            }),
+            2 => {
+                let node = self.node()?;
+                let n = self.u32()?;
+                let role = self.role()?;
+                Ok(ProofGround::AtLeast {
+                    node,
+                    n,
+                    role,
+                    filler: self.u32()?,
+                })
+            }
+            3 => Ok(ProofGround::Equal {
+                left: self.node()?,
+                right: self.node()?,
+            }),
+            4 => Ok(ProofGround::EqualIndividual {
+                node: self.node()?,
+                individual: self.u32()?,
+            }),
+            5 => {
+                let node = self.node()?;
+                let NodeRef::Reserved(root) = self.node()? else {
+                    return Err(malformed(
+                        "a reserved-root identification names a reserved root",
+                    ));
+                };
+                Ok(ProofGround::EqualReserved { node, root: *root })
+            }
+            _ => Err(malformed("unknown grounded atom kind")),
+        }
+    }
+
+    /// Take a [`ProofAlternative`].
+    fn alternative(&mut self) -> Result<ProofAlternative, DlProofError> {
+        let mut atoms = Vec::new();
+        for _ in 0..self.length()? {
+            atoms.push(self.ground()?);
+        }
+        Ok(ProofAlternative { atoms })
+    }
+
+    /// Take an optional `u32`.
+    fn option_u32(&mut self) -> Result<Option<u32>, DlProofError> {
+        if self.flag()? {
+            return Ok(Some(self.u32()?));
+        }
+        Ok(None)
+    }
+
+    /// Take a list of `u32`s.
+    fn u32s(&mut self) -> Result<Vec<u32>, DlProofError> {
+        let mut out = Vec::new();
+        for _ in 0..self.length()? {
+            out.push(self.u32()?);
+        }
+        Ok(out)
+    }
+
+    /// Take a [`Completion`].
+    fn completion(&mut self) -> Result<Completion, DlProofError> {
+        let mut nodes = Vec::new();
+        for _ in 0..self.length()? {
+            let node = self.node()?;
+            let concrete = self.flag()?;
+            let root = self.flag()?;
+            let parent = if self.flag()? {
+                Some(self.node()?)
+            } else {
+                None
+            };
+            let incoming = if self.flag()? {
+                Some(self.role()?)
+            } else {
+                None
+            };
+            let value_class = self.option_u32()?;
+            let label = self.u32s()?;
+            let nominals = self.u32s()?;
+            let mut distinct = Vec::new();
+            for _ in 0..self.length()? {
+                distinct.push(self.node()?);
+            }
+            nodes.push(CompletionNode {
+                node,
+                label,
+                nominals,
+                distinct,
+                parent,
+                incoming,
+                concrete,
+                root,
+                value_class,
+            });
+        }
+        let mut edges = Vec::new();
+        for _ in 0..self.length()? {
+            edges.push(CompletionEdge {
+                from: self.node()?,
+                to: self.node()?,
+                property: self.u32()?,
+            });
+        }
+        let mut blocks = Vec::new();
+        for _ in 0..self.length()? {
+            blocks.push(BlockingPair {
+                blocked: self.node()?,
+                blocker: self.node()?,
+            });
+        }
+        Ok(Completion {
+            nodes,
+            edges,
+            blocks,
+        })
     }
 }
 
@@ -2413,7 +5174,7 @@ mod tests {
         ));
     }
 
-    /// A boundary ordinal outside [`Construct::ALL`] is refused rather than clamped.
+    /// A boundary ordinal outside `Construct::ALL` is refused rather than clamped.
     #[test]
     fn an_out_of_range_boundary_ordinal_is_rejected() {
         let mut out = Vec::new();
@@ -2443,6 +5204,970 @@ mod tests {
             DlProof::decode(&bytes),
             Err(DlProofError::Malformed { .. })
         ));
+    }
+
+    // ── The trust base ──────────────────────────────────────────────────────────
+
+    /// The trust base is PINNED, element by element and in order.
+    ///
+    /// The whole value of this stage is that a consumer knows exactly what they are trusting,
+    /// and that knowledge is worth nothing if the list can grow between two releases without
+    /// anybody noticing. Adding an entry is a BREAKING change: it changes what an
+    /// already-issued proof means. This test is what makes growing it deliberate.
+    #[test]
+    fn the_trust_base_is_pinned() {
+        assert_eq!(
+            TrustBaseEntry::ALL,
+            [
+                TrustBaseEntry::ReverseMapping,
+                TrustBaseEntry::Clausification,
+                TrustBaseEntry::Grounding,
+                TrustBaseEntry::Unravelling,
+            ],
+            "adding, removing or reordering a trust-base entry is a breaking version bump: \
+             bump TRUST_BASE_VERSION and the proof encoding tag, and update this pin"
+        );
+        assert_eq!(
+            trust_base_text(&TrustBaseEntry::ALL),
+            "reverse-mapping,clausification,grounding,unravelling"
+        );
+        assert_eq!(TRUST_BASE_VERSION, "purrdf-owl-dl-trust-base-v1");
+        for (ordinal, entry) in TrustBaseEntry::ALL.iter().enumerate() {
+            assert_eq!(
+                entry.ordinal(),
+                ordinal as u64,
+                "wire ordinals are positions"
+            );
+        }
+    }
+
+    /// A proof CARRIES its trust base, and the digest covers it — so a consumer who pinned a
+    /// digest cannot have the meaning of "verified" changed under them.
+    #[test]
+    fn the_trust_base_travels_in_the_proof_and_is_digested() {
+        let (_, mut proof, _) = refutation();
+        assert_eq!(proof.trust_base(), TrustBaseEntry::ALL);
+        let before = proof.digest();
+        proof.trust_base.pop();
+        assert_ne!(
+            before,
+            proof.digest(),
+            "a proof resting on less is a different term"
+        );
+        assert_eq!(
+            DlProof::decode(&proof.encode())
+                .expect("well formed")
+                .trust_base,
+            proof.trust_base,
+            "the edit survives a round trip rather than being normalized away"
+        );
+    }
+
+    /// A proof stating a trust base this checker does not implement is REJECTED, not checked
+    /// against a different meaning of the same word.
+    #[test]
+    fn a_proof_stating_another_trust_base_is_rejected() {
+        let (_, mut proof, ctx) = refutation();
+        proof.trust_base = vec![TrustBaseEntry::Grounding];
+        assert!(matches!(
+            proof.replay_clash(0, &ctx),
+            Err(DlProofError::TrustBaseMismatch { .. })
+        ));
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::TrustBaseMismatch { .. })
+        ));
+    }
+
+    /// A trust-base ordinal outside [`TrustBaseEntry::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_trust_base_ordinal_is_rejected() {
+        let (_, proof, _) = refutation();
+        let mut bytes = proof.encode();
+        // The first trust-base ordinal sits after the tag, the two digests, the answer and the
+        // truncated flag, and its own count.
+        let at = 8 + PROOF_ENCODING_TAG.len() + 32 + 32 + 1 + 1 + 8;
+        bytes[at..at + 8].copy_from_slice(&(TrustBaseEntry::ALL.len() as u64).to_le_bytes());
+        assert!(matches!(
+            DlProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    // ── The three counts ────────────────────────────────────────────────────────
+
+    /// A clash replay reports its structural checks as `trusted`, NAMES what they rest on, and
+    /// never presents them as `attested`.
+    ///
+    /// This is the honesty of the stage made observable. Stage 1's module docs said the checker
+    /// "clausifies that ontology itself"; that is true and it is still not independence, because
+    /// the clausifier is the producer's. The report says so.
+    #[test]
+    fn a_clash_replay_separates_what_it_re_derived_from_what_it_trusts() {
+        let (_, proof, ctx) = refutation();
+        let replay = proof
+            .replay_clash(0, &ctx)
+            .expect("a genuine clash replays");
+        let checks = replay.checks();
+        assert!(
+            checks.trusted() > 0,
+            "the clause lookup, the head form and the grounding all rest on the trust base: \
+             {checks:?}"
+        );
+        assert_eq!(replay.trusted(), checks.trusted());
+        assert!(
+            checks.rests_on().contains(&TrustBaseEntry::Clausification),
+            "a claim about a clause rests on the clausifier: {checks:?}"
+        );
+        assert!(checks.rests_on().contains(&TrustBaseEntry::Grounding));
+        assert!(
+            !checks.is_fully_attested(),
+            "no check that reads a clause set is fully attested, and saying otherwise is the \
+             one thing this stage exists to prevent"
+        );
+    }
+
+    /// …and the `attested` count is a real count, not a field nothing ever fills: a clash whose
+    /// whole body instance is ASSERTED ABox axioms attests every atom of it.
+    ///
+    /// `p` asymmetric with `a p b` and `b p a` closes on `p(x,y) ∧ p(y,x) → ⊥`, whose two body
+    /// atoms are the two role assertions the ontology states outright. Without this the
+    /// attested counter could be stuck at zero and every other test here would still pass.
+    #[test]
+    fn a_clash_whose_body_is_asserted_attests_every_atom_of_it() {
+        let ontology = asymmetric_clash();
+        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        assert_eq!(
+            answer,
+            ProofAnswer::Inconsistent,
+            "an asymmetric role's own pair"
+        );
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let replay = proof
+            .replay_clash(0, &ctx)
+            .expect("a genuine clash replays");
+        assert_eq!(
+            replay.unattested(),
+            0,
+            "both body atoms are asserted role assertions: {replay:?}"
+        );
+        assert!(replay.attested() >= 2, "{replay:?}");
+        let refutation = proof
+            .replay_refutation(&ctx)
+            .expect("the whole tree is one replayed leaf");
+        assert!(refutation.is_closed(), "{refutation:?}");
+    }
+
+    // ── Branch exhaustiveness ───────────────────────────────────────────────────
+
+    /// A recorded branch point's alternatives are REGENERATED from the caller's own clause set
+    /// and match, atom for atom and in order.
+    #[test]
+    fn a_recorded_branch_point_regenerates_against_the_callers_own_ontology() {
+        let (proof, ctx) = branching_refutation();
+        assert!(
+            !proof.branches().is_empty(),
+            "the fixture refutes through a case split"
+        );
+        let replay = proof
+            .replay_branch(0, &ctx)
+            .expect("a genuine branch point regenerates");
+        assert_eq!(
+            replay.alternatives(),
+            proof.branches()[0].alternatives().len()
+        );
+        assert!(replay.alternatives() >= 2, "a case split has alternatives");
+        assert!(
+            replay
+                .checks()
+                .rests_on()
+                .contains(&TrustBaseEntry::Grounding),
+            "regenerating the alternatives IS the grounding function: {:?}",
+            replay.checks()
+        );
+        assert!(
+            !replay.checks().is_fully_attested(),
+            "an exhaustiveness check is trusted, never attested"
+        );
+    }
+
+    /// The whole refutation TREE checks: every branch point exhaustive, every alternative
+    /// closed, every leaf a re-derived clash.
+    #[test]
+    fn a_refutation_tree_closes_with_every_leaf_replayed() {
+        let (proof, ctx) = branching_refutation();
+        let replay = proof
+            .replay_refutation(&ctx)
+            .expect("a genuine refutation walks");
+        assert!(replay.branches() >= 1, "{replay:?}");
+        assert!(
+            replay.clashes() >= 2,
+            "both alternatives closed: {replay:?}"
+        );
+        assert!(
+            replay.is_closed(),
+            "every alternative reached a replayed closure: {replay:?}"
+        );
+        assert_eq!(replay.unrecorded(), 0);
+    }
+
+    /// A refutation with NO branch point is still a tree — a single leaf — and it walks.
+    #[test]
+    fn a_refutation_with_no_case_split_is_a_single_replayed_leaf() {
+        let (_, proof, ctx) = refutation();
+        let replay = proof.replay_refutation(&ctx).expect("one leaf is a tree");
+        assert_eq!(replay.branches(), 0);
+        assert_eq!(replay.clashes(), 1);
+        assert!(replay.is_closed(), "{replay:?}");
+    }
+
+    // ── Tamper-negatives: written as a forger ───────────────────────────────────
+
+    /// **THE HEADLINE.** DROPPING AN ALTERNATIVE IS REJECTED.
+    ///
+    /// This is how an unsound `inconsistent` is fabricated: refute the alternatives you like,
+    /// omit the one you cannot close, and present a proof in which every recorded step checks.
+    /// Stage 1's checker passes such a proof — every clash it carries is genuine. This one does
+    /// not, because it regenerates the alternative set from the CALLER's own clause set and
+    /// finds the case split narrower than the clause licenses.
+    #[test]
+    fn a_dropped_alternative_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        let honest = proof.branches[0].alternatives.len();
+        assert!(honest >= 2, "there is something to drop");
+        proof.branches[0].alternatives.pop();
+        proof.branches[0].outcomes.pop();
+        match proof.replay_branch(0, &ctx) {
+            Err(DlProofError::AlternativeCountMismatch {
+                derived, stated, ..
+            }) => {
+                assert_eq!(derived, honest);
+                assert_eq!(stated, honest - 1);
+            }
+            other => panic!("a dropped disjunct must not check: {other:?}"),
+        }
+        assert!(
+            proof.replay_refutation(&ctx).is_err(),
+            "and the whole-tree walk must refuse it too"
+        );
+    }
+
+    /// Adding a spurious alternative is rejected for the same reason, from the other side: the
+    /// regenerated set is NARROWER than the record.
+    #[test]
+    fn a_spurious_alternative_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        let extra = proof.branches[0].alternatives[0].clone();
+        proof.branches[0].alternatives.push(extra);
+        proof.branches[0].outcomes.push(BranchOutcome::Unrecorded);
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::AlternativeCountMismatch { .. })
+        ));
+    }
+
+    /// REORDERING the alternatives is rejected: the comparison is positional, because the
+    /// authored order is what the search's determinism — and its cost — rests on.
+    #[test]
+    fn a_reordered_alternative_list_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        assert!(proof.branches[0].alternatives.len() >= 2);
+        proof.branches[0].alternatives.reverse();
+        match proof.replay_branch(0, &ctx) {
+            Err(DlProofError::AlternativeMismatch { .. }) => {}
+            other => panic!("a reordered case split must not check: {other:?}"),
+        }
+    }
+
+    /// Rewriting an ATOM inside an alternative is rejected — the comparison goes all the way
+    /// down, so a forger cannot keep the shape and change the content.
+    #[test]
+    fn a_rewritten_alternative_atom_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        let forged = match &proof.branches[0].alternatives[0].atoms[0] {
+            ProofGround::Concept { node, concept } => ProofGround::Concept {
+                node: node.clone(),
+                concept: concept.wrapping_add(1),
+            },
+            other => panic!("the fixture's alternatives are concept atoms: {other:?}"),
+        };
+        proof.branches[0].alternatives[0].atoms[0] = forged;
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::AlternativeMismatch { position: 0, .. })
+        ));
+    }
+
+    /// A branch point re-pointed at a clause that generates NO disjunction is rejected: the
+    /// checker computes the head form itself, and only a disjunction is a case split.
+    #[test]
+    fn a_branch_point_citing_a_clause_that_generates_no_disjunction_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        let derailed = (0..ctx.clause_count())
+            .find(|&index| ctx.clauses.clause(index).head_form() != HeadForm::Disjunctive)
+            .expect("the fixture produces a non-disjunctive clause");
+        proof.branches[0].clause = derailed;
+        match proof.replay_branch(0, &ctx) {
+            Err(DlProofError::NotADisjunction { clause, .. }) => assert_eq!(clause, derailed),
+            other => panic!("a clause with no case split is no branch point: {other:?}"),
+        }
+    }
+
+    /// A branch point citing a clause the caller's ontology does not have is a rejection, not a
+    /// panic.
+    #[test]
+    fn a_branch_point_citing_an_absent_clause_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].clause = usize::MAX;
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::UnknownClause { .. })
+        ));
+    }
+
+    /// A frame too narrow for the cited clause's head is a rejection rather than an index
+    /// panic — the checker's guard on the one attacker-controlled input `ground_head` indexes.
+    #[test]
+    fn a_branch_point_with_a_short_frame_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].frame.clear();
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::FrameTooShort { .. })
+        ));
+    }
+
+    /// A branch CLAIMED CLOSED whose clash is absent is rejected.
+    #[test]
+    fn a_branch_closed_on_a_clash_that_is_not_there_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].outcomes[0] = BranchOutcome::Clash(usize::MAX);
+        match proof.replay_refutation(&ctx) {
+            Err(DlProofError::DanglingOutcome { .. }) => {}
+            other => panic!("a closure with no step behind it must not check: {other:?}"),
+        }
+    }
+
+    /// A branch closed on a MERGE that did not close the state is rejected: the record says
+    /// what happened, and a forger cannot promote an ordinary identification into a closure.
+    #[test]
+    fn a_branch_closed_on_a_merge_that_did_not_clash_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.merges.push(MergeStep::new(
+            MergeCause::Nominal,
+            NodeRef::Individual(1),
+            NodeRef::Individual(2),
+            NodeRef::Individual(1),
+            false,
+        ));
+        proof.branches[0].outcomes[0] = BranchOutcome::Merge(proof.merges.len() - 1);
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::DanglingOutcome { .. })
+        ));
+    }
+
+    /// An alternative left OPEN or UNEXPLORED in a proof whose answer says every branch closed
+    /// is rejected — the answer and the tree have to agree.
+    #[test]
+    fn an_alternative_that_did_not_close_is_rejected() {
+        for forged in [BranchOutcome::Open, BranchOutcome::Unexplored] {
+            let (mut proof, ctx) = branching_refutation();
+            proof.branches[0].outcomes[0] = forged;
+            match proof.replay_refutation(&ctx) {
+                Err(DlProofError::BranchNotClosed { ordinal: 0, .. }) => {}
+                other => panic!("an unrefuted alternative must not check: {other:?}"),
+            }
+        }
+    }
+
+    /// An alternative that closed with nothing replayable is reported, and the refutation does
+    /// NOT read as closed.
+    ///
+    /// The path is reachable — an alternative can close inside the `≥`-rule's own distinctness
+    /// bookkeeping — so it is a counted, visible outcome rather than a silent pass.
+    #[test]
+    fn an_unrecorded_closure_is_not_a_closed_refutation() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].outcomes[0] = BranchOutcome::Unrecorded;
+        let replay = proof
+            .replay_refutation(&ctx)
+            .expect("an unrecorded closure is a report, not a rejection");
+        assert_eq!(replay.unrecorded(), 1);
+        assert!(
+            !replay.is_closed(),
+            "a branch that closed on nothing replayable is not a discharged obligation: \
+             {replay:?}"
+        );
+        assert!(replay.checks().unattested() > 0);
+    }
+
+    /// A branch point nothing descends into is rejected: an orphaned case split closes
+    /// nothing, and a forger could otherwise hide a wide disjunction beside a narrow one.
+    #[test]
+    fn an_orphaned_branch_point_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        let orphan = proof.branches[0].clone();
+        proof.branches.push(orphan);
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A branch outcome pointing at an EARLIER branch point is rejected: a child is always
+    /// recorded after its parent, and a cycle is how a forger makes two alternatives close each
+    /// other.
+    #[test]
+    fn a_branch_outcome_pointing_backwards_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].outcomes[0] = BranchOutcome::Branch(0);
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::DanglingOutcome { .. })
+        ));
+    }
+
+    /// A branch point whose outcome list does not have one entry per alternative is rejected.
+    #[test]
+    fn a_branch_point_with_a_short_outcome_list_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].outcomes.pop();
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::OutcomeCountMismatch { .. })
+        ));
+    }
+
+    /// A forged NOMINAL-INTRODUCTION alternative is rejected: it is not regenerable, but it is
+    /// not unconstrained either — its role, filler, index and at-most root all come from the
+    /// clause and the branch node.
+    #[test]
+    fn a_forged_nominal_introduction_alternative_is_rejected() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.branches[0].introduced.push(ProofAlternative {
+            atoms: vec![ProofGround::EqualIndividual {
+                node: NodeRef::Anonymous(1),
+                individual: 7,
+            }],
+        });
+        proof.branches[0].outcomes.push(BranchOutcome::Unrecorded);
+        assert!(matches!(
+            proof.replay_branch(0, &ctx),
+            Err(DlProofError::IllFormedIntroduction { .. })
+        ));
+    }
+
+    /// The two whole-trace checks refuse a proof bound to the OTHER answer, rather than
+    /// answering about a tree or a completion that is not there.
+    #[test]
+    fn a_whole_trace_check_refuses_a_proof_bound_to_the_other_answer() {
+        let (proof, ctx) = branching_refutation();
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Consistent,
+                ..
+            })
+        ));
+        let ontology = consistent_ontology();
+        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Inconsistent,
+                ..
+            })
+        ));
+    }
+
+    /// A TRUNCATED recording is refused by both whole-trace checks: a partial tree walked to a
+    /// conclusion is a conclusion about a tree that was never there.
+    #[test]
+    fn a_truncated_recording_is_refused_by_the_whole_trace_checks() {
+        let (mut proof, ctx) = branching_refutation();
+        proof.truncated = true;
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::Truncated)
+        ));
+    }
+
+    // ── Countermodels ───────────────────────────────────────────────────────────
+
+    /// A consistent answer carries a COMPLETION, and it model checks: nothing on it clashes,
+    /// every clause of the caller's ontology is satisfied on it, and every blocking pair's
+    /// signature is recomputed.
+    #[test]
+    fn a_consistent_answer_carries_a_completion_that_model_checks() {
+        let (proof, ctx) = subclass_completion();
+        let replay = proof
+            .replay_completion(&ctx)
+            .expect("a genuine completion model checks");
+        assert!(replay.nodes() > 0, "{replay:?}");
+        assert_eq!(
+            replay.clauses(),
+            ctx.clause_count(),
+            "the check budget reached every clause: {replay:?}"
+        );
+        assert!(
+            replay
+                .checks()
+                .rests_on()
+                .contains(&TrustBaseEntry::Unravelling),
+            "that a pre-model yields a MODEL is the metatheorem, and the report says so: {:?}",
+            replay.checks()
+        );
+        assert!(
+            !replay.checks().is_fully_attested(),
+            "model checking a clause set is a trusted check"
+        );
+    }
+
+    /// A completion whose blocking is load-bearing — the chain `⊤ ⊑ ∃r.⊤` terminates only by
+    /// blocking — checks, and the checker RECOMPUTES the signatures rather than believing them.
+    #[test]
+    fn a_blocked_completion_model_checks_and_names_what_blocking_deferred() {
+        let (proof, ctx) = blocking_chain_completion();
+        let completion = proof.completion().expect("a consistent run records one");
+        assert!(
+            !completion.blocks().is_empty(),
+            "the chain terminates only by blocking"
+        );
+        let replay = proof
+            .replay_completion(&ctx)
+            .expect("a genuine blocked completion model checks");
+        assert!(replay.blocks() > 0, "{replay:?}");
+        assert!(
+            replay.deferred_to_blockers() > 0,
+            "the blocked node's `∃r.⊤` is exactly what blocking withheld, and the report counts \
+             it rather than passing it off as satisfied: {replay:?}"
+        );
+    }
+
+    /// A CONCEALED CLASH is rejected: a forger who adds the missing half of a disjointness to a
+    /// node's label makes an empty-headed clause match the completion, and the checker matches
+    /// it too.
+    #[test]
+    fn a_completion_with_a_concealed_clash_is_rejected() {
+        let (mut proof, ctx) = subclass_completion();
+        // The clause that derives `false`, and the concepts its body reads. Putting all of them
+        // on one node is exactly the clash the search would have closed on.
+        let refuting = (0..ctx.clause_count())
+            .map(|index| ctx.clauses.clause(index))
+            .find(|clause| {
+                clause.head.is_empty()
+                    && clause
+                        .body
+                        .iter()
+                        .all(|atom| matches!(atom, BodyAtom::Concept { var: 0, .. }))
+                    && !clause.body.is_empty()
+            })
+            .expect("the fixture's disjointness derives false from one node's label");
+        let concepts: Vec<u32> = refuting
+            .body
+            .iter()
+            .filter_map(|atom| match *atom {
+                BodyAtom::Concept { concept, .. } => Some(concept),
+                _ => None,
+            })
+            .collect();
+        let node = proof
+            .completion
+            .as_mut()
+            .expect("a consistent proof carries one")
+            .nodes
+            .iter_mut()
+            .find(|node| !node.concrete)
+            .expect("the completion has an abstract node");
+        for concept in concepts {
+            if node.label.binary_search(&concept).is_err() {
+                let at = node.label.partition_point(|&c| c < concept);
+                node.label.insert(at, concept);
+            }
+        }
+        match proof.replay_completion(&ctx) {
+            Err(DlProofError::ClashInCompletion { .. }) => {}
+            other => panic!("a completion that derives false is not a countermodel: {other:?}"),
+        }
+    }
+
+    /// A completion where a clause is NOT SATISFIED is rejected — the direct model check.
+    ///
+    /// The forgery is the smallest possible one: remove the concept an absorbed `C ⊑ D` derives,
+    /// leaving the body that triggers it in place. A checker that only looked for clashes would
+    /// accept it, because nothing on the graph contradicts anything.
+    #[test]
+    fn a_completion_where_a_clause_is_not_satisfied_is_rejected() {
+        let (mut proof, ctx) = subclass_completion();
+        let (body, head) = (0..ctx.clause_count())
+            .map(|index| ctx.clauses.clause(index))
+            .find_map(|clause| {
+                let [BodyAtom::Concept { var: 0, concept }] = clause.body.as_slice() else {
+                    return None;
+                };
+                let [disjunct] = clause.head.as_slice() else {
+                    return None;
+                };
+                let [
+                    HeadAtom::Concept {
+                        var: 0,
+                        concept: derived,
+                    },
+                ] = disjunct.as_slice()
+                else {
+                    return None;
+                };
+                Some((*concept, *derived))
+            })
+            .expect("the fixture absorbs `C ⊑ D` into a one-atom guarded clause");
+        let node = proof
+            .completion
+            .as_mut()
+            .expect("a consistent proof carries one")
+            .nodes
+            .iter_mut()
+            .find(|node| {
+                node.label.binary_search(&body).is_ok() && node.label.binary_search(&head).is_ok()
+            })
+            .expect("the fixture's individual carries both");
+        let at = node
+            .label
+            .binary_search(&head)
+            .expect("the head concept is on the node");
+        node.label.remove(at);
+        match proof.replay_completion(&ctx) {
+            Err(DlProofError::ClauseNotSatisfied { .. }) => {}
+            other => panic!("an unsatisfied clause is not a countermodel: {other:?}"),
+        }
+    }
+
+    /// A FORGED BLOCKING PAIR whose signatures differ is rejected.
+    ///
+    /// This is the forgery that would otherwise let an unsatisfied `≥`-restriction pass as
+    /// "deferred to a blocker": claim the node is blocked and the check waves it through. The
+    /// checker recomputes the signature from the recorded labels, predecessors and incoming
+    /// edges, so the claim has to be true.
+    #[test]
+    fn a_forged_blocking_pair_is_rejected() {
+        let (mut proof, ctx) = blocking_chain_completion();
+        let completion = proof.completion.as_mut().expect("a completion is recorded");
+        let blocker = completion.nodes[0].node.clone();
+        completion.blocks[0].blocker = blocker;
+        match proof.replay_completion(&ctx) {
+            Err(DlProofError::BlockingSignatureMismatch { .. }) => {}
+            other => panic!("a blocker that does not match is no blocker: {other:?}"),
+        }
+    }
+
+    /// Claiming a node is blocked when NOTHING blocks it is rejected: a blocking pair whose two
+    /// halves are the same node fails both the ordering condition and the signature.
+    #[test]
+    fn a_blocking_pair_that_blocks_a_node_with_itself_is_rejected() {
+        let (mut proof, ctx) = subclass_completion();
+        let completion = proof.completion.as_mut().expect("a completion is recorded");
+        let node = completion.nodes[0].node.clone();
+        completion.blocks.push(BlockingPair {
+            blocked: node.clone(),
+            blocker: node,
+        });
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::BlockingSignatureMismatch { .. })
+        ));
+    }
+
+    /// A completion presented against a DIFFERENT ontology is rejected before a single clause
+    /// is evaluated — the identity check is the caller's own recomputation.
+    #[test]
+    fn a_completion_does_not_check_against_a_different_ontology() {
+        let (proof, _) = subclass_completion();
+        let other = consistent_ontology();
+        let ctx = DlProofContext::of_ontology(&other).expect("reverse-maps");
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::InputMismatch { .. })
+        ));
+    }
+
+    /// A completion listing one node identity twice is not a graph, and is refused rather than
+    /// silently read as whichever copy came last.
+    #[test]
+    fn a_duplicated_completion_node_is_rejected() {
+        let (mut proof, ctx) = subclass_completion();
+        let completion = proof.completion.as_mut().expect("a completion is recorded");
+        let duplicate = completion.nodes[0].clone();
+        completion.nodes.push(duplicate);
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::MalformedCompletion { .. })
+        ));
+    }
+
+    /// An edge naming a node the completion does not have is refused: a forger cannot satisfy a
+    /// role atom by pointing at a node nobody can inspect.
+    #[test]
+    fn a_completion_edge_naming_an_absent_node_is_rejected() {
+        let (mut proof, ctx) = subclass_completion();
+        let completion = proof.completion.as_mut().expect("a completion is recorded");
+        completion.edges.push(CompletionEdge {
+            from: NodeRef::Anonymous(4_242),
+            to: NodeRef::Anonymous(4_243),
+            property: 1,
+        });
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::MalformedCompletion { .. })
+        ));
+    }
+
+    /// A completion check that runs out of budget reports the clauses it did not reach as
+    /// UNATTESTED, rather than passing as if it had checked them.
+    ///
+    /// The budget is a resource bound and must never be a semantic one: exhausting it can only
+    /// WITHHOLD a claim. Without this the exhaustion arm would be a branch no test constrains,
+    /// and "the check ran out of time" would be indistinguishable from "the check succeeded".
+    #[test]
+    fn a_completion_check_that_runs_out_of_budget_reports_unattested_rather_than_passing() {
+        let (proof, ctx) = subclass_completion();
+        assert!(
+            ctx.clause_count() > 1,
+            "there is something to leave unchecked"
+        );
+        let replay = proof
+            .replay_completion_within(&ctx, 1)
+            .expect("a spent budget is a report, not a rejection");
+        assert!(
+            replay.clauses() < ctx.clause_count(),
+            "a budget of one unit cannot have model checked every clause: {replay:?}"
+        );
+        assert!(
+            replay.checks().unattested() > 0,
+            "the clauses it never reached are unattested: {:?}",
+            replay.checks()
+        );
+    }
+
+    /// A consistent proof stripped of its completion is refused rather than passing vacuously —
+    /// "nothing to check" must never read as "checked".
+    #[test]
+    fn a_consistent_proof_with_no_completion_is_refused() {
+        let (mut proof, ctx) = subclass_completion();
+        proof.completion = None;
+        assert!(matches!(
+            proof.replay_completion(&ctx),
+            Err(DlProofError::NoCompletion)
+        ));
+    }
+
+    // ── Determinism, over the shapes this stage added ───────────────────────────
+
+    /// A proof carrying a BRANCH TREE and a proof carrying a COMPLETION are both byte-identical
+    /// run to run, and both round-trip through their own encoding.
+    #[test]
+    fn a_branching_and_a_completing_proof_are_byte_identical_run_to_run() {
+        let mut kb = Kb::empty();
+        let ontologies = [closing_disjunction(), subclass_consistent()];
+        kb.finalize();
+        for ontology in ontologies {
+            let (_, first) = prove_consistency(&ontology).expect("reverse-maps");
+            let (_, again) = prove_consistency(&ontology).expect("reverse-maps");
+            assert_eq!(first.encode(), again.encode(), "two runs, one proof");
+            let decoded = DlProof::decode(&first.encode()).expect("its own encoding decodes");
+            assert_eq!(decoded, first);
+            assert_eq!(decoded.encode(), first.encode());
+        }
+    }
+
+    // ── Fixtures for the shapes this stage added ────────────────────────────────
+
+    /// `a : (C ⊔ D)` with `C ⊑ ⊥` and `D ⊑ ⊥` — INCONSISTENT through a two-way case split whose
+    /// alternatives BOTH close on a clause instance, so the refutation is a TREE rather than a
+    /// single leaf.
+    fn closing_disjunction() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let c = f.iri(EX_C);
+        let d = f.iri(EX_D);
+        let ty = f.iri(RDF_TYPE);
+        let sub = f.iri(RDFS_SUBCLASS_OF);
+        let union_of = f.iri("http://www.w3.org/2002/07/owl#unionOf");
+        let first = f.iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
+        let rest = f.iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
+        let nil = f.iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
+        let nothing = f.iri("http://www.w3.org/2002/07/owl#Nothing");
+        let union = f
+            .builder
+            .intern_blank("u", purrdf_core::BlankScope::DEFAULT);
+        let head = f
+            .builder
+            .intern_blank("l1", purrdf_core::BlankScope::DEFAULT);
+        let tail = f
+            .builder
+            .intern_blank("l2", purrdf_core::BlankScope::DEFAULT);
+        f.quad(head, first, c);
+        f.quad(head, rest, tail);
+        f.quad(tail, first, d);
+        f.quad(tail, rest, nil);
+        f.quad(union, union_of, head);
+        f.quad(a, ty, union);
+        f.quad(c, sub, nothing);
+        f.quad(d, sub, nothing);
+        f.freeze()
+    }
+
+    /// The branching refutation's proof, and a context built independently over the same
+    /// ontology.
+    fn branching_refutation() -> (DlProof, DlProofContext) {
+        let ontology = closing_disjunction();
+        let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
+        assert_eq!(
+            answer,
+            ProofAnswer::Inconsistent,
+            "a : (C ⊔ D), C ⊑ ⊥, D ⊑ ⊥"
+        );
+        let ctx = DlProofContext::of_ontology(&ontology).expect("the fixture reverse-maps");
+        (proof, ctx)
+    }
+
+    /// `p` asymmetric with `a p b` and `b p a`: INCONSISTENT on a clause whose whole body
+    /// instance is ASSERTED — the fixture that gives the attestation counter something to count.
+    fn asymmetric_clash() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let b = f.iri(EX_B);
+        let p = f.iri(EX_P);
+        let ty = f.iri(RDF_TYPE);
+        let asymmetric = f.iri("http://www.w3.org/2002/07/owl#AsymmetricProperty");
+        f.quad(p, ty, asymmetric);
+        f.quad(a, p, b);
+        f.quad(b, p, a);
+        f.freeze()
+    }
+
+    /// `C ⊑ D` with `a : C` and `C` disjoint from `E`: CONSISTENT, and its completion carries a
+    /// DERIVED concept membership, an empty-headed clause that must not match, and a guarded
+    /// clause that must be satisfied.
+    fn subclass_consistent() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let c = f.iri(EX_C);
+        let d = f.iri(EX_D);
+        let e = f.iri("http://example.org/E");
+        let ty = f.iri(RDF_TYPE);
+        let sub = f.iri(RDFS_SUBCLASS_OF);
+        let disjoint = f.iri(OWL_DISJOINT_WITH);
+        f.quad(c, sub, d);
+        f.quad(c, disjoint, e);
+        f.quad(a, ty, c);
+        f.freeze()
+    }
+
+    /// That ontology's consistency proof, and a context built independently over it.
+    fn subclass_completion() -> (DlProof, DlProofContext) {
+        let ontology = subclass_consistent();
+        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        assert_eq!(answer, ProofAnswer::Consistent);
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        (proof, ctx)
+    }
+
+    /// `⊤ ⊑ ∃r.⊤` over one individual, through the knowledge-base entrance: an infinite chain
+    /// that terminates ONLY by blocking, which is the completion whose blocking witnesses are
+    /// load-bearing.
+    fn blocking_chain_kb() -> Kb {
+        use crate::owl_dl::concept::Concept;
+
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Top,
+            Concept::Some(Role::Named(20), Box::new(Concept::Top)),
+        );
+        kb.individuals.insert(30);
+        kb.finalize();
+        kb
+    }
+
+    /// That knowledge base's consistency proof, and a context built independently over a second
+    /// copy of it.
+    fn blocking_chain_completion() -> (DlProof, DlProofContext) {
+        let (answer, proof) = prove_consistency_of_kb(&blocking_chain_kb());
+        assert_eq!(answer, ProofAnswer::Consistent);
+        (proof, DlProofContext::of_kb(blocking_chain_kb()))
+    }
+
+    /// A refutation TREE two levels deep walks, and every one of its branch points is reached
+    /// from the root exactly once.
+    ///
+    /// The single-level fixtures above cannot separate "the walk works" from "there was nothing
+    /// to walk". `a : (A ⊔ B)` and `a : (C ⊔ D)` with all four pairs disjoint forces the search
+    /// to branch, survive, branch again and close all four ways: three branch points and four
+    /// clash leaves, which is the shape the reachability, ordering and one-parent conditions
+    /// exist for.
+    #[test]
+    fn a_two_level_refutation_tree_walks_from_the_root() {
+        let (answer, proof) = prove_consistency_of_kb(&nested_disjunctions_kb());
+        assert_eq!(answer, ProofAnswer::Inconsistent);
+        assert_eq!(
+            proof.branches().len(),
+            3,
+            "one branch point at the root and one under each of its two alternatives"
+        );
+        let ctx = DlProofContext::of_kb(nested_disjunctions_kb());
+        let replay = proof
+            .replay_refutation(&ctx)
+            .expect("a genuine two-level tree walks");
+        assert_eq!(
+            replay.branches(),
+            3,
+            "every branch point is reached: {replay:?}"
+        );
+        assert_eq!(replay.clashes(), 4, "all four ways close: {replay:?}");
+        assert!(replay.is_closed(), "{replay:?}");
+    }
+
+    /// Cutting ONE leaf out of that tree is rejected, wherever in the tree it sits: the walk is
+    /// total, not a check of the root's own alternatives.
+    #[test]
+    fn a_dropped_alternative_deep_in_the_tree_is_rejected() {
+        let (_, mut proof) = prove_consistency_of_kb(&nested_disjunctions_kb());
+        let ctx = DlProofContext::of_kb(nested_disjunctions_kb());
+        let deepest = proof.branches.len() - 1;
+        proof.branches[deepest].alternatives.pop();
+        proof.branches[deepest].outcomes.pop();
+        assert!(matches!(
+            proof.replay_refutation(&ctx),
+            Err(DlProofError::AlternativeCountMismatch { .. })
+        ));
+    }
+
+    /// `a : (A ⊔ B)` and `a : (C ⊔ D)` with `A ⊓ C`, `A ⊓ D`, `B ⊓ C` and `B ⊓ D` all
+    /// unsatisfiable: INCONSISTENT, and it takes a two-level case split to say so.
+    fn nested_disjunctions_kb() -> Kb {
+        use crate::owl_dl::concept::Concept;
+
+        /// The four class ids the fixture branches over.
+        const CLASSES: [(u32, u32); 4] = [(10, 12), (10, 13), (11, 12), (11, 13)];
+
+        let mut kb = Kb::empty();
+        for (left, right) in CLASSES {
+            kb.push_gci(
+                Concept::And(vec![Concept::Named(left), Concept::Named(right)]),
+                Concept::Bottom,
+            );
+        }
+        let first = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(10), Concept::Named(11)]));
+        let second = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(12), Concept::Named(13)]));
+        kb.abox_types.push((30, first));
+        kb.abox_types.push((30, second));
+        kb.individuals.insert(30);
+        kb.finalize();
+        kb
     }
 
     /// A dataset that is not an OWL graph at all is a rejection with the reverse mapper's own
