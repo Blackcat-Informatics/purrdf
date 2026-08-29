@@ -345,15 +345,16 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
     );
 }
 
-/// The RDF 1.2 STATEMENT layer is not an arc, so a selector over an annotation predicate
-/// selects nothing — reported honestly as zero entries rather than as a hidden failure.
+/// The RDF 1.2 STATEMENT layer IS reachable through the CLI's shape maps: a selector over
+/// an annotation predicate selects the reifier that carries it.
 ///
-/// This is a fact about ShEx 2.1's data model (arcs), not about what was read: the same
-/// document validated by `purrdf validate` DOES see the annotation, because `purrdf-shapes`
-/// projects the statement layer into quads first. Pinning it here keeps the difference
-/// documented rather than discovered.
+/// ShEx 2.1's own data model predates RDF 1.2 and describes only arcs, so the annotation
+/// would have been invisible. PurRDF extends it rather than inheriting the gap — the
+/// reifier's neighbourhood is the union of its ordinary arcs, its `rdf:reifies` arc, and its
+/// annotations, matching what `purrdf validate` (SHACL) and SPARQL already see over the same
+/// document. Pinning it here keeps the three surfaces answering alike.
 #[test]
-fn the_statement_layer_is_not_an_arc_to_shex() {
+fn the_statement_layer_is_an_arc_to_shex() {
     let dir = tempfile::tempdir().expect("tempdir");
     let schema = write_file(
         dir.path(),
@@ -381,10 +382,19 @@ fn the_statement_layer_is_not_an_arc_to_shex() {
         "{FOCUS <http://example.org/certainty> _}@<http://example.org/Stmt>",
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&out), "[]\n", "an empty selection is an empty map");
     assert!(
-        stderr(&out).contains("shex entries 0\n"),
+        stdout(&out).contains("\"status\":\"conformant\""),
+        "the annotation predicate selects its reifier, which conforms:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("\"shape\":\"<http://example.org/Stmt>\""),
         "{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("shex entries 1\n"),
+        "exactly one reifier carries ex:certainty:\n{}",
         stderr(&out)
     );
 

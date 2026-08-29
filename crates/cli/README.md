@@ -658,11 +658,12 @@ printed *verdict*:
 
 **RDF 1.2.** A triple term is an ordinary node: it matches an arc's object and
 may be named as a focus node (`<< s p o >>` in the result map). The RDF 1.2
-*statement layer* (a `{| … |}` reifier and its annotations) is not an arc, so a
-selector over an annotation predicate selects nothing and reports `entries 0` —
-a true statement about ShEx 2.1's arc-based data model, not a hidden failure.
-`purrdf validate` **does** see that layer, because SHACL projects it into quads
-first.
+*statement layer* (a `{| … |}` reifier and its annotations) is read too: a
+selector over an annotation predicate selects the reifier carrying it, and a
+reifier focus node's neighbourhood is the union of its ordinary arcs, its
+`rdf:reifies` arc, and its annotations. ShEx 2.1 predates RDF 1.2 and describes
+only arcs; PurRDF extends the data model rather than inheriting the gap, so
+`shex`, `validate` (SHACL) and `query` (SPARQL) all answer alike.
 
 ```sh
 # One fixed association.

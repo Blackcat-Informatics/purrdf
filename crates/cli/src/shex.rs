@@ -64,11 +64,12 @@
 //!
 //! The **statement layer** (a reifier's `rdf:reifies` binding and the annotations hung off it,
 //! what Turtle's `{| … |}` mints) is a separate side table in the IR rather than quads, and
-//! `purrdf_shex`'s matcher reads the quad table. So a shape map selector over an annotation
-//! predicate selects nothing and reports `entries 0` — a true statement that the graph has no
-//! such ARC, not a hidden failure. `purrdf validate` does see that layer, because
-//! `purrdf_shapes` projects reifier bindings and annotations into quads before it validates;
-//! the difference is the two engines' data models, not a difference in what was read.
+//! `purrdf_shex` reads it alongside the quad table. So a shape map selector over an annotation
+//! predicate selects the reifier that carries it, and a shape whose focus is a reifier sees a
+//! neighbourhood that is the union of its ordinary arcs, its `rdf:reifies` arc, and its
+//! annotations. ShEx 2.1 predates RDF 1.2 and describes only arcs; PurRDF extends the data
+//! model rather than inheriting the gap, so `shex`, `validate` (SHACL) and `query` (SPARQL)
+//! all answer alike over the same document.
 //!
 //! # No ledger, and nothing transcoded
 //!
