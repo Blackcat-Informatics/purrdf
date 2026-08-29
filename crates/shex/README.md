@@ -41,6 +41,17 @@ A pure-Rust, wasm-clean leaf crate implementing the
   `EXTRA`/`CLOSED` triple-expression matching with `EachOf`/`OneOf`
   partitioning and group cardinalities, inverse constraints, typing-based
   recursion, and an `EXTERNAL` resolver hook.
+- **RDF 1.2 statement layer** (beyond ShEx 2.1, which predates RDF 1.2):
+  reifier bindings and statement annotations live in side-tables outside
+  the quad table, and both the validator and the shape-map resolver read
+  them. A focus node that *is* a reifier has a real neighbourhood — an
+  `rdf:reifies` arc to the triple term plus one arc per statement
+  annotation — inverse arcs reach it (`^rdf:reifies`,
+  `^<annotationPredicate>`), and shape-map selectors resolve through it in
+  both directions. Ordinary subjects are unaffected, since both
+  side-tables key on the reifier. (RDF 1.2 *statement* annotations are
+  unrelated to ShEx *schema* annotations, the `// predicate object`
+  syntax.)
 
 Gated against the vendored [shexTest](https://github.com/shexSpec/shexTest)
 v2.1.0 conformance suite (`vectors/shexTest`): `negativeSyntax/`,

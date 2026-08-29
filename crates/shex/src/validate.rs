@@ -15,6 +15,16 @@
 //! * **triple expressions** (§5.5): neighbourhood matching with `EXTRA` and
 //!   `CLOSED`, `EachOf` partitions, `OneOf` choices, group cardinalities and
 //!   inclusions (see the matcher's module doc for the two-layer design);
+//! * **the RDF 1.2 statement layer** (a PurRDF extension beyond the ShEx 2.1
+//!   arc model): a focus node's neighbourhood includes the reifier and
+//!   statement-annotation side-tables as well as the quad table. Both
+//!   side-tables put the *reifier* in subject position, so a focus node that
+//!   IS a reifier gains an `rdf:reifies` arc to the triple term it reifies
+//!   plus one arc per statement annotation, while an ordinary subject's
+//!   neighbourhood is unchanged. Inverse arcs see the layer too
+//!   (`^rdf:reifies` from a triple term, `^<annotationPredicate>` from an
+//!   annotation object). Consequently a `CLOSED` shape whose focus is a
+//!   reifier must mention `rdf:reifies` and every annotation predicate;
 //! * **recursion** (§5.3): typing-based — a `(node, shape)` pair
 //!   re-encountered while being proven is coinductively assumed to hold, and
 //!   settled pairs are memoized per validation call. Negation through
@@ -34,6 +44,7 @@ use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValu
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
+use crate::statement;
 use matcher::{ArcOptions, Assignment, CNode, Card, Compiled};
 use node::{FactKind, NodeFacts, RDF_LANG_STRING};
 
@@ -609,10 +620,19 @@ impl<'a> Engine<'a> {
         // predicates; sorted by TermId for determinism.
         let data = self.data;
         let mut arcs_out: Vec<(TermId, TermId)> = match focus {
-            Focus::Id(id) => data
-                .quads_for_pattern(Some(id), None, None, GraphMatch::Any)
-                .map(|q| (q.p, q.o))
-                .collect(),
+            Focus::Id(id) => {
+                let mut out: Vec<(TermId, TermId)> = data
+                    .quads_for_pattern(Some(id), None, None, GraphMatch::Any)
+                    .map(|q| (q.p, q.o))
+                    .collect();
+                // RDF 1.2 statement layer (side-tables, not in `quads`): a
+                // focus node that IS a reifier also has an `rdf:reifies` arc to
+                // the triple term it reifies plus one arc per statement
+                // annotation. Both layers key on the reifier as subject, so an
+                // ordinary subject's neighbourhood is untouched.
+                statement::visit_quads(data, Some(id), None, None, |_, p, o| out.push((p, o)));
+                out
+            }
             Focus::Detached(_) => Vec::new(),
         };
         arcs_out.sort_unstable();
@@ -637,6 +657,12 @@ impl<'a> Engine<'a> {
                     .quads_for_pattern(None, Some(pid), Some(id), GraphMatch::Any)
                     .map(|q| q.s)
                     .collect();
+                // Statement layer, inverse direction: `^rdf:reifies` from a
+                // triple term reaches its reifier(s), and `^<annPred>` from an
+                // annotation object reaches the annotated reifier.
+                statement::visit_quads(data, None, Some(pid), Some(id), |s, _, _| {
+                    subjects.push(s);
+                });
                 subjects.sort_unstable();
                 subjects.dedup();
                 arcs.extend(subjects.into_iter().map(|s| (true, pred, s)));

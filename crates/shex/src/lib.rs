@@ -25,6 +25,21 @@
 //!   typing-based recursion; gated against the shexTest `validation/`
 //!   manifest by `tests/validation_conformance.rs`.
 //!
+//! # RDF 1.2 beyond ShEx 2.1
+//!
+//! ShEx 2.1 predates RDF 1.2, but PurRDF treats RDF 1.2 as first class, so the
+//! validator and the shape-map resolver both read the **statement layer** —
+//! reifier bindings and statement annotations — which the frozen IR keeps in
+//! side-tables outside the quad table. A focus node that is a reifier has a
+//! real neighbourhood (`rdf:reifies` to the triple term, plus one arc per
+//! statement annotation), inverse arcs reach it, and shape-map selectors over
+//! an annotation predicate or over `rdf:reifies` select through it. Ordinary
+//! subjects are unaffected: both side-tables key on the reifier.
+//!
+//! Note the word collision: those are RDF 1.2 *statement* annotations. A ShEx
+//! *schema* annotation ([`Annotation`], the `// predicate object` syntax) is
+//! schema metadata and has nothing to do with them.
+//!
 //! # Hard-fail
 //!
 //! Per the repo `no-optionality` doctrine, every malformed schema is a typed
@@ -94,6 +109,10 @@ pub mod shexc;
 pub mod shexj;
 pub mod structure;
 pub mod validate;
+
+/// The RDF 1.2 statement-layer arc source shared by the validator and the
+/// shape-map resolver (private: a consumer-local seam, not public API).
+mod statement;
 
 pub use ast::{
     Annotation, IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind,
