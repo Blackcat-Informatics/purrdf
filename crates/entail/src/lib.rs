@@ -155,15 +155,17 @@ pub use owl_dl::proof::{
     CheckReport, ClashReplay, ClashStep, Completion, CompletionEdge, CompletionNode,
     CompletionReplay, DerivedConclusion, DlProof, DlProofContext, DlProofError,
     MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS, MergeCause,
-    MergeStep, NodeRef, ProofAlternative, ProofAnswer, ProofFact, ProofGround, ProofRole,
-    RefutationReplay, ReservedRef, TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry,
+    MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative, ProofAnswer,
+    ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
+    TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
     prove_consistency,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
-    Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,
-    ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, ProfileViolation, Realization,
-    Reasoner, Verdict, extract_module, profile,
+    Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep, DlAxiom,
+    DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate,
+    ProfileViolation, Question, Realization, Reasoner, RunAssumptions, RunProof, Service,
+    ServiceProof, ServiceReplay, StopCause, StopReceipt, Verdict, extract_module, profile,
 };
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,

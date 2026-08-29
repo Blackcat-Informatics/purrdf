@@ -76,9 +76,14 @@
 
 use std::collections::BTreeSet;
 
+use super::proof::{
+    Claim, MAX_RECORDED_RUNS, Question, RunAssumptions, RunProof, ServiceProof, StopPoint,
+    receipt_of,
+};
 use crate::owl_dl::Kb;
 use crate::owl_dl::graph::{Assumptions, Budget, Decision};
-use crate::owl_dl::hyper::decide;
+use crate::owl_dl::hyper::{decide, decide_recording};
+use crate::owl_dl::proof::{DlProof, ProofAnswer, contract_of};
 use crate::report::{Boundary, Construct};
 
 /// A three-valued answer from a step-bounded decision procedure.
@@ -402,14 +407,17 @@ pub struct Certified<T> {
     answer: T,
     /// The certificate of the run that produced it.
     certificate: DlCertificate,
+    /// The proof term of the run that produced it.
+    proof: ServiceProof,
 }
 
 impl<T> Certified<T> {
-    /// Pair an answer with its certificate.
-    pub(crate) const fn new(answer: T, certificate: DlCertificate) -> Self {
+    /// Pair an answer with its certificate and its proof term.
+    pub(crate) const fn new(answer: T, certificate: DlCertificate, proof: ServiceProof) -> Self {
         Self {
             answer,
             certificate,
+            proof,
         }
     }
 
@@ -423,16 +431,38 @@ impl<T> Certified<T> {
         &self.certificate
     }
 
-    /// Take the answer, discarding the certificate.
+    /// The PROOF TERM of the run that produced it.
+    ///
+    /// Bound to this service's own question, naming every tableau run it made and which run
+    /// decides which reported claim — see [`ServiceProof`]. There is deliberately no
+    /// proof-free variant, for the reason there is no certificate-free one: a second entry
+    /// point that discarded the evidence is how a proof stops being carried.
+    ///
+    /// Two calls make it useful, and both take the consumer's own inputs:
+    /// [`ServiceProof::verify`] replays every run against the consumer's ontology and question,
+    /// and [`ServiceProof::covers`] compares the proof's established claims against the ones
+    /// this answer actually reports. Verifying without covering leaves a genuine proof of some
+    /// other answer able to travel beside this one.
+    pub const fn proof(&self) -> &ServiceProof {
+        &self.proof
+    }
+
+    /// Take the answer, discarding the certificate and the proof.
     #[must_use]
     pub fn into_answer(self) -> T {
         self.answer
     }
 
-    /// Split into the answer and its certificate.
+    /// Split into the answer and its certificate, discarding the proof.
     #[must_use]
     pub fn into_parts(self) -> (T, DlCertificate) {
         (self.answer, self.certificate)
+    }
+
+    /// Split into the answer, its certificate and its proof term.
+    #[must_use]
+    pub fn into_certified_parts(self) -> (T, DlCertificate, ServiceProof) {
+        (self.answer, self.certificate, self.proof)
     }
 }
 
@@ -466,14 +496,34 @@ pub(crate) struct Session<'a> {
     /// The deepest branch stack any decision reached — a MAXIMUM, see
     /// [`DlCertificate::peak_depth`].
     peak_depth: u64,
+    /// The producer-independent identity of the ontology every run of this session is about.
+    input: [u8; 32],
+    /// The calculus/clausification contract of `kb`, computed ONCE.
+    ///
+    /// The knowledge base is borrowed immutably for the session's whole life, so its clause
+    /// set cannot change between decisions and neither can this. Computing it per run would
+    /// re-clausify the ontology once per (individual, class) pair a realization asks about.
+    contract: [u8; 32],
+    /// Every decision this session made, in order, with its assumptions and its trace.
+    runs: Vec<RunProof>,
+    /// What the FIRST decision that did not decide measured — the stopping point.
+    stop: Option<StopPoint>,
+    /// Whether the recording reached [`MAX_RECORDED_RUNS`], so some runs carry no trace.
+    truncated: bool,
 }
 
 impl<'a> Session<'a> {
     /// Open a session over `kb` in which each decision may spend `budget`.
-    pub(crate) const fn new(kb: &'a Kb, budget: Budget) -> Self {
+    ///
+    /// `input` is the producer-independent identity of the ontology `kb` was reverse-mapped
+    /// from — computed once per [`Reasoner`](super::Reasoner) rather than once per service
+    /// call, because it is a canonicalization of the whole dataset and it does not change
+    /// between questions.
+    pub(crate) fn new(kb: &'a Kb, budget: Budget, input: [u8; 32]) -> Self {
         Self {
             kb,
             budget,
+            contract: contract_of(kb),
             steps: 0,
             work: 0,
             decisions: 0,
@@ -482,6 +532,10 @@ impl<'a> Session<'a> {
             peak_nodes: 0,
             disjunctions: 0,
             peak_depth: 0,
+            input,
+            runs: Vec::new(),
+            stop: None,
+            truncated: false,
         }
     }
 
@@ -490,15 +544,65 @@ impl<'a> Session<'a> {
         self.kb
     }
 
-    /// Run one hypertableau decision, tallying its cost.
+    /// The index of the run this session made most recently.
+    ///
+    /// How a service names the run that decides a claim it is about to file. Read immediately
+    /// after the decision it refers to; the run list only ever grows, so the index stays
+    /// valid.
+    pub(crate) fn last_run(&self) -> usize {
+        self.runs.len().saturating_sub(1)
+    }
+
+    /// Run one hypertableau decision, tallying its cost and writing down its proof term.
     ///
     /// Two aggregations, and which one each counter gets is not a style choice: WORK sums
     /// and SIZE peaks. `steps` and `disjunctions` are work a service spent and are summed
     /// over its decisions; `peak_nodes` and `peak_depth` are how large one search got, and
     /// summing them would report a service that made a thousand tiny decisions as having
     /// built one enormous graph.
+    ///
+    /// # Recording changes no decision
+    ///
+    /// An instrumented run and an uninstrumented one reach the IDENTICAL [`Decision`]:
+    /// recording never consults and never charges the work meter, which is the standing
+    /// obligation the decision core's own tests pin. So the two entry points below are
+    /// interchangeable as far as the answer is concerned, and this picks between them purely
+    /// on the recording ceiling — past [`MAX_RECORDED_RUNS`] a service stops paying for
+    /// traces it will not keep, and says so through
+    /// [`ServiceProof::truncated`](super::ServiceProof::truncated).
     pub(crate) fn decide(&mut self, assumptions: &Assumptions<'_>) -> Decision {
-        let decision = decide(self.kb, assumptions, self.budget);
+        let recording = self.runs.len() < MAX_RECORDED_RUNS;
+        let (decision, recorder) = if recording {
+            let (decision, recorder) = decide_recording(self.kb, assumptions, self.budget);
+            (decision, Some(recorder))
+        } else {
+            self.truncated = true;
+            (decide(self.kb, assumptions, self.budget), None)
+        };
+        let answer = if decision.exhausted || decision.stopped {
+            ProofAnswer::Undecided
+        } else if decision.consistent {
+            ProofAnswer::Consistent
+        } else {
+            ProofAnswer::Inconsistent
+        };
+        let proof: Option<DlProof> = recorder
+            .map(|recorder| recorder.into_proof(self.kb, self.input, self.contract, answer));
+        if answer == ProofAnswer::Undecided && self.stop.is_none() {
+            // The FIRST decision that did not finish is the one that explains the answer: a
+            // service that could not decide one sub-question has not decided the aggregate.
+            self.stop = Some(StopPoint {
+                run: self.runs.len(),
+                steps: decision.steps,
+                work: decision.work,
+                stopped: decision.stopped,
+            });
+        }
+        self.runs.push(RunProof::new(
+            RunAssumptions::of(assumptions),
+            answer,
+            proof,
+        ));
         self.steps = self.steps.saturating_add(decision.steps);
         self.work = self.work.saturating_add(decision.work);
         self.decisions += 1;
@@ -558,6 +662,36 @@ impl<'a> Session<'a> {
             peak_depth: self.peak_depth,
         }
     }
+
+    /// Seal the session into a PROOF TERM for `question`, binding `claims` to its runs.
+    ///
+    /// The companion of [`Self::certificate`] and the only producer of a [`ServiceProof`]
+    /// inside this crate. The STOPPING RECEIPT is attached exactly when some decision did not
+    /// finish — the same condition [`DlCertificate::completeness`] derives
+    /// [`DlCompleteness::BudgetExhausted`] from — and it is built from the counters this
+    /// session measured, so a receipt and a certificate cannot disagree.
+    pub(crate) fn proof(
+        self,
+        question: Question,
+        claims: Vec<Claim>,
+        certificate: &DlCertificate,
+    ) -> ServiceProof {
+        // A receipt is attached exactly when a decision did not finish, which is the same
+        // condition `DlCertificate::completeness` derives `BudgetExhausted` from: the two are
+        // read off one measurement, so a receipt and a certificate cannot disagree about
+        // whether the service decided.
+        let receipt = self
+            .stop
+            .map(|stop| receipt_of(stop, certificate, &self.runs));
+        ServiceProof::new(
+            self.input,
+            question,
+            self.runs,
+            claims,
+            receipt,
+            self.truncated,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -597,7 +731,7 @@ mod tests {
     fn a_stopped_decision_is_reported_as_stopped_not_exhausted() {
         let kb = stopped_kb();
         let budget = Budget::for_kb(&kb);
-        let mut session = Session::new(&kb, budget);
+        let mut session = Session::new(&kb, budget, [0; 32]);
         let decision = session.decide(&Assumptions::of_kb());
         assert!(
             decision.stopped,
@@ -617,7 +751,7 @@ mod tests {
     fn session_certificate_reports_a_stopped_run_as_budget_exhausted_and_says_why() {
         let kb = stopped_kb();
         let budget = Budget::for_kb(&kb);
-        let mut session = Session::new(&kb, budget);
+        let mut session = Session::new(&kb, budget, [0; 32]);
         session.decide(&Assumptions::of_kb());
         let certificate = session.certificate(&BTreeSet::new());
         assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
@@ -632,7 +766,7 @@ mod tests {
     fn refutes_answers_unknown_rather_than_a_guessed_verdict_when_stopped() {
         let kb = stopped_kb();
         let budget = Budget::for_kb(&kb);
-        let mut session = Session::new(&kb, budget);
+        let mut session = Session::new(&kb, budget, [0; 32]);
         assert_eq!(session.refutes(&Assumptions::of_kb()), Verdict::Unknown);
     }
 }

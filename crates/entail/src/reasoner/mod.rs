@@ -31,6 +31,23 @@
 //! [`Completeness`](crate::Completeness) is structurally incapable of reporting a tableau's
 //! incompleteness, and what this one measures instead.
 //!
+//! # …and every service returns a PROOF TERM
+//!
+//! A certificate is a MEASUREMENT the search took of itself: a service that answered wrongly
+//! reports exactly the same certificate as one that answered rightly. So each answer also
+//! carries a [`ServiceProof`] ([`Certified::proof`]) that binds this service's own question,
+//! names every tableau run it made together with the assumptions that run received, and says
+//! for every claim the answer reports which run decides it. [`ServiceProof::verify`] replays
+//! all of it against the CONSUMER's own ontology, and [`ServiceProof::covers`] is where the
+//! answer and the proof are compared claim for claim. See [`mod@proof`].
+//!
+//! Two of the eight services decide SYNTACTICALLY and make no tableau run at all:
+//! [`profile`](profile()) walks the axioms and [`extract_module`] runs a locality fixpoint.
+//! Neither has a refutation to replay. `profile` therefore carries no proof term, and
+//! `extract_module` carries one with ZERO runs whose claim is the extracted module's own
+//! canonical identity — which binds the question honestly rather than inventing a search
+//! neither performed.
+//!
 //! # Why some services take `&mut self`
 //!
 //! A `Reasoner` is a working state, not a snapshot. Asking about a class or an individual
@@ -67,6 +84,7 @@ pub mod certificate;
 pub mod classify;
 pub mod module;
 pub mod profile;
+pub mod proof;
 pub mod realize;
 
 pub use axiom::DlAxiom;
@@ -74,11 +92,16 @@ pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
 pub use module::{ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module};
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
+pub use proof::{
+    Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
+    ServiceReplay, StopCause, StopReceipt,
+};
 pub use realize::Realization;
 
 use axiom::{FreshSymbols, both, disjoint, holds_role, holds_role_inclusion, reaches};
 use certificate::Session;
 use classify::{Subsumptions, subsumes};
+use proof::{ClaimBasis as Basis, refutation_claim};
 use realize::is_instance;
 
 /// A total, dataset-independent sort key for a term.
@@ -179,6 +202,14 @@ pub struct Reasoner {
     boundaries: BTreeSet<Construct>,
     /// The refutation symbol generator, seeded to avoid every blank label in the data.
     fresh: FreshSymbols,
+    /// The PRODUCER-INDEPENDENT identity of the dataset this reasoner was built from: BLAKE3
+    /// over its RDFC-1.0 canonical N-Quads.
+    ///
+    /// Computed ONCE here rather than once per service call. It is a canonicalization of the
+    /// whole dataset, it does not change between questions, and every [`ServiceProof`] this
+    /// reasoner issues binds it so that a consumer can recompute it from their own copy of the
+    /// data and refuse a proof produced for anything else.
+    input: [u8; 32],
 }
 
 impl std::fmt::Debug for Reasoner {
@@ -236,7 +267,104 @@ impl Reasoner {
             budget,
             boundaries,
             fresh,
+            input: crate::owl_dl::proof::ontology_identity(ds),
         })
+    }
+
+    /// Apply `question`'s own interning, exactly as the service answering it would.
+    ///
+    /// The step that makes [`Reasoner::proof_context`] usable for a service other than
+    /// consistency. Asking about a class or an axiom the ontology never mentioned INTERNS it —
+    /// that is the correct Direct-Semantics reading — and interning grows the concept table the
+    /// clause set is derived from. A context built without it would compute a different
+    /// contract than the run did and reject an honest proof.
+    ///
+    /// This is the checker's half of [`TrustBaseEntry`](crate::TrustBaseEntry)'s
+    /// `RefutationEncoding` entry: the consumer re-derives the question's encoding from the
+    /// question they hold, rather than from anything the producer shipped. It runs no search
+    /// and opens no session.
+    pub fn prepare(&mut self, question: &Question) {
+        match question {
+            Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
+                self.concept_of(class);
+            }
+            Question::AxiomEntailment { axiom } => {
+                // The plan itself is discarded: what is wanted is the INTERNING it performed,
+                // which is exactly what `Reasoner::entails` does before it reasons.
+                let _plan = self.plan(axiom);
+            }
+            // Consistency, classification and realization range over the ontology's own
+            // vocabulary, which `Reasoner::new` already interned; module extraction opens no
+            // knowledge base at all.
+            Question::Consistency
+            | Question::Classification { .. }
+            | Question::Realization { .. }
+            | Question::ModuleExtraction { .. } => {}
+        }
+    }
+
+    /// A CHECKING CONTEXT for the proof terms this reasoner's services issue.
+    ///
+    /// The context a [`ServiceProof`]'s runs are verified against. It has to be built from a
+    /// reasoner whose knowledge base was prepared the SAME way — a service interns the concepts
+    /// its question needs before it reasons, and a context built from the dataset alone would
+    /// derive a different clause set and reject an honest proof. So a consumer checking an
+    /// `entails` proof asks the same question of a fresh reasoner first, then takes this.
+    ///
+    /// It opens no session and runs no search: the only things it computes are the
+    /// clausification of the knowledge base and the two digests a proof term is bound to.
+    ///
+    /// ```
+    /// use purrdf_core::{RdfDatasetBuilder, TermValue};
+    /// use purrdf_entail::reasoner::{DlAxiom, Question, Reasoner};
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let cat = b.intern_iri("http://example.org/Cat");
+    /// let animal = b.intern_iri("http://example.org/Animal");
+    /// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+    /// b.push_quad(cat, sub, animal, None);
+    /// let ds = b.freeze().expect("freeze");
+    ///
+    /// let axiom = DlAxiom::SubClassOf {
+    ///     sub: TermValue::iri("http://example.org/Cat"),
+    ///     sup: TermValue::iri("http://example.org/Animal"),
+    /// };
+    /// let question = Question::AxiomEntailment { axiom: Box::new(axiom.clone()) };
+    ///
+    /// let mut reasoner = Reasoner::new(&ds).expect("reverse-map");
+    /// let answer = reasoner.entails(&axiom).expect("consistent");
+    ///
+    /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
+    /// let mut checker = Reasoner::new(&ds).expect("reverse-map");
+    /// checker.prepare(&question);
+    /// let ctx = checker.proof_context();
+    /// let certificate = answer.certificate();
+    /// let replay = answer
+    ///     .proof()
+    ///     .verify(&ds, &question, Some(certificate), &ctx)
+    ///     .expect("a genuine proof checks");
+    /// assert_eq!(replay.runs(), replay.replayed());
+    /// ```
+    #[must_use]
+    pub fn proof_context(self) -> crate::DlProofContext {
+        crate::DlProofContext::of_prepared_kb(self.kb, self.input)
+    }
+
+    /// The question [`Reasoner::classify`] answers over this reasoner's own class list.
+    #[must_use]
+    pub fn classification_question(&self) -> Question {
+        Question::Classification {
+            classes: self.signature(),
+        }
+    }
+
+    /// The question [`Reasoner::realize`] answers over this reasoner's own vocabulary.
+    #[must_use]
+    pub fn realization_question(&self) -> Question {
+        Question::Realization {
+            individuals: self.named_individuals(),
+            classes: self.signature(),
+        }
     }
 
     /// Narrow the per-decision step cap to `cap`.
@@ -310,7 +438,7 @@ impl Reasoner {
     /// service answers [`EntailError::Unsatisfiable`].
     #[must_use]
     pub fn consistency(&self) -> Certified<Verdict> {
-        let mut session = Session::new(&self.kb, self.budget);
+        let mut session = self.open_session();
         let decision = session.decide(&Assumptions::of_kb());
         // `stopped` is checked beside `exhausted`: a run the caller cancelled has closed
         // some branches and not others, exactly like a capped one, and `decision.consistent`
@@ -322,7 +450,39 @@ impl Reasoner {
         } else {
             Verdict::False
         };
-        Certified::new(answer, session.certificate(&self.boundaries))
+        // The one service whose claim is the RUN itself: a consistent ontology is exactly a
+        // clash-free completion, so this is the one place a `True` rests on a countermodel
+        // rather than on a refutation. Filed by hand for that reason.
+        let run = session.last_run();
+        let basis = match answer {
+            Verdict::True => Basis::ExhibitedModel { run },
+            Verdict::False => Basis::ClosedRefutation { runs: vec![run] },
+            Verdict::Unknown => Basis::Undecided { run },
+        };
+        let claim = Claim::new(ClaimSubject::Consistent, basis);
+        self.seal(session, Question::Consistency, vec![claim], answer)
+    }
+
+    /// Open a session over this reasoner's knowledge base, budget and input identity.
+    fn open_session(&self) -> Session<'_> {
+        Session::new(&self.kb, self.budget, self.input)
+    }
+
+    /// Seal a session into an answer, its certificate and its proof term.
+    ///
+    /// The single seam every certified service goes through, so a service that filed no claims
+    /// is a service whose proof term visibly binds nothing rather than one that quietly
+    /// returned a bare answer.
+    fn seal<T>(
+        &self,
+        session: Session<'_>,
+        question: Question,
+        claims: Vec<Claim>,
+        answer: T,
+    ) -> Certified<T> {
+        let certificate = session.certificate(&self.boundaries);
+        let proof = session.proof(question, claims, &certificate);
+        Certified::new(answer, certificate, proof)
     }
 
     /// Whether `class` can have an instance in some model of the ontology.
@@ -342,27 +502,39 @@ impl Reasoner {
     ) -> Result<Certified<Verdict>, EntailError> {
         let concept = self.concept_of(class);
         let (mut session, usable) = self.open()?;
+        let mut basis = Basis::NotDecided;
         let answer = if usable {
             let decision = session.decide(&Assumptions {
                 fresh_types: &[concept],
                 ..Assumptions::of_kb()
             });
+            let run = session.last_run();
             // See [`Reasoner::consistency`]: `stopped` is read beside `exhausted` for the
-            // same reason.
+            // same reason. Satisfiability is witnessed by a MODEL, so a `True` here rests on
+            // the run's clash-free completion rather than on a closed refutation.
             if decision.exhausted || decision.stopped {
+                basis = Basis::Undecided { run };
                 Verdict::Unknown
             } else if decision.consistent {
+                basis = Basis::ExhibitedModel { run };
                 Verdict::True
             } else {
+                basis = Basis::ClosedRefutation { runs: vec![run] };
                 Verdict::False
             }
         } else {
             Verdict::Unknown
         };
-        Ok(Certified::new(
-            answer,
-            session.certificate(&self.boundaries),
-        ))
+        let claim = Claim::new(
+            ClaimSubject::ClassSatisfiable {
+                class: class.clone(),
+            },
+            basis,
+        );
+        let question = Question::ClassSatisfiability {
+            class: class.clone(),
+        };
+        Ok(self.seal(session, question, vec![claim], answer))
     }
 
     /// The subsumption hierarchy over the ontology's named classes.
@@ -383,16 +555,15 @@ impl Reasoner {
     /// information.
     pub fn classify(&self) -> Result<Certified<ClassHierarchy>, EntailError> {
         let (mut session, usable) = self.open()?;
-        let answer = if usable {
+        let (answer, claims) = if usable {
             let matrix = Subsumptions::decide(&mut session, &self.classes);
-            ClassHierarchy::derive(&self.kb, &self.classes, &matrix)
+            let answer = ClassHierarchy::derive(&self.kb, &self.classes, &matrix);
+            let claims = matrix.claims(&self.kb, &self.classes);
+            (answer, claims)
         } else {
-            ClassHierarchy::default()
+            (ClassHierarchy::default(), Vec::new())
         };
-        Ok(Certified::new(
-            answer,
-            session.certificate(&self.boundaries),
-        ))
+        Ok(self.seal(session, self.classification_question(), claims, answer))
     }
 
     /// The entailed types of the ontology's named individuals, and the most specific of
@@ -406,16 +577,15 @@ impl Reasoner {
     /// [`EntailError::Unsatisfiable`] if the ontology has no model.
     pub fn realize(&self) -> Result<Certified<Realization>, EntailError> {
         let (mut session, usable) = self.open()?;
-        let answer = if usable {
+        let (answer, claims) = if usable {
             let matrix = Subsumptions::decide(&mut session, &self.classes);
-            Realization::decide(&mut session, &self.individuals, &self.classes, &matrix)
+            let (answer, claims) =
+                Realization::decide(&mut session, &self.individuals, &self.classes, &matrix);
+            (answer, claims)
         } else {
-            Realization::default()
+            (Realization::default(), Vec::new())
         };
-        Ok(Certified::new(
-            answer,
-            session.certificate(&self.boundaries),
-        ))
+        Ok(self.seal(session, self.realization_question(), claims, answer))
     }
 
     /// The named individuals entailed to be instances of `class`, sorted.
@@ -431,18 +601,33 @@ impl Reasoner {
         let concept = self.concept_of(class);
         let (mut session, usable) = self.open()?;
         let mut answer: Vec<TermValue> = Vec::new();
+        let mut claims = Vec::new();
         if usable {
             for &individual in &self.individuals {
-                if is_instance(&mut session, individual, concept).is_true() {
-                    answer.push(self.kb.interner.value(individual).clone());
+                let verdict = is_instance(&mut session, individual, concept);
+                let run = session.last_run();
+                let name = self.kb.interner.value(individual).clone();
+                if verdict.is_true() {
+                    answer.push(name.clone());
                 }
+                // Every individual asked about gets a claim, established or not: an answer
+                // that omitted the negative ones would leave a reader unable to tell an
+                // individual the search RULED OUT from one it never reached.
+                claims.push(refutation_claim(
+                    ClaimSubject::Type {
+                        individual: name,
+                        class: class.clone(),
+                    },
+                    verdict,
+                    &[run],
+                ));
             }
         }
         answer.sort_by_key(term_key);
-        Ok(Certified::new(
-            answer,
-            session.certificate(&self.boundaries),
-        ))
+        let question = Question::InstanceRetrieval {
+            class: class.clone(),
+        };
+        Ok(self.seal(session, question, claims, answer))
     }
 
     /// Whether the ontology entails `axiom`.
@@ -458,15 +643,23 @@ impl Reasoner {
     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
         let plan = self.plan(axiom);
         let (mut session, usable) = self.open()?;
+        let mut runs = Vec::new();
         let answer = if usable {
-            plan.run(&mut session)
+            plan.run(&mut session, &mut runs)
         } else {
             Verdict::Unknown
         };
-        Ok(Certified::new(
+        let claim = refutation_claim(
+            ClaimSubject::Axiom {
+                axiom: Box::new(axiom.clone()),
+            },
             answer,
-            session.certificate(&self.boundaries),
-        ))
+            &runs,
+        );
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom.clone()),
+        };
+        Ok(self.seal(session, question, vec![claim], answer))
     }
 
     /// Intern everything `axiom` needs and reduce it to the refutation(s) that decide it.
@@ -593,7 +786,7 @@ impl Reasoner {
     ///
     /// [`EntailError::Unsatisfiable`] if the ontology has no model.
     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
-        let mut session = Session::new(&self.kb, self.budget);
+        let mut session = self.open_session();
         let decision = session.decide(&Assumptions::of_kb());
         // A stopped consistency check is exactly as unusable as an exhausted one: neither
         // tells the caller whether the ontology has a model, so both leave the session
@@ -663,35 +856,62 @@ enum Refutation {
 }
 
 impl Refutation {
-    /// Decide this refutation in `session`.
-    fn run(&self, session: &mut Session<'_>) -> Verdict {
+    /// Decide this refutation in `session`, pushing the index of every run it makes onto
+    /// `runs`.
+    ///
+    /// The run list is what binds the answer: an equivalence is TWO subsumptions, and a claim
+    /// that named only one of them would rest on half a decision. So the indices are collected
+    /// here, where the decisions are made, rather than reconstructed afterwards from a count.
+    fn run(&self, session: &mut Session<'_>, runs: &mut Vec<usize>) -> Verdict {
+        let ask = |session: &mut Session<'_>, verdict: Verdict, runs: &mut Vec<usize>| {
+            runs.push(session.last_run());
+            verdict
+        };
         match *self {
-            Self::Subsumption { sub, sup } => subsumes(session, sub, sup),
+            Self::Subsumption { sub, sup } => {
+                let verdict = subsumes(session, sub, sup);
+                ask(session, verdict, runs)
+            }
             Self::Equivalence { left, right } => {
                 let forward = subsumes(session, left, right);
+                let forward = ask(session, forward, runs);
                 // A demonstrably failed direction settles the equivalence, so the second
                 // decision is not spent. `both` would give the same answer; not asking is
                 // what keeps `DlCertificate::steps` an honest measure of work done.
                 if matches!(forward, Verdict::False) {
                     return Verdict::False;
                 }
-                both(forward, subsumes(session, right, left))
+                let backward = subsumes(session, right, left);
+                let backward = ask(session, backward, runs);
+                both(forward, backward)
             }
-            Self::Disjointness { left, right } => disjoint(session, left, right),
+            Self::Disjointness { left, right } => {
+                let verdict = disjoint(session, left, right);
+                ask(session, verdict, runs)
+            }
             Self::Membership {
                 individual,
                 concept,
-            } => is_instance(session, individual, concept),
+            } => {
+                let verdict = is_instance(session, individual, concept);
+                ask(session, verdict, runs)
+            }
             Self::RoleAssertion {
                 subject,
                 negated_reach,
-            } => holds_role(session, subject, negated_reach),
+            } => {
+                let verdict = holds_role(session, subject, negated_reach);
+                ask(session, verdict, runs)
+            }
             Self::RoleInclusion {
                 x,
                 sub,
                 y,
                 negated_reach,
-            } => holds_role_inclusion(session, x, sub, y, negated_reach),
+            } => {
+                let verdict = holds_role_inclusion(session, x, sub, y, negated_reach);
+                ask(session, verdict, runs)
+            }
         }
     }
 }

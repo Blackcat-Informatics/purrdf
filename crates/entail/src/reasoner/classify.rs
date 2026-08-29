@@ -55,6 +55,7 @@
 use purrdf_core::TermValue;
 
 use super::certificate::{Session, Verdict};
+use super::proof::{Claim, ClaimBasis, ClaimSubject};
 use super::term_key;
 use crate::owl_dl::Kb;
 use crate::owl_dl::graph::Assumptions;
@@ -71,6 +72,13 @@ pub(crate) struct Subsumptions {
     n: usize,
     /// `n × n` verdicts, row-major, indexed `sub * n + sup`.
     verdicts: Vec<Verdict>,
+    /// `n × n` bases — WHAT decided each pair, in the same row-major layout.
+    ///
+    /// A parallel matrix rather than a field on the verdict, because the two are different
+    /// facts: the verdict is what the classifier answers and the basis is what a proof term
+    /// cites for it. Most pairs are decided by the saturation and never reach a tableau at
+    /// all, which is precisely what a classification proof has to say out loud.
+    bases: Vec<ClaimBasis>,
 }
 
 impl Subsumptions {
@@ -87,18 +95,68 @@ impl Subsumptions {
         let complete = taxonomy.is_complete();
         let n = classes.len();
         let mut verdicts = vec![Verdict::False; n * n];
+        // A pair the saturation ruled out on a COMPLETE taxonomy is decided by the saturation
+        // too, and its basis says so rather than claiming a run nothing made.
+        let mut bases = vec![ClaimBasis::Saturated; n * n];
         for (i, &(_, sub)) in classes.iter().enumerate() {
             for (j, &(_, sup)) in classes.iter().enumerate() {
-                verdicts[i * n + j] = if i == j || taxonomy.derives(sub, sup) {
-                    Verdict::True
-                } else if complete {
-                    Verdict::False
-                } else {
-                    subsumes(session, sub, sup)
+                if i == j {
+                    verdicts[i * n + j] = Verdict::True;
+                    bases[i * n + j] = ClaimBasis::Reflexive;
+                    continue;
+                }
+                if taxonomy.derives(sub, sup) {
+                    verdicts[i * n + j] = Verdict::True;
+                    continue;
+                }
+                if complete {
+                    verdicts[i * n + j] = Verdict::False;
+                    continue;
+                }
+                let verdict = subsumes(session, sub, sup);
+                verdicts[i * n + j] = verdict;
+                bases[i * n + j] = match verdict {
+                    Verdict::True => ClaimBasis::ClosedRefutation {
+                        runs: vec![session.last_run()],
+                    },
+                    Verdict::False => ClaimBasis::CounterModel {
+                        run: session.last_run(),
+                    },
+                    Verdict::Unknown => ClaimBasis::Undecided {
+                        run: session.last_run(),
+                    },
                 };
             }
         }
-        Self { n, verdicts }
+        Self { n, verdicts, bases }
+    }
+
+    /// The CLAIMS a classification reports, each naming what decided it.
+    ///
+    /// One per ordered pair of distinct classes the matrix ESTABLISHES — exactly the pairs
+    /// [`ClassHierarchy::subsumptions`] holds, enumerated by the same double loop
+    /// [`ClassHierarchy::derive`] uses, so the two cannot drift apart. The equivalences, the
+    /// unsatisfiable list and the transitive reduction are views of this relation rather than
+    /// independent claims, and demanding a second proof of the same fact would be double
+    /// counting rather than extra rigour.
+    pub(crate) fn claims(&self, kb: &Kb, classes: &[(u32, u32)]) -> Vec<Claim> {
+        let name = |i: usize| kb.interner.value(classes[i].0).clone();
+        let mut out = Vec::new();
+        for i in 0..self.n {
+            for j in 0..self.n {
+                if i == j || !self.holds(i, j) {
+                    continue;
+                }
+                out.push(Claim::new(
+                    ClaimSubject::Subsumption {
+                        sub: name(i),
+                        sup: name(j),
+                    },
+                    self.bases[i * self.n + j].clone(),
+                ));
+            }
+        }
+        out
     }
 
     /// Decide every ordered pair by REFUTATION alone — one tableau run per pair.
@@ -112,16 +170,21 @@ impl Subsumptions {
     pub(crate) fn decide_by_tableau(session: &mut Session<'_>, classes: &[(u32, u32)]) -> Self {
         let n = classes.len();
         let mut verdicts = vec![Verdict::False; n * n];
+        let mut bases = vec![ClaimBasis::Reflexive; n * n];
         for (i, &(_, sub)) in classes.iter().enumerate() {
             for (j, &(_, sup)) in classes.iter().enumerate() {
                 verdicts[i * n + j] = if i == j {
                     Verdict::True
                 } else {
-                    subsumes(session, sub, sup)
+                    let verdict = subsumes(session, sub, sup);
+                    bases[i * n + j] = ClaimBasis::ClosedRefutation {
+                        runs: vec![session.last_run()],
+                    };
+                    verdict
                 };
             }
         }
-        Self { n, verdicts }
+        Self { n, verdicts, bases }
     }
 
     /// The verdict for `classes[sub] ⊑ classes[sup]`.

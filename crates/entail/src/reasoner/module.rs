@@ -62,10 +62,12 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
+use super::proof::{Claim, ClaimBasis, ClaimSubject, Question, ServiceProof};
 use super::term_key;
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::parser::Vocab;
+use crate::owl_dl::proof::ontology_identity;
 use crate::vocab::{
     OWL_ANNOTATIONPROPERTY, OWL_CLASS, OWL_DATATYPEPROPERTY, OWL_OBJECTPROPERTY, RDF_PROPERTY,
 };
@@ -142,6 +144,8 @@ pub struct ModuleExtraction {
     signature: Vec<TermValue>,
     /// The triples kept conservatively rather than by exact locality, sorted.
     conservative_keeps: Vec<ConservativeKeep>,
+    /// The proof term binding the question this extraction answered.
+    proof: ServiceProof,
 }
 
 impl ModuleExtraction {
@@ -181,6 +185,22 @@ impl ModuleExtraction {
     #[must_use]
     pub fn conservative_keeps(&self) -> &[ConservativeKeep] {
         &self.conservative_keeps
+    }
+
+    /// The PROOF TERM binding the question this extraction answered.
+    ///
+    /// **It carries no tableau run, because this service makes none.** Locality-based module
+    /// extraction is a syntactic fixpoint over the triples — there is no search, so there is
+    /// no refutation to replay, and a proof term shaped like one would be a fiction. What it
+    /// DOES bind is real and checkable: the ontology's producer-independent identity, the
+    /// seed signature and the notion the caller asked for, and the extracted module's own
+    /// canonical identity. A module proof presented against a different signature, a
+    /// different notion or a different extraction is rejected;
+    /// [`ServiceReplay::runs`](super::ServiceReplay::runs) answering zero is the report saying
+    /// out loud that there was no search to check.
+    #[must_use]
+    pub const fn proof(&self) -> &ServiceProof {
+        &self.proof
     }
 }
 
@@ -318,12 +338,33 @@ pub fn extract_module(
         .collect();
     conservative_keeps.sort_by_key(|keep| (term_key(&keep.subject), term_key(&keep.predicate)));
 
+    // The extracted module's own producer-independent identity: the claim a consumer checks
+    // this proof term against, and the reason a proof of one extraction cannot stand for
+    // another over the same signature.
+    let claim = Claim::new(
+        ClaimSubject::Module {
+            digest: ontology_identity(&module),
+        },
+        ClaimBasis::Syntactic,
+    );
+    let proof = ServiceProof::new(
+        ontology_identity(ds),
+        Question::ModuleExtraction {
+            signature: signature.to_vec(),
+            method,
+        },
+        Vec::new(),
+        vec![claim],
+        None,
+        false,
+    );
     Ok(ModuleExtraction {
         module,
         method,
         axioms,
         signature: closed,
         conservative_keeps,
+        proof,
     })
 }
 

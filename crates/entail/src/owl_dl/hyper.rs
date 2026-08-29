@@ -230,8 +230,8 @@ use crate::owl_dl::graph::{
     Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
 };
 use crate::owl_dl::proof::{
-    BranchOutcome, BranchStep, ClashStep, MergeCause, MergeStep, NodeRef, Recorder, RecorderMark,
-    frame_refs, node_ref, observe_alternative, observe_body, observe_completion,
+    BranchOutcome, BranchStep, ClashStep, MergeCause, MergeLicence, MergeStep, NodeRef, Recorder,
+    RecorderMark, frame_refs, node_ref, observe_alternative, observe_body, observe_completion,
 };
 
 /// One head atom with its variables replaced by the nodes a match bound them to.
@@ -349,6 +349,51 @@ struct OpenSlot {
     /// What the recorder held before the alternative was applied, so the closure it reached
     /// can be identified as "whatever was written down since".
     mark: RecorderMark,
+}
+
+/// ONE identification, as the search observed it — the three identities and the rule.
+///
+/// Held together rather than passed as four positional arguments for the reason
+/// [`Assumptions`] is one struct: three same-typed [`NodeRef`]s in a signature are three
+/// arguments a caller can silently permute, and permuting them here would record a merge that
+/// joined the wrong pair while every test still passed.
+struct Identified {
+    /// Which rule forced the identification.
+    cause: MergeCause,
+    /// The identity the licensing atom names for the absorbing side.
+    left: NodeRef,
+    /// The node being identified, as it stood before the merge.
+    right: NodeRef,
+    /// The identity both denote after it.
+    joined: NodeRef,
+}
+
+/// WHERE the disjunct [`Hyper::apply`] is asserting came from.
+///
+/// A merge is licensed by the grounded head atom that asserted it, and there are exactly two
+/// places this search asserts one: a non-disjunctive clause instance the derivation round
+/// fired, and one alternative of a `⊔`-rule branch point. Naming the site here is what lets an
+/// instrumented run write a [`MergeLicence`] a checker can ground for itself.
+///
+/// It borrows the frame rather than owning it, so a NON-recording run — which is every run
+/// every existing caller makes — allocates nothing to construct one.
+enum ApplySite<'f> {
+    /// The single grounded head disjunct of non-disjunctive clause `index`, matched at `frame`.
+    Clause {
+        /// The clause index.
+        index: usize,
+        /// The matcher's binding frame.
+        frame: &'f [usize],
+    },
+    /// Alternative `ordinal` of the recorded branch point at `branch`.
+    Branch {
+        /// The recorded branch step.
+        branch: usize,
+        /// Which alternative of it.
+        ordinal: usize,
+    },
+    /// Nothing replayable: a non-recording run, or a branch point past the recording ceiling.
+    Unrecorded,
 }
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
@@ -527,21 +572,40 @@ impl<'a> Hyper<'a> {
         ));
     }
 
-    /// Write down one identification's provenance, if this run is recording.
-    fn record_merge(
-        &self,
-        st: &State,
-        cause: MergeCause,
-        left: NodeRef,
-        right: NodeRef,
-        joined: NodeRef,
-    ) {
+    /// Write down one identification and the clause instance that LICENSED it, if this run is
+    /// recording.
+    ///
+    /// The licence is resolved from `site` — the place the disjunct being asserted came from —
+    /// so a checker can ground that clause's head itself and find the identification there. The
+    /// frame is turned into merge-invariant identities HERE rather than at the call site, so a
+    /// non-recording run allocates nothing: `site` carries a borrowed slice of node indices and
+    /// this is the only place it is read. Nothing here consults or charges the work meter.
+    fn record_merge(&self, st: &State, identified: Identified, site: &ApplySite<'_>, atom: usize) {
+        let Identified {
+            cause,
+            left,
+            right,
+            joined,
+        } = identified;
         let Some(trace) = self.trace.as_ref() else {
             return;
         };
-        trace
-            .borrow_mut()
-            .merge(MergeStep::new(cause, left, right, joined, st.clash));
+        let licence = match *site {
+            ApplySite::Clause { index, frame } => MergeLicence::Clause {
+                clause: index,
+                frame: frame_refs(st, frame),
+                atom,
+            },
+            ApplySite::Branch { branch, ordinal } => MergeLicence::Branch {
+                branch,
+                ordinal,
+                atom,
+            },
+            ApplySite::Unrecorded => MergeLicence::Unrecorded,
+        };
+        trace.borrow_mut().merge(MergeStep::new(
+            cause, left, right, joined, st.clash, licence,
+        ));
     }
 
     /// Write down a concrete-domain clash, if this run is recording.
@@ -730,7 +794,13 @@ impl<'a> Hyper<'a> {
                                 mark: self.record_mark()?,
                             })
                         });
-                        if self.apply(&mut next, &disjunct) {
+                        // An alternative's identifications are licensed by the branch point that
+                        // dispensed it: the checker regenerates that point's alternatives from
+                        // the clause it cites and finds the identification in one of them.
+                        let site = record.map_or(ApplySite::Unrecorded, |branch| {
+                            ApplySite::Branch { branch, ordinal }
+                        });
+                        if self.apply(&mut next, &disjunct, &site) {
                             open = slot;
                             pending = Some(next);
                         } else if let Some(slot) = slot.as_ref() {
@@ -1025,7 +1095,14 @@ impl<'a> Hyper<'a> {
             // is what makes this `true` rather than a second "did anything happen" flag —
             // and what makes the round loop terminate instead of re-firing a satisfied head.
             changed = true;
-            if !self.apply(st, &disjunct) {
+            if !self.apply(
+                st,
+                &disjunct,
+                &ApplySite::Clause {
+                    index,
+                    frame: &frame,
+                },
+            ) {
                 return changed;
             }
         }
@@ -1233,8 +1310,13 @@ impl<'a> Hyper<'a> {
     }
 
     /// Assert every atom of a grounded disjunct. Returns `false` if the state clashed.
-    fn apply(&self, st: &mut State, disjunct: &[Ground<usize>]) -> bool {
-        for atom in disjunct {
+    ///
+    /// `site` says where the disjunct came from, so an identification can record the clause
+    /// instance that LICENSED it. It is read only by [`Hyper::record_merge`], and only on a
+    /// recording run: constructing one is an enum with a borrowed slice in it, which allocates
+    /// nothing, decides nothing and charges nothing.
+    fn apply(&self, st: &mut State, disjunct: &[Ground<usize>], site: &ApplySite<'_>) -> bool {
+        for (at, atom) in disjunct.iter().enumerate() {
             match atom {
                 Ground::Concept(node, concept) => {
                     self.g.add_concept(st, *node, *concept);
@@ -1247,33 +1329,64 @@ impl<'a> Hyper<'a> {
                 }
                 Ground::Equal(left, right) => {
                     // The two identities are read BEFORE the merge, because a merge is exactly
-                    // the event that makes one of them stop being a representative.
+                    // the event that makes one of them stop being a representative. Both are
+                    // frame slots the `≤n` clause's own body counted, which is what lets a
+                    // checker re-derive the pair rather than believe it.
                     let (before_left, before_right) = (node_ref(st, *left), node_ref(st, *right));
                     self.g.merge_nodes(st, *left, *right);
                     let joined = node_ref(st, *left);
-                    self.record_merge(st, MergeCause::AtMost, before_left, before_right, joined);
+                    self.record_merge(
+                        st,
+                        Identified {
+                            cause: MergeCause::AtMost,
+                            left: before_left,
+                            right: before_right,
+                            joined,
+                        },
+                        site,
+                        at,
+                    );
                 }
                 Ground::EqualIndividual(node, individual) => {
                     let root = self.g.root(st, *individual);
-                    let (before_root, before_node) = (node_ref(st, root), node_ref(st, *node));
+                    let before_node = node_ref(st, *node);
                     self.g.merge_nodes(st, root, *node);
                     let joined = node_ref(st, *node);
-                    self.record_merge(st, MergeCause::Nominal, before_root, before_node, joined);
+                    // The absorbing side is recorded as the identity the `o`-clause NAMED,
+                    // `{a}`, rather than as whichever name `node_ref` currently canonicalizes
+                    // that root to: both are identities of the same node, and only the first is
+                    // one a checker holding a proof term can re-derive. See `MergeStep::left`.
+                    self.record_merge(
+                        st,
+                        Identified {
+                            cause: MergeCause::Nominal,
+                            left: NodeRef::Individual(*individual),
+                            right: before_node,
+                            joined,
+                        },
+                        site,
+                        at,
+                    );
                 }
                 Ground::EqualReserved(node, key) => {
                     // Mint (or reuse) the reserved root and merge the blockable node INTO it —
                     // `merge_nodes` keeps the root, the MSH named-/reserved-root merge direction.
                     let r = self.g.generated_root(st, key.clone());
                     let node = find(st, *node);
-                    let (before_root, before_node) = (node_ref(st, r), node_ref(st, node));
+                    let before_node = node_ref(st, node);
                     self.g.merge_nodes(st, r, node);
                     let joined = node_ref(st, node);
+                    // The reserved root's own identity `u.⟨R,B,i⟩`, for the reason above.
                     self.record_merge(
                         st,
-                        MergeCause::NominalIntroduction,
-                        before_root,
-                        before_node,
-                        joined,
+                        Identified {
+                            cause: MergeCause::NominalIntroduction,
+                            left: NodeRef::of_generated(key),
+                            right: before_node,
+                            joined,
+                        },
+                        site,
+                        at,
                     );
                 }
             }
@@ -1624,7 +1737,7 @@ fn ground<N: Clone>(disjunct: &[HeadAtom], frame: &[N]) -> Vec<Ground<N>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hyper, decide, decide_recording};
+    use super::{Hyper, MergeLicence, decide, decide_recording};
     use crate::owl_dl::Kb;
     use crate::owl_dl::clause::{HeadAtom, derive};
     use crate::owl_dl::concept::{Concept, Role};
@@ -1747,6 +1860,78 @@ mod tests {
                 "recording must not move a single field of the decision"
             );
         }
+    }
+
+    /// …and the same holds under the ASSUMPTION SHAPES the reasoning services ask questions
+    /// with, not only under the bare knowledge base.
+    ///
+    /// Every certified service now records, and every service question reaches the decision
+    /// core through a non-default [`Assumptions`]: a fresh anonymous witness carrying a
+    /// concept (subsumption, class satisfiability, disjointness), an extra concept assertion on
+    /// a named individual (realization, instance retrieval, class assertion), and an extra role
+    /// assertion (role assertion, role inclusion). If recording moved a decision under any of
+    /// those, a proof-carrying service would answer differently from the one that shipped —
+    /// which is the failure this extends the standing obligation to cover.
+    #[test]
+    fn a_recorded_service_question_decides_identically_to_an_unrecorded_one() {
+        let kb = spy_point_kb();
+        let cap = Budget::for_kb(&kb);
+        let types = [(IND, A)];
+        let roles = [(IND, R, IND)];
+        let shapes = [
+            Assumptions {
+                fresh_types: &[A],
+                ..Assumptions::of_kb()
+            },
+            Assumptions {
+                fresh_types: &[A, B],
+                ..Assumptions::of_kb()
+            },
+            Assumptions {
+                types: &types,
+                ..Assumptions::of_kb()
+            },
+            Assumptions {
+                roles: &roles,
+                ..Assumptions::of_kb()
+            },
+            Assumptions {
+                include_abox: false,
+                fresh_types: &[C],
+                ..Assumptions::of_kb()
+            },
+        ];
+        for assumptions in &shapes {
+            let plain = decide(&kb, assumptions, cap);
+            let (recorded, _) = decide_recording(&kb, assumptions, cap);
+            assert_eq!(
+                plain, recorded,
+                "recording must not move a decision under a service's own assumptions"
+            );
+        }
+    }
+
+    /// A recorded MERGE names the clause instance that licensed it.
+    ///
+    /// Without this the licence could be [`MergeLicence::Unrecorded`] at every site and every
+    /// merge-replay test would still pass by refusing to check anything — the same reason the
+    /// clash and branch recordings have an obligation of their own.
+    #[test]
+    fn a_recorded_merge_names_the_clause_instance_that_licensed_it() {
+        let kb = spy_point_kb();
+        let (_, recorder) = decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        let merges = recorder.merges();
+        assert!(
+            !merges.is_empty(),
+            "the nominal-introduction fixture identifies nodes"
+        );
+        assert!(
+            merges
+                .iter()
+                .all(|merge| !matches!(merge.licence(), MergeLicence::Unrecorded)),
+            "every identification the search made came from a grounded head atom, and the \
+             record must name it: {merges:?}"
+        );
     }
 
     /// A recorded refutation actually WRITES SOMETHING DOWN — otherwise the equality above

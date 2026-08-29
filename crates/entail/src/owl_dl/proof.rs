@@ -76,19 +76,33 @@
 //!   yields a real model is a metatheorem about the calculus, not a per-instance obligation. It
 //!   is [`TrustBaseEntry::Unravelling`], cited by [`CALCULUS_VERSION`]. The three checks above
 //!   do NOT by themselves prove a model exists, and nothing here says they do.
-//! * **A MERGE is provenance, not a proof**, and the CONCRETE-domain clash has no clause
-//!   instance to replay — see [`MergeStep`] and [`DlProof::data_clashes`].
+//! * **A MERGE's LICENCE is re-derived, as a `trusted` check.** [`DlProof::replay_merge`]
+//!   grounds the head of the clause instance a merge cites — against the CALLER's clause set —
+//!   and finds the identification there: which rule identified, and which two identities. An
+//!   at-most restriction the ontology does not state, or a pair of nodes the `≤n` clause never
+//!   counted together, is a rejection. What it does NOT establish is that the identification
+//!   CLOSED the state: [`MergeStep::clashed`] is a claim about distinctness in a completion
+//!   graph, and that is reported unattested.
+//! * **The CONCRETE-domain clash is a RECORD, not a proof.** It is the one decision this
+//!   calculus does not take through a clause, so there is no clause instance to look up and no
+//!   grounding to compare against. Nothing here replays one, no method on this type calls one
+//!   proved, and [`RefutationReplay::data_clashes`] counts them apart from the closures that
+//!   were replayed so a reader cannot mistake the two — see [`DlProof::data_clashes`].
 //!
-//! # Three recorded kinds, one replayable
+//! # Three recorded kinds, two replayable
 //!
 //! [`ClashStep`] is a derivation of `false` from a clause with an empty head — the calculus's
 //! only clash rule, because in this hypertableau a clash IS a derivation rather than a
-//! detector. [`MergeStep`] is provenance for an identification: which rule forced it, and the
-//! two stable node identities it joined. The data-clash list names the nodes whose CONCRETE
-//! domain constraints the `owl_dl::data` solver found unsatisfiable — the one
-//! decision this calculus does not take through a clause, and therefore the one clash with no
-//! clause instance to replay. Only the first is replayable in this stage; the other two are
-//! records, they are labelled as records, and no method on this type calls them proofs.
+//! detector. [`MergeStep`] is an identification together with the clause instance that
+//! LICENSED it — which rule forced it, which two stable node identities it joined, and the
+//! [`MergeLicence`] naming the grounded head atom that said so. The data-clash list names the
+//! nodes whose CONCRETE domain constraints the `owl_dl::data` solver found unsatisfiable — the
+//! one decision this calculus does not take through a clause, and therefore the one clash with
+//! no clause instance to replay.
+//!
+//! The first two are replayable. The third is a RECORD, it is labelled a record everywhere it
+//! is reachable — on [`DlProof::data_clashes`], on [`RefutationReplay::data_clashes`], and in
+//! [`BranchOutcome::DataClash`] — and no method on this type calls it a proof.
 //!
 //! # Identity binds to the CALLER, not to the producer
 //!
@@ -136,7 +150,7 @@ use crate::report::Construct;
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v2";
+const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v3";
 
 /// Domain-separation tag for [`contract_digest`].
 const CONTRACT_DIGEST_TAG: &str = "purrdf-owl-dl-contract-v1";
@@ -192,7 +206,7 @@ pub const MAX_CHECK_WORK: u64 = 1 << 22;
 /// Bumped whenever [`TrustBaseEntry::ALL`] changes — which is a BREAKING change, because a
 /// consumer's reading of what it is trusting is a function of this list. `the_trust_base_is_pinned`
 /// asserts the current set element by element so it cannot grow quietly.
-pub const TRUST_BASE_VERSION: &str = "purrdf-owl-dl-trust-base-v1";
+pub const TRUST_BASE_VERSION: &str = "purrdf-owl-dl-trust-base-v2";
 
 /// One PRODUCER-SHARED component a verdict rests on.
 ///
@@ -237,15 +251,36 @@ pub enum TrustBaseEntry {
     /// recorded graph clashes, that every clause is satisfied on it, and that every blocking
     /// pair has equal signatures; that a MODEL follows is this entry.
     Unravelling,
+    /// The REFUTATION ENCODING: `reasoner::axiom`, `reasoner::classify::subsumes` and
+    /// `reasoner::realize::is_instance`, which turn a service's question into the tableau
+    /// ASSUMPTIONS whose consistency decides it, together with the metatheorem those encodings
+    /// rest on — `KB ⊨ α` exactly when `KB ∪ {¬α}` has no model.
+    ///
+    /// A service proof term's runs carry the assumptions they ran under, and a checker
+    /// RE-DERIVES those assumptions from the caller's own question rather than believing the
+    /// recorded ones — so a proof presented against a different question is rejected. What that
+    /// re-derivation cannot be independent of is the encoding itself: if `¬α` is encoded wrongly,
+    /// the checker encodes it wrongly too. Named here rather than left implicit.
+    RefutationEncoding,
+    /// The CLASSIFYING SATURATION: `owl_dl::saturate`, the consequence-based calculus
+    /// [`crate::reasoner::ClassHierarchy`] derives most of its subsumptions from without opening a
+    /// tableau at all.
+    ///
+    /// A subsumption the saturation derived has no tableau run behind it, so it has no
+    /// refutation to replay. A classification proof term says which of its claims came from the
+    /// saturation and which from a refutation, and the saturated ones rest on this entry.
+    ClassifyingSaturation,
 }
 
 impl TrustBaseEntry {
     /// Every entry, in wire order. **Adding to this is a breaking version bump.**
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::ReverseMapping,
         Self::Clausification,
         Self::Grounding,
         Self::Unravelling,
+        Self::RefutationEncoding,
+        Self::ClassifyingSaturation,
     ];
 
     /// A short, stable name.
@@ -256,6 +291,8 @@ impl TrustBaseEntry {
             Self::Clausification => "clausification",
             Self::Grounding => "grounding",
             Self::Unravelling => "unravelling",
+            Self::RefutationEncoding => "refutation-encoding",
+            Self::ClassifyingSaturation => "classifying-saturation",
         }
     }
 
@@ -266,6 +303,8 @@ impl TrustBaseEntry {
             Self::Clausification => 1,
             Self::Grounding => 2,
             Self::Unravelling => 3,
+            Self::RefutationEncoding => 4,
+            Self::ClassifyingSaturation => 5,
         }
     }
 }
@@ -311,7 +350,7 @@ pub struct CheckReport {
 
 impl CheckReport {
     /// An empty report.
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             attested: 0,
             trusted: 0,
@@ -321,18 +360,18 @@ impl CheckReport {
     }
 
     /// Count `n` checks the checker re-derived on its own.
-    fn attest(&mut self, n: usize) {
+    pub(crate) fn attest(&mut self, n: usize) {
         self.attested += n;
     }
 
     /// Count `n` checks that rest on `entries`.
-    fn trust(&mut self, n: usize, entries: &[TrustBaseEntry]) {
+    pub(crate) fn trust(&mut self, n: usize, entries: &[TrustBaseEntry]) {
         self.trusted += n;
         self.cite(entries);
     }
 
     /// Record that this report rests on `entries`, without counting a check.
-    fn cite(&mut self, entries: &[TrustBaseEntry]) {
+    pub(crate) fn cite(&mut self, entries: &[TrustBaseEntry]) {
         for entry in entries {
             if !self.rests_on.contains(entry) {
                 self.rests_on.push(*entry);
@@ -342,12 +381,12 @@ impl CheckReport {
     }
 
     /// Count `n` obligations the checker did not check.
-    fn leave(&mut self, n: usize) {
+    pub(crate) fn leave(&mut self, n: usize) {
         self.unattested += n;
     }
 
     /// Fold `other` into this report.
-    fn absorb(&mut self, other: &Self) {
+    pub(crate) fn absorb(&mut self, other: &Self) {
         self.attested += other.attested;
         self.trusted += other.trusted;
         self.unattested += other.unattested;
@@ -514,7 +553,7 @@ impl NodeRef {
     }
 
     /// The proof-surface identity of the internal `GeneratedRoot`.
-    fn of_generated(root: &GeneratedRoot) -> Self {
+    pub(crate) fn of_generated(root: &GeneratedRoot) -> Self {
         Self::Reserved(Box::new(reserved_ref(root)))
     }
 }
@@ -690,20 +729,80 @@ impl MergeCause {
     }
 }
 
-/// PROVENANCE for one identification: which rule joined which two node identities.
+/// WHERE the head atom that forced an identification came from — the merge's LICENCE.
 ///
-/// A record, not a proof. Nothing on this type or on [`DlProof`] replays a merge: doing so
-/// means re-deriving the head atom that forced it, which needs the premise DAG this stage
-/// does not build. It is recorded because a merge is where node identity CHANGES, and a
-/// consumer reading a clash step's [`NodeRef`]s cannot otherwise tell why two names became
-/// one.
+/// A merge is not a rule of its own: the calculus only ever identifies two nodes because some
+/// clause's grounded head said to. This names the clause instance, so
+/// [`DlProof::replay_merge`] can ground that head ITSELF, against the caller's own clause set,
+/// and find the identification the record claims.
+///
+/// The two licensed shapes are the two places the search asserts a head:
+/// [`Self::Clause`] for a non-disjunctive instance the derivation round fired, and
+/// [`Self::Branch`] for one alternative of a recorded `⊔`-rule branch point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MergeLicence {
+    /// The single grounded head disjunct of a NON-DISJUNCTIVE clause instance.
+    Clause {
+        /// The clause index, into the clause set the CHECKER derives from the caller's
+        /// ontology.
+        clause: usize,
+        /// The matcher's binding frame, variable by variable.
+        frame: Vec<NodeRef>,
+        /// The identifying atom's position within that disjunct.
+        atom: usize,
+    },
+    /// One ALTERNATIVE of the recorded branch point at this index of [`DlProof::branches`].
+    ///
+    /// The alternative is regenerated by [`DlProof::replay_branch`] from the branch point's own
+    /// cited clause, so a merge licensed this way inherits that check rather than repeating it.
+    Branch {
+        /// The branch point, into [`DlProof::branches`].
+        branch: usize,
+        /// Which alternative of it, head-generated ones first — the same numbering
+        /// [`BranchStep::outcomes`] uses.
+        ordinal: usize,
+        /// The identifying atom's position within that alternative.
+        atom: usize,
+    },
+    /// NOTHING replayable was written down.
+    ///
+    /// Reachable and therefore recorded rather than swept up: a branch point past
+    /// [`MAX_RECORDED_STEPS`] has no index to cite, so a merge taken under one of its
+    /// alternatives has no licence to name. [`DlProof::replay_merge`] refuses it, and the
+    /// refusal is a withheld claim rather than a rejected proof.
+    Unrecorded,
+}
+
+/// One identification, and the clause instance that LICENSED it.
+///
+/// A merge is where node identity CHANGES, so a consumer reading a clash step's [`NodeRef`]s
+/// cannot otherwise tell why two names became one. Since stage 3A it is more than provenance:
+/// [`Self::licence`] names the head atom that forced it, and [`DlProof::replay_merge`] grounds
+/// that head against the CALLER's own clause set and finds the identification there — so an
+/// at-most restriction that is not in the ontology, or a pair of nodes the clause never
+/// counted together, is a rejection.
+///
+/// What a replay establishes and what it does not is spelled out on
+/// [`DlProof::replay_merge`]: the LICENCE is re-derived; that the identification also CLOSED
+/// the state ([`Self::clashed`]) is completion-graph state a proof term does not carry, and is
+/// reported unattested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeStep {
     /// Which rule forced the identification.
     cause: MergeCause,
-    /// One of the two identities, as it stood BEFORE the merge.
+    /// The identity the LICENSING atom names for the absorbing side.
+    ///
+    /// For [`MergeCause::AtMost`] this is the first of the two counted successors the
+    /// `≤n`-clause's head paired, read off the frame. For [`MergeCause::Nominal`] it is the
+    /// individual `{a}` the `o`-clause named, and for [`MergeCause::NominalIntroduction`] the
+    /// reserved root `u.⟨R,B,i⟩` the `NI`-rule named — in both cases the identity the LICENCE
+    /// states, which is one of the identities the node it resolves to genuinely has and is the
+    /// one a checker can re-derive. (The node may carry other names from earlier merges; a
+    /// canonical rendering of those is graph state, and recording it would leave the field
+    /// uncheckable.)
     left: NodeRef,
-    /// The other, as it stood before the merge.
+    /// The other identity, as it stood before the merge — the node being identified.
     right: NodeRef,
     /// The identity both denote AFTER it — the orientation
     /// `Graph::merge_nodes` chose, read off the
@@ -713,6 +812,8 @@ pub struct MergeStep {
     /// Whether the identification itself closed the state — a forced merge of a `≠` pair, in
     /// which case no merge happened and `joined` is `right` unchanged.
     clashed: bool,
+    /// The clause instance whose grounded head asserted the identification.
+    licence: MergeLicence,
 }
 
 impl MergeStep {
@@ -723,6 +824,7 @@ impl MergeStep {
         right: NodeRef,
         joined: NodeRef,
         clashed: bool,
+        licence: MergeLicence,
     ) -> Self {
         Self {
             cause,
@@ -730,7 +832,14 @@ impl MergeStep {
             right,
             joined,
             clashed,
+            licence,
         }
+    }
+
+    /// The clause instance whose grounded head asserted this identification.
+    #[must_use]
+    pub const fn licence(&self) -> &MergeLicence {
+        &self.licence
     }
 
     /// Which rule forced the identification.
@@ -739,13 +848,13 @@ impl MergeStep {
         self.cause
     }
 
-    /// One of the two identities, before the merge.
+    /// The identity the LICENSING atom names for the absorbing side — see the field doc.
     #[must_use]
     pub const fn left(&self) -> &NodeRef {
         &self.left
     }
 
-    /// The other identity, before the merge.
+    /// The node being identified, as it stood before the merge.
     #[must_use]
     pub const fn right(&self) -> &NodeRef {
         &self.right
@@ -1384,12 +1493,48 @@ impl Recorder {
         self.completion = Some(completion);
     }
 
+    /// Assemble the [`DlProof`] this recording produced.
+    ///
+    /// The three things a recorder does not hold are supplied by its caller: the ONTOLOGY's
+    /// producer-independent identity, the CONTRACT of the clause set the run was made against,
+    /// and the ANSWER the driver reached. A recorder holds only what it observed, which is what
+    /// keeps "what the search wrote down" and "what the run decided" two separate facts.
+    pub(crate) fn into_proof(
+        self,
+        kb: &Kb,
+        input: [u8; 32],
+        contract: [u8; 32],
+        answer: ProofAnswer,
+    ) -> DlProof {
+        DlProof {
+            input,
+            contract,
+            trust_base: TrustBaseEntry::ALL.to_vec(),
+            boundaries: boundaries_of(&kb.boundaries),
+            answer,
+            clashes: self.clashes,
+            merges: self.merges,
+            data_clashes: self.data_clashes,
+            branches: self.branches,
+            root: self.root,
+            completion: self.completion,
+            truncated: self.truncated,
+        }
+    }
+
     /// The recorded branch points — read by the instrumentation's standing obligation in
     /// `owl_dl::hyper`, which has to show that recording HAPPENED before "recording is
     /// free" means anything.
     #[cfg(test)]
     pub(crate) fn branches(&self) -> &[BranchStep] {
         &self.branches
+    }
+
+    /// The recorded merges, for the same obligation: a licence nothing fills is a licence no
+    /// replay can check.
+    #[cfg(test)]
+    pub(crate) fn merges(&self) -> &[MergeStep] {
+        &self.merges
     }
 
     /// The recorded completion, for the same obligation.
@@ -1668,6 +1813,76 @@ pub enum DlProofError {
         /// The node variable `0` was bound to.
         node: Box<NodeRef>,
     },
+    /// A service proof term is about a DIFFERENT question than the one it is being checked
+    /// against.
+    ///
+    /// The variant that stops an `entails` proof for one axiom from standing in for another, or
+    /// a consistency proof from being presented as a classification. The question is the
+    /// CONSUMER's, never read out of the proof.
+    WrongQuestion {
+        /// The service the consumer's question belongs to.
+        expected: String,
+        /// The service the proof states.
+        stated: String,
+    },
+    /// The claims a service proof establishes are not the claims the answer reports, or a claim
+    /// names a basis nothing supports.
+    AnswerNotCovered {
+        /// What is wrong with the binding.
+        detail: String,
+    },
+    /// The STOPPING RECEIPT and the runs it describes disagree.
+    ///
+    /// A receipt claiming a budget that was not exhausted, one naming a run that decided, one
+    /// whose partial trace is not the size the trace actually carries, and a decided answer
+    /// carrying a truncated trace all land here.
+    ReceiptMismatch {
+        /// What is wrong with the receipt.
+        detail: String,
+    },
+    /// A merge names a LICENCE whose clause instance grounds to no atom at the cited position,
+    /// or names no licence at all.
+    ///
+    /// The forgery this closes is the one that invents a restriction: a merge "licensed by" an
+    /// at-most bound the ontology does not state cites a clause whose head has no
+    /// identification to find.
+    UnlicensedMerge {
+        /// The merge, into [`DlProof::merges`].
+        merge: usize,
+        /// What is wrong with the licence.
+        detail: String,
+    },
+    /// The atom the licence cites is not an IDENTIFICATION at all, so it forces no merge —
+    /// whatever the record calls it. The atom is the CHECKER's own grounding.
+    NotAnIdentification {
+        /// The merge, into [`DlProof::merges`].
+        merge: usize,
+        /// The atom the checker derived at the cited position.
+        derived: Box<ProofGround>,
+    },
+    /// The licensing atom identifies by a DIFFERENT rule than the merge's recorded cause: an
+    /// at-most pairing presented as a nominal identification, or the reverse.
+    MergeCauseMismatch {
+        /// The merge, into [`DlProof::merges`].
+        merge: usize,
+        /// The cause the checker's own grounding licenses.
+        derived: MergeCause,
+        /// The cause the record states.
+        stated: MergeCause,
+    },
+    /// The licensing atom identifies a DIFFERENT pair of nodes than the merge records.
+    ///
+    /// This is what makes "these two nodes were never adjacent" a rejection: an at-most
+    /// clause's head pairs the counted successors its own body bound, so a forger cannot
+    /// identify two nodes the clause never counted together.
+    MergeNodeMismatch {
+        /// The merge, into [`DlProof::merges`].
+        merge: usize,
+        /// The pair the checker's own grounding identifies.
+        derived: Box<(NodeRef, NodeRef)>,
+        /// The pair the record states.
+        stated: Box<(NodeRef, NodeRef)>,
+    },
     /// A recorded blocking pair does not have equal signatures, recomputed by the checker.
     BlockingSignatureMismatch {
         /// The node claimed blocked.
@@ -1826,6 +2041,48 @@ impl std::fmt::Display for DlProofError {
                 f,
                 "clause {clause} is not satisfied on the completion at {node:?}"
             ),
+            Self::WrongQuestion { expected, stated } => write!(
+                f,
+                "the proof answers the {stated} question; this check is about the {expected} one"
+            ),
+            Self::AnswerNotCovered { detail } => {
+                write!(
+                    f,
+                    "the proof does not bind the answer it accompanies: {detail}"
+                )
+            }
+            Self::ReceiptMismatch { detail } => write!(
+                f,
+                "the stopping receipt disagrees with the runs it describes: {detail}"
+            ),
+            Self::UnlicensedMerge { merge, detail } => write!(
+                f,
+                "merge {merge} names no clause instance that licenses it: {detail}"
+            ),
+            Self::NotAnIdentification { merge, derived } => write!(
+                f,
+                "merge {merge} cites an atom that grounds to {derived:?}, which identifies \
+                 nothing"
+            ),
+            Self::MergeCauseMismatch {
+                merge,
+                derived,
+                stated,
+            } => write!(
+                f,
+                "merge {merge} is licensed by a {} identification but the record states {}",
+                derived.as_str(),
+                stated.as_str()
+            ),
+            Self::MergeNodeMismatch {
+                merge,
+                derived,
+                stated,
+            } => write!(
+                f,
+                "merge {merge} is licensed to identify {derived:?} but the record states \
+                 {stated:?}"
+            ),
             Self::BlockingSignatureMismatch {
                 blocked,
                 blocker,
@@ -1977,6 +2234,54 @@ impl BranchReplay {
     }
 }
 
+/// What [`DlProof::replay_merge`] established about ONE identification — and what it did not.
+///
+/// # What it establishes
+///
+/// That the merge was **LICENSED**: the checker looked the cited clause up in the CALLER's own
+/// clause set, grounded its head itself, found an identification atom at the cited position,
+/// and derived from that atom — not from the record — which rule identified which two node
+/// identities. [`Self::identifies`] is the pair the CHECKER derived; the recorded pair is only
+/// ever the value it is compared against.
+///
+/// # What it does NOT establish
+///
+/// * That the merge CLOSED the state. [`MergeStep::clashed`] says the two nodes were forced
+///   distinct, and distinctness is completion-graph state a proof term does not carry. Counted
+///   [`CheckReport::unattested`], and it is why a [`BranchOutcome::Merge`] closure still leaves
+///   [`RefutationReplay::is_closed`] `false`.
+/// * That the licensing clause instance was REACHABLE — the same gap
+///   [`DlProof::replay_clash`] reports, and for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeReplay {
+    /// The rule the CHECKER's own grounding says identified the pair.
+    cause: MergeCause,
+    /// The pair the checker's own grounding identifies.
+    identifies: (NodeRef, NodeRef),
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl MergeReplay {
+    /// The rule the checker's own grounding says identified the pair.
+    #[must_use]
+    pub const fn cause(&self) -> MergeCause {
+        self.cause
+    }
+
+    /// The pair the CHECKER's own grounding identifies — never read out of the record.
+    #[must_use]
+    pub const fn identifies(&self) -> &(NodeRef, NodeRef) {
+        &self.identifies
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
+    }
+}
+
 /// What [`DlProof::replay_refutation`] established about the WHOLE search tree.
 ///
 /// A refutation is a tree: every internal node an exhaustive case split, every leaf a clause
@@ -1989,6 +2294,10 @@ pub struct RefutationReplay {
     branches: usize,
     /// How many clash leaves it re-derived.
     clashes: usize,
+    /// How many alternatives closed on an identification whose LICENCE it re-derived.
+    merges: usize,
+    /// How many alternatives closed on a CONCRETE-domain clash, which is a record.
+    data_clashes: usize,
     /// How many alternatives closed with nothing replayable written down.
     unrecorded: usize,
     /// The three counts and what they rest on.
@@ -2008,6 +2317,31 @@ impl RefutationReplay {
         self.clashes
     }
 
+    /// How many alternatives closed on an IDENTIFICATION whose licence the checker re-derived.
+    ///
+    /// A licensed merge is not a discharged closure: [`DlProof::replay_merge`] establishes that
+    /// the clause instance forced the identification, not that the two nodes were forced
+    /// DISTINCT — which is what actually closed the state, and which is completion-graph state
+    /// a proof term does not carry. Counted separately from [`Self::unrecorded`] because
+    /// "licensed, closure unattested" and "nothing was written down" are different facts, and
+    /// both make [`Self::is_closed`] answer `false`.
+    #[must_use]
+    pub const fn merges(&self) -> usize {
+        self.merges
+    }
+
+    /// How many alternatives closed on a CONCRETE-domain clash.
+    ///
+    /// **These are records, not proofs**, and this count is the API saying so. The concrete
+    /// domain is the one decision this calculus does not take through a clause — see
+    /// [`DlProof::data_clashes`] — so there is no clause instance to look up and no grounding
+    /// to compare against. Counted, never smoothed into a closure, and it makes
+    /// [`Self::is_closed`] answer `false`.
+    #[must_use]
+    pub const fn data_clashes(&self) -> usize {
+        self.data_clashes
+    }
+
     /// How many alternatives closed with nothing replayable written down.
     ///
     /// Reachable: an alternative can close inside the `≥`-rule's distinctness bookkeeping,
@@ -2024,17 +2358,81 @@ impl RefutationReplay {
         &self.checks
     }
 
-    /// Whether EVERY alternative of every branch point reached a closure the checker REPLAYED.
+    /// Whether EVERY alternative of every branch point reached a closure the checker REPLAYED
+    /// IN FULL.
     ///
     /// Exactly that, and deliberately not more. It does NOT say that every witness atom of
     /// every leaf was reduced to an asserted axiom of the caller's ABox — reachability is not
     /// established by this stage, and [`CheckReport::unattested`] is where that is reported.
-    /// What it does say is that no alternative closed on nothing: a branch whose closure was
-    /// [`BranchOutcome::Unrecorded`], a concrete-domain clash or a merge — the three closures
-    /// with no clause instance behind them — makes this `false`.
+    /// What it does say is that every alternative closed on a re-derived clause instance: a
+    /// branch whose closure was [`BranchOutcome::Unrecorded`], a concrete-domain clash
+    /// ([`Self::data_clashes`]) or an identification ([`Self::merges`]) makes this `false`,
+    /// because none of those three is a derivation of `false` the checker reproduced.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
-        self.unrecorded == 0
+        self.unrecorded == 0 && self.merges == 0 && self.data_clashes == 0
+    }
+}
+
+/// What [`DlProof::replay_partial`] established about the recorded PREFIX of a search that did
+/// not decide.
+///
+/// An [`ProofAnswer::Undecided`] answer has no tree to close and no completion to model check,
+/// so neither whole-trace check applies. What it does have is a real, partial trace — the
+/// branch points the search reached and the clash instances it found before it stopped — and
+/// this is the check that each of those is genuine rather than a summary a reader has to take
+/// on faith. Every recorded branch point is regenerated from the caller's own clause set and
+/// every recorded clash is re-derived, exactly as in a whole-trace check; what is deliberately
+/// NOT claimed is closure, and [`Self::open`] counts the alternatives the search never
+/// finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartialReplay {
+    /// Branch points regenerated from the caller's own clause set.
+    branches: usize,
+    /// Clash instances re-derived.
+    clashes: usize,
+    /// Identifications whose licence was re-derived.
+    merges: usize,
+    /// Alternatives the search left open or never tried — the frontier where it stopped.
+    open: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl PartialReplay {
+    /// Branch points regenerated from the caller's own clause set.
+    #[must_use]
+    pub const fn branches(&self) -> usize {
+        self.branches
+    }
+
+    /// Clash instances re-derived.
+    #[must_use]
+    pub const fn clashes(&self) -> usize {
+        self.clashes
+    }
+
+    /// Identifications whose licence was re-derived.
+    #[must_use]
+    pub const fn merges(&self) -> usize {
+        self.merges
+    }
+
+    /// Alternatives the search left OPEN or never tried.
+    ///
+    /// The frontier the search stopped at, counted rather than described. An undecided answer
+    /// whose trace has none of these did not stop inside its branch tree — it stopped inside a
+    /// saturation, which the stopping receipt's counters say — so zero is a real answer here
+    /// rather than a missing one.
+    #[must_use]
+    pub const fn open(&self) -> usize {
+        self.open
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
     }
 }
 
@@ -2172,12 +2570,26 @@ impl DlProofContext {
     /// [`prove_consistency_of_kb`], and `cfg(test)` for the same reason.
     #[cfg(test)]
     pub(crate) fn of_kb(kb: Kb) -> Self {
+        Self::of_prepared_kb(kb, [0; 32])
+    }
+
+    /// A checking context over a knowledge base a reasoning service PREPARED, bound to `input`.
+    ///
+    /// The constructor a service proof's runs are checked against. A service interns the
+    /// concepts its question needs before it reasons — asking about a class the ontology never
+    /// mentioned is a real question with a real answer, and answering it grows the concept
+    /// table — so a context built from the dataset ALONE would derive a different clause set
+    /// than the run did and reject an honest proof. The checker therefore applies the
+    /// question's own interning first, which is the step that rests on
+    /// [`TrustBaseEntry::RefutationEncoding`]; `input` stays the identity of the caller's
+    /// dataset, so a proof still cannot be verified against a store the producer chose.
+    pub(crate) fn of_prepared_kb(kb: Kb, input: [u8; 32]) -> Self {
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses);
         Self {
             kb,
             clauses,
-            input: [0; 32],
+            input,
             contract,
         }
     }
@@ -2633,6 +3045,258 @@ impl DlProof {
         })
     }
 
+    /// RE-DERIVE the LICENCE of merge `index` against the consumer's own ontology.
+    ///
+    /// A merge is not a rule of its own — the calculus identifies two nodes only because some
+    /// clause's grounded head said to — so replaying one means finding that head atom in the
+    /// CALLER's own clause set. Nothing about the step is believed:
+    ///
+    /// 1. the proof must be bound to `ctx`'s ontology, calculus and trust base;
+    /// 2. the licence is resolved to a clause instance: either a non-disjunctive clause the
+    ///    checker looks up itself and grounds itself, or an alternative of a recorded branch
+    ///    point, which [`Self::replay_branch`] regenerates from ITS cited clause first;
+    /// 3. the checker takes the atom at the cited position OUT OF ITS OWN GROUNDING and refuses
+    ///    anything that is not an identification;
+    /// 4. the rule that atom identifies BY — an `≤n` pairing, a nominal `{a}`, or a reserved
+    ///    root `u.⟨R,B,i⟩` — is computed from the atom and compared against the recorded
+    ///    [`MergeCause`];
+    /// 5. the pair the atom identifies is computed from the atom and compared against the
+    ///    recorded [`MergeStep::left`] and [`MergeStep::right`].
+    ///
+    /// Step 5 is what makes "these two nodes were never adjacent" a rejection: an `≤n r.C`
+    /// clause's head pairs the counted successors its own BODY bound, so the pair is a function
+    /// of the frame rather than a claim the record gets to make.
+    ///
+    /// # Classified honestly
+    ///
+    /// Every one of those checks is a statement about a CLAUSE, so every one is `trusted` on
+    /// [`TrustBaseEntry::Clausification`] and [`TrustBaseEntry::Grounding`] — never `attested`.
+    /// And a licence is not a closure: [`MergeStep::clashed`] says the identification also
+    /// closed the state, which is a claim about DISTINCTNESS in a completion graph a proof term
+    /// does not carry, and it is counted [`CheckReport::unattested`]. See [`MergeReplay`].
+    ///
+    /// # Errors
+    ///
+    /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
+    pub fn replay_merge(
+        &self,
+        index: usize,
+        ctx: &DlProofContext,
+    ) -> Result<MergeReplay, DlProofError> {
+        self.bound_to(ctx)?;
+        let step = self
+            .merges
+            .get(index)
+            .ok_or_else(|| malformed(&format!("no merge at index {index}")))?;
+        let mut checks = CheckReport::new();
+        let atom = self.licensed_atom(index, step, ctx, &mut checks)?;
+        // THE CHECKER'S OWN READING of what that atom identifies. The record's cause and pair
+        // participate only as the values these are compared against.
+        let Some((cause, left, right)) = identification(&atom) else {
+            return Err(DlProofError::NotAnIdentification {
+                merge: index,
+                derived: Box::new(atom),
+            });
+        };
+        if cause != step.cause {
+            return Err(DlProofError::MergeCauseMismatch {
+                merge: index,
+                derived: cause,
+                stated: step.cause,
+            });
+        }
+        if left != step.left || right != step.right {
+            return Err(DlProofError::MergeNodeMismatch {
+                merge: index,
+                derived: Box::new((left, right)),
+                stated: Box::new((step.left.clone(), step.right.clone())),
+            });
+        }
+        // The atom is an identification, its rule is the recorded one, and its pair is the
+        // recorded one: three statements about a grounded clause head.
+        checks.trust(
+            3,
+            &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
+        );
+        checks.cite(&[TrustBaseEntry::ReverseMapping]);
+        if step.clashed {
+            // …but that the identification CLOSED the state is a claim about distinctness in a
+            // completion graph, and a proof term carries no distinctness relation to read it
+            // from. Never smoothed into the licence.
+            checks.leave(1);
+        }
+        Ok(MergeReplay {
+            cause,
+            identifies: (left, right),
+            checks,
+        })
+    }
+
+    /// The grounded head atom a merge's [`MergeLicence`] cites — the CHECKER's own grounding.
+    ///
+    /// Folded out of [`Self::replay_merge`] because the two licence shapes reach the same atom
+    /// by different routes: a non-disjunctive clause is looked up and grounded here, while a
+    /// branch alternative is regenerated by [`Self::replay_branch`] against the branch point's
+    /// own cited clause and then indexed.
+    fn licensed_atom(
+        &self,
+        index: usize,
+        step: &MergeStep,
+        ctx: &DlProofContext,
+        checks: &mut CheckReport,
+    ) -> Result<ProofGround, DlProofError> {
+        let unlicensed = |detail: &str| DlProofError::UnlicensedMerge {
+            merge: index,
+            detail: detail.to_owned(),
+        };
+        match step.licence {
+            MergeLicence::Unrecorded => Err(unlicensed(
+                "the recording wrote down no clause instance for this identification, so there \
+                 is nothing to ground",
+            )),
+            MergeLicence::Clause {
+                clause,
+                ref frame,
+                atom,
+            } => {
+                let clauses = ctx.clauses.count();
+                if clause >= clauses {
+                    return Err(DlProofError::UnknownClause { clause, clauses });
+                }
+                let derived = ground_licensing_head(ctx.clauses.clause(clause), clause, frame)?;
+                let [disjunct] = derived.as_slice() else {
+                    return Err(unlicensed(
+                        "the cited clause's head is not a single grounded disjunct, so it \
+                         asserts no identification on its own",
+                    ));
+                };
+                let ground = disjunct
+                    .get(atom)
+                    .ok_or_else(|| unlicensed("the cited clause's head has no atom there"))?;
+                // The clause exists and its head grounds to an atom at the cited position.
+                checks.trust(
+                    2,
+                    &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
+                );
+                Ok(ProofGround::of(ground))
+            }
+            MergeLicence::Branch {
+                branch,
+                ordinal,
+                atom,
+            } => {
+                // The branch point's OWN check runs first: its alternatives are regenerated from
+                // the clause it cites, so indexing one below is indexing a regenerated value.
+                let replay = self.replay_branch(branch, ctx)?;
+                checks.absorb(&replay.checks);
+                let step = &self.branches[branch];
+                let derived = ground_head(&ctx.clauses.clause(step.clause).head, &step.frame);
+                let alternative = match derived.get(ordinal) {
+                    Some(disjunct) => disjunct
+                        .get(atom)
+                        .map(ProofGround::of)
+                        .ok_or_else(|| unlicensed("that alternative has no atom there"))?,
+                    None => {
+                        // A nominal-introduction alternative: shape-checked against the cited
+                        // clause by `replay_branch`, never regenerated, because WHICH blockable
+                        // predecessors press the bound is completion-graph state.
+                        let introduced =
+                            step.introduced
+                                .get(ordinal - derived.len())
+                                .ok_or_else(|| {
+                                    unlicensed("that branch point has no alternative there")
+                                })?;
+                        checks.leave(1);
+                        introduced
+                            .atoms
+                            .get(atom)
+                            .cloned()
+                            .ok_or_else(|| unlicensed("that alternative has no atom there"))?
+                    }
+                };
+                Ok(alternative)
+            }
+        }
+    }
+
+    /// Replay the recorded PREFIX of a search that did not decide.
+    ///
+    /// The receipt half of an [`ProofAnswer::Undecided`] answer. Neither whole-trace check
+    /// applies to one — there is no closed tree and no clash-free completion — but the trace it
+    /// DOES carry is real, and this is what makes it checkable rather than a summary:
+    ///
+    /// * every recorded branch point is regenerated from the caller's own clause set
+    ///   ([`Self::replay_branch`]), so a partial trace cannot claim a case split the ontology
+    ///   does not license;
+    /// * every recorded clash instance is re-derived ([`Self::replay_clash`]);
+    /// * every recorded identification's licence is re-derived ([`Self::replay_merge`]), with an
+    ///   [`MergeLicence::Unrecorded`] one counted unattested rather than rejected — a search
+    ///   that stopped may well have stopped past the recording ceiling;
+    /// * the alternatives still [`BranchOutcome::Open`] or [`BranchOutcome::Unexplored`] are
+    ///   counted, which is the frontier the search stopped at.
+    ///
+    /// Deliberately NOT checked: that the recorded branch points form a tree reachable from the
+    /// root. A search the caller stopped mid-round leaves outcomes unfiled, so requiring
+    /// reachability would reject the honest traces this check exists to read.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::WrongAnswer`] unless the proof is bound to [`ProofAnswer::Undecided`],
+    /// and any rejection the three per-step replays make.
+    pub fn replay_partial(&self, ctx: &DlProofContext) -> Result<PartialReplay, DlProofError> {
+        self.bound_to(ctx)?;
+        if self.answer != ProofAnswer::Undecided {
+            return Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Undecided,
+                stated: self.answer,
+            });
+        }
+        let mut checks = CheckReport::new();
+        let mut open = 0_usize;
+        for index in 0..self.branches.len() {
+            let replay = self.replay_branch(index, ctx)?;
+            checks.absorb(&replay.checks);
+            open += self.branches[index]
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    matches!(outcome, BranchOutcome::Open | BranchOutcome::Unexplored)
+                })
+                .count();
+        }
+        for index in 0..self.clashes.len() {
+            let replay = self.replay_clash(index, ctx)?;
+            checks.absorb(&replay.checks);
+        }
+        let mut merges = 0_usize;
+        for index in 0..self.merges.len() {
+            match self.replay_merge(index, ctx) {
+                Ok(replay) => {
+                    merges += 1;
+                    checks.absorb(&replay.checks);
+                }
+                // A truncated recording has identifications whose branch point was never
+                // written down. Withholding the claim is the honest answer; rejecting the
+                // proof would be a claim about a step nobody recorded.
+                Err(DlProofError::UnlicensedMerge { .. }) if self.truncated => checks.leave(1),
+                Err(error) => return Err(error),
+            }
+        }
+        // That the recorded prefix is the WHOLE prefix is not established: a truncated
+        // recording dropped steps, and this counts one obligation for that rather than
+        // presenting a partial trace as a complete one.
+        if self.truncated {
+            checks.leave(1);
+        }
+        Ok(PartialReplay {
+            branches: self.branches.len(),
+            clashes: self.clashes.len(),
+            merges,
+            open,
+            checks,
+        })
+    }
+
     /// Walk the WHOLE refutation tree: every branch point exhaustive, every alternative closed,
     /// every clash leaf re-derived.
     ///
@@ -2674,6 +3338,8 @@ impl DlProof {
         let mut report = RefutationReplay {
             branches: 0,
             clashes: 0,
+            merges: 0,
+            data_clashes: 0,
             unrecorded: 0,
             checks: CheckReport::new(),
         };
@@ -2728,7 +3394,7 @@ impl DlProof {
                 // [`DlProof::data_clashes`]. Counted unattested, never as a discharged
                 // obligation.
                 report.checks.leave(1);
-                report.unrecorded += 1;
+                report.data_clashes += 1;
                 Ok(())
             }
             BranchOutcome::Merge(index) => {
@@ -2739,11 +3405,13 @@ impl DlProof {
                 if !merge.clashed {
                     return Err(dangling("the named merge did not close the state"));
                 }
-                // A merge is provenance, not a proof — replaying one needs the premise DAG this
-                // stage does not build. That the record SAYS it clashed is read; that it was
-                // licensed is not established.
-                report.checks.leave(1);
-                report.unrecorded += 1;
+                // The identification's LICENCE is re-derived against the caller's own clause
+                // set. What that does NOT establish is the distinctness that closed the state,
+                // which is why this is counted apart from a replayed clash leaf and why it
+                // still makes `is_closed` answer `false`.
+                let replay = self.replay_merge(index, ctx)?;
+                report.merges += 1;
+                report.checks.absorb(&replay.checks);
                 Ok(())
             }
             BranchOutcome::Branch(index) => {
@@ -2857,6 +3525,7 @@ impl DlProof {
     ///     u64 witness_len, fact each
     /// u64 merge_count, then per merge:
     ///     u8 cause ordinal, node left, node right, node joined, u8 clashed
+    ///     licence                                 -- u8 kind and then that kind's fields
     /// u64 data_clash_count, node each
     /// outcome                                     -- the root's
     /// u64 branch_count, then per branch:
@@ -2923,6 +3592,7 @@ impl DlProof {
             encode_node(&mut out, &step.right);
             encode_node(&mut out, &step.joined);
             out.push(u8::from(step.clashed));
+            encode_licence(&mut out, &step.licence);
         }
         out.extend_from_slice(&(self.data_clashes.len() as u64).to_le_bytes());
         for node in &self.data_clashes {
@@ -3045,12 +3715,14 @@ impl DlProof {
             let right = reader.node()?;
             let joined = reader.node()?;
             let clashed = reader.flag()?;
+            let licence = reader.licence()?;
             merges.push(MergeStep {
                 cause,
                 left,
                 right,
                 joined,
                 clashed,
+                licence,
             });
         }
         let mut data_clashes = Vec::new();
@@ -3123,7 +3795,7 @@ impl DlProof {
 pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
     let mut kb = Kb::from_dataset(ontology)?;
     kb.finalize();
-    let clauses = derive(&kb);
+    let contract = contract_of(&kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
     let answer = if decision.exhausted || decision.stopped {
@@ -3133,20 +3805,7 @@ pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof)
     } else {
         ProofAnswer::Inconsistent
     };
-    let proof = DlProof {
-        input: input_digest(ontology),
-        contract: contract_digest(&clauses),
-        trust_base: TrustBaseEntry::ALL.to_vec(),
-        boundaries: boundaries_of(&kb.boundaries),
-        answer,
-        clashes: recorder.clashes,
-        merges: recorder.merges,
-        data_clashes: recorder.data_clashes,
-        branches: recorder.branches,
-        root: recorder.root,
-        completion: recorder.completion,
-        truncated: recorder.truncated,
-    };
+    let proof = recorder.into_proof(&kb, input_digest(ontology), contract, answer);
     Ok((answer, proof))
 }
 
@@ -3160,7 +3819,7 @@ pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof)
 /// entrance: a proof that carried no input identity would verify against any store at all.
 #[cfg(test)]
 pub(crate) fn prove_consistency_of_kb(kb: &Kb) -> (ProofAnswer, DlProof) {
-    let clauses = derive(kb);
+    let contract = contract_of(kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(kb, &Assumptions::of_kb(), Budget::for_kb(kb));
     let answer = if decision.exhausted || decision.stopped {
@@ -3170,21 +3829,16 @@ pub(crate) fn prove_consistency_of_kb(kb: &Kb) -> (ProofAnswer, DlProof) {
     } else {
         ProofAnswer::Inconsistent
     };
-    let proof = DlProof {
-        input: [0; 32],
-        contract: contract_digest(&clauses),
-        trust_base: TrustBaseEntry::ALL.to_vec(),
-        boundaries: boundaries_of(&kb.boundaries),
-        answer,
-        clashes: recorder.clashes,
-        merges: recorder.merges,
-        data_clashes: recorder.data_clashes,
-        branches: recorder.branches,
-        root: recorder.root,
-        completion: recorder.completion,
-        truncated: recorder.truncated,
-    };
-    (answer, proof)
+    (answer, recorder.into_proof(kb, [0; 32], contract, answer))
+}
+
+/// The calculus/clausification contract of a knowledge base's own clause set.
+///
+/// The value a reasoning session computes ONCE and stamps on every proof term it produces: the
+/// knowledge base is borrowed immutably for a session's whole life, so its clause set cannot
+/// change between decisions and neither can this.
+pub(crate) fn contract_of(kb: &Kb) -> [u8; 32] {
+    contract_digest(&derive(kb))
 }
 
 /// The knowledge base's boundary set, in `Construct::ALL` order.
@@ -3291,6 +3945,56 @@ pub(crate) fn head_frame_width(head: &[Vec<HeadAtom>]) -> Option<u32> {
         }
     }
     Some(width)
+}
+
+/// What a grounded head atom IDENTIFIES: the rule it identifies by, and the two identities.
+///
+/// The checker's whole reading of a merge's licence. The first component of the pair is the
+/// ABSORBING side the atom names — the other counted successor for an `≤n` pairing, the
+/// individual `{a}` for a nominal, the reserved root for the `NI`-rule — and the second is the
+/// node being identified. `None` for every atom that identifies nothing, which is what makes
+/// [`DlProofError::NotAnIdentification`] a refusal rather than a mismatch.
+fn identification(atom: &ProofGround) -> Option<(MergeCause, NodeRef, NodeRef)> {
+    match atom {
+        ProofGround::Equal { left, right } => {
+            Some((MergeCause::AtMost, left.clone(), right.clone()))
+        }
+        ProofGround::EqualIndividual { node, individual } => Some((
+            MergeCause::Nominal,
+            NodeRef::Individual(*individual),
+            node.clone(),
+        )),
+        ProofGround::EqualReserved { node, root } => Some((
+            MergeCause::NominalIntroduction,
+            NodeRef::Reserved(Box::new(root.clone())),
+            node.clone(),
+        )),
+        ProofGround::Concept { .. }
+        | ProofGround::SelfLoop { .. }
+        | ProofGround::AtLeast { .. } => None,
+    }
+}
+
+/// GROUND a NON-DISJUNCTIVE clause's head against `frame`, guarding the frame's width first.
+///
+/// The same guard [`DlProof::replay_branch`] applies, and for the same reason: `ground_head`
+/// indexes the frame, and the frame is attacker-controlled, so a short one must be a rejection
+/// rather than a panic.
+fn ground_licensing_head(
+    clause: &DlClause,
+    index: usize,
+    frame: &[NodeRef],
+) -> Result<Vec<Vec<Ground<NodeRef>>>, DlProofError> {
+    let width = head_frame_width(&clause.head)
+        .ok_or_else(|| malformed("a head disjunct mixes a schematic pair with other atoms"))?;
+    if (frame.len() as u64) < u64::from(width) {
+        return Err(DlProofError::FrameTooShort {
+            clause: index,
+            variable: width.saturating_sub(1),
+            frame: frame.len(),
+        });
+    }
+    Ok(ground_head(&clause.head, frame))
 }
 
 /// Shape-check a branch point's NOMINAL-INTRODUCTION alternatives against the clause it cites.
@@ -4045,6 +4749,16 @@ fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
     *blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
 }
 
+/// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
+///
+/// The same 32 bytes [`DlProof::input`] carries, exposed so a service proof term can bind the
+/// caller's dataset by exactly the identity a tableau proof term does. Two engines that read
+/// the same graph, in any order and with any blank-node labelling, compute the same value.
+#[must_use]
+pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
+    input_digest(ontology)
+}
+
 /// The calculus/clausification contract: BLAKE3 over [`CALCULUS_VERSION`] and the canonical
 /// encoding of the DL-clause set.
 ///
@@ -4271,6 +4985,39 @@ fn encode_ground(out: &mut Vec<u8>, atom: &ProofGround) {
     }
 }
 
+/// Append a [`MergeLicence`].
+///
+/// A kind byte and then the kind's own fields, every variable-length field length-prefixed, so
+/// no two byte strings decode to one licence.
+fn encode_licence(out: &mut Vec<u8>, licence: &MergeLicence) {
+    match licence {
+        MergeLicence::Clause {
+            clause,
+            frame,
+            atom,
+        } => {
+            out.push(0);
+            out.extend_from_slice(&(*clause as u64).to_le_bytes());
+            out.extend_from_slice(&(frame.len() as u64).to_le_bytes());
+            for node in frame {
+                encode_node(out, node);
+            }
+            out.extend_from_slice(&(*atom as u64).to_le_bytes());
+        }
+        MergeLicence::Branch {
+            branch,
+            ordinal,
+            atom,
+        } => {
+            out.push(1);
+            for value in [*branch, *ordinal, *atom] {
+                out.extend_from_slice(&(value as u64).to_le_bytes());
+            }
+        }
+        MergeLicence::Unrecorded => out.push(2),
+    }
+}
+
 /// Append a [`ProofRole`].
 fn encode_role(out: &mut Vec<u8>, role: ProofRole) {
     out.extend_from_slice(&role.property.to_le_bytes());
@@ -4487,6 +5234,31 @@ impl<'a> Reader<'a> {
             5 => Ok(BranchOutcome::Open),
             6 => Ok(BranchOutcome::Unexplored),
             _ => Err(malformed("unknown branch outcome kind")),
+        }
+    }
+
+    /// Take a [`MergeLicence`].
+    fn licence(&mut self) -> Result<MergeLicence, DlProofError> {
+        match self.byte()? {
+            0 => {
+                let clause = self.length()?;
+                let mut frame = Vec::new();
+                for _ in 0..self.length()? {
+                    frame.push(self.node()?);
+                }
+                Ok(MergeLicence::Clause {
+                    clause,
+                    frame,
+                    atom: self.length()?,
+                })
+            }
+            1 => Ok(MergeLicence::Branch {
+                branch: self.length()?,
+                ordinal: self.length()?,
+                atom: self.length()?,
+            }),
+            2 => Ok(MergeLicence::Unrecorded),
+            _ => Err(malformed("unknown merge licence kind")),
         }
     }
 
@@ -5033,6 +5805,474 @@ mod tests {
         );
     }
 
+    // ── Merge licences ──────────────────────────────────────────────────────────
+
+    /// The merge-bearing fixture's proof, and a context over the same ontology built
+    /// independently of it.
+    fn nominal_merge() -> (DlProof, DlProofContext) {
+        let ontology = merge_bearing_ontology();
+        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        (proof, ctx)
+    }
+
+    /// A recorded merge's LICENCE re-derives: the checker grounds the cited clause's head
+    /// against the caller's own clause set and finds the identification there.
+    #[test]
+    fn a_recorded_merge_licence_replays_against_the_callers_own_ontology() {
+        let (proof, ctx) = nominal_merge();
+        assert!(!proof.merges().is_empty(), "the fixture merges");
+        let replay = proof
+            .replay_merge(0, &ctx)
+            .expect("a genuine merge licence replays");
+        assert_eq!(replay.cause(), proof.merges()[0].cause());
+        assert_eq!(
+            replay.identifies(),
+            &(
+                proof.merges()[0].left().clone(),
+                proof.merges()[0].right().clone()
+            ),
+            "the pair is the CHECKER's, and the record agrees with it"
+        );
+        assert!(
+            replay.checks().trusted() > 0,
+            "grounding a clause head is a trusted check: {:?}",
+            replay.checks()
+        );
+        assert!(
+            !replay.checks().is_fully_attested(),
+            "a licence is re-derived from a CLAUSE, so it is never fully attested"
+        );
+    }
+
+    /// A merge whose licence names a clause the ontology does not have is rejected.
+    #[test]
+    fn a_merge_licensed_by_an_absent_clause_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        let MergeLicence::Clause { frame, atom, .. } = proof.merges[0].licence.clone() else {
+            panic!("the nominal fixture merges from a non-disjunctive clause instance");
+        };
+        proof.merges[0].licence = MergeLicence::Clause {
+            clause: usize::MAX,
+            frame,
+            atom,
+        };
+        assert!(matches!(
+            proof.replay_merge(0, &ctx),
+            Err(DlProofError::UnknownClause { .. })
+        ));
+    }
+
+    /// **THE HEADLINE FOR MERGES.** A merge claimed licensed by a restriction that is not
+    /// there is rejected.
+    ///
+    /// Re-pointing the licence at a real clause of the same ontology whose head asserts no
+    /// identification is exactly how a merge is fabricated: the record keeps its shape and
+    /// names a clause a log would print without complaint. The checker grounds that clause's
+    /// head ITSELF and finds a concept atom where the record claims an identification.
+    #[test]
+    fn a_merge_licensed_by_a_clause_that_identifies_nothing_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        let MergeLicence::Clause { frame, .. } = proof.merges[0].licence.clone() else {
+            panic!("the nominal fixture merges from a non-disjunctive clause instance");
+        };
+        let derailed = (0..ctx.clause_count())
+            .find(|&index| {
+                let clause = ctx.clauses.clause(index);
+                matches!(clause.head.as_slice(), [disjunct]
+                    if matches!(disjunct.as_slice(), [HeadAtom::Concept { .. }]))
+                    && head_frame_width(&clause.head).is_some_and(|w| (w as usize) <= frame.len())
+            })
+            .expect("the fixture produces a one-atom concept head");
+        proof.merges[0].licence = MergeLicence::Clause {
+            clause: derailed,
+            frame,
+            atom: 0,
+        };
+        match proof.replay_merge(0, &ctx) {
+            Err(DlProofError::NotAnIdentification { .. }) => {}
+            other => panic!("a clause whose head identifies nothing licenses no merge: {other:?}"),
+        }
+    }
+
+    /// A merge licensed by a DISJUNCTIVE clause is rejected on the clause licence path.
+    ///
+    /// The `≤n` case split's alternatives are one identification EACH, and picking one of them
+    /// is what a branch licence does. A clause licence claims the head asserted its atoms
+    /// unconditionally — a conjunction, not a choice — so pointing one at a case split would
+    /// turn "one of these merges" into "all of them".
+    #[test]
+    fn a_merge_licensed_by_a_disjunctive_clause_is_rejected() {
+        let (mut proof, ctx) = wide_at_most_merge();
+        let at = proof
+            .merges
+            .iter()
+            .position(|merge| merge.cause == MergeCause::AtMost)
+            .expect("a functional property forces an at-most identification");
+        let MergeLicence::Branch { branch, atom, .. } = proof.merges[at].licence.clone() else {
+            panic!("an at-most merge is licensed by a branch alternative");
+        };
+        let step = &proof.branches[branch];
+        assert!(
+            ground_head(&ctx.clauses.clause(step.clause).head, &step.frame).len() > 1,
+            "a `≤2` bound over three successors grounds to three alternatives, so the case \
+             split is genuinely wider than one"
+        );
+        proof.merges[at].licence = MergeLicence::Clause {
+            clause: step.clause,
+            frame: step.frame.clone(),
+            atom,
+        };
+        match proof.replay_merge(at, &ctx) {
+            Err(DlProofError::UnlicensedMerge { .. }) => {}
+            other => panic!("a case split asserts no atom unconditionally: {other:?}"),
+        }
+    }
+
+    /// A merge whose recorded nodes are not the pair the licence identifies is rejected.
+    ///
+    /// The forgery a licence exists to catch: keep an honest clause instance, and claim it
+    /// identified two nodes it never named. The pair is a function of the clause's own head
+    /// and the frame, so the checker derives it rather than reading it.
+    #[test]
+    fn a_merge_whose_recorded_nodes_the_licence_never_identified_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        proof.merges[0].right = NodeRef::Anonymous(4_242);
+        match proof.replay_merge(0, &ctx) {
+            Err(DlProofError::MergeNodeMismatch { .. }) => {}
+            other => panic!("an unlicensed pair must not check: {other:?}"),
+        }
+        let (mut proof, ctx) = nominal_merge();
+        proof.merges[0].left = NodeRef::Anonymous(4_243);
+        assert!(matches!(
+            proof.replay_merge(0, &ctx),
+            Err(DlProofError::MergeNodeMismatch { .. })
+        ));
+    }
+
+    /// Relabelling the RULE that identified a pair is rejected: the cause is computed from the
+    /// grounded atom's own shape, not read off the record.
+    #[test]
+    fn a_merge_with_a_relabelled_cause_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        let honest = proof.merges[0].cause;
+        let forged = if honest == MergeCause::AtMost {
+            MergeCause::Nominal
+        } else {
+            MergeCause::AtMost
+        };
+        proof.merges[0].cause = forged;
+        match proof.replay_merge(0, &ctx) {
+            Err(DlProofError::MergeCauseMismatch {
+                derived, stated, ..
+            }) => {
+                assert_eq!(derived, honest);
+                assert_eq!(stated, forged);
+            }
+            other => panic!("a relabelled merge cause must not check: {other:?}"),
+        }
+    }
+
+    /// A merge citing an atom position its licensing disjunct does not have is a rejection
+    /// rather than an index panic.
+    #[test]
+    fn a_merge_citing_an_atom_that_is_not_there_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        let MergeLicence::Clause { clause, frame, .. } = proof.merges[0].licence.clone() else {
+            panic!("the nominal fixture merges from a non-disjunctive clause instance");
+        };
+        proof.merges[0].licence = MergeLicence::Clause {
+            clause,
+            frame,
+            atom: usize::MAX,
+        };
+        assert!(matches!(
+            proof.replay_merge(0, &ctx),
+            Err(DlProofError::UnlicensedMerge { .. })
+        ));
+    }
+
+    /// A merge that names NO licence is refused rather than waved through: "nothing was
+    /// written down" must never read as "checked".
+    #[test]
+    fn a_merge_with_no_licence_is_refused() {
+        let (mut proof, ctx) = nominal_merge();
+        proof.merges[0].licence = MergeLicence::Unrecorded;
+        assert!(matches!(
+            proof.replay_merge(0, &ctx),
+            Err(DlProofError::UnlicensedMerge { .. })
+        ));
+    }
+
+    /// A merge licensed by a frame too narrow for the cited clause's head is a rejection
+    /// rather than an index panic.
+    #[test]
+    fn a_merge_licensed_by_a_short_frame_is_rejected() {
+        let (mut proof, ctx) = nominal_merge();
+        let MergeLicence::Clause { clause, atom, .. } = proof.merges[0].licence.clone() else {
+            panic!("the nominal fixture merges from a non-disjunctive clause instance");
+        };
+        proof.merges[0].licence = MergeLicence::Clause {
+            clause,
+            frame: Vec::new(),
+            atom,
+        };
+        assert!(matches!(
+            proof.replay_merge(0, &ctx),
+            Err(DlProofError::FrameTooShort { .. })
+        ));
+    }
+
+    /// `p` functional with `a p b`, `a p c` and `b ≠ c`: the `≤1 p.⊤` case split's single
+    /// alternative identifies the two successors, and the identification CLOSES the state.
+    ///
+    /// The fixture for the AT-MOST merge — the one whose licence is a branch alternative and
+    /// whose identified pair is the two counted successors the clause's own body bound.
+    fn functional_clash() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let b = f.iri(EX_B);
+        let c = f.iri("http://example.org/c");
+        let p = f.iri(EX_P);
+        let ty = f.iri(RDF_TYPE);
+        let functional = f.iri("http://www.w3.org/2002/07/owl#FunctionalProperty");
+        let different = f.iri("http://www.w3.org/2002/07/owl#differentFrom");
+        f.quad(p, ty, functional);
+        f.quad(a, p, b);
+        f.quad(a, p, c);
+        f.quad(b, different, c);
+        f.freeze()
+    }
+
+    /// That ontology's proof, and a context built independently over it.
+    fn at_most_merge() -> (DlProof, DlProofContext) {
+        let ontology = functional_clash();
+        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        assert_eq!(answer, ProofAnswer::Inconsistent, "b ≠ c under `≤1 p`");
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        (proof, ctx)
+    }
+
+    /// An AT-MOST merge licensed by a branch alternative replays, and the pair the checker
+    /// derives is the two counted successors the `≤n` clause's own body bound.
+    #[test]
+    fn an_at_most_merge_is_licensed_by_the_counted_successors_the_clause_bound() {
+        let (proof, ctx) = at_most_merge();
+        let at = proof
+            .merges()
+            .iter()
+            .position(|merge| merge.cause() == MergeCause::AtMost)
+            .expect("a functional property forces an at-most identification");
+        assert!(
+            matches!(proof.merges()[at].licence(), MergeLicence::Branch { .. }),
+            "an `≤n` head is a case split, so its merge is licensed by a branch alternative"
+        );
+        let replay = proof
+            .replay_merge(at, &ctx)
+            .expect("a genuine at-most licence replays");
+        assert_eq!(replay.cause(), MergeCause::AtMost);
+        assert!(
+            replay.checks().unattested() > 0,
+            "the identification CLOSED the state, and that is distinctness the proof term does \
+             not carry: {:?}",
+            replay.checks()
+        );
+    }
+
+    /// A merge closure is counted APART from a replayed clash leaf, and does not make a
+    /// refutation read as closed.
+    ///
+    /// The whole reason [`RefutationReplay::merges`] exists: replaying a licence establishes
+    /// that the clause forced the identification, never that the two nodes were forced
+    /// DISTINCT — which is what actually closed the branch.
+    #[test]
+    fn a_merge_closure_is_licensed_but_does_not_close_the_refutation() {
+        let (proof, ctx) = at_most_merge();
+        let replay = proof
+            .replay_refutation(&ctx)
+            .expect("the tree walks: every alternative reached a recorded closure");
+        assert!(replay.merges() >= 1, "{replay:?}");
+        assert!(
+            !replay.is_closed(),
+            "a licensed identification is not a re-derived derivation of false: {replay:?}"
+        );
+        assert!(replay.checks().unattested() > 0);
+    }
+
+    /// A branch-licensed merge whose recorded pair the alternative never identified is
+    /// rejected — the "these two were never adjacent" forgery, from the branch side.
+    #[test]
+    fn a_branch_licensed_merge_with_a_forged_pair_is_rejected() {
+        let (mut proof, ctx) = at_most_merge();
+        let at = proof
+            .merges
+            .iter()
+            .position(|merge| merge.cause == MergeCause::AtMost)
+            .expect("a functional property forces an at-most identification");
+        proof.merges[at].left = NodeRef::Anonymous(9_001);
+        assert!(matches!(
+            proof.replay_merge(at, &ctx),
+            Err(DlProofError::MergeNodeMismatch { .. })
+        ));
+        assert!(
+            proof.replay_refutation(&ctx).is_err(),
+            "and the whole-tree walk must refuse it too"
+        );
+    }
+
+    /// A branch-licensed merge pointed at an alternative the branch point does not have is a
+    /// rejection rather than an index panic.
+    #[test]
+    fn a_branch_licensed_merge_naming_an_absent_alternative_is_rejected() {
+        let (mut proof, ctx) = at_most_merge();
+        let at = proof
+            .merges
+            .iter()
+            .position(|merge| merge.cause == MergeCause::AtMost)
+            .expect("a functional property forces an at-most identification");
+        let MergeLicence::Branch { branch, atom, .. } = proof.merges[at].licence.clone() else {
+            panic!("an at-most merge is licensed by a branch alternative");
+        };
+        proof.merges[at].licence = MergeLicence::Branch {
+            branch,
+            ordinal: usize::MAX,
+            atom,
+        };
+        assert!(matches!(
+            proof.replay_merge(at, &ctx),
+            Err(DlProofError::UnlicensedMerge { .. })
+        ));
+    }
+
+    /// `p` a data property with `rdfs:range xsd:integer` and `a p "abc"^^xsd:string` —
+    /// INCONSISTENT, and the closure is a CONCRETE-DOMAIN clash: the one decision this calculus
+    /// does not take through a clause.
+    fn data_range_clash() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let p = f.iri(EX_P);
+        let ty = f.iri(RDF_TYPE);
+        let range = f.iri("http://www.w3.org/2000/01/rdf-schema#range");
+        let datatype_property = f.iri("http://www.w3.org/2002/07/owl#DatatypeProperty");
+        let integer = f.iri("http://www.w3.org/2001/XMLSchema#integer");
+        let text = f.builder.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "abc".to_owned(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
+            language: None,
+            direction: None,
+        });
+        f.quad(p, ty, datatype_property);
+        f.quad(p, range, integer);
+        f.quad(a, p, text);
+        f.freeze()
+    }
+
+    /// A CONCRETE-DOMAIN closure is counted as a RECORD, apart from the closures the checker
+    /// replayed, and it does not make a refutation read as closed.
+    ///
+    /// This is the API saying out loud what the module docs say: a data clash has no clause
+    /// instance to look up and no grounding to compare against, so nothing here replays one.
+    /// Without this test the distinction would be a sentence in a doc comment rather than an
+    /// observable, and a reader could take `is_closed` on trust.
+    #[test]
+    fn a_concrete_domain_closure_is_a_record_and_does_not_close_a_refutation() {
+        let ontology = data_range_clash();
+        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        assert_eq!(answer, ProofAnswer::Inconsistent, "\"abc\" is no integer");
+        assert_eq!(
+            proof.data_clashes().len(),
+            1,
+            "the search closed on the concrete domain: {:?}",
+            proof.data_clashes()
+        );
+        assert!(
+            proof.clashes().is_empty(),
+            "and on no clause instance at all: {:?}",
+            proof.clashes()
+        );
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        let replay = proof
+            .replay_refutation(&ctx)
+            .expect("the tree walks: the root reached a recorded closure");
+        assert_eq!(replay.data_clashes(), 1, "{replay:?}");
+        assert_eq!(replay.clashes(), 0);
+        assert_eq!(
+            replay.unrecorded(),
+            0,
+            "a data clash is a RECORD, which is a different fact from nothing being written \
+             down, and the two are counted apart: {replay:?}"
+        );
+        assert!(
+            !replay.is_closed(),
+            "nothing replayed a concrete-domain decision, so the refutation is not closed: \
+             {replay:?}"
+        );
+        assert!(replay.checks().unattested() > 0);
+    }
+
+    /// `≤2 p.⊤` over three pairwise-distinct successors: the case split has THREE
+    /// alternatives, so a clause licence pointed at it would be picking one of three rather
+    /// than reading a head that holds unconditionally.
+    fn wide_at_most_clash() -> Arc<RdfDataset> {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let p = f.iri(EX_P);
+        let ty = f.iri(RDF_TYPE);
+        let restriction = f.iri("http://www.w3.org/2002/07/owl#Restriction");
+        let on_property = f.iri("http://www.w3.org/2002/07/owl#onProperty");
+        let max_cardinality = f.iri("http://www.w3.org/2002/07/owl#maxCardinality");
+        let different = f.iri("http://www.w3.org/2002/07/owl#differentFrom");
+        let two = f.builder.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "2".to_owned(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#nonNegativeInteger".to_owned()),
+            language: None,
+            direction: None,
+        });
+        let bound = f
+            .builder
+            .intern_blank("r", purrdf_core::BlankScope::DEFAULT);
+        f.quad(bound, ty, restriction);
+        f.quad(bound, on_property, p);
+        f.quad(bound, max_cardinality, two);
+        f.quad(a, ty, bound);
+        let successors: Vec<_> = ["b", "c", "d"]
+            .into_iter()
+            .map(|name| f.iri(&format!("http://example.org/{name}")))
+            .collect();
+        for &successor in &successors {
+            f.quad(a, p, successor);
+        }
+        for (at, &left) in successors.iter().enumerate() {
+            for &right in &successors[at + 1..] {
+                f.quad(left, different, right);
+            }
+        }
+        f.freeze()
+    }
+
+    /// That ontology's proof, and a context built independently over it.
+    fn wide_at_most_merge() -> (DlProof, DlProofContext) {
+        let ontology = wide_at_most_clash();
+        let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        assert_eq!(
+            answer,
+            ProofAnswer::Inconsistent,
+            "three pairwise-distinct successors under `≤2 p`"
+        );
+        let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
+        (proof, ctx)
+    }
+
+    /// Asking for a merge that is not there is a rejection.
+    #[test]
+    fn a_merge_index_past_the_end_is_rejected() {
+        let (proof, ctx) = nominal_merge();
+        assert!(matches!(
+            proof.replay_merge(proof.merges().len(), &ctx),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
     /// A tampered DATA-CLASH record changes the digest, under the same stated limit.
     #[test]
     fn a_tampered_data_clash_record_changes_the_digest() {
@@ -5069,6 +6309,14 @@ mod tests {
     /// An ontology whose `owl:sameAs` and nominal identifications drive a merge, so the merge
     /// record has something in it.
     fn merge_bearing_proof() -> DlProof {
+        let ontology = merge_bearing_ontology();
+        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
+        proof
+    }
+
+    /// `D owl:oneOf (b)` with `C ⊑ D` and `a : C` — the `o`-clause identifies `a`'s root with
+    /// `b`'s, which is a merge licensed by a NON-DISJUNCTIVE clause instance.
+    fn merge_bearing_ontology() -> Arc<RdfDataset> {
         let mut f = Fixture::new();
         let a = f.iri(EX_A);
         let b = f.iri(EX_B);
@@ -5091,9 +6339,7 @@ mod tests {
         f.quad(c, sub, d);
         f.quad(a, ty, c);
         f.quad(a, p, b);
-        let ontology = f.freeze();
-        let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
-        proof
+        f.freeze()
     }
 
     // ── Tamper-negatives: the wire format ───────────────────────────────────────
@@ -5223,15 +6469,18 @@ mod tests {
                 TrustBaseEntry::Clausification,
                 TrustBaseEntry::Grounding,
                 TrustBaseEntry::Unravelling,
+                TrustBaseEntry::RefutationEncoding,
+                TrustBaseEntry::ClassifyingSaturation,
             ],
             "adding, removing or reordering a trust-base entry is a breaking version bump: \
              bump TRUST_BASE_VERSION and the proof encoding tag, and update this pin"
         );
         assert_eq!(
             trust_base_text(&TrustBaseEntry::ALL),
-            "reverse-mapping,clausification,grounding,unravelling"
+            "reverse-mapping,clausification,grounding,unravelling,refutation-encoding,\
+             classifying-saturation"
         );
-        assert_eq!(TRUST_BASE_VERSION, "purrdf-owl-dl-trust-base-v1");
+        assert_eq!(TRUST_BASE_VERSION, "purrdf-owl-dl-trust-base-v2");
         for (ordinal, entry) in TrustBaseEntry::ALL.iter().enumerate() {
             assert_eq!(
                 entry.ordinal(),
@@ -5559,6 +6808,7 @@ mod tests {
             NodeRef::Individual(2),
             NodeRef::Individual(1),
             false,
+            MergeLicence::Unrecorded,
         ));
         proof.branches[0].outcomes[0] = BranchOutcome::Merge(proof.merges.len() - 1);
         assert!(matches!(
@@ -5691,6 +6941,81 @@ mod tests {
         assert!(matches!(
             proof.replay_refutation(&ctx),
             Err(DlProofError::Truncated)
+        ));
+    }
+
+    // ── Partial traces ──────────────────────────────────────────────────────────
+
+    /// An UNDECIDED run's recorded PREFIX replays: every branch point regenerates and every
+    /// clash instance re-derives, and the frontier it stopped at is counted rather than
+    /// described.
+    #[test]
+    fn an_undecided_run_replays_its_recorded_prefix() {
+        let kb = nested_disjunctions_kb();
+        let (decision, recorder) = crate::owl_dl::hyper::decide_recording(
+            &kb,
+            &Assumptions::of_kb(),
+            Budget {
+                steps: 2,
+                work: Budget::for_kb(&kb).work,
+            },
+        );
+        assert!(
+            decision.exhausted,
+            "a two-round cap cannot decide this: {decision:?}"
+        );
+        let contract = contract_of(&kb);
+        let proof = recorder.into_proof(&kb, [0; 32], contract, ProofAnswer::Undecided);
+        let ctx = DlProofContext::of_kb(nested_disjunctions_kb());
+        let replay = proof
+            .replay_partial(&ctx)
+            .expect("a genuine partial trace replays");
+        assert_eq!(replay.branches(), proof.branches().len());
+        assert_eq!(replay.clashes(), proof.clashes().len());
+        assert!(
+            !replay.checks().is_fully_attested(),
+            "regenerating a case split is a trusted check even in a partial trace"
+        );
+    }
+
+    /// The partial-trace check refuses a proof bound to a DECIDED answer, rather than
+    /// reporting a frontier on a search that has none.
+    #[test]
+    fn the_partial_trace_check_refuses_a_decided_proof() {
+        let (proof, ctx) = branching_refutation();
+        assert!(matches!(
+            proof.replay_partial(&ctx),
+            Err(DlProofError::WrongAnswer {
+                expected: ProofAnswer::Undecided,
+                ..
+            })
+        ));
+    }
+
+    /// A partial trace whose branch point cites a clause that generates NO case split is
+    /// rejected: an undecided answer does not get a weaker check than a decided one.
+    #[test]
+    fn a_forged_branch_point_in_a_partial_trace_is_rejected() {
+        let kb = nested_disjunctions_kb();
+        let (_, recorder) = crate::owl_dl::hyper::decide_recording(
+            &kb,
+            &Assumptions::of_kb(),
+            Budget {
+                steps: 2,
+                work: Budget::for_kb(&kb).work,
+            },
+        );
+        let contract = contract_of(&kb);
+        let mut proof = recorder.into_proof(&kb, [0; 32], contract, ProofAnswer::Undecided);
+        assert!(!proof.branches.is_empty(), "the fixture branches");
+        let ctx = DlProofContext::of_kb(nested_disjunctions_kb());
+        let derailed = (0..ctx.clause_count())
+            .find(|&index| ctx.clauses.clause(index).head_form() != HeadForm::Disjunctive)
+            .expect("the fixture produces a non-disjunctive clause");
+        proof.branches[0].clause = derailed;
+        assert!(matches!(
+            proof.replay_partial(&ctx),
+            Err(DlProofError::NotADisjunction { .. })
         ));
     }
 

@@ -20,6 +20,7 @@ use purrdf_core::TermValue;
 
 use super::certificate::{Session, Verdict};
 use super::classify::Subsumptions;
+use super::proof::{Claim, ClaimSubject, refutation_claim};
 use super::term_key;
 use crate::owl_dl::graph::Assumptions;
 
@@ -75,14 +76,22 @@ impl Realization {
         individuals: &[u32],
         classes: &[(u32, u32)],
         m: &Subsumptions,
-    ) -> Self {
+    ) -> (Self, Vec<Claim>) {
         let n = classes.len();
         // `entailed[i][c]` — whether individual `i` was established an instance of the
         // `c`-th class. Dense and positional, so no map order reaches the answer.
         let mut entailed = vec![false; individuals.len() * n];
+        // WHICH run decided each pair, in the same dense layout: a realization's answer
+        // binding has to name one run per (individual, class) question, and reconstructing
+        // that afterwards from a count would be a guess about the order they were asked in.
+        let mut runs = vec![0_usize; individuals.len() * n];
+        let mut verdicts = vec![Verdict::Unknown; individuals.len() * n];
         for (i, &individual) in individuals.iter().enumerate() {
             for (c, &(_, concept)) in classes.iter().enumerate() {
-                entailed[i * n + c] = is_instance(session, individual, concept).is_true();
+                let verdict = is_instance(session, individual, concept);
+                entailed[i * n + c] = verdict.is_true();
+                verdicts[i * n + c] = verdict;
+                runs[i * n + c] = session.last_run();
             }
         }
 
@@ -92,8 +101,20 @@ impl Realization {
 
         let mut types = Vec::new();
         let mut direct = Vec::new();
+        let mut claims = Vec::new();
         for i in 0..individuals.len() {
             for c in 0..n {
+                // Every pair the realizer ASKED about gets a claim, established or not: an
+                // answer binding that listed only the positive ones would leave a reader
+                // unable to tell a type the search ruled out from one it never reached.
+                claims.push(refutation_claim(
+                    ClaimSubject::Type {
+                        individual: individual_name(i),
+                        class: class_name(c),
+                    },
+                    verdicts[i * n + c],
+                    &[runs[i * n + c]],
+                ));
                 if !entailed[i * n + c] {
                     continue;
                 }
@@ -109,6 +130,6 @@ impl Realization {
         let pair = |(a, b): &(TermValue, TermValue)| (term_key(a), term_key(b));
         types.sort_by_key(pair);
         direct.sort_by_key(pair);
-        Self { types, direct }
+        (Self { types, direct }, claims)
     }
 }
