@@ -122,7 +122,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     refuse_two_stdins(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
-    format::refuse_base_with_pack(data_format, options.base, "a pack --data source")?;
+    format::refuse_base_with_container(data_format, options.base, "the --data source")?;
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
     let schema = read_schema(options.schema, options.schema_from, options.base)?;

@@ -68,7 +68,7 @@ mod codec;
 
 pub use media_type::{NativeRdfFormat, classify};
 pub use parse::{parse_dataset, parse_dataset_with};
-pub use source_format::{PACK_EXTENSIONS, SourceFormat, classify_source};
+pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use span::{ParseOptions, SpanTable};
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
 // hidden, unstable, not public API.

@@ -161,6 +161,12 @@ impl From<purrdf_rdf::ProjectionError> for CliError {
     }
 }
 
+impl From<purrdf_rdf::TransportError> for CliError {
+    fn from(error: purrdf_rdf::TransportError) -> Self {
+        Self::Runtime(error.to_string())
+    }
+}
+
 impl From<std::io::Error> for CliError {
     fn from(error: std::io::Error) -> Self {
         Self::Runtime(error.to_string())

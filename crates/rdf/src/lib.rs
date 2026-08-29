@@ -117,11 +117,22 @@ pub use native_codecs::okf::{
     OkfBundle, OkfConfig, OkfError, OkfReadOutcome, OkfWriteOutcome, OkfWriter, lift_okf_bundle,
     write_okf_bundle,
 };
+// The workspace's ONE transport-encoding authority (gzip / zstd magic-byte detection,
+// filename-suffix stripping, and all-or-nothing decoding). It lives in `purrdf-gts`
+// because that crate already owns the tar-import decoder and sits BELOW this one; it is
+// re-exported here so a consumer that already depends on the codec surface (the CLI)
+// reaches it without a second dependency edge and without a second implementation.
+pub use purrdf_gts::transport::{
+    TransportEncoding, TransportError, decode_detected, decode_transport, detect_transport,
+    strip_transport_suffix,
+};
+
 pub use native_codecs::{
-    GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions, SerializeOutcome,
-    SourceFormat, SpanTable, classify, classify_source, parse_dataset, parse_dataset_with,
-    serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_with_jsonld_options,
+    GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions,
+    SerializeOutcome, SourceFormat, SpanTable, classify, classify_source, parse_dataset,
+    parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_with_jsonld_options,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,

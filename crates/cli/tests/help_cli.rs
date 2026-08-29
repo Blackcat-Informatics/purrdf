@@ -237,18 +237,26 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
 fn convert_help_lists_options_and_format_choices() {
     let (code, stdout, _) = run(&["convert", "--help"]);
     assert_eq!(code, 0, "`convert --help` exits 0");
-    for option in ["--from", "--to", "IN", "OUT"] {
+    // `--input` and `--transport` are the two admission flags: a multi-source list and a
+    // gzip/zstd wrapper are capabilities no operator finds if the help does not name them.
+    for option in ["--from", "--to", "--input", "--transport", "IN", "OUT"] {
         assert!(
             stdout.contains(option),
             "convert help must list `{option}` (IN/OUT are positional); got:\n{stdout}"
         );
     }
     for choice in [
-        "turtle", "ntriples", "nquads", "rdfxml", "jsonld", "yamlld", "pack",
+        "turtle", "ntriples", "nquads", "rdfxml", "jsonld", "yamlld", "pack", "gts",
     ] {
         assert!(
             stdout.contains(choice),
             "convert help must list the `{choice}` format choice; got:\n{stdout}"
+        );
+    }
+    for encoding in ["auto", "none", "gzip", "zstd"] {
+        assert!(
+            stdout.contains(encoding),
+            "convert help must list the `{encoding}` transport choice; got:\n{stdout}"
         );
     }
 }

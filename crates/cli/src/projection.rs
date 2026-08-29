@@ -71,7 +71,7 @@ pub(crate) fn run_project(
         .map(|archive| RoCrateAssets::from_ustar(&archive, config.limits()))
         .transpose()?;
     let source_format = format::resolve(from, input)?;
-    format::refuse_base_with_pack(source_format, base, "a pack --from source")?;
+    format::refuse_base_with_container(source_format, base, "the --from source")?;
     let outcome = source::run_over_input(
         input,
         source_format,

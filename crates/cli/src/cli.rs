@@ -86,8 +86,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
-use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat};
+use purrdf_rdf::{
+    LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat, TransportEncoding,
+};
 use purrdf_sparql_results::SparqlResultsFormat;
+
+use crate::source::TransportPolicy;
 
 /// The `purrdf` command-line interface.
 #[derive(Parser, Debug)]
@@ -200,9 +204,22 @@ impl Cli {
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
-        /// Input format override; inferred from the input extension when omitted.
+        /// Input format override; inferred from each input's extension when omitted.
+        /// Applies to EVERY source in the list, including each `--input`.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
+        /// An ADDITIONAL input source, repeatable. The effective ordered source list
+        /// is the positional `IN` followed by each `--input` in the order written;
+        /// two or more sources are merged with the deterministic dataset union, under
+        /// a separate blank-node scope per source.
+        #[arg(long = "input", value_name = "PATH")]
+        inputs: Vec<String>,
+        /// How a gzip/zstd transport wrapper around each input is handled: `auto`
+        /// sniffs the leading bytes then the filename suffix, `none` reads the bytes
+        /// verbatim, and `gzip`/`zstd` decode under exactly that encoding. A
+        /// truncated or corrupt stream is always a hard failure, never a short read.
+        #[arg(long, value_enum, value_name = "ENCODING", default_value = "auto")]
+        transport: CliTransport,
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
@@ -230,7 +247,8 @@ pub(crate) enum Command {
         /// closure.
         #[arg(long)]
         canonical: bool,
-        /// Input path `IN`, or `-` for stdin (which requires `--from`).
+        /// First input path `IN`, or `-` for stdin (which requires `--from`). Every
+        /// `--input` is appended AFTER this one.
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
         /// Output path `OUT`, or `-` for stdout (which requires `--to`).
@@ -1082,6 +1100,13 @@ pub(crate) enum CliRdfFormat {
     // variant IS the pack container's clap spelling, so it is not re-declared as a
     // literal here — the identifier lives once, in `purrdf_rdf::PACK_EXTENSIONS`.
     Pack,
+    /// The GTS transport container. INPUT only: it is read through the authoritative
+    /// event importer (per-segment blank-node scope preserved), and named as a `--to`
+    /// target it is refused by name rather than silently written as something else —
+    /// see `crate::format::refuse_gts_target`.
+    // Same rule as `Pack`: clap's kebab-case rendering IS the spelling, so the literal
+    // lives once, in `purrdf_rdf::GTS_EXTENSIONS`.
+    Gts,
 }
 
 impl CliRdfFormat {
@@ -1100,6 +1125,43 @@ impl CliRdfFormat {
             Self::Jsonld => S::Native(N::JsonLd),
             Self::Yamlld => S::Native(N::YamlLd),
             Self::Pack => S::Pack,
+            Self::Gts => S::Gts,
+        }
+    }
+}
+
+/// The `--transport` choices: how a gzip/zstd wrapper around an input is handled.
+///
+/// A transport encoding is not a format — `data.nt.gz` is an N-Triples document that
+/// arrived gzipped — so it is decided by its own flag rather than by `--from`. `auto` is
+/// the default and the only value most callers ever need; the three explicit values
+/// exist so an operator can OVERRIDE the sniff rather than argue with it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CliTransport {
+    /// Sniff the leading bytes (gzip `1f 8b`, zstd `28 b5 2f fd`), then the filename
+    /// suffix, and decode whatever is found.
+    #[default]
+    #[value(name = "auto")]
+    Auto,
+    /// Read the bytes verbatim; do not decode even a stream that sniffs as wrapped.
+    #[value(name = "none")]
+    None,
+    /// Decode as gzip. A stream that is not gzip hard-fails.
+    #[value(name = "gzip", alias = "gz")]
+    Gzip,
+    /// Decode as zstd. A stream that is not zstd hard-fails.
+    #[value(name = "zstd", alias = "zst")]
+    Zstd,
+}
+
+impl CliTransport {
+    /// The pipeline policy this choice names.
+    pub(crate) fn to_policy(self) -> TransportPolicy {
+        match self {
+            Self::Auto => TransportPolicy::Detect,
+            Self::None => TransportPolicy::Verbatim,
+            Self::Gzip => TransportPolicy::Forced(TransportEncoding::Gzip),
+            Self::Zstd => TransportPolicy::Forced(TransportEncoding::Zstd),
         }
     }
 }

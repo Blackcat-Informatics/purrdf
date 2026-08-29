@@ -29,6 +29,7 @@ use purrdf_rdf::{
 };
 
 use crate::error::CliError;
+use crate::format;
 
 /// The runtime loss code recording how many RDF-1.2 statement-layer rows the
 /// serializer dropped because the target format does not carry the star layer.
@@ -97,6 +98,12 @@ pub(crate) fn write_rdf<D: DatasetView>(
             // A pack is a lossless RDF-1.2 container: no ledger entries.
             Ok(LossLedger::new())
         }
+        // GTS is a READ-ONLY target for this pipeline: `format::refuse_gts_target`
+        // declines `--to gts` at resolution time, with the reason. This arm keeps the
+        // match total and fails closed rather than writing something that is not GTS,
+        // for the caller who reaches the sink by some other route.
+        SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
+            .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
     }
 }
 
