@@ -267,6 +267,20 @@ pub trait DatasetView {
         std::iter::empty()
     }
 
+    /// The reifier side-table rows whose reifier — the virtual quad's SUBJECT — is
+    /// `reifier`: the subject-narrowed twin of [`reifier_quads`](Self::reifier_quads),
+    /// for the very common probe that already knows which reifier it wants.
+    ///
+    /// Yields EXACTLY the rows `reifier_quads().filter(|q| q.s == reifier)` yields, in
+    /// the same order. The default IS that filter, so every backend — including one
+    /// with no reifier layer at all, and one whose side table carries no exploitable
+    /// order — is correct with no per-backend work. A backend whose reifier table is
+    /// keyed on the reifier overrides this with a sub-linear lookup (see
+    /// [`RdfDataset::reifier_quads_of`], `O(log n)` via `partition_point`).
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads().filter(move |q| q.s == reifier)
+    }
+
     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
@@ -692,6 +706,14 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
+    fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        // Indexed override: the frozen reifier table is sorted with the reifier as its
+        // PRIMARY key, so the inherent method addresses one contiguous run via
+        // `partition_point` instead of the trait default's full-table filter.
+        Self::reifier_quads_of(self, reifier)
+    }
+
+    #[inline]
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         Self::annotation_quads(self)
     }
@@ -810,6 +832,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         (**self).reifier_quads()
+    }
+
+    #[inline]
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_of(reifier)
     }
 
     #[inline]

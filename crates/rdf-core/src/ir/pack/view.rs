@@ -287,6 +287,15 @@ impl DatasetView for PackView<'_> {
         self.side().reifier_quads().map(map_quad)
     }
 
+    fn reifier_quads_of(&self, reifier: PackId) -> impl Iterator<Item = QuadIds<PackId>> + '_ {
+        // The pack's reifier columns are sorted by reifier id (an invariant
+        // `SideTablesRef::from_bytes` checks), so this is a bracketed binary search over
+        // the run, not the trait default's full-table filter.
+        self.side()
+            .reifier_quads_of(reifier.as_unified())
+            .map(map_quad)
+    }
+
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<PackId>> + '_ {
         self.side().annotation_quads().map(map_quad)
     }

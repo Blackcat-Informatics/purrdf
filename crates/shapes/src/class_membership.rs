@@ -671,6 +671,14 @@ impl DatasetView for ClassMembershipView {
     }
 
     #[inline]
+    fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        // Forwarded (not defaulted) so the base's indexed run lookup is not degraded
+        // into a full-table filter by this wrapper — the virtual `rdf:type` closure
+        // this view adds touches the base quads only, never the reifier side table.
+        self.base.reifier_quads_of(reifier)
+    }
+
+    #[inline]
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.base.annotation_quads()
     }

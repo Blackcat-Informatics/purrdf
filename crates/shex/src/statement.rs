@@ -46,8 +46,8 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 ///
 /// Reifier rows come first, then annotation rows, each in its side-table's
 /// frozen sorted order. The probe is applied with the same id-equality the
-/// quad-table scan uses; unlike `quads_for_pattern`, the side-table walks are
-/// not pre-narrowed by the probe, so the filtering is residual.
+/// quad-table scan uses; whatever a walk is not pre-narrowed by is filtered
+/// residually.
 ///
 /// The walks are gated rather than blind, mirroring the SPARQL BGP matcher
 /// (`purrdf-sparql-eval`'s `emit_virtual_candidates`):
@@ -56,9 +56,12 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 ///   `rdf:reifies` and its object *can* be a triple term — a predicate bound
 ///   to any other IRI, or an object bound to an IRI/blank/literal, can match no
 ///   reifier row at all;
-/// * the annotation table is indexed straight to the reifier's run
-///   ([`RdfDataset::annotations_of_with_graph`], `O(log n)`) when the subject is
-///   bound, and only scanned in full when it is not.
+/// * BOTH side tables are indexed straight to the subject's run — the subject is
+///   the reifier key, which is each table's primary sort key
+///   ([`RdfDataset::reifier_quads_of`] / [`RdfDataset::annotations_of_with_graph`],
+///   `O(log n)`) — and only scanned in full when the subject is unbound. This
+///   matters because `match_shape` probes once per focus node: a full reifier scan
+///   here would make validation `O(focus_nodes × reifiers)`.
 ///
 /// A dataset with no statement layer costs nothing: `rdf:reifies` is unknown
 /// (so the reifier gate short-circuits) and the annotation table is empty.
@@ -79,9 +82,23 @@ pub(crate) fn visit_quads(
         let object_can_be_triple_term =
             o.is_none_or(|id| matches!(data.resolve(id), TermRef::Triple { .. }));
         if predicate_can_reify && object_can_be_triple_term {
-            for quad in data.reifier_quads() {
-                if s.is_none_or(|id| quad.s == id) && o.is_none_or(|id| quad.o == id) {
-                    emit(quad.s, quad.p, quad.o);
+            // A reifier row's subject IS its reifier key, the side table's primary sort
+            // key, so a bound subject addresses one contiguous run instead of the whole
+            // table — exactly as the annotation walk below does.
+            match s {
+                Some(reifier) => {
+                    for quad in data.reifier_quads_of(reifier) {
+                        if o.is_none_or(|id| quad.o == id) {
+                            emit(quad.s, quad.p, quad.o);
+                        }
+                    }
+                }
+                None => {
+                    for quad in data.reifier_quads() {
+                        if o.is_none_or(|id| quad.o == id) {
+                            emit(quad.s, quad.p, quad.o);
+                        }
+                    }
                 }
             }
         }

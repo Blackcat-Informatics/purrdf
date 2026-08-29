@@ -60,7 +60,10 @@
 //! - **Reifier rows** — `reifier_reifier`/`reifier_triple`/`reifier_graph`
 //!   (`0` sentinel for "no graph", matching [`super::triples`]'s
 //!   `graph_id_or_zero` convention — unified ids are 1-based so `0` never
-//!   collides with a real one).
+//!   collides with a real one). Sorted by `reifier_uni` (the primary key of the
+//!   canonical row order above), so all of one reifier's rows are CONTIGUOUS and
+//!   [`reifier_quads_of`](SideTablesRef::reifier_quads_of) binary-searches the
+//!   `reifier_reifier` column for the run instead of scanning the table.
 //! - **Annotation rows** — grouped and sorted by `reifier_uni` (primary key),
 //!   `predicate_uni`/`object_uni`/`graph_uni` (same `0` sentinel). A CSR-style
 //!   per-reifier index — `local_reifier` (the ascending, DISTINCT `reifier_uni`
@@ -72,10 +75,11 @@
 //!   table — the "fast slice, not a full scan" requirement.
 //!
 //! `SideTablesRef::from_bytes` fails closed: every structural invariant (column
-//! lengths agreeing, `local_reifier` strictly ascending, every non-optional id
-//! column nonzero, the offset/count index being an exact prefix-sum of the row
-//! counts) is checked once at open time, so a later query never panics on a
-//! successfully-opened buffer.
+//! lengths agreeing, `local_reifier` strictly ascending, `reifier_reifier`
+//! ascending, every non-optional id column nonzero, the offset/count index being
+//! an exact prefix-sum of the row counts) is checked once at open time, so a
+//! later query never panics on — or silently binary-searches wrong rows out of —
+//! a successfully-opened buffer.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -196,6 +200,24 @@ fn assert_strictly_ascending(
     Ok(())
 }
 
+/// Verify `column`'s stored values are ascending (NON-strictly: one reifier owns
+/// several rows, so equal neighbours are the normal case) — the invariant
+/// [`lower_bound`]'s binary search depends on. The twin of
+/// [`assert_strictly_ascending`] for a grouped, rather than distinct, key column.
+fn assert_ascending(column: IntVectorRef<'_>, what: &'static str) -> Result<(), PackSideError> {
+    let mut prev: Option<u64> = None;
+    for i in 0..column.len() {
+        let cur = column.get(i);
+        if let Some(p) = prev
+            && cur < p
+        {
+            return Err(PackSideError::Malformed(what));
+        }
+        prev = Some(cur);
+    }
+    Ok(())
+}
+
 /// Verify every value in `vec` is nonzero — every id column here EXCEPT the
 /// graph columns (which reserve `0` as the "no graph" sentinel) holds a real,
 /// 1-based unified [`PackTermId`], so a stored `0` can only be corruption.
@@ -206,6 +228,23 @@ fn assert_nonzero(vec: IntVectorRef<'_>, what: &'static str) -> Result<(), PackS
         }
     }
     Ok(())
+}
+
+/// The index of the FIRST entry of `column` (ascending, possibly with repeats) that
+/// is `>= unified` — the `partition_point` of a bit-packed column, which cannot be
+/// sliced as a native `&[u64]`. `column.len()` when every entry is smaller.
+fn lower_bound(column: IntVectorRef<'_>, unified: PackTermId) -> usize {
+    let mut lo = 0usize;
+    let mut hi = column.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if column.get(mid) < unified {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// Binary-search `map` (ascending) for `unified`, returning its index. Mirrors
@@ -438,6 +477,15 @@ impl<'a> SideTablesRef<'a> {
             local_reifier,
             "side: local_reifier map is not strictly ascending",
         )?;
+        // `reifier_quads_of` binary-searches this column, so its sort order is a
+        // CHECKED invariant here rather than an assumption inherited from
+        // `SideTables::encode` — `from_bytes` parses caller-supplied (possibly
+        // mmap-backed) bytes, and a silently unsorted column would make the search
+        // return wrong rows instead of failing.
+        assert_ascending(
+            reifier_reifier,
+            "side: reifier column is not ascending by reifier id",
+        )?;
         assert_nonzero(reifier_reifier, "side: reifier id is zero")?;
         assert_nonzero(reifier_triple, "side: reifier triple-term id is zero")?;
         assert_nonzero(local_reifier, "side: local_reifier id is zero")?;
@@ -512,6 +560,38 @@ impl<'a> SideTablesRef<'a> {
     ) -> impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_ {
         let reifies = self.reifies_predicate;
         (0..self.reifier_reifier.len()).map(move |i| {
+            (
+                self.reifier_reifier.get(i),
+                reifies,
+                self.reifier_triple.get(i),
+                decode_graph(self.reifier_graph.get(i)),
+            )
+        })
+    }
+
+    /// The reifier bindings owned by ONE reifier, as the same
+    /// `(reifier, rdf:reifies, triple, graph)` rows
+    /// [`reifier_quads`](Self::reifier_quads) yields — the unified-id twin of
+    /// `RdfDataset::reifier_quads_of`.
+    ///
+    /// `O(log reifier_rows)` to locate the run: the reifier columns are sorted by
+    /// `reifier_uni` (checked at [`from_bytes`](Self::from_bytes)), so one reifier's
+    /// rows are contiguous and two [`lower_bound`] probes bracket them — never a
+    /// full scan. Yields exactly the rows of
+    /// `reifier_quads().filter(|(r, ..)| *r == reifier)`, in the same order.
+    pub fn reifier_quads_of(
+        &self,
+        reifier: PackTermId,
+    ) -> impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_ {
+        let reifies = self.reifies_predicate;
+        let start = lower_bound(self.reifier_reifier, reifier);
+        // `reifier + 1` is the exclusive upper bound of the run: ids are integers, so
+        // the first entry `>= reifier + 1` is the first entry `> reifier`. A `reifier`
+        // of `u64::MAX` cannot exist (unified ids are dense and 1-based), but saturate
+        // rather than wrap so a corrupt-looking probe degenerates to "empty run", never
+        // to a wrapped `0` that would select the whole table.
+        let end = lower_bound(self.reifier_reifier, reifier.saturating_add(1));
+        (start..end).map(move |i| {
             (
                 self.reifier_reifier.get(i),
                 reifies,
@@ -781,6 +861,75 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(actual.len(), 2);
+    }
+
+    #[test]
+    fn reifier_quads_of_equals_the_filtered_full_scan() {
+        // The cross-backend equivalence corpus lives in `tests/reifier_quads_of.rs`
+        // (which reaches this reader through `PackView`); this unit test pins the
+        // property at the reader boundary itself, over the whole dictionary — every
+        // unified id, not just the reifiers — so a probe below, inside and above the
+        // reifier run is covered.
+        let (_, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        let mut reached = 0usize;
+        for probe in 1..=dict.n_terms() {
+            let expected: Vec<_> = side.reifier_quads().filter(|(r, ..)| *r == probe).collect();
+            let actual: Vec<_> = side.reifier_quads_of(probe).collect();
+            assert_eq!(
+                actual, expected,
+                "reifier_quads_of({probe}) diverged from the filtered full scan"
+            );
+            reached += actual.len();
+        }
+        assert_eq!(
+            reached,
+            side.reifier_count(),
+            "the per-reifier runs must partition the whole reifier column"
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_an_unsorted_reifier_column() {
+        // `reifier_quads_of` binary-searches `reifier_reifier`, so its sort order is a
+        // CHECKED invariant, not an assumption: a hand-built buffer whose reifier
+        // column descends must fail to OPEN rather than silently answer with wrong
+        // rows. (Byte-level surgery on the bit-packed columns is not possible, so this
+        // assembles the buffer with the same writer helpers `encode` uses.)
+        let mut out = Vec::new();
+        out.push(SIDE_FORMAT_VERSION);
+        out.extend_from_slice(&7u64.to_le_bytes()); // a non-zero reifies-predicate id
+        out.extend_from_slice(&build_int_vector(&[2, 1]).to_bytes()); // DESCENDING
+        out.extend_from_slice(&build_int_vector(&[3, 4]).to_bytes()); // triples
+        out.extend_from_slice(&build_int_vector(&[0, 0]).to_bytes()); // graphs
+        for empty in 0..6 {
+            let _ = empty;
+            out.extend_from_slice(&build_int_vector(&[]).to_bytes());
+        }
+        assert_eq!(
+            SideTablesRef::from_bytes(&out).err(),
+            Some(PackSideError::Malformed(
+                "side: reifier column is not ascending by reifier id"
+            ))
+        );
+
+        // The same buffer with the column ascending opens and answers.
+        let mut ok = Vec::new();
+        ok.push(SIDE_FORMAT_VERSION);
+        ok.extend_from_slice(&7u64.to_le_bytes());
+        ok.extend_from_slice(&build_int_vector(&[1, 2]).to_bytes());
+        ok.extend_from_slice(&build_int_vector(&[3, 4]).to_bytes());
+        ok.extend_from_slice(&build_int_vector(&[0, 0]).to_bytes());
+        for empty in 0..6 {
+            let _ = empty;
+            ok.extend_from_slice(&build_int_vector(&[]).to_bytes());
+        }
+        let side = SideTablesRef::from_bytes(&ok).expect("ascending column opens");
+        assert_eq!(
+            side.reifier_quads_of(2).collect::<Vec<_>>(),
+            vec![(2, 7, 4, None)]
+        );
     }
 
     #[test]

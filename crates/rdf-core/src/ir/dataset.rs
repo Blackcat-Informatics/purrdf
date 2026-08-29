@@ -1447,6 +1447,39 @@ impl RdfDataset {
         })
     }
 
+    /// The reifier side-table rows declared for ONE reifier resource, as the same
+    /// `(reifier, rdf:reifies, triple-term)` virtual quads
+    /// [`reifier_quads`](Self::reifier_quads) yields — the subject-narrowed twin of
+    /// that full walk.
+    ///
+    /// `O(log n)` to locate the run: reifier rows are frozen sorted by
+    /// `(reifier, triple, graph)`, so `reifier` is the PRIMARY key and every row for
+    /// one reifier is contiguous — `partition_point` finds the start, then a
+    /// `take_while` walks the run. (Contrast [`reifiers_of`](Self::reifiers_of), which
+    /// keys on the SECONDARY `triple` column, whose rows are NOT contiguous and for
+    /// which binary search therefore does not apply.)
+    ///
+    /// Yields exactly the rows of `reifier_quads().filter(|q| q.s == reifier)`, in the
+    /// same order (contiguity makes the two streams identical, not merely equal as
+    /// sets); a reifier with no rows yields nothing.
+    pub fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        let start = self.reifiers.partition_point(|(r, _, _)| *r < reifier);
+        // `flat_map` over the `Option<TermId>` for the same fixed-iterator-type reason
+        // as `reifier_quads`; an un-interned `rdf:reifies` ⇒ an empty reifier table ⇒
+        // an empty stream.
+        self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
+            self.reifiers[start..]
+                .iter()
+                .take_while(move |(r, _, _)| *r == reifier)
+                .map(move |&(r, triple, g)| QuadIds {
+                    s: r,
+                    p: reifies,
+                    o: triple,
+                    g,
+                })
+        })
+    }
+
     /// Iterate the annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a `(reifier, predicate, object)`
     /// quad in the default graph (`g == None`).
@@ -2395,6 +2428,143 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A dataset whose reifier side table exercises every shape the subject-narrowed
+    /// lookup must survive: SEVERAL reifiers binding one triple, ONE reifier binding
+    /// several triples, rows in the default graph and in two named graphs, and reifier
+    /// terms interleaved with ordinary terms so the reifier ids are not a contiguous
+    /// block of the term table. Returns the dataset and every id interned into it, so
+    /// a caller can probe reifiers, non-reifiers, ids below the smallest reifier and
+    /// ids above the largest.
+    ///
+    /// The bindings are pushed in an order matching NEITHER the frozen sort order nor
+    /// the id order, so the contiguity the lookup relies on is produced by the freeze
+    /// sort alone — not accidentally by push order.
+    fn reifier_probe_fixture() -> (Arc<RdfDataset>, Vec<TermId>) {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let r_a = iri(&mut b, "rA");
+        let s1 = iri(&mut b, "s1");
+        let r_b = iri(&mut b, "rB");
+        let s2 = iri(&mut b, "s2");
+        let r_c = iri(&mut b, "rC");
+        let s3 = iri(&mut b, "s3");
+        let g1 = iri(&mut b, "g1");
+        let g2 = iri(&mut b, "g2");
+        let bystander = iri(&mut b, "not-a-reifier");
+        let reifies = b.intern_iri(RDF_REIFIES);
+
+        let t1 = b.intern_triple(s1, p, s2);
+        let t2 = b.intern_triple(s2, p, s3);
+        let t3 = b.intern_triple(s3, p, s1);
+
+        b.push_reifier_in_graph(r_c, t2, Some(g2));
+        b.push_reifier(r_a, t3);
+        b.push_reifier_in_graph(r_b, t1, Some(g1));
+        b.push_reifier_in_graph(r_a, t1, Some(g2));
+        b.push_reifier(r_c, t2);
+        b.push_reifier_in_graph(r_a, t1, Some(g1));
+        b.push_reifier(r_b, t1);
+        b.push_reifier(r_a, t2);
+        b.push_reifier_in_graph(r_c, t1, Some(g1));
+        // A base quad and an annotation, so the dataset is not side-table-only and the
+        // (separately keyed) annotation table is populated alongside.
+        b.push_quad(s1, p, s2, None);
+        b.push_annotation(r_b, p, s3);
+
+        let ids = vec![
+            p, r_a, s1, r_b, s2, r_c, s3, g1, g2, bystander, reifies, t1, t2, t3,
+        ];
+        (b.freeze().expect("valid reifier fixture"), ids)
+    }
+
+    #[test]
+    fn reifier_quads_of_equals_the_filtered_full_scan() {
+        let (ds, probes) = reifier_probe_fixture();
+        assert!(
+            ds.reifier_quads().count() >= 9,
+            "fixture must hold enough rows for contiguity to matter"
+        );
+
+        // The property that protects against a wrong sort assumption: for EVERY id in
+        // the dataset the narrowed lookup must reproduce the full scan's rows AND
+        // their order — not merely their set.
+        let mut reached = 0usize;
+        for &probe in &probes {
+            let expected: Vec<QuadIds> = ds.reifier_quads().filter(|q| q.s == probe).collect();
+            let actual: Vec<QuadIds> = ds.reifier_quads_of(probe).collect();
+            assert_eq!(
+                actual, expected,
+                "reifier_quads_of({probe:?}) diverged from reifier_quads().filter(s == probe)"
+            );
+            reached += actual.len();
+        }
+        // The probe set covers every interned term, and each row has exactly one
+        // subject, so every row must be reached by exactly one probe. A row stranded
+        // outside its own reifier's run — the failure a wrong `partition_point` key
+        // produces — shows up here as a short total even if each individual comparison
+        // above happened to agree.
+        assert_eq!(
+            reached,
+            ds.reifier_quads().count(),
+            "the per-reifier runs must partition the whole reifier table"
+        );
+
+        // An id that IS interned but reifies nothing yields nothing (the run is empty,
+        // and `partition_point` lands mid-table rather than at either end).
+        let bystander = ds
+            .term_id_by_iri("http://example.org/not-a-reifier")
+            .expect("bystander is interned");
+        assert_eq!(ds.reifier_quads_of(bystander).count(), 0);
+    }
+
+    #[test]
+    fn reifier_quads_of_yields_the_frozen_run_in_order() {
+        // An expectation written out by hand — independent of `reifier_quads` — so the
+        // equivalence test above cannot pass by both sides sharing one bug.
+        let (ds, _) = reifier_probe_fixture();
+        let id = |n: &str| {
+            ds.term_id_by_iri(&format!("http://example.org/{n}"))
+                .expect("fixture term")
+        };
+        let (r_a, p, s1, s2, s3) = (id("rA"), id("p"), id("s1"), id("s2"), id("s3"));
+        let (g1, g2) = (id("g1"), id("g2"));
+        let reifies = ds.term_id_by_iri(RDF_REIFIES).expect("rdf:reifies");
+        let t1 = ds.term_id_by_triple(s1, p, s2).expect("t1");
+        let t2 = ds.term_id_by_triple(s2, p, s3).expect("t2");
+        let t3 = ds.term_id_by_triple(s3, p, s1).expect("t3");
+
+        // Frozen `(reifier, triple, graph)` order within rA's run: t1 before t2 before
+        // t3 (interning order), and within t1 the named graphs ascend g1 then g2.
+        let row = |o, g| QuadIds {
+            s: r_a,
+            p: reifies,
+            o,
+            g,
+        };
+        assert_eq!(
+            ds.reifier_quads_of(r_a).collect::<Vec<_>>(),
+            vec![
+                row(t1, Some(g1)),
+                row(t1, Some(g2)),
+                row(t2, None),
+                row(t3, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn reifier_quads_of_empty_when_no_reifiers() {
+        // No reifiers ⇒ `rdf:reifies` is never interned ⇒ the narrowed lookup takes the
+        // `None` branch of `rdf_reifies_id` and yields nothing, exactly like the scan.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("valid");
+        assert_eq!(ds.reifier_quads_of(s).count(), 0);
     }
 
     #[test]
