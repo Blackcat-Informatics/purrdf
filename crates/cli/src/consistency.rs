@@ -161,7 +161,7 @@ fn refuse_document_flags(
 /// transcoded ontology is a different ontology and the verdict would be about that one.
 fn read_as_nquads(options: &ConsistencyOptions<'_>) -> Result<String, CliError> {
     let format = format::resolve(options.from, options.input)?;
-    format::refuse_base_with_pack(format, options.base, "a pack --from source")?;
+    format::refuse_base_with_container(format, options.base, "the --from source")?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
     let outcome = source::serialize_input_to_nquads(options.input, format, options.base)?;

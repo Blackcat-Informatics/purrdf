@@ -12,6 +12,7 @@ use crate::files::{FileBlobRange, digest_blob_range, pack_entries_v2_with_blob_r
 use crate::tar::{
     RawTarEntry, SeekTarEntry, TarError, index_uncompressed_tar, read_uncompressed_tar,
 };
+use crate::transport::{decode_detected, detect_transport};
 use crate::writer::digest_string;
 
 /// Options for [`from_tar`].
@@ -64,7 +65,7 @@ pub fn from_seekable_tar_to_writer<R: Read + Seek, W: Write>(
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|err| TarError::new(format!("seek tar input: {err}")))?;
-    if detect_compression(&prefix[..n], options.source_name.as_deref()).is_some() {
+    if detect_transport(&prefix[..n], options.source_name.as_deref()).is_some() {
         return from_tar_to_writer(reader, writer, options);
     }
 
@@ -138,51 +139,15 @@ pub fn from_tar_bytes(data: &[u8], options: &FromTarOptions) -> Result<Vec<u8>, 
     Ok(out)
 }
 
+/// Decode a possibly gzip/zstd-wrapped tar stream through the crate's single
+/// transport authority ([`crate::transport`]), re-labelling its error as a
+/// [`TarError`]. There is no second detection or decoding rule here.
 fn decompress_input<'a>(
     data: &'a [u8],
     source_name: Option<&str>,
 ) -> Result<Cow<'a, [u8]>, TarError> {
-    match detect_compression(data, source_name) {
-        None => Ok(Cow::Borrowed(data)),
-        Some("gzip") => {
-            let mut out = Vec::new();
-            flate2::read::GzDecoder::new(data)
-                .read_to_end(&mut out)
-                .map_err(|err| TarError::new(format!("gzip decode tar input: {err}")))?;
-            Ok(Cow::Owned(out))
-        }
-        Some("zstd") => {
-            let mut out = Vec::new();
-            structured_zstd::decoding::StreamingDecoder::new(data)
-                .map_err(|err| TarError::new(format!("zstd decode tar input: {err}")))?
-                .read_to_end(&mut out)
-                .map_err(|err| TarError::new(format!("zstd decode tar input: {err}")))?;
-            Ok(Cow::Owned(out))
-        }
-        Some(other) => Err(TarError::new(format!(
-            "unsupported tar compression: {other}"
-        ))),
-    }
-}
-
-// Matching stays byte-exact on the (already lowercased) name; multi-part suffixes
-// like ".tar.gz" cannot be expressed via Path::extension.
-#[allow(clippy::case_sensitive_file_extension_comparisons)]
-fn detect_compression(data: &[u8], source_name: Option<&str>) -> Option<&'static str> {
-    if data.starts_with(&[0x1f, 0x8b]) {
-        return Some("gzip");
-    }
-    if data.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
-        return Some("zstd");
-    }
-    let name = source_name?.to_ascii_lowercase();
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
-        Some("gzip")
-    } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") || name.ends_with(".zst") {
-        Some("zstd")
-    } else {
-        None
-    }
+    decode_detected(data, source_name)
+        .map_err(|err| TarError::new(format!("decode tar input: {err}")))
 }
 
 fn file_entry_from_tar(

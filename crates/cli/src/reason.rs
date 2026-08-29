@@ -173,9 +173,9 @@ pub(crate) fn run(
     // unresolvable OUT fails fast rather than after the (potentially
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
-    let target_format = format::resolve(to, output)?;
-    format::refuse_base_with_pack(source_format, base, "a pack --from source")?;
-    format::refuse_base_with_pack(target_format, base, "a pack --to target")?;
+    let target_format = format::resolve_target(to, output, "the --to target")?;
+    format::refuse_base_with_container(source_format, base, "the --from source")?;
+    format::refuse_base_with_container(target_format, base, "the --to target")?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
@@ -187,6 +187,7 @@ pub(crate) fn run(
         input,
         source_format,
         base,
+        crate::source::TransportPolicy::Detect,
         plan.materialization(),
         report_target,
     )?;

@@ -5,15 +5,26 @@
 //!
 //! [`SourceFormat`] is the ONE shared routing identity `purrdf-rdf` hands every
 //! caller (starting with the CLI) that needs to resolve "what is this path/media-type
-//! spec" beyond the text-only [`classify`]: it is either a [`NativeRdfFormat`] text
-//! syntax OR the native pack container. Pack is a *container* — a serialized bundle of
-//! zero or more graphs plus non-RDF sidecar artifacts — deliberately NOT folded into
-//! [`NativeRdfFormat`], which documents text syntaxes only.
+//! spec" beyond the text-only [`classify`]: it is a [`NativeRdfFormat`] text syntax,
+//! the native pack container, or the GTS transport container. Both containers are
+//! *containers* — a serialized bundle of zero or more graphs plus non-RDF sidecar
+//! artifacts — deliberately NOT folded into [`NativeRdfFormat`], which documents text
+//! syntaxes only.
 //!
-//! The pack extension/id literals live in [`PACK_EXTENSIONS`] and NOWHERE ELSE in the
-//! workspace; every consumer (the CLI's `--from`/`--to` extension inference, the
-//! `pack`/`purrpck` CLI subcommand aliasing, …) routes through [`classify_source`]
-//! rather than re-deciding the pack literal itself.
+//! The pack and GTS extension/id literals live in [`PACK_EXTENSIONS`] /
+//! [`GTS_EXTENSIONS`] and NOWHERE ELSE in the workspace; every consumer (the CLI's
+//! `--from`/`--to` extension inference, the `pack`/`purrpck` CLI subcommand aliasing,
+//! …) routes through [`classify_source`] rather than re-deciding a container literal
+//! itself.
+//!
+//! # Pack is not GTS
+//!
+//! They are two different containers and neither is a mode of the other. A pack is the
+//! native digest-verified snapshot container `purrdf_core::PackView` reads zero-copy; a
+//! GTS file is a CBOR sequence of BLAKE3-chained segments read through
+//! [`import_gts_events`](crate::import_gts_events), the authoritative importer that
+//! preserves per-segment blank-node scope. Routing them to one variant would make one
+//! of the two silently read by the other's reader.
 
 use crate::RdfDiagnostic;
 use crate::native_codecs::media_type::{NativeRdfFormat, classify};
@@ -23,20 +34,27 @@ use crate::native_codecs::media_type::{NativeRdfFormat, classify};
 /// `"pack"` as a format literal; every consumer routes through [`classify_source`].
 pub const PACK_EXTENSIONS: &[&str] = &["purrpck", "pack"];
 
-/// A resolved source/target routing identity: a native RDF text syntax OR the native
-/// pack container.
+/// The extensions/ids that name the GTS transport container, on the same single-authority
+/// rule as [`PACK_EXTENSIONS`]: no other module spells `"gts"` as a format literal.
+pub const GTS_EXTENSIONS: &[&str] = &["gts"];
+
+/// A resolved source/target routing identity: a native RDF text syntax, the native
+/// pack container, or the GTS transport container.
 ///
 /// This is the container-aware routing identity that subsumes the text-only
 /// [`classify`]/[`NativeRdfFormat`] pair: every caller that must decide between "one of
-/// the RDF text syntaxes" and "the pack container" — not just "which text syntax" —
-/// resolves through [`classify_source`] to this type rather than hand-rolling a second
-/// pack/extension decision.
+/// the RDF text syntaxes" and "a container" — not just "which text syntax" — resolves
+/// through [`classify_source`] to this type rather than hand-rolling a second
+/// container/extension decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceFormat {
     /// One of the native RDF text syntaxes (see [`NativeRdfFormat`]).
     Native(NativeRdfFormat),
     /// The native PurRDF pack container.
     Pack,
+    /// The GTS transport container (a CBOR sequence of BLAKE3-chained segments), read
+    /// through [`import_gts_events`](crate::import_gts_events).
+    Gts,
 }
 
 impl SourceFormat {
@@ -45,13 +63,39 @@ impl SourceFormat {
         matches!(self, Self::Pack)
     }
 
+    /// Whether this is the GTS container.
+    pub fn is_gts(self) -> bool {
+        matches!(self, Self::Gts)
+    }
+
+    /// Whether this is a CONTAINER rather than an RDF text syntax.
+    ///
+    /// The two containers share every property a caller reasons about at this level:
+    /// they store fully-resolved terms (so there is no relative-IRI base to apply) and
+    /// they carry non-triple sidecar material a text syntax has no place for.
+    pub fn is_container(self) -> bool {
+        matches!(self, Self::Pack | Self::Gts)
+    }
+
+    /// The canonical lowercase token naming this format, for diagnostics.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Native(format) => format.id(),
+            Self::Pack => PACK_EXTENSIONS[0],
+            Self::Gts => GTS_EXTENSIONS[0],
+        }
+    }
+
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this
     /// format carries no loss-ledger codec identity (a native format that itself has
     /// none — TriX / HexTuples — or the pack container).
+    ///
+    /// GTS resolves to the `"gts"` codec the RDF↔GTS loss matrix is keyed on.
     pub fn loss_codec_name(self) -> Option<&'static str> {
         match self {
             Self::Native(format) => format.loss_codec_name(),
             Self::Pack => None,
+            Self::Gts => Some("gts"),
         }
     }
 }
@@ -60,12 +104,12 @@ impl SourceFormat {
 /// [`SourceFormat`].
 ///
 /// The input is normalized exactly like [`classify`] (lowercased, `;charset=…`
-/// stripped, a leading `.` tolerated). If the normalized spelling names the pack
-/// container — an entry of [`PACK_EXTENSIONS`], with or without a leading dot — this
-/// resolves to [`SourceFormat::Pack`]. Otherwise the ORIGINAL spec is delegated to
-/// [`classify`] and the result wrapped in [`SourceFormat::Native`]. An unrecognized
-/// spec is the same hard error [`classify`] returns
-/// (`native-codec-unsupported-format`) — there is no degraded default.
+/// stripped, a leading `.` tolerated). If the normalized spelling names a container —
+/// an entry of [`PACK_EXTENSIONS`] or [`GTS_EXTENSIONS`], with or without a leading dot
+/// — this resolves to [`SourceFormat::Pack`] / [`SourceFormat::Gts`]. Otherwise the
+/// ORIGINAL spec is delegated to [`classify`] and the result wrapped in
+/// [`SourceFormat::Native`]. An unrecognized spec is the same hard error [`classify`]
+/// returns (`native-codec-unsupported-format`) — there is no degraded default.
 pub fn classify_source(spec: &str) -> Result<SourceFormat, RdfDiagnostic> {
     let normalized = spec
         .split(';')
@@ -76,6 +120,9 @@ pub fn classify_source(spec: &str) -> Result<SourceFormat, RdfDiagnostic> {
     let bare = normalized.strip_prefix('.').unwrap_or(&normalized);
     if PACK_EXTENSIONS.contains(&bare) {
         return Ok(SourceFormat::Pack);
+    }
+    if GTS_EXTENSIONS.contains(&bare) {
+        return Ok(SourceFormat::Gts);
     }
     classify(spec).map(SourceFormat::Native)
 }
@@ -118,6 +165,36 @@ mod tests {
     }
 
     #[test]
+    fn classify_source_resolves_gts_with_and_without_dot() {
+        for spec in [".gts", "gts", "GTS", ".GTS"] {
+            assert_eq!(
+                classify_source(spec).unwrap(),
+                SourceFormat::Gts,
+                "spec {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn pack_and_gts_are_distinct_containers() {
+        assert!(SourceFormat::Gts.is_gts());
+        assert!(!SourceFormat::Gts.is_pack());
+        assert!(!SourceFormat::Pack.is_gts());
+        assert!(SourceFormat::Gts.is_container());
+        assert!(SourceFormat::Pack.is_container());
+        assert!(!SourceFormat::Native(NativeRdfFormat::Turtle).is_container());
+        // GTS carries a loss-ledger codec identity (the RDF<->GTS matrix is keyed on
+        // it); the pack container carries none, being lossless by construction.
+        assert_eq!(SourceFormat::Gts.loss_codec_name(), Some("gts"));
+        assert_eq!(SourceFormat::Gts.token(), "gts");
+        assert_eq!(SourceFormat::Pack.token(), "purrpck");
+        assert_eq!(
+            SourceFormat::Native(NativeRdfFormat::Turtle).token(),
+            NativeRdfFormat::Turtle.id()
+        );
+    }
+
+    #[test]
     fn is_pack_and_loss_codec_name_are_consistent() {
         assert!(SourceFormat::Pack.is_pack());
         assert_eq!(SourceFormat::Pack.loss_codec_name(), None);
@@ -140,5 +217,6 @@ mod tests {
         // contract check), but it pins the exact spellings every consumer must route
         // through `classify_source` for.
         assert_eq!(PACK_EXTENSIONS, &["purrpck", "pack"]);
+        assert_eq!(GTS_EXTENSIONS, &["gts"]);
     }
 }

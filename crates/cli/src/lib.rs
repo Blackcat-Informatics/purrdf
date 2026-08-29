@@ -81,6 +81,7 @@ mod error;
 mod format;
 mod governors;
 pub mod immutable;
+mod ingest;
 mod ledger;
 mod pack;
 mod projection;
@@ -154,6 +155,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     match &cli.cmd {
         Command::Convert {
             from,
+            inputs,
+            transport,
             to,
             base,
             entailment,
@@ -166,6 +169,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &convert::ConvertOptions {
                 from: *from,
                 to: *to,
+                inputs,
+                transport: transport.to_policy(),
                 base: base.as_deref(),
                 entailment: *entailment,
                 rules: rules.as_deref(),

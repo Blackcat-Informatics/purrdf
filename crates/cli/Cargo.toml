@@ -71,6 +71,14 @@ sha2 = { workspace = true }
 [dev-dependencies]
 # Isolated temp files/dirs for the integration tests that drive the built binary.
 tempfile = { workspace = true }
+# Authors the `.gts` fixtures the GTS-ingestion integration tests feed to the binary.
+# Test-only: the CLI reads GTS through `purrdf_rdf::import_gts_events` and never links
+# the container engine itself.
+purrdf-gts = { workspace = true }
+# Frames the gzip and zstd fixtures the transport integration tests feed to the binary.
+# Both are already workspace-pinned (purrdf-gts links them); test-only here.
+flate2 = { workspace = true }
+structured-zstd = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
 # Timing harness for the pack-input benchmark (acquisition / verification / reasoning).

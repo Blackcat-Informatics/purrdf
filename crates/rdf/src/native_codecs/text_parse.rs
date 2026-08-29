@@ -329,41 +329,13 @@ fn parse_lines_sequential<S: SpanCollector>(
         }
     };
     for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
+        let Some(nodes) = parse_one_line(raw, allow_graph, lineno)? else {
             if S::ENABLED {
                 advance_line_offset(&mut line_offset, raw);
             }
             lineno = lineno.saturating_add(1);
             continue;
-        }
-        let tokens = tokenize(line).map_err(|e| {
-            let col = e.byte_offset().map_or(1, |at| column_in_raw(raw, at));
-            err_at(e.to_string(), lineno, col)
-        })?;
-        let mut cursor = TokenCursor::new(tokens, raw, lineno);
-        let mut nodes = Vec::new();
-        while !cursor.at_statement_end() {
-            nodes.push(cursor.term(0)?);
-        }
-        cursor.expect_dot()?;
-        let valid_len = if allow_graph {
-            nodes.len() == 3 || nodes.len() == 4
-        } else {
-            nodes.len() == 3
         };
-        if !valid_len {
-            return Err(err_at(
-                format!(
-                    "expected {} terms, got {}",
-                    if allow_graph { "3 or 4" } else { "3" },
-                    nodes.len(),
-                ),
-                lineno,
-                column_in_raw(raw, 0),
-            ));
-        }
-        validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
         // Record the subject's source position when tracking is on. `S::ENABLED` is a
         // const, so for `NoSpans` this whole block is dead code (no key is built).
         if S::ENABLED {
@@ -383,6 +355,58 @@ fn parse_lines_sequential<S: SpanCollector>(
         lineno = lineno.saturating_add(1);
     }
     Ok(statements)
+}
+
+/// Parse ONE physical line of N-Triples / N-Quads into its statement, or `None` when the
+/// line is blank or a `#` comment (which carry no statement and are skipped).
+///
+/// This is the WHOLE of the grammar's per-line work, and it is deliberately the only
+/// copy of it: [`parse_lines_sequential`] (and therefore the chunk-parallel phase-1
+/// workers, which are that same function over line-aligned slices) and the streaming
+/// [`LineStreamParser`] both call THIS function on the same line text with the same
+/// document-global `lineno`. The three paths cannot drift in what a line means or in
+/// what diagnostic a malformed one produces, because there is nothing to drift: they
+/// differ only in where the line came from and where the statement goes.
+///
+/// `raw` is the UNTRIMMED line as `str::lines` yields it (no `\n` / `\r\n`
+/// terminator); columns in diagnostics are rebased onto it.
+fn parse_one_line(
+    raw: &str,
+    allow_graph: bool,
+    lineno: u32,
+) -> Result<Option<Statement>, RdfDiagnostic> {
+    let line = raw.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return Ok(None);
+    }
+    let tokens = tokenize(line).map_err(|e| {
+        let col = e.byte_offset().map_or(1, |at| column_in_raw(raw, at));
+        err_at(e.to_string(), lineno, col)
+    })?;
+    let mut cursor = TokenCursor::new(tokens, raw, lineno);
+    let mut nodes = Vec::new();
+    while !cursor.at_statement_end() {
+        nodes.push(cursor.term(0)?);
+    }
+    cursor.expect_dot()?;
+    let valid_len = if allow_graph {
+        nodes.len() == 3 || nodes.len() == 4
+    } else {
+        nodes.len() == 3
+    };
+    if !valid_len {
+        return Err(err_at(
+            format!(
+                "expected {} terms, got {}",
+                if allow_graph { "3 or 4" } else { "3" },
+                nodes.len(),
+            ),
+            lineno,
+            column_in_raw(raw, 0),
+        ));
+    }
+    validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
+    Ok(Some(nodes))
 }
 
 /// A cursor over one line's lexer tokens, parsing N-Triples/N-Quads terms.
@@ -1916,15 +1940,37 @@ impl Interner {
     }
 }
 
-/// Lower the flat statement list into the in-memory [`SerGraph`], reproducing
-/// `from_nquads`'s `build_gts` (the `rdf:reifies` statement-layer shorthand,
-/// first-seen interning, statement-order quads, encounter-order reifiers).
-fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> {
-    let mut interner = Interner::new();
-    let mut reifiers: Vec<(usize, SerTriple3)> = Vec::new();
-    let mut quads: Vec<(usize, usize, usize, Option<usize>)> = Vec::new();
+/// The in-progress [`SerGraph`] lowering, fed ONE statement at a time.
+///
+/// This is `from_nquads`'s `build_gts` turned inside out: the loop body became
+/// [`push`](Self::push) and the tail became [`finish`](Self::finish), with the state it
+/// carried between iterations (the interner, the reifier table, the quad table) becoming
+/// the struct's fields. Nothing about the lowering changed — the same first-seen
+/// interning, the same statement-order quads, the same encounter-order reifiers, the same
+/// `rdf:reifies` statement-layer shorthand — so [`build_gts_graph`] over a statement
+/// slice and [`LineStreamParser`] over a stream of lines produce the IDENTICAL graph for
+/// the identical statement sequence, by construction rather than by parallel maintenance.
+struct GraphAccumulator {
+    /// The first-seen-order term interner (the sequential serialization point that
+    /// fixes every term id).
+    interner: Interner,
+    /// Reifier bindings in encounter order.
+    reifiers: Vec<(usize, SerTriple3)>,
+    /// Base quads in statement order.
+    quads: Vec<(usize, usize, usize, Option<usize>)>,
+}
 
-    for nodes in statements {
+impl GraphAccumulator {
+    fn new() -> Self {
+        Self {
+            interner: Interner::new(),
+            reifiers: Vec::new(),
+            quads: Vec::new(),
+        }
+    }
+
+    /// Lower ONE statement, in document order.
+    fn push(&mut self, nodes: &Statement) -> Result<(), RdfDiagnostic> {
         let s = &nodes[0];
         let p = &nodes[1];
         let o = &nodes[2];
@@ -1936,35 +1982,123 @@ fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> 
             (s, p, o, gname)
             && pred_iri == RDF_REIFIES
         {
-            let rid = interner.atom(s);
-            let ss = interner.node(ts, &mut reifiers);
-            let pp = interner.node(tp, &mut reifiers);
-            let oo = interner.node(to, &mut reifiers);
-            set_reifier(&mut reifiers, rid, (ss, pp, oo))?;
-            continue;
+            let rid = self.interner.atom(s);
+            let ss = self.interner.node(ts, &mut self.reifiers);
+            let pp = self.interner.node(tp, &mut self.reifiers);
+            let oo = self.interner.node(to, &mut self.reifiers);
+            set_reifier(&mut self.reifiers, rid, (ss, pp, oo))?;
+            return Ok(());
         }
 
-        let sid = interner.node(s, &mut reifiers);
-        let pid = interner.node(p, &mut reifiers);
-        let oid = interner.node(o, &mut reifiers);
-        let gid = gname.map(|node| interner.node(node, &mut reifiers));
-        quads.push((sid, pid, oid, gid));
+        let sid = self.interner.node(s, &mut self.reifiers);
+        let pid = self.interner.node(p, &mut self.reifiers);
+        let oid = self.interner.node(o, &mut self.reifiers);
+        let gid = gname.map(|node| self.interner.node(node, &mut self.reifiers));
+        self.quads.push((sid, pid, oid, gid));
+        Ok(())
     }
 
-    Ok(SerGraph {
-        terms: interner.terms,
-        quads,
-        // The reifier row carries an optional graph slot; this first-party text parser
-        // binds reifiers only in the DEFAULT graph (the `rdf:reifies` shorthand is gated
-        // on `None` graph above), so the slot is always `None`. Annotations are left in
-        // `quads` here and reclassified by `fold_statement_layer`'s pass 2 (the
-        // `annotations` table stays empty).
-        reifiers: reifiers
-            .into_iter()
-            .map(|(rid, spo)| (rid, spo, None))
-            .collect(),
-        ..Default::default()
-    })
+    /// Freeze the accumulated tables into the in-memory [`SerGraph`].
+    fn finish(self) -> SerGraph {
+        SerGraph {
+            terms: self.interner.terms,
+            quads: self.quads,
+            // The reifier row carries an optional graph slot; this first-party text
+            // parser binds reifiers only in the DEFAULT graph (the `rdf:reifies`
+            // shorthand is gated on `None` graph in `push`), so the slot is always
+            // `None`. Annotations are left in `quads` here and reclassified by
+            // `fold_statement_layer`'s pass 2 (the `annotations` table stays empty).
+            reifiers: self
+                .reifiers
+                .into_iter()
+                .map(|(rid, spo)| (rid, spo, None))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Lower the flat statement list into the in-memory [`SerGraph`], reproducing
+/// `from_nquads`'s `build_gts` (the `rdf:reifies` statement-layer shorthand,
+/// first-seen interning, statement-order quads, encounter-order reifiers).
+fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> {
+    let mut accumulator = GraphAccumulator::new();
+    for nodes in statements {
+        accumulator.push(nodes)?;
+    }
+    Ok(accumulator.finish())
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Streaming line front-end
+// ───────────────────────────────────────────────────────────────────────────────
+
+/// The N-Triples / N-Quads parser driven ONE LINE AT A TIME, for a caller reading from
+/// a `Read` rather than holding the document.
+///
+/// It is the SAME parser: [`push_line`](Self::push_line) calls [`parse_one_line`] —
+/// the one copy of the grammar, which the buffered sequential path and the
+/// chunk-parallel workers also call — and hands the statement straight to a
+/// [`GraphAccumulator`], which is `build_gts` with its loop turned inside out. Because
+/// the statement sequence and the lowering are identical, the frozen graph is identical:
+/// the equivalence is structural, not a property re-established by testing (though
+/// [`stream`](super::stream) tests it over a non-trivial corpus anyway).
+///
+/// What is genuinely different is RESIDENCY. The buffered path holds the whole source
+/// text AND the whole `Vec<Statement>` alive while it lowers; this holds exactly one
+/// line's text and one statement, dropping each before reading the next. The
+/// accumulated graph is unavoidable — it is the output — but the two source-sized
+/// buffers are gone.
+///
+/// Only line-oriented formats reach here. Turtle / TriG cannot: their `@prefix` /
+/// `@base` directives rebind mid-document and their anonymous blank nodes mint labels
+/// from a document-ordered counter, so a line has no meaning independent of the lines
+/// before it. [`new`](Self::new) rejects them by name rather than silently mis-parsing.
+pub(super) struct LineStreamParser {
+    accumulator: GraphAccumulator,
+    /// N-Quads admits a fourth graph term; N-Triples does not.
+    allow_graph: bool,
+    /// The 1-based document line number of the NEXT line to be pushed.
+    lineno: u32,
+}
+
+impl LineStreamParser {
+    /// Start a streaming parse of `format`, which MUST be N-Triples or N-Quads.
+    pub(super) fn new(format: NativeRdfFormat) -> Result<Self, RdfDiagnostic> {
+        let allow_graph = match format {
+            NativeRdfFormat::NTriples => false,
+            NativeRdfFormat::NQuads => true,
+            other => {
+                return Err(err(format!(
+                    "{} is not a line-oriented format and cannot be parsed from a stream",
+                    other.media_type()
+                )));
+            }
+        };
+        Ok(Self {
+            accumulator: GraphAccumulator::new(),
+            allow_graph,
+            lineno: 1,
+        })
+    }
+
+    /// Feed the next physical line, in document order.
+    ///
+    /// `raw` is the line WITHOUT its `\n` / `\r\n` terminator — exactly what
+    /// `str::lines` yields for the buffered path, so the diagnostics (line, column,
+    /// message) are the buffered path's diagnostics.
+    pub(super) fn push_line(&mut self, raw: &str) -> Result<(), RdfDiagnostic> {
+        if let Some(nodes) = parse_one_line(raw, self.allow_graph, self.lineno)? {
+            self.accumulator.push(&nodes)?;
+        }
+        self.lineno = self.lineno.saturating_add(1);
+        Ok(())
+    }
+
+    /// Freeze the accumulated graph once the stream is exhausted.
+    pub(super) fn finish(self) -> SerGraph {
+        self.accumulator.finish()
+    }
 }
 
 /// Bind a reifier, hard-failing on a conflicting rebinding — never silently

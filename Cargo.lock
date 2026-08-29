@@ -1297,10 +1297,12 @@ version = "0.12.0"
 dependencies = [
  "clap",
  "criterion",
+ "flate2",
  "memmap2",
  "purrdf",
  "purrdf-core",
  "purrdf-entail",
+ "purrdf-gts",
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
@@ -1308,6 +1310,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "sha2",
+ "structured-zstd",
  "tempfile",
 ]
 

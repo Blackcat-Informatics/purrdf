@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 use crate::cli::ReportTarget;
 use crate::error::CliError;
-use crate::source::{self, ViewOp};
+use crate::source::{self, TransportPolicy, ViewOp};
 
 /// Materialize `plan` over `dataset`, surfacing the run's report to `target` either way.
 ///
@@ -93,6 +93,7 @@ pub(crate) fn materialize_reported_over_input(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    policy: TransportPolicy,
     plan: Materialization<'_>,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
@@ -109,7 +110,7 @@ pub(crate) fn materialize_reported_over_input(
         }
     }
 
-    source::run_over_input(path, format, base, Op { plan, target })
+    source::run_over_input_with_transport(path, format, base, policy, Op { plan, target })
 }
 
 /// Surface `report` per the decoded `--report` target.

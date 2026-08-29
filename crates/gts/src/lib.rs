@@ -89,6 +89,7 @@ pub mod replication;
 pub mod segment_decode;
 pub mod stream;
 pub mod tar;
+pub mod transport;
 pub mod ulid;
 pub mod verify;
 pub mod wire;

@@ -37,7 +37,7 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
     let source_format = format::resolve(options.from, options.data)?;
-    let target_format = format::resolve(options.to, options.output)?;
+    let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
     let engine = NativeSparqlEngine::new();
     let request = SparqlRequest {

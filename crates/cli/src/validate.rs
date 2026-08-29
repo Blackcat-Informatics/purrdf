@@ -123,7 +123,7 @@ pub(crate) fn run(
     refuse_inapplicable_flags(options, ledger_target)?;
 
     let data_format = format::resolve(options.from, options.input)?;
-    format::refuse_base_with_pack(data_format, options.base, "a pack --from data graph")?;
+    format::refuse_base_with_container(data_format, options.base, "the --from data graph")?;
     let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
