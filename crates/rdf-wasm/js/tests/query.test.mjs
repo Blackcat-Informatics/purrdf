@@ -236,3 +236,111 @@ test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => 
     "the JSON-LD document must carry the term IRIs",
   );
 });
+
+// ── A quad-template CONSTRUCT, through the DEFAULT entry point ──────────────────
+//
+// `Dataset#query` passes no format at all, and the documented default was Turtle.
+// Turtle has no `GRAPH` construct, so a CONSTRUCT whose template names a graph
+// serialized to a well-formed EMPTY document and returned it with no error — the exact
+// "silent empty result" the method's own contract says can never happen.
+//
+// The default now widens to TriG (Turtle's dataset superset) for a result that carries
+// a named graph, and stays Turtle for one that does not. Naming a single-graph syntax
+// EXPLICITLY throws instead: that caller asked for a syntax, most likely because
+// something downstream reads only that syntax, so neither answering with TriG bytes nor
+// answering with Turtle bytes that omit the query's own statements is honest.
+
+const GRAPH_CONSTRUCT =
+  "PREFIX ex: <https://e/> CONSTRUCT { GRAPH ex:out { ?s ex:knows ?o } } WHERE { ?s ex:knows ?o }";
+const PLAIN_CONSTRUCT =
+  "PREFIX ex: <https://e/> CONSTRUCT { ?s ex:knows ?o } WHERE { ?s ex:knows ?o }";
+
+test("the default query() format never returns an empty string for a named-graph CONSTRUCT", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const out = ds.query(GRAPH_CONSTRUCT);
+  assert.notEqual(out.trim(), "", "the documented default must never be a silent empty result");
+  assert.ok(out.includes("https://e/out"), `the graph the query named must survive: ${out}`);
+  assert.ok(out.includes("https://e/a"), `the constructed statement must survive: ${out}`);
+  // TriG round-trips back into a dataset that still carries the graph.
+  const reparsed = Dataset.parse(out, "trig");
+  assert.equal(reparsed.size, 1);
+  assert.equal(reparsed.quads()[0].graph.value, "https://e/out");
+});
+
+test("the default query() format is still Turtle for a default-graph CONSTRUCT", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const engine = new QueryEngine();
+  assert.equal(ds.query(PLAIN_CONSTRUCT), engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "turtle" }));
+});
+
+test("an explicit single-graph format throws for a named-graph CONSTRUCT", () => {
+  const engine = new QueryEngine();
+  for (const format of ["turtle", "ntriples", "rdfxml"]) {
+    const ds = Dataset.parse(TRIG, "trig");
+    assert.throws(
+      () => engine.queryRaw(ds, GRAPH_CONSTRUCT, { format }),
+      (error) => {
+        assert.ok(
+          error.message.includes("carrying 1 named graph (<https://e/out>)"),
+          `the refusal names the graph: ${error.message}`,
+        );
+        assert.ok(
+          error.message.includes(format),
+          `the refusal names the offending format: ${error.message}`,
+        );
+        assert.ok(
+          error.message.includes("trig/nquads/trix/hextuples/jsonld/yamlld"),
+          `the refusal names the alternatives: ${error.message}`,
+        );
+        return true;
+      },
+      `${format} must refuse a graph-carrying result`,
+    );
+  }
+});
+
+test("an explicit quad-capable format carries a named-graph CONSTRUCT", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const nquads = engine.queryRaw(ds, GRAPH_CONSTRUCT, { format: "nquads" });
+  assert.ok(nquads.includes("<https://e/out> ."), nquads);
+});
+
+test("an explicit single-graph format still serializes a default-graph CONSTRUCT", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const ntriples = engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "ntriples" });
+  assert.equal(
+    ntriples.trim(),
+    "<https://e/a> <https://e/knows> <https://e/b> .",
+  );
+});
+
+// ── The transcode lane counts what it drops ────────────────────────────────────
+//
+// `Dataset#serialize` cannot refuse the way the CONSTRUCT lane does — asking a TriG
+// document for N-Triples is a legitimate "give me the default graph" — so the only
+// honest alternative is to make the loss readable. `serializeWithLoss` is the same
+// serialization with the three realized counts attached, the JS twin of the C ABI's
+// `purrdf_serialize` out-params and Python's `Store.dump_with_loss`.
+
+test("serializeWithLoss reports the named-graph rows a single-graph syntax drops", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const lossy = ds.serializeWithLoss("ntriples");
+  // N-Triples is star-capable, so the statement-layer count is silent about graphs…
+  assert.equal(lossy.statementRowsDropped, 0);
+  assert.equal(lossy.directionalLiteralsDropped, 0);
+  // …and the named-graph count is the one that reports the vanished row.
+  assert.equal(lossy.namedGraphRowsDropped, 1);
+  assert.ok(!lossy.text.includes("https://e/g"), lossy.text);
+  // The bytes are exactly what the plain entry point produces.
+  assert.equal(lossy.text, ds.serialize("ntriples"));
+  lossy.free();
+
+  const lossless = ds.serializeWithLoss("nquads");
+  assert.equal(lossless.statementRowsDropped, 0);
+  assert.equal(lossless.directionalLiteralsDropped, 0);
+  assert.equal(lossless.namedGraphRowsDropped, 0);
+  assert.ok(lossless.text.includes("https://e/g"), lossless.text);
+  lossless.free();
+});

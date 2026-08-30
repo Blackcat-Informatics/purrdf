@@ -2237,20 +2237,42 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
 /**
  * Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,
  * `"application/n-quads"`). `base_iri` may be null. The output bytes go to
- * `*out_buffer` (free with `purrdf_buffer_free`). When `out_statement_rows_dropped`
- * is non-null it receives the number of RDF-1.2 statement-layer rows dropped
- * because the target format cannot represent quoted triples (`0` for
- * star-capable formats) — so the caller can detect lossy projection.
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * The three count out-params are the WHOLE realized loss of this call, partitioned by
+ * CAUSE so their sum is the total and no row is charged twice. Each is independently
+ * nullable: pass null for a count you do not want, exactly as before.
+ *
+ * * `out_statement_rows_dropped` — RDF-1.2 statement-layer rows (reifier bindings +
+ *   annotation triples) dropped because the target format cannot represent quoted
+ *   triples (`0` for star-capable formats).
+ * * `out_directional_literals_dropped` — object literals whose RDF-1.2 base direction
+ *   the target has no surface for (TriX / HexTuples keep the language tag but cannot
+ *   carry `--ltr` / `--rtl`); `0` for every direction-capable format.
+ * * `out_named_graph_rows_dropped` — rows the single-graph flattening dropped because
+ *   the target has no named-graph construct: base quads asserted in a named graph plus
+ *   the statement-layer rows scoped to one. `0` for every dataset-capable format
+ *   (TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD). The rows are DROPPED, not
+ *   folded into the default graph.
+ *
+ * Why all three rather than the statement count alone: the counts partition the loss,
+ * so a caller reading only one of them cannot tell "nothing was lost" from "the loss
+ * was charged to a cause I am not reading". A star-capable single-graph target
+ * (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
+ * named graph it was handed, and a direction-carrying star-incapable target reports
+ * nothing about a dropped base direction — each silent unless its own count is read.
  *
  * # Safety
  * `dataset` must be a live handle; the `c_char` pointers must be null or
- * NUL-terminated; the out-params must be writable.
+ * NUL-terminated; the out-params must be null or writable.
  */
 int32_t purrdf_serialize(const PurrdfDataset *dataset,
                          const char *media_type,
                          const char *base_iri,
                          PurrdfBuffer **out_buffer,
                          size_t *out_statement_rows_dropped,
+                         size_t *out_directional_literals_dropped,
+                         size_t *out_named_graph_rows_dropped,
                          PurrdfError **out_error);
 
 /**

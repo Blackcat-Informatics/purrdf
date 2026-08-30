@@ -637,6 +637,8 @@ fn serialize_round_trips_through_ntriples() {
         let media = CString::new("application/n-triples").unwrap();
         let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut dropped: usize = 999;
+        let mut directional: usize = 999;
+        let mut named_graph_rows: usize = 999;
         let mut error: *mut PurrdfError = std::ptr::null_mut();
         let status = purrdf_serialize(
             dataset,
@@ -644,12 +646,18 @@ fn serialize_round_trips_through_ntriples() {
             std::ptr::null(),
             &raw mut buffer,
             &raw mut dropped,
+            &raw mut directional,
+            &raw mut named_graph_rows,
             &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
         // N-Triples is star-capable: no statement rows dropped.
         assert_eq!(dropped, 0);
+        // It carries direction and this dataset has no named graph, so nothing else
+        // was lost either — all three counts are written, not merely left alone.
+        assert_eq!(directional, 0);
+        assert_eq!(named_graph_rows, 0);
         let bytes = buffer_bytes(buffer);
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("<http://a>"));
@@ -708,6 +716,8 @@ fn expanded_jsonld_and_yamlld_abi_bytes_are_frozen() {
                 std::ptr::null(),
                 &raw mut buffer,
                 &raw mut dropped,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
                 &raw mut error,
             );
             assert_eq!(status, PurrdfStatus::Ok as i32);
@@ -842,6 +852,8 @@ fn serialize_rejects_unknown_media_type() {
             media.as_ptr(),
             std::ptr::null(),
             &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
             std::ptr::null_mut(),
             &raw mut error,
         );
@@ -1386,6 +1398,8 @@ fn construct_graph_result_keeps_its_graph_name() {
             std::ptr::null(),
             &raw mut buffer,
             std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
             &raw mut serialize_error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
@@ -1394,6 +1408,163 @@ fn construct_graph_result_keeps_its_graph_name() {
         purrdf_buffer_free(buffer);
 
         purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// An N-Quads document that loses something different to each single-graph target.
+///
+/// One default-graph base quad, two base quads in two DIFFERENT named graphs, one
+/// RDF-1.2 reifier binding in the default graph and one scoped to a named graph. Every
+/// count `purrdf_serialize` reports is non-trivial over it, and the two graph-scoped
+/// rows are exactly what distinguishes a partitioned loss report from a single number.
+const MIXED_GRAPH_NQUADS: &str = concat!(
+    "<http://s1> <http://p> <http://o1> .\n",
+    "<http://s2> <http://p> <http://o2> <http://g1> .\n",
+    "<http://s3> <http://p> <http://o3> <http://g2> .\n",
+    "<http://r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s1> <http://p> <http://o1> )>> .\n",
+    "<http://r2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s2> <http://p> <http://o2> )>> <http://g1> .\n",
+);
+
+/// The rows a single-graph syntax discards reach a C caller as a NUMBER.
+///
+/// Turtle and N-Triples are star-capable, so `out_statement_rows_dropped` is `0` for
+/// them however many named graphs they were handed: read alone it says "nothing was
+/// lost" while the flattening discards every graph-scoped row. The named-graph count is
+/// the one that reports what actually vanished, and this pins it through the real
+/// `extern "C"` symbol rather than the Rust outcome struct behind it.
+#[test]
+fn serialize_reports_the_named_graph_rows_a_single_graph_syntax_drops() {
+    unsafe {
+        let dataset = parse("application/n-quads", MIXED_GRAPH_NQUADS);
+
+        // Two graph-scoped base quads + one graph-scoped reifier row = three rows the
+        // single-graph flattening drops, whether or not the target carries the star layer.
+        for (media_type, expect_statement_rows) in [
+            ("text/turtle", 0_usize),
+            ("application/n-triples", 0),
+            // RDF/XML is star-incapable AND single-graph: the statement count charges
+            // only the DEFAULT-graph reifier row, because the graph-scoped one is
+            // already charged to the named-graph count. The two partition the loss.
+            ("application/rdf+xml", 1),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut statement_rows: usize = 999;
+            let mut directional: usize = 999;
+            let mut named_graph_rows: usize = 999;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut statement_rows,
+                &raw mut directional,
+                &raw mut named_graph_rows,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            assert_eq!(
+                statement_rows, expect_statement_rows,
+                "{media_type}: statement-layer rows dropped"
+            );
+            assert_eq!(directional, 0, "{media_type}: no directional literal here");
+            assert_eq!(
+                named_graph_rows, 3,
+                "{media_type}: two graph-scoped base quads + one graph-scoped reifier row"
+            );
+            // And the loss is REAL: neither graph name survives into the bytes.
+            let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+            assert!(!text.contains("http://g1"), "{media_type}: {text}");
+            assert!(!text.contains("http://g2"), "{media_type}: {text}");
+            purrdf_buffer_free(buffer);
+        }
+
+        // A dataset-capable target loses nothing at all, and says so.
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut statement_rows: usize = 999;
+        let mut directional: usize = 999;
+        let mut named_graph_rows: usize = 999;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut statement_rows,
+            &raw mut directional,
+            &raw mut named_graph_rows,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(statement_rows, 0);
+        assert_eq!(directional, 0);
+        assert_eq!(named_graph_rows, 0);
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Every count out-param is INDEPENDENTLY nullable, and null means "do not report",
+/// never "do not serialize".
+///
+/// The same lossy call as above with all three counts null still succeeds and still
+/// produces the same bytes — a caller that wants only the document is not made to
+/// allocate three `size_t`s for counts it will not read, exactly as before the two new
+/// out-params existed.
+#[test]
+fn serialize_accepts_a_null_pointer_for_each_loss_count() {
+    unsafe {
+        let dataset = parse("application/n-quads", MIXED_GRAPH_NQUADS);
+        let media = CString::new("text/turtle").unwrap();
+
+        let mut reference: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut named_graph_rows: usize = 999;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut reference,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut named_graph_rows,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(named_graph_rows, 3);
+        let expected = buffer_bytes(reference);
+        purrdf_buffer_free(reference);
+
+        // All three null: the counts are simply not written.
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(buffer_bytes(buffer), expected);
+        purrdf_buffer_free(buffer);
+
         purrdf_dataset_free(dataset);
     }
 }

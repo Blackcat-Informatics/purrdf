@@ -334,6 +334,27 @@ class QueryQuads:
     def graph_names(self) -> list[str]: ...
     def serialize(self, format: RdfFormat) -> bytes: ...
 
+# One serialized document plus the WHOLE realized loss of producing it, partitioned by
+# CAUSE — the return of `Store.dump_with_loss` / `MutableDataset.dump_with_loss`.
+#
+# `dump` answers with bytes alone: a multi-graph store dumped to `RdfFormat.TURTLE`
+# comes back well-formed with every graph-scoped statement missing and no signal at
+# all. These counts are that signal. They partition the loss, so their sum is the total
+# and no row is charged twice; reading one alone cannot distinguish "nothing was lost"
+# from "the loss was charged to a cause I am not reading". Every count is REALIZED —
+# what this document actually discarded — not the static pair contract
+# `loss_matrix_json()` describes. The same three numbers are the C ABI's
+# `purrdf_serialize` out-params and the wasm `Dataset.serializeWithLoss` getters.
+class SerializeLoss:
+    @property
+    def bytes(self) -> bytes: ...
+    @property
+    def statement_rows_dropped(self) -> int: ...
+    @property
+    def directional_literals_dropped(self) -> int: ...
+    @property
+    def named_graph_rows_dropped(self) -> int: ...
+
 class QueryBoolean:
     def __bool__(self) -> bool: ...
 
@@ -618,6 +639,10 @@ class Store:
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
     ) -> bytes: ...
+    # The counting twin of `dump`: same bytes, plus the realized loss of producing
+    # them. No `from_graph` and no JSON-LD configuration — a graph selection would make
+    # the named-graph count meaningless, and the JSON-LD family loses nothing.
+    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     def __len__(self) -> int: ...
 
 class MutableDataset:
@@ -665,6 +690,8 @@ class MutableDataset:
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
     ) -> bytes: ...
+    # The counting twin of `dump`; see `Store.dump_with_loss`.
+    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
     # `aggregate_namespace` (see `Store.query`).
     def query(

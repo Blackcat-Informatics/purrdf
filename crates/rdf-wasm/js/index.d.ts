@@ -601,6 +601,7 @@ export class Dataset implements Iterable<Quad> {
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
   serialize(format: string): string;
+  serializeWithLoss(format: string): SerializeLoss;
   serializeConfigured(format: "jsonld" | "yamlld" | string, optionsJson: string): string;
   serializeWithContext(
     format: "jsonld" | "yamlld" | string,
@@ -612,6 +613,38 @@ export class Dataset implements Iterable<Quad> {
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+/**
+ * One serialized document plus the realized loss of producing it, partitioned by
+ * cause — the return of `Dataset#serializeWithLoss`.
+ *
+ * The counts partition the loss, so their sum is the total and no row is charged
+ * twice: reading one alone cannot distinguish "nothing was lost" from "the loss was
+ * charged to a cause I am not reading". Every count is REALIZED — what this document
+ * actually discarded — not the static pair contract `lossMatrixJson` describes.
+ */
+export class SerializeLoss {
+  /** The serialized document, identical to what `serialize(format)` returns. */
+  readonly text: string;
+  /**
+   * RDF-1.2 statement-layer rows dropped because the target cannot represent quoted
+   * triples. `0` for star-capable formats. Rows dropped for being scoped to a named
+   * graph are counted by `namedGraphRowsDropped` instead, never here and never twice.
+   */
+  readonly statementRowsDropped: number;
+  /**
+   * Object literals whose RDF-1.2 base direction the target has no surface for.
+   * `0` for every direction-capable format.
+   */
+  readonly directionalLiteralsDropped: number;
+  /**
+   * Rows the single-graph flattening dropped because the target has no named-graph
+   * construct. `0` for every dataset-capable format. The rows are DROPPED, not
+   * folded into the default graph.
+   */
+  readonly namedGraphRowsDropped: number;
   free(): void;
 }
 

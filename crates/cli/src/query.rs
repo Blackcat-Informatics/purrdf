@@ -118,10 +118,9 @@
 //! using more than one registered extension at once — and the block lists the ten
 //! registered statistical aggregate IRIs.
 
-use std::collections::BTreeSet;
-
 use purrdf::GovernedEntailment;
-use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult, TermRef};
+use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
+use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
@@ -406,20 +405,14 @@ fn emit_result(
     }
 }
 
-/// How many graph names a refusal spells out individually before it summarises the
-/// rest as a count.
+/// The closing imperative of every named-graph refusal on this lane: the quad-capable
+/// `--results-format` tokens, in [`QueryFormat`] declaration order.
 ///
-/// A `CONSTRUCT` template can name a graph per statement — and with a graph VARIABLE
-/// one template writes as many graphs as the `WHERE` has distinct bindings — so the
-/// name list is unbounded in principle. Eight is enough to identify the mistake in
-/// every hand-written query and short enough that the message stays a message; the
-/// tail is reported as "and N more" rather than truncated silently, so the count is
-/// always exact even when the list is not complete.
-const NAMED_GRAPH_SAMPLE_LIMIT: usize = 8;
-
-/// The quad-capable `--results-format` tokens, in [`QueryFormat`] declaration order —
-/// the alternatives every named-graph refusal points at.
-const QUAD_CAPABLE_FORMATS: &str = "trig/nquads/trix/hextuples/jsonld/yamlld";
+/// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
+/// verbatim with the Python and wasm hosts; only the remedy is per-host, because
+/// "`--results-format`" is a spelling this binary has and they do not.
+const QUAD_CAPABLE_REMEDY: &str =
+    "Re-run with a quad-capable --results-format (trig/nquads/trix/hextuples/jsonld/yamlld)";
 
 /// Refuse to serialize a graph result that carries named graphs to a single-graph
 /// RDF syntax, naming the graphs, the format, and what to use instead.
@@ -457,70 +450,14 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
         return Ok(());
     }
     let names = distinct_graph_names(graph);
-    let Some(count) = std::num::NonZeroUsize::new(names.len()) else {
+    if names.is_empty() {
         return Ok(());
-    };
-    let count = count.get();
-    let listed = if count > NAMED_GRAPH_SAMPLE_LIMIT {
-        format!(
-            "{}, and {} more",
-            names[..NAMED_GRAPH_SAMPLE_LIMIT].join(", "),
-            count - NAMED_GRAPH_SAMPLE_LIMIT
-        )
-    } else {
-        names.join(", ")
-    };
-    let (graphs, them) = if count == 1 {
-        ("named graph", "it")
-    } else {
-        ("named graphs", "them")
-    };
-    Err(CliError::Usage(format!(
-        "a CONSTRUCT/DESCRIBE result carrying {count} {graphs} ({listed}) cannot be \
-         serialized to the single-graph RDF syntax `{token}`: {token} has no named-graph \
-         construct, so every statement in {them} would be DROPPED (not folded into the \
-         default graph) and the output would silently omit what the query asked for. \
-         Re-run with a quad-capable --results-format ({QUAD_CAPABLE_FORMATS})",
-        token = results_format.token()
-    )))
-}
-
-/// Every distinct non-default graph name the result carries, rendered in N-Triples
-/// term syntax and sorted lexicographically.
-///
-/// Sorted through a [`BTreeSet`], not merely deduplicated: the message must be
-/// byte-identical across runs, and both the dataset's quad order and any hash-map
-/// iteration would make it a function of insertion order. It reads the graph slot of
-/// the base quads AND of the RDF-1.2 statement-layer rows, because a reifier or
-/// annotation can be scoped to a graph whose base quads the template never wrote —
-/// a graph the flattening would drop just as silently.
-fn distinct_graph_names<D: DatasetView>(graph: &D) -> Vec<String> {
-    let slots = graph
-        .quads()
-        .map(|q| q.g)
-        .chain(graph.reifier_quads().map(|q| q.g))
-        .chain(graph.annotation_quads().map(|q| q.g));
-    let names: BTreeSet<String> = slots
-        .flatten()
-        .map(|id| render_graph_name(graph, id))
-        .collect();
-    names.into_iter().collect()
-}
-
-/// Render one graph-name term for a diagnostic, in N-Triples term syntax.
-///
-/// A CONSTRUCT template's graph slot only ever resolves to an IRI (a graph variable
-/// bound to anything else skips the statement, per SPARQL §16.2), and the RDF 1.2
-/// abstract syntax admits only an IRI or a blank node in the graph position — but the
-/// match is total over [`TermRef`] rather than partial, because a diagnostic that
-/// panics on a term it did not expect is worse than one that names it.
-fn render_graph_name<D: DatasetView>(graph: &D, id: D::Id) -> String {
-    match graph.resolve(id) {
-        TermRef::Iri(iri) => format!("<{iri}>"),
-        TermRef::Blank { label, .. } => format!("_:{label}"),
-        TermRef::Literal { lexical, .. } => format!("\"{lexical}\""),
-        TermRef::Triple { .. } => "<<( … )>>".to_owned(),
     }
+    Err(CliError::Usage(named_graph_refusal(
+        &names,
+        results_format.token(),
+        QUAD_CAPABLE_REMEDY,
+    )))
 }
 
 /// Answer `query` over `dataset` under the resolved entailment plan AND the caller's

@@ -20,7 +20,7 @@ use super::query::{PyQueryQuads, PyQueryTriples};
 use super::term::PyQuad;
 use crate::{
     NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph, flat_dataset_from_quads,
-    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
+    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset, serialize_dataset_to_format,
 };
 
 // ── RDF serialization format enum ───────────────────────────────────────────────
@@ -81,6 +81,118 @@ impl PyRdfFormat {
             Self::YAML_LD => "RdfFormat.YAML_LD",
         }
     }
+}
+
+// ── The realized serialization loss ─────────────────────────────────────────────
+
+/// One serialized document plus the WHOLE realized loss of producing it, partitioned
+/// by CAUSE — the return of `Store.dump_with_loss` / `MutableDataset.dump_with_loss`.
+///
+/// # Why counts rather than a refusal
+///
+/// A graph-carrying CONSTRUCT result REFUSES a single-graph syntax (`QueryQuads`),
+/// because the graph name is in the query the caller wrote. Dumping a store is the
+/// opposite situation: asking a multi-graph store for Turtle is a legitimate "give me
+/// the default graph", so the honest answer is not to refuse but to say what was left
+/// behind. `dump` answers with bytes alone, exactly as it always has; this is the same
+/// serialization with the numbers attached.
+///
+/// # Why three counts rather than one flag
+///
+/// The causes are independent, so their sum is the total and no row is charged twice.
+/// A star-capable single-graph target (`TURTLE`, `N_TRIPLES`) loses named graphs and no
+/// statement rows; a dataset-capable star-incapable one (`TRIX`, `HEXTUPLES`) loses
+/// statement rows and base directions and no named graphs. Reading one count alone
+/// cannot distinguish "nothing was lost" from "the loss was charged to a cause I am not
+/// reading" — which is exactly how a silent drop hides.
+///
+/// Every count is REALIZED — what this document actually discarded — not the static
+/// pair contract `purrdf.loss_matrix_json()` describes.
+///
+/// # `statement_rows_dropped` on THIS lane
+///
+/// The Python quad model carries the RDF-1.2 statement layer as ordinary `rdf:reifies`
+/// / annotation quads with triple-term objects rather than as a separate layer (see
+/// [`dataset_from_quads_verbatim`]), so a star-incapable target does not silently drop
+/// them here — it REFUSES the triple term outright. The count is reported anyway, and
+/// with the same meaning as on every other host: it is the same
+/// `SerializeOutcome` field the C ABI's `out_statement_rows_dropped` and the wasm
+/// `statementRowsDropped` read, so a caller comparing hosts is comparing one number,
+/// and a future statement-layer ingress on this lane needs no new surface.
+#[pyclass(name = "SerializeLoss", frozen, skip_from_py_object)]
+#[derive(Debug)]
+pub(crate) struct PySerializeLoss {
+    bytes: Vec<u8>,
+    statement_rows_dropped: usize,
+    directional_literals_dropped: usize,
+    named_graph_rows_dropped: usize,
+}
+
+#[pymethods]
+impl PySerializeLoss {
+    /// The serialized document, identical to what `dump(format=…)` returns.
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.bytes)
+    }
+
+    /// RDF-1.2 statement-layer rows (reifier bindings + annotation triples) dropped
+    /// because the target cannot represent quoted triples. `0` for star-capable
+    /// formats. Rows dropped for being scoped to a named graph are counted by
+    /// `named_graph_rows_dropped` instead, never here and never twice.
+    #[getter]
+    const fn statement_rows_dropped(&self) -> usize {
+        self.statement_rows_dropped
+    }
+
+    /// Object literals whose RDF-1.2 base direction the target has no surface for
+    /// (`TRIX` / `HEXTUPLES` keep the language tag but cannot carry the direction).
+    /// `0` for every direction-capable format.
+    #[getter]
+    const fn directional_literals_dropped(&self) -> usize {
+        self.directional_literals_dropped
+    }
+
+    /// Rows the single-graph flattening dropped because the target has no named-graph
+    /// construct: base quads asserted in a named graph plus the statement-layer rows
+    /// scoped to one. `0` for every dataset-capable format. The rows are DROPPED, not
+    /// folded into the default graph.
+    #[getter]
+    const fn named_graph_rows_dropped(&self) -> usize {
+        self.named_graph_rows_dropped
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SerializeLoss(bytes={}, statement_rows_dropped={}, \
+             directional_literals_dropped={}, named_graph_rows_dropped={})",
+            self.bytes.len(),
+            self.statement_rows_dropped,
+            self.directional_literals_dropped,
+            self.named_graph_rows_dropped
+        )
+    }
+}
+
+/// Serialize the whole quad set to `format` and report every realized loss.
+///
+/// The pure-Rust core behind both `dump_with_loss` methods, so the store and the
+/// mutable dataset can never report the same document differently. `SerializeGraph`
+/// is `Dataset` unconditionally — a graph SELECTION would make the named-graph count
+/// meaningless, since the caller would already have chosen what to keep — matching the
+/// C ABI's `purrdf_serialize`, which has no selection parameter for the same reason.
+pub(super) fn dump_quads_with_loss(
+    quads: &[RdfQuad],
+    format: NativeRdfFormat,
+) -> Result<PySerializeLoss, String> {
+    let dataset = flat_dataset_from_quads(quads)?;
+    let outcome = serialize_dataset_to_format(&dataset, format, None).map_err(|e| e.to_string())?;
+    Ok(PySerializeLoss {
+        bytes: outcome.bytes,
+        statement_rows_dropped: outcome.statement_rows_dropped,
+        directional_literals_dropped: outcome.directional_literals_dropped,
+        named_graph_rows_dropped: outcome.named_graph_rows_dropped,
+    })
 }
 
 // ── Module-level functions ──────────────────────────────────────────────────────

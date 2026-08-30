@@ -265,7 +265,7 @@ static char *rdfxml_file_to_nquads(const char *path) {
         goto done;
     }
     if (purrdf_serialize(parsed, "application/n-quads", NULL, &serialized, NULL,
-                         &error) != PURRDF_STATUS_OK) {
+                         NULL, NULL, &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "cannot serialize %s: %s\n", path,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
         goto done;
@@ -488,10 +488,15 @@ int main(int argc, char **argv) {
     /* serialize */
     PurrdfBuffer *serialized = NULL;
     size_t dropped = 99;
+    size_t directional = 99;
+    size_t named_graph_rows = 99;
     rc = purrdf_serialize(dataset, "application/n-triples", NULL, &serialized,
-                          &dropped, &error);
+                          &dropped, &directional, &named_graph_rows, &error);
     CHECK(rc == PURRDF_STATUS_OK && serialized != NULL, "serialize");
     CHECK(dropped == 0, "no statement rows dropped for n-triples");
+    CHECK(directional == 0, "no base directions dropped for n-triples");
+    CHECK(named_graph_rows == 0,
+          "no named-graph rows dropped: this dataset has no named graph");
     const uint8_t *sbytes = NULL;
     size_t slen = 0;
     CHECK(purrdf_buffer_data(serialized, &sbytes, &slen) == PURRDF_STATUS_OK,

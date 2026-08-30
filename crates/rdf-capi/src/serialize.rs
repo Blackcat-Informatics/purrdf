@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `purrdf_serialize`: a frozen dataset → bytes in a requested media type, with
-//! the RDF-1.2 statement-layer loss count surfaced (MAXIMAL INFORMATION FLOW).
+//! `purrdf_serialize`: a frozen dataset → bytes in a requested media type, with the
+//! whole realized loss surfaced as three independently-nullable counts — the RDF-1.2
+//! statement layer, dropped base directions, and rows the single-graph flattening
+//! discarded (MAXIMAL INFORMATION FLOW).
 
 use std::os::raw::c_char;
 use std::sync::Arc;
@@ -156,21 +158,47 @@ fn decode_options(json: &[u8]) -> Result<JsonLdSerializeOptions, PurrdfError> {
 
 /// Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,
 /// `"application/n-quads"`). `base_iri` may be null. The output bytes go to
-/// `*out_buffer` (free with `purrdf_buffer_free`). When `out_statement_rows_dropped`
-/// is non-null it receives the number of RDF-1.2 statement-layer rows dropped
-/// because the target format cannot represent quoted triples (`0` for
-/// star-capable formats) — so the caller can detect lossy projection.
+/// `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// The three count out-params are the WHOLE realized loss of this call, partitioned by
+/// CAUSE so their sum is the total and no row is charged twice. Each is independently
+/// nullable: pass null for a count you do not want, exactly as before.
+///
+/// * `out_statement_rows_dropped` — RDF-1.2 statement-layer rows (reifier bindings +
+///   annotation triples) dropped because the target format cannot represent quoted
+///   triples (`0` for star-capable formats).
+/// * `out_directional_literals_dropped` — object literals whose RDF-1.2 base direction
+///   the target has no surface for (TriX / HexTuples keep the language tag but cannot
+///   carry `--ltr` / `--rtl`); `0` for every direction-capable format.
+/// * `out_named_graph_rows_dropped` — rows the single-graph flattening dropped because
+///   the target has no named-graph construct: base quads asserted in a named graph plus
+///   the statement-layer rows scoped to one. `0` for every dataset-capable format
+///   (TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD). The rows are DROPPED, not
+///   folded into the default graph.
+///
+/// Why all three rather than the statement count alone: the counts partition the loss,
+/// so a caller reading only one of them cannot tell "nothing was lost" from "the loss
+/// was charged to a cause I am not reading". A star-capable single-graph target
+/// (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
+/// named graph it was handed, and a direction-carrying star-incapable target reports
+/// nothing about a dropped base direction — each silent unless its own count is read.
 ///
 /// # Safety
 /// `dataset` must be a live handle; the `c_char` pointers must be null or
-/// NUL-terminated; the out-params must be writable.
+/// NUL-terminated; the out-params must be null or writable.
 #[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
+)]
 pub unsafe extern "C" fn purrdf_serialize(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,
     base_iri: *const c_char,
     out_buffer: *mut *mut PurrdfBuffer,
     out_statement_rows_dropped: *mut usize,
+    out_directional_literals_dropped: *mut usize,
+    out_named_graph_rows_dropped: *mut usize,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
@@ -197,6 +225,12 @@ pub unsafe extern "C" fn purrdf_serialize(
 
             if !out_statement_rows_dropped.is_null() {
                 *out_statement_rows_dropped = outcome.statement_rows_dropped;
+            }
+            if !out_directional_literals_dropped.is_null() {
+                *out_directional_literals_dropped = outcome.directional_literals_dropped;
+            }
+            if !out_named_graph_rows_dropped.is_null() {
+                *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
             }
             *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
             Ok(PurrdfStatus::Ok)
