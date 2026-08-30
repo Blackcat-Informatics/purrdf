@@ -4948,6 +4948,13 @@ fn builtin_function(upper: &str) -> Option<Function> {
         "SHA256" => Function::Sha256,
         "SHA384" => Function::Sha384,
         "SHA512" => Function::Sha512,
+        // SEP-0008. These four are the only built-in names carrying a `-`; the
+        // lexer's PN_PREFIX scan admits `-`, so each arrives here as ONE word
+        // (see `Function::Sha3_224`'s rustdoc and the parser tests below).
+        "SHA3-224" => Function::Sha3_224,
+        "SHA3-256" => Function::Sha3_256,
+        "SHA3-384" => Function::Sha3_384,
+        "SHA3-512" => Function::Sha3_512,
         "STRLANG" => Function::StrLang,
         "STRDT" => Function::StrDt,
         "ISIRI" => Function::IsIri,
@@ -7972,6 +7979,89 @@ mod tests {
             matches!(&func, Function::Custom(n) if n.as_str() == format!("{EXT_NS}heldIn")),
             "got {func:?}"
         );
+    }
+
+    // ── SEP-0008 SHA-3 built-ins (the hyphenated keyword surface) ────────────
+
+    #[test]
+    fn sha3_builtins_parse_under_their_hyphenated_names() {
+        for (name, expected) in [
+            ("SHA3-224", Function::Sha3_224),
+            ("SHA3-256", Function::Sha3_256),
+            ("SHA3-384", Function::Sha3_384),
+            ("SHA3-512", Function::Sha3_512),
+        ] {
+            let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+            let Expression::FunctionCall(func, args) = bound_expr(&q) else {
+                panic!("expected a FunctionCall for {name}");
+            };
+            assert_eq!(func, expected, "{name} dispatched to the wrong builtin");
+            assert_eq!(args.len(), 1, "{name} takes one argument");
+        }
+    }
+
+    /// Case-insensitivity is the whole `BuiltInCall` keyword rule, and the
+    /// hyphen must not break it (`upper` is an ASCII uppercase of the WHOLE
+    /// token, hyphen included).
+    #[test]
+    fn sha3_builtin_names_are_case_insensitive() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(sha3-512(STR(?o)) AS ?h) }";
+        let Expression::FunctionCall(func, _) = bound_expr(q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Sha3_512);
+    }
+
+    /// THE hyphen trap, pinned from the parser side: `SHA3-224(…)` is ONE
+    /// built-in call, while a SPACED `SHA3 - 224` is a different token sequence
+    /// that must NOT resolve to it. `SHA3` alone is not a function, so the
+    /// spaced form is a hard parse error rather than a silently different
+    /// meaning — which is exactly the outcome that keeps the two unambiguous.
+    #[test]
+    fn sha3_hyphen_is_one_token_not_a_subtraction() {
+        // The joined form is the built-in.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(SHA3-224(STR(?o)) AS ?h) }";
+        assert!(matches!(
+            bound_expr(q),
+            Expression::FunctionCall(Function::Sha3_224, _)
+        ));
+
+        // The spaced form is not: `SHA3` is no function or keyword.
+        let spaced = "SELECT ?h WHERE { ?s ?p ?o . BIND(SHA3 - 224 AS ?h) }";
+        let err = SparqlParser::new()
+            .parse_query(spaced)
+            .expect_err("`SHA3 - 224` must not resolve to the SHA3-224 builtin");
+        assert!(
+            format!("{err:?}").contains("SHA3"),
+            "the diagnostic must name the unresolved token, got {err:?}"
+        );
+
+        // And subtraction against a real hash call still parses as subtraction:
+        // the `-` there follows `)`, not a word character.
+        let sub = "SELECT ?h WHERE { ?s ?p ?o . BIND(STRLEN(SHA3-256(STR(?o))) - 4 AS ?h) }";
+        assert!(
+            matches!(bound_expr(sub), Expression::Subtract(_, _)),
+            "an ordinary subtraction beside a SHA-3 call must stay a subtraction"
+        );
+    }
+
+    /// Parse → serialize → parse must be stable for the hyphenated names: the
+    /// serializer re-emits `SHA3-224`, which the lexer must read back as the
+    /// same single word (a serializer that emitted `SHA3 - 224`, or a lexer that
+    /// split it, would make the round trip lose the call).
+    #[test]
+    fn sha3_builtins_round_trip_through_the_serializer() {
+        for name in ["SHA3-224", "SHA3-256", "SHA3-384", "SHA3-512"] {
+            let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+            let pattern = unproject(select_pattern(&q));
+            let text = crate::serialize::pattern_to_select_query(&pattern);
+            assert!(
+                text.contains(name),
+                "the serializer must re-emit `{name}` verbatim, got: {text}"
+            );
+            let reparsed = unproject(select_pattern(&text));
+            assert_eq!(reparsed, pattern, "round-trip mismatch for {name}");
+        }
     }
 
     #[test]

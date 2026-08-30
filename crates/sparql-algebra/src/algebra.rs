@@ -1153,6 +1153,23 @@ pub enum Function {
     Sha256,
     Sha384,
     Sha512,
+    /// `SHA3-224(string)` — SEP-0008 SHA-3 (FIPS 202 Keccak) built-in.
+    ///
+    /// The four SHA-3 names are the only built-in keywords in the language that
+    /// contain a `-`. That is not a problem for this parser: the lexer's
+    /// `PN_PREFIX` scan admits `-` as a `PN_CHARS` character, so `SHA3-224`
+    /// arrives as ONE [`Token::Word`](crate::lexer::Token::Word) and dispatches
+    /// through the same `NAME(...)` table every other built-in uses. A SPACED
+    /// `SHA3 - 224` is a different token sequence entirely (`Word`, `Minus`,
+    /// `Integer`) and is NOT this call — see the parser's
+    /// `sha3_hyphen_is_one_token_not_a_subtraction` test.
+    Sha3_224,
+    /// `SHA3-256(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_256,
+    /// `SHA3-384(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_384,
+    /// `SHA3-512(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_512,
     StrLang,
     StrDt,
     IsIri,
