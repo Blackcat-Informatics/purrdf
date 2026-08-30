@@ -49,11 +49,12 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-versions.py
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
+	python3 scripts/conformance-matrix.py --self-test
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
 
-check-issue-refs: ## Reject #NNN issue-reference tokens in comments and docs.
+check-issue-refs: ## Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
 	python3 scripts/check-issue-refs.py
 
 check-brand-casing: ## Reject bare lowercase 'purrdf' in prose (project is PurRDF in prose).

@@ -57,6 +57,9 @@ jobs:
       - name: Check the conclusion-directed entailment surface reaches all four hosts
         run: python3 scripts/check-entailment-surface.py
 
+      - name: Check every scraped conformance row is RED without its scoreboard line
+        run: python3 scripts/conformance-matrix.py --self-test
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

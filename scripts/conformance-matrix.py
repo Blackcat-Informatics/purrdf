@@ -21,21 +21,39 @@ Design notes:
     unexpected failure (a red cargo/pytest run, an XPASS, or a stale ledger key).
   * When `$GITHUB_STEP_SUMMARY` is set (CI), the matrix is also appended there
     as a Markdown table so it lands in the job summary, not just the log.
+  * A scrape that MISSES fails CLOSED. Every scraped row reports the harness's
+    own per-case scoreboard; when that line stops being emitted the row cannot
+    silently degrade to the handful of Rust test functions `cargo test` counted
+    and stay GREEN. `_no_scoreboard` turns the miss into a RED row naming the
+    marker that went missing and the command that owed it. A gate that cannot
+    fail is not a gate, and a corpus tally nobody measures is not a measurement.
+  * `self_test` proves that fail-closed property rather than asserting it: it
+    drives every scraper over a specimen of its harness's output through
+    `_RUN_STUB`, requires the whole specimen to be RECOGNISED (so a specimen
+    gone stale fails loudly instead of testing nothing), then withholds one
+    scoreboard line at a time and requires each row to go RED with a non-zero
+    fail. It runs BEFORE any harness starts on every invocation — it is pure
+    text over strings, so it costs no build and no I/O — and standalone under
+    `--self-test`.
 
 Usage:
     python3 scripts/conformance-matrix.py            # full matrix
     python3 scripts/conformance-matrix.py --no-python  # native Rust suites only
+    python3 scripts/conformance-matrix.py --self-test  # scrape fail-closed proof
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +81,10 @@ class SuiteResult:
     detail: str = ""
     ok: bool = False
     budget: int | None = None  # ratchet ceiling from conformance-baseline.json
+    # Set only by `_no_scoreboard`: the harness ran but did not emit the
+    # per-case scoreboard line this row is scraped from, so `xskip` is not a
+    # ledgered-gap count at all and the ratchet must not diagnose it as one.
+    scoreboard_missing: bool = False
     log: str = field(default="", repr=False)
 
     @property
@@ -75,8 +97,30 @@ class SuiteResult:
 # ---------------------------------------------------------------------------
 
 
+# The self-test's ONLY injection point: one canned (returncode, output) pair
+# substituted for the harness a scraper would otherwise spawn. Every scraper
+# reaches its harness through `_run`, so setting this drives the real scraping
+# code — the regex under test — over specimen text with no build and no cargo.
+# `None` outside `_stubbed_run`, which is the only writer.
+_RUN_STUB: Callable[[list[str], Path], tuple[int, str]] | None = None
+
+
+@contextlib.contextmanager
+def _stubbed_run(out: str, rc: int = 0) -> Iterator[None]:
+    """Answer every `_run` inside this block with (*rc*, *out*)."""
+    global _RUN_STUB  # noqa: PLW0603 - the injection point is deliberately global
+    previous = _RUN_STUB
+    _RUN_STUB = lambda _cmd, _cwd: (rc, out)  # noqa: E731
+    try:
+        yield
+    finally:
+        _RUN_STUB = previous
+
+
 def _run(cmd: list[str], cwd: Path) -> tuple[int, str]:
     """Run *cmd*, return (returncode, combined stdout+stderr)."""
+    if _RUN_STUB is not None:
+        return _RUN_STUB(cmd, cwd)
     proc = subprocess.run(
         cmd,
         cwd=cwd,
@@ -126,6 +170,43 @@ def _suite_cargo(
     )
 
 
+def _no_scoreboard(
+    name: str, source: str, marker: str, cmd: list[str], out: str
+) -> SuiteResult:
+    """A scraped suite whose harness did NOT emit its scoreboard line: hard RED.
+
+    This is the fail-CLOSED replacement for falling back to ``_suite_cargo``.
+    The fallback returned whatever `cargo test` reported, which for a corpus
+    harness is a handful of Rust test *functions* — so a suite whose per-case
+    scoreboard silently stopped being emitted kept printing a plausible small
+    number in the Pass column and stayed GREEN. The corpus was no longer being
+    measured and nothing said so.
+
+    A missing marker is therefore treated as one failure of the suite's own
+    contract: ``failed=1`` so the row renders ``FAIL 1 / RED`` rather than the
+    self-contradicting ``FAIL 0 / RED``, and the detail names both the marker
+    that went missing and the exact command that owed it, because the next
+    person to read this row needs to fix a harness, not re-run a matrix.
+    """
+    return SuiteResult(
+        name=name,
+        source=source,
+        passed=0,
+        xskip=0,
+        failed=1,
+        detail=(
+            f"NO SCOREBOARD: `{shlex.join(cmd)}` did not emit its "
+            f"{marker} line, so this row has no per-case measurement behind it. "
+            "The cargo tally is NOT a substitute — it counts test functions, not "
+            "fixtures. Restore the harness's scoreboard line or re-point the "
+            "scraper; do not let the row report a number it did not measure"
+        ),
+        ok=False,
+        scoreboard_missing=True,
+        log=out,
+    )
+
+
 def _suite_codec() -> SuiteResult:
     """Turtle/TriG/N-Triples/N-Quads/RDF-XML native-codec round-trip."""
     cmd = [
@@ -143,8 +224,9 @@ def _suite_codec() -> SuiteResult:
             passed=passed, xskip=gap, failed=(total - passed - gap),
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
-    return _suite_cargo(
-        "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)", "W3C rdf-tests", cmd
+    return _no_scoreboard(
+        "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)", "W3C rdf-tests",
+        "`TOTAL: total N passed N allowlisted-gap N`", cmd, out,
     )
 
 
@@ -164,7 +246,10 @@ def _suite_shacl_w3c() -> SuiteResult:
             passed=passed, xskip=xfailed, failed=0,
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
-    return _suite_cargo("SHACL Core + SHACL-SPARQL", "W3C data-shapes", cmd)
+    return _no_scoreboard(
+        "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
+        "`TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+    )
 
 
 def _suite_shapes_corpus() -> SuiteResult:
@@ -186,8 +271,9 @@ def _suite_shapes_corpus() -> SuiteResult:
             passed=passed, xskip=0, failed=(total - passed),
             detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
         )
-    return _suite_cargo(
-        "SHACL (first-party corpus)", "first-party frozen reports", cmd
+    return _no_scoreboard(
+        "SHACL (first-party corpus)", "first-party frozen reports",
+        "`SHAPES-CORPUS: passed N total N`", cmd, out,
     )
 
 
@@ -210,7 +296,9 @@ def _suite_shacl_rules() -> SuiteResult:
             passed=passed, xskip=(total - passed), failed=0,
             detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
         )
-    return _suite_cargo("SHACL Rules", "DASH + first-party", cmd)
+    return _no_scoreboard(
+        "SHACL Rules", "DASH + first-party", "`RULES: passed N total N`", cmd, out,
+    )
 
 
 def _suite_shex_validation() -> SuiteResult:
@@ -233,7 +321,10 @@ def _suite_shex_validation() -> SuiteResult:
             passed=passed, xskip=xfail + skipped, failed=fail,
             detail=detail, ok=(rc == 0 and failed == 0 and fail == 0), log=out,
         )
-    return _suite_cargo("ShEx 2.1 validation", "shexTest v2.1.0", cmd)
+    return _no_scoreboard(
+        "ShEx 2.1 validation", "shexTest v2.1.0",
+        "`entries N | attempted N | pass N | xfail N | fail N | skipped N`", cmd, out,
+    )
 
 
 def _suite_sparql() -> SuiteResult:
@@ -274,10 +365,13 @@ def _suite_sparql() -> SuiteResult:
             ok=(rc == 0 and cargo_failed == 0 and failed == 0 and unexpected == 0),
             log=out,
         )
-    return _suite_cargo(
+    return _no_scoreboard(
         "SPARQL 1.1/1.2 evaluation (full corpus)",
         "W3C sparql11 + sparql12 + first-party",
+        "per-manifest `[<manifest>] N passed, N xfail, N unexpected-pass, "
+        "N failed, N unmodeled`",
         cmd,
+        out,
     )
 
 
@@ -310,8 +404,9 @@ def _suite_construct_corpus() -> SuiteResult:
             passed=passed, xskip=0, failed=(total - passed),
             detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
         )
-    return _suite_cargo(
-        "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)", cmd
+    return _no_scoreboard(
+        "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
+        "`CONSTRUCT-CORPUS: passed N total N`", cmd, out,
     )
 
 
@@ -340,8 +435,9 @@ def _suite_describe_corpus() -> SuiteResult:
             passed=passed, xskip=0, failed=(total - passed),
             detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
         )
-    return _suite_cargo(
-        "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)", cmd
+    return _no_scoreboard(
+        "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
+        "`DESCRIBE-CORPUS: passed N total N`", cmd, out,
     )
 
 
@@ -372,8 +468,9 @@ def _suite_governor_corpus() -> SuiteResult:
             passed=passed, xskip=0, failed=(total - passed),
             detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
         )
-    return _suite_cargo(
-        "SPARQL execution governors", "purrdf-sparql-governors (first-party)", cmd
+    return _no_scoreboard(
+        "SPARQL execution governors", "purrdf-sparql-governors (first-party)",
+        "`GOVERNOR-CORPUS: passed N total N bands N`", cmd, out,
     )
 
 
@@ -428,12 +525,18 @@ def _suite_entailment() -> SuiteResult:
             )
         else:
             # The exclusion line is part of this harness's contract; losing it
-            # would silently restore "256 of 261" as an unqualified headline.
-            detail = _augment(detail, "NO OWL2-DL-EXCLUDED LINE: the exclusion tally went missing")
-            return SuiteResult(
+            # would silently restore "N of 261" as an unqualified headline. It
+            # is a missing scoreboard line like any other, so it goes down the
+            # same path: FAIL 1 / RED, naming the marker and the command. The
+            # arm used to keep the scraped `agreed`/`ledgered` counts and set
+            # `ok=False`, which rendered `FAIL 0 / RED` — a row asserting both
+            # that nothing failed and that the suite is red.
+            return _no_scoreboard(
                 "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
-                passed=agreed, xskip=ledgered, failed=unledgered + stale,
-                detail=detail, ok=False, log=out,
+                "`OWL2-DL-EXCLUDED: total N non-terminating N decides N "
+                "withholds N no-premise N`",
+                cmd,
+                out,
             )
         return SuiteResult(
             "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
@@ -442,8 +545,11 @@ def _suite_entailment() -> SuiteResult:
             ok=(rc == 0 and cargo_failed == 0 and unledgered == 0 and stale == 0),
             log=out,
         )
-    return _suite_cargo(
-        "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite", cmd
+    return _no_scoreboard(
+        "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
+        "`OWL2-ENTAILMENT: agreed N ledgered N unledgered N stale N total N`",
+        cmd,
+        out,
     )
 
 
@@ -477,7 +583,14 @@ def _suite_entailment_rl() -> SuiteResult:
         out,
     )
     if not m:
-        return _suite_cargo(name, source, cmd)
+        return _no_scoreboard(
+            name,
+            source,
+            "`OWL2-RL-ENTAILMENT: agreed N ledgered N unledgered N stale N "
+            "total N actionable N`",
+            cmd,
+            out,
+        )
     agreed, ledgered, unledgered, stale, total, actionable = (
         int(m.group(i)) for i in range(1, 7)
     )
@@ -618,14 +731,20 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
         suite is exactly when this happens, which is why it is checked rather than
         trusted.
 
-    Suites that could not emit a scoreboard (``failed < 0`` — a compile error or
-    aborted harness) keep their own failure and are not re-diagnosed here; their
-    names still count as produced, so an aborted harness does not also read as an
+    Suites that could not emit a scoreboard keep their own failure and are not
+    re-diagnosed here — a compile error or aborted harness (``failed < 0``), and
+    a harness that ran but withheld its scoreboard line
+    (``scoreboard_missing``). Both already fail RED for a reason the row states,
+    and neither has a ledgered-gap count to gate: their ``xskip`` is zero
+    because nothing was measured, not because a gap was fixed, so gating it
+    would print "LEDGER SHRANK — lower the budget to lock the gain" over a
+    broken harness and invite someone to ratchet a measurement away. Their
+    names still count as produced, so a broken harness does not also read as an
     orphan key.
     """
     for r in results:
         r.budget = budget.get(r.name)
-        if r.failed < 0:
+        if r.failed < 0 or r.scoreboard_missing:
             continue
         if r.budget is None:
             r.ok = False
@@ -828,6 +947,247 @@ def check_doc_block(block: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Self-test: every scraped row must go RED without its scoreboard line
+# ---------------------------------------------------------------------------
+#
+# The failure this proves against is not hypothetical. Every scraped suite used
+# to fall back to `_suite_cargo` when its regex missed, so a harness that
+# stopped printing its per-case scoreboard kept a plausible small number in the
+# Pass column and a GREEN badge, and the corpus behind it stopped being measured
+# with nothing to say so. `_no_scoreboard` closes that; the specimens below are
+# what keep it closed, because a fail-closed claim nobody exercises decays into
+# a fail-open one the first time a regex is edited.
+#
+# The numbers in the specimens are DELIBERATELY small and synthetic. They are
+# not measurements and must never be read as any: only the SHAPE of each line is
+# under test, and a specimen wearing real-looking totals is a specimen someone
+# eventually quotes. The shapes are copied from the harnesses that print them.
+
+_CARGO_OK = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+
+
+def _board(line: str) -> tuple[str, bool]:
+    """A scoreboard line: withheld one at a time, each withholding must go RED."""
+    return (line, True)
+
+
+def _noise(line: str) -> tuple[str, bool]:
+    """Surrounding harness chatter, kept so each scrape is exercised over a log
+    of the shape it really reads and not over a bare isolated marker."""
+    return (line, False)
+
+
+# (row name, scraper, specimen lines). One entry per SCRAPED suite; the four
+# `_suite_cargo` rows in `native_suites` scrape nothing and have no scoreboard
+# line to withhold, and the two Python rows already fail closed on a missing
+# scoreboard by construction.
+_SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], ...]], ...] = (
+    (
+        "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)",
+        _suite_codec,
+        (
+            _noise("=== W3C RDF 1.2 native-codec round-trip conformance ==="),
+            _noise("vendored corpus: crates/rdf/tests/corpus/w3c"),
+            _noise("     turtle: total   5  passed   4  allowlisted-gap  1"),
+            _board("      TOTAL: total   9  passed   7  allowlisted-gap  2"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SPARQL 1.1/1.2 evaluation (full corpus)",
+        _suite_sparql,
+        (
+            _noise("running 1 test"),
+            # One manifest tally, because the property under test is "no tally
+            # at all is RED". A manifest that drops out entirely is caught by
+            # the datatest harness itself — its case fails and cargo goes
+            # non-zero — not by counting lines here, which would need this
+            # script to hold a second copy of the manifest list.
+            _board(
+                "[w3c-sparql11/aggregates] 12 passed, 1 xfail, "
+                "0 unexpected-pass, 0 failed, 0 unmodeled"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SPARQL CONSTRUCT (first-party corpus)",
+        _suite_construct_corpus,
+        (
+            _noise("running 1 test"),
+            _board("CONSTRUCT-CORPUS: passed 9 total 9"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SPARQL DESCRIBE (first-party corpus)",
+        _suite_describe_corpus,
+        (
+            _noise("running 1 test"),
+            _board("DESCRIBE-CORPUS: passed 7 total 7"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SPARQL execution governors",
+        _suite_governor_corpus,
+        (
+            _noise("running 1 test"),
+            _board("GOVERNOR-CORPUS: passed 12 total 12 bands 4"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "Entailment (OWL 2 DL consistency)",
+        _suite_entailment,
+        (
+            _noise("running 1 test"),
+            _board("OWL2-ENTAILMENT: agreed 9 ledgered 2 unledgered 0 stale 0 total 11"),
+            _board(
+                "OWL2-DL-EXCLUDED: total 8 non-terminating 1 decides 5 "
+                "withholds 1 no-premise 1"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "Entailment (OWL 2 RL, W3C entailment tests)",
+        _suite_entailment_rl,
+        (
+            _noise(
+                "[w3c-owl2-rl] 6 positive + 5 negative entailment cases, graded "
+                "through the OWL 2 RL chase"
+            ),
+            _board(
+                "OWL2-RL-ENTAILMENT: agreed 9 ledgered 2 unledgered 0 stale 0 "
+                "total 11 actionable 1"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SHACL Core + SHACL-SPARQL",
+        _suite_shacl_w3c,
+        (
+            _noise("W3C SHACL conformance scoreboard (9 tests):"),
+            _noise("  core/node                     passed   4  xfailed   1"),
+            _board("  TOTAL: passed 7, xfailed 2, ledger 2"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SHACL (first-party corpus)",
+        _suite_shapes_corpus,
+        (
+            _noise("first-party SHACL corpus:"),
+            _board("SHAPES-CORPUS: passed 9 total 9"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SHACL Rules",
+        _suite_shacl_rules,
+        (
+            _noise("SHACL rules corpus:"),
+            _board("RULES: passed 6 total 6"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "ShEx 2.1 validation",
+        _suite_shex_validation,
+        (
+            _noise("shexTest validation scoreboard:"),
+            _board(
+                "  entries 40 | attempted 32 | pass 32 | xfail 0 | fail 0 | skipped 8"
+            ),
+            _noise("  skip[Greedy] = 8"),
+            _noise("  trait[Cardinality] = 6/6"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+)
+
+_SCOREBOARD_LINES = sum(
+    1 for _, _, lines in _SPECIMENS for _, is_board in lines if is_board
+)
+
+
+def _specimen(lines: tuple[tuple[str, bool], ...], withhold: int | None = None) -> str:
+    """The specimen as harness output, optionally without line *withhold*."""
+    return "".join(
+        f"{text}\n" for i, (text, _) in enumerate(lines) if i != withhold
+    )
+
+
+def self_test(report: bool) -> list[str]:
+    """Every scraped row that survives losing its scoreboard line, plus every
+    specimen that no longer looks like its harness. An empty list is the only
+    passing answer.
+
+    Two properties, and the second is what stops the first from rotting:
+
+      * WITHHOLDING — dropping one scoreboard line from an otherwise green
+        specimen must leave the row RED with at least one counted failure. This
+        is the fail-closed claim itself.
+      * RECOGNITION — the UNMUTATED specimen must come back GREEN. Every scraper
+        returns a RED `_no_scoreboard` row when its regex misses, so a green
+        unmutated row proves the specimen was actually parsed. Without this
+        check a specimen left behind by a harness that changed its wording would
+        miss the regex in every arm, each withholding would still go RED, and
+        the whole suite would pass while testing nothing at all.
+    """
+    problems: list[str] = []
+    for name, scraper, lines in _SPECIMENS:
+        boards = [i for i, (_, is_board) in enumerate(lines) if is_board]
+        if not boards:
+            raise SystemExit(
+                f"conformance-matrix: the specimen for {name!r} marks no scoreboard "
+                "line, so it withholds nothing and proves nothing. Mark the line the "
+                "scraper reads with `_board(...)`."
+            )
+
+        with _stubbed_run(_specimen(lines)):
+            whole = scraper()
+        if whole.name != name:
+            raise SystemExit(
+                f"conformance-matrix: the self-test lists {name!r}, but that scraper "
+                f"now produces the row {whole.name!r}. The suite was renamed and this "
+                "table was not — fix the spelling rather than leaving a row whose "
+                "fail-closed behaviour nothing here reports on."
+            )
+        if report:
+            print(f"  {'ok' if whole.ok else 'STALE':9}  {name}: whole specimen recognised")
+        if not whole.ok:
+            problems.append(
+                f"  • {name}: the UNMUTATED specimen is not recognised — the row "
+                f"comes back {whole.status} ({whole.detail or 'no detail'}). The "
+                "specimen no longer looks like what the harness prints, so every "
+                "withholding below would go RED for the wrong reason and this "
+                "suite would test nothing. Re-point the specimen at the harness."
+            )
+            continue
+
+        for i in boards:
+            with _stubbed_run(_specimen(lines, withhold=i)):
+                row = scraper()
+            caught = (not row.ok) and row.failed >= 1
+            if report:
+                print(
+                    f"  {'caught' if caught else 'SURVIVED':9}  {name}: "
+                    f"without {lines[i][0].strip()!r}"
+                )
+            if not caught:
+                problems.append(
+                    f"  • {name}: withholding {lines[i][0].strip()!r} leaves the row "
+                    f"{row.status} with fail {row.failed} and pass {row.passed} — the "
+                    "per-case scoreboard stopped being measured and this matrix still "
+                    "reports a number for it"
+                )
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="PurRDF conformance matrix")
     parser.add_argument(
@@ -846,12 +1206,48 @@ def main() -> int:
         help="rewrite the generated matrix block in docs/CONFORMANCE.md from the "
         "measured results (instead of drift-checking it)",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run only the fail-closed proof (no harness, no build): every scraped "
+        "row must go RED when its scoreboard line is withheld",
+    )
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
         # The committed doc block reflects the full 15-row matrix (13 native Rust
         # suites + the 2 Python gates); a native-only run cannot reproduce it.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
+
+    if args.self_test:
+        print(
+            f"conformance-matrix: withholding each of the {_SCOREBOARD_LINES} "
+            f"scoreboard lines across {len(_SPECIMENS)} scraped suites, every one of "
+            "which must turn its row RED —"
+        )
+    # BEFORE any harness starts, on every invocation: these rows report corpus
+    # tallies nothing else measures, and for a whole branch each of them fell
+    # back to a `cargo test` count and stayed GREEN when its scoreboard line went
+    # missing. Pure text over strings through `_RUN_STUB`, so it costs no build
+    # and no cargo — a rounding error against the matrix it precedes.
+    problems = self_test(report=args.self_test)
+    if problems:
+        print(
+            "conformance-matrix: this matrix reports corpus tallies it did not "
+            "measure:\n" + "\n".join(problems)
+            + "\n\nEach line above is a row that stays GREEN, or a specimen that "
+            "checks nothing, while the corpus behind it goes unmeasured. Fix the "
+            "scraper, not the specimen.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.self_test:
+        print(
+            f"OK: all {len(_SPECIMENS)} scraped suites recognise their specimen, and "
+            f"withholding any of the {_SCOREBOARD_LINES} scoreboard lines turns the "
+            "row RED with a counted failure."
+        )
+        return 0
 
     results = native_suites()
     if not args.no_python:
