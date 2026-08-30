@@ -165,7 +165,8 @@ pub use reasoner::{
     Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep, DlAxiom,
     DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate,
     ProfileViolation, Question, Realization, Reasoner, RunAssumptions, RunProof, Service,
-    ServiceProof, ServiceReplay, StopCause, StopReceipt, Verdict, extract_module, profile,
+    ServiceProof, ServiceReplay, StopCause, StopReceipt, Verdict, extract_module,
+    extract_module_with_proofs, profile,
 };
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
@@ -309,6 +310,19 @@ pub enum EntailError {
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
     /// class-expression graph or an unrecognized RIF construct).
     Parse(String),
+    /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
+    ///
+    /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
+    /// [`Reasoner::with_proofs`] pays for the ontology's RDFC-1.0 identity and the run traces
+    /// bound to it. [`Reasoner::proof_context`] needs that identity — a checking context
+    /// without it would reject every honest proof with an input mismatch nothing accounts for
+    /// — so it refuses here instead, naming the constructor that would have worked.
+    ///
+    /// It is deliberately NOT how an absent proof term is reported. A service answer says that
+    /// with [`Certified::proof`] returning `None`, because an answer produced without
+    /// recording is a perfectly good answer; only asking such a reasoner to CHECK something is
+    /// an error.
+    ProofsNotRecorded,
     /// The declared calculus could not be evaluated to a fixpoint.
     ///
     /// [`materialize`] runs [`calculus_program`] through `purrdf-datalog`'s semi-naive
@@ -440,6 +454,11 @@ impl std::fmt::Display for EntailError {
         match self {
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
+            Self::ProofsNotRecorded => write!(
+                f,
+                "this reasoner records no proofs, so it has no ontology identity to check one \
+                 against; build it with Reasoner::with_proofs"
+            ),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
@@ -493,7 +512,7 @@ impl std::error::Error for EntailError {
     /// The rest return `None` because they genuinely have no cause to name.
     /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
     /// rendered message, not an error value — and `Unsatisfiable`, `MatchBudget` and
-    /// `UnsupportedRegime` are complete statements in themselves. `Inconsistent` carries
+    /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
     /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
     /// that the premise has no model, and the run it describes succeeded at producing
     /// it, so calling it the cause of this error would misdescribe both.
@@ -509,6 +528,7 @@ impl std::error::Error for EntailError {
             | Self::UnsupportedRegime(_)
             | Self::UnresolvedImport(_)
             | Self::MatchBudget
+            | Self::ProofsNotRecorded
             | Self::Stopped => None,
         }
     }

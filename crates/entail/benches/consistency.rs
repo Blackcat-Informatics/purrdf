@@ -335,5 +335,51 @@ fn bench_consistency(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_consistency, bench_nominal_introduction);
+/// Report-only bench of what PROOF RECORDING costs, both modes side by side.
+///
+/// Recording is opt-in, so the interesting number is the difference between the two arms — the
+/// RDFC-1.0 canonicalization `Reasoner::with_proofs` pays for the ontology identity, the
+/// clausification contract each session derives, and the instrumented search itself. Both arms
+/// measure construction AND one consistency call, because the canonicalization happens at
+/// construction and a bench that reused a reasoner would hide the larger half.
+///
+/// Nothing is asserted. A saving is a number this prints, not a claim a test makes; the
+/// obligation the tests DO carry is that the two arms decide identically, which
+/// `a_proofs_off_service_answer_is_identical_to_a_proofs_on_one` pins.
+fn bench_proof_recording(c: &mut Criterion) {
+    let mut group = c.benchmark_group("owl_direct_consistency_proof_recording");
+    for &blocks in &[1usize, 4, 16] {
+        let dataset = ontology(blocks, Shape::SubClass);
+        group.bench_with_input(
+            BenchmarkId::new("off", blocks),
+            &dataset,
+            |bencher, dataset| {
+                bencher.iter(|| {
+                    Reasoner::new(dataset)
+                        .expect("reverse-map the ontology")
+                        .consistency()
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("on", blocks),
+            &dataset,
+            |bencher, dataset| {
+                bencher.iter(|| {
+                    Reasoner::with_proofs(dataset)
+                        .expect("reverse-map the ontology")
+                        .consistency()
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_consistency,
+    bench_nominal_introduction,
+    bench_proof_recording
+);
 criterion_main!(benches);

@@ -144,8 +144,8 @@ pub struct ModuleExtraction {
     signature: Vec<TermValue>,
     /// The triples kept conservatively rather than by exact locality, sorted.
     conservative_keeps: Vec<ConservativeKeep>,
-    /// The proof term binding the question this extraction answered.
-    proof: ServiceProof,
+    /// The proof term binding the question this extraction answered, when one was asked for.
+    proof: Option<ServiceProof>,
 }
 
 impl ModuleExtraction {
@@ -187,7 +187,7 @@ impl ModuleExtraction {
         &self.conservative_keeps
     }
 
-    /// The PROOF TERM binding the question this extraction answered.
+    /// The PROOF TERM binding the question this extraction answered, when one was asked for.
     ///
     /// **It carries no tableau run, because this service makes none.** Locality-based module
     /// extraction is a syntactic fixpoint over the triples — there is no search, so there is
@@ -198,17 +198,31 @@ impl ModuleExtraction {
     /// different notion or a different extraction is rejected;
     /// [`ServiceReplay::runs`](super::ServiceReplay::runs) answering zero is the report saying
     /// out loud that there was no search to check.
+    ///
+    /// # Zero runs and no proof at all are DIFFERENT answers
+    ///
+    /// This is the service where the distinction is sharpest, and it is why
+    /// [`Certified::proof`](super::Certified::proof) is an `Option` too. `Some(proof)` with
+    /// `proof.runs()` empty is a REAL measurement: the extractor decided syntactically, and
+    /// the zero says there was no search to check. `None` — what [`extract_module`] returns —
+    /// says nothing was measured at all, because nobody asked. Reading the second as the first
+    /// would turn "never recorded" into "checked, and there was nothing to check".
     #[must_use]
-    pub const fn proof(&self) -> &ServiceProof {
-        &self.proof
+    pub const fn proof(&self) -> Option<&ServiceProof> {
+        self.proof.as_ref()
     }
 }
 
-/// Extract the locality module of `ds` for the seed signature `signature`.
+/// Extract the locality module of `ds` for the seed signature `signature`, RECORDING NOTHING.
 ///
 /// Reads the DEFAULT graph, like every other OWL-Direct entry point in this crate: OWL 2's
 /// Direct Semantics is defined over one ontology, and a quad in a named graph is not part of
 /// it. Quads outside the default graph are neither read nor emitted.
+///
+/// [`ModuleExtraction::proof`] is `None`. The proof term this service can issue binds TWO
+/// RDFC-1.0 canonicalizations — the source ontology's identity and the extracted module's —
+/// and neither is computed here. A caller who wants one asks
+/// [`extract_module_with_proofs`]; the extracted module itself is identical either way.
 ///
 /// # Errors
 ///
@@ -239,6 +253,60 @@ pub fn extract_module(
     ds: &RdfDataset,
     signature: &[TermValue],
     method: ModuleMethod,
+) -> Result<ModuleExtraction, EntailError> {
+    extract(ds, signature, method, false)
+}
+
+/// The same extraction, carrying a PROOF TERM bound to its question.
+///
+/// The proof makes no tableau run — this service opens none — and says so through
+/// [`ServiceReplay::runs`](super::ServiceReplay::runs) answering zero. What it binds is the
+/// source ontology's producer-independent identity, the seed signature, the locality notion,
+/// and the extracted module's own canonical identity, so a proof presented against a different
+/// signature, a different notion or a different extraction is rejected.
+///
+/// It costs two RDFC-1.0 canonicalizations that [`extract_module`] does not pay for, which is
+/// why it is a separate entry point rather than the default.
+///
+/// # Errors
+///
+/// [`EntailError::Build`] if the extracted module cannot be frozen into a dataset.
+///
+/// ```
+/// use purrdf_core::{RdfDatasetBuilder, TermValue};
+/// use purrdf_entail::reasoner::{ModuleMethod, extract_module, extract_module_with_proofs};
+///
+/// let mut b = RdfDatasetBuilder::new();
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+/// let cat = b.intern_iri("http://example.org/Cat");
+/// let animal = b.intern_iri("http://example.org/Animal");
+/// b.push_quad(cat, sub, animal, None);
+/// let dataset = b.freeze().expect("freeze");
+/// let seed = [TermValue::iri("http://example.org/Cat")];
+///
+/// // A ZERO-run proof: a real measurement saying there was no search to check.
+/// let proved = extract_module_with_proofs(&dataset, &seed, ModuleMethod::Bot).expect("extract");
+/// assert!(proved.proof().expect("recorded").runs().is_empty());
+///
+/// // …which is a different thing from having recorded nothing.
+/// let plain = extract_module(&dataset, &seed, ModuleMethod::Bot).expect("extract");
+/// assert!(plain.proof().is_none());
+/// assert_eq!(plain.axioms(), proved.axioms(), "the module is the same either way");
+/// ```
+pub fn extract_module_with_proofs(
+    ds: &RdfDataset,
+    signature: &[TermValue],
+    method: ModuleMethod,
+) -> Result<ModuleExtraction, EntailError> {
+    extract(ds, signature, method, true)
+}
+
+/// The shared body of the two entry points; `proofs` is whether to record a proof term.
+fn extract(
+    ds: &RdfDataset,
+    signature: &[TermValue],
+    method: ModuleMethod,
+    proofs: bool,
 ) -> Result<ModuleExtraction, EntailError> {
     let mut interner = Interner::default();
     let v = Vocab::intern(&mut interner);
@@ -341,23 +409,29 @@ pub fn extract_module(
     // The extracted module's own producer-independent identity: the claim a consumer checks
     // this proof term against, and the reason a proof of one extraction cannot stand for
     // another over the same signature.
-    let claim = Claim::new(
-        ClaimSubject::Module {
-            digest: ontology_identity(&module),
-        },
-        ClaimBasis::Syntactic,
-    );
-    let proof = ServiceProof::new(
-        ontology_identity(ds),
-        Question::ModuleExtraction {
-            signature: signature.to_vec(),
-            method,
-        },
-        Vec::new(),
-        vec![claim],
-        None,
-        false,
-    );
+    //
+    // Both `ontology_identity` calls are RDFC-1.0 canonicalizations, and they happen only
+    // inside this `then`: the non-recording entry point does not compute a digest it would
+    // then drop.
+    let proof = proofs.then(|| {
+        let claim = Claim::new(
+            ClaimSubject::Module {
+                digest: ontology_identity(&module),
+            },
+            ClaimBasis::Syntactic,
+        );
+        ServiceProof::new(
+            ontology_identity(ds),
+            Question::ModuleExtraction {
+                signature: signature.to_vec(),
+                method,
+            },
+            Vec::new(),
+            vec![claim],
+            None,
+            false,
+        )
+    });
     Ok(ModuleExtraction {
         module,
         method,

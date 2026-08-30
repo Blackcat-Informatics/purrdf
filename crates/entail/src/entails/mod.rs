@@ -527,6 +527,7 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
         | EntailError::MatchBudget
+        | EntailError::ProofsNotRecorded
         | EntailError::Stopped
         | EntailError::Unsatisfiable) => other,
     }

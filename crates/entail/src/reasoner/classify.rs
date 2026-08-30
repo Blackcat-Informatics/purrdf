@@ -72,12 +72,18 @@ pub(crate) struct Subsumptions {
     n: usize,
     /// `n × n` verdicts, row-major, indexed `sub * n + sup`.
     verdicts: Vec<Verdict>,
-    /// `n × n` bases — WHAT decided each pair, in the same row-major layout.
+    /// `n × n` bases — WHAT decided each pair, in the same row-major layout, and EMPTY when
+    /// the session was not recording a proof.
     ///
     /// A parallel matrix rather than a field on the verdict, because the two are different
     /// facts: the verdict is what the classifier answers and the basis is what a proof term
     /// cites for it. Most pairs are decided by the saturation and never reach a tableau at
     /// all, which is precisely what a classification proof has to say out loud.
+    ///
+    /// It is `n²` [`ClaimBasis`] values, several of which own a heap allocation, so a
+    /// non-recording classification does not fill it — and, because [`Self::claims`] is the
+    /// only reader and is itself only reached from a recording session, does not allocate it
+    /// either.
     bases: Vec<ClaimBasis>,
 }
 
@@ -96,13 +102,22 @@ impl Subsumptions {
         let n = classes.len();
         let mut verdicts = vec![Verdict::False; n * n];
         // A pair the saturation ruled out on a COMPLETE taxonomy is decided by the saturation
-        // too, and its basis says so rather than claiming a run nothing made.
-        let mut bases = vec![ClaimBasis::Saturated; n * n];
+        // too, and its basis says so rather than claiming a run nothing made. Allocated only
+        // for a recording session: nothing but `Self::claims` reads it, and nothing but a
+        // recording session calls that.
+        let records = session.records();
+        let mut bases = if records {
+            vec![ClaimBasis::Saturated; n * n]
+        } else {
+            Vec::new()
+        };
         for (i, &(_, sub)) in classes.iter().enumerate() {
             for (j, &(_, sup)) in classes.iter().enumerate() {
                 if i == j {
                     verdicts[i * n + j] = Verdict::True;
-                    bases[i * n + j] = ClaimBasis::Reflexive;
+                    if records {
+                        bases[i * n + j] = ClaimBasis::Reflexive;
+                    }
                     continue;
                 }
                 if taxonomy.derives(sub, sup) {
@@ -115,17 +130,19 @@ impl Subsumptions {
                 }
                 let verdict = subsumes(session, sub, sup);
                 verdicts[i * n + j] = verdict;
-                bases[i * n + j] = match verdict {
-                    Verdict::True => ClaimBasis::ClosedRefutation {
-                        runs: vec![session.last_run()],
-                    },
-                    Verdict::False => ClaimBasis::CounterModel {
-                        run: session.last_run(),
-                    },
-                    Verdict::Unknown => ClaimBasis::Undecided {
-                        run: session.last_run(),
-                    },
-                };
+                if records {
+                    bases[i * n + j] = match verdict {
+                        Verdict::True => ClaimBasis::ClosedRefutation {
+                            runs: vec![session.last_run()],
+                        },
+                        Verdict::False => ClaimBasis::CounterModel {
+                            run: session.last_run(),
+                        },
+                        Verdict::Unknown => ClaimBasis::Undecided {
+                            run: session.last_run(),
+                        },
+                    };
+                }
             }
         }
         Self { n, verdicts, bases }
@@ -139,7 +156,16 @@ impl Subsumptions {
     /// unsatisfiable list and the transitive reduction are views of this relation rather than
     /// independent claims, and demanding a second proof of the same fact would be double
     /// counting rather than extra rigour.
+    ///
+    /// Reachable only from a RECORDING session, which is what makes [`Self::bases`] safe to
+    /// leave unallocated otherwise: `Reasoner::seal` calls this from inside the closure
+    /// `Session::proof` runs only when it has a proof term to put the claims in.
     pub(crate) fn claims(&self, kb: &Kb, classes: &[(u32, u32)]) -> Vec<Claim> {
+        debug_assert_eq!(
+            self.bases.len(),
+            self.n * self.n,
+            "a claim list is only ever asked of a matrix a recording session filled"
+        );
         let name = |i: usize| kb.interner.value(classes[i].0).clone();
         let mut out = Vec::new();
         for i in 0..self.n {

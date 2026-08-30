@@ -31,22 +31,41 @@
 //! [`Completeness`](crate::Completeness) is structurally incapable of reporting a tableau's
 //! incompleteness, and what this one measures instead.
 //!
-//! # …and every service returns a PROOF TERM
+//! # …and a service can be asked for a PROOF TERM
 //!
 //! A certificate is a MEASUREMENT the search took of itself: a service that answered wrongly
-//! reports exactly the same certificate as one that answered rightly. So each answer also
-//! carries a [`ServiceProof`] ([`Certified::proof`]) that binds this service's own question,
-//! names every tableau run it made together with the assumptions that run received, and says
-//! for every claim the answer reports which run decides it. [`ServiceProof::verify`] replays
-//! all of it against the CONSUMER's own ontology, and [`ServiceProof::covers`] is where the
-//! answer and the proof are compared claim for claim. See [`mod@proof`].
+//! reports exactly the same certificate as one that answered rightly. So a reasoner built with
+//! [`Reasoner::with_proofs`] attaches to each answer a [`ServiceProof`]
+//! ([`Certified::proof`]) that binds this service's own question, names every tableau run it
+//! made together with the assumptions that run received, and says for every claim the answer
+//! reports which run decides it. [`ServiceProof::verify`] replays all of it against the
+//! CONSUMER's own ontology, and [`ServiceProof::covers`] is where the answer and the proof are
+//! compared claim for claim. See [`mod@proof`].
+//!
+//! # Recording is OPT-IN, and its absence is a value
+//!
+//! [`Reasoner::new`] records NOTHING: no RDFC-1.0 canonicalization of the dataset, no
+//! clausification contract, no instrumented search, no run traces, no answer binding. A caller
+//! who never reads a proof pays for none of it, which is why the default is the cheap one.
+//! [`Reasoner::with_proofs`] is the same reasoner with recording on, and
+//! [`Reasoner::records_proofs`] says which is in play.
+//!
+//! The two modes DECIDE IDENTICALLY — same verdict, same [`DlCertificate`], counter for
+//! counter — because recording is an observation the decision core makes of itself and never
+//! a lever it reads. What changes is only whether evidence is kept.
+//!
+//! [`Certified::proof`] is therefore an `Option`, and the `None` is load-bearing: it is NOT an
+//! empty [`ServiceProof`]. A zero-run proof is a real measurement — it is what
+//! [`extract_module_with_proofs`] issues, and it means "this service is syntactic, so there
+//! was no search to check" — while `None` means nothing was measured at all. Collapsing them
+//! would let "never recorded" be read as "checked, and there was nothing to check".
 //!
 //! Two of the eight services decide SYNTACTICALLY and make no tableau run at all:
 //! [`profile`](profile()) walks the axioms and [`extract_module`] runs a locality fixpoint.
-//! Neither has a refutation to replay. `profile` therefore carries no proof term, and
-//! `extract_module` carries one with ZERO runs whose claim is the extracted module's own
-//! canonical identity — which binds the question honestly rather than inventing a search
-//! neither performed.
+//! Neither has a refutation to replay. `profile` therefore carries no proof term at all, and
+//! [`extract_module_with_proofs`] carries one with ZERO runs whose claim is the extracted
+//! module's own canonical identity — which binds the question honestly rather than inventing a
+//! search neither performed.
 //!
 //! # Why some services take `&mut self`
 //!
@@ -90,7 +109,9 @@ pub mod realize;
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
-pub use module::{ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module};
+pub use module::{
+    ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
+};
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
 pub use proof::{
     Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
@@ -203,13 +224,17 @@ pub struct Reasoner {
     /// The refutation symbol generator, seeded to avoid every blank label in the data.
     fresh: FreshSymbols,
     /// The PRODUCER-INDEPENDENT identity of the dataset this reasoner was built from: BLAKE3
-    /// over its RDFC-1.0 canonical N-Quads.
+    /// over its RDFC-1.0 canonical N-Quads — and `None` when this reasoner records no proofs.
     ///
-    /// Computed ONCE here rather than once per service call. It is a canonicalization of the
-    /// whole dataset, it does not change between questions, and every [`ServiceProof`] this
-    /// reasoner issues binds it so that a consumer can recompute it from their own copy of the
-    /// data and refuse a proof produced for anything else.
-    input: [u8; 32],
+    /// Computed ONCE, in [`Reasoner::with_proofs`] and nowhere else. It is a full RDFC-1.0
+    /// canonicalization of the whole dataset, which is the single most expensive thing proof
+    /// recording costs — so [`Reasoner::new`] does not compute it and then discard it, it does
+    /// not compute it at all. Every [`ServiceProof`] a recording reasoner issues binds it, so
+    /// that a consumer can recompute it from their own copy of the data and refuse a proof
+    /// produced for anything else.
+    ///
+    /// Its presence IS the recording mode. There is no second flag for it to disagree with.
+    input: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for Reasoner {
@@ -228,17 +253,28 @@ impl std::fmt::Debug for Reasoner {
             .field("step_cap", &self.budget.steps)
             .field("work_cap", &self.budget.work)
             .field("boundaries", &self.boundaries)
+            .field("proofs", &self.records_proofs())
             .finish_non_exhaustive()
     }
 }
 
 impl Reasoner {
-    /// Reverse-map `ds` into a knowledge base and open the reasoning services over it.
+    /// Reverse-map `ds` into a knowledge base and open the reasoning services over it,
+    /// RECORDING NOTHING.
     ///
     /// The named vocabulary is fixed here — every IRI the data uses in a class-denoting
     /// position, plus `owl:Thing` and `owl:Nothing`, plus every named individual — so that
     /// [`Reasoner::classify`] and [`Reasoner::realize`] range over a set that is a function
     /// of the dataset rather than of the order somebody asked questions in.
+    ///
+    /// # This is the cheap constructor, and it is the default
+    ///
+    /// It performs no RDFC-1.0 canonicalization of `ds`, derives no clausification contract,
+    /// runs no instrumented search, keeps no run traces and builds no answer binding. Every
+    /// [`Certified::proof`] it hands back is `None`. A caller who wants evidence asks for it
+    /// with [`Reasoner::with_proofs`]; a caller who does not pays for none of it.
+    ///
+    /// The two decide IDENTICALLY — same verdict, same [`DlCertificate`] counter for counter.
     ///
     /// # Errors
     ///
@@ -246,6 +282,41 @@ impl Reasoner {
     /// [`EntailError::Build`] or [`EntailError::Unsatisfiable`] if applying an
     /// `owl:hasKey` axiom exhausts the tableau or finds the ontology already unsatisfiable.
     pub fn new(ds: &RdfDataset) -> Result<Self, EntailError> {
+        Self::build(ds, None)
+    }
+
+    /// The same reasoner, RECORDING A PROOF TERM for every answer.
+    ///
+    /// Each [`Certified::proof`] is then `Some`, bound to that service's own question and
+    /// replayable by a consumer through [`ServiceProof::verify`] against their own copy of the
+    /// data. This is also the constructor a CHECKER is built from — see
+    /// [`Reasoner::proof_context`], which needs the same ontology identity a proof binds.
+    ///
+    /// # What it costs, said out loud
+    ///
+    /// One RDFC-1.0 canonicalization of `ds` here, one clausification contract per service
+    /// call, an instrumented search per tableau run, and a run trace per run up to
+    /// [`MAX_RECORDED_RUNS`](proof::MAX_RECORDED_RUNS). None of it is charged to the search's
+    /// work meter, and none of it moves an answer.
+    ///
+    /// # Errors
+    ///
+    /// The same three [`Reasoner::new`] returns.
+    pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
+        Self::build(ds, Some(crate::owl_dl::proof::ontology_identity(ds)))
+    }
+
+    /// Whether this reasoner records a proof term for each answer.
+    ///
+    /// Read off the presence of the recorded input identity, so it cannot disagree with what
+    /// [`Certified::proof`] actually returns.
+    #[must_use]
+    pub const fn records_proofs(&self) -> bool {
+        self.input.is_some()
+    }
+
+    /// The shared body of the two constructors: `input` present is recording on.
+    fn build(ds: &RdfDataset, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
         let mut kb = Kb::from_dataset(ds)?;
         let vocab = Vocab::intern(&mut kb.interner);
         let index = build_data_index(ds, &mut kb.interner);
@@ -267,7 +338,7 @@ impl Reasoner {
             budget,
             boundaries,
             fresh,
-            input: crate::owl_dl::proof::ontology_identity(ds),
+            input,
         })
     }
 
@@ -314,6 +385,13 @@ impl Reasoner {
     /// It opens no session and runs no search: the only things it computes are the
     /// clausification of the knowledge base and the two digests a proof term is bound to.
     ///
+    /// # It must be built with [`Reasoner::with_proofs`]
+    ///
+    /// A checking context is bound to the ontology's RDFC-1.0 identity, which is exactly the
+    /// canonicalization [`Reasoner::new`] declines to pay for. Rather than hand back a context
+    /// bound to a placeholder — which would reject every honest proof with an input mismatch a
+    /// reader could not account for — this refuses, and names the constructor to use.
+    ///
     /// ```
     /// use purrdf_core::{RdfDatasetBuilder, TermValue};
     /// use purrdf_entail::reasoner::{DlAxiom, Question, Reasoner};
@@ -331,23 +409,33 @@ impl Reasoner {
     /// };
     /// let question = Question::AxiomEntailment { axiom: Box::new(axiom.clone()) };
     ///
-    /// let mut reasoner = Reasoner::new(&ds).expect("reverse-map");
+    /// // Recording is OPT-IN, so the producer asks for it.
+    /// let mut reasoner = Reasoner::with_proofs(&ds).expect("reverse-map");
     /// let answer = reasoner.entails(&axiom).expect("consistent");
     ///
     /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
-    /// let mut checker = Reasoner::new(&ds).expect("reverse-map");
+    /// let mut checker = Reasoner::with_proofs(&ds).expect("reverse-map");
     /// checker.prepare(&question);
-    /// let ctx = checker.proof_context();
+    /// let ctx = checker.proof_context().expect("a recording reasoner checks proofs");
     /// let certificate = answer.certificate();
     /// let replay = answer
     ///     .proof()
+    ///     .expect("a recording reasoner carries a proof")
     ///     .verify(&ds, &question, Some(certificate), &ctx)
     ///     .expect("a genuine proof checks");
     /// assert_eq!(replay.runs(), replay.replayed());
+    ///
+    /// // …and the cheap reasoner says so rather than pretending.
+    /// let plain = Reasoner::new(&ds).expect("reverse-map");
+    /// assert!(plain.proof_context().is_err());
     /// ```
-    #[must_use]
-    pub fn proof_context(self) -> crate::DlProofContext {
-        crate::DlProofContext::of_prepared_kb(self.kb, self.input)
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::ProofsNotRecorded`] when this reasoner came from [`Reasoner::new`].
+    pub fn proof_context(self) -> Result<crate::DlProofContext, EntailError> {
+        let input = self.input.ok_or(EntailError::ProofsNotRecorded)?;
+        Ok(crate::DlProofContext::of_prepared_kb(self.kb, input))
     }
 
     /// The question [`Reasoner::classify`] answers over this reasoner's own class list.
@@ -454,34 +542,42 @@ impl Reasoner {
         // clash-free completion, so this is the one place a `True` rests on a countermodel
         // rather than on a refutation. Filed by hand for that reason.
         let run = session.last_run();
-        let basis = match answer {
-            Verdict::True => Basis::ExhibitedModel { run },
-            Verdict::False => Basis::ClosedRefutation { runs: vec![run] },
-            Verdict::Unknown => Basis::Undecided { run },
-        };
-        let claim = Claim::new(ClaimSubject::Consistent, basis);
-        self.seal(session, Question::Consistency, vec![claim], answer)
+        self.seal(session, answer, || {
+            let basis = match answer {
+                Verdict::True => Basis::ExhibitedModel { run },
+                Verdict::False => Basis::ClosedRefutation { runs: vec![run] },
+                Verdict::Unknown => Basis::Undecided { run },
+            };
+            (
+                Question::Consistency,
+                vec![Claim::new(ClaimSubject::Consistent, basis)],
+            )
+        })
     }
 
-    /// Open a session over this reasoner's knowledge base, budget and input identity.
+    /// Open a session over this reasoner's knowledge base, budget and recording mode.
     fn open_session(&self) -> Session<'_> {
         Session::new(&self.kb, self.budget, self.input)
     }
 
-    /// Seal a session into an answer, its certificate and its proof term.
+    /// Seal a session into an answer, its certificate and — when recording — its proof term.
     ///
     /// The single seam every certified service goes through, so a service that filed no claims
     /// is a service whose proof term visibly binds nothing rather than one that quietly
     /// returned a bare answer.
+    ///
+    /// `bind` produces the question and the answer binding, and it is a CLOSURE because both
+    /// are clones of every term the answer mentions — a realization's binding is one claim per
+    /// (individual, class) pair. [`Session::proof`] calls it only when the session is
+    /// recording, so a non-recording service never builds an answer binding it would drop.
     fn seal<T>(
         &self,
         session: Session<'_>,
-        question: Question,
-        claims: Vec<Claim>,
         answer: T,
+        bind: impl FnOnce() -> (Question, Vec<Claim>),
     ) -> Certified<T> {
         let certificate = session.certificate(&self.boundaries);
-        let proof = session.proof(question, claims, &certificate);
+        let proof = session.proof(&certificate, bind);
         Certified::new(answer, certificate, proof)
     }
 
@@ -525,16 +621,19 @@ impl Reasoner {
         } else {
             Verdict::Unknown
         };
-        let claim = Claim::new(
-            ClaimSubject::ClassSatisfiable {
-                class: class.clone(),
-            },
-            basis,
-        );
-        let question = Question::ClassSatisfiability {
-            class: class.clone(),
-        };
-        Ok(self.seal(session, question, vec![claim], answer))
+        Ok(self.seal(session, answer, || {
+            (
+                Question::ClassSatisfiability {
+                    class: class.clone(),
+                },
+                vec![Claim::new(
+                    ClaimSubject::ClassSatisfiable {
+                        class: class.clone(),
+                    },
+                    basis,
+                )],
+            )
+        }))
     }
 
     /// The subsumption hierarchy over the ontology's named classes.
@@ -555,15 +654,18 @@ impl Reasoner {
     /// information.
     pub fn classify(&self) -> Result<Certified<ClassHierarchy>, EntailError> {
         let (mut session, usable) = self.open()?;
-        let (answer, claims) = if usable {
+        let (answer, matrix) = if usable {
             let matrix = Subsumptions::decide(&mut session, &self.classes);
             let answer = ClassHierarchy::derive(&self.kb, &self.classes, &matrix);
-            let claims = matrix.claims(&self.kb, &self.classes);
-            (answer, claims)
+            (answer, Some(matrix))
         } else {
-            (ClassHierarchy::default(), Vec::new())
+            (ClassHierarchy::default(), None)
         };
-        Ok(self.seal(session, self.classification_question(), claims, answer))
+        Ok(self.seal(session, answer, || {
+            let claims =
+                matrix.map_or_else(Vec::new, |matrix| matrix.claims(&self.kb, &self.classes));
+            (self.classification_question(), claims)
+        }))
     }
 
     /// The entailed types of the ontology's named individuals, and the most specific of
@@ -579,13 +681,11 @@ impl Reasoner {
         let (mut session, usable) = self.open()?;
         let (answer, claims) = if usable {
             let matrix = Subsumptions::decide(&mut session, &self.classes);
-            let (answer, claims) =
-                Realization::decide(&mut session, &self.individuals, &self.classes, &matrix);
-            (answer, claims)
+            Realization::decide(&mut session, &self.individuals, &self.classes, &matrix)
         } else {
             (Realization::default(), Vec::new())
         };
-        Ok(self.seal(session, self.realization_question(), claims, answer))
+        Ok(self.seal(session, answer, || (self.realization_question(), claims)))
     }
 
     /// The named individuals entailed to be instances of `class`, sorted.
@@ -600,6 +700,7 @@ impl Reasoner {
     ) -> Result<Certified<Vec<TermValue>>, EntailError> {
         let concept = self.concept_of(class);
         let (mut session, usable) = self.open()?;
+        let records = session.records();
         let mut answer: Vec<TermValue> = Vec::new();
         let mut claims = Vec::new();
         if usable {
@@ -612,22 +713,29 @@ impl Reasoner {
                 }
                 // Every individual asked about gets a claim, established or not: an answer
                 // that omitted the negative ones would leave a reader unable to tell an
-                // individual the search RULED OUT from one it never reached.
-                claims.push(refutation_claim(
-                    ClaimSubject::Type {
-                        individual: name,
-                        class: class.clone(),
-                    },
-                    verdict,
-                    &[run],
-                ));
+                // individual the search RULED OUT from one it never reached. Built only when
+                // there is a proof term for it to go into — see [`Reasoner::seal`].
+                if records {
+                    claims.push(refutation_claim(
+                        ClaimSubject::Type {
+                            individual: name,
+                            class: class.clone(),
+                        },
+                        verdict,
+                        &[run],
+                    ));
+                }
             }
         }
         answer.sort_by_key(term_key);
-        let question = Question::InstanceRetrieval {
-            class: class.clone(),
-        };
-        Ok(self.seal(session, question, claims, answer))
+        Ok(self.seal(session, answer, || {
+            (
+                Question::InstanceRetrieval {
+                    class: class.clone(),
+                },
+                claims,
+            )
+        }))
     }
 
     /// Whether the ontology entails `axiom`.
@@ -649,17 +757,20 @@ impl Reasoner {
         } else {
             Verdict::Unknown
         };
-        let claim = refutation_claim(
-            ClaimSubject::Axiom {
-                axiom: Box::new(axiom.clone()),
-            },
-            answer,
-            &runs,
-        );
-        let question = Question::AxiomEntailment {
-            axiom: Box::new(axiom.clone()),
-        };
-        Ok(self.seal(session, question, vec![claim], answer))
+        Ok(self.seal(session, answer, || {
+            (
+                Question::AxiomEntailment {
+                    axiom: Box::new(axiom.clone()),
+                },
+                vec![refutation_claim(
+                    ClaimSubject::Axiom {
+                        axiom: Box::new(axiom.clone()),
+                    },
+                    answer,
+                    &runs,
+                )],
+            )
+        }))
     }
 
     /// Intern everything `axiom` needs and reduce it to the refutation(s) that decide it.

@@ -1708,7 +1708,15 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, TermValue};
 
     use super::*;
-    use crate::reasoner::{ModuleMethod, Reasoner, extract_module};
+    use crate::reasoner::{
+        Certified, ModuleMethod, Reasoner, extract_module, extract_module_with_proofs,
+    };
+
+    /// What every fixture below asks for, and what every `expect` on a proof term says.
+    ///
+    /// Recording is OPT-IN, so a proof-carrying test builds its reasoner with
+    /// [`Reasoner::with_proofs`] and this is the message if that ever stops being true.
+    const RECORDED: &str = "the fixture reasons with `Reasoner::with_proofs`, which records";
 
     /// Fixture terms are `example.org`: **PurRDF mints no vocabulary**.
     const EX_CAT: &str = "http://example.org/Cat";
@@ -1752,9 +1760,11 @@ mod tests {
     /// A checking context built the way a CONSUMER builds one: from their own copy of the data
     /// and their own copy of the question, with nothing the producer shipped.
     fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
-        let mut checker = Reasoner::new(ontology).expect("the fixture reverse-maps");
+        let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
         checker.prepare(question);
-        checker.proof_context()
+        checker
+            .proof_context()
+            .expect("a recording reasoner checks proofs")
     }
 
     /// The `Cat ⊑ Animal` entailment question.
@@ -1777,13 +1787,13 @@ mod tests {
         let cat = TermValue::iri(EX_CAT);
         let axiom = subclass_axiom();
 
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let questions: Vec<(Question, ServiceProof, DlCertificate)> = vec![
             {
                 let answer = reasoner.consistency();
                 (
                     Question::Consistency,
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1791,7 +1801,7 @@ mod tests {
                 let answer = reasoner.class_satisfiability(&cat).expect("consistent");
                 (
                     Question::ClassSatisfiability { class: cat.clone() },
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1799,7 +1809,7 @@ mod tests {
                 let answer = reasoner.instances(&cat).expect("consistent");
                 (
                     Question::InstanceRetrieval { class: cat.clone() },
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1809,7 +1819,7 @@ mod tests {
                     Question::AxiomEntailment {
                         axiom: Box::new(axiom.clone()),
                     },
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1817,7 +1827,7 @@ mod tests {
                 let answer = reasoner.classify().expect("consistent");
                 (
                     reasoner.classification_question(),
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1825,7 +1835,7 @@ mod tests {
                 let answer = reasoner.realize().expect("consistent");
                 (
                     reasoner.realization_question(),
-                    answer.proof().clone(),
+                    answer.proof().expect(RECORDED).clone(),
                     answer.certificate().clone(),
                 )
             },
@@ -1863,7 +1873,7 @@ mod tests {
     #[test]
     fn a_classification_proof_binds_every_subsumption_it_reports() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
         let hierarchy = answer.answer();
         assert!(
@@ -1872,17 +1882,19 @@ mod tests {
         );
         answer
             .proof()
+            .expect(RECORDED)
             .covers(&hierarchy_claims(hierarchy))
             .expect("the proof establishes exactly the subsumptions the answer reports");
         assert!(
             answer
                 .proof()
+                .expect(RECORDED)
                 .claims()
                 .iter()
                 .any(|claim| matches!(claim.basis(), ClaimBasis::Saturated)),
             "an EL-shaped taxonomy is classified by the saturation, and the proof says so \
              rather than claiming a refutation nothing made: {:?}",
-            answer.proof().claims()
+            answer.proof().expect(RECORDED).claims()
         );
     }
 
@@ -1890,11 +1902,12 @@ mod tests {
     #[test]
     fn a_realization_proof_binds_every_type_it_reports() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.realize().expect("consistent");
         assert!(!answer.answer().types().is_empty(), "tom has types");
         answer
             .proof()
+            .expect(RECORDED)
             .covers(&realization_claims(answer.answer()))
             .expect("the proof establishes exactly the types the answer reports");
     }
@@ -1903,12 +1916,13 @@ mod tests {
     #[test]
     fn an_instance_retrieval_proof_binds_the_individuals_it_returns() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let animal = TermValue::iri(EX_ANIMAL);
         let answer = reasoner.instances(&animal).expect("consistent");
         assert_eq!(answer.answer().len(), 1, "tom is the only Animal");
         answer
             .proof()
+            .expect(RECORDED)
             .covers(&instance_claims(&animal, answer.answer()))
             .expect("the proof establishes exactly the individuals the answer returns");
     }
@@ -1922,7 +1936,7 @@ mod tests {
     #[test]
     fn a_boolean_answer_binds_through_its_claim_or_through_its_absence() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let holds = subclass_axiom();
         let answer = reasoner.entails(&holds).expect("consistent");
         assert_eq!(*answer.answer(), Verdict::True);
@@ -1931,6 +1945,7 @@ mod tests {
         };
         answer
             .proof()
+            .expect(RECORDED)
             .covers(&verdict_claims(&subject, *answer.answer()))
             .expect("a True answer reports its claim, and the proof establishes it");
 
@@ -1947,17 +1962,17 @@ mod tests {
             verdict_claims(&subject, *answer.answer()).is_empty(),
             "a False answer reports nothing"
         );
-        answer.proof().covers(&[]).expect(
+        answer.proof().expect(RECORDED).covers(&[]).expect(
             "…and the proof establishes nothing, though it still names the run that \
                      exhibited the counter-model",
         );
         assert!(
             matches!(
-                answer.proof().claims()[0].basis(),
+                answer.proof().expect(RECORDED).claims()[0].basis(),
                 ClaimBasis::CounterModel { .. }
             ),
             "the counter-model is REPORTED rather than dropped: {:?}",
-            answer.proof().claims()
+            answer.proof().expect(RECORDED).claims()
         );
     }
 
@@ -1972,7 +1987,7 @@ mod tests {
     #[test]
     fn an_entails_proof_does_not_check_against_a_different_axiom() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let honest = subclass_axiom();
         let answer = reasoner.entails(&honest).expect("consistent");
         let other = DlAxiom::SubClassOf {
@@ -1984,9 +1999,12 @@ mod tests {
         };
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            answer
-                .proof()
-                .verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            answer.proof().expect(RECORDED).verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx
+            ),
             Err(DlProofError::WrongQuestion { .. })
         ));
     }
@@ -1996,14 +2014,17 @@ mod tests {
     #[test]
     fn a_consistency_proof_does_not_check_as_a_classification() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let consistency = reasoner.consistency();
         let question = reasoner.classification_question();
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            consistency
-                .proof()
-                .verify(&ontology, &question, Some(consistency.certificate()), &ctx),
+            consistency.proof().expect(RECORDED).verify(
+                &ontology,
+                &question,
+                Some(consistency.certificate()),
+                &ctx
+            ),
             Err(DlProofError::WrongQuestion { .. })
         ));
     }
@@ -2015,14 +2036,14 @@ mod tests {
     #[test]
     fn a_classify_proof_missing_a_reported_subsumption_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
         let reported = hierarchy_claims(answer.answer());
         // The CANONICALLY LAST established claim, so what remains is an exact prefix of what
         // the answer reports: the element-wise comparison agrees at every position it reaches,
         // and only the count says the claim is missing. Dropping an arbitrary one would leave
         // the arithmetic beside the comparison unconstrained.
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let last = proof
             .claims
             .iter()
@@ -2047,12 +2068,12 @@ mod tests {
     #[test]
     fn a_classify_proof_stating_a_subsumption_the_answer_omits_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
         let reported = hierarchy_claims(answer.answer());
         // SWAPPED, not appended: the claim count stays exactly what the answer reports, so
         // this constrains the containment check rather than the arithmetic beside it.
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let at = proof
             .claims
             .iter()
@@ -2075,7 +2096,7 @@ mod tests {
             Err(DlProofError::AnswerNotCovered { .. })
         ));
         // …and appending one is rejected too, from the other side.
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.claims.push(Claim::new(
             ClaimSubject::Subsumption {
                 sub: TermValue::iri(EX_ANIMAL),
@@ -2093,12 +2114,12 @@ mod tests {
     #[test]
     fn a_service_proof_does_not_check_against_a_different_ontology() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
         let other = other_ontology();
         let ctx = context(&other, &Question::Consistency);
         assert!(matches!(
-            answer.proof().verify(
+            answer.proof().expect(RECORDED).verify(
                 &other,
                 &Question::Consistency,
                 Some(answer.certificate()),
@@ -2113,13 +2134,13 @@ mod tests {
     #[test]
     fn a_claim_naming_a_run_that_answered_otherwise_is_rejected() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let axiom = subclass_axiom();
         let answer = reasoner.entails(&axiom).expect("consistent");
         let question = Question::AxiomEntailment {
             axiom: Box::new(axiom),
         };
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         // Run 0 is the consistency pre-check, which found a MODEL. Claiming it closed is the
         // forgery: it turns a countermodel into a refutation.
         proof.claims[0] = Claim::new(
@@ -2137,9 +2158,9 @@ mod tests {
     #[test]
     fn a_claim_naming_an_absent_run_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.claims[0] = Claim::new(
             ClaimSubject::Consistent,
             ClaimBasis::ClosedRefutation {
@@ -2162,9 +2183,9 @@ mod tests {
     #[test]
     fn a_claim_refuted_by_no_run_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.claims[0] = Claim::new(
             ClaimSubject::Consistent,
             ClaimBasis::ClosedRefutation { runs: Vec::new() },
@@ -2186,9 +2207,9 @@ mod tests {
     #[test]
     fn a_run_whose_answer_contradicts_its_trace_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         // The claim moves with the run, so the answer binding stays self-consistent and the
         // ONLY thing left disagreeing is the run's own trace.
         proof.runs[0].answer = ProofAnswer::Inconsistent;
@@ -2217,7 +2238,7 @@ mod tests {
     #[test]
     fn a_claim_resting_on_a_model_whose_run_closed_is_rejected() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let axiom = subclass_axiom();
         let answer = reasoner.entails(&axiom).expect("consistent");
         let question = Question::AxiomEntailment {
@@ -2225,11 +2246,12 @@ mod tests {
         };
         let closed = answer
             .proof()
+            .expect(RECORDED)
             .runs()
             .iter()
             .position(|run| run.answer() == ProofAnswer::Inconsistent)
             .expect("an entailed subsumption closes a refutation");
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.claims[0] = Claim::new(
             proof.claims[0].subject().clone(),
             ClaimBasis::ExhibitedModel { run: closed },
@@ -2250,9 +2272,10 @@ mod tests {
     fn a_runless_proof_still_refuses_a_different_ontology() {
         let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
-        let extracted = extract_module(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let extracted =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
         assert!(
-            extracted.proof().runs().is_empty(),
+            extracted.proof().expect(RECORDED).runs().is_empty(),
             "locality extraction opens no tableau"
         );
         let other = other_ontology();
@@ -2261,7 +2284,11 @@ mod tests {
             method: ModuleMethod::Bot,
         };
         let ctx = context(&other, &question);
-        match extracted.proof().verify(&other, &question, None, &ctx) {
+        match extracted
+            .proof()
+            .expect(RECORDED)
+            .verify(&other, &question, None, &ctx)
+        {
             Err(DlProofError::InputMismatch { .. }) => {}
             other => panic!("a proof for another ontology: {other:?}"),
         }
@@ -2274,13 +2301,14 @@ mod tests {
     #[test]
     fn an_undecided_answer_carries_a_stopping_receipt_bound_to_its_counters() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
         assert_eq!(*answer.answer(), Verdict::Unknown, "a zero round cap");
         let receipt = answer
             .proof()
+            .expect(RECORDED)
             .receipt()
             .expect("an undecided answer carries a receipt");
         assert_eq!(receipt.cause(), StopCause::RoundCap);
@@ -2296,6 +2324,7 @@ mod tests {
         let ctx = context(&ontology, &question);
         let replay = answer
             .proof()
+            .expect(RECORDED)
             .verify(&ontology, &question, Some(answer.certificate()), &ctx)
             .expect("an undecided proof's partial trace still replays");
         assert_eq!(replay.runs(), 1);
@@ -2306,10 +2335,10 @@ mod tests {
     #[test]
     fn a_decided_answer_carries_no_stopping_receipt() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
         assert_eq!(*answer.answer(), Verdict::True);
-        assert!(answer.proof().receipt().is_none());
+        assert!(answer.proof().expect(RECORDED).receipt().is_none());
         assert!(
             answer.certificate().completeness().is_decided(),
             "and the certificate agrees, which is the pair that must never disagree"
@@ -2323,11 +2352,11 @@ mod tests {
     #[test]
     fn a_receipt_claiming_a_budget_that_was_not_exhausted_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let receipt = proof.receipt.as_mut().expect("undecided");
         // The honest receipt reports steps == budget == 0. Widening the cap without moving the
         // counter is exactly "a budget that was not exhausted".
@@ -2347,11 +2376,11 @@ mod tests {
     #[test]
     fn a_receipt_whose_partial_trace_understates_the_branch_points_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let receipt = proof.receipt.as_mut().expect("undecided");
         receipt.branches_reached += 1;
         let question = Question::Consistency;
@@ -2361,7 +2390,7 @@ mod tests {
             Err(DlProofError::ReceiptMismatch { .. })
         ));
         // …and the same from the clash side.
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let receipt = proof.receipt.as_mut().expect("undecided");
         receipt.clashes_found += 1;
         assert!(matches!(
@@ -2375,10 +2404,10 @@ mod tests {
     #[test]
     fn a_receipt_naming_a_run_that_decided_is_rejected() {
         let ontology = taxonomy();
-        let mut reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let cat = TermValue::iri(EX_CAT);
         let answer = reasoner.class_satisfiability(&cat).expect("consistent");
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         assert!(proof.receipt.is_none(), "the fixture decides");
         proof.receipt = Some(receipt_of(
             StopPoint {
@@ -2403,11 +2432,11 @@ mod tests {
     #[test]
     fn an_undecided_run_with_no_receipt_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.receipt = None;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
@@ -2424,9 +2453,9 @@ mod tests {
     #[test]
     fn a_decided_answer_carrying_a_truncated_trace_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.truncated = true;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
@@ -2440,11 +2469,11 @@ mod tests {
     #[test]
     fn a_receipt_naming_an_absent_run_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.receipt.as_mut().expect("undecided").run = usize::MAX;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
@@ -2462,16 +2491,18 @@ mod tests {
     #[test]
     fn a_receipt_pointed_at_a_deciding_run_is_rejected() {
         let ontology = taxonomy();
-        let undecided = Reasoner::new(&ontology)
+        let undecided = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0)
             .consistency();
-        let decided = Reasoner::new(&ontology)
+        let decided = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .consistency();
-        let mut proof = undecided.proof().clone();
+        let mut proof = undecided.proof().expect(RECORDED).clone();
         // A second run, this one decided — and the receipt moved onto it.
-        proof.runs.push(decided.proof().runs()[0].clone());
+        proof
+            .runs
+            .push(decided.proof().expect(RECORDED).runs()[0].clone());
         proof.receipt.as_mut().expect("undecided").run = 1;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
@@ -2486,13 +2517,17 @@ mod tests {
     #[test]
     fn a_receipt_checked_against_no_certificate_is_refused() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match answer.proof().verify(&ontology, &question, None, &ctx) {
+        match answer
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, None, &ctx)
+        {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt with nothing to be a receipt of: {other:?}"),
         }
@@ -2503,20 +2538,22 @@ mod tests {
     #[test]
     fn a_receipt_beside_a_decided_certificate_is_rejected() {
         let ontology = taxonomy();
-        let undecided = Reasoner::new(&ontology)
+        let undecided = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0)
             .consistency();
-        let decided = Reasoner::new(&ontology)
+        let decided = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .consistency();
         assert!(decided.certificate().completeness().is_decided());
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
-        match undecided
-            .proof()
-            .verify(&ontology, &question, Some(decided.certificate()), &ctx)
-        {
+        match undecided.proof().expect(RECORDED).verify(
+            &ontology,
+            &question,
+            Some(decided.certificate()),
+            &ctx,
+        ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a stopping receipt beside a decided certificate: {other:?}"),
         }
@@ -2530,11 +2567,11 @@ mod tests {
     #[test]
     fn a_receipt_whose_boundary_set_is_not_the_certificates_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof
             .receipt
             .as_mut()
@@ -2554,12 +2591,12 @@ mod tests {
     #[test]
     fn a_receipt_inventing_a_caller_cancellation_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
         assert!(!answer.certificate().stopped(), "a cap, not a cancellation");
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         let receipt = proof.receipt.as_mut().expect("undecided");
         receipt.stopped = true;
         assert_eq!(
@@ -2580,11 +2617,11 @@ mod tests {
     #[test]
     fn a_receipt_whose_run_costs_more_than_the_service_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology)
+        let reasoner = Reasoner::with_proofs(&ontology)
             .expect("reverse-maps")
             .with_step_cap(0);
         let answer = reasoner.consistency();
-        let mut proof = answer.proof().clone();
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.receipt.as_mut().expect("undecided").work = u64::MAX;
         let question = Question::Consistency;
         let ctx = context(&ontology, &question);
@@ -2602,8 +2639,8 @@ mod tests {
     fn a_module_extraction_proof_binds_its_question_and_reports_no_search() {
         let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
-        let extracted =
-            extract_module(&ontology, &seed, ModuleMethod::Bot).expect("the fixture extracts");
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("the fixture extracts");
         let question = Question::ModuleExtraction {
             signature: seed.to_vec(),
             method: ModuleMethod::Bot,
@@ -2611,6 +2648,7 @@ mod tests {
         let ctx = context(&ontology, &question);
         let replay = extracted
             .proof()
+            .expect(RECORDED)
             .verify(&ontology, &question, None, &ctx)
             .expect("a genuine extraction's proof checks");
         assert_eq!(
@@ -2621,6 +2659,7 @@ mod tests {
         );
         extracted
             .proof()
+            .expect(RECORDED)
             .covers(&[ClaimSubject::Module {
                 digest: crate::owl_dl::proof::ontology_identity(extracted.module()),
             }])
@@ -2632,10 +2671,12 @@ mod tests {
     fn a_module_proof_does_not_cover_a_different_extraction() {
         let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
-        let bot = extract_module(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
-        let other = extract_module(&ontology, &seed, ModuleMethod::Top).expect("extracts");
+        let bot =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let other =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Top).expect("extracts");
         assert!(matches!(
-            bot.proof().covers(&[ClaimSubject::Module {
+            bot.proof().expect(RECORDED).covers(&[ClaimSubject::Module {
                 digest: crate::owl_dl::proof::ontology_identity(other.module()),
             }]),
             Err(DlProofError::AnswerNotCovered { .. })
@@ -2647,14 +2688,17 @@ mod tests {
     fn a_module_proof_does_not_check_against_a_different_notion() {
         let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
-        let bot = extract_module(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let bot =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
         let question = Question::ModuleExtraction {
             signature: seed.to_vec(),
             method: ModuleMethod::Star,
         };
         let ctx = context(&ontology, &question);
         assert!(matches!(
-            bot.proof().verify(&ontology, &question, None, &ctx),
+            bot.proof()
+                .expect(RECORDED)
+                .verify(&ontology, &question, None, &ctx),
             Err(DlProofError::WrongQuestion { .. })
         ));
     }
@@ -2670,13 +2714,13 @@ mod tests {
     fn a_receipt_beside_a_proof_whose_runs_all_decided_is_rejected_without_a_certificate() {
         let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
-        let extracted =
-            extract_module(&ontology, &seed, ModuleMethod::Bot).expect("the fixture extracts");
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("the fixture extracts");
         let question = Question::ModuleExtraction {
             signature: seed.to_vec(),
             method: ModuleMethod::Bot,
         };
-        let mut proof = extracted.proof().clone();
+        let mut proof = extracted.proof().expect(RECORDED).clone();
         assert!(
             proof.runs.is_empty(),
             "locality extraction opens no tableau"
@@ -2688,7 +2732,7 @@ mod tests {
                 work: 0,
                 stopped: true,
             },
-            &Reasoner::new(&ontology)
+            &Reasoner::with_proofs(&ontology)
                 .expect("reverse-maps")
                 .consistency()
                 .certificate()
@@ -2709,20 +2753,33 @@ mod tests {
     fn a_service_proof_is_byte_identical_run_to_run() {
         let ontology = taxonomy();
         for _ in 0..2 {
-            let first = Reasoner::new(&ontology).expect("reverse-maps");
-            let again = Reasoner::new(&ontology).expect("reverse-maps");
+            let first = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+            let again = Reasoner::with_proofs(&ontology).expect("reverse-maps");
             assert_eq!(
-                first.realize().expect("consistent").proof().encode(),
-                again.realize().expect("consistent").proof().encode(),
+                first
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .encode(),
+                again
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .encode(),
                 "two runs, one proof"
             );
         }
-        let first = Reasoner::new(&ontology).expect("reverse-maps");
-        let again = Reasoner::new(&ontology).expect("reverse-maps");
+        let first = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let again = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let one = first.classify().expect("consistent");
         let two = again.classify().expect("consistent");
-        assert_eq!(one.proof().digest(), two.proof().digest());
-        assert_eq!(one.proof().digest_hex().len(), 64);
+        assert_eq!(
+            one.proof().expect(RECORDED).digest(),
+            two.proof().expect(RECORDED).digest()
+        );
+        assert_eq!(one.proof().expect(RECORDED).digest_hex().len(), 64);
     }
 
     /// Editing ANY part of a service proof moves its digest — the question, a run, a claim and
@@ -2730,19 +2787,19 @@ mod tests {
     #[test]
     fn every_part_of_a_service_proof_is_digested() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
-        let base = answer.proof().digest();
+        let base = answer.proof().expect(RECORDED).digest();
 
-        let mut edited = answer.proof().clone();
+        let mut edited = answer.proof().expect(RECORDED).clone();
         edited.claims.pop();
         assert_ne!(base, edited.digest(), "a dropped claim is a different term");
 
-        let mut edited = answer.proof().clone();
+        let mut edited = answer.proof().expect(RECORDED).clone();
         edited.runs.pop();
         assert_ne!(base, edited.digest(), "a dropped run is a different term");
 
-        let mut edited = answer.proof().clone();
+        let mut edited = answer.proof().expect(RECORDED).clone();
         edited.question = Question::Consistency;
         edited.service = Service::Consistency;
         assert_ne!(
@@ -2751,11 +2808,11 @@ mod tests {
             "a rewritten question is a different term"
         );
 
-        let mut edited = answer.proof().clone();
+        let mut edited = answer.proof().expect(RECORDED).clone();
         edited.truncated = true;
         assert_ne!(base, edited.digest());
 
-        let mut edited = answer.proof().clone();
+        let mut edited = answer.proof().expect(RECORDED).clone();
         edited.input[0] ^= 0xff;
         assert_ne!(base, edited.digest());
     }
@@ -2766,10 +2823,13 @@ mod tests {
     #[test]
     fn a_service_proof_stating_another_trust_base_is_rejected() {
         let ontology = taxonomy();
-        let reasoner = Reasoner::new(&ontology).expect("reverse-maps");
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
         let answer = reasoner.consistency();
-        assert_eq!(answer.proof().trust_base(), TrustBaseEntry::ALL);
-        let mut proof = answer.proof().clone();
+        assert_eq!(
+            answer.proof().expect(RECORDED).trust_base(),
+            TrustBaseEntry::ALL
+        );
+        let mut proof = answer.proof().expect(RECORDED).clone();
         proof.trust_base.pop();
         let ctx = context(&ontology, &Question::Consistency);
         assert!(matches!(
@@ -2781,5 +2841,201 @@ mod tests {
             ),
             Err(DlProofError::TrustBaseMismatch { .. })
         ));
+    }
+
+    // ── Recording is OPT-IN, and its absence is a value ─────────────────────────
+
+    /// One service answer reduced to what must not move between the two recording modes: the
+    /// answer itself, rendered, and the whole certificate — compared as a value, so every
+    /// counter it holds is inside the comparison, including the two flags it derives
+    /// [`DlCompleteness`] from and has no public reader for.
+    fn decided<T: std::fmt::Debug>(answer: &Certified<T>) -> (String, DlCertificate) {
+        (
+            format!("{:?}", answer.answer()),
+            answer.certificate().clone(),
+        )
+    }
+
+    /// Every certified service asked in one fixed order, from one reasoner, in one mode.
+    ///
+    /// One reasoner for all six because asking about a class INTERNS it: a mode comparison
+    /// that opened a fresh reasoner per service would compare two different knowledge bases.
+    fn every_service(
+        ontology: &RdfDataset,
+        proofs: bool,
+        step_cap: u64,
+    ) -> Vec<(String, DlCertificate)> {
+        let reasoner = if proofs {
+            Reasoner::with_proofs(ontology)
+        } else {
+            Reasoner::new(ontology)
+        }
+        .expect("the fixture reverse-maps");
+        assert_eq!(
+            reasoner.records_proofs(),
+            proofs,
+            "the reasoner reports the mode it was built in"
+        );
+        let mut reasoner = reasoner.with_step_cap(step_cap);
+        let cat = TermValue::iri(EX_CAT);
+        let axiom = subclass_axiom();
+        vec![
+            decided(&reasoner.consistency()),
+            decided(&reasoner.class_satisfiability(&cat).expect("decides")),
+            decided(&reasoner.instances(&cat).expect("decides")),
+            decided(&reasoner.entails(&axiom).expect("decides")),
+            decided(&reasoner.classify().expect("decides")),
+            decided(&reasoner.realize().expect("decides")),
+        ]
+    }
+
+    /// **THE MODE-EQUIVALENCE TEST.** A proofs-OFF answer is the proofs-ON answer, in the
+    /// verdict AND in every [`DlCertificate`] counter.
+    ///
+    /// Recording is an OBSERVATION the decision core makes of itself, never a lever it reads —
+    /// the standing obligation `a_recorded_decision_is_identical_to_an_unrecorded_one` pins at
+    /// the decision core, lifted here to the whole service surface. If it ever became a lever,
+    /// the work figure would move first (it counts every scan rather than every round), then
+    /// the rounds, then the three shape counters, then the verdict; comparing the certificate
+    /// as a VALUE is what keeps a later field from escaping the comparison.
+    ///
+    /// Run twice: once decided, and once under a zero round cap, so the `budget-exhausted`
+    /// path — where a recording session ALSO takes a stop point and a receipt — is inside the
+    /// comparison rather than only the happy one.
+    #[test]
+    fn a_proofs_off_service_answer_is_identical_to_a_proofs_on_one() {
+        let ontology = taxonomy();
+        for cap in [u64::MAX, 0] {
+            let off = every_service(&ontology, false, cap);
+            let on = every_service(&ontology, true, cap);
+            assert_eq!(off.len(), 6, "six services return `Certified<T>`");
+            for (index, (off, on)) in off.iter().zip(&on).enumerate() {
+                assert_eq!(
+                    off, on,
+                    "service {index} under step cap {cap} must decide identically whether or \
+                     not anybody asked for evidence"
+                );
+            }
+        }
+    }
+
+    /// **THE AVAILABILITY TEST.** A proofs-OFF answer carries NO proof term, and there is no
+    /// way to present it as a verified one.
+    ///
+    /// The distinction this whole opt-in design turns on. An answer produced without recording
+    /// must not hand back an EMPTY [`ServiceProof`]: a consumer reading `runs()` off one and
+    /// seeing zero would understand "checked, and there was no search to check" — which is a
+    /// true statement about the syntactic module extractor and a false one about a
+    /// hypertableau that ran six times and kept nothing. So the absence is a `None`, and this
+    /// test is what makes that load-bearing rather than decorative.
+    ///
+    /// Three things are asserted, and each fails on its own:
+    ///
+    /// 1. every certified service of a [`Reasoner::new`] reasoner answers `None`;
+    /// 2. the same reasoner refuses to produce a CHECKING CONTEXT at all, which is the
+    ///    observable consequence of its never having canonicalized the dataset — there is no
+    ///    ontology identity for a proof to be checked against, because none was computed;
+    /// 3. the recording counterpart's proof does verify, so (1) is the recording mode being
+    ///    off rather than verification being broken.
+    #[test]
+    fn a_proofs_off_answer_carries_no_proof_and_cannot_be_presented_as_a_verified_one() {
+        let ontology = taxonomy();
+        let cat = TermValue::iri(EX_CAT);
+        let axiom = subclass_axiom();
+
+        let mut plain = Reasoner::new(&ontology).expect("reverse-maps");
+        assert!(!plain.records_proofs());
+        let absent = [
+            plain.consistency().proof().is_none(),
+            plain
+                .class_satisfiability(&cat)
+                .expect("decides")
+                .proof()
+                .is_none(),
+            plain.instances(&cat).expect("decides").proof().is_none(),
+            plain.entails(&axiom).expect("decides").proof().is_none(),
+            plain.classify().expect("decides").proof().is_none(),
+            plain.realize().expect("decides").proof().is_none(),
+        ];
+        assert_eq!(absent.len(), 6, "six services return `Certified<T>`");
+        assert!(
+            absent.iter().all(|&absent| absent),
+            "a service that recorded nothing must answer `None`, never an empty proof term: \
+             {absent:?}"
+        );
+
+        // …and it has no ontology identity to check one against either, because it never
+        // canonicalized the dataset. The refusal is the observable consequence of the saving.
+        assert!(
+            matches!(
+                Reasoner::new(&ontology)
+                    .expect("reverse-maps")
+                    .proof_context(),
+                Err(crate::EntailError::ProofsNotRecorded)
+            ),
+            "a non-recording reasoner has no input identity, and says so rather than \
+             substituting a placeholder"
+        );
+
+        // The control: the same question, recorded, verifies. So the `None` above is the mode,
+        // not a broken checker.
+        let recorded = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .consistency();
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        recorded
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, Some(recorded.certificate()), &ctx)
+            .expect("a recorded consistency proof checks");
+    }
+
+    /// **A REAL ZERO IS NOT AN ABSENCE.** The module extractor's zero-run proof and a
+    /// recording-off answer are different values, and stay so.
+    ///
+    /// [`extract_module_with_proofs`] issues a [`ServiceProof`] with no runs in it, and that
+    /// zero is a MEASUREMENT: locality extraction is a syntactic fixpoint, so there was no
+    /// search to check, and [`ServiceReplay::runs`] answering zero is the report saying it out
+    /// loud. [`extract_module`] issues no proof at all, which says nothing was measured.
+    /// Collapsing the two — by giving the second an empty proof — would turn "never recorded"
+    /// into "checked, and there was nothing to check", which is the one substitution this
+    /// surface must never make.
+    #[test]
+    fn a_zero_run_proof_is_a_different_answer_from_no_proof_at_all() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+
+        let proved =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let proof = proved.proof().expect("asked for, so recorded");
+        assert!(
+            proof.runs().is_empty(),
+            "locality extraction opens no tableau"
+        );
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Bot,
+        };
+        let ctx = context(&ontology, &question);
+        let replay = proof
+            .verify(&ontology, &question, None, &ctx)
+            .expect("a genuine extraction's proof checks");
+        assert_eq!(
+            replay.runs(),
+            0,
+            "and the REPLAY reports the real zero: there was no search to check"
+        );
+
+        let plain = extract_module(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        assert!(
+            plain.proof().is_none(),
+            "nobody asked, so nothing was measured — which is not the same as measuring zero"
+        );
+        assert_eq!(
+            crate::owl_dl::proof::ontology_identity(plain.module()),
+            crate::owl_dl::proof::ontology_identity(proved.module()),
+            "and the module itself is identical either way"
+        );
     }
 }

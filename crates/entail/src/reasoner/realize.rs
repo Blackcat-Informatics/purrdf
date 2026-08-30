@@ -71,6 +71,11 @@ impl Realization {
 
     /// Realize `individuals` against `classes`, reusing the classifier's matrix for the
     /// most-specific pass.
+    ///
+    /// The claim list is EMPTY unless the session is recording a proof term. It is one claim
+    /// per (individual, class) pair, each cloning two terms, so a realization that built one
+    /// for a proof nobody asked for would pay more for the answer binding than for the answer
+    /// — which is why the two side matrices it is derived from are not allocated either.
     pub(crate) fn decide(
         session: &mut Session<'_>,
         individuals: &[u32],
@@ -78,20 +83,33 @@ impl Realization {
         m: &Subsumptions,
     ) -> (Self, Vec<Claim>) {
         let n = classes.len();
+        let cells = individuals.len() * n;
+        let records = session.records();
         // `entailed[i][c]` — whether individual `i` was established an instance of the
         // `c`-th class. Dense and positional, so no map order reaches the answer.
-        let mut entailed = vec![false; individuals.len() * n];
+        let mut entailed = vec![false; cells];
         // WHICH run decided each pair, in the same dense layout: a realization's answer
         // binding has to name one run per (individual, class) question, and reconstructing
         // that afterwards from a count would be a guess about the order they were asked in.
-        let mut runs = vec![0_usize; individuals.len() * n];
-        let mut verdicts = vec![Verdict::Unknown; individuals.len() * n];
+        // Both of these exist for the binding alone, and so only when there is one.
+        let mut runs = if records {
+            vec![0_usize; cells]
+        } else {
+            Vec::new()
+        };
+        let mut verdicts = if records {
+            vec![Verdict::Unknown; cells]
+        } else {
+            Vec::new()
+        };
         for (i, &individual) in individuals.iter().enumerate() {
             for (c, &(_, concept)) in classes.iter().enumerate() {
                 let verdict = is_instance(session, individual, concept);
                 entailed[i * n + c] = verdict.is_true();
-                verdicts[i * n + c] = verdict;
-                runs[i * n + c] = session.last_run();
+                if records {
+                    verdicts[i * n + c] = verdict;
+                    runs[i * n + c] = session.last_run();
+                }
             }
         }
 
@@ -107,14 +125,16 @@ impl Realization {
                 // Every pair the realizer ASKED about gets a claim, established or not: an
                 // answer binding that listed only the positive ones would leave a reader
                 // unable to tell a type the search ruled out from one it never reached.
-                claims.push(refutation_claim(
-                    ClaimSubject::Type {
-                        individual: individual_name(i),
-                        class: class_name(c),
-                    },
-                    verdicts[i * n + c],
-                    &[runs[i * n + c]],
-                ));
+                if records {
+                    claims.push(refutation_claim(
+                        ClaimSubject::Type {
+                            individual: individual_name(i),
+                            class: class_name(c),
+                        },
+                        verdicts[i * n + c],
+                        &[runs[i * n + c]],
+                    ));
+                }
                 if !entailed[i * n + c] {
                     continue;
                 }
