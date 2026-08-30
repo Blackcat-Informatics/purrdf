@@ -8,9 +8,10 @@
 # documented choice — the Symmetric Concise Bounded Description
 # (`purrdf_core::describe`), the same description the CLI and the docs export
 # use — case by case. Each case isolates one clause of that definition: the
-# outgoing edges, the incoming edges, the blank-node closure, the target
-# resolution rules (concrete IRI / bound variable / `*`), and the fact that a
-# non-IRI binding describes nothing.
+# outgoing edges, the incoming edges, the blank-node closure, the RDF 1.2
+# statement layer (the reifiers whose reified triple's subject OR object lies in
+# the closure, and their annotations), the target resolution rules (concrete IRI
+# / bound variable / `*`), and the fact that a non-IRI binding describes nothing.
 #
 # Run by `crates/sparql-conformance/tests/describe_corpus.rs`, NOT by the
 # datatest harness (which is rooted at `suite/`), so this corpus reports its own
@@ -23,6 +24,8 @@
 :manifest a mf:Manifest ;
     mf:entries ( :concreteIri :boundVariable :star :starMultiVar :multipleTargets
                  :absentSubject :literalBindingIgnored :namedGraph
+                 :statementLayerSubject :statementLayerObject
+                 :statementLayerBlankClosure
                  :syntax :noTargetSyntax ) .
 
 :concreteIri a mf:QueryEvaluationTest ;
@@ -65,6 +68,23 @@
     mf:action [ qt:query <named-graph.rq> ; qt:data <data.ttl> ;
                 qt:graphData <worlds.ttl> ] ;
     mf:result <named-graph.nq> .
+
+# ── Clause 4: the RDF 1.2 statement layer ────────────────────────────────────
+
+:statementLayerSubject a mf:QueryEvaluationTest ;
+    mf:name "the reifier of a described SUBJECT's edge, and its annotations, are described" ;
+    mf:action [ qt:query <statement-layer-subject.rq> ; qt:data <statements.ttl> ] ;
+    mf:result <statement-layer-subject.ttl> .
+
+:statementLayerObject a mf:QueryEvaluationTest ;
+    mf:name "a reifier is selected when the described term is its reified triple's OBJECT" ;
+    mf:action [ qt:query <statement-layer-object.rq> ; qt:data <statements.ttl> ] ;
+    mf:result <statement-layer-object.ttl> .
+
+:statementLayerBlankClosure a mf:QueryEvaluationTest ;
+    mf:name "the blank-node closure runs through a blank reifier and a blank annotation object" ;
+    mf:action [ qt:query <statement-layer-blank-closure.rq> ; qt:data <statements.ttl> ] ;
+    mf:result <statement-layer-blank-closure.ttl> .
 
 :syntax a mf:PositiveSyntaxTest11 ;
     mf:name "DESCRIBE with several variable targets and a WHERE parses" ;

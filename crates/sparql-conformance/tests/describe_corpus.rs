@@ -60,13 +60,13 @@ fn describe_corpus_case_count_and_kinds() {
     let cases = purrdf_sparql_conformance::manifest::load(&manifest())
         .unwrap_or_else(|e| panic!("load the DESCRIBE corpus manifest: {e}"));
 
-    assert_eq!(cases.len(), 10, "the corpus declares 10 cases");
+    assert_eq!(cases.len(), 13, "the corpus declares 13 cases");
     assert_eq!(
         cases
             .iter()
             .filter(|c| c.kind == TestKind::QueryEval)
             .count(),
-        8
+        11
     );
     assert_eq!(
         cases
@@ -127,5 +127,66 @@ fn the_corpus_pins_both_non_empty_and_empty_descriptions() {
     assert!(
         empty >= 2,
         "the corpus must pin the two empty-description rules, saw {empty}"
+    );
+}
+
+/// Clause 4 of the symmetric CBD — the RDF 1.2 statement layer — must actually be
+/// measured, on BOTH sides of its "reified subject *or* object" disjunction.
+///
+/// Without this, a corpus could satisfy every check above while containing no
+/// RDF 1.2 syntax at all, which is exactly how a whole clause of the definition
+/// the corpus exists to pin can go ungraded.
+#[test]
+fn the_corpus_measures_the_rdf_12_statement_layer() {
+    let cases = purrdf_sparql_conformance::manifest::load(&manifest())
+        .unwrap_or_else(|e| panic!("load the DESCRIBE corpus manifest: {e}"));
+
+    let mut reifying_expectations = 0_usize;
+    let mut annotated_expectations = 0_usize;
+    for case in &cases {
+        let purrdf_sparql_conformance::manifest::ExpectedResult::Graph(result) = &case.expected
+        else {
+            continue;
+        };
+        let expected = std::fs::read_to_string(result).expect("read the expected result");
+        // A reifier is declared either by the `~` reifier syntax or by an explicit
+        // `rdf:reifies` edge onto a `<<( … )>>` triple term.
+        if expected.contains("rdf:reifies") || expected.contains(" ~") {
+            reifying_expectations += 1;
+        }
+        if expected.contains("{|") || expected.contains("rdf:reifies") {
+            annotated_expectations += 1;
+        }
+    }
+    assert!(
+        reifying_expectations >= 3,
+        "clause 4 must be pinned by real reifier expectations, saw {reifying_expectations}"
+    );
+    assert!(
+        annotated_expectations >= 3,
+        "clause 4's annotations must be pinned too, saw {annotated_expectations}"
+    );
+
+    // The object half of the disjunction is the one a subject-only describer would
+    // silently pass, so it is named rather than merely counted: its fixture reifies
+    // an UNASSERTED triple, so every statement in the expectation had to be selected
+    // through the reified triple's object.
+    let object_half = cases
+        .iter()
+        .find(|c| c.iri.ends_with("statementLayerObject"))
+        .expect("the object half of clause 4 must be a declared case");
+    let purrdf_sparql_conformance::manifest::ExpectedResult::Graph(result) = &object_half.expected
+    else {
+        panic!("the object-half case must expect a graph result");
+    };
+    let expected = std::fs::read_to_string(result).expect("read the expected result");
+    assert!(
+        expected.contains("rdf:reifies"),
+        "the object-half expectation must carry the reifier it selected"
+    );
+    assert!(
+        !expected.contains(":mentions :q ."),
+        "the object-half fixture's reified triple must stay unasserted, or the case \
+         no longer isolates the object side of the disjunction"
     );
 }

@@ -300,7 +300,11 @@ def _suite_construct_corpus() -> SuiteResult:
     m = re.search(r"CONSTRUCT-CORPUS: passed (\d+) total (\d+)", out)
     if m:
         passed, total = int(m.group(1)), int(m.group(2))
-        detail = f"{passed}/{total} cases: triple-producing §16.2 + CONSTRUCT GRAPH quads"
+        detail = (
+            f"{passed}/{total} cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, "
+            "paired case for case, incl. the RDF 1.2 statement layer and its "
+            "per-graph keying"
+        )
         return SuiteResult(
             "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
             passed=passed, xskip=0, failed=(total - passed),
@@ -327,7 +331,10 @@ def _suite_describe_corpus() -> SuiteResult:
     m = re.search(r"DESCRIBE-CORPUS: passed (\d+) total (\d+)", out)
     if m:
         passed, total = int(m.group(1)), int(m.group(2))
-        detail = f"{passed}/{total} cases pinning the symmetric CBD"
+        detail = (
+            f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
+            "statement layer on both sides of its subject-or-object disjunction"
+        )
         return SuiteResult(
             "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
             passed=passed, xskip=0, failed=(total - passed),

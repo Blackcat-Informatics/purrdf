@@ -11,6 +11,11 @@
 #   * the quad-producing `CONSTRUCT GRAPH <iri>` form, whose expected results
 #     are N-Quads carrying the target graph on every line.
 #
+# Every triple-form evaluation case has a `graph`-prefixed counterpart, and the
+# corpus test checks that rather than trusting this comment. The two syntax
+# verdicts grade the quad grammar itself, and `:graphReifierScope` needs two
+# graphs to say anything, so those three have no triple-form twin.
+#
 # Run by `crates/sparql-conformance/tests/construct_corpus.rs`, NOT by the
 # datatest harness (which is rooted at `suite/`), so this corpus reports its own
 # row in the conformance matrix instead of folding into the full-corpus tally.
@@ -21,9 +26,11 @@
 
 :manifest a mf:Manifest ;
     mf:entries ( :rewrite :shortForm :unboundSkipped :illFormedSkipped
-                 :blankFresh :fromNamedGraph :modifiers
+                 :blankFresh :fromNamedGraph :modifiers :reified
                  :graphRewrite :graphShortForm :graphBlankFresh
                  :graphFromNamedGraph :graphUnboundSkipped
+                 :graphIllFormedSkipped :graphModifiers :graphReified
+                 :graphReifierScope
                  :graphSyntax :graphNoNameSyntax ) .
 
 # ── SPARQL 1.1 §16.2: the triple-producing form ──────────────────────────────
@@ -64,6 +71,11 @@
     mf:action [ qt:query <modifiers.rq> ; qt:data <data.ttl> ] ;
     mf:result <modifiers.ttl> .
 
+:reified a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 reifier + annotation template lands wholly in the default graph" ;
+    mf:action [ qt:query <reified.rq> ; qt:data <data.ttl> ] ;
+    mf:result <reified.ttl> .
+
 # ── The quad-producing form: CONSTRUCT GRAPH <iri> ───────────────────────────
 
 :graphRewrite a mf:QueryEvaluationTest ;
@@ -91,6 +103,26 @@
     mf:name "the unbound-variable skip is unchanged by a target graph" ;
     mf:action [ qt:query <graph-unbound-skipped.rq> ; qt:data <data.ttl> ] ;
     mf:result <empty.nq> .
+
+:graphIllFormedSkipped a mf:QueryEvaluationTest ;
+    mf:name "the ill-formed-triple skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.nq> .
+
+:graphModifiers a mf:QueryEvaluationTest ;
+    mf:name "ORDER BY + LIMIT restrict the rows a CONSTRUCT GRAPH is instantiated over" ;
+    mf:action [ qt:query <graph-modifiers.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-modifiers.nq> .
+
+:graphReified a mf:QueryEvaluationTest ;
+    mf:name "the RDF 1.2 statement layer follows the template into the target graph" ;
+    mf:action [ qt:query <graph-reified.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-reified.nq> .
+
+:graphReifierScope a mf:QueryEvaluationTest ;
+    mf:name "an annotation attaches only to a reifier declared in the SAME graph" ;
+    mf:action [ qt:query <graph-reifier-scope.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-reifier-scope.nq> .
 
 :graphSyntax a mf:PositiveSyntaxTest11 ;
     mf:name "CONSTRUCT GRAPH <iri> { ... } WHERE { ... } parses" ;

@@ -28,11 +28,32 @@ corpus.
 
 ## The pairing, and why the file extensions carry meaning
 
-Every rule that governs template instantiation — the unbound-variable skip, the
-ill-formed-triple skip, per-row blank-node freshness — is exercised under BOTH
-forms, because `CONSTRUCT GRAPH` is defined to be the ordinary instantiation
-with a graph name attached, and a corpus that only tested the new form could
-not say that.
+Every triple-form evaluation case has a `graph`-prefixed quad-form counterpart —
+the rewrite, the `CONSTRUCT WHERE` short form, the unbound-variable skip, the
+ill-formed-triple skip, per-row blank-node freshness, a `GRAPH`-scoped `WHERE`,
+the solution modifiers, and the RDF 1.2 reifier + annotation template. That is
+checked by `construct_corpus.rs`, not merely asserted here, because
+`CONSTRUCT GRAPH` is defined to be the ordinary instantiation with a graph name
+attached and a corpus that only tested the new form could not say that.
+
+Two quad-form cases have no triple-form twin, by nature rather than by omission:
+the positive and negative syntax verdicts grade the quad grammar itself, and
+`graphReifierScope` needs TWO graphs to say anything at all.
+
+## The RDF 1.2 statement layer
+
+Reifier declarations and annotations are a separate emission path — they do not
+travel through `push_quad` — so a regression that left them in the default graph
+beside the target graph's quads would be invisible to a corpus of plain triples.
+`reified` and `graphReified` are the same reifier + annotation template under
+both forms, and their expectations differ exactly by the graph term.
+
+`graphReifierScope` pins the layer's **per-graph keying**: one reifier id, one
+annotation predicate, two graphs. In the graph that declares the reifier the
+statement is an annotation; in the graph that does not, the identical shape is an
+ordinary quad. The two canonicalize differently, so the case fails the moment
+either the template evaluator or the N-Quads reader degrades to "a reifier
+declared anywhere in the output".
 
 The expectations are compared as canonical N-Quads, so the choice of expectation
 file is itself a check: a Turtle expectation parses into the default graph, so a
