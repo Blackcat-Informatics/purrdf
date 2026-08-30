@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The FIRST-PARTY CONSTRUCT conformance corpus, in the W3C mf: manifest shape.
+#
+# Two halves, deliberately paired case-for-case:
+#
+#   * the SPARQL 1.1 §16.2 triple-producing form, whose expected results are
+#     Turtle (a graph, so every statement lands in the DEFAULT graph — a result
+#     that started carrying a graph term would no longer match), and
+#   * the quad-producing `CONSTRUCT GRAPH <iri>` form, whose expected results
+#     are N-Quads carrying the target graph on every line.
+#
+# Run by `crates/sparql-conformance/tests/construct_corpus.rs`, NOT by the
+# datatest harness (which is rooted at `suite/`), so this corpus reports its own
+# row in the conformance matrix instead of folding into the full-corpus tally.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/construct#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :rewrite :shortForm :unboundSkipped :illFormedSkipped
+                 :blankFresh :fromNamedGraph :modifiers
+                 :graphRewrite :graphShortForm :graphBlankFresh
+                 :graphFromNamedGraph :graphUnboundSkipped
+                 :graphSyntax :graphNoNameSyntax ) .
+
+# ── SPARQL 1.1 §16.2: the triple-producing form ──────────────────────────────
+
+:rewrite a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT rewrites a predicate into the default graph" ;
+    mf:action [ qt:query <rewrite.rq> ; qt:data <data.ttl> ] ;
+    mf:result <rewrite.ttl> .
+
+:shortForm a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT WHERE short form: the template IS the WHERE block" ;
+    mf:action [ qt:query <short-form.rq> ; qt:data <data.ttl> ] ;
+    mf:result <short-form.ttl> .
+
+:unboundSkipped a mf:QueryEvaluationTest ;
+    mf:name "a template triple with an unbound variable is skipped" ;
+    mf:action [ qt:query <unbound-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+:illFormedSkipped a mf:QueryEvaluationTest ;
+    mf:name "a literal instantiated into subject position is skipped" ;
+    mf:action [ qt:query <ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+:blankFresh a mf:QueryEvaluationTest ;
+    mf:name "a template blank node is minted fresh per solution row" ;
+    mf:action [ qt:query <blank-fresh.rq> ; qt:data <data.ttl> ] ;
+    mf:result <blank-fresh.ttl> .
+
+:fromNamedGraph a mf:QueryEvaluationTest ;
+    mf:name "a WHERE matching a named graph still CONSTRUCTs into the default graph" ;
+    mf:action [ qt:query <from-named-graph.rq> ; qt:data <data.ttl> ;
+                qt:graphData <worlds.ttl> ] ;
+    mf:result <from-named-graph.ttl> .
+
+:modifiers a mf:QueryEvaluationTest ;
+    mf:name "ORDER BY + LIMIT restrict the rows the template is instantiated over" ;
+    mf:action [ qt:query <modifiers.rq> ; qt:data <data.ttl> ] ;
+    mf:result <modifiers.ttl> .
+
+# ── The quad-producing form: CONSTRUCT GRAPH <iri> ───────────────────────────
+
+:graphRewrite a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH emits quads in the named graph, not the default graph" ;
+    mf:action [ qt:query <graph-rewrite.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-rewrite.nq> .
+
+:graphShortForm a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH accepts the WHERE short form" ;
+    mf:action [ qt:query <graph-short-form.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-short-form.nq> .
+
+:graphBlankFresh a mf:QueryEvaluationTest ;
+    mf:name "per-row blank freshness is unchanged inside the target graph" ;
+    mf:action [ qt:query <graph-blank-fresh.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-blank-fresh.nq> .
+
+:graphFromNamedGraph a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH moves matches from one named graph into another" ;
+    mf:action [ qt:query <graph-from-named-graph.rq> ; qt:data <data.ttl> ;
+                qt:graphData <worlds.ttl> ] ;
+    mf:result <graph-from-named-graph.nq> .
+
+:graphUnboundSkipped a mf:QueryEvaluationTest ;
+    mf:name "the unbound-variable skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-unbound-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.nq> .
+
+:graphSyntax a mf:PositiveSyntaxTest11 ;
+    mf:name "CONSTRUCT GRAPH <iri> { ... } WHERE { ... } parses" ;
+    mf:action <graph-syntax.rq> .
+
+:graphNoNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "CONSTRUCT GRAPH without a graph name is a syntax error" ;
+    mf:action <graph-no-name-syntax.rq> .

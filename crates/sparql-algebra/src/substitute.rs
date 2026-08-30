@@ -92,12 +92,14 @@ impl Query {
             },
             Self::Construct {
                 template,
+                target_graph,
                 pattern,
                 dataset,
                 base_iri,
                 version,
             } => Self::Construct {
                 template,
+                target_graph,
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,

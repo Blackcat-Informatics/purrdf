@@ -281,6 +281,63 @@ def _suite_sparql() -> SuiteResult:
     )
 
 
+def _suite_construct_corpus() -> SuiteResult:
+    """First-party CONSTRUCT corpus (`crates/sparql-conformance/corpus/construct/`).
+
+    Its own row rather than a fold into the SPARQL row: the corpus exists so a
+    consumer can read CONSTRUCT coverage — both the triple-producing §16.2 form
+    and the quad-producing `CONSTRUCT GRAPH <iri>` form — off the scoreboard, and
+    a number folded into a four-digit total answers nobody's question. Every case
+    is graded and there is no xfail ledger, so a non-zero fail cannot appear
+    without the harness going red.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "construct_corpus", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"CONSTRUCT-CORPUS: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} cases: triple-producing §16.2 + CONSTRUCT GRAPH quads"
+        return SuiteResult(
+            "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo(
+        "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)", cmd
+    )
+
+
+def _suite_describe_corpus() -> SuiteResult:
+    """First-party DESCRIBE corpus (`crates/sparql-conformance/corpus/describe/`).
+
+    §16.4 leaves the description implementation-defined, so no vendored manifest
+    grades a DESCRIBE at all — this row is the only conformance measurement the
+    form has, and it pins the engine's documented Symmetric CBD case by case.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "describe_corpus", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"DESCRIBE-CORPUS: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} cases pinning the symmetric CBD"
+        return SuiteResult(
+            "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo(
+        "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)", cmd
+    )
+
+
 def _suite_governor_corpus() -> SuiteResult:
     """First-party frozen execution-governor corpus.
 
@@ -621,6 +678,8 @@ def native_suites() -> list[SuiteResult]:
         ),
         _suite_codec(),
         _suite_sparql(),
+        _suite_construct_corpus(),
+        _suite_describe_corpus(),
         _suite_governor_corpus(),
         _suite_entailment(),
         _suite_entailment_rl(),

@@ -1,0 +1,5 @@
+PREFIX : <http://example.org/>
+CONSTRUCT { ?s :related ?o }
+WHERE { ?s :knows ?o }
+ORDER BY ?o
+LIMIT 1

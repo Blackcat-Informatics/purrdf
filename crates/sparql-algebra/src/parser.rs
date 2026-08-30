@@ -1268,6 +1268,22 @@ impl<'a> Parser<'a, '_> {
 
     fn parse_construct(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
         self.expect_kw("CONSTRUCT")?;
+        // `CONSTRUCT GRAPH <iri> …` — the quad-producing form (see the
+        // `Query::Construct::target_graph` rustdoc for its provenance).
+        // Read BEFORE the short/long-form fork, because it prefixes both: the
+        // target graph names where the instantiated statements go, and says
+        // nothing about how the template is written.
+        //
+        // Unambiguous at exactly one token of lookahead: the long form's next
+        // token is `{` and the short form's is `FROM` or `WHERE`, so a `GRAPH`
+        // here can be nothing else. A plain `CONSTRUCT { … }` never reaches
+        // `eat_kw` with anything but `{`, so its parse is bit-for-bit what it
+        // was.
+        let target_graph = if self.eat_kw("GRAPH") {
+            Some(self.expect_iri_node()?)
+        } else {
+            None
+        };
         // Short form (§16.2.1): `CONSTRUCT DatasetClause* WHERE { TriplesTemplate }`
         // with no explicit template — the template *is* the WHERE triples block.
         if !self.at(&Token::LBrace) {
@@ -1342,6 +1358,7 @@ impl<'a> Parser<'a, '_> {
             self.pop_exists_scope_boundary();
             return Ok(Query::Construct {
                 template,
+                target_graph,
                 pattern: p,
                 dataset,
                 base_iri,
@@ -1380,6 +1397,7 @@ impl<'a> Parser<'a, '_> {
         self.pop_exists_scope_boundary();
         Ok(Query::Construct {
             template,
+            target_graph,
             pattern: p,
             dataset,
             base_iri,
@@ -5607,10 +5625,116 @@ mod tests {
     #[test]
     fn construct_form() {
         let q = format!("{GM}CONSTRUCT {{ ?s a purrdf:Out }} WHERE {{ ?s a purrdf:In }}");
-        let Query::Construct { template, .. } = parse(&q) else {
+        let Query::Construct {
+            template,
+            target_graph,
+            ..
+        } = parse(&q)
+        else {
             panic!("expected CONSTRUCT");
         };
         assert_eq!(template.len(), 1);
+        assert_eq!(
+            target_graph, None,
+            "a plain CONSTRUCT names no target graph — it is the triple-producing form"
+        );
+    }
+
+    // ── CONSTRUCT GRAPH <iri> — the quad-producing CONSTRUCT ─────────────────
+
+    #[test]
+    fn construct_graph_form_carries_the_target_graph() {
+        let q = format!(
+            "{GM}CONSTRUCT GRAPH <http://example.org/g> {{ ?s a purrdf:Out }} \
+             WHERE {{ ?s a purrdf:In }}"
+        );
+        let Query::Construct {
+            template,
+            target_graph,
+            ..
+        } = parse(&q)
+        else {
+            panic!("expected CONSTRUCT");
+        };
+        assert_eq!(template.len(), 1);
+        assert_eq!(
+            target_graph.as_ref().map(NamedNode::as_str),
+            Some("http://example.org/g")
+        );
+    }
+
+    /// A prefixed name and a `BASE`-relative reference are both legal graph
+    /// names, resolved by the ordinary IRI production.
+    #[test]
+    fn construct_graph_accepts_prefixed_and_relative_graph_names() {
+        let q = format!("{GM}CONSTRUCT GRAPH purrdf:g {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o }}");
+        let Query::Construct { target_graph, .. } = parse(&q) else {
+            panic!("expected CONSTRUCT");
+        };
+        // `GM` binds `purrdf:` to `<https://x/>`.
+        assert_eq!(
+            target_graph.as_ref().map(NamedNode::as_str),
+            Some("https://x/g")
+        );
+
+        let q = "BASE <http://example.org/> CONSTRUCT GRAPH <g> { ?s ?p ?o } WHERE { ?s ?p ?o }";
+        let Query::Construct { target_graph, .. } = parse(q) else {
+            panic!("expected CONSTRUCT");
+        };
+        assert_eq!(
+            target_graph.as_ref().map(NamedNode::as_str),
+            Some("http://example.org/g")
+        );
+    }
+
+    /// The short form (§16.2.1, template ≡ WHERE block) takes the graph name
+    /// too: `GRAPH <iri>` is read before the short/long fork, so both spellings
+    /// reach the same algebra node.
+    #[test]
+    fn construct_graph_works_with_the_short_form() {
+        let q = "CONSTRUCT GRAPH <http://example.org/g> WHERE { ?s ?p ?o }";
+        let Query::Construct {
+            template,
+            target_graph,
+            ..
+        } = parse(q)
+        else {
+            panic!("expected CONSTRUCT");
+        };
+        assert_eq!(template.len(), 1, "the short form's template IS the block");
+        assert_eq!(
+            target_graph.as_ref().map(NamedNode::as_str),
+            Some("http://example.org/g")
+        );
+    }
+
+    /// `GRAPH` must be followed by a graph NAME; a bare `CONSTRUCT GRAPH { … }`
+    /// is a syntax error rather than a silently-default-graph CONSTRUCT.
+    #[test]
+    fn construct_graph_without_a_name_is_refused() {
+        let q = "CONSTRUCT GRAPH { ?s ?p ?o } WHERE { ?s ?p ?o }";
+        SparqlParser::new()
+            .parse_query(q)
+            .expect_err("CONSTRUCT GRAPH requires a graph IRI");
+    }
+
+    /// Adding the `GRAPH` prefix must not perturb any OTHER CONSTRUCT spelling:
+    /// the dataset clause, the WHERE-less short form, and the solution
+    /// modifiers all parse to exactly the algebra they did before, with
+    /// `target_graph: None`.
+    #[test]
+    fn plain_construct_spellings_are_unchanged_and_name_no_graph() {
+        for q in [
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } FROM <http://example.org/d> WHERE { ?s ?p ?o }",
+            "CONSTRUCT WHERE { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } ORDER BY ?s LIMIT 3",
+        ] {
+            let Query::Construct { target_graph, .. } = parse(q) else {
+                panic!("expected CONSTRUCT for `{q}`");
+            };
+            assert_eq!(target_graph, None, "`{q}` must name no target graph");
+        }
     }
 
     #[test]

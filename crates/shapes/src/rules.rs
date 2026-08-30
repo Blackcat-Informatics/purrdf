@@ -855,6 +855,23 @@ mod tests {
         assert!(err.contains("must be a CONSTRUCT"), "got: {err}");
     }
 
+    /// The quad-producing `CONSTRUCT GRAPH <iri>` form parses as a `CONSTRUCT`,
+    /// but a SHACL rule head produces TRIPLES inferred into the data graph —
+    /// `sparql_rule_producer` returns `[Term; 3]` and has nowhere to put a graph
+    /// name. Accepting it would silently discard the named graph, so the rule
+    /// loader refuses it and names the graph it refused.
+    #[test]
+    fn sparql_rule_construct_graph_errors() {
+        let err = parse_shapes_err(
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT GRAPH <http://example.org/g> { $this ex:x ex:y } WHERE { $this a ex:Person }" ] ."#,
+        );
+        assert!(err.contains("CONSTRUCT GRAPH"), "got: {err}");
+        assert!(err.contains("http://example.org/g"), "got: {err}");
+    }
+
     #[test]
     fn sparql_rule_illegal_prebinding_errors() {
         // MINUS is forbidden under pre-binding; must be rejected at load.

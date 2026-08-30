@@ -146,6 +146,22 @@ impl Parser<'_> {
         let construct = format!("{}{raw}", self.prefix_header(&[shape_id, rule_node]));
 
         match SparqlParser::new().parse_query(&construct) {
+            Ok(Query::Construct {
+                target_graph: Some(graph),
+                ..
+            }) => {
+                // `CONSTRUCT GRAPH <g>` is a quad-producing form, but a
+                // `sh:SPARQLRule` head produces TRIPLES that SHACL-AF adds to the
+                // data graph — `sparql_rule_producer` returns `[Term; 3]` and has
+                // nowhere to carry `<g>`. Accepting it would silently discard the
+                // named graph, so it is refused by name instead.
+                return Err(format!(
+                    "sh:SPARQLRule {rule_node} on shape {shape_id} uses CONSTRUCT GRAPH <{}>; a \
+                     SHACL rule head produces triples inferred into the data graph and cannot \
+                     target a named graph",
+                    graph.as_str()
+                ));
+            }
             Ok(query @ Query::Construct { .. }) => {
                 // The query runs with $this pre-bound to each focus node; the
                 // SHACL-SPARQL §5.2.1 pre-binding restrictions reject an illegal

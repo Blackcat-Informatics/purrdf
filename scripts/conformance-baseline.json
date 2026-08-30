@@ -21,6 +21,14 @@
       "ledgered": 5,
       "note": "5 upstream-errata fixtures with non-canonical XSD lexicals (cast-decimal/double/float, coalesce01, plus-1-corrected); the entailment-regime cases (OWL-Direct/DL via the SHOIQ(D) tableau, RIF-rule, RDF-axiomatic-triple) are all native now"
     },
+    "SPARQL CONSTRUCT (first-party corpus)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps: every case in crates/sparql-conformance/corpus/construct/ is graded, and a first-party corpus that ledgers its own cases would be grading itself against whatever the engine happens to do. The corpus carries both CONSTRUCT forms case for case - the SPARQL 1.1 16.2 triple-producing form, whose expected results are Turtle so a statement that gained a graph term would no longer match, and the quad-producing CONSTRUCT GRAPH <iri> form, whose expected results are N-Quads carrying the target graph on every line - plus the template rules that must be identical under both (unbound-variable skip, ill-formed-triple skip, per-row blank freshness) and the two syntax verdicts"
+    },
+    "SPARQL DESCRIBE (first-party corpus)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps. SPARQL 1.1 16.4 leaves the description implementation-defined, so no vendored W3C manifest grades a DESCRIBE and this row is the form's only conformance measurement: it pins the engine's documented Symmetric Concise Bounded Description clause by clause - outgoing edges, incoming edges, the blank-node closure, the three target-resolution rules (concrete IRI, bound variable, *), the fact that a non-IRI binding describes nothing, and that a described statement stays in the named graph it came from"
+    },
     "SPARQL execution governors": {
       "ledgered": 0,
       "note": "no ledgered gaps: every case in vectors/sparql-governors/ is graded, and there is nothing a governor case could be excused for. The corpus carries a zero, a boundary (the ceiling IS the measured cost or complete stop-poll count, and must be admitted) and an over-bound (one below that measurement, and must trip) case for each of the five caller-settable numeric dimensions and for a deterministic injected deadline signal, plus the RDF 1.2 statement layer, the federated SERVICE transport seam, and the property-function relation seam. The property-function pair is banded three more times to take the two charge points apart \u2014 an invocation-isolating lane whose relation emits nothing, a row-isolating lane driven by a single row, and a 1200-row lane above the evaluator's fork threshold whose boundary is the sequential/parallel parity claim \u2014 and a seam case pins a fuel ceiling landing between an invocation and its first row. A separate wall-deadline smoke case pins only what a time-dependent trip can guarantee"

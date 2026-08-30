@@ -111,12 +111,14 @@ fn map_patterns_in_query(query: Query, mut f: impl FnMut(GraphPattern) -> GraphP
         },
         Query::Construct {
             template,
+            target_graph,
             pattern,
             dataset,
             base_iri,
             version,
         } => Query::Construct {
             template,
+            target_graph,
             pattern: f(pattern),
             dataset,
             base_iri,

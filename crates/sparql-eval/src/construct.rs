@@ -29,7 +29,9 @@ use purrdf_core::loss::{
 use purrdf_core::{
     DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef, TermValue,
 };
-use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TriplePattern};
+use purrdf_sparql_algebra::{
+    GraphPattern, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -205,6 +207,7 @@ fn truncate_graph(graph: &RdfDataset, admitted: usize) -> Arc<RdfDataset> {
 
 pub(crate) fn eval_construct<D: DatasetView + Sync>(
     template: &[TriplePattern],
+    target_graph: Option<&NamedNode>,
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<ConstructedGraph<D::Id>, EvalError> {
@@ -256,6 +259,7 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
 
     let plan = ConstructPlan {
         template,
+        target_graph: target_graph.map(NamedNode::as_str),
         dropped: &dropped,
         loss_vocab: loss_vocab.as_ref(),
         reifier_decl_indices: &reifier_decl_indices,
@@ -297,6 +301,10 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
 struct ConstructPlan<'a> {
     /// The CONSTRUCT template triples.
     template: &'a [TriplePattern],
+    /// `CONSTRUCT GRAPH <iri>` — the named graph every emitted statement is
+    /// tagged with. `None` (the SPARQL 1.1 form) tags nothing, which is the
+    /// default graph and is byte-identical to the pre-`GRAPH` behavior.
+    target_graph: Option<&'a str>,
     /// The dropped-reifier loss declarations detected in the `WHERE`.
     dropped: &'a [DroppedReifier],
     /// The caller-supplied loss vocabulary, when configured.
@@ -334,6 +342,12 @@ fn build_construct_graph<D: DatasetView + Sync>(
         )
     });
 
+    // `CONSTRUCT GRAPH <iri>`: interned ONCE, before the row loop, and threaded
+    // into every emission below as the quad/reifier/annotation graph term. `None`
+    // is the plain form and reproduces the previous `push_quad(.., None)` calls
+    // exactly.
+    let target_graph_id: Option<TermId> = plan.target_graph.map(|iri| builder.intern_iri(iri));
+
     let has_reifier_decls = !plan.reifier_decl_indices.is_empty();
     // Interned once (idempotent), used by pass 2 below to recognize a
     // *dynamically*-produced `rdf:reifies` edge — see its doc comment.
@@ -350,7 +364,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
                 if let Some((s, p, o)) =
                     instantiate(tp, row, schema, &mut builder, &mut blanks, ctx, tracker)
                 {
-                    builder.push_quad(s, p, o, None);
+                    builder.push_quad(s, p, o, target_graph_id);
                 }
             }
         } else {
@@ -367,7 +381,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             let mut reifier_ids: HashSet<TermId> = HashSet::new();
             for &idx in plan.reifier_decl_indices {
                 if let Some((s, _p, o)) = instantiated[idx] {
-                    builder.push_reifier(s, o);
+                    builder.push_reifier_in_graph(s, o, target_graph_id);
                     reifier_ids.insert(s);
                 }
             }
@@ -395,11 +409,11 @@ fn build_construct_graph<D: DatasetView + Sync>(
                     let is_dynamic_reifies =
                         p == reifies_id && matches!(builder.resolve(o), TermRef::Triple { .. });
                     if is_dynamic_reifies {
-                        builder.push_reifier(s, o);
+                        builder.push_reifier_in_graph(s, o, target_graph_id);
                     } else if reifier_ids.contains(&s) {
-                        builder.push_annotation(s, p, o);
+                        builder.push_annotation_in_graph(s, p, o, target_graph_id);
                     } else {
-                        builder.push_quad(s, p, o, None);
+                        builder.push_quad(s, p, o, target_graph_id);
                     }
                 }
             }
@@ -408,7 +422,15 @@ fn build_construct_graph<D: DatasetView + Sync>(
         if let Some(ids) = loss_term_ids
             && !plan.dropped.is_empty()
         {
-            emit_dropped_losses(plan.dropped, row, schema, &mut builder, ctx, ids);
+            emit_dropped_losses(
+                plan.dropped,
+                row,
+                schema,
+                &mut builder,
+                ctx,
+                ids,
+                target_graph_id,
+            );
         }
     }
 
@@ -424,7 +446,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             let s = builder.intern_value(&s);
             let p = builder.intern_value(&p);
             let o = builder.intern_value(&o);
-            builder.push_quad(s, p, o, None);
+            builder.push_quad(s, p, o, target_graph_id);
         }
     }
 
@@ -833,6 +855,7 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_, D>,
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
+    target_graph_id: Option<TermId>,
 ) {
     for d in dropped {
         // Materialize the concrete reified triple term for this row. An unbound
@@ -848,14 +871,20 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
         let loss_node = builder.intern_blank_value(&label, purrdf_core::BlankScope::DEFAULT);
 
         let rdf_type = builder.intern_iri_value(RDF_TYPE);
-        builder.push_quad(loss_node, rdf_type, proj_loss_id, None);
+        builder.push_quad(loss_node, rdf_type, proj_loss_id, target_graph_id);
 
         // <lossCode> "reifier-layer-dropped"
-        push_loss_code(builder, loss_node, LOSS_REIFIER_LAYER_DROPPED, loss_code_id);
+        push_loss_code(
+            builder,
+            loss_node,
+            LOSS_REIFIER_LAYER_DROPPED,
+            loss_code_id,
+            target_graph_id,
+        );
 
         // <lostReifies> <<( s p o )>>
         let triple_id = builder.intern_value(&inner_term);
-        builder.push_quad(loss_node, lost_reifies_id, triple_id, None);
+        builder.push_quad(loss_node, lost_reifies_id, triple_id, target_graph_id);
 
         // Sub-codes on the SAME loss node (keyed deterministically by the same
         // content-derived label, so they coalesce across rows too).
@@ -865,6 +894,7 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
                 loss_node,
                 LOSS_ANNOTATION_LAYER_DROPPED,
                 loss_code_id,
+                target_graph_id,
             );
         }
         if d.has_standpoint {
@@ -873,6 +903,7 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
                 loss_node,
                 LOSS_STANDPOINT_SCOPE_DROPPED,
                 loss_code_id,
+                target_graph_id,
             );
         }
     }
@@ -884,6 +915,7 @@ fn push_loss_code(
     loss_node: TermId,
     code: &str,
     loss_code_id: TermId,
+    target_graph_id: Option<TermId>,
 ) {
     let code_lit = builder.intern_literal_value(RdfLiteral {
         lexical_form: code.to_owned(),
@@ -891,7 +923,7 @@ fn push_loss_code(
         language: None,
         direction: None,
     });
-    builder.push_quad(loss_node, loss_code_id, code_lit, None);
+    builder.push_quad(loss_node, loss_code_id, code_lit, target_graph_id);
 }
 
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
@@ -992,7 +1024,7 @@ mod tests {
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Arc<RdfDataset>, EvalError> {
-        let (graph, certificate) = super::eval_construct(template, pattern, ctx)?;
+        let (graph, certificate) = super::eval_construct(template, None, pattern, ctx)?;
         assert!(
             certificate.is_none(),
             "an ungoverned CONSTRUCT cannot truncate"
@@ -1000,7 +1032,7 @@ mod tests {
         Ok(graph)
     }
     use purrdf_core::{RdfLiteral, TermRef};
-    use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, Variable};
+    use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
 
     const KNOWS: &str = "http://ex/knows";
     const RELATED: &str = "http://ex/related";
@@ -1049,6 +1081,126 @@ mod tests {
         for q in out.quads() {
             assert!(matches!(out.resolve(q.p), TermRef::Iri(p) if p == RELATED));
         }
+    }
+
+    // ── CONSTRUCT GRAPH <iri>: quads, not triples ───────────────────────────
+
+    /// The `CONSTRUCT { ?s :related ?o }` template both quad-form tests use.
+    fn related_template() -> Vec<TriplePattern> {
+        vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }]
+    }
+
+    const TARGET_GRAPH: &str = "http://example.org/g";
+
+    /// `CONSTRUCT GRAPH <g> { … }` must place every instantiated statement in
+    /// `<g>` — the default graph of the result must stay EMPTY.
+    ///
+    /// This is the test that fails if the quad form is ever weakened back into
+    /// the triple form: emitting into the default graph flips both assertions.
+    #[test]
+    fn construct_graph_emits_quads_in_the_named_graph() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let target = NamedNode::new_unchecked(TARGET_GRAPH);
+        let (out, certificate) =
+            super::eval_construct(&related_template(), Some(&target), &where_knows(), &mut ctx)
+                .expect("construct");
+        assert!(certificate.is_none());
+
+        assert_eq!(out.quad_count(), 2, "both solutions instantiate");
+        for q in out.quads() {
+            let g = q.g.unwrap_or_else(|| {
+                panic!("CONSTRUCT GRAPH emitted a DEFAULT-graph triple, not a quad")
+            });
+            assert!(
+                matches!(out.resolve(g), TermRef::Iri(iri) if iri == TARGET_GRAPH),
+                "quad landed in the wrong graph"
+            );
+        }
+        assert_eq!(
+            out.quads().filter(|q| q.g.is_none()).count(),
+            0,
+            "the default graph must carry nothing"
+        );
+        let named: Vec<String> = out
+            .named_graphs()
+            .map(|g| match out.resolve(g) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => panic!("a named graph must be an IRI, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(named, vec![TARGET_GRAPH.to_owned()]);
+    }
+
+    /// The quad form must differ from the triple form in the GRAPH TERM ONLY:
+    /// same subjects, predicates and objects, same count, same order. Pinning
+    /// the two together is what makes "`CONSTRUCT GRAPH` is plain `CONSTRUCT`
+    /// plus a graph name" a checked claim rather than a description.
+    #[test]
+    fn construct_graph_differs_from_plain_construct_only_by_the_graph_term() {
+        let ds = knows_graph();
+
+        let mut ctx = EvalCtx::new(&ds);
+        let plain = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("plain");
+
+        let mut ctx = EvalCtx::new(&ds);
+        let target = NamedNode::new_unchecked(TARGET_GRAPH);
+        let (quads, _) =
+            super::eval_construct(&related_template(), Some(&target), &where_knows(), &mut ctx)
+                .expect("graph form");
+
+        let strip = |ds: &RdfDataset| -> Vec<String> {
+            ds.quads()
+                .map(|q| {
+                    format!(
+                        "{:?} {:?} {:?}",
+                        ds.resolve(q.s),
+                        ds.resolve(q.p),
+                        ds.resolve(q.o)
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(strip(&plain), strip(&quads));
+    }
+
+    /// The byte-identity half of the same claim, from the other side: the plain
+    /// (triple-producing) `CONSTRUCT` output is pinned to a literal canonical
+    /// N-Quads string with NO graph term on any line. A regression that started
+    /// tagging plain `CONSTRUCT` output with a graph — or that changed its bytes
+    /// in any other way — fails here.
+    #[test]
+    fn plain_construct_output_is_byte_identical_to_its_pinned_nquads() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let out = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> .\n"
+        );
+    }
+
+    /// And the quad form's own pinned bytes: the same two statements, each
+    /// carrying the graph term. Together with the test above this pins BOTH
+    /// sides of the fork against a single literal.
+    #[test]
+    fn construct_graph_output_is_byte_identical_to_its_pinned_nquads() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let target = NamedNode::new_unchecked(TARGET_GRAPH);
+        let (out, _) =
+            super::eval_construct(&related_template(), Some(&target), &where_knows(), &mut ctx)
+                .expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
+        );
     }
 
     #[test]
@@ -1544,6 +1696,44 @@ mod tests {
         assert!(
             !flat_reifies,
             "no flat quad with predicate rdf:reifies — must be in side table"
+        );
+    }
+
+    /// The RDF 1.2 statement layer must follow the template into the target
+    /// graph too: `CONSTRUCT GRAPH <g>` puts the reifier BINDING in `<g>`, not
+    /// in the default graph beside `<g>`'s quads. The side tables carry their
+    /// own graph term, so this is a distinct emission path from `push_quad` and
+    /// would otherwise stay in the default graph unnoticed.
+    #[test]
+    fn construct_graph_places_the_statement_layer_in_the_named_graph() {
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![TriplePattern {
+            subject: var("r"),
+            predicate: pred(REIFIES),
+            object: TermPattern::Triple(Box::new(TriplePattern {
+                subject: var("s"),
+                predicate: NamedNodePattern::Variable(Variable::new("p")),
+                object: var("o"),
+            })),
+        }];
+        let target = NamedNode::new_unchecked(TARGET_GRAPH);
+        let (out, _) = super::eval_construct(&template, Some(&target), &where_reifies(), &mut ctx)
+            .expect("construct");
+
+        let graphs: Vec<Option<String>> = out
+            .reifiers_with_graph()
+            .map(|(_, _, g)| {
+                g.map(|g| match out.resolve(g) {
+                    TermRef::Iri(iri) => iri.to_owned(),
+                    other => panic!("a graph term must be an IRI, got {other:?}"),
+                })
+            })
+            .collect();
+        assert_eq!(
+            graphs,
+            vec![Some(TARGET_GRAPH.to_owned())],
+            "the reifier binding must carry the target graph"
         );
     }
 

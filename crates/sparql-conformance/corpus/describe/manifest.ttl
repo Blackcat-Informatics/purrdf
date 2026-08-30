@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The FIRST-PARTY DESCRIBE conformance corpus, in the W3C mf: manifest shape.
+#
+# SPARQL 1.1 §16.4 leaves the description implementation-defined, so a
+# conformance corpus for DESCRIBE can only be first-party: it pins THIS engine's
+# documented choice — the Symmetric Concise Bounded Description
+# (`purrdf_core::describe`), the same description the CLI and the docs export
+# use — case by case. Each case isolates one clause of that definition: the
+# outgoing edges, the incoming edges, the blank-node closure, the target
+# resolution rules (concrete IRI / bound variable / `*`), and the fact that a
+# non-IRI binding describes nothing.
+#
+# Run by `crates/sparql-conformance/tests/describe_corpus.rs`, NOT by the
+# datatest harness (which is rooted at `suite/`), so this corpus reports its own
+# row in the conformance matrix.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/describe#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :concreteIri :boundVariable :star :starMultiVar :multipleTargets
+                 :absentSubject :literalBindingIgnored :namedGraph
+                 :syntax :noTargetSyntax ) .
+
+:concreteIri a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE <iri> is the symmetric CBD: outgoing, incoming, and the blank closure" ;
+    mf:action [ qt:query <iri.rq> ; qt:data <data.ttl> ] ;
+    mf:result <iri.ttl> .
+
+:boundVariable a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE ?v describes every IRI the WHERE bound to ?v" ;
+    mf:action [ qt:query <variable.rq> ; qt:data <data.ttl> ] ;
+    mf:result <variable.ttl> .
+
+:star a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE * describes the IRIs bound to the WHERE's projected variables" ;
+    mf:action [ qt:query <star.rq> ; qt:data <data.ttl> ] ;
+    mf:result <iri.ttl> .
+
+:starMultiVar a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE * over two projected variables unions both descriptions" ;
+    mf:action [ qt:query <star-multi-var.rq> ; qt:data <data.ttl> ] ;
+    mf:result <two-subjects.ttl> .
+
+:multipleTargets a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE <a> <b> unions the two symmetric CBDs" ;
+    mf:action [ qt:query <multiple.rq> ; qt:data <data.ttl> ] ;
+    mf:result <two-subjects.ttl> .
+
+:absentSubject a mf:QueryEvaluationTest ;
+    mf:name "describing a subject the data does not mention is empty, not an error" ;
+    mf:action [ qt:query <absent.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+:literalBindingIgnored a mf:QueryEvaluationTest ;
+    mf:name "a variable bound to a literal contributes no describable subject" ;
+    mf:action [ qt:query <literal-binding-ignored.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+:namedGraph a mf:QueryEvaluationTest ;
+    mf:name "DESCRIBE keeps a described statement in the named graph it came from" ;
+    mf:action [ qt:query <named-graph.rq> ; qt:data <data.ttl> ;
+                qt:graphData <worlds.ttl> ] ;
+    mf:result <named-graph.nq> .
+
+:syntax a mf:PositiveSyntaxTest11 ;
+    mf:name "DESCRIBE with several variable targets and a WHERE parses" ;
+    mf:action <syntax.rq> .
+
+:noTargetSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "DESCRIBE with neither a target nor `*` is a syntax error" ;
+    mf:action <no-target-syntax.rq> .

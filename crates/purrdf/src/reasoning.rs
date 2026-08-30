@@ -1026,12 +1026,14 @@ fn restrict_witness_bindings(query: &Query, surrogates: &BTreeSet<String>) -> Qu
         },
         Query::Construct {
             template,
+            target_graph,
             pattern,
             dataset,
             base_iri,
             version,
         } => Query::Construct {
             template: template.clone(),
+            target_graph: target_graph.clone(),
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),

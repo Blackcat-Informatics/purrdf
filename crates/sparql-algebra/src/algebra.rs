@@ -128,6 +128,18 @@ pub enum Query {
     Construct {
         /// The `CONSTRUCT { ... }` triple template.
         template: Vec<TriplePattern>,
+        /// `CONSTRUCT GRAPH <iri> { ... }` — the **named graph** every
+        /// instantiated statement is placed in: the quad-producing `CONSTRUCT`
+        /// proposed at <https://github.com/w3c/sparql-dev/issues/31> and already
+        /// shipped by Jena and Stardog.
+        ///
+        /// `None` is the SPARQL 1.1 §16.2 form: the result is a *graph*, whose
+        /// statements land in the default graph of the returned dataset. `Some(g)`
+        /// makes the result a *dataset*: the exact same instantiation, tagged with
+        /// `g` — the template, the per-row blank-node freshness rule, and the
+        /// ill-formed-triple skip are all untouched. A `None` query therefore emits
+        /// byte-identically to what it emitted before this variant existed.
+        target_graph: Option<NamedNode>,
         /// The `WHERE` algebra.
         pattern: GraphPattern,
         /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
