@@ -304,6 +304,34 @@ being able to not ask for it:
 | Justification | `entail.justify(data, axiom)` | a minimal subset of the ontology that still entails `axiom`, as canonical N-Quads |
 | Proof | `entail.explain_conclusion(data, regime, conclusion)` | `asserted`, `steps`, and one `rule` line per rule the derivation cited |
 
+### Proof terms: opt-in to produce, and a checker to consume
+
+Every call above records **nothing** and returns a two-tuple. `entail.prove` is the
+opt-in: it records the tableau runs a service made — which costs the completion graph of
+each one — and returns a THREE-tuple whose third element is a `purrdf-dl-proof 1`
+document. The answer and the certificate are byte-identical either way, because recording
+is an observation the reasoner makes of itself rather than a lever it reads.
+
+| Service | Call | Answer |
+| --- | --- | --- |
+| Prove | `entail.prove(data, service, argument, step_cap, work_cap)` | `(answer, certificate, proof)`; the proof is a `purrdf-dl-proof 1` block whose header is derived from the term and whose `body` lines are the term's own canonical bytes as lowercase hex |
+| Check a proof | `entail.check_proof(data, service, argument, answer, certificate, proof)` | the `purrdf-dl-proof-check 1` report — the digest and input identity it checked, the runs it replayed, and the `attested`/`trusted`/`unattested` counts with the producer-shared components the check rests on |
+| The service set | `entail.proof_services()` | the seven services a proof term can be about, so the set is measurable rather than written down here |
+
+`service` is one of those seven; `argument` is the question's own input in that service's
+grammar — `""` for `consistency`/`classify`/`realize` (a non-empty one raises rather than
+being discarded), ONE N-Triples term for `class-satisfiability`/`instances`, ONE triple for
+`entails`, and a `method <bot|top|star>` line followed by one term per line for
+`extract-module`. `entail.Reasoner(data, proofs=True)` is the session-level opt-in, and
+`session.prove(service, argument)` is the same call over a document parsed once.
+
+Nothing in `check_proof` trusts the producer: the ontology is parsed from `data`, the
+question is re-derived from `service` and `argument`, the claims are read back out of
+`answer`'s own grammar, and the checking context comes from a reverse mapping the call
+performs itself. A proof for a different ontology, for a different question, or of a
+different answer is refused — and so is a document reading `availability not-recorded`,
+because an answer nobody asked to record must never be presented as a verified one.
+
 The three services below are the **chase** lane's, not the tableau's, and their
 certificate is a `purrdf-reasoning-report 4` block rather than a DL one. Note the
 collision and that both names are right: `entail.entails` asks the tableau about one

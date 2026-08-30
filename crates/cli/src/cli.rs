@@ -524,6 +524,28 @@ pub(crate) enum Command {
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
+        /// Also record the run's PROOF TERM and print it after the certificate.
+        ///
+        /// Opt-in, and it costs what it records: the completion graph of every tableau run
+        /// the decision made. Without it nothing is recorded and the run is exactly the one
+        /// this command has always made — the verdict and the certificate are byte-identical
+        /// either way, because recording is an observation the reasoner makes of itself
+        /// rather than a lever it reads.
+        ///
+        /// The document is a `purrdf-dl-proof 1` block: a header derived from the term, then
+        /// the term's own canonical bytes as lowercase hex. `--check-proof` verifies one.
+        #[arg(long)]
+        proof: bool,
+        /// CHECK a `purrdf-dl-proof 1` document at PATH against THIS ontology, this question
+        /// and this run's own answer, printing a `purrdf-dl-proof-check 1` report.
+        ///
+        /// Nothing about the check trusts the producer: the ontology is the one named on this
+        /// command line, the question is re-derived here, and the claims are read out of this
+        /// run's own answer. A proof for a different ontology, or a proof of a different
+        /// answer, is refused. A document reading `availability not-recorded` is refused too,
+        /// by name — an answer nobody asked to record is never presented as a verified one.
+        #[arg(long, value_name = "PATH")]
+        check_proof: Option<PathBuf>,
         /// Narrow the per-decision round cap the ontology's own size already derives;
         /// `0` (the default) applies no narrowing and runs under the derived cap alone.
         /// This can only TIGHTEN the cap, never loosen it — mirrors the `step_cap`

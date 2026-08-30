@@ -311,6 +311,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         )
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
+            proof,
+            check_proof,
             step_cap,
             work_cap,
             from,
@@ -323,6 +325,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 base: base.as_deref(),
                 step_cap: *step_cap,
                 work_cap: *work_cap,
+                proof: *proof,
+                check_proof: check_proof.as_deref(),
             },
             &ledger_target,
             jsonld_options.as_ref(),

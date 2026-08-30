@@ -26,8 +26,11 @@ import {
   ready,
   Dataset,
   entailCertainAnswers,
+  entailCheckAbsentProof,
   entailCheckGoldenVectors,
   entailCheckInconsistentRefusal,
+  entailCheckProof,
+  entailCheckProofGoldenVectors,
   entailClassify,
   entailConsistency,
   entailEntails,
@@ -40,9 +43,11 @@ import {
   entailJustify,
   entailMaterialize,
   entailProfile,
+  entailProve,
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  Reasoner,
 } from "../index.mjs";
 
 await ready();
@@ -68,6 +73,78 @@ const SCHEMA = `<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#sub
 <http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 `;
+
+test("entailCheckProofGoldenVectors runs the committed proof artifact ON WASM", () => {
+  // The cross-host byte-stability assertion for the PROOF surface, executed on wasm32.
+  // A rendered proof carries `ServiceProof::encode`'s canonical bytes, so a byte that
+  // differs here is a difference in the proof TERM — a consumer's pinned digest would
+  // have moved under them — rather than a difference in some rendering of one.
+  entailCheckProofGoldenVectors();
+});
+
+test("an answer nobody recorded is never presented as verified ON WASM", () => {
+  entailCheckAbsentProof();
+  // …and a caller reaching the boundary directly sees the same three states. An
+  // ordinary answer records nothing and SAYS so.
+  const plain = entailConsistency(SCHEMA, 0, 0);
+  assert.equal(plain.proof, "purrdf-dl-proof 1\navailability not-recorded\n");
+  assert.throws(
+    () =>
+      entailCheckProof(SCHEMA, "consistency", "", plain.answer, plain.certificate, plain.proof),
+    /nothing was recorded/,
+  );
+
+  // Asking produces a real proof, with byte-identical answer and certificate…
+  const proved = entailProve(SCHEMA, "consistency", "", 0, 0);
+  assert.equal(proved.answer, plain.answer);
+  assert.equal(proved.certificate, plain.certificate);
+  assert.match(proved.proof, /\navailability recorded\n/);
+
+  // …and it CHECKS, against this caller's own document, question and answer.
+  const report = entailCheckProof(
+    SCHEMA,
+    "consistency",
+    "",
+    proved.answer,
+    proved.certificate,
+    proved.proof,
+  );
+  assert.match(report, /^purrdf-dl-proof-check 1\nservice consistency\n/);
+  assert.match(report, /\nanswer checked 1\n/);
+
+  // A proof of a DIFFERENT ontology does not check, which is the binding the whole
+  // term exists for.
+  assert.throws(
+    () =>
+      entailCheckProof(
+        "<http://example.org/z> <http://example.org/p> <http://example.org/q> .\n",
+        "consistency",
+        "",
+        proved.answer,
+        proved.certificate,
+        proved.proof,
+      ),
+    /does not check/,
+  );
+});
+
+test("the session records proofs only when asked ON WASM", () => {
+  const plain = new Reasoner(SCHEMA, 0, 0);
+  assert.equal(plain.recordsProofs(), false);
+  assert.equal(
+    plain.consistency().proof,
+    "purrdf-dl-proof 1\navailability not-recorded\n",
+  );
+  assert.throws(() => plain.prove("consistency", ""), /records nothing/);
+  plain.free();
+
+  const recording = Reasoner.withProofs(SCHEMA, 0, 0);
+  assert.equal(recording.recordsProofs(), true);
+  const proved = recording.prove("classify", "");
+  assert.match(proved.proof, /\navailability recorded\n/);
+  entailCheckProof(SCHEMA, "classify", "", proved.answer, proved.certificate, proved.proof);
+  recording.free();
+});
 
 test("entailCheckGoldenVectors runs the committed tri-host artifact ON WASM", () => {
   // Throws with the case name and a diff of the two strings on the first byte that

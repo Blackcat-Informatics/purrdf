@@ -1266,6 +1266,50 @@ class entail:
         data: str, regime: RegimeLike, conclusion: str
     ) -> tuple[str, str]: ...
 
+    # ── Proof terms: opt-in to produce, and a checker to consume ─────────────
+    # Everything above records NOTHING and returns a two-tuple. `prove` is the
+    # opt-in: it records the tableau runs a service made — which costs the
+    # completion graph of each one — and returns a THREE-tuple whose third
+    # element is a `purrdf-dl-proof 1` document. `answer` and `certificate` are
+    # byte-identical to the same question asked without a proof: recording is an
+    # observation the reasoner makes of itself, never a lever it reads.
+    #
+    # `argument` is the question's own input in that service's grammar: "" for
+    # `consistency`/`classify`/`realize` (a non-empty one raises rather than
+    # being discarded), ONE N-Triples term for `class-satisfiability`/`instances`,
+    # ONE triple for `entails`, and a `method <bot|top|star>` line followed by one
+    # term per line for `extract-module`.
+    @staticmethod
+    def prove(
+        data: str,
+        service: str,
+        argument: str = ...,
+        step_cap: int = ...,
+        work_cap: int = ...,
+    ) -> tuple[str, str, str]: ...
+    # CHECK a proof against the CALLER's own ontology, question and answer.
+    # Nothing in it trusts the producer: the ontology is parsed from `data`, the
+    # question is re-derived from `service` and `argument`, the claims are read
+    # back out of `answer`'s own grammar, and the checking context comes from a
+    # reverse mapping this call performs itself. Returns the
+    # `purrdf-dl-proof-check 1` report. `answer` and `certificate` may each be ""
+    # for a weaker check that SAYS so. Raises ValueError for a proof document
+    # reading `availability not-recorded` — an answer nobody asked to record is
+    # never presented as a verified one — and for every other rejection.
+    @staticmethod
+    def check_proof(
+        data: str,
+        service: str,
+        argument: str,
+        answer: str,
+        certificate: str,
+        proof: str,
+    ) -> str: ...
+    # The seven services `prove` and `check_proof` accept, so a caller can
+    # MEASURE the set rather than trust a docstring.
+    @staticmethod
+    def proof_services() -> list[str]: ...
+
     # ── Conclusion-directed entailment (the CHASE lane, not the tableau) ─────
     # The CERTAIN ANSWERS of a basic graph pattern: the substitutions the
     # knowledge base ENTAILS the pattern under — true in every model, not merely
@@ -1359,8 +1403,21 @@ class entail:
     # pair of caps.
     class Reasoner:
         def __init__(
-            self, data: str, step_cap: int = ..., work_cap: int = ...
+            self,
+            data: str,
+            step_cap: int = ...,
+            work_cap: int = ...,
+            proofs: bool = ...,
         ) -> None: ...
+        # Whether this session records proof terms. False unless the session was
+        # constructed with `proofs=True`, which is the whole opt-in: a session
+        # nobody asked to record keeps no traces and costs what it always cost.
+        @property
+        def records_proofs(self) -> bool: ...
+        # Answer `service` about `argument`, with its proof — see
+        # `purrdf.entail.prove`. Returns (answer, certificate, proof). Raises
+        # ValueError on a session that records nothing.
+        def prove(self, service: str, argument: str = ...) -> tuple[str, str, str]: ...
         def consistency(self) -> tuple[str, str]: ...
         def classify(self) -> tuple[str, str]: ...
         def realize(self) -> tuple[str, str]: ...

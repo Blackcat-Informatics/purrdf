@@ -1014,7 +1014,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the boundary is no longer re-exported from the crate root",
         "crates/validate/src/lib.rs",
-        lambda text: _cut(text, f"{_names('boundary')},\n    "),
+        # The NAME and its comma, with no assumption about what follows. `rustfmt` packs
+        # this re-export list to fill the line, so whether a given name lands at the end of
+        # one is a function of every other name in the block — a needle that assumed a
+        # trailing newline stopped applying the day an unrelated export was added beside it,
+        # which is a self-test proving nothing rather than a tree that moved.
+        lambda text: _cut(text, f"{_names('boundary')},"),
     ),
     (
         "the boundary grows a parameter no host spells",

@@ -84,11 +84,12 @@ use core::fmt::Write as _;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
 use purrdf_entail::{
-    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
+    ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
-    Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner,
-    ReasoningReport, Regime, RuleSet, VarKey, Verdict, explain_conclusion, extensions,
-    extract_module, implemented, justify, materialize, parse_rif_xml, profile, rules,
+    Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Question,
+    Reasoner, ReasoningReport, Regime, RuleSet, Service, ServiceProof, VarKey, Verdict,
+    explain_conclusion, extensions, extract_module, extract_module_with_proofs, implemented,
+    justify, materialize, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -1156,6 +1157,9 @@ pub struct ReasoningAnswer {
     answer: String,
     /// The certificate of the run that produced it.
     certificate: String,
+    /// The rendered [`ServiceProof`] of the run that produced it, ABSENT when nobody asked
+    /// for one. See [`Self::proof`] for why absence is a value rather than an empty proof.
+    proof: Option<String>,
 }
 
 impl ReasoningAnswer {
@@ -1185,10 +1189,55 @@ impl ReasoningAnswer {
         &self.certificate
     }
 
+    /// The rendered PROOF TERM of the run that produced [`Self::answer`], when one was
+    /// recorded.
+    ///
+    /// `None` is not an empty proof, and the distinction is the whole reason this is an
+    /// `Option`. Recording is OPT-IN — [`ReasonerSession::open`] records nothing and
+    /// [`ReasonerSession::open_with_proofs`] records — so a service nobody asked to record
+    /// answers `None` here, meaning NOTHING WAS MEASURED. A recorded proof with `runs 0` in
+    /// it means something entirely different: that the service is syntactic, so there was no
+    /// search to check, and the checker verified exactly that. Collapsing the two would let
+    /// "never recorded" be presented as "verified, and there was nothing to verify", which is
+    /// the one substitution this surface must never make.
+    ///
+    /// [`Self::proof_document`] is the same three-way fact for a host that carries strings
+    /// and has no `Option`.
+    #[must_use]
+    pub fn proof(&self) -> Option<&str> {
+        self.proof.as_deref()
+    }
+
+    /// [`Self::proof`] as a document that is never empty — the form every host boundary
+    /// carries.
+    ///
+    /// An FFI surface has no `Option`, and an empty string would be a third spelling of
+    /// "nothing" a consumer could read as either of the other two. So an unrecorded answer
+    /// renders [`ABSENT_DL_PROOF`], which SAYS `availability not-recorded` in the same
+    /// grammar a recorded proof uses — and [`check_dl_proof`] refuses that document by name
+    /// rather than reporting a verification of it.
+    #[must_use]
+    pub fn proof_document(&self) -> &str {
+        self.proof.as_deref().unwrap_or(ABSENT_DL_PROOF)
+    }
+
     /// Consume the answer, yielding `(answer, certificate)`.
+    ///
+    /// Drops the proof, which is why it is not the way a host reaches one: see
+    /// [`Self::into_proved_parts`].
     #[must_use]
     pub fn into_parts(self) -> (String, String) {
         (self.answer, self.certificate)
+    }
+
+    /// Consume the answer, yielding `(answer, certificate, proof_document)`.
+    ///
+    /// The three-string shape a host that asked for a proof carries. The third is never
+    /// empty: see [`Self::proof_document`].
+    #[must_use]
+    pub fn into_proved_parts(self) -> (String, String, String) {
+        let proof = self.proof.unwrap_or_else(|| ABSENT_DL_PROOF.to_owned());
+        (self.answer, self.certificate, proof)
     }
 }
 
@@ -1536,6 +1585,272 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
     out
 }
 
+// ── Proof rendering: a text ENVELOPE, not a pretty-printer ──────────────────
+
+/// The banner every rendered [`ServiceProof`] opens with.
+pub const DL_PROOF_BANNER: &str = "purrdf-dl-proof 1";
+
+/// The banner every [`check_dl_proof`] report opens with.
+///
+/// Deliberately not [`DL_PROOF_BANNER`]: a proof and a report ABOUT a proof are different
+/// documents, and a consumer that parsed one as the other would read a summary of a check as
+/// the thing checked.
+pub const DL_PROOF_CHECK_BANNER: &str = "purrdf-dl-proof-check 1";
+
+/// The document an answer produced WITHOUT recording carries in place of a proof.
+///
+/// Never the empty string, and never a proof term with nothing in it. An FFI surface has no
+/// `Option`, so the absence has to be said out loud in the same grammar a present proof uses —
+/// otherwise "nobody asked" arrives at a host as a blank, and a blank is what "verified,
+/// nothing to check" also looks like. [`check_dl_proof`] refuses this document by name.
+pub const ABSENT_DL_PROOF: &str = "purrdf-dl-proof 1\navailability not-recorded\n";
+
+/// The services a [`ServiceProof`] can be about, in the spellings this boundary uses
+/// everywhere else — the `service <name>` line of a rendered certificate, the CLI's own
+/// words, and the `service` argument [`prove_to_string`] and [`check_dl_proof`] take.
+pub const PROOF_SERVICE_NAMES: [&str; 7] = [
+    "consistency",
+    "class-satisfiability",
+    "classify",
+    "realize",
+    "instances",
+    "entails",
+    "extract-module",
+];
+
+/// How many proof BYTES one `body` line carries, as `2 * n` lowercase hex digits.
+const PROOF_BODY_BYTES_PER_LINE: usize = 32;
+
+/// This boundary's name for `service`.
+///
+/// Total, and deliberately NOT [`Service::as_str`]: `purrdf-entail` names the classification
+/// service `classification`, and every string this boundary has ever emitted for it — the
+/// certificate's `service` line, the CLI subcommand, the WASM and Python method — says
+/// `classify`. One vocabulary at the boundary is worth more than agreeing with an internal
+/// one, so the map is here and [`parse_proof_service`] is its exact inverse.
+const fn proof_service_name(service: Service) -> &'static str {
+    match service {
+        Service::Consistency => "consistency",
+        Service::ClassSatisfiability => "class-satisfiability",
+        Service::Classification => "classify",
+        Service::Realization => "realize",
+        Service::InstanceRetrieval => "instances",
+        Service::AxiomEntailment => "entails",
+        Service::ModuleExtraction => "extract-module",
+        // `Service` is `#[non_exhaustive]`; a service added upstream without a name here is a
+        // service this boundary cannot render, and saying so is better than inventing a name.
+        _ => "unknown",
+    }
+}
+
+/// Parse a service from its [`PROOF_SERVICE_NAMES`] spelling.
+///
+/// # Errors
+///
+/// A spelling outside the accepted set, which the message names in full so a caller three
+/// language boundaries away can fix the call without reading this source.
+fn parse_proof_service(name: &str) -> Result<Service, String> {
+    match name {
+        "consistency" => Ok(Service::Consistency),
+        "class-satisfiability" => Ok(Service::ClassSatisfiability),
+        "classify" => Ok(Service::Classification),
+        "realize" => Ok(Service::Realization),
+        "instances" => Ok(Service::InstanceRetrieval),
+        "entails" => Ok(Service::AxiomEntailment),
+        "extract-module" => Ok(Service::ModuleExtraction),
+        other => Err(format!(
+            "unknown proof service \"{other}\"; accepted: {}",
+            PROOF_SERVICE_NAMES.join(", ")
+        )),
+    }
+}
+
+/// `bytes` as lowercase hex.
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Parse lowercase hex back to bytes, refusing an odd length or a non-hex digit.
+fn unhex(text: &str) -> Result<Vec<u8>, String> {
+    if !text.len().is_multiple_of(2) {
+        return Err("a proof body line has an odd number of hex digits".to_owned());
+    }
+    let mut out = Vec::with_capacity(text.len() / 2);
+    for pair in text.as_bytes().as_chunks::<2>().0 {
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'a'..=b'f' => Ok(byte - b'a' + 10),
+            other => Err(format!(
+                "a proof body carries {:?}, which is not a lowercase hex digit",
+                char::from(other)
+            )),
+        };
+        out.push(digit(pair[0])? << 4 | digit(pair[1])?);
+    }
+    Ok(out)
+}
+
+/// Render a [`ServiceProof`] to the boundary's byte-stable textual form.
+///
+/// The grammar, in emission order — one fact per line, `\n`-terminated:
+///
+/// ```text
+/// purrdf-dl-proof 1
+/// service <name>                  (one of PROOF_SERVICE_NAMES)
+/// availability recorded
+/// input <64 lowercase hex>        (the ontology's RDFC-1.0 identity)
+/// digest <64 lowercase hex>       (BLAKE3 over the canonical bytes below)
+/// trust-base <a,b,c>              (what a verification of this proof RESTS ON)
+/// runs <n>                        (tableau runs the service made)
+/// traced <n>                      (how many of them kept a replayable trace)
+/// claims <n>
+/// truncated true | false
+/// receipt none | receipt <cause>  (caller-stop | work-cap | round-cap | nested-ceiling)
+/// bytes <n>
+/// body <hex>                      (ceil(n / 32) lines, 64 hex digits each but the last)
+/// ```
+///
+/// # Why an envelope around canonical bytes, and not a rendering of the term
+///
+/// This was a deliberate choice between two shapes, and the alternative was rejected rather
+/// than not considered.
+///
+/// A [`ServiceProof`] transitively contains one [`purrdf_entail::DlProof`] per tableau run,
+/// and a `DlProof` is a completion graph: every node with its concept label, its nominals and
+/// its distinctness set, every edge, every blocking pair, every branch point with all of its
+/// grounded alternatives, every clash with the frame that grounded it. All of it in the
+/// reasoner's INTERNED ids, which mean nothing without the reverse mapping. A line-oriented
+/// rendering of that is not a summary — it is the same information in a second syntax, and it
+/// would have to be exact, because [`ServiceProof::verify`] replays those very structures. Two
+/// exact syntaxes for one term is two things to keep byte-identical across four hosts instead
+/// of one, and the cost of getting the second one subtly wrong is a proof that checks against
+/// a graph slightly unlike the one the search built.
+///
+/// The shape that is NOT acceptable is the third one: a readable digest of the term — "12
+/// runs, 40 claims, refutation closed" — presented as a proof. A consumer holding that
+/// cannot verify anything. It is a report about a proof wearing the word "proof", and the
+/// issue this implements asks for the opposite.
+///
+/// So the text carries the canonical bytes verbatim, in a deterministic encoding, and every
+/// header line above it is DERIVED from those same bytes. The header is a courtesy for a
+/// reader; it is never evidence. [`decode_dl_proof`] re-renders the decoded term and refuses
+/// the document unless it is byte-identical, so a header that disagrees with the body is a
+/// rejection rather than a friendlier summary a forger got to write.
+///
+/// # Determinism
+///
+/// Every line is a fixed keyword and an integer, a fixed-order enum name, or hex over
+/// [`ServiceProof::encode`] — which is itself byte-identical run to run and on `wasm32`. No
+/// clock, no map iteration, no host paths, no floating point, and the hex is lowercase and
+/// fixed-width, so a 32-bit host and a 64-bit host emit the same bytes.
+#[must_use]
+pub fn render_dl_proof(proof: &ServiceProof) -> String {
+    let bytes = proof.encode();
+    let mut out = String::with_capacity(bytes.len() * 2 + 512);
+    out.push_str(DL_PROOF_BANNER);
+    out.push('\n');
+    let _ = writeln!(out, "service {}", proof_service_name(proof.service()));
+    out.push_str("availability recorded\n");
+    let _ = writeln!(out, "input {}", hex(&proof.input()));
+    let _ = writeln!(out, "digest {}", proof.digest_hex());
+    let _ = writeln!(
+        out,
+        "trust-base {}",
+        proof
+            .trust_base()
+            .iter()
+            .map(|entry| entry.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let _ = writeln!(out, "runs {}", proof.runs().len());
+    let _ = writeln!(
+        out,
+        "traced {}",
+        proof
+            .runs()
+            .iter()
+            .filter(|run| run.proof().is_some())
+            .count()
+    );
+    let _ = writeln!(out, "claims {}", proof.claims().len());
+    let _ = writeln!(out, "truncated {}", proof.truncated());
+    match proof.receipt() {
+        None => out.push_str("receipt none\n"),
+        Some(receipt) => {
+            let _ = writeln!(out, "receipt {}", receipt.cause().as_str());
+        }
+    }
+    let _ = writeln!(out, "bytes {}", bytes.len());
+    for chunk in bytes.chunks(PROOF_BODY_BYTES_PER_LINE) {
+        let _ = writeln!(out, "body {}", hex(chunk));
+    }
+    out
+}
+
+/// Read a `purrdf-dl-proof 1` document back into the term it renders.
+///
+/// The UNTRUSTED entrance for the TEXT layer, exactly as [`ServiceProof::decode`] is for the
+/// byte layer, and it defers to that one for everything structural. What it adds is the
+/// envelope's own discipline:
+///
+/// * the banner must be the first line, so a document in some other grammar is refused rather
+///   than parsed hopefully;
+/// * `availability not-recorded` is refused BY NAME — there is no proof in such a document,
+///   and reporting a verification of it is the one substitution this whole surface exists to
+///   prevent;
+/// * the header is not believed. The decoded term is re-rendered and compared to the document
+///   byte for byte, so every derived line — the digest, the run and claim counts, the trust
+///   base, the stopping cause — is checked against the bytes rather than read off a line a
+///   forger wrote. A document whose `runs 0` sits above a body carrying six runs is a
+///   rejection.
+///
+/// # Errors
+///
+/// A document that is not this grammar, an unrecorded one, a body that is not lowercase hex,
+/// bytes that are not a [`ServiceProof`], or a header that does not match its own body.
+pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, String> {
+    let mut lines = document.lines();
+    if lines.next() != Some(DL_PROOF_BANNER) {
+        return Err(format!(
+            "a proof document opens with {DL_PROOF_BANNER:?}, and this one does not"
+        ));
+    }
+    if document.contains("\navailability not-recorded\n") {
+        return Err(
+            "this answer carries no proof: nothing was recorded, because nobody asked. That \
+             is not the same as a proof with nothing in it, and it is not something a check \
+             can report as verified — ask for the proof (open the session with proofs, or \
+             call the `prove` entry point) and check that"
+                .to_owned(),
+        );
+    }
+    let mut bytes = Vec::new();
+    for line in lines {
+        if let Some(hex) = line.strip_prefix("body ") {
+            bytes.extend_from_slice(&unhex(hex)?);
+        }
+    }
+    if bytes.is_empty() {
+        return Err("a recorded proof document carries no `body` line".to_owned());
+    }
+    let proof = ServiceProof::decode(&bytes)
+        .map_err(|error| format!("the proof body is not a proof term: {error}"))?;
+    let rendered = render_dl_proof(&proof);
+    if rendered != document {
+        return Err(
+            "the proof document's header does not describe the proof its own body carries, \
+             so at least one of the two was rewritten after the proof was issued"
+                .to_owned(),
+        );
+    }
+    Ok(proof)
+}
+
 /// The rendering of a three-valued [`Verdict`]: `true`, `false` or `unknown`.
 ///
 /// `unknown` is never collapsed to `false`. That is the whole point of the third
@@ -1590,6 +1905,13 @@ pub struct ReasonerSession {
     work_cap: u32,
     /// The reverse-mapped knowledge base, built by the first service that needs it.
     reasoner: Option<Reasoner>,
+    /// Whether this session RECORDS proof terms — set at [`ReasonerSession::open_with_proofs`]
+    /// and read only when the knowledge base is built.
+    ///
+    /// A flag rather than two session types because it changes nothing a service DECIDES: it
+    /// selects [`Reasoner::with_proofs`] over [`Reasoner::new`], which is an observation the
+    /// decision core makes of itself and never a lever it reads.
+    proofs: bool,
 }
 
 impl std::fmt::Debug for ReasonerSession {
@@ -1605,6 +1927,7 @@ impl std::fmt::Debug for ReasonerSession {
             .field("step_cap", &self.step_cap)
             .field("work_cap", &self.work_cap)
             .field("reasoned", &self.reasoner.is_some())
+            .field("proofs", &self.proofs)
             .finish_non_exhaustive()
     }
 }
@@ -1628,6 +1951,34 @@ impl ReasonerSession {
     /// here, so an ontology whose knowledge base cannot be built still opens — and fails on
     /// the first service that needs one, with that service's own message.
     pub fn open(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, String> {
+        Self::opened(document, step_cap, work_cap, false)
+    }
+
+    /// Parse `document` and open a session that RECORDS a proof term for every service that
+    /// has one.
+    ///
+    /// The opt-in. [`Self::open`] is unchanged and still records nothing, so a caller who
+    /// does not ask pays exactly what they paid before: no clausification contract, no
+    /// instrumented search, no kept traces. What this costs is real — the recorded
+    /// completion graph of every tableau run — and it buys the one thing an unrecorded
+    /// answer cannot have, which is a proof a consumer can check for themselves.
+    ///
+    /// It changes nothing a service DECIDES. Every verdict, every certificate counter and
+    /// every rendered answer is identical to the same question asked through [`Self::open`];
+    /// `a_proved_session_answers_exactly_what_an_unproved_one_answers` is what makes that
+    /// falsifiable rather than asserted.
+    ///
+    /// `step_cap` and `work_cap` are [`Self::open`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, String> {
+        Self::opened(document, step_cap, work_cap, true)
+    }
+
+    /// Parse `document` and open a session in the requested recording mode.
+    fn opened(document: &str, step_cap: u32, work_cap: u32, proofs: bool) -> Result<Self, String> {
         let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
             .map_err(|diagnostic| diagnostic.to_string())?;
         Ok(Self {
@@ -1635,14 +1986,25 @@ impl ReasonerSession {
             step_cap,
             work_cap,
             reasoner: None,
+            proofs,
         })
+    }
+
+    /// Whether this session records proof terms.
+    #[must_use]
+    pub const fn records_proofs(&self) -> bool {
+        self.proofs
     }
 
     /// The knowledge base, building it on first use.
     fn kb(&mut self) -> Result<&mut Reasoner, String> {
         if self.reasoner.is_none() {
-            let reasoner =
-                Reasoner::new(&self.dataset).map_err(|error| format!("reasoner: {error}"))?;
+            let reasoner = if self.proofs {
+                Reasoner::with_proofs(&self.dataset)
+            } else {
+                Reasoner::new(&self.dataset)
+            }
+            .map_err(|error| format!("reasoner: {error}"))?;
             let reasoner = if self.step_cap == 0 {
                 reasoner
             } else {
@@ -1693,10 +2055,11 @@ impl ReasonerSession {
     ///
     /// A knowledge base that cannot be built from the document.
     pub fn consistency(&mut self) -> Result<ReasoningAnswer, String> {
-        let (verdict, certificate) = self.kb()?.consistency().into_parts();
+        let (verdict, certificate, proof) = self.kb()?.consistency().into_certified_parts();
         Ok(ReasoningAnswer {
             answer: format!("consistency {}\n", verdict_name(verdict)),
             certificate: render_dl_certificate("consistency", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
         })
     }
 
@@ -1706,11 +2069,11 @@ impl ReasonerSession {
     ///
     /// A knowledge base that cannot be built, or an ontology with no model.
     pub fn classify(&mut self) -> Result<ReasoningAnswer, String> {
-        let (hierarchy, certificate) = self
+        let (hierarchy, certificate, proof) = self
             .kb()?
             .classify()
             .map_err(|error| service_error("classify", &error))?
-            .into_parts();
+            .into_certified_parts();
         let mut answer = String::new();
         for (left, right) in hierarchy.equivalences() {
             let _ = writeln!(answer, "equivalent {} {}", emit(left), emit(right));
@@ -1727,6 +2090,7 @@ impl ReasonerSession {
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("classify", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
         })
     }
 
@@ -1736,11 +2100,11 @@ impl ReasonerSession {
     ///
     /// A knowledge base that cannot be built, or an ontology with no model.
     pub fn realize(&mut self) -> Result<ReasoningAnswer, String> {
-        let (realization, certificate) = self
+        let (realization, certificate, proof) = self
             .kb()?
             .realize()
             .map_err(|error| service_error("realize", &error))?
-            .into_parts();
+            .into_certified_parts();
         let mut answer = String::new();
         for (individual, class) in realization.types() {
             let _ = writeln!(answer, "type {} {}", emit(individual), emit(class));
@@ -1751,6 +2115,7 @@ impl ReasonerSession {
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("realize", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
         })
     }
 
@@ -1762,11 +2127,11 @@ impl ReasonerSession {
     /// or an ontology with no model.
     pub fn instances(&mut self, class: &str) -> Result<ReasoningAnswer, String> {
         let term = parse_one_term(class)?;
-        let (individuals, certificate) = self
+        let (individuals, certificate, proof) = self
             .kb()?
             .instances(&term)
             .map_err(|error| service_error("instances", &error))?
-            .into_parts();
+            .into_certified_parts();
         let mut answer = String::new();
         for individual in &individuals {
             let _ = writeln!(answer, "instance {}", emit(individual));
@@ -1774,6 +2139,7 @@ impl ReasonerSession {
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("instances", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
         })
     }
 
@@ -1785,16 +2151,17 @@ impl ReasonerSession {
     /// ontology with no model.
     pub fn entails(&mut self, axiom: &str) -> Result<ReasoningAnswer, String> {
         let parsed = parse_axiom(axiom)?;
-        let (verdict, certificate) = self
+        let (verdict, certificate, proof) = self
             .kb()?
             .entails(&parsed)
             .map_err(|error| service_error("entails", &error))?
-            .into_parts();
+            .into_certified_parts();
         let mut answer = format!("entails {}\n", verdict_name(verdict));
         write_axiom(&parsed, &mut answer);
         Ok(ReasoningAnswer {
             answer,
             certificate: render_dl_certificate("entails", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
         })
     }
 
@@ -1805,6 +2172,7 @@ impl ReasonerSession {
         ReasoningAnswer {
             answer: render_profile_answer(&certificate),
             certificate: render_profile_certificate(&certificate),
+            proof: None,
         }
     }
 
@@ -1817,11 +2185,20 @@ impl ReasonerSession {
     pub fn extract_module(&self, signature: &str, method: &str) -> Result<ReasoningAnswer, String> {
         let notion = parse_module_method(method)?;
         let seed = parse_signature(signature)?;
-        let extraction = extract_module(&self.dataset, &seed, notion)
-            .map_err(|error| format!("extract-module: {error}"))?;
+        // Two producers, one for each recording mode: `extract_module_with_proofs` records a
+        // ZERO-RUN proof — a real measurement, saying this service is syntactic and had no
+        // search to check — and `extract_module` records nothing at all. They are different
+        // answers and must not be collapsed into one call with a discarded proof.
+        let extraction = if self.proofs {
+            extract_module_with_proofs(&self.dataset, &seed, notion)
+        } else {
+            extract_module(&self.dataset, &seed, notion)
+        }
+        .map_err(|error| format!("extract-module: {error}"))?;
         Ok(ReasoningAnswer {
             answer: purrdf_rdf::canonical_flat_nquads(extraction.module().as_ref())?,
             certificate: render_module_certificate(&extraction),
+            proof: extraction.proof().map(render_dl_proof),
         })
     }
 
@@ -1837,6 +2214,7 @@ impl ReasonerSession {
         Ok(ReasoningAnswer {
             answer: purrdf_rdf::canonical_flat_nquads(justification.ontology().as_ref())?,
             certificate: render_justification(&justification)?,
+            proof: None,
         })
     }
 
@@ -1865,6 +2243,7 @@ impl ReasonerSession {
         Ok(ReasoningAnswer {
             answer: render_chase_proof_answer(&proof),
             certificate: render_chase_proof_certificate(&proof),
+            proof: None,
         })
     }
 }
@@ -3048,6 +3427,7 @@ pub fn certain_answers_to_string(
     Ok(ReasoningAnswer {
         answer,
         certificate: render_reasoning_report(answers.report()),
+        proof: None,
     })
 }
 
@@ -3127,6 +3507,7 @@ pub fn graph_entails_to_string(
     Ok(ReasoningAnswer {
         answer: render_entailment_answer(&certificate),
         certificate: render_reasoning_report(certificate.report()),
+        proof: None,
     })
 }
 
@@ -3246,7 +3627,871 @@ pub fn verify_entailment_to_string(
     Ok(ReasoningAnswer {
         answer,
         certificate: render_reasoning_report(certificate.report()),
+        proof: None,
     })
+}
+
+// ── Proving, and checking a proof ───────────────────────────────────────────
+
+/// Refuse a non-empty `argument` for a service that takes none.
+///
+/// Never discarded silently: a caller who passed a class to `classify` believes it narrowed
+/// the question, and the answer they would get back is about every named class.
+fn refuse_argument(service: &str, argument: &str) -> Result<(), String> {
+    if argument.trim().is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "service \"{service}\" takes no argument, and \"{argument}\" was supplied; the \
+         argument would have been discarded rather than narrowing the question"
+    ))
+}
+
+/// Split `extract-module`'s argument into `(signature, method)`.
+///
+/// The grammar is one `method <bot|top|star>` line and then one N-Triples term per line —
+/// the module extractor's question is a PAIR, and every other service's argument is a single
+/// value, so the pair is spelled inside the one string every host already carries rather than
+/// by giving one service a second parameter four hosts would have to grow.
+fn parse_module_argument(argument: &str) -> Result<(String, String), String> {
+    let (first, rest) = argument.split_once('\n').unwrap_or((argument, ""));
+    let method = first.trim().strip_prefix("method ").ok_or_else(|| {
+        format!(
+            "an `extract-module` argument opens with a `method <{}>` line",
+            MODULE_METHOD_NAMES.join("|")
+        )
+    })?;
+    Ok((rest.to_owned(), method.trim().to_owned()))
+}
+
+/// The services, as a session that RECORDS.
+impl ReasonerSession {
+    /// Can `class` have an instance in some model?
+    ///
+    /// The seventh Direct-Semantics service, and the one this boundary had no entry point
+    /// for. It is reachable through [`Self::prove`] rather than as a free function of its
+    /// own, because what made it worth adding is that [`purrdf_entail::Service`] has seven
+    /// members and a proof surface missing one of them is a surface with a hole in it.
+    ///
+    /// The answer's grammar:
+    ///
+    /// ```text
+    /// class-satisfiability true | false | unknown
+    /// term <C>
+    /// ```
+    ///
+    /// `unknown` is never collapsed to `false`, and the class is echoed for the reason
+    /// [`entails_to_string`] echoes its axiom.
+    ///
+    /// # Errors
+    ///
+    /// A `class` that is not one N-Triples term, a knowledge base that cannot be built, or an
+    /// ontology with no model.
+    pub fn class_satisfiability(&mut self, class: &str) -> Result<ReasoningAnswer, String> {
+        let term = parse_one_term(class)?;
+        let (verdict, certificate, proof) = self
+            .kb()?
+            .class_satisfiability(&term)
+            .map_err(|error| service_error("class-satisfiability", &error))?
+            .into_certified_parts();
+        let mut answer = format!("class-satisfiability {}\n", verdict_name(verdict));
+        let _ = writeln!(answer, "term {}", emit(&term));
+        Ok(ReasoningAnswer {
+            answer,
+            certificate: render_dl_certificate("class-satisfiability", &certificate),
+            proof: proof.as_ref().map(render_dl_proof),
+        })
+    }
+
+    /// Answer `service` about `argument`, WITH the proof term of the run that answered.
+    ///
+    /// One entry point for all seven proof-bearing services rather than seven, because the
+    /// thing a caller varies is the QUESTION and the thing they are asking for is the same:
+    /// the answer, its certificate, and a proof they can hand to [`check_dl_proof`]. Seven
+    /// parallel entry points would have to be grown at four hosts each.
+    ///
+    /// `argument` is the question's own input, in the grammar the service already uses:
+    ///
+    /// | `service` | `argument` |
+    /// |---|---|
+    /// | `consistency`, `classify`, `realize` | empty — a non-empty one is an ERROR |
+    /// | `class-satisfiability`, `instances` | ONE N-Triples term |
+    /// | `entails` | ONE triple of the OWL 2 RDF mapping |
+    /// | `extract-module` | a `method <bot\|top\|star>` line, then one term per line |
+    ///
+    /// # Errors
+    ///
+    /// A session that is not recording (open it with [`Self::open_with_proofs`]), an unknown
+    /// service spelling, an argument that is wrong for the service, or whatever that service
+    /// itself refuses.
+    pub fn prove(&mut self, service: &str, argument: &str) -> Result<ReasoningAnswer, String> {
+        let asked = parse_proof_service(service)?;
+        if !self.proofs {
+            return Err(format!(
+                "this session records nothing, so \"{service}\" has no proof to hand back. \
+                 Recording is opt-in and costs the traces it keeps: open the session with \
+                 proofs to ask for one"
+            ));
+        }
+        match asked {
+            Service::Consistency => {
+                refuse_argument(service, argument)?;
+                self.consistency()
+            }
+            Service::ClassSatisfiability => self.class_satisfiability(argument),
+            Service::Classification => {
+                refuse_argument(service, argument)?;
+                self.classify()
+            }
+            Service::Realization => {
+                refuse_argument(service, argument)?;
+                self.realize()
+            }
+            Service::InstanceRetrieval => self.instances(argument),
+            Service::AxiomEntailment => self.entails(argument),
+            Service::ModuleExtraction => {
+                let (signature, method) = parse_module_argument(argument)?;
+                self.extract_module(&signature, &method)
+            }
+            // `Service` is `#[non_exhaustive]`: a member added upstream is a member this
+            // boundary cannot ask about, and saying so beats answering a different question.
+            other => Err(format!(
+                "service \"{}\" has no entry point at this boundary",
+                other.as_str()
+            )),
+        }
+    }
+}
+
+/// Answer `service` about `argument` over `document`, WITH the proof term of the run.
+///
+/// [`ReasonerSession::prove`] over a session opened by [`ReasonerSession::open_with_proofs`].
+/// The opt-in lives here rather than as a flag on the existing entry points: every one of
+/// them is unchanged, so a caller who does not ask for a proof runs exactly the search they
+/// ran before, keeps exactly the traces they kept before (none), and gets exactly the bytes
+/// they got before.
+///
+/// The returned [`ReasoningAnswer`] carries all three strings. [`ReasoningAnswer::answer`]
+/// and [`ReasoningAnswer::certificate`] are byte-identical to the same question asked without
+/// proofs; [`ReasoningAnswer::proof_document`] is the `purrdf-dl-proof 1` block
+/// [`check_dl_proof`] takes.
+///
+/// `step_cap` and `work_cap` are [`consistency_to_string`]'s.
+///
+/// # Errors
+///
+/// A malformed document, an unknown `service`, an `argument` that is wrong for the service,
+/// or whatever that service itself refuses.
+///
+/// ```
+/// use purrdf_validate::regime::{check_dl_proof, prove_to_string};
+///
+/// let data = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+/// let proved = prove_to_string(data, "consistency", "", 0, 0).expect("decides");
+/// assert_eq!(proved.answer(), "consistency true\n");
+/// assert!(proved.proof_document().starts_with("purrdf-dl-proof 1\n"));
+/// assert!(proved.proof_document().contains("\navailability recorded\n"));
+///
+/// // …and a consumer holding the document, the answer and the proof can CHECK it.
+/// let checked = check_dl_proof(
+///     data,
+///     "consistency",
+///     "",
+///     proved.answer(),
+///     proved.certificate(),
+///     proved.proof_document(),
+/// )
+/// .expect("a genuine proof checks");
+/// assert!(checked.starts_with("purrdf-dl-proof-check 1\n"));
+/// ```
+pub fn prove_to_string(
+    document: &str,
+    service: &str,
+    argument: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    ReasonerSession::open_with_proofs(document, step_cap, work_cap)?.prove(service, argument)
+}
+
+/// Read a rendered `purrdf-dl-certificate 1` block back into the value it renders.
+///
+/// A CONSUMER's reading, for holding a proof's stopping receipt against — see
+/// [`DlCertificate::stated`]. It is the certificate the consumer was HANDED beside the
+/// answer, which is what makes the receipt check meaningful: the two halves of one answer
+/// must agree, and a receipt free to state its own budget could widen the cap it claims to
+/// have exhausted until the claim was unfalsifiable.
+///
+/// # The one reading the rendering does not carry
+///
+/// [`render_dl_certificate`] emits no cancellation flag — `completeness budget-exhausted`
+/// covers both a cap reached and a caller's stop signal, and only [`DlCertificate::stopped`]
+/// tells them apart. So a certificate read back from text states `stopped false`, and a proof
+/// whose receipt claims a caller cancellation is REFUSED here rather than checked against a
+/// flag the text never carried. That is the sound direction — a refusal, not an
+/// acceptance — and it costs nothing at this boundary, which has no stop signal to fire: no
+/// answer this crate produces can carry such a receipt.
+///
+/// # Errors
+///
+/// Text that is not this grammar, a missing or repeated line, a counter that is not a `u64`,
+/// or a boundary naming no [`Construct`](purrdf_entail::Construct).
+fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some(DL_CERTIFICATE_BANNER) {
+        return Err(format!(
+            "a DL certificate opens with {DL_CERTIFICATE_BANNER:?}, and this one does not"
+        ));
+    }
+    let mut exhausted = None;
+    let mut boundaries = Vec::new();
+    let mut counters: [Option<u64>; 8] = [None; 8];
+    const COUNTERS: [&str; 8] = [
+        "steps",
+        "budget",
+        "work",
+        "work-budget",
+        "decisions",
+        "peak-nodes",
+        "disjunctions",
+        "peak-depth",
+    ];
+    for line in lines {
+        if let Some(value) = line.strip_prefix("completeness ") {
+            exhausted = Some(match value {
+                "decided" | "decided-within-boundaries" => false,
+                "budget-exhausted" => true,
+                other => return Err(format!("unknown DL completeness \"{other}\"")),
+            });
+        } else if let Some(rest) = line.strip_prefix("boundary ") {
+            let name = rest.split_once(' ').map_or(rest, |(name, _)| name);
+            let construct = purrdf_entail::Construct::of_name(name)
+                .ok_or_else(|| format!("\"{name}\" names no construct this build knows"))?;
+            boundaries.push(purrdf_entail::Boundary::of(construct));
+        } else if let Some((index, value)) = COUNTERS.iter().enumerate().find_map(|(at, name)| {
+            line.strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .map(|value| (at, value))
+        }) {
+            let parsed = value.parse::<u64>().map_err(|error| {
+                format!("the certificate's `{}` line: {error}", COUNTERS[index])
+            })?;
+            if counters[index].replace(parsed).is_some() {
+                return Err(format!(
+                    "the certificate states `{}` twice",
+                    COUNTERS[index]
+                ));
+            }
+        }
+    }
+    let exhausted = exhausted.ok_or_else(|| "the certificate states no completeness".to_owned())?;
+    let mut read = [0_u64; 8];
+    for (at, value) in counters.iter().enumerate() {
+        read[at] = value.ok_or_else(|| format!("the certificate states no `{}`", COUNTERS[at]))?;
+    }
+    Ok(DlCertificate::stated(
+        exhausted, false, boundaries, read[0], read[1], read[2], read[3], read[4], read[5],
+        read[6], read[7],
+    ))
+}
+
+/// The two self-delimiting N-Triples terms a `<keyword> <s> <o>` answer line carries.
+///
+/// Safe to split on the first space after the first term because every term this boundary
+/// puts on such a line is a NAME — an `<iri>` or a `_:label`, neither of which may carry an
+/// unescaped space — which is the same property that makes the answer grammars readable.
+fn two_terms(line: &str, keyword: &str) -> Result<(TermValue, TermValue), String> {
+    let rest = line
+        .strip_prefix(keyword)
+        .and_then(|rest| rest.strip_prefix(' '))
+        .ok_or_else(|| format!("a `{keyword}` line was expected, and this is {line:?}"))?;
+    let (left, right) = rest
+        .split_once(' ')
+        .ok_or_else(|| format!("a `{keyword}` line carries two terms, and this is {line:?}"))?;
+    Ok((parse_one_term(left)?, parse_one_term(right)?))
+}
+
+/// The three-valued verdict an answer's FIRST line reports about `keyword`.
+fn answer_verdict(answer: &str, keyword: &str) -> Result<Verdict, String> {
+    let first = answer.lines().next().unwrap_or_default();
+    match first
+        .strip_prefix(keyword)
+        .and_then(|r| r.strip_prefix(' '))
+    {
+        Some("true") => Ok(Verdict::True),
+        Some("false") => Ok(Verdict::False),
+        Some("unknown") => Ok(Verdict::Unknown),
+        _ => Err(format!(
+            "a `{keyword}` answer opens `{keyword} true|false|unknown`, and this opens {first:?}"
+        )),
+    }
+}
+
+/// The claims `answer` REPORTS, read back out of the service's own answer grammar.
+///
+/// The other half of checking a proof, and the half [`ServiceProof::verify`] cannot do:
+/// verification establishes that the runs happened and that the claims rest on them, and this
+/// establishes that those claims are the ones the answer beside the proof actually states. A
+/// genuine proof of some OTHER answer verifies perfectly and is caught here.
+///
+/// A three-valued `false` or `unknown` reports NO claim, which is the whole reason the DL
+/// services answer three-valued: "not established" and "established false" are both the
+/// absence of a claim.
+fn answer_claims(
+    service: Service,
+    argument: &str,
+    answer: &str,
+) -> Result<Vec<ClaimSubject>, String> {
+    Ok(match service {
+        Service::Consistency => {
+            if answer_verdict(answer, "consistency")?.is_true() {
+                vec![ClaimSubject::Consistent]
+            } else {
+                Vec::new()
+            }
+        }
+        Service::ClassSatisfiability => {
+            if answer_verdict(answer, "class-satisfiability")?.is_true() {
+                vec![ClaimSubject::ClassSatisfiable {
+                    class: parse_one_term(argument)?,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        Service::Classification => answer
+            .lines()
+            .filter(|line| line.starts_with("subclass "))
+            .map(|line| {
+                two_terms(line, "subclass").map(|(sub, sup)| ClaimSubject::Subsumption { sub, sup })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        Service::Realization => answer
+            .lines()
+            .filter(|line| line.starts_with("type "))
+            .map(|line| {
+                two_terms(line, "type")
+                    .map(|(individual, class)| ClaimSubject::Type { individual, class })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        Service::InstanceRetrieval => {
+            let class = parse_one_term(argument)?;
+            answer
+                .lines()
+                .filter_map(|line| line.strip_prefix("instance "))
+                .map(|term| {
+                    parse_one_term(term).map(|individual| ClaimSubject::Type {
+                        individual,
+                        class: class.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        }
+        Service::AxiomEntailment => {
+            if answer_verdict(answer, "entails")?.is_true() {
+                vec![ClaimSubject::Axiom {
+                    axiom: Box::new(parse_axiom(argument)?),
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        Service::ModuleExtraction => {
+            // The answer IS the module, as canonical N-Quads, so its claim is that module's
+            // own producer-independent identity — recomputed here from the bytes the consumer
+            // holds rather than read off anything the producer said about them.
+            let module = purrdf_rdf::parse_dataset(answer.as_bytes(), INPUT_MEDIA_TYPE, None)
+                .map_err(|diagnostic| format!("the module answer is not N-Quads: {diagnostic}"))?;
+            vec![ClaimSubject::Module {
+                digest: purrdf_entail::ontology_identity(&module),
+            }]
+        }
+        other => {
+            return Err(format!(
+                "service \"{}\" has no answer grammar at this boundary",
+                other.as_str()
+            ));
+        }
+    })
+}
+
+/// The question `service` and `argument` ask, RE-DERIVED from the consumer's own inputs.
+///
+/// Never read off the proof. The whole value of [`ServiceProof::verify`] is that it refuses a
+/// proof whose question is not the one the consumer holds, and taking the question from the
+/// proof would make that check compare a value with itself.
+///
+/// Two of the seven questions range over the ontology's own named terms rather than over an
+/// argument, and those are re-derived from the consumer's `reasoner` — their own reverse
+/// mapping of their own document — which is exactly the re-derivation the check needs.
+fn proof_question(
+    reasoner: &Reasoner,
+    service: Service,
+    argument: &str,
+) -> Result<Question, String> {
+    Ok(match service {
+        Service::Consistency => Question::Consistency,
+        Service::ClassSatisfiability => Question::ClassSatisfiability {
+            class: parse_one_term(argument)?,
+        },
+        Service::Classification => reasoner.classification_question(),
+        Service::Realization => reasoner.realization_question(),
+        Service::InstanceRetrieval => Question::InstanceRetrieval {
+            class: parse_one_term(argument)?,
+        },
+        Service::AxiomEntailment => Question::AxiomEntailment {
+            axiom: Box::new(parse_axiom(argument)?),
+        },
+        Service::ModuleExtraction => {
+            let (signature, method) = parse_module_argument(argument)?;
+            Question::ModuleExtraction {
+                signature: parse_signature(&signature)?,
+                method: parse_module_method(&method)?,
+            }
+        }
+        other => {
+            return Err(format!(
+                "service \"{}\" has no question at this boundary",
+                other.as_str()
+            ));
+        }
+    })
+}
+
+/// CHECK a rendered proof against the consumer's OWN ontology, question and answer.
+///
+/// The checker every host exposes, and the reason a proof is worth rendering at all. Nothing
+/// about it trusts the producer: the ontology is parsed from `document`, the question is
+/// re-derived from `service` and `argument`, the claims are read back out of `answer`'s own
+/// grammar, and the checking context is built from a reverse mapping this function performs
+/// itself. The proof supplies the runs and nothing else.
+///
+/// Five things are established, and each is a separate refusal:
+///
+/// 1. the document is a `purrdf-dl-proof 1` block whose header describes its own body — see
+///    [`decode_dl_proof`], which re-renders and compares;
+/// 2. the proof BINDS this ontology and this question: an `entails` proof for a different
+///    axiom, or any proof for a different document, is refused before a run is read;
+/// 3. every claim names a basis whose run exists and answered the way the basis requires, and
+///    the stopping receipt — when there is one — is the certificate's, reading for reading;
+/// 4. every run that kept a trace is REPLAYED against the consumer's own clause set;
+/// 5. the proof's established claims are exactly the ones `answer` reports, so a genuine
+///    proof of some other answer cannot travel beside this one.
+///
+/// `answer` and `certificate` may both be empty, and each empty one is a WEAKER check that
+/// says so in the report rather than a check that quietly passed: with no answer the report
+/// reads `answer not-checked`, and with no certificate a proof carrying a stopping receipt is
+/// refused, because there is nothing for the receipt to be a receipt of.
+///
+/// The report's grammar:
+///
+/// ```text
+/// purrdf-dl-proof-check 1
+/// service <name>
+/// availability recorded
+/// digest <64 lowercase hex>
+/// input <64 lowercase hex>
+/// runs <n>
+/// replayed <n>
+/// claims <n>
+/// attested <n>
+/// trusted <n>
+/// unattested <n>
+/// rests-on <a,b,c>
+/// answer checked <n> | answer not-checked
+/// ```
+///
+/// There is deliberately no `verified true` line. A verification that FAILED is an `Err`
+/// carrying the rejection, so a rendered `true` would be a constant — a disclosure dressed as
+/// a gate, which is the thing [`ReasoningAnswer::certificate`] documents this boundary does
+/// not do. What the report carries instead are the three counts, and they are load-bearing:
+/// `unattested` above zero says some run was accounted for and NOT replayed, and `rests-on`
+/// names the producer-shared components the whole check leans on. A proof is never "fully
+/// attested" — reading a clause set is the producer's clausifier, and the report says so.
+///
+/// # Errors
+///
+/// A proof document that is absent (`availability not-recorded`), malformed, or for another
+/// ontology, question or answer; a document that does not parse; an unknown service; a
+/// certificate that is not a `purrdf-dl-certificate 1` block; or a run whose recorded trace
+/// does not replay.
+pub fn check_dl_proof(
+    document: &str,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> Result<String, String> {
+    let asked = parse_proof_service(service)?;
+    let term = decode_dl_proof(proof)?;
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    // The consumer's own reverse mapping, never the producer's: this is the step that rests on
+    // the `refutation-encoding` and `reverse-mapping` entries the report names.
+    let mut reasoner = Reasoner::with_proofs(&dataset).map_err(|e| format!("reasoner: {e}"))?;
+    let question = proof_question(&reasoner, asked, argument)?;
+    reasoner.prepare(&question);
+    let context = reasoner
+        .proof_context()
+        .map_err(|error| format!("checking context: {error}"))?;
+    let read = if asked == Service::ModuleExtraction {
+        // Locality extraction opens no tableau, so it issues no DL certificate at all — its
+        // `purrdf-module-extraction 1` block is a different document with no search counters
+        // a stopping receipt could be held against. `ServiceProof::verify` takes `None` for
+        // exactly this service, and a module proof arriving WITH a receipt is refused there
+        // on the proof's own terms rather than admitted here.
+        if !certificate.trim().is_empty() && !certificate.starts_with(MODULE_CERTIFICATE_BANNER) {
+            return Err(format!(
+                "`extract-module` issues a {MODULE_CERTIFICATE_BANNER:?} block and no DL \
+                 certificate; this is some other document"
+            ));
+        }
+        None
+    } else if certificate.trim().is_empty() {
+        None
+    } else {
+        Some(parse_dl_certificate(certificate)?)
+    };
+    let replay = term
+        .verify(&dataset, &question, read.as_ref(), &context)
+        .map_err(|error| format!("the proof does not check: {error}"))?;
+    let bound = if answer.trim().is_empty() {
+        None
+    } else {
+        let claims = answer_claims(asked, argument, answer)?;
+        term.covers(&claims)
+            .map_err(|error| format!("the proof does not cover the answer beside it: {error}"))?;
+        Some(claims.len())
+    };
+
+    let mut out = String::new();
+    out.push_str(DL_PROOF_CHECK_BANNER);
+    out.push('\n');
+    let _ = writeln!(out, "service {}", proof_service_name(term.service()));
+    out.push_str("availability recorded\n");
+    let _ = writeln!(out, "digest {}", term.digest_hex());
+    let _ = writeln!(out, "input {}", hex(&term.input()));
+    let _ = writeln!(out, "runs {}", replay.runs());
+    let _ = writeln!(out, "replayed {}", replay.replayed());
+    let _ = writeln!(out, "claims {}", replay.claims());
+    let checks = replay.checks();
+    let _ = writeln!(out, "attested {}", checks.attested());
+    let _ = writeln!(out, "trusted {}", checks.trusted());
+    let _ = writeln!(out, "unattested {}", checks.unattested());
+    let _ = writeln!(
+        out,
+        "rests-on {}",
+        checks
+            .rests_on()
+            .iter()
+            .map(|entry| entry.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    match bound {
+        Some(count) => {
+            let _ = writeln!(out, "answer checked {count}");
+        }
+        None => out.push_str("answer not-checked\n"),
+    }
+    Ok(out)
+}
+
+// ── The proof golden vector: one artifact, four hosts ───────────────────────
+
+/// The committed golden vector for the proof surface, verbatim.
+///
+/// Compiled in with `include_str!` for the reason [`REGIME_GOLDEN_VECTORS`] is: the C ABI,
+/// WASM and PyO3 crates consume the SAME bytes as the Rust test rather than each growing a
+/// fixture that drifts from the other three. The artifact lives at
+/// `crates/validate/tests/fixtures/dl-proof.vectors`.
+pub const DL_PROOF_GOLDEN_VECTORS: &str = include_str!("../tests/fixtures/dl-proof.vectors");
+
+/// One case of [`DL_PROOF_GOLDEN_VECTORS`]: a document and a question, and the three strings
+/// this boundary must produce for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DlProofVector {
+    /// The case name, unique within the artifact.
+    name: String,
+    /// The service, in [`PROOF_SERVICE_NAMES`] spelling.
+    service: String,
+    /// The question's argument, in that service's own grammar.
+    argument: String,
+    /// The input document (N-Quads).
+    input: String,
+    /// The answer [`prove_to_string`] must return.
+    answer: String,
+    /// The `purrdf-dl-proof 1` document it must return beside it.
+    proof: String,
+    /// The `purrdf-dl-proof-check 1` report [`check_dl_proof`] must return for that proof.
+    check: String,
+}
+
+impl DlProofVector {
+    /// The case name, unique within the artifact.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The service, in [`PROOF_SERVICE_NAMES`] spelling.
+    #[must_use]
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+
+    /// The question's argument.
+    #[must_use]
+    pub fn argument(&self) -> &str {
+        &self.argument
+    }
+
+    /// The input document, as N-Quads.
+    #[must_use]
+    pub fn input(&self) -> &str {
+        &self.input
+    }
+
+    /// The answer [`prove_to_string`] must return.
+    #[must_use]
+    pub fn answer(&self) -> &str {
+        &self.answer
+    }
+
+    /// The proof document [`prove_to_string`] must return.
+    #[must_use]
+    pub fn proof(&self) -> &str {
+        &self.proof
+    }
+
+    /// The check report [`check_dl_proof`] must return.
+    #[must_use]
+    pub fn check(&self) -> &str {
+        &self.check
+    }
+}
+
+/// Parse [`DL_PROOF_GOLDEN_VECTORS`] into its cases.
+///
+/// The format is [`REGIME_GOLDEN_VECTORS`]'s, with this artifact's own section names: a line
+/// starting with `@` is a directive (`@case <name>`, `@service <name>`, `@argument`, `@input`,
+/// `@answer`, `@proof`, `@check`, `@end`), every other line belongs to the last body a
+/// directive opened, and outside a body only blank lines and `#` comments are allowed. No
+/// body line may begin with `@`, and none does: N-Quads terms open with `<`, `_:` or `"`, and
+/// every proof, answer and check line opens with a fixed keyword.
+///
+/// # Errors
+///
+/// A malformed artifact, with the 1-based line number.
+pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
+    let mut cases: Vec<DlProofVector> = Vec::new();
+    let mut open: Option<&'static str> = None;
+    let mut name: Option<String> = None;
+    let mut service: Option<String> = None;
+    let mut bodies: std::collections::BTreeMap<&'static str, String> =
+        std::collections::BTreeMap::new();
+
+    for (index, raw) in DL_PROOF_GOLDEN_VECTORS.lines().enumerate() {
+        let line = index + 1;
+        let Some(directive) = raw.strip_prefix('@') else {
+            match open {
+                Some(section) => {
+                    let body = bodies.entry(section).or_default();
+                    body.push_str(raw);
+                    body.push('\n');
+                }
+                None if raw.trim().is_empty() || raw.starts_with('#') => {}
+                None => return Err(format!("line {line}: text outside any section: {raw}")),
+            }
+            continue;
+        };
+        let (keyword, argument) = directive.split_once(' ').unwrap_or((directive, ""));
+        let argument = argument.trim();
+        open = None;
+        match keyword {
+            "case" if name.is_none() && !argument.is_empty() => {
+                name = Some(argument.to_owned());
+            }
+            "service" if !argument.is_empty() => service = Some(argument.to_owned()),
+            "argument" | "input" | "answer" | "proof" | "check" => {
+                let section: &'static str = match keyword {
+                    "argument" => "argument",
+                    "input" => "input",
+                    "answer" => "answer",
+                    "proof" => "proof",
+                    _ => "check",
+                };
+                bodies.entry(section).or_default();
+                open = Some(section);
+            }
+            "end" => {
+                let missing = |what: &str| format!("line {line}: @end before @{what}");
+                cases.push(DlProofVector {
+                    name: name.take().ok_or_else(|| missing("case"))?,
+                    service: service.take().ok_or_else(|| missing("service"))?,
+                    argument: bodies.remove("argument").unwrap_or_default(),
+                    input: bodies.remove("input").ok_or_else(|| missing("input"))?,
+                    answer: bodies.remove("answer").ok_or_else(|| missing("answer"))?,
+                    proof: bodies.remove("proof").ok_or_else(|| missing("proof"))?,
+                    check: bodies.remove("check").ok_or_else(|| missing("check"))?,
+                });
+                bodies.clear();
+            }
+            other => {
+                return Err(format!(
+                    "line {line}: unknown or misplaced directive @{other}"
+                ));
+            }
+        }
+    }
+    if name.is_some() {
+        return Err("the artifact ends inside an unclosed case (missing @end)".to_owned());
+    }
+    Ok(cases)
+}
+
+/// Run every case of [`DL_PROOF_GOLDEN_VECTORS`] through [`prove_to_string`] and
+/// [`check_dl_proof`], and compare all three outputs byte for byte.
+///
+/// **This is the cross-host byte-stability assertion for the proof surface.** The Rust test
+/// here, the C-ABI crate's test, the WASM crate's test and the PyO3 crate's test all call
+/// THIS function over THESE bytes, and the WASM host also exposes it as
+/// `entailCheckProofGoldenVectors` so the artifact can be run as real wasm — a different
+/// pointer width, a different `usize`, a different allocator — and compared against what the
+/// native build produced. A host that diverges fails here in the same words the others do.
+///
+/// The proof document is the load-bearing comparison: it carries
+/// [`ServiceProof::encode`]'s canonical bytes, so a byte difference between hosts is a
+/// difference in the PROOF TERM rather than in a rendering of one, and a consumer's pinned
+/// digest would have moved under them.
+///
+/// It also requires the artifact to cover every service in [`PROOF_SERVICE_NAMES`], so a
+/// truncated artifact fails loudly instead of passing vacuously.
+///
+/// # Errors
+///
+/// A malformed artifact, a case that fails to prove or to check, a byte difference in any of
+/// the three outputs, or a service the artifact no longer covers.
+pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
+    let cases = dl_proof_golden_vectors()?;
+    if cases.is_empty() {
+        return Err("the DL proof golden vector artifact holds no cases".to_owned());
+    }
+    for case in &cases {
+        let produced = prove_to_string(
+            case.input(),
+            case.service(),
+            case.argument().trim_end(),
+            0,
+            0,
+        )
+        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
+        let differs = |what: &str, expected: &str, produced: &str| {
+            format!(
+                "case \"{}\": {what} mismatch\n--- expected ---\n{expected}--- produced ---\n{produced}",
+                case.name()
+            )
+        };
+        if produced.answer() != case.answer() {
+            return Err(differs("answer", case.answer(), produced.answer()));
+        }
+        if produced.proof_document() != case.proof() {
+            return Err(differs("proof", case.proof(), produced.proof_document()));
+        }
+        let checked = check_dl_proof(
+            case.input(),
+            case.service(),
+            case.argument().trim_end(),
+            produced.answer(),
+            produced.certificate(),
+            produced.proof_document(),
+        )
+        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
+        if checked != case.check() {
+            return Err(differs("check", case.check(), &checked));
+        }
+    }
+    for service in PROOF_SERVICE_NAMES {
+        if !cases.iter().any(|case| case.service() == service) {
+            return Err(format!(
+                "the DL proof golden vector artifact no longer covers service \"{service}\""
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Check that an answer nobody asked to record is NOT presentable as a verified one.
+///
+/// The twin of [`check_inconsistent_refusal`], shared for the same reason: the Rust test
+/// here, the C-ABI test, the WASM test and the PyO3 test all call it, so the one host that
+/// quietly started treating an absent proof as a checked one fails against the same
+/// expectation as the other three.
+///
+/// Three facts, and each fails on its own:
+///
+/// 1. an answer from a session that records nothing carries [`ABSENT_DL_PROOF`], which SAYS
+///    `availability not-recorded` rather than being blank;
+/// 2. [`check_dl_proof`] REFUSES that document, and the refusal says nothing was recorded;
+/// 3. the same question asked WITH proofs produces a document that says
+///    `availability recorded` and does check — so (2) is the absence being refused rather
+///    than the checker being broken.
+///
+/// # Errors
+///
+/// Any of the three failing.
+pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
+    const DOCUMENT: &str = concat!(
+        "<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ",
+        "<http://example.org/Animal> .\n"
+    );
+    let unrecorded = consistency_to_string(DOCUMENT, 0, 0)?;
+    if unrecorded.proof().is_some() {
+        return Err("a session that records nothing must carry no proof term".to_owned());
+    }
+    if unrecorded.proof_document() != ABSENT_DL_PROOF {
+        return Err(format!(
+            "an unrecorded answer must carry the absent-proof document, and it carries:\n{}",
+            unrecorded.proof_document()
+        ));
+    }
+    let refusal = check_dl_proof(
+        DOCUMENT,
+        "consistency",
+        "",
+        unrecorded.answer(),
+        unrecorded.certificate(),
+        unrecorded.proof_document(),
+    )
+    .err()
+    .ok_or_else(|| {
+        "checking an absent proof reported a result; an answer nobody recorded must never be \
+         presented as a verified one"
+            .to_owned()
+    })?;
+    if !refusal.contains("nothing was recorded") {
+        return Err(format!(
+            "the refusal must say that nothing was recorded, and it says: {refusal}"
+        ));
+    }
+    let recorded = prove_to_string(DOCUMENT, "consistency", "", 0, 0)?;
+    if !recorded
+        .proof_document()
+        .contains("\navailability recorded\n")
+    {
+        return Err("a recorded answer must say so".to_owned());
+    }
+    check_dl_proof(
+        DOCUMENT,
+        "consistency",
+        "",
+        recorded.answer(),
+        recorded.certificate(),
+        recorded.proof_document(),
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -5830,5 +7075,471 @@ _:b <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:a .\n\
         let refused = on_the_smallest_stack(move || consistency_to_string(cycle, 0, 0))
             .expect_err("a data range cannot be its own complement");
         assert!(refused.contains("cyclic OWL data range"), "{refused}");
+    }
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use super::*;
+
+    /// `Cat ⊑ Animal`, `Fish ⊑ Animal`, `tom : Cat` — a real taxonomy and a real realization.
+    const TAXONOMY: &str = "\
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+";
+
+    /// A different consistent ontology, for the wrong-ontology negative.
+    const OTHER: &str = "<http://example.org/a> <http://example.org/p> <http://example.org/c> .\n";
+
+    /// `Cat ⊑ Animal`, asserted and therefore entailed.
+    const AXIOM: &str = "<http://example.org/Cat> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+
+    /// Every proof-bearing service and the argument its question takes.
+    fn every_question() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("consistency", ""),
+            ("class-satisfiability", "<http://example.org/Cat>"),
+            ("classify", ""),
+            ("realize", ""),
+            ("instances", "<http://example.org/Animal>"),
+            ("entails", AXIOM),
+            ("extract-module", "method bot\n<http://example.org/Cat>"),
+        ]
+    }
+
+    /// **THE CROSS-HOST ASSERTION, made natively.** Every case of the committed artifact
+    /// reproduces byte for byte.
+    ///
+    /// The wasm half is `entailCheckProofGoldenVectors`, and the C-ABI and PyO3 crates call
+    /// this same function over these same bytes, so a host that diverges fails on one case
+    /// rather than on four fixtures that quietly stopped agreeing.
+    #[test]
+    fn the_dl_proof_golden_vector_matches_natively() {
+        check_dl_proof_golden_vectors().expect("the DL proof golden vector");
+    }
+
+    /// **THE AVAILABILITY ASSERTION, made natively.** An answer nobody asked to record is
+    /// never presentable as a verified one.
+    #[test]
+    fn an_absent_proof_is_never_presented_as_a_verified_one_natively() {
+        check_absent_proof_is_not_verifiable().expect("the absent-proof refusal");
+    }
+
+    /// EVERY proof-bearing service produces a proof this boundary can CHECK.
+    ///
+    /// The headline of the boundary half: seven services, one grammar, and the check runs
+    /// against the consumer's own document, question and answer rather than against anything
+    /// the producer said about them.
+    #[test]
+    fn every_proof_bearing_service_produces_a_checkable_proof() {
+        let questions = every_question();
+        assert_eq!(
+            questions.len(),
+            PROOF_SERVICE_NAMES.len(),
+            "every service has a question here"
+        );
+        for (service, argument) in questions {
+            let proved = prove_to_string(TAXONOMY, service, argument, 0, 0)
+                .unwrap_or_else(|error| panic!("{service}: {error}"));
+            let document = proved.proof_document();
+            assert!(
+                document.starts_with(&format!("{DL_PROOF_BANNER}\nservice {service}\n")),
+                "{service}: {document}"
+            );
+            assert!(document.contains("\navailability recorded\n"), "{service}");
+            let checked = check_dl_proof(
+                TAXONOMY,
+                service,
+                argument,
+                proved.answer(),
+                proved.certificate(),
+                document,
+            )
+            .unwrap_or_else(|error| panic!("{service}: {error}"));
+            assert!(
+                checked.starts_with(&format!("{DL_PROOF_CHECK_BANNER}\nservice {service}\n")),
+                "{service}: {checked}"
+            );
+            assert!(
+                checked.contains("\nanswer checked "),
+                "{service}: the answer beside the proof is part of what was checked: {checked}"
+            );
+            // No proof is fully attested: reading a clause set is the PRODUCER's clausifier,
+            // and the report names what the check rests on rather than claiming independence.
+            let rests = checked
+                .lines()
+                .find_map(|line| line.strip_prefix("rests-on "))
+                .unwrap_or_else(|| panic!("{service}: no rests-on line: {checked}"));
+            assert!(!rests.is_empty(), "{service}: {checked}");
+        }
+    }
+
+    /// **THE MODE-EQUIVALENCE TEST AT THE BOUNDARY.** A proved answer is the unproved answer,
+    /// in the rendered answer AND in the rendered certificate.
+    ///
+    /// Recording is an observation the decision core makes of itself, never a lever it reads.
+    /// This lifts `a_proofs_off_service_answer_is_identical_to_a_proofs_on_one` to the string
+    /// surface every host sees: the certificate is compared as well as the answer, so a
+    /// recording session that had carried extra work forward would move `steps` or `work`
+    /// here even where the verdict did not.
+    #[test]
+    fn a_proved_session_answers_exactly_what_an_unproved_one_answers() {
+        for (service, argument) in every_question() {
+            let mut plain = ReasonerSession::open(TAXONOMY, 0, 0).expect("parses");
+            assert!(!plain.records_proofs());
+            let bare = match service {
+                "consistency" => plain.consistency(),
+                "class-satisfiability" => plain.class_satisfiability(argument),
+                "classify" => plain.classify(),
+                "realize" => plain.realize(),
+                "instances" => plain.instances(argument),
+                "entails" => plain.entails(argument),
+                _ => {
+                    let (signature, method) =
+                        parse_module_argument(argument).expect("a method line");
+                    plain.extract_module(&signature, &method)
+                }
+            }
+            .unwrap_or_else(|error| panic!("{service}: {error}"));
+            let proved = prove_to_string(TAXONOMY, service, argument, 0, 0)
+                .unwrap_or_else(|error| panic!("{service}: {error}"));
+            assert_eq!(bare.answer(), proved.answer(), "{service} answer");
+            assert_eq!(
+                bare.certificate(),
+                proved.certificate(),
+                "{service} certificate"
+            );
+            assert!(
+                bare.proof().is_none(),
+                "{service}: nobody asked, so nothing was measured"
+            );
+            assert!(proved.proof().is_some(), "{service}: somebody asked");
+        }
+    }
+
+    /// **A REAL ZERO IS NOT AN ABSENCE, AT THE BOUNDARY.** The three availabilities are three
+    /// different documents, and no two of them can be read as each other.
+    ///
+    /// The distinction the whole opt-in design turns on, carried all the way to the strings a
+    /// host hands out. `extract-module` is a syntactic fixpoint, so its recorded proof states
+    /// `runs 0` — a MEASUREMENT saying there was no search to check — and the check report
+    /// says `runs 0` too, having verified exactly that. An unrecorded answer states
+    /// `availability not-recorded` and is REFUSED. A host that collapsed the two would be
+    /// presenting "never recorded" as "verified, and there was nothing to verify".
+    #[test]
+    fn a_recorded_zero_run_proof_is_a_different_document_from_an_absent_one() {
+        let argument = "method bot\n<http://example.org/Cat>";
+        let proved = prove_to_string(TAXONOMY, "extract-module", argument, 0, 0).expect("extracts");
+        let document = proved.proof_document();
+        assert!(document.contains("\navailability recorded\n"), "{document}");
+        assert!(
+            document.contains("\nruns 0\n"),
+            "locality extraction opens no tableau: {document}"
+        );
+        let checked = check_dl_proof(
+            TAXONOMY,
+            "extract-module",
+            argument,
+            proved.answer(),
+            proved.certificate(),
+            document,
+        )
+        .expect("a genuine extraction's proof checks");
+        assert!(
+            checked.contains("\nruns 0\n") && checked.contains("\nreplayed 0\n"),
+            "the REPLAY reports the real zero rather than claiming a search checked out: \
+             {checked}"
+        );
+
+        // …and the third availability is neither of those, and is refused by name.
+        let unrecorded = extract_module_to_string(TAXONOMY, "<http://example.org/Cat>\n", "bot")
+            .expect("extracts");
+        assert_eq!(unrecorded.proof_document(), ABSENT_DL_PROOF);
+        assert_ne!(unrecorded.proof_document(), document);
+        let refusal = check_dl_proof(
+            TAXONOMY,
+            "extract-module",
+            argument,
+            unrecorded.answer(),
+            unrecorded.certificate(),
+            unrecorded.proof_document(),
+        )
+        .expect_err("an absent proof is not a verified one");
+        assert!(refusal.contains("nothing was recorded"), "{refusal}");
+    }
+
+    /// A session that records nothing refuses to prove, rather than handing back an answer
+    /// with an empty proof beside it.
+    #[test]
+    fn a_session_that_records_nothing_refuses_to_prove() {
+        let refusal = ReasonerSession::open(TAXONOMY, 0, 0)
+            .expect("parses")
+            .prove("consistency", "")
+            .expect_err("this session records nothing");
+        assert!(refusal.contains("records nothing"), "{refusal}");
+    }
+
+    /// A proof presented against ANOTHER ontology is refused.
+    #[test]
+    fn a_proof_for_another_ontology_is_refused_at_the_boundary() {
+        let proved = prove_to_string(TAXONOMY, "consistency", "", 0, 0).expect("decides");
+        let refusal = check_dl_proof(
+            OTHER,
+            "consistency",
+            "",
+            proved.answer(),
+            proved.certificate(),
+            proved.proof_document(),
+        )
+        .expect_err("a proof for another ontology");
+        assert!(refusal.contains("does not check"), "{refusal}");
+    }
+
+    /// An `entails` proof for one axiom is refused against another — the equivocation the
+    /// whole question binding exists to prevent, at the boundary.
+    #[test]
+    fn an_entails_proof_for_another_axiom_is_refused_at_the_boundary() {
+        let proved = prove_to_string(TAXONOMY, "entails", AXIOM, 0, 0).expect("decides");
+        let other = "<http://example.org/Fish> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+        let refusal = check_dl_proof(
+            TAXONOMY,
+            "entails",
+            other,
+            proved.answer(),
+            proved.certificate(),
+            proved.proof_document(),
+        )
+        .expect_err("a proof of a different axiom");
+        assert!(refusal.contains("does not check"), "{refusal}");
+    }
+
+    /// A proof whose ESTABLISHED CLAIMS are not the answer's is refused, even though every
+    /// run inside it is genuine.
+    ///
+    /// The forgery a two-string answer invites: ship a real proof of a real classification
+    /// beside an answer that reports one subsumption more, or one fewer.
+    #[test]
+    fn a_proof_that_does_not_cover_the_answer_beside_it_is_refused() {
+        let proved = prove_to_string(TAXONOMY, "classify", "", 0, 0).expect("classifies");
+        let doctored: String = proved
+            .answer()
+            .lines()
+            .filter(|line| !line.starts_with("subclass <http://example.org/Fish>"))
+            .fold(String::new(), |mut out, line| {
+                out.push_str(line);
+                out.push('\n');
+                out
+            });
+        assert_ne!(doctored, proved.answer(), "the fixture drops a subsumption");
+        let refusal = check_dl_proof(
+            TAXONOMY,
+            "classify",
+            "",
+            &doctored,
+            proved.certificate(),
+            proved.proof_document(),
+        )
+        .expect_err("a proof of more than the answer says");
+        assert!(refusal.contains("does not cover"), "{refusal}");
+    }
+
+    /// A rewritten HEADER line is refused: the header is derived from the body, so a forger
+    /// cannot write a friendlier summary above bytes that say otherwise.
+    #[test]
+    fn a_rewritten_proof_header_is_refused() {
+        let proved = prove_to_string(TAXONOMY, "realize", "", 0, 0).expect("realizes");
+        let document = proved.proof_document();
+        let runs = document
+            .lines()
+            .find(|line| line.starts_with("runs "))
+            .expect("a runs line");
+        let forged = document.replace(
+            &format!("\n{runs}\n"),
+            "\n runs 0\n".trim_start_matches(' '),
+        );
+        assert_ne!(forged, document, "the fixture rewrites the run count");
+        let refusal = check_dl_proof(
+            TAXONOMY,
+            "realize",
+            "",
+            proved.answer(),
+            proved.certificate(),
+            &forged,
+        )
+        .expect_err("a header that does not describe its own body");
+        assert!(refusal.contains("header does not describe"), "{refusal}");
+    }
+
+    /// A single edited hex digit in the BODY is refused — by the byte decoder, by the digest
+    /// the header states, or by the replay, but never accepted.
+    #[test]
+    fn a_proof_body_edited_by_one_hex_digit_is_refused() {
+        let proved = prove_to_string(TAXONOMY, "entails", AXIOM, 0, 0).expect("decides");
+        let document = proved.proof_document();
+        let at = document.rfind("\nbody ").expect("a body line") + "\nbody ".len();
+        let mut forged: Vec<u8> = document.as_bytes().to_vec();
+        forged[at] = if forged[at] == b'0' { b'1' } else { b'0' };
+        let forged = String::from_utf8(forged).expect("hex is ASCII");
+        assert_ne!(forged, document);
+        assert!(
+            check_dl_proof(
+                TAXONOMY,
+                "entails",
+                AXIOM,
+                proved.answer(),
+                proved.certificate(),
+                &forged,
+            )
+            .is_err(),
+            "an edited proof body must never check"
+        );
+    }
+
+    /// A body carrying anything but lowercase hex is refused rather than silently skipped.
+    #[test]
+    fn a_proof_body_that_is_not_lowercase_hex_is_refused() {
+        let proved = prove_to_string(TAXONOMY, "consistency", "", 0, 0).expect("decides");
+        for forged in [
+            proved.proof_document().replacen("body 1a", "body 1A", 1),
+            proved.proof_document().replacen("body 1a", "body 1", 1),
+        ] {
+            let refusal = check_dl_proof(
+                TAXONOMY,
+                "consistency",
+                "",
+                proved.answer(),
+                proved.certificate(),
+                &forged,
+            )
+            .expect_err("a body that is not lowercase hex");
+            assert!(refusal.contains("hex"), "{refusal}");
+        }
+    }
+
+    /// A BUDGET-EXHAUSTED proof carries a stopping receipt, checks against the certificate it
+    /// arrived beside, and is REFUSED without one.
+    ///
+    /// The receipt is the one part of a proof whose counters live outside it, so this is the
+    /// path where `parse_dl_certificate` is load-bearing: without a certificate there is
+    /// nothing for the receipt to be a receipt of, and the check says so rather than passing.
+    #[test]
+    fn an_undecided_proof_needs_the_certificate_it_arrived_beside() {
+        let starved = prove_to_string(TAXONOMY, "consistency", "", 1, 0).expect("decides nothing");
+        assert_eq!(starved.answer(), "consistency unknown\n");
+        assert!(
+            starved
+                .certificate()
+                .contains("\ncompleteness budget-exhausted\n")
+        );
+        let document = starved.proof_document();
+        assert!(
+            document.contains("\nreceipt round-cap\n"),
+            "the receipt names the cap that bit: {document}"
+        );
+        check_dl_proof(
+            TAXONOMY,
+            "consistency",
+            "",
+            starved.answer(),
+            starved.certificate(),
+            document,
+        )
+        .expect("an undecided proof checks against its own certificate");
+
+        let refusal = check_dl_proof(TAXONOMY, "consistency", "", starved.answer(), "", document)
+            .expect_err("a receipt with nothing to be a receipt of");
+        assert!(refusal.contains("does not check"), "{refusal}");
+    }
+
+    /// A receipt checked against a DIFFERENT run's certificate is refused: the two halves of
+    /// one answer must agree, and a widened cap is exactly the forgery the comparison exists
+    /// to catch.
+    #[test]
+    fn a_receipt_checked_against_another_runs_certificate_is_refused() {
+        let starved = prove_to_string(TAXONOMY, "consistency", "", 1, 0).expect("decides nothing");
+        let decided = prove_to_string(TAXONOMY, "consistency", "", 0, 0).expect("decides");
+        let refusal = check_dl_proof(
+            TAXONOMY,
+            "consistency",
+            "",
+            starved.answer(),
+            decided.certificate(),
+            starved.proof_document(),
+        )
+        .expect_err("a stopping receipt beside a decided certificate");
+        assert!(refusal.contains("does not check"), "{refusal}");
+    }
+
+    /// A proof is byte-identical run to run, which is what makes the committed artifact a
+    /// contract rather than a snapshot.
+    #[test]
+    fn a_rendered_proof_is_byte_identical_run_to_run() {
+        for (service, argument) in every_question() {
+            let first = prove_to_string(TAXONOMY, service, argument, 0, 0).expect("proves");
+            let again = prove_to_string(TAXONOMY, service, argument, 0, 0).expect("proves");
+            assert_eq!(
+                first.proof_document(),
+                again.proof_document(),
+                "{service}: two runs, one proof"
+            );
+        }
+    }
+
+    /// A non-empty argument for a service that takes none is REFUSED rather than discarded.
+    #[test]
+    fn an_argument_a_service_does_not_take_is_refused() {
+        for service in ["consistency", "classify", "realize"] {
+            let refusal = prove_to_string(TAXONOMY, service, "<http://example.org/Cat>", 0, 0)
+                .expect_err("this service takes no argument");
+            assert!(refusal.contains("takes no argument"), "{refusal}");
+        }
+    }
+
+    /// An unknown service spelling names the accepted set.
+    #[test]
+    fn an_unknown_proof_service_names_the_accepted_set() {
+        let refusal =
+            prove_to_string(TAXONOMY, "justify", "", 0, 0).expect_err("not a proof service");
+        assert!(
+            refusal.contains("consistency, class-satisfiability"),
+            "{refusal}"
+        );
+    }
+
+    /// A document in some OTHER grammar is refused rather than parsed hopefully.
+    #[test]
+    fn a_document_that_is_not_a_proof_is_refused() {
+        for text in [
+            "",
+            "purrdf-dl-certificate 1\nservice consistency\n",
+            "hello\n",
+        ] {
+            let refusal = check_dl_proof(TAXONOMY, "consistency", "", "", "", text)
+                .expect_err("not a proof document");
+            assert!(refusal.contains(DL_PROOF_BANNER), "{refusal}");
+        }
+    }
+
+    /// The two proof grammars carry DIFFERENT banners, so neither can be parsed as the other
+    /// — nor as any certificate this boundary already emits.
+    #[test]
+    fn the_proof_banners_are_all_distinct() {
+        let banners = [
+            REPORT_FORMAT_BANNER,
+            DL_CERTIFICATE_BANNER,
+            PROFILE_CERTIFICATE_BANNER,
+            MODULE_CERTIFICATE_BANNER,
+            JUSTIFICATION_CERTIFICATE_BANNER,
+            CHASE_PROOF_CERTIFICATE_BANNER,
+            DL_PROOF_BANNER,
+            DL_PROOF_CHECK_BANNER,
+        ];
+        let mut sorted = banners.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), banners.len(), "every banner is distinct");
     }
 }

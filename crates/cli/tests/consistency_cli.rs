@@ -506,3 +506,125 @@ fn jsonld_options_is_refused_rather_than_silently_ignored() {
         stderr(&out)
     );
 }
+
+// ── The proof surface: opt-in to produce, and a checker to consume ─────────────
+
+/// `--proof` is OPT-IN, and asking for one changes nothing the command decides.
+///
+/// The load-bearing half of the opt-in: the verdict and the certificate a caller gets with
+/// `--proof` are byte-for-byte the ones they get without it, so recording is an observation
+/// the reasoner makes of itself rather than a lever it reads. What `--proof` adds is a third
+/// block, and a caller who does not pass it records nothing and pays nothing.
+#[test]
+fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let bare = run(&["consistency", "--from", "turtle", &path]);
+    assert_eq!(code(&bare), 0, "{}", stderr(&bare));
+    let proved = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    assert_eq!(code(&proved), 0, "{}", stderr(&proved));
+
+    let bare_text = stdout(&bare);
+    let proved_text = stdout(&proved);
+    assert!(
+        proved_text.starts_with(&bare_text),
+        "the proof is APPENDED; the verdict and certificate above it must not move\n\
+         --- without ---\n{bare_text}--- with ---\n{proved_text}"
+    );
+    let proof = &proved_text[bare_text.len()..];
+    assert!(
+        proof.starts_with("purrdf-dl-proof 1\nservice consistency\navailability recorded\n"),
+        "{proof}"
+    );
+    assert!(
+        !bare_text.contains("purrdf-dl-proof"),
+        "a caller who did not ask gets no proof block at all:\n{bare_text}"
+    );
+}
+
+/// A proof this command produced CHECKS through this command, against the same ontology.
+#[test]
+fn a_proof_this_command_produced_checks_through_this_command() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let bare = stdout(&run(&["consistency", "--from", "turtle", &path]));
+    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &path]));
+    let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
+
+    let checked = run(&[
+        "consistency",
+        "--check-proof",
+        &proof_path,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_eq!(code(&checked), 0, "{}", stderr(&checked));
+    let text = stdout(&checked);
+    assert!(
+        text.contains("purrdf-dl-proof-check 1\nservice consistency\n"),
+        "{text}"
+    );
+    assert!(text.contains("\nanswer checked 1\n"), "{text}");
+}
+
+/// A proof for a DIFFERENT ontology is refused, and the refusal is a non-zero exit.
+#[test]
+fn a_proof_for_another_ontology_is_refused_by_the_command() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mine = write_file(&dir.path().join(""), "mine.ttl", ORDINARY_ONTOLOGY);
+    let theirs = write_file(&dir.path().join(""), "theirs.nt", OTHER_ONTOLOGY);
+    let bare = stdout(&run(&["consistency", "--from", "turtle", &mine]));
+    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &mine]));
+    let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
+
+    let refused = run(&[
+        "consistency",
+        "--check-proof",
+        &proof_path,
+        "--from",
+        "nt",
+        &theirs,
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("does not check"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// A document saying `availability not-recorded` is REFUSED BY NAME.
+///
+/// The one substitution this whole surface must never make: an answer nobody asked to record
+/// is not a verified one, and a command that printed a check report for it would be saying
+/// the opposite.
+#[test]
+fn an_absent_proof_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let absent = write_file(
+        &dir.path().join(""),
+        "absent.txt",
+        "purrdf-dl-proof 1\navailability not-recorded\n",
+    );
+    let refused = run(&[
+        "consistency",
+        "--check-proof",
+        &absent,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("nothing was recorded"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// A different consistent ontology, for the wrong-ontology negative.
+const OTHER_ONTOLOGY: &str =
+    "<https://example.org/a> <https://example.org/p> <https://example.org/c> .\n";

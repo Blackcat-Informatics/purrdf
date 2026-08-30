@@ -715,6 +715,21 @@ export class ReasoningAnswer {
    *   `entailExtractModule`, `entailExplainConclusion`).
    */
   readonly certificate: string;
+  /**
+   * The PROOF TERM of the run that produced this answer, as a `purrdf-dl-proof 1`
+   * document — the thing `entailCheckProof` takes.
+   *
+   * Never the empty string. Recording is OPT-IN, so an answer from an `entail*`
+   * function or from a `new Reasoner(...)` session reads
+   * `purrdf-dl-proof 1\navailability not-recorded\n`, which says NOTHING WAS
+   * MEASURED. A recorded proof says `availability recorded`; a recorded proof with
+   * `runs 0` says something different again — that the service is syntactic, so there
+   * was no search to check. Three states, three documents, and `entailCheckProof`
+   * refuses the first by name.
+   *
+   * Ask for one with `entailProve(...)` or `Reasoner.withProofs(...)`.
+   */
+  readonly proof: string;
   free(): void;
 }
 
@@ -747,6 +762,23 @@ export class Reasoner {
    *   cannot see.
    */
   constructor(document: string, stepCap: number, workCap: number);
+  /**
+   * A session that RECORDS a proof term for every service that has one.
+   *
+   * The session-level opt-in. `new Reasoner(...)` records nothing; this records, so
+   * every answer it hands back carries a real `.proof` document instead of the
+   * `availability not-recorded` one, and `prove` becomes callable. It changes nothing a
+   * service decides: every `.answer` and `.certificate` is byte-identical.
+   */
+  static withProofs(document: string, stepCap: number, workCap: number): Reasoner;
+  /** Whether this session records proof terms — true only for `withProofs`. */
+  recordsProofs(): boolean;
+  /**
+   * Answer `service` about `argument`, with its proof. See {@link entailProve}.
+   *
+   * Throws on a session that records nothing: open it with `Reasoner.withProofs`.
+   */
+  prove(service: ProofService | string, argument: string): ReasoningAnswer;
   consistency(): ReasoningAnswer;
   classify(): ReasoningAnswer;
   realize(): ReasoningAnswer;
@@ -952,6 +984,81 @@ export function entailImplementedRules(regime: EntailmentRegime | string): strin
 export function entailExtensions(regime: EntailmentRegime | string): string[];
 export function entailCheckGoldenVectors(): void;
 export function entailCheckInconsistentRefusal(): void;
+
+/**
+ * Run the committed proof golden-vector artifact through this build and throw on the
+ * first byte that differs.
+ *
+ * The wasm half of the CROSS-HOST byte-stability assertion for the proof surface: the
+ * native, C-ABI and PyO3 hosts run the same checker over the same committed bytes, and
+ * a rendered proof carries the proof term's own canonical encoding, so a divergence
+ * here is a divergence in the TERM rather than in a rendering of one.
+ */
+export function entailCheckProofGoldenVectors(): void;
+
+/**
+ * Prove that an answer nobody asked to record is NOT presentable as a verified one,
+ * and throw if it is.
+ *
+ * An unrecorded answer must carry `availability not-recorded`, `entailCheckProof` must
+ * refuse that document by name, and the same question asked WITH a proof must check.
+ */
+export function entailCheckAbsentProof(): void;
+
+/** The seven Description-Logic services a proof term can be about. */
+export type ProofService =
+  | "consistency"
+  | "class-satisfiability"
+  | "classify"
+  | "realize"
+  | "instances"
+  | "entails"
+  | "extract-module";
+
+/**
+ * `entailProve(document, service, argument, stepCap, workCap)` → a `ReasoningAnswer`
+ * whose `.proof` is the run's `purrdf-dl-proof 1` document.
+ *
+ * THE OPT-IN. Every other `entail*` function records nothing, so a caller who does not
+ * want a proof runs exactly the search they ran before. `.answer` and `.certificate`
+ * are byte-identical to the same question asked without a proof.
+ *
+ * `argument` is the question's own input: empty for `consistency`/`classify`/`realize`
+ * (a non-empty one throws rather than being discarded), ONE N-Triples term for
+ * `class-satisfiability`/`instances`, ONE triple for `entails`, and a
+ * `method <bot|top|star>` line followed by one term per line for `extract-module`.
+ */
+export function entailProve(
+  document: string,
+  service: ProofService | string,
+  argument: string,
+  stepCap: number,
+  workCap: number,
+): ReasoningAnswer;
+
+/**
+ * `entailCheckProof(document, service, argument, answer, certificate, proof)` → the
+ * `purrdf-dl-proof-check 1` report, or a throw naming the rejection.
+ *
+ * THE CHECKER. Nothing in it trusts the producer: the ontology is parsed from
+ * `document`, the question is re-derived from `service` and `argument`, the claims are
+ * read back out of `answer`'s own grammar, and the checking context comes from a
+ * reverse mapping this call performs itself.
+ *
+ * `answer` and `certificate` may be empty, and each empty one is a WEAKER check that
+ * says so: with no answer the report reads `answer not-checked`, and with no
+ * certificate a proof carrying a stopping receipt is refused.
+ *
+ * Throws for a proof document that says `availability not-recorded`.
+ */
+export function entailCheckProof(
+  document: string,
+  service: ProofService | string,
+  argument: string,
+  answer: string,
+  certificate: string,
+  proof: string,
+): string;
 
 /** The `bot`/`top`/`star` locality-module extraction methods `entailExtractModule` accepts. */
 export type ModuleExtractionMethod = "bot" | "top" | "star";
