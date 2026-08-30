@@ -1753,4 +1753,36 @@ mod tests {
         assert_eq!(result.remaining(), 0);
         assert!(result.next_row().is_none());
     }
+
+    /// A quad-template `CONSTRUCT` hands JS the graph names, and they survive
+    /// serialization.
+    ///
+    /// The JS egress for a graph result is a `Dataset` wrapping the frozen IR the
+    /// engine produced, with nothing projected out of it — so unlike a triple-shaped
+    /// result surface it has somewhere to PUT a graph name. This pins that: the graph
+    /// the query named is still on the quad when the `Dataset` is serialized to
+    /// N-Quads, so a JS caller can never silently receive a CONSTRUCT result with its
+    /// graph names removed.
+    #[test]
+    fn construct_graph_result_keeps_its_graph_name() {
+        let source = Dataset::parse(
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
+            "ntriples",
+            None,
+        )
+        .expect("seed dataset parses");
+        let constructed = QueryEngine::new()
+            .construct(
+                &source,
+                "CONSTRUCT { GRAPH <https://example.org/g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+                None,
+            )
+            .expect("quad-template CONSTRUCT evaluates");
+        let nquads = constructed.serialize("nquads").expect("N-Quads serializes");
+        assert_eq!(
+            nquads.trim(),
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+             <https://example.org/g> ."
+        );
+    }
 }

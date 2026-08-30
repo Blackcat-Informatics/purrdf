@@ -1344,6 +1344,60 @@ fn construct_returns_graph() {
     }
 }
 
+/// A quad-template `CONSTRUCT` hands C the graph names, and they survive serialization.
+///
+/// The C egress is a `PurrdfDataset` handle — the same frozen IR the engine produced,
+/// with nothing projected out of it — so unlike a triple-shaped result surface it has
+/// somewhere to PUT a graph name. This pins that: the graph the query named is still on
+/// the quad when the handle is serialized back to N-Quads, so a C caller can never
+/// silently receive a CONSTRUCT result with its graph names removed.
+#[test]
+fn construct_graph_result_keeps_its_graph_name() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq =
+            CString::new("CONSTRUCT { GRAPH <http://g> { ?s ?p ?o } } WHERE { ?s ?p ?o }").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 1);
+        assert!(!graph.is_null());
+        assert_eq!(quad_count(graph), 3);
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut serialize_error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            graph,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            &raw mut serialize_error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        assert_eq!(text.lines().filter(|l| l.contains("<http://g>")).count(), 3);
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
 #[test]
 fn query_json_has_sparql_results_shape() {
     unsafe {

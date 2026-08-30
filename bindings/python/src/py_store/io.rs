@@ -16,7 +16,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
-use super::query::PyQueryTriples;
+use super::query::{PyQueryQuads, PyQueryTriples};
 use super::term::PyQuad;
 use crate::{
     NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph, flat_dataset_from_quads,
@@ -62,6 +62,25 @@ impl PyRdfFormat {
             Self::YAML_LD => NativeRdfFormat::YamlLd,
         }
     }
+
+    /// The Python-visible spelling of this member (`RdfFormat.N_QUADS`), for diagnostics.
+    ///
+    /// A Python caller never sees the native `NativeRdfFormat` name or a media type, so
+    /// a message that names either would be asking them to re-derive which argument they
+    /// passed. Written out rather than derived from `Debug` so the strings cannot drift
+    /// away from the members if the Rust variant spellings ever change.
+    pub(crate) fn member_name(self) -> &'static str {
+        match self {
+            Self::TURTLE => "RdfFormat.TURTLE",
+            Self::N_TRIPLES => "RdfFormat.N_TRIPLES",
+            Self::N_QUADS => "RdfFormat.N_QUADS",
+            Self::TRIG => "RdfFormat.TRIG",
+            Self::TRIX => "RdfFormat.TRIX",
+            Self::HEXTUPLES => "RdfFormat.HEXTUPLES",
+            Self::JSON_LD => "RdfFormat.JSON_LD",
+            Self::YAML_LD => "RdfFormat.YAML_LD",
+        }
+    }
 }
 
 // ── Module-level functions ──────────────────────────────────────────────────────
@@ -89,24 +108,33 @@ pub(crate) fn parse(
         .collect()
 }
 
-/// Serialize `QueryTriples` in `format`. Mirrors the oxigraph Python `serialize`: when
-/// `output` (a file-like with `.write`) is given the bytes are written to it and
-/// `None` is returned; when `output` is omitted the serialized `bytes` are
-/// returned directly.
+/// Serialize a `QueryTriples` or a `QueryQuads` in `format`. Mirrors the oxigraph
+/// Python `serialize`: when `output` (a file-like with `.write`) is given the bytes are
+/// written to it and `None` is returned; when `output` is omitted the serialized
+/// `bytes` are returned directly.
+///
+/// Both CONSTRUCT result types are accepted, and each delegates to its OWN
+/// `serialize` method rather than re-implementing it, so the module function and the
+/// method can never disagree — in particular a `QueryQuads` refuses a single-graph
+/// syntax here exactly as it does there.
 #[pyfunction]
 #[pyo3(signature = (input, output=None, format=None))]
 pub(crate) fn serialize(
     py: Python<'_>,
-    input: &PyQueryTriples,
+    input: &Bound<'_, PyAny>,
     output: Option<&Bound<'_, PyAny>>,
     format: Option<PyRdfFormat>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = format.ok_or_else(|| PyValueError::new_err("serialize: format is required"))?;
-    // The native serialization runs detached (GIL released).
-    let triples = &input.triples;
-    let bytes = py
-        .detach(|| serialize_triples(triples, format.to_native()))
-        .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
+    let bytes = if let Ok(triples) = input.cast::<PyQueryTriples>() {
+        triples.borrow().serialize_bytes(py, format)?
+    } else if let Ok(quads) = input.cast::<PyQueryQuads>() {
+        quads.borrow().serialize_bytes(py, format)?
+    } else {
+        return Err(PyTypeError::new_err(
+            "serialize: input must be a QueryTriples or a QueryQuads",
+        ));
+    };
     match output {
         Some(output) => {
             output.call_method1("write", (PyBytes::new(py, &bytes),))?;
@@ -146,6 +174,24 @@ pub(crate) fn serialize_triples(
         .collect();
     let dataset = flat_dataset_from_quads(&quads)?;
     serialize_dataset(&dataset, format.media_type(), SerializeGraph::DefaultGraph)
+        .map_err(|e| e.to_string())
+}
+
+/// Serialize a graph-carrying CONSTRUCT result's quads through the native codec,
+/// emitting **every** graph.
+///
+/// The quad twin of [`serialize_triples`]: same verbatim freeze (RDF 1.2 triple-term
+/// objects preserved as triple-term objects, no statement-layer fold), but
+/// [`SerializeGraph::Dataset`] rather than `DefaultGraph`, because the graph slot is
+/// the whole reason this stream is quads. `format` is the caller's, unchecked here: the
+/// single-graph syntaxes are refused BEFORE this point (`QueryQuads::serialize`), so a
+/// format that reaches this function can carry what it is handed.
+pub(crate) fn serialize_quads(
+    quads: &[RdfQuad],
+    format: NativeRdfFormat,
+) -> Result<Vec<u8>, String> {
+    let dataset = flat_dataset_from_quads(quads)?;
+    serialize_dataset(&dataset, format.media_type(), SerializeGraph::Dataset)
         .map_err(|e| e.to_string())
 }
 

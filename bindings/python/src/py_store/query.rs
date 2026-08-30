@@ -2,13 +2,23 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! SPARQL result model for the `purrdf` Python extension: the materialized
-//! `QuerySolutions` / `QuerySolution` (SELECT), `QueryTriples` (CONSTRUCT), and
-//! `QueryBoolean` (ASK) pyclasses, plus the `materialize_results` adapter the
-//! store seam uses to turn a native [`SparqlResult`] into these objects.
+//! `QuerySolutions` / `QuerySolution` (SELECT), `QueryTriples` / `QueryQuads`
+//! (CONSTRUCT/DESCRIBE), and `QueryBoolean` (ASK) pyclasses, plus the
+//! `materialize_results` adapter the store seam uses to turn a native
+//! [`SparqlResult`] into these objects.
 //!
 //! Native backing: solution cells are `purrdf_core::TermValue`,
-//! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
-//! oxigraph `QueryResults` type is gone from this surface.
+//! CONSTRUCT triples are `RdfTriple` and CONSTRUCT quads are `RdfQuad`. The engine is
+//! `NativeSparqlEngine`; the oxigraph `QueryResults` type is gone from this surface.
+//!
+//! # Two CONSTRUCT result types, chosen by what the result carries
+//!
+//! A SPARQL 1.2 CONSTRUCT template names a graph per statement, so one result may span
+//! several named graphs and may mix them with default-graph triples. `Triple` has no
+//! graph slot, so a default-graph result stays a `QueryTriples` (unchanged, for every
+//! SPARQL 1.1 CONSTRUCT and every DESCRIBE) while a graph-carrying one is a
+//! `QueryQuads` of `Quad`s. Asking a `QueryQuads` for a single-graph syntax raises
+//! rather than dropping the graphs — see [`refuse_uncarriable_named_graphs`].
 //!
 //! # The governed surface
 //!
@@ -27,6 +37,7 @@
 //! malformed query, a broken snapshot, and the one Python-level event that genuinely is
 //! an exception, a `KeyboardInterrupt` (see [`run_governed`]).
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -42,9 +53,9 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
-use super::io::{PyRdfFormat, serialize_triples};
-use super::term::{PyTriple, PyVariable, extract_term_value, term_to_py};
-use crate::{GovernedEntailment, RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
+use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
+use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
+use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// The optional per-call engine configuration the Python surface accepts, converted
 /// out of Python before the GIL is released and moved into the detached region whole.
@@ -407,7 +418,13 @@ impl PyQuerySolution {
     }
 }
 
-/// CONSTRUCT results, materialized. Mirrors the oxigraph Python `QueryTriples`.
+/// Default-graph CONSTRUCT/DESCRIBE results, materialized. Mirrors the oxigraph
+/// Python `QueryTriples`.
+///
+/// This is the result object for a CONSTRUCT/DESCRIBE whose statements ALL land in
+/// the default graph — the plain SPARQL 1.1 template, and every `DESCRIBE`. A
+/// quad-template CONSTRUCT that writes a named graph yields [`PyQueryQuads`] instead,
+/// because a triple has no slot to carry the graph name in.
 #[pyclass(name = "QueryTriples")]
 #[derive(Debug)]
 pub struct PyQueryTriples {
@@ -441,12 +458,203 @@ impl PyQueryTriples {
         py: Python<'py>,
         format: PyRdfFormat,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format)?))
+    }
+}
+
+impl PyQueryTriples {
+    /// The serialization core, shared by the `serialize` method and the module-level
+    /// `purrdf.serialize` function so the two can never diverge.
+    pub(crate) fn serialize_bytes(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<Vec<u8>> {
         // The native serialization runs detached (GIL released).
         let triples = &self.triples;
-        let bytes = py
-            .detach(|| serialize_triples(triples, format.to_native()))
-            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
-        Ok(PyBytes::new(py, &bytes))
+        py.detach(|| serialize_triples(triples, format.to_native()))
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+    }
+}
+
+/// Graph-carrying CONSTRUCT results, materialized: the quad stream of a template that
+/// names at least one graph.
+///
+/// # Why a second result type rather than a graph slot on `QueryTriples`
+///
+/// A SPARQL 1.2 CONSTRUCT template carries a graph per STATEMENT: one template may
+/// write several named graphs, and may mix default-graph triples with named-graph
+/// quads. `Triple` has no graph slot, so a `QueryTriples` cannot represent that result
+/// — flattening it into one triple stream silently deletes exactly the graph names the
+/// caller spelled out in the query. So a result that names a graph comes back as
+/// `QueryQuads`, whose members are `Quad`s with a live `graph_name`, and
+/// [`serialize`](Self::serialize) round-trips them through any quad-capable syntax.
+///
+/// A result whose statements are ALL default-graph is unchanged: it is still a
+/// `QueryTriples` of `Triple`s, byte-identical on every format. Only a query that
+/// actually asks for a named graph — which SPARQL 1.1 had no syntax to ask for — can
+/// produce this type, so no pre-existing query changes shape.
+#[pyclass(name = "QueryQuads")]
+#[derive(Debug)]
+pub struct PyQueryQuads {
+    pub(crate) quads: Vec<RdfQuad>,
+    pos: usize,
+}
+
+#[pymethods]
+impl PyQueryQuads {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<Py<PyQuad>>> {
+        if slf.pos >= slf.quads.len() {
+            return Ok(None);
+        }
+        let quad = slf.quads[slf.pos].clone();
+        slf.pos += 1;
+        Ok(Some(Py::new(py, PyQuad { inner: quad })?))
+    }
+
+    fn __len__(&self) -> usize {
+        self.quads.len()
+    }
+
+    /// Every distinct non-default graph name the result carries, in N-Triples term
+    /// syntax, sorted lexicographically.
+    ///
+    /// Sorted rather than merely deduplicated so the list is a function of the RESULT
+    /// and not of the evaluator's quad order — the same property the refusal message
+    /// needs, from the same helper, so the two can never disagree.
+    #[getter]
+    fn graph_names(&self) -> Vec<String> {
+        distinct_graph_names(&self.quads)
+    }
+
+    /// Serialize the constructed quads to bytes in `format`.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` when `format` is a single-graph RDF syntax
+    /// (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`): those have no named-graph
+    /// construct, so serializing would DROP every graph-scoped statement and hand back
+    /// a well-formed document missing exactly what the query asked for. See
+    /// [`refuse_uncarriable_named_graphs`].
+    fn serialize<'py>(
+        &self,
+        py: Python<'py>,
+        format: PyRdfFormat,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format)?))
+    }
+}
+
+impl PyQueryQuads {
+    /// The serialization core, shared by the `serialize` method and the module-level
+    /// `purrdf.serialize` function so the refusal cannot be reachable from one entry
+    /// point and not the other.
+    pub(crate) fn serialize_bytes(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<Vec<u8>> {
+        // Refused BEFORE the serializer runs: a result the requested syntax would
+        // silently empty out never becomes bytes.
+        refuse_uncarriable_named_graphs(&self.quads, format)?;
+        // The native serialization runs detached (GIL released).
+        let quads = &self.quads;
+        py.detach(|| serialize_quads(quads, format.to_native()))
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+    }
+}
+
+/// How many graph names a refusal spells out individually before it summarises the
+/// rest as a count.
+///
+/// A CONSTRUCT template can name a graph per statement — and with a graph VARIABLE one
+/// template writes as many graphs as the `WHERE` has distinct bindings — so the name
+/// list is unbounded in principle. Eight is enough to identify the mistake in every
+/// hand-written query and short enough that the message stays a message; the tail is
+/// reported as "and N more" rather than truncated silently, so the count is always
+/// exact even when the list is not complete. Matches the CLI refusal's limit.
+const NAMED_GRAPH_SAMPLE_LIMIT: usize = 8;
+
+/// The quad-capable `RdfFormat` members, in declaration order — the alternatives every
+/// named-graph refusal points at.
+const QUAD_CAPABLE_FORMATS: &str = "RdfFormat.N_QUADS/TRIG/TRIX/HEXTUPLES/JSON_LD/YAML_LD";
+
+/// Refuse to serialize graph-carrying quads to a single-graph RDF syntax, naming the
+/// graphs, the format, and what to use instead.
+///
+/// # Why this REFUSES rather than serializing what fits
+///
+/// The graph name is in the QUERY the caller wrote, one token at a time
+/// (`CONSTRUCT { GRAPH ex:out { … } }`), so it is the single most explicit thing in the
+/// request. Turtle and N-Triples have no named-graph construct and the single-graph
+/// serializers DROP every graph-scoped row (they do not fold it into the default graph
+/// — see `purrdf_core::loss`'s `named-graph-dropped` note). Serializing anyway would
+/// return a well-formed document missing exactly the statements the caller asked for,
+/// with no exception and no loss signal — the silent-wrong shape this binding refuses
+/// everywhere else, and the reason a graph-carrying result is a `QueryQuads` at all.
+///
+/// A mixed template makes refusal the only honest answer: emitting the default-graph
+/// half would report a partial answer as a complete one, which is worse than emitting
+/// nothing. So ANY non-default graph refuses, exactly as the `purrdf query` lane does.
+fn refuse_uncarriable_named_graphs(quads: &[RdfQuad], format: PyRdfFormat) -> PyResult<()> {
+    if format.to_native().supports_datasets() {
+        return Ok(());
+    }
+    let names = distinct_graph_names(quads);
+    let count = names.len();
+    if count == 0 {
+        return Ok(());
+    }
+    let listed = if count > NAMED_GRAPH_SAMPLE_LIMIT {
+        format!(
+            "{}, and {} more",
+            names[..NAMED_GRAPH_SAMPLE_LIMIT].join(", "),
+            count - NAMED_GRAPH_SAMPLE_LIMIT
+        )
+    } else {
+        names.join(", ")
+    };
+    let (graphs, them) = if count == 1 {
+        ("named graph", "it")
+    } else {
+        ("named graphs", "them")
+    };
+    Err(PyValueError::new_err(format!(
+        "a CONSTRUCT/DESCRIBE result carrying {count} {graphs} ({listed}) cannot be \
+         serialized to the single-graph RDF syntax `{token}`: {token} has no named-graph \
+         construct, so every statement in {them} would be DROPPED (not folded into the \
+         default graph) and the output would silently omit what the query asked for. \
+         Re-serialize with a quad-capable format ({QUAD_CAPABLE_FORMATS})",
+        token = format.member_name()
+    )))
+}
+
+/// Every distinct non-default graph name in `quads`, rendered in N-Triples term syntax
+/// and sorted lexicographically.
+///
+/// Sorted through a [`BTreeSet`], not merely deduplicated: the message must be
+/// byte-identical across runs, and both the evaluator's quad order and any hash-map
+/// iteration would make it a function of insertion order. The flat quad stream already
+/// carries the RDF 1.2 statement layer as `rdf:reifies` / annotation rows WITH their
+/// graph slot, so a graph named only by a reifier or annotation is listed too.
+fn distinct_graph_names(quads: &[RdfQuad]) -> Vec<String> {
+    let names: BTreeSet<String> = quads
+        .iter()
+        .filter_map(|quad| quad.graph_name.as_ref())
+        .map(render_graph_name)
+        .collect();
+    names.into_iter().collect()
+}
+
+/// Render one graph-name term for a diagnostic, in N-Triples term syntax.
+///
+/// A CONSTRUCT template's graph slot only ever resolves to an IRI (a graph variable
+/// bound to anything else skips the statement, per SPARQL §16.2), and the RDF 1.2
+/// abstract syntax admits only an IRI or a blank node in the graph position — but the
+/// match is total over [`RdfTerm`] rather than partial, because a diagnostic that
+/// panics on a term it did not expect is worse than one that names it.
+fn render_graph_name(term: &RdfTerm) -> String {
+    match term {
+        RdfTerm::Iri(iri) => format!("<{iri}>"),
+        RdfTerm::BlankNode(label) => format!("_:{label}"),
+        RdfTerm::Literal(literal) => format!("\"{}\"", literal.lexical_form),
+        RdfTerm::Triple(_) => "<<( … )>>".to_owned(),
     }
 }
 
@@ -478,9 +686,15 @@ impl PyQueryBoolean {
 
 /// Convert a native [`SparqlResult`] into the materialized Python result object.
 ///
-/// A SELECT becomes [`PyQuerySolutions`] (each cell a [`RdfTerm`]); a
-/// CONSTRUCT/DESCRIBE [`SparqlResult::Graph`] is flattened into its triple stream
-/// and becomes [`PyQueryTriples`]; an ASK becomes [`PyQueryBoolean`].
+/// A SELECT becomes [`PyQuerySolutions`] (each cell a [`RdfTerm`]); an ASK becomes
+/// [`PyQueryBoolean`]; a CONSTRUCT/DESCRIBE [`SparqlResult::Graph`] becomes
+/// [`PyQueryTriples`] or [`PyQueryQuads`] according to what it carries — see
+/// [`materialize_graph`].
+///
+/// This is the ONE adapter every result-bearing entry point routes through
+/// (`Store.query`, `MutableDataset.query`, both governed lanes and the partial-answer
+/// certificate), so the graph-carrying result type reaches all of them from here and
+/// cannot be wired into some of them only.
 pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyResult<Py<PyAny>> {
     match result {
         SparqlResult::Solutions {
@@ -504,23 +718,42 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
             )?
             .into_any())
         }
-        SparqlResult::Graph(graph) => {
-            let triples = graph_to_triples(&graph);
-            Ok(Py::new(py, PyQueryTriples { triples, pos: 0 })?.into_any())
-        }
+        SparqlResult::Graph(graph) => materialize_graph(py, &graph),
         SparqlResult::Boolean(value) => Ok(Py::new(py, PyQueryBoolean { value })?.into_any()),
     }
 }
 
-/// Flatten a CONSTRUCT result dataset into its triple stream (source-faithful: the
-/// RDF 1.2 statement layer is re-materialized as `rdf:reifies`/annotation triples),
-/// dropping the graph name (a CONSTRUCT yields a triple graph, matching the oxigraph
-/// `QueryResults::Graph` egress).
-fn graph_to_triples(graph: &RdfDataset) -> Vec<RdfTriple> {
-    crate::flat_rdf_quads_from_dataset(graph)
+/// Materialize a CONSTRUCT/DESCRIBE result dataset into the Python result object that
+/// can actually hold it.
+///
+/// The dataset is first flattened to its source-faithful quad stream (the RDF 1.2
+/// statement layer re-materialized as `rdf:reifies` / annotation rows, each keeping the
+/// graph it was asserted in). Then:
+///
+/// * **every statement in the default graph** → [`PyQueryTriples`], the triple stream,
+///   exactly as before. This is the plain SPARQL 1.1 CONSTRUCT, every DESCRIBE, and
+///   every query written before the quad-template grammar existed, so their result
+///   type, iteration and serialization are untouched;
+/// * **any statement in a named graph** → [`PyQueryQuads`], the quad stream with the
+///   graph slot live.
+///
+/// The discriminator is what the result CARRIES, not what the query's syntax looked
+/// like: `CONSTRUCT { GRAPH ?g { … } }` whose `?g` never binds writes only default-graph
+/// statements and correctly yields a `QueryTriples`.
+///
+/// The graph name is never dropped. A triple has no slot for one, so flattening a
+/// graph-carrying result into `QueryTriples` would delete the most explicit part of the
+/// caller's query with no exception and no loss signal.
+fn materialize_graph(py: Python<'_>, graph: &RdfDataset) -> PyResult<Py<PyAny>> {
+    let quads = crate::flat_rdf_quads_from_dataset(graph);
+    if quads.iter().any(|quad| quad.graph_name.is_some()) {
+        return Ok(Py::new(py, PyQueryQuads { quads, pos: 0 })?.into_any());
+    }
+    let triples: Vec<RdfTriple> = quads
         .into_iter()
         .map(|q| RdfTriple::new(q.subject, q.predicate, q.object))
-        .collect()
+        .collect();
+    Ok(Py::new(py, PyQueryTriples { triples, pos: 0 })?.into_any())
 }
 
 /// Lower a dataset-independent [`TermValue`] (the SPARQL egress cell type) into the
