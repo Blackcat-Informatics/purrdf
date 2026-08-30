@@ -707,12 +707,17 @@ pub(crate) fn serialize_description(
                 format.id()
             ))
         })?;
-    if serialized.statement_rows_dropped != 0 || serialized.directional_literals_dropped != 0 {
+    if serialized.statement_rows_dropped != 0
+        || serialized.directional_literals_dropped != 0
+        || serialized.named_graph_rows_dropped != 0
+    {
         return Err(ProjectionError::integrity(format!(
-            "native {} serialization would drop {} RDF 1.2 statement rows and {} directional literals",
+            "native {} serialization would drop {} RDF 1.2 statement rows, {} directional \
+             literals and {} named-graph rows",
             format.id(),
             serialized.statement_rows_dropped,
-            serialized.directional_literals_dropped
+            serialized.directional_literals_dropped,
+            serialized.named_graph_rows_dropped
         )));
     }
     let artifact_path = format!("{artifact_stem}.{}", format.file_extension());

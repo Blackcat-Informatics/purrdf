@@ -595,3 +595,146 @@ fn reason_closure_to_star_incapable_target_surfaces_the_ledger() {
         "the reason ledger must record the dropped statement rows; got:\n{ledger}"
     );
 }
+
+/// The `named-graph-dropped` contract note and the shipped serializer AGREE: a
+/// `convert --from trig --to turtle` DROPS the named graph's quad entirely (subject,
+/// predicate, object and graph name alike) rather than folding it into the default
+/// graph, and the note says exactly that.
+///
+/// The note used to promise the quads were "folded into the default graph and graph
+/// names are dropped", which no shipped codec has ever done — this pins the corrected
+/// claim against the behaviour it describes, in the same run.
+#[test]
+fn the_named_graph_dropped_note_matches_what_convert_actually_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let trig = write_file(dir, "graphs.trig", NAMED_GRAPH_TRIG);
+
+    let out = run(&[
+        "--loss-ledger",
+        "convert",
+        "--from",
+        "trig",
+        "--to",
+        "turtle",
+        &trig,
+        "-",
+    ]);
+    assert!(
+        out.status.success(),
+        "trig -> turtle must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+
+    // The BEHAVIOUR: the default-graph triple survives; every part of the named
+    // graph's quad is gone — including its subject, which a fold into the default
+    // graph would have kept.
+    let body = stdout(&out);
+    assert!(
+        body.contains("http://example.org/d"),
+        "the default-graph triple must survive; got:\n{body}"
+    );
+    assert!(
+        !body.contains("http://example.org/g1"),
+        "the graph name must not appear in Turtle; got:\n{body}"
+    );
+    assert!(
+        !body.contains("http://example.org/gs"),
+        "a FOLD would have re-asserted the named graph's subject in the default graph; \
+         the shipped serializer DROPS it, and this pins that; got:\n{body}"
+    );
+
+    // The NOTE: the contract entry says dropped, not folded.
+    let ledger = stderr(&out);
+    assert!(
+        ledger.contains("\"code\": \"named-graph-dropped\""),
+        "the contract entry must be recorded; got:\n{ledger}"
+    );
+    assert!(
+        ledger.contains("DROPPED entirely"),
+        "the note must say the quad is DROPPED; got:\n{ledger}"
+    );
+    assert!(
+        ledger.contains("NOT folded into the default graph"),
+        "the note must deny the fold it used to promise; got:\n{ledger}"
+    );
+    assert!(
+        !ledger.contains("quads are folded into the default graph"),
+        "the false 'folded into the default graph' claim must be gone; got:\n{ledger}"
+    );
+
+    // The REALIZED count: exactly one row was discarded, and the ledger says so — the
+    // contract half alone would fire even for a source with no named graph at all.
+    assert!(
+        ledger.contains("\"code\": \"named-graph-rows-dropped\""),
+        "the realized drop count must be recorded beside the contract entry; got:\n{ledger}"
+    );
+    assert!(
+        ledger.contains("1 row(s) asserted in a named graph"),
+        "the realized entry must count the dropped row; got:\n{ledger}"
+    );
+}
+
+/// The realized `named-graph-rows-dropped` count is absent when nothing is scoped
+/// away: a default-graph-only source converted to Turtle records neither the realized
+/// entry nor any other loss.
+#[test]
+fn no_named_graph_rows_dropped_entry_when_the_source_has_no_named_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "plain.ttl", PLAIN_TTL);
+
+    let out = run(&[
+        "--loss-ledger",
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "ntriples",
+        &ttl,
+    ]);
+    assert!(out.status.success(), "turtle -> ntriples must exit 0");
+    let ledger = stderr(&out);
+    assert!(
+        ledger_is_empty(&ledger),
+        "a lossless conversion records nothing; got:\n{ledger}"
+    );
+}
+
+/// A `query`-CONSTRUCT whose result carries a named graph is REFUSED by the
+/// single-graph target rather than reaching the sink with an empty ledger: the loss
+/// ledger's realized half only reports what a serializer ran and discarded, so the
+/// case where the caller NAMED the graph is closed one step earlier.
+#[test]
+fn a_named_graph_construct_never_reaches_the_sink_with_an_empty_ledger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "seed.nt", PLAIN_TTL);
+
+    let out = run(&[
+        "--loss-ledger",
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "turtle",
+        "CONSTRUCT GRAPH <http://example.org/out> { ?s ?p ?o } WHERE { ?s ?p ?o }",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the named-graph CONSTRUCT must be refused, not silently emptied; stderr:\n{}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).is_empty(),
+        "nothing is serialized; got:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stderr(&out).contains("\"schema_version\""),
+        "a refused run produces no ledger at all — the old failure printed an EMPTY one \
+         beside empty stdout and exited 0; got:\n{}",
+        stderr(&out)
+    );
+}

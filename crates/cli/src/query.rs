@@ -42,7 +42,11 @@
 //!   (e.g. RDF/XML) projects the RDF-1.2 statement layer and the loss ledger records
 //!   the drop (the universal-sink invariant), surfaced under `--loss-ledger`;
 //! * a shape/format-kind MISMATCH (solutions/boolean + an RDF syntax, or a graph +
-//!   a SPARQL-results format) is a hard runtime error (exit 1).
+//!   a SPARQL-results format) is a hard runtime error (exit 1);
+//! * a graph result carrying a NAMED GRAPH + a single-graph syntax (turtle /
+//!   ntriples / rdfxml) is a usage refusal (exit 2), naming the graphs and a
+//!   quad-capable alternative — see [`refuse_uncarriable_named_graphs`] for why
+//!   this one is refused rather than serialized-and-ledgered.
 //!
 //! ## The governed lane, and what a trip puts on which stream
 //!
@@ -114,11 +118,13 @@
 //! using more than one registered extension at once — and the block lists the ten
 //! registered statistical aggregate IRIs.
 
+use std::collections::BTreeSet;
+
 use purrdf::GovernedEntailment;
-use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
+use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult, TermRef};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_rdf::SourceFormat;
+use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
     QueryGovernors, QueryOptions as EngineQueryOptions,
@@ -379,6 +385,10 @@ fn emit_result(
                     results_format.token()
                 )));
             };
+            // Refused BEFORE the serializer runs: a result the requested syntax would
+            // silently empty out never reaches stdout. See
+            // `refuse_uncarriable_named_graphs`.
+            refuse_uncarriable_named_graphs(&**graph, fmt, results_format)?;
             // The universal sink: a star-incapable target (RDF/XML, TriX, HexTuples)
             // projects the RDF-1.2 statement layer and records the drop in the ledger.
             // The graph is freshly constructed, so there is no source codec to seed the
@@ -393,6 +403,123 @@ fn emit_result(
             )?;
             ledger::surface(ledger_target, &ledger)
         }
+    }
+}
+
+/// How many graph names a refusal spells out individually before it summarises the
+/// rest as a count.
+///
+/// A `CONSTRUCT` template can name a graph per statement — and with a graph VARIABLE
+/// one template writes as many graphs as the `WHERE` has distinct bindings — so the
+/// name list is unbounded in principle. Eight is enough to identify the mistake in
+/// every hand-written query and short enough that the message stays a message; the
+/// tail is reported as "and N more" rather than truncated silently, so the count is
+/// always exact even when the list is not complete.
+const NAMED_GRAPH_SAMPLE_LIMIT: usize = 8;
+
+/// The quad-capable `--results-format` tokens, in [`QueryFormat`] declaration order —
+/// the alternatives every named-graph refusal points at.
+const QUAD_CAPABLE_FORMATS: &str = "trig/nquads/trix/hextuples/jsonld/yamlld";
+
+/// Refuse to serialize a graph result that carries named graphs to a single-graph
+/// RDF syntax, naming the graphs, the format, and what to use instead.
+///
+/// # Why this REFUSES rather than serializing and ledgering the loss
+///
+/// Every other loss in this pipeline is a transcode the caller asked for implicitly —
+/// they named a source document and a target syntax, and the sink reports what the
+/// pair cannot carry. A named graph in a CONSTRUCT result is not that: the graph name
+/// is in the QUERY the caller wrote, one token at a time (`CONSTRUCT GRAPH ex:out {…}`),
+/// so it is the single most explicit thing in the request. Turtle, N-Triples and
+/// RDF/XML have no named-graph construct, and the serializer's single-graph flattening
+/// DROPS every graph-scoped row (it does not fold them into the default graph — see
+/// `purrdf_core::loss`'s `named-graph-dropped` note). Serializing anyway would print a
+/// well-formed document that is missing exactly the statements the caller asked for,
+/// and exit 0 — the silent-wrong shape this binary refuses everywhere else.
+///
+/// A whole-template `CONSTRUCT GRAPH g {…}` against Turtle produced ZERO bytes, an
+/// EMPTY loss ledger and exit 0 before this refusal existed. That is the case it
+/// closes, and it closes the general one with it: a per-statement template may write
+/// into many graphs at once, or mix default-graph triples with named-graph quads, and
+/// a result that carries ANY non-default graph is refused, because the mixed case
+/// would otherwise emit the default-graph half and drop the rest — a partial answer
+/// reported as a complete one, which is worse than emitting nothing.
+///
+/// A result carrying ONLY default-graph triples is untouched: the plain
+/// SPARQL 1.1 `CONSTRUCT`/`DESCRIBE` lane serializes to Turtle, N-Triples and RDF/XML
+/// exactly as it always has.
+fn refuse_uncarriable_named_graphs<D: DatasetView>(
+    graph: &D,
+    fmt: NativeRdfFormat,
+    results_format: QueryFormat,
+) -> Result<(), CliError> {
+    if fmt.supports_datasets() {
+        return Ok(());
+    }
+    let names = distinct_graph_names(graph);
+    let Some(count) = std::num::NonZeroUsize::new(names.len()) else {
+        return Ok(());
+    };
+    let count = count.get();
+    let listed = if count > NAMED_GRAPH_SAMPLE_LIMIT {
+        format!(
+            "{}, and {} more",
+            names[..NAMED_GRAPH_SAMPLE_LIMIT].join(", "),
+            count - NAMED_GRAPH_SAMPLE_LIMIT
+        )
+    } else {
+        names.join(", ")
+    };
+    let (graphs, them) = if count == 1 {
+        ("named graph", "it")
+    } else {
+        ("named graphs", "them")
+    };
+    Err(CliError::Usage(format!(
+        "a CONSTRUCT/DESCRIBE result carrying {count} {graphs} ({listed}) cannot be \
+         serialized to the single-graph RDF syntax `{token}`: {token} has no named-graph \
+         construct, so every statement in {them} would be DROPPED (not folded into the \
+         default graph) and the output would silently omit what the query asked for. \
+         Re-run with a quad-capable --results-format ({QUAD_CAPABLE_FORMATS})",
+        token = results_format.token()
+    )))
+}
+
+/// Every distinct non-default graph name the result carries, rendered in N-Triples
+/// term syntax and sorted lexicographically.
+///
+/// Sorted through a [`BTreeSet`], not merely deduplicated: the message must be
+/// byte-identical across runs, and both the dataset's quad order and any hash-map
+/// iteration would make it a function of insertion order. It reads the graph slot of
+/// the base quads AND of the RDF-1.2 statement-layer rows, because a reifier or
+/// annotation can be scoped to a graph whose base quads the template never wrote —
+/// a graph the flattening would drop just as silently.
+fn distinct_graph_names<D: DatasetView>(graph: &D) -> Vec<String> {
+    let slots = graph
+        .quads()
+        .map(|q| q.g)
+        .chain(graph.reifier_quads().map(|q| q.g))
+        .chain(graph.annotation_quads().map(|q| q.g));
+    let names: BTreeSet<String> = slots
+        .flatten()
+        .map(|id| render_graph_name(graph, id))
+        .collect();
+    names.into_iter().collect()
+}
+
+/// Render one graph-name term for a diagnostic, in N-Triples term syntax.
+///
+/// A CONSTRUCT template's graph slot only ever resolves to an IRI (a graph variable
+/// bound to anything else skips the statement, per SPARQL §16.2), and the RDF 1.2
+/// abstract syntax admits only an IRI or a blank node in the graph position — but the
+/// match is total over [`TermRef`] rather than partial, because a diagnostic that
+/// panics on a term it did not expect is worse than one that names it.
+fn render_graph_name<D: DatasetView>(graph: &D, id: D::Id) -> String {
+    match graph.resolve(id) {
+        TermRef::Iri(iri) => format!("<{iri}>"),
+        TermRef::Blank { label, .. } => format!("_:{label}"),
+        TermRef::Literal { lexical, .. } => format!("\"{lexical}\""),
+        TermRef::Triple { .. } => "<<( … )>>".to_owned(),
     }
 }
 
