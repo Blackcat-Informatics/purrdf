@@ -2722,13 +2722,9 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
             }),
         },
         Query::Construct {
-            template,
-            target_graph,
-            pattern,
-            ..
+            template, pattern, ..
         } => {
-            let (graph, certificate) =
-                crate::construct::eval_construct(template, target_graph.as_ref(), pattern, ctx)?;
+            let (graph, certificate) = crate::construct::eval_construct(template, pattern, ctx)?;
             Ok(match certificate {
                 None => EvaluatedOutcome::Complete(Outcome::Graph(graph)),
                 Some(certificate) => EvaluatedOutcome::Truncated {

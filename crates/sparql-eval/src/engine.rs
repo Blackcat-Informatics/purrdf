@@ -3292,6 +3292,89 @@ mod tests {
         }
     }
 
+    /// The quad-producing `CONSTRUCT`, end to end from QUERY TEXT: a `GRAPH ?g`
+    /// block inside the template routes each row by its `?g` binding, and a
+    /// second, differently-named block in the SAME template writes elsewhere.
+    #[test]
+    fn construct_template_graph_blocks_route_end_to_end() {
+        let ds = multigraph();
+        let SparqlResult::Graph(out) = run_on(
+            &ds,
+            "CONSTRUCT { GRAPH ?g { ?s <http://ex/seen> ?o } \
+             GRAPH <http://ex/audit> { ?s <http://ex/from> ?g } } \
+             WHERE { GRAPH ?g { ?s <http://ex/p> ?o } }",
+        ) else {
+            panic!("a CONSTRUCT returns a graph");
+        };
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/from> <http://ex/g1> <http://ex/audit> .\n\
+             <http://ex/a> <http://ex/from> <http://ex/g2> <http://ex/audit> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g1> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g2> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/x> <http://ex/g1> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/y> <http://ex/g2> .\n"
+        );
+    }
+
+    /// The RDF 1.2 statement layer, end to end from QUERY TEXT: a `~ ?r` reifier
+    /// and a `{| … |}` annotation written INSIDE a `GRAPH <g>` block must put the
+    /// reifier binding, the `rdf:reifies` edge AND the annotations in `<g>` —
+    /// asserted through BOTH statement-layer views, because they are two
+    /// separate emission paths and either one could silently keep the default
+    /// graph on its own.
+    #[test]
+    fn construct_annotation_template_in_a_graph_block_lands_wholly_in_that_graph() {
+        let ds = social();
+        let SparqlResult::Graph(out) = run_on(
+            &ds,
+            "CONSTRUCT { GRAPH <http://ex/g> { \
+               ?s <http://ex/related> ?o \
+               {| <http://ex/note> \"n\" ; <http://ex/rank> \"1\" |} } } \
+             WHERE { ?s <http://ex/knows> ?o }",
+        ) else {
+            panic!("a CONSTRUCT returns a graph");
+        };
+
+        let named = |g: Option<purrdf_core::TermId>| -> Option<String> {
+            g.map(|g| match out.resolve(g) {
+                purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
+                other => panic!("a graph term must be an IRI, got {other:?}"),
+            })
+        };
+
+        let reifier_graphs: Vec<Option<String>> = out
+            .reifiers_with_graph()
+            .map(|(_, _, g)| named(g))
+            .collect();
+        assert_eq!(
+            reifier_graphs,
+            vec![Some("http://ex/g".to_owned())],
+            "the reifier binding must be in the GRAPH block's graph"
+        );
+
+        let annotation_graphs: Vec<Option<String>> = out
+            .annotations_with_graph()
+            .map(|(_, _, _, g)| named(g))
+            .collect();
+        assert_eq!(
+            annotation_graphs.len(),
+            2,
+            "both annotations must be emitted, got {annotation_graphs:?}"
+        );
+        assert!(
+            annotation_graphs
+                .iter()
+                .all(|g| g.as_deref() == Some("http://ex/g")),
+            "an annotation escaped the GRAPH block: {annotation_graphs:?}"
+        );
+        assert_eq!(
+            out.quads().filter(|q| q.g.is_none()).count(),
+            0,
+            "nothing may be left behind in the default graph"
+        );
+    }
+
     #[test]
     fn plan_cache_memoizes_parse() {
         let mut cache = PlanCache::new();

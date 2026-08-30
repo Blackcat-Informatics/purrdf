@@ -689,6 +689,41 @@ fn describe_target_iri_reaches_dependency_walk() {
 }
 
 #[test]
+fn construct_template_graph_iri_reaches_dependency_walk() {
+    // A quad-producing `CONSTRUCT`'s template GRAPH slot carries a dependency
+    // IRI in term position that is named NOWHERE else in the query — the WHERE
+    // need not mention the target graph at all — so a walker that visited only
+    // the statement patterns dropped the edge, exactly as the DESCRIBE `targets`
+    // walk above once did.
+    let ev = query_edge_evidence(
+        &format!(
+            "PREFIX vocab: <{NS}>\n\
+             CONSTRUCT {{ GRAPH vocab:targetGraph {{ ?s <http://example.org/p> ?o }} }}\n\
+             WHERE {{ ?s <http://example.org/q> ?o }}\n"
+        ),
+        "targetGraph",
+    );
+    assert!(
+        ev.contains(&nn("targetGraph")),
+        "a CONSTRUCT template GRAPH IRI must be dependency evidence; got {ev:?}"
+    );
+
+    // The whole-template shorthand reaches the same slot.
+    let ev = query_edge_evidence(
+        &format!(
+            "PREFIX vocab: <{NS}>\n\
+             CONSTRUCT GRAPH vocab:targetGraph {{ ?s <http://example.org/p> ?o }}\n\
+             WHERE {{ ?s <http://example.org/q> ?o }}\n"
+        ),
+        "targetGraph",
+    );
+    assert!(
+        ev.contains(&nn("targetGraph")),
+        "the CONSTRUCT GRAPH shorthand's IRI must be dependency evidence; got {ev:?}"
+    );
+}
+
+#[test]
 fn order_by_function_iri_reaches_dependency_walk() {
     // A function IRI used only in an ORDER BY key was dropped because the
     // OrderBy arm matched `..` and never walked `expression`. The IRI is the purrdf

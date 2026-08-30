@@ -714,8 +714,16 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
             None => collect_all_variables(pattern, &mut names),
         },
         Query::Construct { template, .. } => {
-            for triple in template {
-                collect_triple_pattern_variables(triple, &mut names);
+            for quad in template {
+                collect_triple_pattern_variables(&quad.triple, &mut names);
+                // A template GRAPH variable is observable: its binding decides
+                // which graph the row's statement lands in, so the caller reads
+                // the value back off the result dataset's graph name just as
+                // directly as off a subject position. Leaving it out would let a
+                // witness surrogate leak through the graph slot.
+                if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
+                    names.insert(variable.as_str().to_owned());
+                }
             }
         }
         Query::Describe { targets, .. } => {
@@ -1026,14 +1034,12 @@ fn restrict_witness_bindings(query: &Query, surrogates: &BTreeSet<String>) -> Qu
         },
         Query::Construct {
             template,
-            target_graph,
             pattern,
             dataset,
             base_iri,
             version,
         } => Query::Construct {
             template: template.clone(),
-            target_graph: target_graph.clone(),
             pattern: restrict(pattern),
             dataset: dataset.clone(),
             base_iri: base_iri.clone(),
@@ -1455,6 +1461,47 @@ mod tests {
         assert!(
             source.source().is_none(),
             "an error that wraps nothing must end the chain"
+        );
+    }
+
+    /// A quad-producing `CONSTRUCT`'s template GRAPH variable is OBSERVABLE: its
+    /// binding decides which named graph the row's statement lands in, so the
+    /// caller reads it straight back off the result dataset's graph name. A
+    /// walker that only descended into subject/predicate/object would let a
+    /// witness surrogate out through the graph slot unnoticed.
+    #[test]
+    fn a_construct_template_graph_variable_is_observable() {
+        use purrdf_sparql_algebra::SparqlParser;
+
+        // `?g` appears ONLY in the graph slot; `?hidden` appears only in the
+        // WHERE, so it is the control that keeps the assertion falsifiable.
+        let query = SparqlParser::new()
+            .parse_query(
+                "CONSTRUCT { GRAPH ?g { ?s <http://example.org/p> ?o } } \
+                 WHERE { GRAPH ?g { ?s <http://example.org/q> ?o } . \
+                         ?s <http://example.org/r> ?hidden }",
+            )
+            .expect("the quad-producing CONSTRUCT parses");
+        let observable = observable_variables(&query);
+        assert!(
+            observable.contains("g"),
+            "the template graph variable must be observable, got {observable:?}"
+        );
+        assert!(observable.contains("s"), "{observable:?}");
+        assert!(observable.contains("o"), "{observable:?}");
+        assert!(
+            !observable.contains("hidden"),
+            "a WHERE-only variable the template drops is not observable, got {observable:?}"
+        );
+
+        // The `CONSTRUCT GRAPH ?g` whole-template shorthand reaches the same
+        // slot, so it must report the same variable.
+        let query = SparqlParser::new()
+            .parse_query("CONSTRUCT GRAPH ?g { ?s <http://example.org/p> ?o } WHERE { ?s ?p ?o }")
+            .expect("the shorthand parses");
+        assert!(
+            observable_variables(&query).contains("g"),
+            "the shorthand's graph variable must be observable too"
         );
     }
 

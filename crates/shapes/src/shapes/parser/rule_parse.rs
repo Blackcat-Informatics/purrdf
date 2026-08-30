@@ -3,13 +3,22 @@
 
 //! Parsing for SHACL-AF rules (`sh:rule`): `sh:TripleRule` and `sh:SPARQLRule`.
 
-use purrdf_sparql_algebra::{Query, SparqlParser};
+use purrdf_sparql_algebra::{NamedNodePattern, Query, SparqlParser};
 
 use crate::model::sh;
 use crate::rules::{OrderKey, Rule, RuleBody};
 use crate::term::Term;
 
 use crate::shapes::Parser;
+
+/// Spell a refused `CONSTRUCT` template graph name the way the query wrote it —
+/// `<iri>` or `?var` — so the diagnostic points at a token the author can find.
+fn graph_name_for_diagnostic(graph: &NamedNodePattern) -> String {
+    match graph {
+        NamedNodePattern::NamedNode(n) => format!("<{}>", n.as_str()),
+        NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
+    }
+}
 
 impl Parser<'_> {
     /// Parse every `sh:rule` attached to shape `id` into a [`Rule`], in stable
@@ -146,23 +155,25 @@ impl Parser<'_> {
         let construct = format!("{}{raw}", self.prefix_header(&[shape_id, rule_node]));
 
         match SparqlParser::new().parse_query(&construct) {
-            Ok(Query::Construct {
-                target_graph: Some(graph),
-                ..
-            }) => {
-                // `CONSTRUCT GRAPH <g>` is a quad-producing form, but a
+            Ok(query @ Query::Construct { .. }) => {
+                // The quad-producing `CONSTRUCT` is a `CONSTRUCT`, but a
                 // `sh:SPARQLRule` head produces TRIPLES that SHACL-AF adds to the
                 // data graph — `sparql_rule_producer` returns `[Term; 3]` and has
-                // nowhere to carry `<g>`. Accepting it would silently discard the
-                // named graph, so it is refused by name instead.
-                return Err(format!(
-                    "sh:SPARQLRule {rule_node} on shape {shape_id} uses CONSTRUCT GRAPH <{}>; a \
-                     SHACL rule head produces triples inferred into the data graph and cannot \
-                     target a named graph",
-                    graph.as_str()
-                ));
-            }
-            Ok(query @ Query::Construct { .. }) => {
+                // nowhere to carry a graph name. Accepting one would silently
+                // discard that graph, so ANY template statement naming a graph is
+                // refused by name: the `CONSTRUCT GRAPH …` whole-template
+                // shorthand and a `GRAPH … { … }` block inside the template alike,
+                // and whether the name is an IRI or a variable.
+                if let Query::Construct { template, .. } = &query
+                    && let Some(graph) = template.iter().find_map(|quad| quad.graph.as_ref())
+                {
+                    return Err(format!(
+                        "sh:SPARQLRule {rule_node} on shape {shape_id} uses CONSTRUCT GRAPH {}; a \
+                         SHACL rule head produces triples inferred into the data graph and cannot \
+                         target a named graph",
+                        graph_name_for_diagnostic(graph)
+                    ));
+                }
                 // The query runs with $this pre-bound to each focus node; the
                 // SHACL-SPARQL §5.2.1 pre-binding restrictions reject an illegal
                 // body (MINUS/SERVICE/VALUES, `AS $this`, …) as a hard failure.

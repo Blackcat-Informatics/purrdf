@@ -285,9 +285,24 @@ fn validate_reproducible_construct(query: &Query) -> Result<(), ProjectionError>
             "dataset-description query must be SPARQL CONSTRUCT",
         ));
     };
-    if template.iter().any(triple_pattern_contains_blank) {
+    if template
+        .iter()
+        .any(|quad| triple_pattern_contains_blank(&quad.triple))
+    {
         return Err(ProjectionError::configuration(
             "dataset-description CONSTRUCT templates must not mint blank nodes",
+        ));
+    }
+    // A dataset description is a GRAPH: the projection hands back one graph and
+    // the evaluation-side check refuses a result carrying named graphs. A
+    // quad-producing template (a `GRAPH` block in the template, or the
+    // `CONSTRUCT GRAPH …` shorthand) can only ever produce such a result, so it
+    // is refused here — at configuration time, naming the cause — rather than
+    // left to fail later as an opaque integrity error.
+    if template.iter().any(|quad| quad.graph.is_some()) {
+        return Err(ProjectionError::configuration(
+            "dataset-description CONSTRUCT templates must not name a target graph; the \
+             projection is a graph, not a dataset",
         ));
     }
     if let Some(cause) = pattern_reaches_non_reproducible_builtin(pattern) {

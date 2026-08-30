@@ -124,22 +124,40 @@ pub enum Query {
         /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
         version: Option<SparqlVersion>,
     },
-    /// `CONSTRUCT` query. `template` is the output triple template.
+    /// `CONSTRUCT` query. `template` is the output **quad** template.
     Construct {
-        /// The `CONSTRUCT { ... }` triple template.
-        template: Vec<TriplePattern>,
-        /// `CONSTRUCT GRAPH <iri> { ... }` — the **named graph** every
-        /// instantiated statement is placed in: the quad-producing `CONSTRUCT`
-        /// proposed at <https://github.com/w3c/sparql-dev/issues/31> and already
-        /// shipped by Jena and Stardog.
+        /// The `CONSTRUCT { ... }` template, as a sequence of quad patterns:
+        /// one statement pattern each, carrying the graph it is instantiated
+        /// into.
         ///
-        /// `None` is the SPARQL 1.1 §16.2 form: the result is a *graph*, whose
-        /// statements land in the default graph of the returned dataset. `Some(g)`
-        /// makes the result a *dataset*: the exact same instantiation, tagged with
-        /// `g` — the template, the per-row blank-node freshness rule, and the
-        /// ill-formed-triple skip are all untouched. A `None` query therefore emits
-        /// byte-identically to what it emitted before this variant existed.
-        target_graph: Option<NamedNode>,
+        /// # The graph slot
+        ///
+        /// [`QuadPattern::graph`] is `None` for the SPARQL 1.1 §16.2 form — the
+        /// statement lands in the **default graph** of the returned dataset, so
+        /// a template whose every slot is `None` emits byte-identically to a
+        /// pre-quad-template `CONSTRUCT`. `Some(g)` names the graph the
+        /// instantiated statement is tagged with, making the result a *dataset*
+        /// rather than a graph; `g` may be an IRI or a **variable**.
+        ///
+        /// Nothing else about instantiation changes: the per-row blank-node
+        /// freshness rule, the unbound-variable skip and the ill-formed-triple
+        /// skip all run exactly as they do for the triple form. A graph
+        /// variable joins that same skip rule — an unbound graph variable, or
+        /// one bound to a non-IRI (a literal, a blank node or a triple term),
+        /// **skips** the statement rather than raising or silently retargeting
+        /// it at the default graph.
+        ///
+        /// # Surface syntax
+        ///
+        /// Two spellings reach this one shape. `GRAPH VarOrIri { ... }` blocks
+        /// **inside** the template scope the statements they enclose, may be
+        /// repeated, and may be mixed with unscoped (default-graph) statements
+        /// in the same template — the quad-producing `CONSTRUCT` that Jena and
+        /// Stardog ship. `CONSTRUCT GRAPH VarOrIri { ... }` is the
+        /// whole-template shorthand: the named graph becomes the default for
+        /// every template slot that does not name one itself, so an inner
+        /// `GRAPH` block still wins over it.
+        template: Vec<QuadPattern>,
         /// The `WHERE` algebra.
         pattern: GraphPattern,
         /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
