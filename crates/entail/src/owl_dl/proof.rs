@@ -4863,7 +4863,7 @@ fn head_atom_hash(hasher: &mut blake3::Hasher, atom: &HeadAtom) {
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
 
 /// A [`DlProofError::Malformed`] carrying `detail`.
-fn malformed(detail: &str) -> DlProofError {
+pub(crate) fn malformed(detail: &str) -> DlProofError {
     DlProofError::Malformed {
         detail: detail.to_owned(),
     }
@@ -5089,25 +5089,36 @@ fn encode_completion(out: &mut Vec<u8>, completion: &Completion) {
     }
 }
 
+/// The deepest a decoder follows a self-similar field into itself.
+///
+/// [`Reader::node`] and [`crate::reasoner::proof::ServiceProof::decode`]'s term reader both
+/// recurse on a kind byte the STREAM chooses, so a stream of nothing but that byte would
+/// recurse until the stack ran out — a crash rather than a rejection, from the one entrance
+/// that exists to turn hostile bytes into rejections. The ceiling is far above anything a
+/// recorder builds (a reserved root nests once per generating `≥`-rule application; an RDF 1.2
+/// triple term nests once per quoting) and it is a REFUSAL, so an over-deep stream is
+/// [`DlProofError::Malformed`] like every other structural defect.
+pub(crate) const MAX_NESTING: usize = 64;
+
 /// A bounds-checked cursor over an encoded proof.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     /// The remaining bytes.
     bytes: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
     /// A cursor over `bytes`.
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes }
     }
 
     /// Whether every byte has been consumed.
-    const fn is_exhausted(&self) -> bool {
+    pub(crate) const fn is_exhausted(&self) -> bool {
         self.bytes.is_empty()
     }
 
     /// Take `n` bytes.
-    fn take(&mut self, n: usize) -> Result<&'a [u8], DlProofError> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], DlProofError> {
         if self.bytes.len() < n {
             return Err(malformed("the proof stream ended mid-field"));
         }
@@ -5117,12 +5128,12 @@ impl<'a> Reader<'a> {
     }
 
     /// Take one byte.
-    fn byte(&mut self) -> Result<u8, DlProofError> {
+    pub(crate) fn byte(&mut self) -> Result<u8, DlProofError> {
         Ok(self.take(1)?[0])
     }
 
     /// Take one boolean, refusing any encoding but `0` and `1`.
-    fn flag(&mut self) -> Result<bool, DlProofError> {
+    pub(crate) fn flag(&mut self) -> Result<bool, DlProofError> {
         match self.byte()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -5131,7 +5142,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Take a little-endian `u32`.
-    fn u32(&mut self) -> Result<u32, DlProofError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, DlProofError> {
         let bytes: [u8; 4] = self
             .take(4)?
             .try_into()
@@ -5140,7 +5151,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Take a little-endian `u64` as a `usize`, refusing one this target cannot hold.
-    fn length(&mut self) -> Result<usize, DlProofError> {
+    pub(crate) fn length(&mut self) -> Result<usize, DlProofError> {
         let bytes: [u8; 8] = self
             .take(8)?
             .try_into()
@@ -5149,26 +5160,50 @@ impl<'a> Reader<'a> {
             .map_err(|_| malformed("a length field exceeds this target's usize"))
     }
 
+    /// Take a little-endian `u64` AS a `u64`.
+    ///
+    /// Distinct from [`Self::length`], which narrows to `usize` and refuses a value this
+    /// target cannot index with. A COUNTER is not an index: a run's step total is as wide on
+    /// `wasm32` as it is natively, and narrowing it there would refuse a proof that is
+    /// perfectly well formed — a host-dependent rejection, which is the one thing a shared
+    /// wire format must never have.
+    pub(crate) fn u64(&mut self) -> Result<u64, DlProofError> {
+        let bytes: [u8; 8] = self
+            .take(8)?
+            .try_into()
+            .map_err(|_| malformed("a counter field is eight bytes"))?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
     /// Take 32 digest bytes.
-    fn digest(&mut self) -> Result<[u8; 32], DlProofError> {
+    pub(crate) fn digest(&mut self) -> Result<[u8; 32], DlProofError> {
         self.take(32)?
             .try_into()
             .map_err(|_| malformed("a digest field is thirty-two bytes"))
     }
 
     /// Take a length-prefixed byte string.
-    fn frame(&mut self) -> Result<&'a [u8], DlProofError> {
+    pub(crate) fn frame(&mut self) -> Result<&'a [u8], DlProofError> {
         let len = self.length()?;
         self.take(len)
     }
 
     /// Take a [`NodeRef`].
     fn node(&mut self) -> Result<NodeRef, DlProofError> {
+        self.node_at(0)
+    }
+
+    /// Take a [`NodeRef`] nested `depth` reserved roots deep, refusing one past
+    /// [`MAX_NESTING`] rather than recursing until the stack ends.
+    fn node_at(&mut self, depth: usize) -> Result<NodeRef, DlProofError> {
+        if depth > MAX_NESTING {
+            return Err(malformed("a node nests past the decoder's ceiling"));
+        }
         match self.byte()? {
             NODE_INDIVIDUAL => Ok(NodeRef::Individual(self.u32()?)),
             NODE_ANONYMOUS => Ok(NodeRef::Anonymous(self.u32()?)),
             NODE_RESERVED => {
-                let origin = self.node()?;
+                let origin = self.node_at(depth + 1)?;
                 let property = self.u32()?;
                 let inverse = self.flag()?;
                 let filler = self.u32()?;

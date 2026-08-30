@@ -71,17 +71,34 @@ use super::certificate::{DlCertificate, DlCompleteness, Verdict};
 use super::classify::ClassHierarchy;
 use super::module::ModuleMethod;
 use super::realize::Realization;
-use super::term_key;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::proof::{
-    CheckReport, DlProof, DlProofContext, DlProofError, ProofAnswer, TrustBaseEntry,
+    CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
+    TrustBaseEntry, malformed,
 };
+use crate::report::Construct;
 
 /// Domain-separation tag leading every [`ServiceProof::encode`]d proof.
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can never
 /// be decoded as if they were current.
-const SERVICE_ENCODING_TAG: &str = "purrdf-dl-service-proof-v1";
+/// `v2` because [`ServiceProof::decode`] arrived and two fields had to become READABLE for it
+/// to exist. Under `v1` a term was written as its sort KEY — a lossy projection no decoder can
+/// invert once a triple term nests — and an axiom always wrote three terms whatever its arity,
+/// so the padding term was a field the reader could not check. Both are now structural: a term
+/// is a kind byte and its own components, and an axiom writes exactly the terms its kind
+/// carries. Bytes written under `v1` therefore cannot be read as if they were current, which is
+/// what the tag is for.
+const SERVICE_ENCODING_TAG: &str = "purrdf-dl-service-proof-v2";
+
+/// Wire kind for [`TermValue::Iri`].
+const TERM_IRI: u8 = 0;
+/// Wire kind for [`TermValue::Blank`].
+const TERM_BLANK: u8 = 1;
+/// Wire kind for [`TermValue::Literal`].
+const TERM_LITERAL: u8 = 2;
+/// Wire kind for [`TermValue::Triple`].
+const TERM_TRIPLE: u8 = 3;
 
 /// The declared ceiling on how many RUN TRACES one service proof keeps.
 ///
@@ -1317,6 +1334,90 @@ impl ServiceProof {
     pub fn digest_hex(&self) -> String {
         hex(self.digest())
     }
+
+    /// Rebuild a service proof from [`Self::encode`]d bytes.
+    ///
+    /// The UNTRUSTED entrance, and the place a corrupted or forged stream is a REJECTION
+    /// rather than a panic — the twin of [`DlProof::decode`], and held to the same standard.
+    /// A mis-tagged, truncated or over-long stream, an unknown service, question, claim,
+    /// basis, term, axiom or answer kind, an ordinal outside [`TrustBaseEntry::ALL`],
+    /// [`Service::ALL`] or [`ModuleMethod::ALL`], a boundary name no
+    /// [`Construct`] spells, a boolean that is neither `0` nor `1`, a
+    /// non-UTF-8 string, a term nested past the decoder's ceiling, and a stated service that
+    /// is not the decoded question's own are all [`DlProofError::Malformed`].
+    ///
+    /// Every byte the encoder writes is READ and checked here. That is not a courtesy: a field
+    /// the decoder skipped would be a field a forger could rewrite while the stream still
+    /// decoded to the same proof, which is what
+    /// `no_single_byte_edit_of_a_service_proof_decodes_back_to_the_same_proof` exists to
+    /// falsify.
+    ///
+    /// What decoding does NOT establish is that the proof is a proof: a stream that is
+    /// structurally legal but describes a search that did not happen decodes cleanly and is
+    /// caught where it should be, by [`Self::verify`].
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::Malformed`].
+    pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
+        let mut reader = Reader::new(bytes);
+        if reader.frame()? != SERVICE_ENCODING_TAG.as_bytes() {
+            return Err(malformed(
+                "the service proof encoding tag is absent or from another layout",
+            ));
+        }
+        let input = reader.digest()?;
+        let service = *Service::ALL
+            .get(usize::from(reader.byte()?))
+            .ok_or_else(|| malformed("service ordinal outside Service::ALL"))?;
+        let truncated = reader.flag()?;
+        let mut trust_base = Vec::new();
+        for _ in 0..reader.length()? {
+            let ordinal = reader.length()?;
+            trust_base.push(
+                *TrustBaseEntry::ALL
+                    .get(ordinal)
+                    .ok_or_else(|| malformed("trust-base ordinal outside TrustBaseEntry::ALL"))?,
+            );
+        }
+        let question = decode_question(&mut reader)?;
+        // The service is written as well as derivable, so it is CHECKED rather than believed
+        // or ignored: a stream stating one service and carrying another's question is two
+        // claims that disagree, and neither of them is trustworthy.
+        if question.service() != service {
+            return Err(malformed(
+                "the stated service is not the one the decoded question belongs to",
+            ));
+        }
+        let mut runs = Vec::new();
+        for _ in 0..reader.length()? {
+            runs.push(decode_run(&mut reader)?);
+        }
+        let mut claims = Vec::new();
+        for _ in 0..reader.length()? {
+            let subject = decode_subject(&mut reader)?;
+            claims.push(Claim::new(subject, decode_basis(&mut reader)?));
+        }
+        let receipt = reader
+            .flag()?
+            .then(|| decode_receipt(&mut reader))
+            .transpose()?;
+        if !reader.is_exhausted() {
+            return Err(malformed(
+                "trailing bytes after the service proof's last field",
+            ));
+        }
+        Ok(Self {
+            input,
+            trust_base,
+            service,
+            question,
+            runs,
+            claims,
+            receipt,
+            truncated,
+        })
+    }
 }
 
 /// What [`ServiceProof::verify`] established about a whole service call.
@@ -1494,15 +1595,64 @@ const fn answer_ordinal(answer: ProofAnswer) -> u8 {
     }
 }
 
-/// Append a term through the same total, dataset-independent key the services sort by.
+/// Append a term STRUCTURALLY — a kind byte and then that kind's own components, every
+/// variable-length one length-prefixed.
 ///
-/// A term is encoded by its KEY rather than by a structural walk so that two terms that sort
-/// equal encode equal — which is what makes a claim's identity the same notion the answer's own
-/// ordering uses.
+/// Not the sort key [`term_key`] builds, and the difference is load-bearing twice over. The key
+/// joins a term's coordinates with separator scalars, so a triple term whose parts contain
+/// those scalars has the same key as a different term — an ambiguity a claim's identity must
+/// not rest on — and it is a PROJECTION, so no decoder can invert it. This encoding is
+/// injective and invertible, which is what lets [`ServiceProof::decode`] exist at all, and it
+/// is still a total order over terms: [`ServiceProof::covers`] sorts by these bytes, and two
+/// terms encode equal exactly when they ARE equal.
+///
+/// The kind byte's ordering agrees with [`term_key`]'s discriminant, so the four term kinds
+/// still do not interleave.
 fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
-    let (kind, key) = term_key(term);
-    out.push(kind);
-    frame(out, key.as_bytes());
+    match term {
+        TermValue::Iri(iri) => {
+            out.push(TERM_IRI);
+            frame(out, iri.as_bytes());
+        }
+        TermValue::Blank { label, scope } => {
+            out.push(TERM_BLANK);
+            out.extend_from_slice(&scope.ordinal().to_le_bytes());
+            frame(out, label.as_bytes());
+        }
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            out.push(TERM_LITERAL);
+            frame(out, datatype.as_bytes());
+            match language.as_deref() {
+                Some(tag) => {
+                    out.push(1);
+                    frame(out, tag.as_bytes());
+                }
+                None => out.push(0),
+            }
+            out.push(direction_ordinal(*direction));
+            frame(out, lexical_form.as_bytes());
+        }
+        TermValue::Triple { s, p, o } => {
+            out.push(TERM_TRIPLE);
+            encode_term(out, s);
+            encode_term(out, p);
+            encode_term(out, o);
+        }
+    }
+}
+
+/// The wire ordinal of an RDF 1.2 base direction: `0` absent, `1` `ltr`, `2` `rtl`.
+const fn direction_ordinal(direction: Option<purrdf_core::RdfTextDirection>) -> u8 {
+    match direction {
+        None => 0,
+        Some(purrdf_core::RdfTextDirection::Ltr) => 1,
+        Some(purrdf_core::RdfTextDirection::Rtl) => 2,
+    }
 }
 
 /// Append a list of terms.
@@ -1554,21 +1704,33 @@ fn encode_question(out: &mut Vec<u8>, question: &Question) {
     }
 }
 
-/// Append a [`DlAxiom`] — a kind byte and then its terms in declaration order.
+/// Append a [`DlAxiom`] — a kind byte and then EXACTLY the terms that kind carries, in
+/// declaration order.
+///
+/// Seven kinds write two terms and one writes three. Padding the short kinds to a fixed three,
+/// as this once did, put a term on the wire that nothing reads: a forger could rewrite it
+/// freely and the stream would still decode to the same axiom, which is precisely the field
+/// [`ServiceProof::decode`]'s single-byte-edit sweep exists to find.
 fn encode_axiom(out: &mut Vec<u8>, axiom: &DlAxiom) {
-    let (kind, terms): (u8, [&TermValue; 3]) = match axiom {
-        DlAxiom::SubClassOf { sub, sup } => (0, [sub, sup, sub]),
-        DlAxiom::EquivalentClasses { left, right } => (1, [left, right, left]),
-        DlAxiom::DisjointClasses { left, right } => (2, [left, right, left]),
-        DlAxiom::ClassAssertion { individual, class } => (3, [individual, class, individual]),
+    let (kind, terms): (u8, [&TermValue; 2]) = match axiom {
+        DlAxiom::SubClassOf { sub, sup } => (0, [sub, sup]),
+        DlAxiom::EquivalentClasses { left, right } => (1, [left, right]),
+        DlAxiom::DisjointClasses { left, right } => (2, [left, right]),
+        DlAxiom::ClassAssertion { individual, class } => (3, [individual, class]),
         DlAxiom::ObjectPropertyAssertion {
             subject,
             property,
             object,
-        } => (4, [subject, property, object]),
-        DlAxiom::SameIndividual { left, right } => (5, [left, right, left]),
-        DlAxiom::DifferentIndividuals { left, right } => (6, [left, right, left]),
-        DlAxiom::SubObjectPropertyOf { sub, sup } => (7, [sub, sup, sub]),
+        } => {
+            out.push(4);
+            encode_term(out, subject);
+            encode_term(out, property);
+            encode_term(out, object);
+            return;
+        }
+        DlAxiom::SameIndividual { left, right } => (5, [left, right]),
+        DlAxiom::DifferentIndividuals { left, right } => (6, [left, right]),
+        DlAxiom::SubObjectPropertyOf { sub, sup } => (7, [sub, sup]),
     };
     out.push(kind);
     for term in terms {
@@ -1668,6 +1830,295 @@ fn encode_receipt(out: &mut Vec<u8>, receipt: &StopReceipt) {
     }
     length(out, receipt.branches_reached);
     length(out, receipt.clashes_found);
+}
+
+// ── Byte plumbing: the reading half ─────────────────────────────────────────────
+
+/// Take a length-prefixed UTF-8 string, refusing bytes that are not one.
+fn decode_text(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
+    core::str::from_utf8(reader.frame()?)
+        .map(str::to_owned)
+        .map_err(|_| malformed("a text field is not UTF-8"))
+}
+
+/// Take a [`TermValue`], refusing one nested past [`MAX_NESTING`].
+fn decode_term(reader: &mut Reader<'_>) -> Result<TermValue, DlProofError> {
+    decode_term_at(reader, 0)
+}
+
+/// Take a [`TermValue`] nested `depth` triple terms deep.
+fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, DlProofError> {
+    if depth > MAX_NESTING {
+        return Err(malformed("a term nests past the decoder's ceiling"));
+    }
+    match reader.byte()? {
+        TERM_IRI => Ok(TermValue::Iri(decode_text(reader)?)),
+        TERM_BLANK => {
+            let scope = purrdf_core::BlankScope(reader.u32()?);
+            Ok(TermValue::Blank {
+                label: decode_text(reader)?,
+                scope,
+            })
+        }
+        TERM_LITERAL => {
+            let datatype = decode_text(reader)?;
+            let language = reader.flag()?.then(|| decode_text(reader)).transpose()?;
+            let direction = match reader.byte()? {
+                0 => None,
+                1 => Some(purrdf_core::RdfTextDirection::Ltr),
+                2 => Some(purrdf_core::RdfTextDirection::Rtl),
+                _ => return Err(malformed("unknown base-direction ordinal")),
+            };
+            Ok(TermValue::Literal {
+                lexical_form: decode_text(reader)?,
+                datatype,
+                language,
+                direction,
+            })
+        }
+        TERM_TRIPLE => {
+            let s = decode_term_at(reader, depth + 1)?;
+            let p = decode_term_at(reader, depth + 1)?;
+            let o = decode_term_at(reader, depth + 1)?;
+            Ok(TermValue::Triple {
+                s: Box::new(s),
+                p: Box::new(p),
+                o: Box::new(o),
+            })
+        }
+        _ => Err(malformed("unknown term kind")),
+    }
+}
+
+/// Take a list of terms.
+fn decode_terms(reader: &mut Reader<'_>) -> Result<Vec<TermValue>, DlProofError> {
+    let mut out = Vec::new();
+    for _ in 0..reader.length()? {
+        out.push(decode_term(reader)?);
+    }
+    Ok(out)
+}
+
+/// Take a [`DlAxiom`] — a kind byte and exactly the terms that kind carries.
+fn decode_axiom(reader: &mut Reader<'_>) -> Result<DlAxiom, DlProofError> {
+    let kind = reader.byte()?;
+    if kind == 4 {
+        let subject = decode_term(reader)?;
+        let property = decode_term(reader)?;
+        return Ok(DlAxiom::ObjectPropertyAssertion {
+            subject,
+            property,
+            object: decode_term(reader)?,
+        });
+    }
+    let first = decode_term(reader)?;
+    let second = decode_term(reader)?;
+    Ok(match kind {
+        0 => DlAxiom::SubClassOf {
+            sub: first,
+            sup: second,
+        },
+        1 => DlAxiom::EquivalentClasses {
+            left: first,
+            right: second,
+        },
+        2 => DlAxiom::DisjointClasses {
+            left: first,
+            right: second,
+        },
+        3 => DlAxiom::ClassAssertion {
+            individual: first,
+            class: second,
+        },
+        5 => DlAxiom::SameIndividual {
+            left: first,
+            right: second,
+        },
+        6 => DlAxiom::DifferentIndividuals {
+            left: first,
+            right: second,
+        },
+        7 => DlAxiom::SubObjectPropertyOf {
+            sub: first,
+            sup: second,
+        },
+        _ => return Err(malformed("unknown axiom kind")),
+    })
+}
+
+/// Take a [`Question`].
+fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
+    match reader.byte()? {
+        0 => Ok(Question::Consistency),
+        1 => Ok(Question::ClassSatisfiability {
+            class: decode_term(reader)?,
+        }),
+        2 => Ok(Question::Classification {
+            classes: decode_terms(reader)?,
+        }),
+        3 => {
+            let individuals = decode_terms(reader)?;
+            Ok(Question::Realization {
+                individuals,
+                classes: decode_terms(reader)?,
+            })
+        }
+        4 => Ok(Question::InstanceRetrieval {
+            class: decode_term(reader)?,
+        }),
+        5 => Ok(Question::AxiomEntailment {
+            axiom: Box::new(decode_axiom(reader)?),
+        }),
+        6 => {
+            let signature = decode_terms(reader)?;
+            let method = *ModuleMethod::ALL
+                .get(usize::from(reader.byte()?))
+                .ok_or_else(|| malformed("module method ordinal outside ModuleMethod::ALL"))?;
+            Ok(Question::ModuleExtraction { signature, method })
+        }
+        _ => Err(malformed("unknown question kind")),
+    }
+}
+
+/// Take one [`RunProof`] — its assumptions, its answer, and its trace when it kept one.
+fn decode_run(reader: &mut Reader<'_>) -> Result<RunProof, DlProofError> {
+    let include_abox = reader.flag()?;
+    let answer = match reader.byte()? {
+        0 => ProofAnswer::Consistent,
+        1 => ProofAnswer::Inconsistent,
+        2 => ProofAnswer::Undecided,
+        _ => return Err(malformed("unknown tableau answer ordinal")),
+    };
+    let mut types = Vec::new();
+    for _ in 0..reader.length()? {
+        let individual = reader.u32()?;
+        types.push((individual, reader.u32()?));
+    }
+    let mut roles = Vec::new();
+    for _ in 0..reader.length()? {
+        let subject = reader.u32()?;
+        let property = reader.u32()?;
+        roles.push((subject, property, reader.u32()?));
+    }
+    let mut fresh_types = Vec::new();
+    for _ in 0..reader.length()? {
+        fresh_types.push(reader.u32()?);
+    }
+    let proof = reader
+        .flag()?
+        .then(|| reader.frame().and_then(DlProof::decode))
+        .transpose()?;
+    Ok(RunProof::new(
+        RunAssumptions {
+            include_abox,
+            types,
+            roles,
+            fresh_types,
+        },
+        answer,
+        proof,
+    ))
+}
+
+/// Take a [`ClaimSubject`].
+fn decode_subject(reader: &mut Reader<'_>) -> Result<ClaimSubject, DlProofError> {
+    match reader.byte()? {
+        0 => Ok(ClaimSubject::Consistent),
+        1 => Ok(ClaimSubject::ClassSatisfiable {
+            class: decode_term(reader)?,
+        }),
+        2 => {
+            let sub = decode_term(reader)?;
+            Ok(ClaimSubject::Subsumption {
+                sub,
+                sup: decode_term(reader)?,
+            })
+        }
+        3 => {
+            let individual = decode_term(reader)?;
+            Ok(ClaimSubject::Type {
+                individual,
+                class: decode_term(reader)?,
+            })
+        }
+        4 => Ok(ClaimSubject::Axiom {
+            axiom: Box::new(decode_axiom(reader)?),
+        }),
+        5 => Ok(ClaimSubject::Module {
+            digest: reader.digest()?,
+        }),
+        _ => Err(malformed("unknown claim subject kind")),
+    }
+}
+
+/// Take a [`ClaimBasis`].
+fn decode_basis(reader: &mut Reader<'_>) -> Result<ClaimBasis, DlProofError> {
+    match reader.byte()? {
+        0 => {
+            let mut runs = Vec::new();
+            for _ in 0..reader.length()? {
+                runs.push(reader.length()?);
+            }
+            Ok(ClaimBasis::ClosedRefutation { runs })
+        }
+        1 => Ok(ClaimBasis::ExhibitedModel {
+            run: reader.length()?,
+        }),
+        2 => Ok(ClaimBasis::CounterModel {
+            run: reader.length()?,
+        }),
+        3 => Ok(ClaimBasis::Undecided {
+            run: reader.length()?,
+        }),
+        4 => Ok(ClaimBasis::Saturated),
+        5 => Ok(ClaimBasis::Reflexive),
+        6 => Ok(ClaimBasis::NotDecided),
+        7 => Ok(ClaimBasis::Syntactic),
+        _ => Err(malformed("unknown claim basis kind")),
+    }
+}
+
+/// Take a [`StopReceipt`], every field in declaration order.
+///
+/// A boundary is written as the SHORT NAME a [`Construct`] spells, so a name
+/// no construct spells is refused rather than carried into a receipt that could then never
+/// agree with any certificate.
+fn decode_receipt(reader: &mut Reader<'_>) -> Result<StopReceipt, DlProofError> {
+    let stopped = reader.flag()?;
+    let run = reader.length()?;
+    let mut counters = [0_u64; 10];
+    for counter in &mut counters {
+        *counter = reader.u64()?;
+    }
+    let mut boundaries = Vec::new();
+    for _ in 0..reader.length()? {
+        let name = decode_text(reader)?;
+        if !Construct::ALL
+            .iter()
+            .any(|construct| construct.as_str() == name)
+        {
+            return Err(malformed("a boundary names no Construct this build knows"));
+        }
+        boundaries.push(name);
+    }
+    let branches_reached = reader.length()?;
+    Ok(StopReceipt {
+        stopped,
+        run,
+        steps: counters[0],
+        budget: counters[1],
+        work: counters[2],
+        work_budget: counters[3],
+        session_steps: counters[4],
+        session_work: counters[5],
+        decisions: counters[6],
+        peak_nodes: counters[7],
+        disjunctions: counters[8],
+        peak_depth: counters[9],
+        boundaries,
+        branches_reached,
+        clashes_found: reader.length()?,
+    })
 }
 
 /// The claim a REFUTATION-DECIDED boolean question reports, for a service to file.
@@ -3036,6 +3487,510 @@ mod tests {
             crate::owl_dl::proof::ontology_identity(plain.module()),
             crate::owl_dl::proof::ontology_identity(proved.module()),
             "and the module itself is identical either way"
+        );
+    }
+
+    // ── The wire format: `decode` is the untrusted entrance ─────────────────────
+
+    /// Every service proof the fixtures can produce, named, for the wire-format negatives to
+    /// range over.
+    ///
+    /// Deliberately not one: the encoding is a UNION, and a sweep over a consistency proof
+    /// alone would leave the axiom question, the multi-run answer binding, the runless
+    /// syntactic proof and the stopping receipt uncovered — four of the eight things a forger
+    /// would go for.
+    fn every_shape() -> Vec<(&'static str, ServiceProof)> {
+        let ontology = taxonomy();
+        let cat = TermValue::iri(EX_CAT);
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let mut shapes = vec![
+            (
+                "consistency",
+                reasoner.consistency().proof().expect(RECORDED).clone(),
+            ),
+            (
+                "class-satisfiability",
+                reasoner
+                    .class_satisfiability(&cat)
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "instance-retrieval",
+                reasoner
+                    .instances(&cat)
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "axiom-entailment",
+                reasoner
+                    .entails(&subclass_axiom())
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "classification",
+                reasoner
+                    .classify()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "realization",
+                reasoner
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+        ];
+        shapes.push((
+            "module-extraction",
+            extract_module_with_proofs(&ontology, &[cat], ModuleMethod::Bot)
+                .expect("extracts")
+                .proof()
+                .expect(RECORDED)
+                .clone(),
+        ));
+        // The one shape that carries a stopping receipt, which is a whole record no decided
+        // proof puts on the wire.
+        shapes.push((
+            "undecided",
+            Reasoner::with_proofs(&ontology)
+                .expect("reverse-maps")
+                .with_step_cap(0)
+                .consistency()
+                .proof()
+                .expect(RECORDED)
+                .clone(),
+        ));
+        shapes
+    }
+
+    /// A proof carrying the term kinds no reasoning fixture reaches — a blank node, a
+    /// language-and-direction literal, and a nested triple term.
+    ///
+    /// Assembled directly rather than reasoned to, deliberately: a question a reasoner will
+    /// build ranges over the ontology's named classes, so the literal and triple-term arms of
+    /// the term codec would otherwise be encoded by nothing and decoded by nothing, and an
+    /// arm no test reaches is an arm a forger has to itself.
+    fn exotic_terms_proof() -> ServiceProof {
+        let inner = TermValue::Triple {
+            s: Box::new(TermValue::iri(EX_TOM)),
+            p: Box::new(TermValue::iri(RDF_TYPE)),
+            o: Box::new(TermValue::Blank {
+                label: "b1".to_owned(),
+                scope: purrdf_core::BlankScope(7),
+            }),
+        };
+        let literal = TermValue::Literal {
+            lexical_form: "\u{1f}separator\u{1e}soup".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(purrdf_core::RdfTextDirection::Rtl),
+        };
+        ServiceProof::new(
+            [9; 32],
+            Question::Realization {
+                individuals: vec![
+                    TermValue::Triple {
+                        s: Box::new(inner.clone()),
+                        p: Box::new(TermValue::iri(RDFS_SUBCLASS_OF)),
+                        o: Box::new(literal.clone()),
+                    },
+                    TermValue::Blank {
+                        label: "x".to_owned(),
+                        scope: purrdf_core::BlankScope::DEFAULT,
+                    },
+                ],
+                classes: vec![literal.clone(), TermValue::iri(EX_CAT)],
+            },
+            Vec::new(),
+            vec![Claim::new(
+                ClaimSubject::Type {
+                    individual: inner,
+                    class: literal,
+                },
+                ClaimBasis::Saturated,
+            )],
+            None,
+            false,
+        )
+    }
+
+    /// **THE ROUND TRIP.** `decode(encode(p))` is `p`, re-encodes to the identical bytes, and
+    /// keeps the identical digest — for every shape the services produce and for the term
+    /// kinds they do not.
+    #[test]
+    fn a_service_proof_round_trips_through_its_own_encoding() {
+        let mut shapes = every_shape();
+        shapes.push(("exotic-terms", exotic_terms_proof()));
+        assert_eq!(shapes.len(), 9, "eight service shapes and the term corpus");
+        for (name, proof) in shapes {
+            let bytes = proof.encode();
+            let decoded = ServiceProof::decode(&bytes)
+                .unwrap_or_else(|error| panic!("{name}: its own encoding decodes: {error}"));
+            assert_eq!(decoded, proof, "{name}: the decoded term is the same value");
+            assert_eq!(
+                decoded.encode(),
+                bytes,
+                "{name}: and re-encodes to the identical bytes"
+            );
+            assert_eq!(decoded.digest(), proof.digest(), "{name}");
+        }
+    }
+
+    /// A DECODED proof still verifies, which is what makes the wire format a way to SHIP a
+    /// proof rather than a way to describe one.
+    #[test]
+    fn a_service_proof_that_travelled_as_bytes_still_verifies() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let axiom = subclass_axiom();
+        let answer = reasoner.entails(&axiom).expect("consistent");
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let shipped = ServiceProof::decode(&answer.proof().expect(RECORDED).encode())
+            .expect("its own encoding decodes");
+        let ctx = context(&ontology, &question);
+        let replay = shipped
+            .verify(&ontology, &question, Some(answer.certificate()), &ctx)
+            .expect("a proof that crossed a wire is still a proof");
+        assert_eq!(replay.runs(), replay.replayed());
+        assert!(replay.runs() > 0, "the fixture ran a tableau: {replay:?}");
+    }
+
+    /// Bytes written under another layout do not decode as if they were current.
+    #[test]
+    fn a_foreign_service_proof_encoding_tag_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        bytes[8] = b'X';
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+        // …including the exact bytes a `v1` writer produced: the tag is the only thing
+        // separating the two layouts, and it must be enough.
+        let mut bytes = proof.encode();
+        let at = 8 + SERVICE_ENCODING_TAG.len() - 1;
+        bytes[at] = b'1';
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// EVERY truncation of EVERY shape is a rejection rather than a panic.
+    #[test]
+    fn a_truncated_service_proof_stream_is_rejected() {
+        for (name, proof) in every_shape() {
+            let bytes = proof.encode();
+            for cut in 0..bytes.len() {
+                assert!(
+                    ServiceProof::decode(&bytes[..cut]).is_err(),
+                    "{name}: a proof truncated to {cut} bytes must not decode"
+                );
+            }
+        }
+    }
+
+    /// Trailing bytes after the last field are a rejection: a proof is the WHOLE stream, so a
+    /// forger cannot append a second, unread payload to a term that checks.
+    #[test]
+    fn trailing_bytes_after_a_service_proof_are_rejected() {
+        for (name, proof) in every_shape() {
+            let mut bytes = proof.encode();
+            bytes.push(0);
+            assert!(
+                matches!(
+                    ServiceProof::decode(&bytes),
+                    Err(DlProofError::Malformed { .. })
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// **THE FIELD-NOTHING-READS SWEEP.** Every single-byte corruption of every shape either
+    /// fails to decode or decodes to a DIFFERENT proof — never back to the same term.
+    ///
+    /// The one negative that finds a defect nobody thought to look for: a byte that can be
+    /// rewritten while the stream still decodes to the identical value is a field the decoder
+    /// does not read, and a field the decoder does not read is a field a forger moves for
+    /// free. It found two here — the axiom encoder's padding term, which wrote a third term
+    /// for seven kinds that carry two, and the stated service ordinal, which was written and
+    /// then derived again from the question rather than checked against it.
+    #[test]
+    fn no_single_byte_edit_of_a_service_proof_decodes_back_to_the_same_proof() {
+        for (name, proof) in every_shape() {
+            let bytes = proof.encode();
+            let mut decoded_to_something_else = 0_usize;
+            for position in 0..bytes.len() {
+                let mut forged = bytes.clone();
+                forged[position] ^= 0x01;
+                if let Ok(decoded) = ServiceProof::decode(&forged) {
+                    assert_ne!(
+                        decoded, proof,
+                        "{name}: byte {position} is not read by the decoder, so the encoding \
+                         carries a field a forger can move freely"
+                    );
+                    decoded_to_something_else += 1;
+                }
+            }
+            // …and the sweep is not passing because NOTHING decodes: a decoder that refused
+            // every edit would satisfy the assertion above vacuously, and the property under
+            // test is that a legal edit lands on a different TERM rather than on the same one.
+            assert!(
+                decoded_to_something_else > 0,
+                "{name}: no single-byte edit decoded at all, so the sweep proved nothing"
+            );
+        }
+    }
+
+    /// A stream stating one service while carrying another's question is refused.
+    ///
+    /// The service ordinal is written AND derivable, so the decoder has two readings of the
+    /// same fact. Believing the ordinal, or silently preferring the question, would make one
+    /// of the two bytes unconstrained; comparing them is what makes both load-bearing.
+    #[test]
+    fn a_service_proof_whose_service_is_not_its_questions_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        assert_eq!(proof.service(), Service::Consistency);
+        let mut bytes = proof.encode();
+        // The service ordinal sits immediately after the tag and the input identity.
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32] = Service::Realization.ordinal() as u8;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A service ordinal outside [`Service::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_service_ordinal_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32] = Service::ALL.len() as u8;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A boolean field encoded as anything but `0` or `1` is refused, so two byte strings can
+    /// never decode to one proof.
+    #[test]
+    fn a_non_canonical_boolean_in_a_service_proof_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        // The `truncated` flag sits immediately after the tag, the input identity and the
+        // service ordinal.
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32 + 1] = 2;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A trust-base ordinal outside [`TrustBaseEntry::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_service_trust_base_ordinal_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        // …after the tag, the identity, the service, the truncated flag and the count.
+        let at = 8 + SERVICE_ENCODING_TAG.len() + 32 + 1 + 1 + 8;
+        bytes[at..at + 8].copy_from_slice(&(TrustBaseEntry::ALL.len() as u64).to_le_bytes());
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// The stream prefix every hand-built negative below shares: the tag, a zero identity,
+    /// `service`'s ordinal, a decided flag and the full trust base.
+    fn forged_header(service: Service) -> Vec<u8> {
+        let mut out = Vec::new();
+        frame(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        out.extend_from_slice(&[0_u8; 32]);
+        out.push(service.ordinal() as u8);
+        out.push(0);
+        length(&mut out, TrustBaseEntry::ALL.len());
+        for ordinal in 0..TrustBaseEntry::ALL.len() {
+            length(&mut out, ordinal);
+        }
+        out
+    }
+
+    /// Every UNKNOWN discriminant is refused rather than read as some neighbouring one.
+    ///
+    /// One test over the whole union rather than seven, so an arm added to any of these enums
+    /// without a decoder arm shows up here: each case is a stream that is well formed up to
+    /// the byte under test.
+    #[test]
+    fn an_unknown_service_proof_discriminant_is_rejected() {
+        // A question kind past the seven.
+        let mut question = forged_header(Service::Consistency);
+        question.push(7);
+
+        // A term kind past the four, inside a class-satisfiability question.
+        let mut term = forged_header(Service::ClassSatisfiability);
+        term.push(1);
+        term.push(4);
+
+        // An axiom kind past the eight, inside an entailment question.
+        let mut axiom = forged_header(Service::AxiomEntailment);
+        axiom.push(5);
+        axiom.push(8);
+
+        // A base-direction ordinal past `rtl`.
+        let mut direction = forged_header(Service::ClassSatisfiability);
+        direction.push(1);
+        direction.push(TERM_LITERAL);
+        frame(&mut direction, b"http://example.org/dt");
+        direction.push(0);
+        direction.push(3);
+
+        // A tableau answer ordinal past `undecided`, on the first run.
+        let mut answer = forged_header(Service::Consistency);
+        answer.push(0);
+        length(&mut answer, 1);
+        answer.push(0);
+        answer.push(3);
+
+        // A claim subject kind past the six.
+        let mut subject = forged_header(Service::Consistency);
+        subject.push(0);
+        length(&mut subject, 0);
+        length(&mut subject, 1);
+        subject.push(6);
+
+        // A claim basis kind past the eight.
+        let mut basis = forged_header(Service::Consistency);
+        basis.push(0);
+        length(&mut basis, 0);
+        length(&mut basis, 1);
+        basis.push(0);
+        basis.push(8);
+
+        for (what, bytes) in [
+            ("question kind", question),
+            ("term kind", term),
+            ("axiom kind", axiom),
+            ("base direction", direction),
+            ("tableau answer", answer),
+            ("claim subject", subject),
+            ("claim basis", basis),
+        ] {
+            assert!(
+                matches!(
+                    ServiceProof::decode(&bytes),
+                    Err(DlProofError::Malformed { .. })
+                ),
+                "an unknown {what} must be refused"
+            );
+        }
+    }
+
+    /// A module-method ordinal outside [`ModuleMethod::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_module_method_ordinal_is_rejected() {
+        let mut bytes = forged_header(Service::ModuleExtraction);
+        bytes.push(6);
+        length(&mut bytes, 0);
+        bytes.push(ModuleMethod::ALL.len() as u8);
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A text field that is not UTF-8 is refused rather than replaced.
+    #[test]
+    fn a_non_utf8_text_field_in_a_service_proof_is_rejected() {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1);
+        bytes.push(TERM_IRI);
+        frame(&mut bytes, &[0xff, 0xfe]);
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A term nested past the decoder's ceiling is REFUSED rather than recursed into until
+    /// the stack ends.
+    ///
+    /// The forgery a self-similar field invites: the stream chooses the kind byte, so a
+    /// stream of nothing but `TERM_TRIPLE` costs the forger one byte per stack frame. A crash
+    /// from the one entrance whose whole job is turning hostile bytes into rejections is not
+    /// a rejection.
+    #[test]
+    fn a_term_nested_past_the_ceiling_is_rejected() {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1);
+        bytes.extend(std::iter::repeat_n(TERM_TRIPLE, MAX_NESTING + 2));
+        match ServiceProof::decode(&bytes) {
+            Err(DlProofError::Malformed { detail }) => {
+                assert!(detail.contains("ceiling"), "{detail}");
+            }
+            other => panic!("an unbounded nesting must be refused by the ceiling: {other:?}"),
+        }
+    }
+
+    /// A receipt naming a boundary NO construct spells is refused at the wire.
+    ///
+    /// A boundary set is the certificate's own vocabulary; a name outside it could never
+    /// agree with any certificate, so admitting one would only move the rejection later while
+    /// letting an arbitrary string ride inside a proof term in the meantime.
+    #[test]
+    fn a_boundary_no_construct_spells_is_rejected() {
+        let ontology = taxonomy();
+        let proof = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0)
+            .consistency()
+            .proof()
+            .expect(RECORDED)
+            .clone();
+        assert!(
+            proof.receipt().is_some(),
+            "a zero round cap does not decide"
+        );
+        let mut edited = proof.clone();
+        edited
+            .receipt
+            .as_mut()
+            .expect("undecided")
+            .boundaries
+            .push("not-a-construct".to_owned());
+        assert!(matches!(
+            ServiceProof::decode(&edited.encode()),
+            Err(DlProofError::Malformed { .. })
+        ));
+        // …and a name a construct DOES spell round-trips, so the check is the vocabulary and
+        // not a blanket refusal of boundaries.
+        let mut honest = proof;
+        honest
+            .receipt
+            .as_mut()
+            .expect("undecided")
+            .boundaries
+            .push(Construct::PropertyChain.as_str().to_owned());
+        assert_eq!(
+            ServiceProof::decode(&honest.encode()).expect("a known construct decodes"),
+            honest
         );
     }
 }

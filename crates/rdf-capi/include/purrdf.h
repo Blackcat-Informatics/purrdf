@@ -1459,6 +1459,87 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
                                         PurrdfError **out_error);
 
 /**
+ * Answer one Description-Logic service WITH the proof term of the run that answered.
+ *
+ * **THE OPT-IN.** Every `purrdf_entail_*` entry point above is unchanged and records
+ * nothing, so a caller who does not want a proof runs exactly the search they ran before
+ * and pays exactly what they paid before. This one RECORDS — which costs the completion
+ * graph of every tableau run it keeps — and hands back a document
+ * [`purrdf_entail_check_proof`] can verify.
+ *
+ * `service` is one of `consistency`, `class-satisfiability`, `classify`, `realize`,
+ * `instances`, `entails`, `extract-module`; an unknown spelling is an error naming the
+ * accepted set. `argument` is the question's own input in that service's grammar:
+ *
+ * * `""` for `consistency`, `classify` and `realize` — a non-empty one is an ERROR rather
+ *   than a silently discarded argument;
+ * * ONE N-Triples term for `class-satisfiability` and `instances`;
+ * * ONE triple of the OWL 2 RDF mapping for `entails`;
+ * * a `method <bot|top|star>` line then one term per line for `extract-module`.
+ *
+ * `step_cap` and `work_cap` behave exactly as in [`purrdf_entail_consistency`].
+ *
+ * On success `*out_answer` and `*out_certificate` receive exactly the bytes the same
+ * question would produce WITHOUT a proof — recording is an observation the reasoner makes
+ * of itself, never a lever it reads — and `*out_proof` receives the `purrdf-dl-proof 1`
+ * document. **Free ALL THREE with `purrdf_buffer_free`.** On any error none of the three
+ * out-params is written, so there is nothing to free.
+ *
+ * # Safety
+ * `document`, `service` and `argument` must be non-null, NUL-terminated C strings;
+ * `out_answer`, `out_certificate` and `out_proof` must be writable pointers; `out_error`
+ * must be null or writable.
+ */
+int32_t purrdf_entail_prove(const char *document,
+                            const char *service,
+                            const char *argument,
+                            uint32_t step_cap,
+                            uint32_t work_cap,
+                            PurrdfBuffer **out_answer,
+                            PurrdfBuffer **out_certificate,
+                            PurrdfBuffer **out_proof,
+                            PurrdfError **out_error);
+
+/**
+ * CHECK a proof against the CALLER's own ontology, question and answer.
+ *
+ * **THE CHECKER**, and the shape [`purrdf_entail_verify_entailment`] set: a consumer holds
+ * evidence and re-decides it here. Nothing in this call trusts the producer. The ontology
+ * is parsed from `document`, the question is re-derived from `service` and `argument`, the
+ * claims are read back out of `answer`'s own grammar, and the checking context comes from a
+ * reverse mapping this call performs itself. The proof supplies the runs and nothing else,
+ * so an `entails` proof for a different axiom, a proof for a different document, and a
+ * genuine proof of some OTHER answer are each REFUSED.
+ *
+ * `answer` and `certificate` may each be the empty string, and each empty one is a WEAKER
+ * check that SAYS SO rather than one that quietly passed: with no answer the report reads
+ * `answer not-checked`, and with no certificate a proof carrying a stopping receipt is
+ * refused, because there is nothing for the receipt to be a receipt of.
+ *
+ * On success `*out_report` receives the `purrdf-dl-proof-check 1` block — the digest and
+ * input identity it checked, the runs it replayed, and the `attested`/`trusted`/`unattested`
+ * counts with the producer-shared components the whole check rests on. **Free it with
+ * `purrdf_buffer_free`.** There is no `verified` line: a verification that FAILED is an
+ * error, so a rendered `true` would be a constant rather than a gate.
+ *
+ * A `proof` document reading `availability not-recorded` is an ERROR naming that fact. An
+ * answer nobody asked to record must never be presented as a verified one.
+ *
+ * # Safety
+ * `document`, `service`, `argument`, `answer`, `certificate` and `proof` must be non-null,
+ * NUL-terminated C strings; `out_report` must be a writable pointer; `out_error` must be
+ * null or writable.
+ */
+int32_t purrdf_entail_check_proof(const char *document,
+                                  const char *service,
+                                  const char *argument,
+                                  const char *answer,
+                                  const char *certificate,
+                                  const char *proof,
+                                  PurrdfBuffer **out_report,
+                                  PurrdfError **out_error);
+
+/**
  * Open a reasoning session over `document`.
  *
  * `step_cap` narrows the per-decision tableau step cap for every question asked through

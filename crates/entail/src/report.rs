@@ -392,6 +392,19 @@ impl Construct {
         Self::NonHornTBox,
     ];
 
+    /// The construct `name` is the short name of, or `None`.
+    ///
+    /// The left inverse of [`Self::as_str`], for a CONSUMER reading a rendered certificate or
+    /// proof back in. Total and exact: a name no construct spells is `None` rather than a
+    /// nearest match, because a boundary is a claim about which axioms were not read and
+    /// guessing at one would make that claim about a different construct.
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|construct| construct.as_str() == name)
+    }
+
     /// A short, stable name for the construct.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

@@ -56,11 +56,12 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::regime::{
-    ReasonerSession, ReasoningAnswer, certain_answers_to_string, classify_to_string,
-    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
-    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string, profile_to_string,
-    realize_to_string, rules_string, verify_entailment_to_string,
+    ReasonerSession, ReasoningAnswer, certain_answers_to_string, check_dl_proof,
+    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extension_rules_string, extract_module_to_string, graph_entails_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    profile_to_string, prove_to_string, realize_to_string, rules_string,
+    verify_entailment_to_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -1044,6 +1045,168 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
     }
 }
 
+// ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
+
+/// Write a proved answer to its three out-params, or map its message to an error.
+///
+/// # Safety
+/// `out_answer`, `out_certificate` and `out_proof` must be non-null, writable pointers.
+/// All three writes happen only after every fallible step has succeeded.
+unsafe fn store_proved_answer(
+    produced: Result<ReasoningAnswer, String>,
+    out_answer: *mut *mut PurrdfBuffer,
+    out_certificate: *mut *mut PurrdfBuffer,
+    out_proof: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    let (answer, certificate, proof) = produced
+        .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?
+        .into_proved_parts();
+    // SAFETY: the caller's contract above — all three pointers are non-null and writable,
+    // and nothing fallible remains between here and the three writes.
+    unsafe {
+        *out_answer = PurrdfBuffer::into_raw(answer.into_bytes());
+        *out_certificate = PurrdfBuffer::into_raw(certificate.into_bytes());
+        *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
+    }
+    Ok(PurrdfStatus::Ok)
+}
+
+/// Answer one Description-Logic service WITH the proof term of the run that answered.
+///
+/// **THE OPT-IN.** Every `purrdf_entail_*` entry point above is unchanged and records
+/// nothing, so a caller who does not want a proof runs exactly the search they ran before
+/// and pays exactly what they paid before. This one RECORDS — which costs the completion
+/// graph of every tableau run it keeps — and hands back a document
+/// [`purrdf_entail_check_proof`] can verify.
+///
+/// `service` is one of `consistency`, `class-satisfiability`, `classify`, `realize`,
+/// `instances`, `entails`, `extract-module`; an unknown spelling is an error naming the
+/// accepted set. `argument` is the question's own input in that service's grammar:
+///
+/// * `""` for `consistency`, `classify` and `realize` — a non-empty one is an ERROR rather
+///   than a silently discarded argument;
+/// * ONE N-Triples term for `class-satisfiability` and `instances`;
+/// * ONE triple of the OWL 2 RDF mapping for `entails`;
+/// * a `method <bot|top|star>` line then one term per line for `extract-module`.
+///
+/// `step_cap` and `work_cap` behave exactly as in [`purrdf_entail_consistency`].
+///
+/// On success `*out_answer` and `*out_certificate` receive exactly the bytes the same
+/// question would produce WITHOUT a proof — recording is an observation the reasoner makes
+/// of itself, never a lever it reads — and `*out_proof` receives the `purrdf-dl-proof 1`
+/// document. **Free ALL THREE with `purrdf_buffer_free`.** On any error none of the three
+/// out-params is written, so there is nothing to free.
+///
+/// # Safety
+/// `document`, `service` and `argument` must be non-null, NUL-terminated C strings;
+/// `out_answer`, `out_certificate` and `out_proof` must be writable pointers; `out_error`
+/// must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_entail_prove(
+    document: *const c_char,
+    service: *const c_char,
+    argument: *const c_char,
+    step_cap: u32,
+    work_cap: u32,
+    out_answer: *mut *mut PurrdfBuffer,
+    out_certificate: *mut *mut PurrdfBuffer,
+    out_proof: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: the caller's contract above; the out-params are written only by
+    // `store_proved_answer`, after the boundary call has succeeded.
+    unsafe {
+        ffi_try!(out_error, {
+            if document.is_null()
+                || service.is_null()
+                || argument.is_null()
+                || out_answer.is_null()
+                || out_certificate.is_null()
+                || out_proof.is_null()
+            {
+                return Err(null_argument("purrdf_entail_prove"));
+            }
+            let document = cstr_to_str(document)?;
+            let service = cstr_to_str(service)?;
+            let argument = cstr_to_str(argument)?;
+            store_proved_answer(
+                prove_to_string(document, service, argument, step_cap, work_cap),
+                out_answer,
+                out_certificate,
+                out_proof,
+            )
+        })
+    }
+}
+
+/// CHECK a proof against the CALLER's own ontology, question and answer.
+///
+/// **THE CHECKER**, and the shape [`purrdf_entail_verify_entailment`] set: a consumer holds
+/// evidence and re-decides it here. Nothing in this call trusts the producer. The ontology
+/// is parsed from `document`, the question is re-derived from `service` and `argument`, the
+/// claims are read back out of `answer`'s own grammar, and the checking context comes from a
+/// reverse mapping this call performs itself. The proof supplies the runs and nothing else,
+/// so an `entails` proof for a different axiom, a proof for a different document, and a
+/// genuine proof of some OTHER answer are each REFUSED.
+///
+/// `answer` and `certificate` may each be the empty string, and each empty one is a WEAKER
+/// check that SAYS SO rather than one that quietly passed: with no answer the report reads
+/// `answer not-checked`, and with no certificate a proof carrying a stopping receipt is
+/// refused, because there is nothing for the receipt to be a receipt of.
+///
+/// On success `*out_report` receives the `purrdf-dl-proof-check 1` block — the digest and
+/// input identity it checked, the runs it replayed, and the `attested`/`trusted`/`unattested`
+/// counts with the producer-shared components the whole check rests on. **Free it with
+/// `purrdf_buffer_free`.** There is no `verified` line: a verification that FAILED is an
+/// error, so a rendered `true` would be a constant rather than a gate.
+///
+/// A `proof` document reading `availability not-recorded` is an ERROR naming that fact. An
+/// answer nobody asked to record must never be presented as a verified one.
+///
+/// # Safety
+/// `document`, `service`, `argument`, `answer`, `certificate` and `proof` must be non-null,
+/// NUL-terminated C strings; `out_report` must be a writable pointer; `out_error` must be
+/// null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_entail_check_proof(
+    document: *const c_char,
+    service: *const c_char,
+    argument: *const c_char,
+    answer: *const c_char,
+    certificate: *const c_char,
+    proof: *const c_char,
+    out_report: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: the caller's contract above; `*out_report` is written only after the boundary
+    // call has succeeded.
+    unsafe {
+        ffi_try!(out_error, {
+            if document.is_null()
+                || service.is_null()
+                || argument.is_null()
+                || answer.is_null()
+                || certificate.is_null()
+                || proof.is_null()
+                || out_report.is_null()
+            {
+                return Err(null_argument("purrdf_entail_check_proof"));
+            }
+            let report = check_dl_proof(
+                cstr_to_str(document)?,
+                cstr_to_str(service)?,
+                cstr_to_str(argument)?,
+                cstr_to_str(answer)?,
+                cstr_to_str(certificate)?,
+                cstr_to_str(proof)?,
+            )
+            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_report = PurrdfBuffer::into_raw(report.into_bytes());
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology. Release with [`purrdf_reasoner_free`].
@@ -1426,7 +1589,10 @@ pub unsafe extern "C" fn purrdf_reasoner_explain_conclusion(
 mod tests {
     use std::ffi::CString;
 
-    use purrdf_validate::regime::{check_inconsistent_refusal, check_regime_golden_vectors};
+    use purrdf_validate::regime::{
+        check_absent_proof_is_not_verifiable, check_dl_proof_golden_vectors,
+        check_inconsistent_refusal, check_regime_golden_vectors,
+    };
 
     use super::*;
 
@@ -1462,6 +1628,183 @@ mod tests {
     #[test]
     fn an_inconsistent_input_is_refused_with_its_report() {
         check_inconsistent_refusal().expect("the inconsistent refusal");
+    }
+
+    /// The C-ABI host's leg of the CROSS-HOST assertion for the PROOF surface.
+    ///
+    /// The `purrdf-validate` test, the PyO3 test and the WASM host's
+    /// `entailCheckProofGoldenVectors` call this SAME checker over the SAME committed
+    /// artifact. A rendered proof carries `ServiceProof::encode`'s canonical bytes, so a host
+    /// producing different bytes has produced a different proof TERM.
+    #[test]
+    fn the_dl_proof_golden_vector_matches() {
+        check_dl_proof_golden_vectors().expect("the DL proof golden vector");
+    }
+
+    /// The C-ABI host's leg of the availability assertion: an answer nobody asked to record
+    /// is never presentable as a verified one.
+    #[test]
+    fn an_absent_proof_is_never_presented_as_a_verified_one() {
+        check_absent_proof_is_not_verifiable().expect("the absent-proof refusal");
+    }
+
+    /// **THE GOLDEN ARTIFACT, THROUGH THE C SYMBOLS.** Every committed case reproduces
+    /// byte for byte when produced and checked through the `extern "C"` entry points.
+    ///
+    /// `the_dl_proof_golden_vector_matches` runs the shared checker over the Rust boundary;
+    /// this runs the same cases through the ABI a C consumer actually calls — C strings in,
+    /// `PurrdfBuffer`s out. A framing bug that truncated a proof, or a host that produced
+    /// different bytes, fails here on the case that moved rather than on a fixture only this
+    /// crate has.
+    #[test]
+    fn the_golden_proof_bytes_survive_the_c_abi() {
+        let cases = purrdf_validate::regime::dl_proof_golden_vectors().expect("the artifact");
+        assert_eq!(cases.len(), 7, "one case per proof-bearing service");
+        for case in &cases {
+            let document = CString::new(case.input()).expect("no NUL");
+            let service = CString::new(case.service()).expect("no NUL");
+            let argument = CString::new(case.argument().trim_end()).expect("no NUL");
+            let mut answer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut certificate: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut proof: *mut PurrdfBuffer = std::ptr::null_mut();
+            // SAFETY: live C strings and three writable out-params.
+            let status = unsafe {
+                purrdf_entail_prove(
+                    document.as_ptr(),
+                    service.as_ptr(),
+                    argument.as_ptr(),
+                    0,
+                    0,
+                    &raw mut answer,
+                    &raw mut certificate,
+                    &raw mut proof,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, PurrdfStatus::Ok as i32, "{}", case.name());
+            // SAFETY: three live buffers, each freed exactly once.
+            let (answer, certificate, proof) =
+                unsafe { (take(answer), take(certificate), take(proof)) };
+            assert_eq!(answer, case.answer(), "{}: answer", case.name());
+            assert_eq!(proof, case.proof(), "{}: proof", case.name());
+
+            let answer_c = CString::new(answer.as_str()).expect("no NUL");
+            let certificate_c = CString::new(certificate.as_str()).expect("no NUL");
+            let proof_c = CString::new(proof.as_str()).expect("no NUL");
+            let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
+            // SAFETY: as above.
+            let status = unsafe {
+                purrdf_entail_check_proof(
+                    document.as_ptr(),
+                    service.as_ptr(),
+                    argument.as_ptr(),
+                    answer_c.as_ptr(),
+                    certificate_c.as_ptr(),
+                    proof_c.as_ptr(),
+                    &raw mut report,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, PurrdfStatus::Ok as i32, "{}", case.name());
+            // SAFETY: one live buffer, freed exactly once.
+            assert_eq!(
+                unsafe { take(report) },
+                case.check(),
+                "{}: check",
+                case.name()
+            );
+        }
+    }
+
+    /// **THE C ENTRY POINTS THEMSELVES.** A proof produced through `purrdf_entail_prove`
+    /// checks through `purrdf_entail_check_proof`, and the absence of one does not.
+    ///
+    /// Drives the actual `extern "C"` symbols with real C strings and real out-params rather
+    /// than the Rust boundary underneath them, because the framing is this crate's whole job:
+    /// a proof that never reaches the third buffer is a proof no C caller can hold.
+    #[test]
+    fn the_c_entry_points_produce_and_check_a_proof() {
+        let document = CString::new(TAXONOMY).expect("no NUL");
+        let service = CString::new("entails").expect("no NUL");
+        let argument = CString::new(CHAIN_AXIOM).expect("no NUL");
+        let empty = CString::new("").expect("no NUL");
+        let mut answer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut certificate: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut proof: *mut PurrdfBuffer = std::ptr::null_mut();
+        // SAFETY: every pointer is a live C string or a writable out-param.
+        let status = unsafe {
+            purrdf_entail_prove(
+                document.as_ptr(),
+                service.as_ptr(),
+                argument.as_ptr(),
+                0,
+                0,
+                &raw mut answer,
+                &raw mut certificate,
+                &raw mut proof,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        // SAFETY: three live buffers, each freed exactly once.
+        let (answer, certificate, proof) =
+            unsafe { (take(answer), take(certificate), take(proof)) };
+        assert!(answer.starts_with("entails true\n"), "{answer}");
+        assert!(
+            proof.starts_with("purrdf-dl-proof 1\nservice entails\navailability recorded\n"),
+            "{proof}"
+        );
+
+        let answer_c = CString::new(answer.as_str()).expect("no NUL");
+        let certificate_c = CString::new(certificate.as_str()).expect("no NUL");
+        let proof_c = CString::new(proof.as_str()).expect("no NUL");
+        let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
+        // SAFETY: as above.
+        let status = unsafe {
+            purrdf_entail_check_proof(
+                document.as_ptr(),
+                service.as_ptr(),
+                argument.as_ptr(),
+                answer_c.as_ptr(),
+                certificate_c.as_ptr(),
+                proof_c.as_ptr(),
+                &raw mut report,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        // SAFETY: one live buffer, freed exactly once.
+        let report = unsafe { take(report) };
+        assert!(
+            report.starts_with("purrdf-dl-proof-check 1\nservice entails\n"),
+            "{report}"
+        );
+        assert!(report.contains("\nanswer checked 1\n"), "{report}");
+
+        // …and the ABSENT proof — what an ordinary `purrdf_entail_entails` answer has — is
+        // REFUSED rather than reported as a verification of nothing.
+        let absent =
+            CString::new("purrdf-dl-proof 1\navailability not-recorded\n").expect("no NUL");
+        let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: as above; `out_error` is writable.
+        let status = unsafe {
+            purrdf_entail_check_proof(
+                document.as_ptr(),
+                service.as_ptr(),
+                argument.as_ptr(),
+                empty.as_ptr(),
+                empty.as_ptr(),
+                absent.as_ptr(),
+                &raw mut report,
+                &raw mut error,
+            )
+        };
+        assert_ne!(status, PurrdfStatus::Ok as i32);
+        assert!(report.is_null(), "a refused check writes no report to free");
+        assert!(!error.is_null(), "and it names what it refused");
+        // SAFETY: a live error handle, freed exactly once.
+        unsafe { crate::error::purrdf_error_free(error) };
     }
 
     #[test]

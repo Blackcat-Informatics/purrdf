@@ -57,8 +57,12 @@
 //! to carry. The certificate's four budget lines say WHICH cap: an exhausted run has `steps`
 //! at `budget`, or `work` at `work-budget`.
 
+use std::path::Path;
+
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_validate::regime::consistency_to_string;
+use purrdf_validate::regime::{
+    ReasoningAnswer, check_dl_proof, consistency_to_string, prove_to_string,
+};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
@@ -86,6 +90,14 @@ pub(crate) struct ConsistencyOptions<'a> {
     /// parameter [`consistency_to_string`] takes. It bounds the matcher, scan, closure and
     /// clone work done INSIDE a round, which the round cap cannot see.
     pub(crate) work_cap: u32,
+    /// `--proof`: also RECORD the run's proof term and print it after the certificate.
+    ///
+    /// Opt-in, and the default stays exactly what it was: `false` records nothing, keeps no
+    /// traces and decides the identical verdict under the identical certificate.
+    pub(crate) proof: bool,
+    /// `--check-proof PATH`: a `purrdf-dl-proof 1` document to CHECK against this ontology,
+    /// this question and this run's own answer.
+    pub(crate) check_proof: Option<&'a Path>,
 }
 
 /// Run the `consistency` subcommand.
@@ -96,12 +108,32 @@ pub(crate) fn run(
 ) -> Result<CliOutcome, CliError> {
     refuse_document_flags(ledger_target, jsonld_options)?;
     let document = read_as_nquads(options)?;
-    let answer = consistency_to_string(&document, options.step_cap, options.work_cap)
-        .map_err(CliError::Runtime)?;
+    // Two producers, one for each recording mode. `prove_to_string` records the tableau's
+    // completion graphs and `consistency_to_string` records nothing; the verdict and the
+    // certificate they return are byte-identical, which is why the default is untouched
+    // rather than "the recording one with the proof thrown away".
+    let answer: ReasoningAnswer = if options.proof {
+        prove_to_string(
+            &document,
+            "consistency",
+            "",
+            options.step_cap,
+            options.work_cap,
+        )
+    } else {
+        consistency_to_string(&document, options.step_cap, options.work_cap)
+    }
+    .map_err(CliError::Runtime)?;
 
     let mut rendered = String::with_capacity(answer.answer().len() + answer.certificate().len());
     rendered.push_str(answer.answer());
     rendered.push_str(answer.certificate());
+    if options.proof {
+        rendered.push_str(answer.proof_document());
+    }
+    if let Some(path) = options.check_proof {
+        rendered.push_str(&check_supplied_proof(path, &document, &answer)?);
+    }
     sink::write_out("-", rendered.as_bytes())?;
 
     // `unknown` is the certificate's own word for "at least one hypertableau run reached
@@ -116,6 +148,36 @@ pub(crate) fn run(
     } else {
         Ok(CliOutcome::Complete)
     }
+}
+
+/// CHECK the `purrdf-dl-proof 1` document at `path` against THIS run.
+///
+/// The consumer's side of the proof surface, reached from the command line. Every input to
+/// the check is this command's own: the ontology it was pointed at, the question it asked,
+/// and the answer and certificate it just produced. The file supplies the proof and nothing
+/// else, so a proof for another ontology, for another question, or of another answer is
+/// refused — and so is a document that says `availability not-recorded`, because an answer
+/// nobody asked to record must never be printed as a verified one.
+///
+/// A proof that does not check is a RUNTIME ERROR rather than a `verified false` line: this
+/// command's exit code already carries the decided/undecided distinction, and a refusal that
+/// left the exit code at zero would be a check a script could not act on.
+fn check_supplied_proof(
+    path: &Path,
+    document: &str,
+    answer: &ReasoningAnswer,
+) -> Result<String, CliError> {
+    let proof = std::fs::read_to_string(path)
+        .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))?;
+    check_dl_proof(
+        document,
+        "consistency",
+        "",
+        answer.answer(),
+        answer.certificate(),
+        &proof,
+    )
+    .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
 }
 
 /// Refuse the two global document flags, which name outputs this command does not produce.

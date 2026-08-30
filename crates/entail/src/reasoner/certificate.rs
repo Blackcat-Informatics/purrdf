@@ -239,6 +239,60 @@ pub struct DlCertificate {
 }
 
 impl DlCertificate {
+    /// A CONSUMER's reading of a certificate they were handed, for checking a proof's
+    /// stopping receipt against.
+    ///
+    /// # This is a reading, never a measurement
+    ///
+    /// Every other [`DlCertificate`] in this crate is produced by the reasoning session, from
+    /// what the search actually did. This one is produced by a consumer who has a RENDERED
+    /// certificate — a `purrdf-dl-certificate 1` block that crossed a host boundary as text —
+    /// and needs the value back so that [`ServiceProof::verify`] can hold a stopping receipt
+    /// against it. Without it a budget-exhausted proof could not be checked anywhere but in
+    /// process, because the receipt check has nothing to be a receipt of; see
+    /// [`ServiceProof::verify`].
+    ///
+    /// It does not weaken the overclaim discipline the [module docs](self) describe, and the
+    /// reason is structural rather than a matter of care: there is still NO completeness
+    /// field. [`Self::completeness`] derives its verdict on every call, so `decided` beside a
+    /// non-empty `boundaries` is as unconstructible through this constructor as through the
+    /// session's. What a caller CAN do here is state readings that were never measured — and
+    /// that is exactly the position a consumer is in anyway: the certificate they hold came
+    /// from the producer, and holding a proof's receipt against it is a check that the two
+    /// halves of one answer AGREE, not a check that either is true on its own.
+    #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a certificate is eleven independent readings, and taking them as one struct would need a second public type that exists only to be unpacked here"
+    )]
+    pub fn stated(
+        exhausted: bool,
+        stopped: bool,
+        boundaries: Vec<Boundary>,
+        steps: u64,
+        budget: u64,
+        work: u64,
+        work_budget: u64,
+        decisions: u64,
+        peak_nodes: u64,
+        disjunctions: u64,
+        peak_depth: u64,
+    ) -> Self {
+        Self {
+            exhausted,
+            stopped,
+            boundaries,
+            steps,
+            budget,
+            work,
+            work_budget,
+            decisions,
+            peak_nodes,
+            disjunctions,
+            peak_depth,
+        }
+    }
+
     /// How complete the answer is.
     ///
     /// DERIVED on every call from [`Self::boundaries`] and the run's own exhausted flag,

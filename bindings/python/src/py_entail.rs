@@ -63,12 +63,13 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    REGIME_NAMES, ReasonerSession, certain_answers_to_string, classify_to_string,
-    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
-    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string, parse_regime,
-    profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
-    render_entail_error, render_reasoning_report, rules_string, verify_entailment_to_string,
+    PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, certain_answers_to_string, check_dl_proof,
+    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extension_rules_string, extract_module_to_string, graph_entails_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    parse_regime, profile_to_string, prove_to_string, realize_to_string, regime_name, regime_plan,
+    regime_rule_set, render_entail_error, render_reasoning_report, rules_string,
+    verify_entailment_to_string,
 };
 
 use crate::entail::{Regime, materialize as materialize_closure};
@@ -746,6 +747,101 @@ fn verify_entailment(
     Ok(answer.into_parts())
 }
 
+// ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
+
+/// Answer one Description-Logic service WITH the proof term of the run that answered.
+///
+/// **The opt-in.** The nine entry points above are unchanged and record nothing, so a caller
+/// who does not want a proof runs exactly the search they ran before and gets exactly the
+/// two-tuple they got before. This one RECORDS — which costs the completion graph of every
+/// tableau run it keeps — and returns a THREE-tuple `(answer, certificate, proof)`, all
+/// `str`.
+///
+/// `service` is one of `consistency`, `class-satisfiability`, `classify`, `realize`,
+/// `instances`, `entails`, `extract-module`. `argument` is the question's own input in that
+/// service's grammar:
+///
+/// * `""` for `consistency`, `classify` and `realize` — a non-empty one raises rather than
+///   being discarded;
+/// * ONE N-Triples term for `class-satisfiability` and `instances`;
+/// * ONE triple of the OWL 2 RDF mapping for `entails`;
+/// * a `method <bot|top|star>` line then one term per line for `extract-module`.
+///
+/// `answer` and `certificate` are byte-identical to the same question asked without a proof:
+/// recording is an observation the reasoner makes of itself, never a lever it reads. `proof`
+/// is the `purrdf-dl-proof 1` document `check_proof` takes.
+///
+/// `step_cap` and `work_cap` are `consistency`'s.
+///
+/// Raises `ValueError` on a malformed document, an unknown service, an argument wrong for the
+/// service, or whatever that service itself refuses.
+#[pyfunction]
+#[pyo3(signature = (data, service, argument = "", step_cap = 0, work_cap = 0))]
+fn prove(
+    py: Python<'_>,
+    data: &str,
+    service: &str,
+    argument: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> PyResult<(String, String, String)> {
+    let answer = py
+        .detach(|| prove_to_string(data, service, argument, step_cap, work_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_proved_parts())
+}
+
+/// CHECK a proof against the CALLER's own ontology, question and answer.
+///
+/// **The checker**, and nothing in it trusts the producer: the ontology is parsed from `data`,
+/// the question is re-derived from `service` and `argument`, the claims are read back out of
+/// `answer`'s own grammar, and the checking context comes from a reverse mapping this call
+/// performs itself. The proof supplies the runs and nothing else, so an `entails` proof for a
+/// different axiom, a proof for a different document, and a genuine proof of some OTHER
+/// answer are each refused.
+///
+/// `answer` and `certificate` may each be `""`, and each empty one is a WEAKER check that says
+/// so rather than one that quietly passed: with no answer the report reads
+/// `answer not-checked`, and with no certificate a proof carrying a stopping receipt is
+/// refused, because there is nothing for the receipt to be a receipt of.
+///
+/// Returns the `purrdf-dl-proof-check 1` report — the digest and input identity it checked,
+/// the runs it replayed, and the `attested`/`trusted`/`unattested` counts with the
+/// producer-shared components the whole check rests on. There is no `verified` line: a
+/// verification that FAILED raises, so a rendered `true` would be a constant rather than a
+/// gate.
+///
+/// Raises `ValueError` for a proof document reading `availability not-recorded` — an answer
+/// nobody asked to record is never presented as a verified one — and for every other
+/// rejection.
+#[pyfunction]
+#[pyo3(signature = (data, service, argument, answer, certificate, proof))]
+fn check_proof(
+    py: Python<'_>,
+    data: &str,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> PyResult<String> {
+    py.detach(|| check_dl_proof(data, service, argument, answer, certificate, proof))
+        .map_err(PyValueError::new_err)
+}
+
+/// The seven Description-Logic services a proof term can be about, in the spellings `prove`
+/// and `check_proof` accept.
+///
+/// Exposed for the reason `rules`/`implemented_rules` are: a caller must be able to MEASURE
+/// the set rather than trust a docstring that would go stale the day it moved.
+#[pyfunction]
+fn proof_services() -> Vec<String> {
+    PROOF_SERVICE_NAMES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology — `purrdf.entail.Reasoner`.
@@ -788,12 +884,50 @@ impl PyReasoner {
     ///
     /// Raises `ValueError` on a malformed document.
     #[new]
-    #[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
-    fn new(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult<Self> {
+    #[pyo3(signature = (data, step_cap = 0, work_cap = 0, proofs = false))]
+    fn new(
+        py: Python<'_>,
+        data: &str,
+        step_cap: u32,
+        work_cap: u32,
+        proofs: bool,
+    ) -> PyResult<Self> {
         let session = py
-            .detach(|| ReasonerSession::open(data, step_cap, work_cap))
+            .detach(|| {
+                if proofs {
+                    ReasonerSession::open_with_proofs(data, step_cap, work_cap)
+                } else {
+                    ReasonerSession::open(data, step_cap, work_cap)
+                }
+            })
             .map_err(PyValueError::new_err)?;
         Ok(Self { session })
+    }
+
+    /// Whether this session records proof terms — `True` only for `Reasoner(..., proofs=True)`.
+    ///
+    /// The default is `False`, and it is the whole opt-in: a session nobody asked to record
+    /// runs the same searches it always ran and keeps no traces.
+    #[getter]
+    fn records_proofs(&self) -> bool {
+        self.session.records_proofs()
+    }
+
+    /// Answer `service` about `argument`, with its proof. See `purrdf.entail.prove`.
+    ///
+    /// Returns `(answer, certificate, proof)`, all `str`. Raises `ValueError` on a session
+    /// that records nothing: construct it with `proofs=True`.
+    #[pyo3(signature = (service, argument = ""))]
+    fn prove(
+        &mut self,
+        py: Python<'_>,
+        service: &str,
+        argument: &str,
+    ) -> PyResult<(String, String, String)> {
+        let answer = py
+            .detach(|| self.session.prove(service, argument))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_proved_parts())
     }
 
     /// Is the knowledge base consistent? See `purrdf.entail.consistency`.
@@ -915,6 +1049,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(certain_answers, m)?)?;
     m.add_function(wrap_pyfunction!(graph_entails, m)?)?;
     m.add_function(wrap_pyfunction!(verify_entailment, m)?)?;
+    m.add_function(wrap_pyfunction!(prove, m)?)?;
+    m.add_function(wrap_pyfunction!(check_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(proof_services, m)?)?;
     Ok(())
 }
 
@@ -929,6 +1066,38 @@ mod tests {
     /// `rif` is the one regime whose calculus is the CALLER's, so it is the one
     /// spelling whose `program` argument is a document rather than the empty string.
     const RIF_PROGRAM: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
+    /// The PyO3 host's leg of the CROSS-HOST assertion for the PROOF surface.
+    ///
+    /// The `purrdf-validate` test, the C-ABI test and the WASM host's
+    /// `entailCheckProofGoldenVectors` call this SAME checker over the SAME committed
+    /// artifact. A rendered proof carries the proof term's own canonical bytes, so a host
+    /// producing different bytes has produced a different proof TERM — and a consumer's
+    /// pinned digest would have moved under them.
+    #[test]
+    fn the_dl_proof_golden_vector_matches() {
+        purrdf_validate::regime::check_dl_proof_golden_vectors()
+            .expect("the DL proof golden vector");
+    }
+
+    /// The PyO3 host's leg of the availability assertion: an answer nobody asked to record
+    /// is never presentable as a verified one.
+    #[test]
+    fn an_absent_proof_is_never_presented_as_a_verified_one() {
+        purrdf_validate::regime::check_absent_proof_is_not_verifiable()
+            .expect("the absent-proof refusal");
+    }
+
+    /// The service set this module exposes is `purrdf-validate`'s, not a copy of it.
+    #[test]
+    fn the_proof_service_set_is_the_boundarys() {
+        assert_eq!(proof_services(), PROOF_SERVICE_NAMES.to_vec());
+        assert_eq!(
+            proof_services().len(),
+            7,
+            "seven services carry a proof term"
+        );
+    }
 
     /// Every Python-visible member maps onto a distinct native regime, and the
     /// seven together cover the whole `Regime` enum.

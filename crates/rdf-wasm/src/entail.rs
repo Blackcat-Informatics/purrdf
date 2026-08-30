@@ -40,11 +40,13 @@
 
 use purrdf_validate::regime::{
     ReasonerSession, ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
-    certain_answers_to_string, check_inconsistent_refusal, check_regime_golden_vectors,
+    certain_answers_to_string, check_absent_proof_is_not_verifiable, check_dl_proof,
+    check_dl_proof_golden_vectors, check_inconsistent_refusal, check_regime_golden_vectors,
     classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
     extension_rules_string, extract_module_to_string, graph_entails_to_string,
     implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    profile_to_string, realize_to_string, rules_string, verify_entailment_to_string,
+    profile_to_string, prove_to_string, realize_to_string, rules_string,
+    verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
 
@@ -248,6 +250,9 @@ pub struct ReasoningAnswer {
     answer: String,
     /// The certificate of the run that produced it.
     certificate: String,
+    /// The proof term of the run that produced it, or the `availability not-recorded`
+    /// document when nobody asked for one. NEVER empty — see [`Self::proof`].
+    proof: String,
 }
 
 #[wasm_bindgen]
@@ -284,14 +289,40 @@ impl ReasoningAnswer {
     pub fn certificate(&self) -> String {
         self.certificate.clone()
     }
+
+    /// The PROOF TERM of the run that produced this answer, as a `purrdf-dl-proof 1`
+    /// document — the thing `entailCheckProof` takes.
+    ///
+    /// Never the empty string, and that is the point. Recording is OPT-IN: an answer from an
+    /// `entail*` function or from a `new Reasoner(...)` session records nothing, and this
+    /// getter then reads
+    ///
+    /// ```text
+    /// purrdf-dl-proof 1
+    /// availability not-recorded
+    /// ```
+    ///
+    /// which says NOTHING WAS MEASURED. A recorded proof says `availability recorded`, and a
+    /// recorded proof with `runs 0` in it says something different again: that the service is
+    /// syntactic (`extractModule` is), so there was no search to check and the checker
+    /// verified exactly that. Three states, three documents, and `entailCheckProof` refuses
+    /// the first by name rather than reporting a verification of it.
+    ///
+    /// Ask for a proof with `entailProve(...)` or `Reasoner.withProofs(...)`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn proof(&self) -> String {
+        self.proof.clone()
+    }
 }
 
 impl From<BoundaryAnswer> for ReasoningAnswer {
     fn from(produced: BoundaryAnswer) -> Self {
-        let (answer, certificate) = produced.into_parts();
+        let (answer, certificate, proof) = produced.into_proved_parts();
         Self {
             answer,
             certificate,
+            proof,
         }
     }
 }
@@ -766,6 +797,128 @@ pub fn entail_verify_entailment(
         .map_err(|e| JsError::new(&e))
 }
 
+// ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
+
+/// Answer one service WITH its proof term. See [`entail_prove`].
+pub(crate) fn prove_impl(
+    document: &str,
+    service: &str,
+    argument: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    prove_to_string(document, service, argument, step_cap, work_cap).map(ReasoningAnswer::from)
+}
+
+/// `entailProve(document, service, argument, stepCap, workCap)` → a `ReasoningAnswer` whose
+/// `.proof` is the run's `purrdf-dl-proof 1` document.
+///
+/// THE OPT-IN. Every other `entail*` function is unchanged and records nothing, so a caller
+/// who does not want a proof runs exactly the search they ran before and pays exactly what
+/// they paid before. This one records — which costs the completion graph of every tableau run
+/// it keeps — and hands back a document `entailCheckProof` can verify.
+///
+/// `service` is one of `consistency`, `class-satisfiability`, `classify`, `realize`,
+/// `instances`, `entails`, `extract-module`; an unknown spelling throws with the accepted set
+/// named. `argument` is the question's own input in that service's grammar: empty for
+/// `consistency`/`classify`/`realize` (a non-empty one throws rather than being discarded),
+/// ONE N-Triples term for `class-satisfiability`/`instances`, ONE triple for `entails`, and a
+/// `method <bot|top|star>` line followed by one term per line for `extract-module`.
+///
+/// `.answer` and `.certificate` are byte-identical to the same question asked without a
+/// proof: recording is an observation the reasoner makes of itself, never a lever it reads.
+///
+/// `stepCap` and `workCap` are `entailConsistency`'s.
+///
+/// Throws on a malformed document, an unknown service, an argument wrong for the service, or
+/// whatever that service itself refuses.
+#[wasm_bindgen(js_name = entailProve)]
+pub fn entail_prove(
+    document: &str,
+    service: &str,
+    argument: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, JsError> {
+    prove_impl(document, service, argument, step_cap, work_cap).map_err(|e| JsError::new(&e))
+}
+
+/// Check a proof against the caller's own ontology, question and answer. See
+/// [`entail_check_proof`].
+pub(crate) fn check_proof_impl(
+    document: &str,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> Result<String, String> {
+    check_dl_proof(document, service, argument, answer, certificate, proof)
+}
+
+/// `entailCheckProof(document, service, argument, answer, certificate, proof)` → the
+/// `purrdf-dl-proof-check 1` report, or a throw naming the rejection.
+///
+/// THE CHECKER, and nothing in it trusts the producer: the ontology is parsed from
+/// `document`, the question is re-derived from `service` and `argument`, the claims are read
+/// back out of `answer`'s own grammar, and the checking context comes from a reverse mapping
+/// this call performs itself. The proof supplies the runs and nothing else. An `entails`
+/// proof for a different axiom, a proof for a different document, or a genuine proof of some
+/// OTHER answer are each refused.
+///
+/// `answer` and `certificate` may be empty, and each empty one is a WEAKER check that says so
+/// rather than one that quietly passed: with no answer the report reads `answer not-checked`,
+/// and with no certificate a proof carrying a stopping receipt is refused, because there is
+/// nothing for the receipt to be a receipt of.
+///
+/// Throws for a proof document that says `availability not-recorded` — an answer nobody asked
+/// to record is never presented as a verified one — and for every other rejection.
+#[wasm_bindgen(js_name = entailCheckProof)]
+pub fn entail_check_proof(
+    document: &str,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> Result<String, JsError> {
+    check_proof_impl(document, service, argument, answer, certificate, proof)
+        .map_err(|e| JsError::new(&e))
+}
+
+/// `entailCheckProofGoldenVectors()` — run the committed proof golden-vector artifact through
+/// this build and throw on the first byte that differs.
+///
+/// The wasm half of the CROSS-HOST byte-stability assertion for the proof surface. The
+/// artifact (`crates/validate/tests/fixtures/dl-proof.vectors`) is compiled into the module by
+/// `purrdf-validate`, and the C-ABI crate's Rust test, the PyO3 crate's Rust test, the
+/// `purrdf-validate` Rust test and this entry point all call the SAME checker over the SAME
+/// bytes. Running it here produces and verifies real proof terms on `wasm32` — different
+/// pointer width, different `usize` — and compares the rendered proof byte for byte against
+/// what the native build produced. Since the rendered proof carries `ServiceProof::encode`'s
+/// canonical bytes, a divergence here is a divergence in the PROOF TERM, not in a rendering.
+///
+/// Throws with the case name and a diff of the two strings on any mismatch.
+#[wasm_bindgen(js_name = entailCheckProofGoldenVectors)]
+pub fn entail_check_proof_golden_vectors() -> Result<(), JsError> {
+    check_dl_proof_golden_vectors().map_err(|e| JsError::new(&e))
+}
+
+/// `entailCheckAbsentProof()` — prove that an answer nobody asked to record is NOT
+/// presentable as a verified one, and throw if it is.
+///
+/// The companion to [`entail_check_proof_golden_vectors`], covering the path an artifact
+/// cannot: there is no proof to pair an input with, and the property under test is that the
+/// ABSENCE says so. An unrecorded answer must carry `availability not-recorded`,
+/// `entailCheckProof` must refuse that document by name, and the same question asked WITH a
+/// proof must check — so the refusal is the absence rather than a broken checker.
+///
+/// Throws naming which of the three failed.
+#[wasm_bindgen(js_name = entailCheckAbsentProof)]
+pub fn entail_check_absent_proof() -> Result<(), JsError> {
+    check_absent_proof_is_not_verifiable().map_err(|e| JsError::new(&e))
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology — `new Reasoner(document, stepCap)`.
@@ -822,6 +975,41 @@ impl Reasoner {
     pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
         ReasonerSession::open(document, step_cap, work_cap)
             .map(|session| Self { session })
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// `Reasoner.withProofs(document, stepCap, workCap)` → a session that RECORDS a proof
+    /// term for every service that has one.
+    ///
+    /// The session-level opt-in. `new Reasoner(...)` is unchanged and records nothing; this
+    /// records, so every answer it hands back carries a real `.proof` document instead of the
+    /// `availability not-recorded` one, and `prove` becomes callable.
+    ///
+    /// It changes nothing a service DECIDES. Every `.answer` and `.certificate` is
+    /// byte-identical to the same question asked through `new Reasoner(...)`.
+    ///
+    /// Throws if `document` fails to parse.
+    #[wasm_bindgen(js_name = withProofs)]
+    pub fn with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+        ReasonerSession::open_with_proofs(document, step_cap, work_cap)
+            .map(|session| Self { session })
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Whether this session records proof terms — `true` only for `Reasoner.withProofs`.
+    #[wasm_bindgen(js_name = recordsProofs)]
+    #[must_use]
+    pub fn records_proofs(&self) -> bool {
+        self.session.records_proofs()
+    }
+
+    /// Answer `service` about `argument`, with its proof. See `entailProve`.
+    ///
+    /// Throws on a session that records nothing: open it with `Reasoner.withProofs`.
+    pub fn prove(&mut self, service: &str, argument: &str) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .prove(service, argument)
+            .map(ReasoningAnswer::from)
             .map_err(|e| JsError::new(&e))
     }
 
@@ -1071,6 +1259,94 @@ mod tests {
                 .expect_err("defined by an input this signature does not carry");
             assert!(refused.contains(regime), "{refused}");
         }
+    }
+
+    /// The proof surface's CROSS-HOST assertion, made from THIS crate.
+    ///
+    /// The wasm half is `entailCheckProofGoldenVectors`, called as real wasm by
+    /// `js/tests/entail.test.mjs`; both run the same checker over the same committed
+    /// artifact, so a native/wasm divergence in a PROOF TERM is one failing case.
+    #[test]
+    fn the_dl_proof_golden_vector_matches_natively() {
+        check_dl_proof_golden_vectors().expect("the DL proof golden vector");
+    }
+
+    /// An answer nobody asked to record is never presented as a verified one, on this host.
+    #[test]
+    fn an_absent_proof_is_never_presented_as_a_verified_one() {
+        check_absent_proof_is_not_verifiable().expect("the absent-proof refusal");
+    }
+
+    /// EVERY proof-bearing service reaches this host, with a proof this host can CHECK.
+    ///
+    /// The sibling of `every_dl_service_reaches_this_host_with_its_certificate`, for the
+    /// surface this stage adds: a proof compiled in and unreachable is the defect, and a
+    /// proof reachable but uncheckable is the worse one.
+    #[test]
+    fn every_proof_bearing_service_reaches_this_host_with_a_checkable_proof() {
+        let questions = [
+            ("consistency", ""),
+            ("class-satisfiability", "<http://example.org/A>"),
+            ("classify", ""),
+            ("realize", ""),
+            ("instances", "<http://example.org/C>"),
+            ("entails", CHAIN_AXIOM),
+            ("extract-module", "method bot\n<http://example.org/A>"),
+        ];
+        assert_eq!(questions.len(), 7, "seven services carry a proof term");
+        for (service, argument) in questions {
+            let proved = prove_impl(TAXONOMY, service, argument, 0, 0)
+                .unwrap_or_else(|error| panic!("{service}: {error}"));
+            assert!(
+                proved.proof().contains("\navailability recorded\n"),
+                "{service}: {}",
+                proved.proof()
+            );
+            let report = check_proof_impl(
+                TAXONOMY,
+                service,
+                argument,
+                &proved.answer(),
+                &proved.certificate(),
+                &proved.proof(),
+            )
+            .unwrap_or_else(|error| panic!("{service}: {error}"));
+            assert!(
+                report.starts_with("purrdf-dl-proof-check 1\n"),
+                "{service}: {report}"
+            );
+        }
+    }
+
+    /// The default cost is unchanged: an ordinary `entail*` answer records NOTHING, and its
+    /// proof getter says so rather than handing back a blank a caller could read as a
+    /// verified emptiness.
+    #[test]
+    fn an_unasked_answer_carries_the_absent_proof_document_on_this_host() {
+        let plain = consistency_impl(TAXONOMY, 0, 0).expect("decides");
+        assert_eq!(
+            plain.proof(),
+            "purrdf-dl-proof 1\navailability not-recorded\n"
+        );
+        assert!(
+            check_proof_impl(
+                TAXONOMY,
+                "consistency",
+                "",
+                &plain.answer(),
+                &plain.certificate(),
+                &plain.proof(),
+            )
+            .is_err(),
+            "an absent proof must never check"
+        );
+        // …and the recording session says the opposite, with the same answer bytes.
+        let mut recording = ReasonerSession::open_with_proofs(TAXONOMY, 0, 0).expect("parses");
+        assert!(recording.records_proofs());
+        let proved = ReasoningAnswer::from(recording.consistency().expect("decides"));
+        assert_eq!(proved.answer(), plain.answer());
+        assert_eq!(proved.certificate(), plain.certificate());
+        assert!(proved.proof().contains("\navailability recorded\n"));
     }
 
     /// The other tri-host assertion, made from THIS crate: an inconsistent input is

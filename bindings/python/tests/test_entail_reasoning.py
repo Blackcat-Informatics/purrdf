@@ -42,6 +42,8 @@ What is asserted, and why:
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from purrdf import entail
@@ -670,3 +672,204 @@ def test_the_session_does_not_reason_until_it_has_to() -> None:
     assert "reasoned: false" in repr(session), "profile must not reason"
     session.consistency()
     assert "reasoned: true" in repr(session)
+
+
+# ── Proof terms: opt-in to produce, and a checker to consume ────────────────────
+#
+# Everything above records NOTHING. `entail.prove` is the opt-in and returns a
+# THREE-tuple whose third element is a `purrdf-dl-proof 1` document; `entail.
+# check_proof` is the checker, and it re-derives the question and the claims from
+# the CALLER's own inputs rather than reading either off the proof.
+#
+# What is asserted, and why:
+#
+# * **Every one of the seven proof-bearing services produces a proof this host can
+#   check**, so a service reachable but unprovable — or provable but uncheckable —
+#   is a failure here rather than a gap nobody looks at.
+# * **The three availabilities stay three.** "Nobody asked" is a document that SAYS
+#   `availability not-recorded` and is REFUSED; "asked, and there was no search"
+#   is a recorded proof with `runs 0` that CHECKS. Collapsing them would let
+#   "never recorded" be read as "verified, and there was nothing to verify".
+# * **Asking for a proof changes no answer.** The answer and certificate bytes are
+#   identical either way: recording is an observation the reasoner makes of
+#   itself, never a lever it reads.
+# * **A proof is bound to its ontology, its question AND its answer.** Each of the
+#   three is refused separately.
+
+# Every service, and the argument its question takes.
+PROOF_QUESTIONS = [
+    ("consistency", ""),
+    ("class-satisfiability", "<https://example.org/Cat>"),
+    ("classify", ""),
+    ("realize", ""),
+    ("instances", "<https://example.org/Animal>"),
+    ("entails", CHAIN_AXIOM),
+    ("extract-module", "method bot\n<https://example.org/Cat>"),
+]
+
+
+def test_the_proof_service_set_is_measurable() -> None:
+    """The seven services are readable rather than written down in a docstring."""
+    assert entail.proof_services() == [name for name, _ in PROOF_QUESTIONS]
+
+
+@pytest.mark.parametrize(("service", "argument"), PROOF_QUESTIONS)
+def test_every_proof_bearing_service_produces_a_checkable_proof(
+    service: str, argument: str
+) -> None:
+    """Seven services, one grammar, and a check that runs against the caller's own
+    document, question and answer."""
+    answer, certificate, proof = entail.prove(TAXONOMY, service, argument)
+    assert proof.startswith(f"purrdf-dl-proof 1\nservice {service}\navailability recorded\n")
+    report = entail.check_proof(TAXONOMY, service, argument, answer, certificate, proof)
+    assert report.startswith(f"purrdf-dl-proof-check 1\nservice {service}\n")
+    assert "\nanswer checked " in report
+    # No proof is fully attested: reading a clause set is the PRODUCER's
+    # clausifier, and the report NAMES what the whole check rests on rather than
+    # claiming an independence it does not have.
+    rests = [line for line in report.splitlines() if line.startswith("rests-on ")]
+    assert rests and rests[0] != "rests-on "
+
+
+@pytest.mark.parametrize(("service", "argument"), PROOF_QUESTIONS)
+def test_asking_for_a_proof_changes_no_answer(service: str, argument: str) -> None:
+    """The answer and the certificate are byte-identical with and without a proof."""
+    proved_answer, proved_certificate, _ = entail.prove(TAXONOMY, service, argument)
+    session = entail.Reasoner(TAXONOMY)
+    assert session.records_proofs is False
+    if service == "extract-module":
+        method, *terms = argument.splitlines()
+        bare = session.extract_module("\n".join(terms) + "\n", method.removeprefix("method "))
+    elif service == "class-satisfiability":
+        proving = entail.Reasoner(TAXONOMY, proofs=True)
+        # The one service with no non-proving entry point of its own; asked twice
+        # through the recording session instead, which is the same code path.
+        bare = proving.prove(service, argument)[:2]
+    elif argument:
+        bare = getattr(session, service)(argument)
+    else:
+        bare = getattr(session, service)()
+    assert bare[0] == proved_answer
+    assert bare[1] == proved_certificate
+
+
+def test_an_answer_nobody_recorded_is_never_presented_as_verified() -> None:
+    """The three availabilities are three different documents, and no two of them
+    can be read as each other."""
+    answer, certificate = entail.consistency(TAXONOMY)
+    absent = "purrdf-dl-proof 1\navailability not-recorded\n"
+    with pytest.raises(ValueError, match="nothing was recorded"):
+        entail.check_proof(TAXONOMY, "consistency", "", answer, certificate, absent)
+
+    # …while a RECORDED zero-run proof is a real measurement, and it checks.
+    argument = "method bot\n<https://example.org/Cat>"
+    module_answer, module_certificate, module_proof = entail.prove(
+        TAXONOMY, "extract-module", argument
+    )
+    assert "\navailability recorded\n" in module_proof
+    assert "\nruns 0\n" in module_proof, "locality extraction opens no tableau"
+    report = entail.check_proof(
+        TAXONOMY, "extract-module", argument, module_answer, module_certificate, module_proof
+    )
+    assert "\nruns 0\n" in report and "\nreplayed 0\n" in report
+
+
+def test_a_session_records_only_when_asked() -> None:
+    """A session that records nothing refuses to prove rather than handing back an
+    answer with an empty proof beside it."""
+    plain = entail.Reasoner(TAXONOMY)
+    assert plain.records_proofs is False
+    with pytest.raises(ValueError, match="records nothing"):
+        plain.prove("consistency", "")
+
+    recording = entail.Reasoner(TAXONOMY, proofs=True)
+    assert recording.records_proofs is True
+    answer, certificate, proof = recording.prove("classify", "")
+    assert "\navailability recorded\n" in proof
+    entail.check_proof(TAXONOMY, "classify", "", answer, certificate, proof)
+
+
+def test_a_proof_is_bound_to_its_ontology_its_question_and_its_answer() -> None:
+    """Three separate refusals: a genuine proof is still not a proof of a different
+    document, a different axiom, or a different answer."""
+    answer, certificate, proof = entail.prove(TAXONOMY, "entails", CHAIN_AXIOM)
+    other_document = (
+        f"<https://example.org/a> <{RDF_TYPE}> <https://example.org/B> .\n"
+    )
+    with pytest.raises(ValueError, match="does not check"):
+        entail.check_proof(
+            other_document, "entails", CHAIN_AXIOM, answer, certificate, proof
+        )
+    with pytest.raises(ValueError, match="does not check"):
+        entail.check_proof(
+            TAXONOMY, "entails", REVERSED_AXIOM, answer, certificate, proof
+        )
+    # An answer the proof does not establish: `entails false` reports no claim at
+    # all, and this proof establishes one.
+    with pytest.raises(ValueError, match="does not cover"):
+        entail.check_proof(
+            TAXONOMY, "entails", CHAIN_AXIOM, "entails false\n", certificate, proof
+        )
+
+
+def test_a_rendered_proof_is_byte_identical_run_to_run() -> None:
+    """A proof is a function of its input alone, which is what makes a pinned
+    digest mean anything."""
+    for service, argument in PROOF_QUESTIONS:
+        first = entail.prove(TAXONOMY, service, argument)[2]
+        again = entail.prove(TAXONOMY, service, argument)[2]
+        assert first == again, service
+
+
+def _dl_proof_vectors() -> list[dict[str, str]]:
+    """Parse the committed cross-host proof artifact.
+
+    The SAME bytes the Rust boundary, the C ABI and the wasm module are checked
+    against, read here through the same line-oriented directive format the Rust
+    parser reads. Reading the artifact rather than re-deriving an expectation is
+    the point: an expectation this file computed would agree with this host by
+    construction and prove nothing about the other three.
+    """
+    root = pathlib.Path(__file__).resolve().parents[3]
+    text = (root / "crates/validate/tests/fixtures/dl-proof.vectors").read_text()
+    cases: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    section: str | None = None
+    for raw in text.splitlines():
+        if not raw.startswith("@"):
+            if section is not None:
+                current[section] = current.get(section, "") + raw + "\n"
+            continue
+        keyword, _, argument = raw[1:].partition(" ")
+        section = None
+        if keyword in {"case", "service"}:
+            current[keyword] = argument.strip()
+        elif keyword in {"argument", "input", "answer", "proof", "check"}:
+            current.setdefault(keyword, "")
+            section = keyword
+        elif keyword == "end":
+            cases.append(current)
+            current = {}
+    return cases
+
+
+def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
+    """**THE CROSS-HOST BYTE ASSERTION, made from Python.**
+
+    Every case of the artifact the native, C-ABI and wasm hosts are checked
+    against reproduces byte for byte through the PyO3 extension. A rendered proof
+    carries the proof term's own canonical encoding, so a byte that differed here
+    would be a different proof TERM — and a consumer who pinned its digest on one
+    host and verified on another would have had it move under them.
+    """
+    cases = _dl_proof_vectors()
+    assert len(cases) == 7, "one case per proof-bearing service"
+    for case in cases:
+        argument = case.get("argument", "").rstrip("\n")
+        answer, certificate, proof = entail.prove(case["input"], case["service"], argument)
+        assert answer == case["answer"], case["case"]
+        assert proof == case["proof"], case["case"]
+        report = entail.check_proof(
+            case["input"], case["service"], argument, answer, certificate, proof
+        )
+        assert report == case["check"], case["case"]
