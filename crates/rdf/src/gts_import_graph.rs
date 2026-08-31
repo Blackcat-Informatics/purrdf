@@ -218,9 +218,13 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         ..
     } = graph;
 
-    // purrdf-gts 0.9.11 reifier rows are `(reifier_id, (s,p,o), graph?)`. The IR statement
-    // layer has no graph dimension (reification is standpoint-scoped), so the binding map
-    // drops the graph slot; a non-`None` graph is rejected in the binding loop below.
+    // purrdf-gts 0.9.11 reifier rows are `(reifier_id, (s,p,o), graph?)`. This map serves
+    // ONE purpose — resolving a GTS triple TERM, whose single `Term.reifier` slot names a
+    // reifier id and whose meaning is the `(s,p,o)` shape that id binds. That is a shape
+    // question, not a graph question, so the graph slot is not part of this lookup's key.
+    // It is emphatically NOT dropped from the IR: the statement layer is keyed per graph,
+    // and the binding loop below carries each row's graph through
+    // `push_reifier_in_graph` / `push_annotation_in_graph`.
     let reifier_bindings: HashMap<usize, (usize, usize, usize)> = reifiers
         .iter()
         .map(|&(reifier_id, triple, _graph)| (reifier_id, triple))
