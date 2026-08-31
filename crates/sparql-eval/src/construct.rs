@@ -1146,9 +1146,10 @@ fn instantiate<D: DatasetView + Sync>(
     let p = instantiate_predicate(&tp.predicate, row, schema, ctx)?;
     let o = instantiate_term(&tp.object, row, schema, blanks, ctx)?;
 
-    // Positional validity (§16.2): subject must not be a literal; predicate must be
-    // an IRI. Ill-formed instantiations are skipped, not errored.
-    if positionally_ill_formed(&s, &p) {
+    // Positional validity (§16.2): the asserted subject must be an IRI or a blank
+    // node, the predicate must be an IRI, and an object triple term must itself be
+    // well-formed. Ill-formed instantiations are skipped, not errored.
+    if positionally_ill_formed(&s, &p, &o) {
         return None;
     }
 
@@ -1831,6 +1832,99 @@ mod tests {
         }];
         let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
         assert_eq!(out.quad_count(), 0);
+    }
+
+    #[test]
+    fn ill_formed_triple_term_subject_is_skipped() {
+        // The RDF 1.2 half of the SAME rule. An asserted subject is an IRI or a
+        // blank node, so a TRIPLE TERM is as ill-formed there as a literal — and
+        // the binding comes from the data, not from the template: `?t` is bound
+        // by the reifier declaration `ex:r rdf:reifies <<( ex:a ex:p ex:b )>>`,
+        // which any RDF 1.2 input carries. Recognising only the literal half
+        // lets the ill-formed instantiation reach `freeze`, where it is a HARD
+        // error that kills the whole query instead of skipping one statement.
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://ex/a");
+        let p = b.intern_iri("http://ex/p");
+        let o = b.intern_iri("http://ex/b");
+        let r = b.intern_iri("http://ex/r");
+        let quoted = b.intern_triple(a, p, o);
+        b.push_reifier(r, quoted);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("r"),
+                predicate: pred(REIFIES),
+                object: var("t"),
+            }],
+        };
+        // The first template triple is well-formed (a triple term is a legal
+        // OBJECT) and the second is not. Keeping both means a zero count could
+        // never be explained away as "the WHERE matched nothing".
+        let template = vec![
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: var("t"),
+            },
+            TriplePattern {
+                subject: var("t"),
+                predicate: pred(RELATED),
+                object: var("r"),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the triple-term subject is skipped; its well-formed sibling is not"
+        );
+    }
+
+    #[test]
+    fn an_object_triple_term_with_a_literal_subject_is_skipped() {
+        // A triple term is a legal object, but its OWN components still carry
+        // the term model: `<<( "hello" ex:p ex:s )>>` has a literal subject, so
+        // the instantiation is ill-formed and the whole statement is skipped.
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple("hello"));
+        b.push_quad(s, p, lit, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred("http://ex/p"),
+                object: var("o"),
+            }],
+        };
+        let template = vec![
+            TriplePattern {
+                subject: var("s"),
+                predicate: pred(RELATED),
+                object: var("o"),
+            },
+            TriplePattern {
+                subject: var("s"),
+                predicate: pred(RELATED),
+                object: TermPattern::Triple(Box::new(TriplePattern {
+                    subject: var("o"),
+                    predicate: pred("http://ex/p"),
+                    object: var("s"),
+                })),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the ill-formed object triple term is skipped; its sibling is not"
+        );
     }
 
     // ── Loss-aware CONSTRUCT ──────────────────────────────────────────────────

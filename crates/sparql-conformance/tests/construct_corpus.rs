@@ -11,6 +11,11 @@
 //! target graph on every line). A downstream consumer asking "is this query
 //! form covered by conformance evidence" gets a scoreboard row, not a promise.
 //!
+//! The §16.2 skip rules are graded on BOTH kinds of term that a subject position
+//! refuses — a literal and, over RDF 1.2 data, a triple term — because an engine
+//! that recognised only the literal half would still hard-fail on real annotated
+//! input.
+//!
 //! It also grades the quad-template grammar's **boundary**, from both sides: a
 //! positive-syntax case for a spelling that parses and a negative-syntax case
 //! for each spelling that does not (a missing / literal / blank-node graph
@@ -84,13 +89,13 @@ fn construct_corpus_case_count_and_kinds() {
     let cases = purrdf_sparql_conformance::manifest::load(&manifest())
         .unwrap_or_else(|e| panic!("load the CONSTRUCT corpus manifest: {e}"));
 
-    assert_eq!(cases.len(), 25, "the corpus declares 25 cases");
+    assert_eq!(cases.len(), 27, "the corpus declares 27 cases");
     assert_eq!(
         cases
             .iter()
             .filter(|c| c.kind == TestKind::QueryEval)
             .count(),
-        17
+        19
     );
     assert_eq!(
         cases
@@ -129,13 +134,13 @@ fn construct_corpus_case_count_and_kinds() {
         });
     assert_eq!(
         quad_form.len(),
-        9,
-        "nine evaluation cases must exercise the quad-producing form"
+        10,
+        "ten evaluation cases must exercise the quad-producing form"
     );
     assert_eq!(
         triple_form.len(),
-        8,
-        "eight evaluation cases must exercise the triple-producing form"
+        9,
+        "nine evaluation cases must exercise the triple-producing form"
     );
 
     // The pairing is the corpus's central claim, so it is checked rather than
@@ -241,7 +246,7 @@ fn quad_form_expectations_actually_name_a_graph() {
         }
     }
     assert!(
-        graph_bearing_lines >= 18,
+        graph_bearing_lines >= 19,
         "the quad-form expectations must pin real statements, saw {graph_bearing_lines}"
     );
 }

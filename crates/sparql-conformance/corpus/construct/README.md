@@ -21,6 +21,7 @@ corpus.
 |---|---|
 | `manifest.ttl` | the case list, in the W3C `mf:` manifest shape |
 | `data.ttl` | the default-graph fixture (`qt:data`) |
+| `annotated.ttl` | an RDF 1.2 fixture whose reification layer exposes a triple term |
 | `worlds.ttl` | a named-graph fixture (`qt:graphData`) |
 | `<case>.rq` | the query |
 | `<case>.ttl` | a **triple**-form expectation — a graph, so every statement is in the default graph |
@@ -30,8 +31,9 @@ corpus.
 
 Every triple-form evaluation case has a `graph`-prefixed quad-form counterpart —
 the rewrite, the `CONSTRUCT WHERE` short form, the unbound-variable skip, the
-ill-formed-triple skip, per-row blank-node freshness, a `GRAPH`-scoped `WHERE`,
-the solution modifiers, and the RDF 1.2 reifier + annotation template. That is
+literal-subject skip, the triple-term-subject skip, per-row blank-node freshness,
+a `GRAPH`-scoped `WHERE`, the solution modifiers, and the RDF 1.2 reifier +
+annotation template. That is
 checked by `construct_corpus.rs`, not merely asserted here, because
 `CONSTRUCT GRAPH` is defined to be the ordinary instantiation with a graph name
 attached and a corpus that only tested the new form could not say that.
@@ -39,6 +41,25 @@ attached and a corpus that only tested the new form could not say that.
 Some quad-form cases have no triple-form twin, by nature rather than by
 omission: the syntax verdicts grade the quad grammar itself, and
 `graphReifierScope` needs TWO graphs to say anything at all.
+
+## The §16.2 subject rule, on both kinds of term it refuses
+
+An asserted subject is an IRI or a blank node. Two kinds of term are therefore
+ill-formed there, and an instantiation that produces either is SKIPPED rather
+than errored:
+
+| Case (and its `graph`-prefixed twin) | The term it puts in subject position |
+|---|---|
+| `illFormedSkipped` | a literal |
+| `tripleTermSubjectSkipped` | an RDF 1.2 triple term |
+
+The second is not a curiosity. RDF 1.2 data puts a triple term within reach of
+an ordinary triple pattern — `?r rdf:reifies ?t` binds one — so a template that
+carries that binding into subject position is something an engine meets on real
+input, and a corpus that graded only the literal half would call an engine
+conformant while it hard-failed on annotated data. `annotated.ttl` is that
+input, and both cases keep one WELL-FORMED triple beside the skipped one so the
+expectation distinguishes "the skip fired" from "the `WHERE` matched nothing".
 
 ## The grammar boundary, from both sides
 

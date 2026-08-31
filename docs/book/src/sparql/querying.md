@@ -880,7 +880,19 @@ rather than a silently unscoped template.
 ### Skip semantics
 
 SPARQL §16.2 already skips a template statement whose variables are unbound or
-whose instantiation is ill-formed (a literal subject, a non-IRI predicate).
+whose instantiation is ill-formed. Ill-formed means "not a legal RDF 1.2
+statement", position by position:
+
+* the **subject** is an IRI or a blank node — a literal is illegal there, and so
+  is a triple term (a quoted triple is a value; an asserted statement is made
+  about a reifier, not about the quoted triple itself). Both are reachable from
+  ordinary data: over RDF 1.2 input, `CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }`
+  binds `?o` to a triple term as readily as to a literal;
+* the **predicate** is an IRI, and nothing else;
+* the **object** may be any term, but when it is a triple term that triple
+  term's own components carry the same rules recursively (its subject must not
+  be a literal, its predicate must be an IRI).
+
 The graph slot follows the same rule, and this is worth being explicit about:
 
 **An unresolvable graph name skips its statement.** It is not an error, and it

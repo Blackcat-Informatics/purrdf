@@ -27,10 +27,12 @@
 
 :manifest a mf:Manifest ;
     mf:entries ( :rewrite :shortForm :unboundSkipped :illFormedSkipped
+                 :tripleTermSubjectSkipped
                  :blankFresh :fromNamedGraph :modifiers :reified
                  :graphRewrite :graphShortForm :graphBlankFresh
                  :graphFromNamedGraph :graphUnboundSkipped
-                 :graphIllFormedSkipped :graphModifiers :graphReified
+                 :graphIllFormedSkipped :graphTripleTermSubjectSkipped
+                 :graphModifiers :graphReified
                  :graphReifierScope
                  :graphSyntax :graphNoNameSyntax :graphLiteralNameSyntax
                  :graphBlankNameSyntax :graphNestedBlockSyntax
@@ -58,6 +60,17 @@
     mf:name "a literal instantiated into subject position is skipped" ;
     mf:action [ qt:query <ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
     mf:result <empty.ttl> .
+
+# The other half of the §16.2 subject rule. An asserted subject is an IRI or a
+# blank node, so a TRIPLE TERM is as ill-formed there as a literal — and RDF 1.2
+# data puts one within reach of an ordinary triple pattern, so this is a skip an
+# engine has to perform on real input, not a curiosity. The template keeps one
+# well-formed triple beside the skipped one, so the expectation distinguishes
+# "the skip fired" from "the WHERE matched nothing".
+:tripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 triple term instantiated into subject position is skipped" ;
+    mf:action [ qt:query <triple-term-subject-skipped.rq> ; qt:data <annotated.ttl> ] ;
+    mf:result <triple-term-subject-skipped.ttl> .
 
 :blankFresh a mf:QueryEvaluationTest ;
     mf:name "a template blank node is minted fresh per solution row" ;
@@ -112,6 +125,12 @@
     mf:name "the ill-formed-triple skip is unchanged by a target graph" ;
     mf:action [ qt:query <graph-ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
     mf:result <empty.nq> .
+
+:graphTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "the triple-term-subject skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <graph-triple-term-subject-skipped.nq> .
 
 :graphModifiers a mf:QueryEvaluationTest ;
     mf:name "ORDER BY + LIMIT restrict the rows a CONSTRUCT GRAPH is instantiated over" ;
