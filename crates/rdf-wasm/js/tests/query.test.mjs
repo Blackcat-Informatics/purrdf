@@ -397,3 +397,32 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   assert.ok(lossless.text.includes("https://e/g"), lossless.text);
   lossless.free();
 });
+
+// The `SILENT` forms are the query author's own opt-out, and SPARQL 1.1 (§10 for
+// SERVICE, §3.1.4 for LOAD) requires them to succeed with nothing fetched. The
+// package docs claimed SERVICE / LOAD hard-fail unconditionally; they hard-fail only
+// without `SILENT`, and this pins both halves beside each other so the prose and the
+// behaviour cannot drift apart again.
+test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
+  const ds = Dataset.parse("@prefix ex: <https://e/> . ex:a ex:p ex:b .", "turtle");
+
+  // Without SILENT: a hard failure, because no resolver is installed.
+  assert.throws(() =>
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://e/endpoint> { ?a ?b ?c } }"),
+  );
+
+  // With SILENT: the surrounding pattern's own solutions come back, joined against
+  // the identity — so the local row survives and nothing remote is bound.
+  const json = JSON.parse(
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://e/endpoint> { ?a ?b ?c } }"),
+  );
+  assert.equal(json.results.bindings.length, 1);
+  assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
+  assert.equal(json.results.bindings[0].s.value, "https://e/a");
+
+  const engine = new QueryEngine();
+  const before = ds.canonicalize();
+  assert.throws(() => engine.update(ds, "LOAD <https://e/doc>"));
+  engine.update(ds, "LOAD SILENT <https://e/doc>");
+  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+});

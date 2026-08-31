@@ -20,7 +20,8 @@
 //!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. Only the
 //!   host can provide SERVICE federation; this default browser surface installs no
 //!   remote source, so `SERVICE` / `LOAD` hard-fails here rather than silently
-//!   returning a partial answer.
+//!   returning a partial answer — except for the `SILENT` forms, which SPARQL 1.1
+//!   requires to succeed with nothing fetched (see the `query` module).
 //! - **Separate from the C-ABI (P8).** WASM has its own ownership model,
 //!   packaging, and async I/O; it is not a C-ABI consumer and does not depend on the
 //!   `no_std` track.

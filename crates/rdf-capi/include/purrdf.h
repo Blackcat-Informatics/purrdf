@@ -27,9 +27,16 @@
 #define PURRDF_ABI_MAJOR 0
 
 /**
- * ABI minor version.
+ * ABI minor version. It TRACKS THE EXPORTED SIGNATURES: every change to the
+ * parameter list, the return contract, or the documented behaviour of an exported
+ * symbol bumps it, including a purely additive out-param — additive in source is
+ * still a recompile for every C consumer, and a library whose minor is below the
+ * header's cannot honour the call the header describes. It is the number a consumer
+ * linking against an unknown build reads back from `purrdf_abi_version` to decide
+ * whether the header it compiled against and the library it loaded agree, so it must
+ * never stand still across a signature change.
  */
-#define PURRDF_ABI_MINOR 6
+#define PURRDF_ABI_MINOR 7
 
 /**
  * ABI patch version.
@@ -2029,17 +2036,34 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
  * no graph term IS the N-Triples line.
  *
  * This is deliberately the WIDENING answer rather than the refusal
- * `purrdf_core::named_graph` supplies to the CLI, wasm, Python and
- * `purrdf_serialize`. Those refuse because their caller NAMED a single-graph RDF
- * syntax (`turtle`, `RdfFormat.TURTLE`, `text/turtle`) that cannot hold the
- * answer, and silently answering with a different syntax would break a consumer
- * that reads only the one it asked for. Here the caller names no RDF syntax at
+ * `purrdf_core::named_graph` supplies on the QUERY lane — the CLI's `query` and
+ * `describe`, the wasm query surface, and Python's query results. Those three
+ * refuse because their caller asked a QUESTION whose own text names the graph
+ * (`CONSTRUCT { GRAPH <g> { … } }`) and then named a single-graph RDF syntax
+ * (`turtle`, `RdfFormat.TURTLE`) to receive the answer in: the two halves of one
+ * request contradict, and answering in a syntax that cannot hold the answer would
+ * report a partial answer as a complete one. Here the caller names no RDF syntax at
  * all: `{"graph": …}` is PurRDF's own envelope member, not a W3C SPARQL-Results
  * member and not a selectable format. With no request to contradict, MAXIMAL
  * UTILITY makes carrying the graph strictly better than refusing — and refusing
  * would leave this ABI with no JSON path at all for a quad-template CONSTRUCT.
- * Use `purrdf_query` + `purrdf_serialize` when a specific RDF media type is
- * required; that lane reports its loss through `out_named_graph_rows_dropped`.
+ *
+ * `purrdf_serialize` does NOT refuse, and is not a counter-example to any of that:
+ * it is the TRANSCODE lane, where the caller hands over a dataset and a target
+ * syntax and nothing in the request contradicts anything else in it. It FLATTENS —
+ * every graph-scoped row is DROPPED, never folded into the default graph — and
+ * charges the whole of that loss to `out_named_graph_rows_dropped`, the same
+ * number the CLI's `convert` records as a `named-graph-rows-dropped` ledger entry,
+ * wasm's `serializeWithLoss` returns as `namedGraphRowsDropped`, and Python's
+ * `dump_with_loss` returns as `named_graph_rows_dropped`. No host refuses on that
+ * lane. Two consequences a C caller must plan for: the count out-param is
+ * independently nullable, so passing null DECLINES a report this call computes
+ * either way; and a dataset whose rows are ALL graph-scoped flattens to a
+ * well-formed EMPTY document with status `Ok`, which is the correct rendering of an
+ * empty default graph and not an error. Use `purrdf_query` + `purrdf_serialize`
+ * when a specific RDF media type is required, and READ
+ * `out_named_graph_rows_dropped` when you do: it is the only place that lane says
+ * what the media type could not hold.
  *
  * `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
  * additive `purrdf` provenance extension on a SELECT/ASK emission under that
@@ -2282,6 +2306,27 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
  * (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
  * named graph it was handed, and a direction-carrying star-incapable target reports
  * nothing about a dropped base direction — each silent unless its own count is read.
+ *
+ * # This lane FLATTENS and COUNTS; it never refuses
+ *
+ * `purrdf_core::named_graph`'s refusal belongs to the QUERY lane (the CLI's `query`
+ * and `describe`, the wasm query surface, Python's query results), where the caller's
+ * own query text names a graph and the caller then names a single-graph syntax to
+ * receive it in — two halves of one request that contradict. A transcode names only a
+ * dataset and a target syntax, so there is nothing to contradict: "this dataset's
+ * default graph, as Turtle" is a legitimate request, and no host's transcode lane
+ * refuses it
+ * (`purrdf convert --to turtle` writes it and records a `named-graph-rows-dropped`
+ * ledger entry; wasm's `serializeWithLoss` and Python's `dump_with_loss` return the
+ * same three numbers this call writes).
+ *
+ * The degenerate case follows and is NOT an error: a dataset whose every row is
+ * graph-scoped serializes to a single-graph syntax as a well-formed EMPTY document
+ * with status `Ok`, the whole of the loss in `out_named_graph_rows_dropped`. That is
+ * the correct rendering of an empty default graph. Passing null for a count declines a
+ * report this call computes either way — it does not suppress one — so a caller that
+ * passes null for all three has asked for the document alone and gets exactly that,
+ * empty included. Read `out_named_graph_rows_dropped` if the difference matters.
  *
  * # Safety
  * `dataset` must be a live handle; the `c_char` pointers must be null or

@@ -183,6 +183,27 @@ fn decode_options(json: &[u8]) -> Result<JsonLdSerializeOptions, PurrdfError> {
 /// named graph it was handed, and a direction-carrying star-incapable target reports
 /// nothing about a dropped base direction — each silent unless its own count is read.
 ///
+/// # This lane FLATTENS and COUNTS; it never refuses
+///
+/// `purrdf_core::named_graph`'s refusal belongs to the QUERY lane (the CLI's `query`
+/// and `describe`, the wasm query surface, Python's query results), where the caller's
+/// own query text names a graph and the caller then names a single-graph syntax to
+/// receive it in — two halves of one request that contradict. A transcode names only a
+/// dataset and a target syntax, so there is nothing to contradict: "this dataset's
+/// default graph, as Turtle" is a legitimate request, and no host's transcode lane
+/// refuses it
+/// (`purrdf convert --to turtle` writes it and records a `named-graph-rows-dropped`
+/// ledger entry; wasm's `serializeWithLoss` and Python's `dump_with_loss` return the
+/// same three numbers this call writes).
+///
+/// The degenerate case follows and is NOT an error: a dataset whose every row is
+/// graph-scoped serializes to a single-graph syntax as a well-formed EMPTY document
+/// with status `Ok`, the whole of the loss in `out_named_graph_rows_dropped`. That is
+/// the correct rendering of an empty default graph. Passing null for a count declines a
+/// report this call computes either way — it does not suppress one — so a caller that
+/// passes null for all three has asked for the document alone and gets exactly that,
+/// empty included. Read `out_named_graph_rows_dropped` if the difference matters.
+///
 /// # Safety
 /// `dataset` must be a live handle; the `c_char` pointers must be null or
 /// NUL-terminated; the out-params must be null or writable.

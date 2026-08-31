@@ -163,7 +163,113 @@ fn abi_version_is_the_current_minor() {
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
     assert_eq!(version.patch, PURRDF_ABI_PATCH);
-    assert_eq!((version.major, version.minor, version.patch), (0, 6, 0));
+    // Pinned literally, not read back from the constants above: the minor tracks the
+    // exported signatures, so a signature change that forgot to bump it fails HERE
+    // rather than shipping a library whose reported version cannot distinguish it
+    // from the previous, differently-shaped one.
+    assert_eq!((version.major, version.minor, version.patch), (0, 7, 0));
+}
+
+/// Every exported declaration in the COMMITTED header, one per entry, sorted.
+///
+/// A declaration starts at column 0 (cbindgen indents continuation lines and comment
+/// bodies) and names a `purrdf_` symbol before its parameter list; it runs to the
+/// `);` that closes it. Whitespace is normalized so re-wrapping a long parameter list
+/// is not mistaken for a signature change.
+fn exported_declarations() -> Vec<String> {
+    const HEADER: &str = include_str!("../include/purrdf.h");
+    let mut declarations = Vec::new();
+    let mut open: Option<String> = None;
+    for line in HEADER.lines() {
+        if open.is_none() && !starts_a_declaration(line) {
+            continue;
+        }
+        let buffer = open.get_or_insert_with(String::new);
+        if !buffer.is_empty() {
+            buffer.push(' ');
+        }
+        buffer.push_str(line.trim());
+        if line.trim_end().ends_with(");") {
+            declarations.push(open.take().unwrap_or_default());
+        }
+    }
+    assert!(open.is_none(), "an unterminated declaration in purrdf.h");
+    declarations.sort_unstable();
+    declarations
+}
+
+/// Whether `line` opens an exported function declaration.
+fn starts_a_declaration(line: &str) -> bool {
+    let Some(first) = line.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    line.find('(')
+        .is_some_and(|open| line[..open].contains("purrdf_"))
+}
+
+/// The exported surface, digested, pinned beside the ABI minor it belongs to.
+///
+/// `abi_version_is_the_current_minor` pins the version, and `make capi-check` pins the
+/// committed header to the code, but until this test nothing tied the two together: a
+/// signature could change, the header could be regenerated to match it, and the number
+/// a consumer reads back from `purrdf_abi_version` could stand still — leaving that
+/// consumer unable to tell a library with the old shape from one with the new. Any
+/// change to any exported parameter list now fails HERE, and the only way past is to
+/// update this digest and the minor above in the same edit, deliberately.
+const ABI_SURFACE_SHA256: &str = "939512efa893f8da259b0abe4b44d51ffec74058cbb93be34a186301684f4e09";
+
+#[test]
+fn the_exported_surface_is_digested_beside_the_abi_minor_it_belongs_to() {
+    let declarations = exported_declarations();
+    assert!(
+        declarations.len() > 60,
+        "the header scrape found only {} declaration(s) — the scrape itself is broken, \
+         not the ABI",
+        declarations.len()
+    );
+    // `purrdf_serialize`'s loss counts are the signature this pin was added for, so the
+    // scrape must actually be seeing them.
+    assert!(
+        declarations
+            .iter()
+            .any(|d| d.contains("purrdf_serialize(") && d.contains("out_named_graph_rows_dropped")),
+        "the scrape missed purrdf_serialize's parameter list"
+    );
+    let mut hasher = Sha256::new();
+    for declaration in &declarations {
+        hasher.update(declaration.as_bytes());
+        hasher.update(b"\n");
+    }
+    let digest = format!("{:x}", hasher.finalize());
+    assert_eq!(
+        digest, ABI_SURFACE_SHA256,
+        "an exported signature changed: update ABI_SURFACE_SHA256 *and* bump \
+         PURRDF_ABI_MINOR (and the literal in abi_version_is_the_current_minor) together"
+    );
+}
+
+/// Every place this crate SPELLS the ABI version in prose agrees with the constants.
+///
+/// A version written into prose goes stale silently — the book's C page claimed
+/// `0.1.x` long after the ABI reached `0.6.0` — and a consumer reading a stale number
+/// is reading a false statement about the library it just linked. Both documents that
+/// state the version live beside the constant, so they are checked against it here and
+/// the bump becomes a single edit that cannot be half-done.
+#[test]
+fn every_prose_statement_of_the_abi_version_matches_the_constants() {
+    let stated = format!("{PURRDF_ABI_MAJOR}.{PURRDF_ABI_MINOR}.{PURRDF_ABI_PATCH} (beta)");
+    for (name, text) in [
+        ("crates/rdf-capi/README.md", include_str!("../README.md")),
+        ("crates/rdf-capi/src/lib.rs", include_str!("../src/lib.rs")),
+    ] {
+        assert!(
+            text.contains(&stated),
+            "{name} does not state the current ABI version `{stated}`"
+        );
+    }
 }
 
 #[test]

@@ -17,6 +17,13 @@
 //! rather than silently returning an empty or partial result: in a browser there is
 //! no resolver to fetch a remote graph, and a false answer is worse than an error.
 //!
+//! The one exception is the caller's own: `SERVICE SILENT` and `LOAD SILENT` succeed
+//! with nothing fetched — the `SILENT` keyword is the query author writing "an
+//! unreachable endpoint is not an error" into the request, and SPARQL 1.1 §10 and
+//! §3.1.4 require it to be honoured. `SERVICE SILENT` contributes the join identity
+//! (so the surrounding pattern's own solutions come back, unaugmented) and
+//! `LOAD SILENT` leaves the dataset untouched. Drop `SILENT` to get the hard failure.
+//!
 //! ## Result encoding
 //!
 //! - SELECT / ASK → **SPARQL Results JSON** (the W3C SRJ format) via
@@ -1414,7 +1421,9 @@ impl Dataset {
     /// byte-identical Turtle exactly as before; see `default_graph_format`.
     ///
     /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause
-    /// (unresolvable in-browser) throws a JsError — never a silent empty result.
+    /// (unresolvable in-browser) throws a JsError — never a silent empty result. The
+    /// `SILENT` forms are the caller's own opt-out and still succeed with nothing
+    /// fetched, as SPARQL 1.1 requires; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {

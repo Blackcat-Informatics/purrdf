@@ -600,7 +600,21 @@ export class Dataset implements Iterable<Quad> {
   visualModel(options?: VisualizationOptions | null): VisualModel;
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
+  /**
+   * The writer-native lane: emits everything the target's writer has a surface for
+   * and throws for what it does not. The RDF-1.2 statement layer survives Turtle,
+   * N-Triples, N-Quads and TriG (`<<( … )>>`), RDF/XML (`rdf:parseType="Triple"`)
+   * and JSON-LD / YAML-LD (`@triple`); `trix` and `hextuples` have no triple-term
+   * surface and throw rather than drop it silently. A single-graph target emits the
+   * default graph alone.
+   */
   serialize(format: string): string;
+  /**
+   * The transcode lane: the declared format contract plus the realized loss.
+   * Byte-identical to `serialize(format)` for a star-capable target; for `rdfxml`,
+   * `trix` and `hextuples` it projects the RDF-1.2 statement layer to base quads and
+   * counts it instead of throwing.
+   */
   serializeWithLoss(format: string): SerializeLoss;
   serializeConfigured(format: "jsonld" | "yamlld" | string, optionsJson: string): string;
   serializeWithContext(
@@ -626,7 +640,12 @@ export class Dataset implements Iterable<Quad> {
  * actually discarded — not the static pair contract `lossMatrixJson` describes.
  */
 export class SerializeLoss {
-  /** The serialized document, identical to what `serialize(format)` returns. */
+  /**
+   * The serialized document. Identical to what `serialize(format)` returns for a
+   * star-capable target; for `rdfxml`, `trix` and `hextuples` it is the contract's
+   * projected document instead — the statement layer reduced to base quads and
+   * charged to `statementRowsDropped`.
+   */
   readonly text: string;
   /**
    * RDF-1.2 statement-layer rows dropped because the target cannot represent quoted
