@@ -1749,3 +1749,193 @@ fn a_refusal_over_many_graphs_samples_deterministically_and_counts_the_tail() {
          got:\n{message}"
     );
 }
+
+// ── SEP-0008 SHA-3 through the built binary ─────────────────────────────────────
+//
+// The evaluator's own tests pin the digests against NIST FIPS 202. They cannot pin
+// what a HOST receives: the CLI parses the query text, evaluates it, and writes a
+// SPARQL-results document, and every one of those three steps is a place a
+// hyphen-bearing keyword or a fresh built-in can be lost. This block drives the
+// shipped executable end to end, from query text to the JSON on stdout.
+
+/// A fixture whose object is the NIST FIPS 202 example message `"abc"` — the message
+/// every published SHA-3 known-answer table is written against, so the expected
+/// digests below are citable values rather than recorded output.
+const SHA3_DATA_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:s ex:message \"abc\" .\n",
+);
+
+/// `(function name, SELECT alias, published FIPS 202 digest of "abc")`.
+///
+/// Provenance: NIST FIPS 202 publishes `"abc"` as a worked example for all four
+/// SHA-3 sizes. Each value below was taken from that table and independently
+/// cross-checked against two implementations that are not the code under test —
+/// OpenSSL (`printf 'abc' | openssl dgst -sha3-256`) and CPython's `hashlib`
+/// (`hashlib.new("sha3_256", b"abc").hexdigest()`), which agree with each other and
+/// with these strings.
+const SHA3_ABC_VECTORS: [(&str, &str, &str); 4] = [
+    (
+        "SHA3-224",
+        "h224",
+        "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf",
+    ),
+    (
+        "SHA3-256",
+        "h256",
+        "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    ),
+    (
+        "SHA3-384",
+        "h384",
+        "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f5\
+         39f1edf228376d25",
+    ),
+    (
+        "SHA3-512",
+        "h512",
+        "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c9\
+         1a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+    ),
+];
+
+/// One `SELECT` projecting all four SHA-3 digests of `?m`, spelled with `spelling`
+/// applied to each function name.
+fn sha3_select(spelling: impl Fn(&str) -> String) -> String {
+    let mut q = String::from("PREFIX ex: <http://example.org/> SELECT");
+    for (name, alias, _) in SHA3_ABC_VECTORS {
+        use std::fmt::Write as _;
+        write!(q, " ({}(?m) AS ?{alias})", spelling(name)).expect("write to a String");
+    }
+    q.push_str(" WHERE { ?s ex:message ?m }");
+    q
+}
+
+/// The one solution row of a `--results-format json` run, as `alias -> value`.
+fn sha3_row(out: &Output) -> serde_json::Map<String, serde_json::Value> {
+    assert!(
+        out.status.success(),
+        "a SHA-3 SELECT must exit 0; stderr:\n{}",
+        stderr(out)
+    );
+    let body = stdout(out);
+    let doc: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("--results-format json must emit JSON ({e}); got:\n{body}"));
+    let bindings = doc["results"]["bindings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results.bindings array in:\n{body}"));
+    assert_eq!(bindings.len(), 1, "the fixture binds one row; got:\n{body}");
+    bindings[0]
+        .as_object()
+        .unwrap_or_else(|| panic!("the binding row is not an object in:\n{body}"))
+        .clone()
+}
+
+/// The four SEP-0008 built-ins, evaluated by the SHIPPED binary, reproduce their
+/// published FIPS 202 `"abc"` digests in the SPARQL-results JSON it writes.
+#[test]
+fn sha3_builtins_reach_their_published_digests_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        &sha3_select(str::to_owned),
+    ]);
+    let row = sha3_row(&out);
+    for (name, alias, want) in SHA3_ABC_VECTORS {
+        let got = row[alias]["value"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{alias} is not a literal value in {row:?}"));
+        assert_eq!(
+            got, want,
+            "{name} through the CLI does not match its published FIPS 202 vector"
+        );
+    }
+    // The four sizes must not collide: a dispatch table sending SHA3-384 to the
+    // 256-bit arm would fail above, but this also pins the digest LENGTHS.
+    let lengths: Vec<usize> = SHA3_ABC_VECTORS
+        .iter()
+        .map(|(_, alias, _)| row[*alias]["value"].as_str().expect("a literal").len())
+        .collect();
+    assert_eq!(lengths, vec![56, 64, 96, 128]);
+}
+
+/// SEP-0008 spells its four functions with an UNDERSCORE, so a query copied out of
+/// the proposal must reach the same digests through the same shipped binary.
+#[test]
+fn sha3_underscored_sep_spelling_reaches_the_same_digests_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        &sha3_select(|name| name.replace('-', "_")),
+    ]);
+    let row = sha3_row(&out);
+    for (name, alias, want) in SHA3_ABC_VECTORS {
+        assert_eq!(
+            row[alias]["value"].as_str(),
+            Some(want),
+            "the underscored spelling of {name} must reach the same digest"
+        );
+    }
+}
+
+/// The hyphen/spacing rule, at the surface a user types into a shell: `SHA3-256(?m)`
+/// is one built-in call, a SPACED `SHA3 - 256` is not a function at all (a hard
+/// parse failure, never a silently different answer), and an ordinary subtraction
+/// beside a SHA-3 call still subtracts.
+#[test]
+fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let spaced = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "PREFIX ex: <http://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }",
+    ]);
+    assert!(
+        !spaced.status.success(),
+        "`SHA3 - 256` must not resolve to the built-in; stdout:\n{}",
+        stdout(&spaced)
+    );
+
+    // `STRLEN(SHA3-256(?m)) - 4` is subtraction: 64 hex chars minus 4.
+    let arith = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "PREFIX ex: <http://example.org/> \
+         SELECT (STRLEN(SHA3-256(?m)) - 4 AS ?n) WHERE { ?s ex:message ?m }",
+    ]);
+    assert!(
+        arith.status.success(),
+        "a subtraction beside a SHA-3 call must exit 0; stderr:\n{}",
+        stderr(&arith)
+    );
+    let body = stdout(&arith);
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("JSON results");
+    assert_eq!(
+        doc["results"]["bindings"][0]["n"]["value"].as_str(),
+        Some("60"),
+        "STRLEN(SHA3-256(?m)) - 4 must be 64 - 4; got:\n{body}"
+    );
+}

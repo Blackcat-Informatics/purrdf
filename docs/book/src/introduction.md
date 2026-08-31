@@ -46,7 +46,9 @@ reimplemented per language.
   loss ledger.
   See [Graph, Tabular & Research-Object Projections](concepts/projections.md).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, with full
-  Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), caller-registered
+  Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), the SEP-0008
+  SHA-3 hash builtins (`SHA3-224`/`256`/`384`/`512`), quad templates that
+  `CONSTRUCT` into named graphs, caller-registered
   aggregates and property functions, governed execution with per-node explain
   receipts, and `SERVICE` federation through a host-injected transport, gated
   by the W3C conformance suites. See [SPARQL](sparql/querying.md).

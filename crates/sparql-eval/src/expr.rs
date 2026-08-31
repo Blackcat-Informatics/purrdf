@@ -3128,35 +3128,43 @@ fn eval_function<D: DatasetView + Sync>(
         }
 
         // ---- hash functions ------------------------------------------------
-        Function::Md5 => match string_arg(&vals, 0) {
+        //
+        // Every arm here reads its argument through `string_arg_ref`, NOT
+        // `string_arg`: a hash consumes the lexical form as bytes and never
+        // keeps it, so copying it into a fresh `String` first would be one
+        // wasted heap allocation and one wasted memcpy of the whole literal,
+        // per solution row, on every one of these nine built-ins. The only
+        // allocation a hash call still makes per row is the hex digest it
+        // returns, which is genuinely new text.
+        Function::Md5 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha1 => match string_arg(&vals, 0) {
+        Function::Sha1 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha256 => match string_arg(&vals, 0) {
+        Function::Sha256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha384 => match string_arg(&vals, 0) {
+        Function::Sha384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha512 => match string_arg(&vals, 0) {
+        Function::Sha512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
@@ -3167,28 +3175,28 @@ fn eval_function<D: DatasetView + Sync>(
         // SEP-0008 SHA-3 (FIPS 202). Same call convention as SHA1/SHA256: one
         // simple-literal/xsd:string argument in, the lowercase hex digest out,
         // an unbound/ill-typed argument yielding an error (`None`).
-        Function::Sha3_224 => match string_arg(&vals, 0) {
+        Function::Sha3_224 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_224::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_256 => match string_arg(&vals, 0) {
+        Function::Sha3_256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_384 => match string_arg(&vals, 0) {
+        Function::Sha3_384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_512 => match string_arg(&vals, 0) {
+        Function::Sha3_512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
@@ -3727,6 +3735,35 @@ fn is_numeric(v: &XsdValue) -> bool {
 /// argument. `None` for any other term (a string-function type error).
 fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
     string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
+}
+
+/// [`string_arg`] without the copy: `(lexical, language)` BORROWED from the
+/// argument rather than cloned out of it.
+///
+/// The accepted-datatype rule is identical to [`string_arg`]'s (simple literal,
+/// `xsd:string`, `rdf:langString`, `rdf:dirLangString`); only the ownership
+/// differs. Callers that merely READ the lexical form — the hash built-ins,
+/// which feed it straight to `Digest::update` as bytes — must use this one:
+/// [`string_arg`] heap-allocates a fresh `String` per call, and these are
+/// evaluated once per solution row, so a `SHA3-256(?o)` over a million-row scan
+/// paid a million allocations to hand `as_bytes()` a pointer it could have had
+/// for free. The hex digest is still allocated (it is a genuinely new string),
+/// so the per-row allocation count for a hash call drops from two to one.
+fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
+    match arg(vals, i)? {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        } if datatype == XSD_STRING
+            || datatype == RDF_LANG_STRING
+            || datatype == RDF_DIR_LANG_STRING =>
+        {
+            Some((lexical_form.as_str(), language.as_deref()))
+        }
+        _ => None,
+    }
 }
 
 /// Extract the lexical form of a *plain* string argument — a simple literal or
@@ -5528,6 +5565,64 @@ mod tests {
                 )],
             );
             assert_eq!(lex(&ds, &expr), None, "{f:?} over an IRI must error");
+        }
+    }
+
+    /// The hash built-ins read their argument through the BORROWING accessor
+    /// (`string_arg_ref`) rather than the cloning one, and that swap must not
+    /// have narrowed which arguments they accept.
+    ///
+    /// `string_arg` admits a simple literal, an explicitly `xsd:string`-typed
+    /// one, an `rdf:langString` and an RDF 1.2 `rdf:dirLangString` — hashing the
+    /// LEXICAL form in every case and ignoring the tag — and refuses everything
+    /// else. This pins the same four accepts and one refuse across all nine
+    /// hash functions, against the `xsd:string` digest of the same lexical form,
+    /// so an accessor that dropped an accepted datatype (or started hashing the
+    /// language tag along with the text) fails here rather than silently
+    /// erroring on tagged data at a host boundary.
+    #[test]
+    fn every_hash_builtin_accepts_the_same_argument_shapes_by_reference() {
+        let ds = empty_ds();
+        let functions = [
+            Function::Md5,
+            Function::Sha1,
+            Function::Sha256,
+            Function::Sha384,
+            Function::Sha512,
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+        ];
+        for f in functions {
+            let baseline = lex(&ds, &Expression::FunctionCall(f.clone(), vec![lit("abc")]))
+                .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
+            for accepted in [
+                typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string"),
+                Expression::Literal(Literal::new_lang("abc", "en", None)),
+                Expression::Literal(Literal::new_lang(
+                    "abc",
+                    "en",
+                    Some(purrdf_sparql_algebra::BaseDirection::Ltr),
+                )),
+            ] {
+                assert_eq!(
+                    lex(&ds, &Expression::FunctionCall(f.clone(), vec![accepted])).as_deref(),
+                    Some(baseline.as_str()),
+                    "{f:?} must hash the lexical form of every string-shaped literal"
+                );
+            }
+            assert_eq!(
+                lex(
+                    &ds,
+                    &Expression::FunctionCall(
+                        f.clone(),
+                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")]
+                    )
+                ),
+                None,
+                "{f:?} over a non-string literal must stay an expression error"
+            );
         }
     }
 

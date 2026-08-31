@@ -1193,6 +1193,13 @@ pub enum Function {
     /// `SHA3 - 224` is a different token sequence entirely (`Word`, `Minus`,
     /// `Integer`) and is NOT this call — see the parser's
     /// `sha3_hyphen_is_one_token_not_a_subtraction` test.
+    ///
+    /// SEP-0008's own text spells the four functions with an UNDERSCORE
+    /// (`sha3_224`), so the parser accepts `SHA3_224` as an alias for the same
+    /// variant. The alias is an INPUT spelling only: this enum has one variant
+    /// per digest size and the serializer has one arm per variant, so emitted
+    /// text always carries the canonical hyphenated name and stays
+    /// byte-deterministic regardless of which spelling was parsed.
     Sha3_224,
     /// `SHA3-256(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
     Sha3_256,

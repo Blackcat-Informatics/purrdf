@@ -333,8 +333,9 @@ SPARQL breadth grows through caller-keyed extension seams — scalar functions,
 property functions, custom aggregates, and the host-injected service transport
 — so new capability lands as composition through a seam, never as a Cargo
 feature flag and never as a vocabulary PurRDF mints itself. In capability
-terms, the near-term direction includes quad-form `CONSTRUCT`, SEP-0008 SHA-3
-builtins, SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
+terms, quad-form `CONSTRUCT` and the SEP-0008 SHA-3 builtins have landed; the
+near-term direction continues with
+SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
 `FOLD`/`UNFOLD`), deterministic full-text search, property-path binding,
 embedding similarity, and GeoSPARQL — each arriving out-of-core through those
 seams, under the same conformance discipline as everything above.

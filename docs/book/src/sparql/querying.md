@@ -671,6 +671,207 @@ The restriction is SEP-0007's own addition, adopted here because it is what
 makes `EXISTS`'s substitution semantics defensible at every site — SPARQL
 1.1/1.2's own §18.6 text requires no such rule.
 
+## SHA-3 hashing (SEP-0008)
+
+SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
+`SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions
+[SEP-0008](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0008/sep-0008.md)
+proposes, on exactly the same call convention:
+
+| Call | Digest | Hex characters |
+|---|---|---|
+| `SHA3-224(string)` | SHA3-224 | 56 |
+| `SHA3-256(string)` | SHA3-256 | 64 |
+| `SHA3-384(string)` | SHA3-384 | 96 |
+| `SHA3-512(string)` | SHA3-512 | 128 |
+
+```sparql
+SELECT ?s (SHA3-256(?label) AS ?fingerprint)
+WHERE { ?s <http://example.org/label> ?label }
+```
+
+### The argument contract
+
+Each function takes **one** argument and hashes the UTF-8 bytes of its
+**lexical form**, returning the digest as a lowercase hex `xsd:string` — the
+same contract `SHA256` has, so a query can swap one for the other without
+changing anything else about the row.
+
+The accepted arguments are a simple literal, an explicitly `xsd:string`-typed
+literal, an `rdf:langString`, and an RDF 1.2 `rdf:dirLangString`. A tagged
+literal is hashed on its **text only**: `SHA3-256("abc"@en)` and
+`SHA3-256("abc")` are the same digest, because the tag is not part of the
+lexical form.
+
+Anything else is an expression error, which is SPARQL's ordinary
+"this row produces no value" outcome rather than a query failure:
+
+- an **unbound** variable (`SHA3-256(?missing)`),
+- an IRI or a blank node,
+- a non-string literal (`SHA3-256(7)`).
+
+In a `SELECT` projection an errored call leaves the projected variable
+**unbound** on that row; under `FILTER` it makes the constraint false; a
+`BIND` of it binds nothing. Wrap the argument in `STR(…)` when you mean
+"hash whatever this term looks like" — `SHA3-256(STR(?anything))` — because
+`STR` is the function that turns a term into a string, and these do not do it
+implicitly.
+
+### The hyphen is part of the name
+
+These are the only built-in names in the language containing a `-`, so the
+spacing rule is worth stating outright:
+
+| Text | Reading |
+|---|---|
+| `SHA3-256(?o)` | the built-in call — one token, hyphen included |
+| `SHA3 - 256` | **a parse error**: `SHA3` alone is no function or keyword |
+| `STRLEN(SHA3-256(?o)) - 4` | subtraction — the `-` follows `)`, not a word character |
+
+The lexer's `PN_PREFIX` scan admits `-` as a name character, so `SHA3-256`
+arrives at the parser as a single word. Whitespace around the hyphen makes it
+the subtraction operator again, and because `SHA3` is not itself a function,
+the spaced form fails loudly rather than meaning something else. Names are
+case-insensitive like every other built-in (`sha3-256` is the same call).
+
+SEP-0008's own text spells the four functions with an **underscore**
+(`sha3_256`), so `SHA3_256(?o)` is accepted as an alias for `SHA3-256(?o)`:
+a query copied out of the proposal parses. The alias is an input spelling
+only — the algebra has one function per digest size, so a serialized query
+always carries the canonical hyphenated name and stays byte-deterministic
+whichever spelling was typed.
+
+### Reaching it from other hosts
+
+There is nothing to configure: unlike the extension-function and
+custom-aggregate seams, these are built-ins, so every surface that takes
+query text has them — `purrdf query`, `Store.query` / `MutableDataset.query`
+in Python, `Dataset.query` / `QueryEngine.select` in WebAssembly, and
+`purrdf_query` / `purrdf_query_json` over the C ABI.
+
+## Quad templates: `CONSTRUCT` into named graphs
+
+A SPARQL 1.1 `CONSTRUCT` template is a set of triples, and the result is one
+graph. `purrdf` implements the SPARQL 1.2 **quad template**, so a template may
+name the graph each statement lands in, and a single result may span several
+named graphs.
+
+### `GRAPH` blocks inside the template
+
+```sparql
+PREFIX ex: <http://example.org/>
+CONSTRUCT { GRAPH ex:derived { ?s ex:friend ?o } }
+WHERE { ?s ex:knows ?o }
+```
+
+### A variable graph name
+
+The graph slot takes a variable as well as an IRI, so the graph a statement
+lands in can be decided per solution row:
+
+```sparql
+PREFIX ex: <http://example.org/>
+CONSTRUCT { GRAPH ?g { ?s ex:friend ?o } }
+WHERE { GRAPH ?g { ?s ex:knows ?o } }
+```
+
+### Several graphs, and mixed default-graph triples
+
+One template may write into more than one graph, and may mix graph-scoped
+quads with unscoped triples that land in the default graph:
+
+```sparql
+PREFIX ex: <http://example.org/>
+CONSTRUCT {
+  ?s ex:seen true .
+  GRAPH ex:people  { ?s ex:friend ?o }
+  GRAPH ex:reverse { ?o ex:friend ?s }
+}
+WHERE { ?s ex:knows ?o }
+```
+
+### The whole-template shorthand
+
+`CONSTRUCT GRAPH <iri> { … }` scopes the entire template to one graph without
+a `GRAPH` block around it. It also works with the short form
+(`CONSTRUCT GRAPH <iri> WHERE { … }`), and it takes a variable
+(`CONSTRUCT GRAPH ?g { … }`), a prefixed name, or a `BASE`-relative IRI:
+
+```sparql
+PREFIX ex: <http://example.org/>
+CONSTRUCT GRAPH ex:derived { ?s ex:friend ?o }
+WHERE { ?s ex:knows ?o }
+```
+
+The shorthand is a **default, not an override**: it supplies the graph for
+every template slot that did not name one itself, so an inner `GRAPH` block
+still wins over it. `CONSTRUCT GRAPH { … }` with no name is a syntax error
+rather than a silently unscoped template.
+
+### Skip semantics
+
+SPARQL §16.2 already skips a template statement whose variables are unbound or
+whose instantiation is ill-formed (a literal subject, a non-IRI predicate).
+The graph slot follows the same rule, and this is worth being explicit about:
+
+**An unresolvable graph name skips its statement.** It is not an error, and it
+is *not* a fallback to the default graph. The graph slot is resolved first, so
+a statement whose graph name is an unbound variable, or is bound to anything
+that is not an IRI (a literal, a blank node, a triple term), is not
+instantiated at all — it mints no blank-node labels either, so the rest of the
+result is exactly what it would be if that quad were absent from the template.
+
+The skip is **per statement**, not per row: a sibling template quad whose own
+graph slot resolves is still emitted for the same solution.
+
+### Which output formats can carry the result
+
+A named graph needs a syntax with somewhere to put a graph name. Six of the
+nine RDF syntaxes have one:
+
+| Carries named graphs | Does not |
+|---|---|
+| TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD | Turtle, N-Triples, RDF/XML |
+
+The single-graph serializers **drop** graph-scoped statements — they do not
+fold them into the default graph — so writing a graph-carrying result to one
+of them would produce a well-formed document silently missing exactly what the
+query asked for. No host lets that pass unsignalled. The three hosts whose
+egress is a *document* refuse outright, each naming the graphs it would have
+dropped, the format it was asked for, and the quad-capable alternatives; the C
+ABI, whose egress is the dataset itself, reports the loss as a count instead:
+
+- **CLI** — `purrdf query … --results-format turtle` exits **2** (a usage
+  refusal, distinct from an evaluation error) and prints the refusal on
+  stderr, pointing at
+  `--results-format trig/nquads/trix/hextuples/jsonld/yamlld`.
+- **Python** — the result of a graph-carrying `CONSTRUCT` is a `QueryQuads`
+  (whose members are `Quad`s with a live `graph_name`) rather than a
+  `QueryTriples`. `QueryQuads.serialize(RdfFormat.TURTLE)` raises
+  `ValueError`, naming `RdfFormat.N_QUADS/TRIG/TRIX/HEXTUPLES/JSON_LD/YAML_LD`.
+- **WebAssembly** — an explicit `serialize("turtle")` / `queryRaw(…, {format:
+  "turtle"})` **throws**, with the same sentence and the same alternatives.
+  When the caller names NO format the default widens from `turtle` to `trig`
+  instead of throwing, because there was no request to contradict and an empty
+  document would be the wrong answer; a result with no named graph still gets
+  `turtle`, byte for byte.
+- **C ABI** — the shape is different, and deliberately so. `purrdf_query`
+  hands back a `PurrdfDataset` handle, which is the frozen IR itself and has
+  somewhere to put a graph name, so the graphs are never lost at the query
+  boundary. Serializing that handle is a separate call, and
+  `purrdf_serialize` to a single-graph media type succeeds while reporting
+  what it discarded through the `out_named_graph_rows_dropped` out-parameter —
+  a count rather than an exception, because that is the signal C has. The
+  parameter is independently nullable; a caller that passes null for it has
+  asked not to be told, so read it — or serialize to a quad-capable media type
+  — whenever the result may carry graphs.
+
+A result carrying only default-graph statements is untouched everywhere: every
+SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle exactly as
+before. A **mixed** result is refused as a whole rather than half-emitted,
+because emitting the default-graph half would report a partial answer as a
+complete one.
+
 ## The `VERSION` declaration
 
 A query or update prologue may declare `VERSION "<string>"` (SPARQL 1.2 Query

@@ -5098,13 +5098,18 @@ fn builtin_function(upper: &str) -> Option<Function> {
         "SHA256" => Function::Sha256,
         "SHA384" => Function::Sha384,
         "SHA512" => Function::Sha512,
-        // SEP-0008. These four are the only built-in names carrying a `-`; the
-        // lexer's PN_PREFIX scan admits `-`, so each arrives here as ONE word
-        // (see `Function::Sha3_224`'s rustdoc and the parser tests below).
-        "SHA3-224" => Function::Sha3_224,
-        "SHA3-256" => Function::Sha3_256,
-        "SHA3-384" => Function::Sha3_384,
-        "SHA3-512" => Function::Sha3_512,
+        // SEP-0008, in BOTH spellings the proposal uses. The hyphenated names are the
+        // only built-ins carrying a `-`; the lexer's PN_PREFIX scan admits `-`, so each
+        // arrives here as ONE word (see `Function::Sha3_224`'s rustdoc and the parser
+        // tests below). The underscored names are SEP-0008's own literal spelling of the
+        // four functions, accepted here so a query written from the proposal text parses
+        // rather than failing as an unsupported construct. Both spellings resolve to the
+        // SAME `Function`, so the serializer has exactly one form to emit and output
+        // stays byte-deterministic — see `sha3_serializes_to_one_canonical_spelling`.
+        "SHA3-224" | "SHA3_224" => Function::Sha3_224,
+        "SHA3-256" | "SHA3_256" => Function::Sha3_256,
+        "SHA3-384" | "SHA3_384" => Function::Sha3_384,
+        "SHA3-512" | "SHA3_512" => Function::Sha3_512,
         "STRLANG" => Function::StrLang,
         "STRDT" => Function::StrDt,
         "ISIRI" => Function::IsIri,
@@ -8483,6 +8488,90 @@ mod tests {
             matches!(bound_expr(sub), Expression::Subtract(_, _)),
             "an ordinary subtraction beside a SHA-3 call must stay a subtraction"
         );
+    }
+
+    /// SEP-0008 writes its four functions UNDERSCORED (`sha3_256`), so a query
+    /// copied out of the proposal must parse. Both spellings are the same call:
+    /// each `SHA3_NNN` pins to the SAME [`Function`] as its `SHA3-NNN` twin, and
+    /// the two parse to an identical expression tree, so nothing downstream can
+    /// tell which spelling the author typed.
+    #[test]
+    fn sha3_underscored_sep_spelling_pins_to_the_same_function() {
+        for (hyphen, underscore, expected) in [
+            ("SHA3-224", "SHA3_224", Function::Sha3_224),
+            ("SHA3-256", "SHA3_256", Function::Sha3_256),
+            ("SHA3-384", "SHA3_384", Function::Sha3_384),
+            ("SHA3-512", "SHA3_512", Function::Sha3_512),
+        ] {
+            let q = |name: &str| {
+                format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}")
+            };
+            let under = bound_expr(&q(underscore));
+            let Expression::FunctionCall(func, args) = &under else {
+                panic!("expected a FunctionCall for {underscore}");
+            };
+            assert_eq!(
+                func, &expected,
+                "{underscore} dispatched to the wrong builtin"
+            );
+            assert_eq!(args.len(), 1, "{underscore} takes one argument");
+            assert_eq!(
+                under,
+                bound_expr(&q(hyphen)),
+                "{underscore} and {hyphen} must parse to the same expression"
+            );
+        }
+
+        // Case-insensitive, exactly like the hyphenated spelling — and this is
+        // SEP-0008's own lower-case rendering of the name.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(sha3_256(STR(?o)) AS ?h) }";
+        assert!(matches!(
+            bound_expr(q),
+            Expression::FunctionCall(Function::Sha3_256, _)
+        ));
+    }
+
+    /// Accepting two spellings must NOT put two spellings on the wire. The
+    /// serializer has one arm per [`Function`], so a query written in either
+    /// spelling serializes to the HYPHENATED canonical form, byte-identically —
+    /// which is what keeps a spelling choice at the input from reaching the
+    /// output at all.
+    #[test]
+    fn sha3_serializes_to_one_canonical_spelling() {
+        for (hyphen, underscore) in [
+            ("SHA3-224", "SHA3_224"),
+            ("SHA3-256", "SHA3_256"),
+            ("SHA3-384", "SHA3_384"),
+            ("SHA3-512", "SHA3_512"),
+        ] {
+            let text = |name: &str| {
+                let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+                crate::serialize::pattern_to_select_query(&unproject(select_pattern(&q)))
+            };
+            let from_underscore = text(underscore);
+            assert_eq!(
+                from_underscore,
+                text(hyphen),
+                "{underscore} and {hyphen} must serialize byte-identically"
+            );
+            assert!(
+                from_underscore.contains(hyphen),
+                "the canonical spelling is `{hyphen}`, got: {from_underscore}"
+            );
+            assert!(
+                !from_underscore.contains(underscore),
+                "`{underscore}` must never be emitted, got: {from_underscore}"
+            );
+            // And the canonical text re-parses to the same call, so the
+            // round trip from the SEP spelling is closed.
+            assert_eq!(
+                unproject(select_pattern(&from_underscore)),
+                unproject(select_pattern(&format!(
+                    "SELECT ?h WHERE {{ ?s ?p ?o . BIND({underscore}(STR(?o)) AS ?h) }}"
+                ))),
+                "the canonical form must re-parse to the {underscore} call"
+            );
+        }
     }
 
     /// Parse → serialize → parse must be stable for the hyphenated names: the

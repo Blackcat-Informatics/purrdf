@@ -1098,6 +1098,26 @@ mod tests {
         );
     }
 
+    /// SEP-0008 spells the same four functions with an UNDERSCORE, and that
+    /// spelling must also arrive as ONE word — `_` is `PN_CHARS_U`, so the same
+    /// scan covers it, and no `SHA3` / `_224` split can occur (there is no
+    /// underscore operator to split on in the first place).
+    #[test]
+    fn underscored_sha3_names_are_single_words() {
+        for name in ["SHA3_224", "SHA3_256", "SHA3_384", "SHA3_512"] {
+            assert_eq!(toks(name), vec![Token::Word(name)]);
+        }
+        assert_eq!(
+            toks("sha3_256(\"abc\")"),
+            vec![
+                Token::Word("sha3_256"),
+                Token::LParen,
+                Token::StringLit("abc".into()),
+                Token::RParen,
+            ]
+        );
+    }
+
     /// The counterpart: WHITESPACE around the hyphen makes it the subtraction
     /// operator again, so `SHA3 - 224` is three tokens and cannot be confused
     /// with the built-in. This is what makes the single-word rule above a

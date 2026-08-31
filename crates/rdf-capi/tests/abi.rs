@@ -2025,3 +2025,149 @@ fn every_exported_entry_point_is_declared_in_the_committed_header() {
          not expand macros"
     );
 }
+
+// ── SEP-0008 SHA-3 across the C ABI ─────────────────────────────────────────────
+
+/// One N-Triples statement whose object is the NIST FIPS 202 example message `"abc"`.
+const SHA3_MESSAGE_NT: &str = "<http://example.org/s> <http://example.org/message> \"abc\" .\n";
+
+/// `(function name, SELECT alias, published FIPS 202 digest of "abc")`.
+///
+/// Provenance: NIST FIPS 202 publishes `"abc"` as a worked example for all four SHA-3
+/// sizes. Each value here was taken from that table and independently cross-checked
+/// against two implementations that are not the code under test — OpenSSL
+/// (`printf 'abc' | openssl dgst -sha3-256`) and CPython's `hashlib`
+/// (`hashlib.new("sha3_256", b"abc").hexdigest()`).
+const SHA3_ABC_VECTORS: [(&str, &str, &str); 4] = [
+    (
+        "SHA3-224",
+        "h224",
+        "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf",
+    ),
+    (
+        "SHA3-256",
+        "h256",
+        "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    ),
+    (
+        "SHA3-384",
+        "h384",
+        "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f5\
+         39f1edf228376d25",
+    ),
+    (
+        "SHA3-512",
+        "h512",
+        "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c9\
+         1a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+    ),
+];
+
+/// Run a `SELECT` projecting all four SHA-3 digests through `purrdf_query_json`,
+/// returning the single solution row as a JSON object.
+///
+/// `spelling` rewrites each function name, so the SAME assertion serves the
+/// hyphenated keyword and SEP-0008's own underscored spelling.
+unsafe fn sha3_row_over_the_c_abi(
+    spelling: impl Fn(&str) -> String,
+) -> serde_json::Map<String, serde_json::Value> {
+    unsafe {
+        let dataset = parse("application/n-triples", SHA3_MESSAGE_NT);
+        let mut query = String::from("PREFIX ex: <http://example.org/> SELECT");
+        for (name, alias, _) in SHA3_ABC_VECTORS {
+            use std::fmt::Write as _;
+            write!(query, " ({}(?m) AS ?{alias})", spelling(name)).expect("write to a String");
+        }
+        query.push_str(" WHERE { ?s ex:message ?m }");
+        let cq = CString::new(query).unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        let doc: serde_json::Value = serde_json::from_str(&json).expect("SPARQL-results JSON");
+        let bindings = doc["results"]["bindings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no results.bindings in: {json}"));
+        assert_eq!(bindings.len(), 1, "the fixture binds one row: {json}");
+        bindings[0].as_object().expect("a binding object").clone()
+    }
+}
+
+/// The four SEP-0008 built-ins reach their published FIPS 202 digests through the
+/// `extern "C"` entry point — the surface a C host actually calls, not the Rust
+/// evaluator behind it.
+#[test]
+fn sha3_builtins_reach_their_published_digests_over_the_c_abi() {
+    unsafe {
+        let row = sha3_row_over_the_c_abi(str::to_owned);
+        for (name, alias, want) in SHA3_ABC_VECTORS {
+            assert_eq!(
+                row[alias]["value"].as_str(),
+                Some(want),
+                "{name} over the C ABI does not match its published FIPS 202 vector"
+            );
+            assert_eq!(
+                row[alias]["type"].as_str(),
+                Some("literal"),
+                "{name} must come back as a literal"
+            );
+        }
+    }
+}
+
+/// SEP-0008's own underscored spelling crosses the same ABI to the same digests.
+#[test]
+fn sha3_underscored_sep_spelling_reaches_the_same_digests_over_the_c_abi() {
+    unsafe {
+        let row = sha3_row_over_the_c_abi(|name| name.replace('-', "_"));
+        for (_, alias, want) in SHA3_ABC_VECTORS {
+            assert_eq!(row[alias]["value"].as_str(), Some(want));
+        }
+    }
+}
+
+/// The hyphen is part of the NAME across this ABI too: a spaced `SHA3 - 256` is a
+/// typed error status with a populated `PurrdfError`, never a silently different
+/// answer, and no buffer is handed back to free.
+#[test]
+fn a_spaced_sha3_hyphen_is_an_error_over_the_c_abi() {
+    unsafe {
+        let dataset = parse("application/n-triples", SHA3_MESSAGE_NT);
+        let cq = CString::new(
+            "PREFIX ex: <http://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }",
+        )
+        .unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_ne!(status, PurrdfStatus::Ok as i32);
+        assert!(buffer.is_null(), "a failed query must hand back no buffer");
+        assert!(
+            !error.is_null(),
+            "a failed query must populate the error out"
+        );
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
