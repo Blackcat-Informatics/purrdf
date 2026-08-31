@@ -826,25 +826,6 @@ impl RdfDataset {
         .unwrap_or_else(|arc| arc.owned_snapshot())
     }
 
-    /// The named-graph projection under its historical second name — identical to
-    /// [`Self::project_named_graph`], which it now calls.
-    ///
-    /// This variant existed to widen the strict projection's reifier-subject
-    /// membership proxy with the reified statement's subject, because that proxy
-    /// dropped an anonymous reifier whose only appearances were the side-tables
-    /// (`[] rdf:reifies << s p o >>` plus its annotations). That widening was a
-    /// workaround for the missing graph dimension, not a semantics of its own: the
-    /// statement layer is keyed per graph, so such a row carries the graph it was
-    /// asserted in and the graph-slot selection in [`Self::project_named_graph`]
-    /// already keeps it — while a proxy, wide or narrow, also keeps rows belonging to
-    /// OTHER graphs. There is no projection this name can name that the strict one
-    /// does not already compute, so it delegates rather than re-deriving a second,
-    /// divergent answer.
-    #[must_use]
-    pub fn project_named_graph_full(&self, graph: &str) -> Self {
-        self.project_named_graph(graph)
-    }
-
     /// Borrow (building on first access) the ordinal-indirection array for a
     /// non-identity permutation (P4b): `arr[i]` is the ordinal into `self.quads`
     /// of the `i`-th quad in `perm`'s order. Sorted by [`perm_key`]; `OnceLock` makes
@@ -3199,33 +3180,6 @@ mod tests {
             assert_eq!(g1.owned_quads().count(), 1);
             assert_eq!(g1.owned_reifiers().count(), 0);
             assert_eq!(g1.owned_annotations().count(), 0);
-        }
-
-        /// The historical `_full` name is the same projection, so it cannot drift back
-        /// into a wider, cross-graph selection.
-        #[test]
-        fn full_projection_agrees_with_the_strict_one() {
-            let ds = two_graphs_sharing_one_reifier();
-            for g in [
-                "http://example.org/g1",
-                "http://example.org/g2",
-                "http://example.org/absent",
-            ] {
-                let strict = ds.project_named_graph(g);
-                let full = ds.project_named_graph_full(g);
-                assert_eq!(
-                    strict.owned_quads().collect::<Vec<_>>(),
-                    full.owned_quads().collect::<Vec<_>>()
-                );
-                assert_eq!(
-                    strict.owned_reifiers().collect::<Vec<_>>(),
-                    full.owned_reifiers().collect::<Vec<_>>()
-                );
-                assert_eq!(
-                    strict.owned_annotations().collect::<Vec<_>>(),
-                    full.owned_annotations().collect::<Vec<_>>()
-                );
-            }
         }
     }
 

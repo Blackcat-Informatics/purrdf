@@ -61,6 +61,10 @@
       "ledgered": 0,
       "note": "no ledgered gaps"
     },
+    "GTS transport (frozen vectors)": {
+      "ledgered": 1,
+      "note": "39 frozen cross-language GTS vectors folded through the production reader and compared byte-for-byte with the committed <id>.expected.json each ships; 38 agree exactly. The one ledgered divergence is 12-conflicting-reifier, which binds a single reifier id to two triples and carries no quoted-triple term. rdf:reifies is not a functional property, so both bindings are legitimate and this reader keeps both without complaint - two rows and no diagnostic - while the committed expectation still states the superseded single-binding reading, one row plus a ConflictingReifier diagnostic. The expectation encodes the premise the reader has shed, so correcting it is an upstream act on a corpus governed in gmeow-gts, which this repository never regenerates, edits or deletes. Held to XPASS discipline in both directions: purrdf-gts's frozen_conflicting_reifier_divergence pins both sides in full, and crates/rdf/tests/gts_corpus_expected_fold.rs fails if the listed vector starts AGREEING (the signal to drop the entry and lower this budget to 0) or if any unlisted vector starts disagreeing"
+    },
     "rdflib LSP drop-in gate": {
       "ledgered": 1,
       "note": "rdflib-suite strict xfails: Graph-subclass set-operator identity, rdf:List/Collection mutation, Result.bindings/SELECT* subselect projection, graph-prefix forwarding, aggregate/nested-FILTER evaluation, and ConjunctiveGraph legacy semantics"

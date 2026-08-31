@@ -2017,8 +2017,29 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
 /**
  * Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
  * Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
- * CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
+ * CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
  * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
+ *
+ * The envelope carries EVERYTHING the result holds: the base quads, the RDF 1.2
+ * statement layer (reifier declarations and annotations), and every row's named
+ * graph. A `CONSTRUCT { GRAPH <g> { … } }` or a `DESCRIBE` over a TriG dataset is
+ * therefore readable through this entry point without loss, and needs no loss
+ * out-param, because nothing is dropped. A default-graph-only result is
+ * byte-identical to the N-Triples this member used to hold: an N-Quads line with
+ * no graph term IS the N-Triples line.
+ *
+ * This is deliberately the WIDENING answer rather than the refusal
+ * `purrdf_core::named_graph` supplies to the CLI, wasm, Python and
+ * `purrdf_serialize`. Those refuse because their caller NAMED a single-graph RDF
+ * syntax (`turtle`, `RdfFormat.TURTLE`, `text/turtle`) that cannot hold the
+ * answer, and silently answering with a different syntax would break a consumer
+ * that reads only the one it asked for. Here the caller names no RDF syntax at
+ * all: `{"graph": …}` is PurRDF's own envelope member, not a W3C SPARQL-Results
+ * member and not a selectable format. With no request to contradict, MAXIMAL
+ * UTILITY makes carrying the graph strictly better than refusing — and refusing
+ * would leave this ABI with no JSON path at all for a quad-template CONSTRUCT.
+ * Use `purrdf_query` + `purrdf_serialize` when a specific RDF media type is
+ * required; that lane reports its loss through `out_named_graph_rows_dropped`.
  *
  * `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
  * additive `purrdf` provenance extension on a SELECT/ASK emission under that
@@ -2292,6 +2313,10 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
  * materialized dataset (base graph plus every inferred triple) as canonical
  * N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * Nothing is dropped on the way out: the underlying writer is the graph-carrying
+ * canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+ * are single-graph syntaxes, not because a graph slot was discarded.
  *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;

@@ -1675,6 +1675,168 @@ fn query_json_has_sparql_results_shape() {
     }
 }
 
+/// A quad-template `CONSTRUCT` driven through `purrdf_query_json` keeps its named
+/// graph, and keeps it in the SAME place `purrdf_serialize` puts it.
+///
+/// This entry point used to render a CONSTRUCT/DESCRIBE result through a
+/// triple-only writer, so the graph name the query spelled out vanished with status
+/// `0`, no loss out-param and no error — the identical process could serialize the
+/// same result to N-Quads through `purrdf_query` + `purrdf_serialize` and see the
+/// graph, or ask this one convenience call and not. The two lanes are compared here
+/// rather than asserted separately, because one lane agreeing with a hard-coded
+/// string is only half the claim; a C consumer's actual complaint was that the two
+/// C entry points disagreed.
+#[test]
+fn query_json_construct_into_a_named_graph_keeps_the_graph() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new(
+            "CONSTRUCT { GRAPH <http://example.org/g1> { ?s ?p ?o } } \
+             WHERE { ?s ?p ?o }",
+        )
+        .unwrap();
+
+        // Lane 1: the typed result, serialized to N-Quads with the loss counts read.
+        let mut kind = -1_i32;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                &raw mut kind,
+                &raw mut rows,
+                &raw mut graph,
+                &raw mut boolean,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert!(!graph.is_null(), "a CONSTRUCT yields a graph handle");
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut nq_buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let (mut statements, mut directions, mut named_graphs) = (9_usize, 9_usize, 9_usize);
+        assert_eq!(
+            purrdf_serialize(
+                graph,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut nq_buffer,
+                &raw mut statements,
+                &raw mut directions,
+                &raw mut named_graphs,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(
+            (statements, directions, named_graphs),
+            (0, 0, 0),
+            "N-Quads carries the whole result with no realized loss"
+        );
+        let nquads = String::from_utf8(buffer_bytes(nq_buffer)).unwrap();
+        assert!(
+            nquads.contains("<http://example.org/g1>"),
+            "the reference lane must see the graph: {nquads}"
+        );
+        purrdf_buffer_free(nq_buffer);
+        purrdf_dataset_free(graph);
+
+        // Lane 2: the same query through the convenience JSON path.
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query_json(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        assert!(json.starts_with("{\"graph\":\""), "graph envelope: {json}");
+        assert!(
+            json.contains("<http://example.org/g1>"),
+            "purrdf_query_json DROPPED the named graph: {json}"
+        );
+        // Every one of the three rows is graph-scoped, so every rendered line names
+        // it — a partial carry would be as wrong as none at all.
+        assert_eq!(
+            json.matches("<http://example.org/g1>").count(),
+            3,
+            "every constructed row must name its graph: {json}"
+        );
+        for line in nquads.lines() {
+            assert!(
+                json.contains(line),
+                "the JSON envelope must carry the same N-Quads line as \
+                 purrdf_serialize: missing {line}\nenvelope: {json}"
+            );
+        }
+    }
+}
+
+/// `DESCRIBE` over a TriG dataset is graph-carrying too — a described statement
+/// stays in the graph it came from, at every layer — so the JSON envelope must show
+/// the graph for the base quad AND for the RDF 1.2 statement-layer rows.
+#[test]
+fn query_json_describe_over_trig_keeps_every_layers_graph() {
+    unsafe {
+        let trig = concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "ex:g1 { ex:alice ex:knows ex:bob . }\n",
+            "ex:g2 { ex:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( ex:alice ex:knows ex:bob )>> . ex:r ex:source ex:ledger . }\n",
+        );
+        let dataset = parse("application/trig", trig);
+        let cq = CString::new("DESCRIBE <http://example.org/alice>").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query_json(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        assert!(
+            json.contains("<http://example.org/g1>"),
+            "the described base quad must stay in <g1>: {json}"
+        );
+        assert!(
+            json.contains("<http://example.org/g2>"),
+            "the reifier declaration and its annotation must stay in <g2>: {json}"
+        );
+        assert!(
+            json.contains("#reifies"),
+            "the RDF 1.2 statement layer must ride along: {json}"
+        );
+    }
+}
+
 /// End-to-end: `purrdf_query_json`'s `provenance_prefix`/`provenance_iri` anchor a
 /// populated additive `purrdf` extension, and what this ABI writes,
 /// `purrdf_sparql_results::provenance_from_json` reads back — the

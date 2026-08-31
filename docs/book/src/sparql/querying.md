@@ -935,6 +935,16 @@ ABI, whose egress is the dataset itself, reports the loss as a count instead:
   asked not to be told, so read it — or serialize to a quad-capable media type
   — whenever the result may carry graphs.
 
+  The convenience path, `purrdf_query_json`, needs neither: it renders a
+  `CONSTRUCT`/`DESCRIBE` result as **N-Quads** inside its `{"graph": "..."}`
+  envelope, so the graph names, the base quads and the RDF 1.2 statement layer
+  all survive and there is no loss to report. That member is `purrdf`'s own
+  envelope rather than a caller-selected RDF syntax, which is why it widens the
+  way the WebAssembly no-format default does instead of refusing the way an
+  explicit `serialize("turtle")` does. A default-graph-only result is
+  byte-identical to the N-Triples the member used to hold — an N-Quads line with
+  no graph term is the N-Triples line.
+
 A result carrying only default-graph statements is untouched everywhere: every
 SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle exactly as
 before. A **mixed** result is refused as a whole rather than half-emitted,

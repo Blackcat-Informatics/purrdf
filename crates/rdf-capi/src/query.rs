@@ -441,8 +441,29 @@ fn build_query_provenance(
 
 /// Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
 /// Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
-/// CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
+/// CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
 /// `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
+///
+/// The envelope carries EVERYTHING the result holds: the base quads, the RDF 1.2
+/// statement layer (reifier declarations and annotations), and every row's named
+/// graph. A `CONSTRUCT { GRAPH <g> { … } }` or a `DESCRIBE` over a TriG dataset is
+/// therefore readable through this entry point without loss, and needs no loss
+/// out-param, because nothing is dropped. A default-graph-only result is
+/// byte-identical to the N-Triples this member used to hold: an N-Quads line with
+/// no graph term IS the N-Triples line.
+///
+/// This is deliberately the WIDENING answer rather than the refusal
+/// `purrdf_core::named_graph` supplies to the CLI, wasm, Python and
+/// `purrdf_serialize`. Those refuse because their caller NAMED a single-graph RDF
+/// syntax (`turtle`, `RdfFormat.TURTLE`, `text/turtle`) that cannot hold the
+/// answer, and silently answering with a different syntax would break a consumer
+/// that reads only the one it asked for. Here the caller names no RDF syntax at
+/// all: `{"graph": …}` is PurRDF's own envelope member, not a W3C SPARQL-Results
+/// member and not a selectable format. With no request to contradict, MAXIMAL
+/// UTILITY makes carrying the graph strictly better than refusing — and refusing
+/// would leave this ABI with no JSON path at all for a quad-template CONSTRUCT.
+/// Use `purrdf_query` + `purrdf_serialize` when a specific RDF media type is
+/// required; that lane reports its loss through `out_named_graph_rows_dropped`.
 ///
 /// `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
 /// additive `purrdf` provenance extension on a SELECT/ASK emission under that
@@ -479,9 +500,10 @@ pub unsafe extern "C" fn purrdf_query_json(
             // Delegate to the canonical SPARQL-Results serializer (purrdf S9). An
             // empty `ResultProvenance` (no namespace supplied) yields byte-identical
             // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
-            // crate's wasm-clean rdf-core N-Triples writer and never carries the
-            // extension (`to_json` only appends it for `Solutions`/`Boolean` — a
-            // `Graph` result serializes as `{"graph": "..."}` regardless).
+            // crate's wasm-clean rdf-core N-QUADS writer — graph slots and the RDF 1.2
+            // statement layer included — and never carries the extension (`to_json`
+            // only appends it for `Solutions`/`Boolean`; a `Graph` result serializes
+            // as `{"graph": "..."}` regardless).
             let provenance = build_query_provenance(namespace.as_ref(), query_text);
             let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
                 .map_err(|e| {

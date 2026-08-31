@@ -22,7 +22,15 @@
 //! left stale here. Each entry carries a dedicated test elsewhere that pins
 //! both sides of the disagreement; this list only records that the corpus-wide
 //! equality is knowingly relaxed for it.
+//!
+//! The fold prints a `GTS-VECTORS:` scoreboard line, which is what
+//! `scripts/conformance-matrix.py` scrapes for the corpus's row in the umbrella
+//! `make conformance` matrix. Before that row existed the 38-of-39 state was
+//! recorded only in [`KNOWN_DIVERGENCES`] below, so the umbrella gate could not
+//! see this corpus at all; the line is emitted unconditionally, before any
+//! assertion, so a red run still reports what it measured.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use purrdf_rdf::gts_dict_vectors::{
@@ -70,7 +78,8 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
         "the frozen GTS corpus changed size; every vector must be graded",
     );
 
-    let mut still_diverging: Vec<&str> = Vec::new();
+    let mut diverging: BTreeSet<String> = BTreeSet::new();
+    let mut mismatch: Option<(String, String, String)> = None;
     for stem in &stems {
         let pack = std::fs::read(vectors.join(format!("{stem}.gts")))
             .unwrap_or_else(|error| panic!("read {stem}.gts: {error}"));
@@ -81,32 +90,40 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
         let mode = declared["mode"].as_str().unwrap_or(DEFAULT_MODE);
 
         let produced = render_expected_json(&expected_fold_json_in_mode(&pack, mode));
-        let known = KNOWN_DIVERGENCES.contains(&stem.as_str());
-        if known {
-            assert_ne!(
-                produced, expected,
-                "{stem} is listed as a known divergence but now AGREES — the \
-                 divergence closed upstream; drop it from KNOWN_DIVERGENCES and \
-                 turn its dedicated test into a plain agreement check",
-            );
-            still_diverging.push(
-                KNOWN_DIVERGENCES
-                    .iter()
-                    .find(|name| *name == stem)
-                    .expect("matched entry"),
-            );
-        } else {
-            assert_eq!(
-                produced, expected,
-                "{stem}.expected.json must be the fold oracle this engine \
-                 produces for the frozen bytes",
-            );
+        if produced != expected {
+            diverging.insert(stem.clone());
+            // Keep the FIRST unexpected pair whole, so the failure below can
+            // show the two documents rather than only their names.
+            if !KNOWN_DIVERGENCES.contains(&stem.as_str()) && mismatch.is_none() {
+                mismatch = Some((stem.clone(), produced, expected));
+            }
         }
     }
 
+    // The umbrella matrix's row for this corpus. Printed BEFORE the assertions so
+    // it is emitted whether the corpus agrees or not.
+    println!(
+        "GTS-VECTORS: agreed {} total {} diverging {}",
+        stems.len() - diverging.len(),
+        stems.len(),
+        diverging.len(),
+    );
+
+    if let Some((stem, produced, expected)) = mismatch {
+        assert_eq!(
+            produced, expected,
+            "{stem}.expected.json must be the fold oracle this engine produces \
+             for the frozen bytes",
+        );
+    }
+
+    let known: BTreeSet<&str> = KNOWN_DIVERGENCES.into_iter().collect();
+    let diverging: BTreeSet<&str> = diverging.iter().map(String::as_str).collect();
     assert_eq!(
-        still_diverging.len(),
-        KNOWN_DIVERGENCES.len(),
-        "every known divergence must name a vector that is actually in the corpus",
+        diverging, known,
+        "the divergence ledger must name exactly the vectors that actually \
+         disagree: an entry that started AGREEING closed upstream (drop it from \
+         KNOWN_DIVERGENCES and turn its dedicated test into a plain agreement \
+         check), and an unlisted disagreement is a regression in this reader",
     );
 }

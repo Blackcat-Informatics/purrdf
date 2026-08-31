@@ -476,6 +476,55 @@ def _suite_governor_corpus() -> SuiteResult:
     )
 
 
+def _suite_gts_vectors() -> SuiteResult:
+    """The frozen cross-language GTS vector corpus (`vectors/*.gts`).
+
+    Its own row because nothing else in this matrix reads that corpus: the wire
+    format is governed upstream in `gmeow-gts` and this repository never
+    regenerates the vectors, so the only thing purrdf can measure is whether its
+    production reader folds each `<id>.gts` into exactly the `<id>.expected.json`
+    the corpus ships. That agreement used to be recorded only inside the
+    harness's own divergence ledger, which meant the umbrella gate could not see
+    the corpus at all and a shipped doc could go on calling it unqualifiedly
+    byte-exact.
+
+    `Pass` is the vectors that agree byte-for-byte and `XFail/Skip` is the
+    harness's `KNOWN_DIVERGENCES` ledger — vectors whose committed expectation
+    this reader knowingly contradicts, each pinned on both sides by a dedicated
+    test and held to XPASS discipline (a listed vector that starts agreeing fails
+    the harness). `Fail` can only be non-zero if the corpus changed size, which
+    the harness asserts separately.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-rdf", "--locked",
+        "--test", "gts_corpus_expected_fold", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    name = "GTS transport (frozen vectors)"
+    source = "gmeow-gts frozen corpus, vectors/"
+    m = re.search(r"GTS-VECTORS: agreed (\d+) total (\d+) diverging (\d+)", out)
+    if not m:
+        return _no_scoreboard(
+            name, source, "`GTS-VECTORS: agreed N total N diverging N`", cmd, out,
+        )
+    agreed, total, diverging = (int(m.group(i)) for i in (1, 2, 3))
+    plural = "divergence" if diverging == 1 else "divergences"
+    detail = (
+        f"{agreed}/{total} frozen vectors fold byte-exactly into their committed "
+        f"`.expected.json`; {diverging} ledgered {plural} from an upstream "
+        "expectation this reader contradicts. The corpus is governed upstream and "
+        "is never regenerated here"
+    )
+    return SuiteResult(
+        name, source,
+        passed=agreed, xskip=diverging, failed=(total - agreed - diverging),
+        detail=detail,
+        ok=(rc == 0 and failed == 0 and agreed + diverging == total),
+        log=out,
+    )
+
+
 def _suite_entailment() -> SuiteResult:
     """W3C OWL 2 suite graded against the native `OWL-Direct` SHOIQ(D) tableau.
 
@@ -822,6 +871,7 @@ def native_suites() -> list[SuiteResult]:
              "--test", "shexj_roundtrip"],
             detail="schemas parse + negative syntax/structure",
         ),
+        _suite_gts_vectors(),
     ]
 
 
@@ -1109,6 +1159,15 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _noise(_CARGO_OK),
         ),
     ),
+    (
+        "GTS transport (frozen vectors)",
+        _suite_gts_vectors,
+        (
+            _noise("running 1 test"),
+            _board("GTS-VECTORS: agreed 8 total 9 diverging 1"),
+            _noise(_CARGO_OK),
+        ),
+    ),
 )
 
 _SCOREBOARD_LINES = sum(
@@ -1217,8 +1276,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
-        # The committed doc block reflects the full 15-row matrix (13 native Rust
-        # suites + the 2 Python gates); a native-only run cannot reproduce it.
+        # The committed doc block reflects the full matrix (every native Rust
+        # suite PLUS the two Python gates); a native-only run cannot reproduce it,
+        # and writing it from one would silently delete the Python rows.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
 
     if args.self_test:

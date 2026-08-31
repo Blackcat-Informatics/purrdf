@@ -179,7 +179,8 @@ pub use sssom::{
 pub use store::RdfStoreCapabilities;
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
-    write_dataset_annotation, write_dataset_quad, write_dataset_reifier, write_dataset_term,
+    write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
+    write_dataset_quad, write_dataset_reifier, write_dataset_reifier_nquad, write_dataset_term,
 };
 pub use turtle_render::render as render_canonical_turtle;
 
