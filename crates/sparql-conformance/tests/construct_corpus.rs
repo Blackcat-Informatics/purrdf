@@ -11,6 +11,14 @@
 //! target graph on every line). A downstream consumer asking "is this query
 //! form covered by conformance evidence" gets a scoreboard row, not a promise.
 //!
+//! It also grades the quad-template grammar's **boundary**, from both sides: a
+//! positive-syntax case for a spelling that parses and a negative-syntax case
+//! for each spelling that does not (a missing / literal / blank-node graph
+//! name, a nested `GRAPH` block, a `GRAPH` block missing its braces, a `GRAPH`
+//! block in the `CONSTRUCT` short form, and a property path inside a `GRAPH`
+//! block). A corpus that pinned only what is accepted would let the grammar
+//! quietly widen.
+//!
 //! # Why its own target, beside `suite/`
 //!
 //! `sparql_conformance.rs`'s `datatest_stable::harness!` is rooted at `suite/`
@@ -76,7 +84,7 @@ fn construct_corpus_case_count_and_kinds() {
     let cases = purrdf_sparql_conformance::manifest::load(&manifest())
         .unwrap_or_else(|e| panic!("load the CONSTRUCT corpus manifest: {e}"));
 
-    assert_eq!(cases.len(), 19, "the corpus declares 19 cases");
+    assert_eq!(cases.len(), 25, "the corpus declares 25 cases");
     assert_eq!(
         cases
             .iter()
@@ -91,12 +99,18 @@ fn construct_corpus_case_count_and_kinds() {
             .count(),
         1
     );
+    // The refused half of the quad-template grammar: one spelling each for the
+    // missing graph name, a literal name, a blank-node name, a nested GRAPH
+    // block, a GRAPH block missing its braces, a GRAPH block in the short form,
+    // and a property path inside a GRAPH block. The boundary of what the parser
+    // accepts is only measured while BOTH sides of it are pinned, so this count
+    // is a tripwire exactly like the positive one.
     assert_eq!(
         cases
             .iter()
             .filter(|c| c.kind == TestKind::NegativeSyntax)
             .count(),
-        1
+        7
     );
     assert_eq!(
         cases.iter().filter(|c| c.kind == TestKind::Unknown).count(),

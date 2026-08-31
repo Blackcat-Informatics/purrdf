@@ -36,9 +36,36 @@ checked by `construct_corpus.rs`, not merely asserted here, because
 `CONSTRUCT GRAPH` is defined to be the ordinary instantiation with a graph name
 attached and a corpus that only tested the new form could not say that.
 
-Two quad-form cases have no triple-form twin, by nature rather than by omission:
-the positive and negative syntax verdicts grade the quad grammar itself, and
+Some quad-form cases have no triple-form twin, by nature rather than by
+omission: the syntax verdicts grade the quad grammar itself, and
 `graphReifierScope` needs TWO graphs to say anything at all.
+
+## The grammar boundary, from both sides
+
+The accepted quad-template grammar is
+
+```text
+ConstructQuads           ::= TriplesTemplate? ( ConstructQuadsNotTriples '.'? TriplesTemplate? )*
+ConstructQuadsNotTriples ::= ( 'GRAPH' VarOrIri )? '{' TriplesTemplate? '}'
+```
+
+plus the whole-template `CONSTRUCT GRAPH VarOrIri …` shorthand. `graphSyntax`
+pins one spelling that parses. A corpus that stopped there would let the grammar
+widen without anyone noticing, so each spelling that is genuinely REFUSED is
+pinned too, one case per rule:
+
+| Case | The rule it pins |
+|---|---|
+| `graphNoNameSyntax` | the shorthand's graph name is not optional |
+| `graphLiteralNameSyntax` | the name is a `VarOrIri` — a literal is not one |
+| `graphBlankNameSyntax` | …and neither is a blank node |
+| `graphNestedBlockSyntax` | a block body is a `TriplesTemplate`; blocks do not nest |
+| `graphBlockNoBracesSyntax` | a block's braces are not optional |
+| `graphShortFormBlockSyntax` | the short form's one block is read twice, as template AND as `WHERE` algebra, so it admits no `GRAPH` block |
+| `graphBlockPathSyntax` | a template asserts triples, so the property-path ban holds inside a `GRAPH` block exactly as it does outside one |
+
+These are empirical: each was confirmed against the parser before it was
+declared, so the corpus measures the boundary rather than assuming it.
 
 ## The RDF 1.2 statement layer
 

@@ -138,6 +138,46 @@ impl Parser<'_> {
     /// Parse a `sh:SPARQLRule` head (a `sh:construct` CONSTRUCT query). The query
     /// is validated (parseable + CONSTRUCT-form + pre-binding-legal) at load time;
     /// the `$this`-bearing prefix header is prepended.
+    ///
+    /// # Why a template that names a target graph is refused, not accommodated
+    ///
+    /// This crate's SPARQL parser accepts the quad-producing `CONSTRUCT`
+    /// (`CONSTRUCT GRAPH VarOrIri …`, and `GRAPH … { … }` blocks inside a
+    /// template), so a `sh:construct` string may legally name a graph for some
+    /// or all of its head statements. Such a rule is refused at LOAD time, by
+    /// name. The refusal is a decision about SHACL semantics, not a stopgap
+    /// around a type:
+    ///
+    /// * **A named-graph head would be inert under every other SHACL concept.**
+    ///   A SHACL rule derives triples into the **data graph**, and the data
+    ///   graph is the one graph every other part of SHACL is defined over:
+    ///   target selection (`sh:targetClass`, `sh:targetNode`, …), `sh:path`
+    ///   traversal, `sh:condition` conformance, and the next fixpoint round's
+    ///   own rule firing all read it and nothing else. Statements written into
+    ///   `<g>` could therefore never be targeted, never be validated, never
+    ///   feed another rule, and never re-enter the fixpoint — a rule head that
+    ///   produced them would produce output no shape in the document can
+    ///   observe. Silently accepting it is the worst outcome; accepting it and
+    ///   inventing a reachability rule for named graphs would mint SHACL
+    ///   semantics no other processor shares, which is a bigger claim than a
+    ///   parser convenience is entitled to make.
+    /// * **What widening would actually cost.** `crate::rules`'s `Producer`
+    ///   yields `Vec<[Term; 3]>`; `apply_rules` dedups facts in a `FastSet` of
+    ///   that triple, sorts them with `triple_sort_key`, diffs them against
+    ///   `original`, and rebuilds each round through `rebuild_dataset` /
+    ///   `push_fact`. Widening the head to a quad is a mechanical change to all
+    ///   of those, and cheap. It is not the reason for the refusal — the
+    ///   semantic gap above is, and widening the type would not close it.
+    /// * **Fail-fast beats a silent drop.** `sparql_rule_producer` reads the
+    ///   CONSTRUCT result with `GraphFilter::AnyGraph` and keeps only `s`/`p`/
+    ///   `o`, so without this check a graph-scoped head would be *accepted and
+    ///   its graph name discarded*: the rule would appear to work while writing
+    ///   somewhere the author did not ask for. Refusing at load time, naming
+    ///   both the rule and the graph term it refused, is the only reading that
+    ///   cannot mislead.
+    ///
+    /// Reopening this means deciding what a named graph MEANS to SHACL targets,
+    /// paths and conditions first; the head type is the easy half.
     fn parse_sparql_rule(&self, shape_id: &Term, rule_node: &Term) -> Result<RuleBody, String> {
         let raw = self
             .first_object_of(rule_node, sh::CONSTRUCT)
@@ -158,12 +198,13 @@ impl Parser<'_> {
             Ok(query @ Query::Construct { .. }) => {
                 // The quad-producing `CONSTRUCT` is a `CONSTRUCT`, but a
                 // `sh:SPARQLRule` head produces TRIPLES that SHACL-AF adds to the
-                // data graph — `sparql_rule_producer` returns `[Term; 3]` and has
-                // nowhere to carry a graph name. Accepting one would silently
-                // discard that graph, so ANY template statement naming a graph is
-                // refused by name: the `CONSTRUCT GRAPH …` whole-template
-                // shorthand and a `GRAPH … { … }` block inside the template alike,
-                // and whether the name is an IRI or a variable.
+                // data graph — the only graph SHACL targets, paths, conditions
+                // and the fixpoint read. ANY template statement naming a graph
+                // is therefore refused by name: the `CONSTRUCT GRAPH …`
+                // whole-template shorthand and a `GRAPH … { … }` block inside the
+                // template alike, and whether the name is an IRI or a variable.
+                // See this function's docs for why widening the head instead
+                // would not answer the question.
                 if let Query::Construct { template, .. } = &query
                     && let Some(graph) = template.iter().find_map(|quad| quad.graph.as_ref())
                 {

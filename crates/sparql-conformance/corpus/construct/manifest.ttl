@@ -12,9 +12,10 @@
 #     are N-Quads carrying the target graph on every line.
 #
 # Every triple-form evaluation case has a `graph`-prefixed counterpart, and the
-# corpus test checks that rather than trusting this comment. The two syntax
-# verdicts grade the quad grammar itself, and `:graphReifierScope` needs two
-# graphs to say anything, so those three have no triple-form twin.
+# corpus test checks that rather than trusting this comment. The syntax verdicts
+# grade the quad grammar itself — one accepted spelling and the seven refused
+# ones that bound it — and `:graphReifierScope` needs two graphs to say
+# anything, so none of those has a triple-form twin.
 #
 # Run by `crates/sparql-conformance/tests/construct_corpus.rs`, NOT by the
 # datatest harness (which is rooted at `suite/`), so this corpus reports its own
@@ -31,7 +32,10 @@
                  :graphFromNamedGraph :graphUnboundSkipped
                  :graphIllFormedSkipped :graphModifiers :graphReified
                  :graphReifierScope
-                 :graphSyntax :graphNoNameSyntax ) .
+                 :graphSyntax :graphNoNameSyntax :graphLiteralNameSyntax
+                 :graphBlankNameSyntax :graphNestedBlockSyntax
+                 :graphBlockNoBracesSyntax :graphShortFormBlockSyntax
+                 :graphBlockPathSyntax ) .
 
 # ── SPARQL 1.1 §16.2: the triple-producing form ──────────────────────────────
 
@@ -128,6 +132,35 @@
     mf:name "CONSTRUCT GRAPH <iri> { ... } WHERE { ... } parses" ;
     mf:action <graph-syntax.rq> .
 
+# The refused half of the quad-template grammar. Each case pins ONE spelling
+# the parser does not accept, so the boundary of the accepted grammar is
+# measured rather than assumed: a future relaxation has to delete a case here
+# and say so, and a future over-tightening turns a positive case red instead.
+
 :graphNoNameSyntax a mf:NegativeSyntaxTest11 ;
     mf:name "CONSTRUCT GRAPH without a graph name is a syntax error" ;
     mf:action <graph-no-name-syntax.rq> .
+
+:graphLiteralNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a target graph name is a VarOrIri: a literal is a syntax error" ;
+    mf:action <graph-literal-name-syntax.rq> .
+
+:graphBlankNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block's name is a VarOrIri: a blank node is a syntax error" ;
+    mf:action <graph-blank-name-syntax.rq> .
+
+:graphNestedBlockSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block's body is a TriplesTemplate: a nested GRAPH block is a syntax error" ;
+    mf:action <graph-nested-block-syntax.rq> .
+
+:graphBlockNoBracesSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block inside a template requires its braces" ;
+    mf:action <graph-block-no-braces-syntax.rq> .
+
+:graphShortFormBlockSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block in the CONSTRUCT short form is a syntax error" ;
+    mf:action <graph-short-form-block-syntax.rq> .
+
+:graphBlockPathSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "the template's property-path ban still holds inside a GRAPH block" ;
+    mf:action <graph-block-path-syntax.rq> .

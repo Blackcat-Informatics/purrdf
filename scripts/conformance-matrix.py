@@ -397,7 +397,8 @@ def _suite_construct_corpus() -> SuiteResult:
         detail = (
             f"{passed}/{total} cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, "
             "paired case for case, incl. the RDF 1.2 statement layer and its "
-            "per-graph keying"
+            "per-graph keying; the quad-template grammar bounded from both "
+            "sides by 1 positive and 7 negative syntax verdicts"
         )
         return SuiteResult(
             "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
