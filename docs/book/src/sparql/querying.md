@@ -676,7 +676,9 @@ makes `EXISTS`'s substitution semantics defensible at every site — SPARQL
 SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
 `SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions
 [SEP-0008](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0008/sep-0008.md)
-proposes, on exactly the same call convention:
+proposes, on exactly the same call convention. SEP-0008 is a proposal, **not
+part of the SPARQL 1.1 or 1.2 recommendation** — these four are a first-party
+extension, and [they do not travel](#taking-a-sha-3-query-to-another-engine):
 
 | Call | Digest | Hex characters |
 |---|---|---|
@@ -741,6 +743,24 @@ only — the algebra has one function per digest size, so a serialized query
 always carries the canonical hyphenated name and stays byte-deterministic
 whichever spelling was typed.
 
+### Taking a SHA-3 query to another engine
+
+Expect a **parse error**. `SHA3-256` is a built-in name here, but the SPARQL
+1.1/1.2 grammar offers exactly two ways to name a function — a keyword from its
+own built-in list, or a `FunctionCall ::= iri ArgList` whose `iri` is an
+`IRIREF` or a prefixed name. On an engine that has not adopted SEP-0008,
+`SHA3-256` is not in the built-in list, and a bare word with no colon is not an
+`iri` either, so `SHA3-256(?o)` has no parse at all. The underscored
+`SHA3_256(?o)` spelling fails for the same reason. The failure is therefore
+loud and immediate rather than a quietly unbound column.
+
+The portable substitute is one of the SPARQL 1.1 §17.4.4 hashes. `SHA256` takes
+the same single argument and returns the same lowercase-hex `xsd:string`, so
+swapping the name is the whole edit — it changes the digest, and nothing else
+about the query. Reach for the SHA-3 names when you control the engine and want
+the Keccak construction specifically; reach for `SHA256` when the query text has
+to run anywhere.
+
 ### Reaching it from other hosts
 
 There is nothing to configure: unlike the extension-function and
@@ -752,9 +772,58 @@ in Python, `Dataset.query` / `QueryEngine.select` in WebAssembly, and
 ## Quad templates: `CONSTRUCT` into named graphs
 
 A SPARQL 1.1 `CONSTRUCT` template is a set of triples, and the result is one
-graph. `purrdf` implements the SPARQL 1.2 **quad template**, so a template may
-name the graph each statement lands in, and a single result may span several
-named graphs.
+graph. `purrdf` also accepts a **quad template**, so a template may name the
+graph each statement lands in, and a single result may span several named
+graphs.
+
+### Provenance: a `purrdf` extension, not a SPARQL 1.2 feature
+
+**SPARQL 1.2 does not define the quad template.** Neither the 1.1 nor the 1.2
+grammar admits a `GRAPH` block inside a `CONSTRUCT` template
+(`ConstructTemplate ::= '{' ConstructTriples? '}'`, and `ConstructTriples` is
+triples only), and neither defines the `CONSTRUCT GRAPH …` shorthand. Both
+spellings documented below are first-party extensions this engine ships.
+Producing quads from a `CONSTRUCT` is a long-running request in the SPARQL
+community's proposal process, and other engines — Jena and Stardog among them —
+already ship a form of it, but no standardized spelling exists, so the one
+described here is `purrdf`'s.
+
+Declaring `VERSION "1.2"` does not subtract the extension: a version
+declaration selects semantics, not a feature whitelist. See
+[The `VERSION` declaration](#the-version-declaration).
+
+### Taking one of these queries to another engine
+
+Expect a **parse error**, not a different answer. An engine without the
+extension rejects the `GRAPH` keyword as soon as it meets it inside a
+`CONSTRUCT` template, because its grammar has no production that admits one
+there — the query fails before evaluation, so there is no risk of silently
+getting the wrong graphs. An engine that ships its own form of the feature may
+accept only one of the two spellings, since neither is standardized.
+
+Two portable rewrites:
+
+- **If the result is going into a store**, use SPARQL 1.1 Update rather than
+  `CONSTRUCT`. Update's template has always been a quad template, so
+  `INSERT { GRAPH … { … } } WHERE { … }` is standard, universally implemented,
+  and gives the same per-solution graph targeting — including a graph name
+  bound per row:
+
+  ```sparql
+  PREFIX ex: <http://example.org/>
+  INSERT { GRAPH ?g { ?s ex:friend ?o } }
+  WHERE  { GRAPH ?g { ?s ex:knows ?o } }
+  ```
+
+- **If the result must come back as a document**, issue one ordinary
+  triple-producing `CONSTRUCT` per target graph and assemble the dataset on the
+  client. This costs a round trip per graph and cannot express a graph name
+  computed per solution row, which is the gap the quad template closes.
+
+Queries that stay inside the triple form are unaffected in either direction: a
+template with no `GRAPH` slot is an ordinary SPARQL 1.1 `CONSTRUCT` here and
+emits byte-identically, so only the templates that actually name a graph are
+the ones that will not travel.
 
 ### `GRAPH` blocks inside the template
 

@@ -1171,8 +1171,9 @@ class Graph:
             )
             return Result(form, graph=constructed)
         if isinstance(res, purrdf.QueryQuads):
-            # A SPARQL 1.2 quad template (`CONSTRUCT { GRAPH ?g { ... } }`) wrote at
-            # least one named graph, so the answer is a dataset. Carried through
+            # A quad template (`CONSTRUCT { GRAPH ?g { ... } }` — a first-party
+            # extension, NOT defined by SPARQL 1.2) wrote at least one named
+            # graph, so the answer is a dataset. Carried through
             # N-Quads into a `Dataset` rather than N-Triples into a `Graph`: a `Graph`
             # has nowhere to put a graph name, and folding the quads into one would
             # silently delete what the query asked for.

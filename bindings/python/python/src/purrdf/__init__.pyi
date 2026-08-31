@@ -320,8 +320,9 @@ class QueryTriples:
     def __len__(self) -> int: ...
     def serialize(self, format: RdfFormat) -> bytes: ...
 
-# A CONSTRUCT result carrying at least one NAMED graph (the SPARQL 1.2 quad template:
-# `CONSTRUCT { GRAPH ?g { ... } }`). One result may span several graphs and may mix
+# A CONSTRUCT result carrying at least one NAMED graph (a quad template:
+# `CONSTRUCT { GRAPH ?g { ... } }` — a first-party extension, NOT defined by SPARQL
+# 1.2). One result may span several graphs and may mix
 # them with default-graph statements, so the members are `Quad`s with a live
 # `graph_name`. `serialize` raises `ValueError` for a single-graph syntax
 # (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`) rather than dropping the graphs.
