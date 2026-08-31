@@ -177,26 +177,37 @@ fn term_from_id_depth(
             }))
         }
         TermKind::Triple => {
-            let Some(reifier_id) = term.reifier else {
-                return Err(RdfDiagnostic::error(
-                    "gts-unbound-triple-term",
-                    "GTS triple term has no reifier binding",
-                )
-                .with_location(location.with_gts_term(term_id)));
+            // A self-describing triple term (wire `"tt"`) states its own
+            // components; only the older indirect spelling routes through a
+            // reifier id, which `Graph::triple_of` resolves as a fallback.
+            let Some((s, p, o)) = graph.triple_of(term_id) else {
+                let (code, detail) = match term.reifier {
+                    Some(reifier_id) => (
+                        "gts-missing-reifier-binding",
+                        format!("GTS triple term references missing reifier {reifier_id}"),
+                    ),
+                    None => (
+                        "gts-unbound-triple-term",
+                        "GTS triple term names neither its own components nor a reifier"
+                            .to_string(),
+                    ),
+                };
+                let mut location = location.with_gts_term(term_id);
+                if let Some(reifier_id) = term.reifier {
+                    location = location.with_gts_reifier(reifier_id);
+                }
+                return Err(RdfDiagnostic::error(code, detail).with_location(location));
             };
-            let Some((s, p, o)) = graph.reifier(reifier_id) else {
-                return Err(RdfDiagnostic::error(
-                    "gts-missing-reifier-binding",
-                    format!("GTS triple term references missing reifier {reifier_id}"),
-                )
-                .with_location(location.with_gts_term(term_id).with_gts_reifier(reifier_id)));
+            let location = match term.reifier {
+                Some(reifier_id) => location.with_gts_reifier(reifier_id),
+                None => location.with_gts_term(term_id),
             };
             Ok(RdfTerm::triple(triple_from_ids_depth(
                 graph,
                 s,
                 p,
                 o,
-                location.with_gts_reifier(reifier_id),
+                location,
                 depth + 1,
             )?))
         }

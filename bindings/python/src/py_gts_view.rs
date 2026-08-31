@@ -17,6 +17,7 @@ type PyTermRow = (
     Option<String>,
     Option<String>,
     Option<usize>,
+    Option<(usize, usize, usize)>,
 );
 
 /// One statement-layer reifier row as Python exchanges it: `(reifier_id, (s, p, o),
@@ -88,6 +89,7 @@ impl PyGtsFoldView {
             term.lang.clone(),
             term.direction.clone(),
             term.reifier,
+            term.triple,
         ))
     }
 
@@ -340,16 +342,19 @@ fn graph_from_parts(
     Ok(Graph {
         terms: terms
             .into_iter()
-            .map(|(kind, value, datatype, lang, direction, reifier)| {
-                Ok(Term {
-                    kind: term_kind(kind)?,
-                    value,
-                    datatype,
-                    lang,
-                    direction,
-                    reifier,
-                })
-            })
+            .map(
+                |(kind, value, datatype, lang, direction, reifier, triple)| {
+                    Ok(Term {
+                        kind: term_kind(kind)?,
+                        value,
+                        datatype,
+                        lang,
+                        direction,
+                        reifier,
+                        triple,
+                    })
+                },
+            )
             .collect::<PyResult<Vec<_>>>()?,
         quads,
         // The Python rows are already the 0.9.11 row-array shape, graph slot included:
@@ -374,9 +379,17 @@ fn term_kind(kind: u8) -> PyResult<TermKind> {
 }
 
 fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
-    for (idx, (_, _value, datatype, _lang, _direction, reifier)) in terms.iter().enumerate() {
+    for (idx, (_, _value, datatype, _lang, _direction, reifier, triple)) in terms.iter().enumerate()
+    {
         validate_optional_term_id(*datatype, term_count, &format!("terms[{idx}].datatype"))?;
         validate_optional_term_id(*reifier, term_count, &format!("terms[{idx}].reifier"))?;
+        // A self-describing quoted triple names its own components; every id is
+        // validated exactly like the reifier slot, so no silent acceptance.
+        if let Some((s, p, o)) = *triple {
+            validate_term_id(s, term_count, &format!("terms[{idx}].triple.s"))?;
+            validate_term_id(p, term_count, &format!("terms[{idx}].triple.p"))?;
+            validate_term_id(o, term_count, &format!("terms[{idx}].triple.o"))?;
+        }
     }
     Ok(())
 }

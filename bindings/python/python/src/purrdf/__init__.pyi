@@ -942,13 +942,17 @@ def feedback_bundle_native(
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
 
-_TermRow = tuple[int, int, str | None, int | None, str | None, int | None]
+_TermRow = tuple[
+    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
+]
 _QuadRow = tuple[int, int, int, int | None]
 _ReifierRow = tuple[int, int, int, int, int | None]
 _AnnotationRow = tuple[int, int, int, int | None]
 _FoldReifierRow = tuple[int, tuple[int, int, int], int | None]
 _BlobExportRow = tuple[str, bytes]
-_InputTermRow = tuple[int, str | None, int | None, str | None, str | None, int | None]
+_InputTermRow = tuple[
+    int, str | None, int | None, str | None, str | None, int | None, tuple[int, int, int] | None
+]
 
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]

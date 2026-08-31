@@ -51,6 +51,15 @@ pub fn term_to_wire(t: &Term) -> Value {
     if let Some(rf) = t.reifier {
         entries.push(("rf".into(), iv(rf as i64)));
     }
+    // A self-describing quoted triple carries its own components, so the wire
+    // never has to route a triple TERM's identity through a reifier id (which
+    // RDF 1.2 lets bind several different triples).
+    if let Some((s, p, o)) = t.triple {
+        entries.push((
+            "tt".into(),
+            Value::Array(vec![iv(s as i64), iv(p as i64), iv(o as i64)]),
+        ));
+    }
     Value::Map(entries)
 }
 
@@ -1290,12 +1299,54 @@ pub struct TermRemap {
     pub old_by_new: Vec<usize>,
 }
 
+/// Structural nesting depth of a term: `0` for everything that is not a quoted
+/// triple, and one more than its deepest component for one that is.
+///
+/// This is what makes the canonical id order safe for a self-describing triple
+/// term (wire `"tt"`), whose components MUST be introduced before it. Content
+/// order alone does not guarantee that: `<<( <a> <p> <<( <z> <p> <b> )>> )>>`
+/// sorts BEFORE its own inner triple, because the comparison reaches the
+/// subjects (`<a>` vs `<z>`) before it ever notices the nesting. Ordering by
+/// depth first fixes that without disturbing anything else — every non-triple
+/// term is depth `0`, so their relative order is untouched, and quoted triples
+/// already sorted after them (`"triple"` is last among the kind tags).
+///
+/// A malformed cyclic graph cannot make this recurse forever: a term already on
+/// the stack contributes depth `0`.
+fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
+    if stack.contains(&tid) {
+        return 0;
+    }
+    let Some(term) = graph.terms.get(tid) else {
+        return 0;
+    };
+    if term.kind != TermKind::Triple {
+        return 0;
+    }
+    let Some((s, p, o)) = graph.triple_of(tid) else {
+        return 1;
+    };
+    stack.push(tid);
+    let deepest = <[usize; 3]>::from((s, p, o))
+        .into_iter()
+        .map(|component| term_nesting_depth(graph, component, stack))
+        .max()
+        .unwrap_or(0);
+    stack.pop();
+    deepest + 1
+}
+
 /// Return the deterministic term-id remapping used by canonical graph writers.
 pub fn deterministic_term_remap(graph: &Graph) -> TermRemap {
     let mut old_by_new: Vec<usize> = (0..graph.terms.len()).collect();
-    let keys: Vec<Vec<u8>> = old_by_new
+    let keys: Vec<(usize, Vec<u8>)> = old_by_new
         .iter()
-        .map(|&tid| canonical(&term_identity_value(graph, tid, &mut Vec::new())))
+        .map(|&tid| {
+            (
+                term_nesting_depth(graph, tid, &mut Vec::new()),
+                canonical(&term_identity_value(graph, tid, &mut Vec::new())),
+            )
+        })
         .collect();
     old_by_new.sort_by(|a, b| keys[*a].cmp(&keys[*b]).then_with(|| a.cmp(b)));
     let mut old_to_new = vec![0; graph.terms.len()];
@@ -1449,7 +1500,7 @@ fn term_identity_value(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Val
                 _ => Value::Array(vec!["anonymous".into(), Value::from(tid as u64)]),
             },
         ]),
-        TermKind::Triple => match term.reifier.and_then(|rid| graph.reifier(rid)) {
+        TermKind::Triple => match graph.term_triple(term) {
             Some((s, p, o)) => Value::Array(vec![
                 "triple".into(),
                 term_identity_value(graph, s, stack),
@@ -1484,6 +1535,13 @@ fn remap_term(term: &Term, old_to_new: &[usize]) -> Term {
         lang: term.lang.clone(),
         direction: term.direction.clone(),
         reifier: term.reifier.map(|tid| remap_id(old_to_new, tid)),
+        triple: term.triple.map(|(s, p, o)| {
+            (
+                remap_id(old_to_new, s),
+                remap_id(old_to_new, p),
+                remap_id(old_to_new, o),
+            )
+        }),
     }
 }
 

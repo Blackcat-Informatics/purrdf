@@ -154,6 +154,7 @@ fn gts_iri(value: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -166,6 +167,7 @@ fn gts_blank(label: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 

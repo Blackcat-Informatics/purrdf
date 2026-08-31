@@ -225,7 +225,7 @@ impl ResolvedSink for SinkImporter {
     fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
         RdfDiagnostic::error(
             "rdf-ir-unbound-triple-term",
-            "GTS triple term has no reifier binding",
+            "GTS triple term names neither its own components nor a reifier",
         )
         .with_location(
             RdfLocation::logical("gts:sink")
@@ -485,6 +485,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -496,6 +497,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -857,6 +859,7 @@ mod tests {
                 lang: Some("FR".to_owned()),
                 direction: None,
                 reifier: None,
+                triple: None,
             },
         );
         resolver.quad(0, (0, 1, 2, None));
@@ -909,6 +912,7 @@ mod tests {
                 lang: Some("AR".to_owned()),
                 direction: Some("rtl".to_owned()),
                 reifier: None,
+                triple: None,
             },
         );
         resolver.quad(0, (0, 1, 2, None));
@@ -961,6 +965,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: Some(3),
+                triple: None,
             },
         );
         resolver.term(0, 5, &iri_term("http://example.org/asserts"));
@@ -976,6 +981,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: Some(6),
+                triple: None,
             },
         );
         resolver.quad(0, (0, 5, 7, None));
@@ -1040,6 +1046,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(3),
+            triple: None,
         }); // 4 quoted triple <<ex:s ex:p ex:o>>
         graph.terms.push(iri("http://example.org/asserts")); // 5
         // Outer quad: (ex:s ex:asserts <<ex:s ex:p ex:o>>) — the quoted triple
@@ -1107,6 +1114,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(3),
+            triple: None,
         }); // 4 inner <<ex:a ex:b ex:c>>
         graph.terms.push(iri("http://example.org/p")); // 5
         graph.terms.push(iri("http://example.org/o")); // 6
@@ -1121,6 +1129,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(7),
+            triple: None,
         }); // 8 outer << <<...>> ex:p ex:o >>
         graph.terms.push(iri("http://example.org/says")); // 9
         graph.quads.push((0, 9, 8, None));
@@ -1174,6 +1183,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: Some(99),
+                triple: None,
             },
         );
         resolver.quad(0, (0, 1, 2, None));
@@ -1198,6 +1208,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: None,
+                triple: None,
             });
             graph.terms.push(GtsTerm {
                 kind: GtsKind::Iri,
@@ -1206,6 +1217,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: None,
+                triple: None,
             });
             graph.terms.push(GtsTerm {
                 kind: GtsKind::Bnode,
@@ -1214,6 +1226,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: None,
+                triple: None,
             });
             graph.quads.push((0, 1, 2, None));
             graph
@@ -1275,6 +1288,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 }

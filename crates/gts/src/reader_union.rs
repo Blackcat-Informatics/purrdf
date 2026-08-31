@@ -50,16 +50,16 @@ impl Unioner {
                 let anon_tid = label.is_none().then_some(tid);
                 InternKey::Bnode(seg_idx, label, anon_tid)
             }
-            // Quoted triple: identity is the interned SPO binding. Self-bound
-            // triple terms use `rf == tid`; do not recursively map the reifier.
-            TermKind::Triple => InternKey::Qt(t.reifier.and_then(|rf| {
-                seg.reifier(rf).map(|(s, p, o)| {
-                    (
-                        self.map_term(seg, seg_idx, s),
-                        self.map_term(seg, seg_idx, p),
-                        self.map_term(seg, seg_idx, o),
-                    )
-                })
+            // Quoted triple: identity is the interned SPO binding, taken from
+            // the term's own `tt` when it has one and otherwise through the
+            // legacy reifier indirection. Self-bound triple terms use
+            // `rf == tid`; do not recursively map the reifier.
+            TermKind::Triple => InternKey::Qt(seg.term_triple(t).map(|(s, p, o)| {
+                (
+                    self.map_term(seg, seg_idx, s),
+                    self.map_term(seg, seg_idx, p),
+                    self.map_term(seg, seg_idx, o),
+                )
             })),
         }
     }
@@ -77,8 +77,15 @@ impl Unioner {
         } else {
             t.reifier.map(|r| self.map_term(seg, seg_idx, r))
         };
-        // Recursive datatype/reifier mapping can push terms, so capture this
-        // term's output id only after those mappings have completed.
+        let triple = t.triple.map(|(s, p, o)| {
+            (
+                self.map_term(seg, seg_idx, s),
+                self.map_term(seg, seg_idx, p),
+                self.map_term(seg, seg_idx, o),
+            )
+        });
+        // Recursive datatype/reifier/triple-component mapping can push terms, so
+        // capture this term's output id only after those mappings have completed.
         let new_id = self.out.terms.len();
         let reifier = if self_bound {
             Some(new_id)
@@ -108,6 +115,7 @@ impl Unioner {
             lang: t.lang,
             direction: t.direction,
             reifier,
+            triple,
         });
         self.intern.insert(key, new_id);
         new_id

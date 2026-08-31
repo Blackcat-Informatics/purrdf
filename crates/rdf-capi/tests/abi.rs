@@ -1867,6 +1867,71 @@ fn gts_star_roundtrip_preserves_the_statement_layer() {
     }
 }
 
+/// One reifier id bound to SEVERAL triple terms survives the C-ABI GTS
+/// round-trip, with the graph each declaration was made in.
+///
+/// `rdf:reifies` is not a functional property, so this is ordinary RDF 1.2, not
+/// a corner case; a container that kept only the first binding would drop a
+/// caller's data without saying so.
+#[test]
+fn gts_roundtrip_keeps_every_binding_of_one_reifier() {
+    unsafe {
+        let doc = concat!(
+            "<https://e/a> <https://e/related> <https://e/b> <https://e/g1> .\n",
+            "<https://e/a> <https://e/related> <https://e/c> <https://e/g2> .\n",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/a> <https://e/related> <https://e/b> )>> <https://e/g1> .\n",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/a> <https://e/related> <https://e/c> )>> <https://e/g2> .\n",
+        );
+        let dataset = parse("application/n-quads", doc);
+        let restored = from_gts(&to_gts(dataset));
+
+        // The restored container is re-serialized so the assertion reads the
+        // BINDINGS themselves — count, content and graph slot — rather than the
+        // boolean `purrdf_capabilities` star flag, which cannot tell one binding
+        // from two.
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let (mut statement_rows, mut directional, mut named_graph_rows) = (0usize, 0usize, 0usize);
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                restored,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut statement_rows,
+                &raw mut directional,
+                &raw mut named_graph_rows,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.contains("22-rdf-syntax-ns#reifies"))
+                .count(),
+            2,
+            "both bindings of the one reifier id must survive:\n{text}"
+        );
+        for expected in [
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://e/a> <https://e/related> <https://e/b> )>> <https://e/g1> .",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://e/a> <https://e/related> <https://e/c> )>> <https://e/g2> .",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+        }
+
+        purrdf_dataset_free(restored);
+        purrdf_dataset_free(dataset);
+    }
+}
+
 #[test]
 fn capabilities_reflect_the_dataset() {
     unsafe {

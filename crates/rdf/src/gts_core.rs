@@ -340,6 +340,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.terms.push(Term {
             kind: TermKind::Iri,
@@ -348,6 +349,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.terms.push(Term {
             kind: TermKind::Literal,
@@ -356,6 +358,7 @@ mod tests {
             lang: Some("x-purrdf-afrikaans".to_owned()),
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.terms.push(Term {
             kind: TermKind::Iri,
@@ -364,6 +367,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph
             .meta
@@ -428,6 +432,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(0),
+            triple: None,
         });
         graph.terms.push(Term {
             kind: TermKind::Iri,
@@ -436,6 +441,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.terms.push(Term {
             kind: TermKind::Iri,
@@ -444,6 +450,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.reifiers.push((0, (0, 1, 2), None));
 
@@ -463,6 +470,7 @@ mod tests {
                 lang: None,
                 direction: None,
                 reifier: None,
+                triple: None,
             });
 
             let err = term_from_id(&graph, 0, RdfLocation::logical("test"))

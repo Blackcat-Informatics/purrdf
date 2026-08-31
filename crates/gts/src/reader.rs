@@ -94,13 +94,14 @@ fn term_depends_on_anchor(
     if term.kind != TermKind::Triple {
         return false;
     }
-    let Some(reifier) = term.reifier else {
-        return false;
-    };
-    let binding = if reifier == pending.0 {
-        Some(pending.1)
-    } else {
-        graph.reifier(reifier)
+    // A self-describing triple term (`tt`) can only name already-introduced
+    // components, so it is acyclic by construction; only the legacy indirection
+    // through a reifier id can close a loop.
+    let binding = match (term.triple, term.reifier) {
+        (Some(triple), _) => Some(triple),
+        (None, Some(reifier)) if reifier == pending.0 => Some(pending.1),
+        (None, Some(reifier)) => graph.reifier(reifier),
+        (None, None) => None,
     };
     let Some(triple) = binding else {
         return false;
@@ -351,9 +352,46 @@ struct Folder<'g, 's, 'k> {
     index_records: Vec<IndexRecord>,
     described: HashSet<String>,
     blob_events: Vec<(usize, String, bool)>,
+    // Reifier ids seen bound to more than one triple, with the frame index of
+    // the rebinding row. Legitimate on its own (§7.1 `tt`); only ambiguous for a
+    // legacy `rf`-only quoted-triple term, which is checked once the segment is
+    // fully folded (see `report_ambiguous_reifiers`).
+    rebound_reifiers: Vec<(usize, usize)>,
 }
 
 impl Folder<'_, '_, '_> {
+    /// Report the ONE shape a multi-bound reifier id can still break: a
+    /// quoted-triple term that carries no `tt` of its own and resolves its
+    /// components through that id, so the file asks for a single term with two
+    /// different meanings. The bindings themselves are kept (nothing is
+    /// dropped); the term resolves through the FIRST binding, and the
+    /// diagnostic makes the ambiguity loud rather than silent.
+    ///
+    /// Run after the whole segment is folded so it does not depend on whether
+    /// the `terms` frame happened to precede the `reifies` frame.
+    fn report_ambiguous_reifiers(&mut self) {
+        let ambiguous: Vec<(usize, usize)> = std::mem::take(&mut self.rebound_reifiers)
+            .into_iter()
+            .filter(|&(rid, _)| {
+                self.g.terms.iter().any(|term| {
+                    term.kind == TermKind::Triple
+                        && term.triple.is_none()
+                        && term.reifier == Some(rid)
+                })
+            })
+            .collect();
+        for (rid, index) in ambiguous {
+            self.diag(
+                "ConflictingReifier",
+                format!(
+                    "reifier {rid} binds several triples while a quoted-triple term \
+                     still resolves through it"
+                ),
+                Some(index),
+            );
+        }
+    }
+
     fn with_sink(&mut self, f: impl FnOnce(usize, &mut dyn StreamingSink)) {
         if let Some(sink) = self.sink.as_deref_mut() {
             f(self.segment_index, sink);
@@ -523,7 +561,28 @@ impl Folder<'_, '_, '_> {
             let dt_out_of_range = matches!(dt_raw, Some(d) if d >= tid);
             let rf_out_of_range =
                 matches!(rf_raw, Some(d) if d >= tid && !(kind == TermKind::Triple && d == tid));
-            if dt_out_of_range || rf_out_of_range {
+            // `tt` — the quoted triple's OWN components (§7.1). Every id must
+            // name an already-introduced term, exactly like `dt`; a triple term
+            // therefore cannot contain itself, which is what makes `tt` the
+            // acyclic-by-construction spelling of a quoted triple.
+            let tt_raw = match map_get(entries, "tt") {
+                Some(Value::Array(ids)) if ids.len() == 3 => {
+                    Some([&ids[0], &ids[1], &ids[2]].map(as_i128))
+                }
+                _ => None,
+            };
+            let tt = match tt_raw {
+                Some([Some(s), Some(p), Some(o)])
+                    if kind == TermKind::Triple
+                        && [s, p, o].iter().all(|d| (0..tid).contains(d)) =>
+                {
+                    Some((s as usize, p as usize, o as usize))
+                }
+                _ => None,
+            };
+            let tt_out_of_range = tt.is_none()
+                && matches!(tt_raw, Some(ids) if ids.iter().any(|d| matches!(d, Some(d) if *d >= tid)));
+            if dt_out_of_range || rf_out_of_range || tt_out_of_range {
                 self.diag(
                     "ForwardReference",
                     format!("term {tid} has an out-of-range ref"),
@@ -537,6 +596,7 @@ impl Folder<'_, '_, '_> {
                 lang,
                 direction,
                 reifier: rf,
+                triple: tt,
             });
             if let Some(sink) = self.sink.as_deref_mut() {
                 sink.term(self.segment_index, term_id, &self.g.terms[term_id]);
@@ -606,15 +666,17 @@ impl Folder<'_, '_, '_> {
                     continue;
                 }
             };
-            if let Some(existing) = self.g.reifier(rid)
-                && existing != triple
-            {
-                self.diag(
-                    "ConflictingReifier",
-                    format!("reifier {rid} rebound"),
-                    Some(index),
-                );
-                continue; // keep the first binding
+            // `rdf:reifies` is NOT functional: one reifier id legitimately
+            // binds several distinct triple terms (`r rdf:reifies <<s p o1>>`
+            // and `r rdf:reifies <<s p o2>>` are both assertable, in the same
+            // graph or in different ones). Every binding is therefore recorded;
+            // the only thing a rebind can still break is the LEGACY indirect
+            // spelling of a quoted-triple term (one that names this reifier id
+            // through `rf` and carries no `tt` of its own), whose meaning would
+            // become double-valued. That shape is flagged after the fold, once
+            // every term and every binding of the segment has been seen.
+            if matches!(self.g.reifier(rid), Some(existing) if existing != triple) {
+                self.rebound_reifiers.push((rid, index));
             }
             if reifier_binding_is_recursive(self.g, rid, triple) {
                 self.diag(
@@ -824,12 +886,11 @@ impl Folder<'_, '_, '_> {
                     Value::Map(term_entries) => Value::Map(
                         term_entries
                             .iter()
-                            .map(|(k, v)| {
-                                if matches!(as_text(k), Some("dt" | "rf")) {
-                                    (k.clone(), sh(v))
-                                } else {
-                                    (k.clone(), v.clone())
-                                }
+                            .map(|(k, v)| match as_text(k) {
+                                Some("dt" | "rf") => (k.clone(), sh(v)),
+                                // `tt` is a 3-id row, so it shifts row-wise.
+                                Some("tt") => (k.clone(), sh_row(v)),
+                                _ => (k.clone(), v.clone()),
                             })
                             .collect(),
                     ),
@@ -1311,6 +1372,9 @@ struct ActiveStreamingSegment {
     index_records: Vec<IndexRecord>,
     described: HashSet<String>,
     blob_events: Vec<(usize, String, bool)>,
+    // Carried across this segment's frames (each frame gets a fresh `Folder`)
+    // so the ambiguity check runs once the whole segment has been seen.
+    rebound_reifiers: Vec<(usize, usize)>,
 }
 
 impl ActiveStreamingSegment {
@@ -1392,6 +1456,7 @@ impl ActiveStreamingSegment {
             index_records: Vec::new(),
             described: HashSet::new(),
             blob_events: Vec::new(),
+            rebound_reifiers: Vec::new(),
         }
     }
 
@@ -1415,6 +1480,7 @@ impl ActiveStreamingSegment {
         let index_records = std::mem::take(&mut self.index_records);
         let described = std::mem::take(&mut self.described);
         let blob_events = std::mem::take(&mut self.blob_events);
+        let rebound_reifiers = std::mem::take(&mut self.rebound_reifiers);
         let mut folder = Folder {
             g: &mut self.g,
             sink: Some(sink),
@@ -1425,6 +1491,7 @@ impl ActiveStreamingSegment {
             index_records,
             described,
             blob_events,
+            rebound_reifiers,
         };
         // `sink.frame()` is fired for THIS frame before any of its rows are
         // folded (the `StreamingSink::frame` contract), so index builders can
@@ -1518,11 +1585,13 @@ impl ActiveStreamingSegment {
         let index_records = std::mem::take(&mut folder.index_records);
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
+        let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
         drop(folder);
         self.catalog = catalog;
         self.index_records = index_records;
         self.described = described;
         self.blob_events = blob_events;
+        self.rebound_reifiers = rebound_reifiers;
     }
 
     fn finish_into_result(
@@ -1531,6 +1600,24 @@ impl ActiveStreamingSegment {
         sink: &mut dyn StreamingSink,
     ) {
         if self.valid_header {
+            // Every frame of this segment has been folded, so a multi-bound
+            // reifier id can now be judged against the segment's full term
+            // table (see `Folder::report_ambiguous_reifiers`).
+            if !self.rebound_reifiers.is_empty() {
+                let mut folder = Folder {
+                    g: &mut self.g,
+                    sink: Some(sink),
+                    content_key: None,
+                    segment_index: self.segment_index,
+                    materialize: false,
+                    catalog: HashMap::new(),
+                    index_records: Vec::new(),
+                    described: HashSet::new(),
+                    blob_events: Vec::new(),
+                    rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
+                };
+                folder.report_ambiguous_reifiers();
+            }
             self.g.segment_heads.push(self.expected_prev);
             if let Some(head) = self.g.segment_heads.last() {
                 sink.segment_head(self.segment_index, head);
@@ -1883,6 +1970,7 @@ fn read_segment_with_sink(
             index_records: Vec::new(),
             described: HashSet::new(),
             blob_events: Vec::new(),
+            rebound_reifiers: Vec::new(),
         };
         for (index, (_, raw)) in items[1..].iter().enumerate() {
             let abs_index = index + 1 + index_offset;
@@ -1943,6 +2031,7 @@ fn read_segment_with_sink(
             }
             folder.fold_frame(frame, abs_index);
         }
+        folder.report_ambiguous_reifiers();
         (folder.index_records, folder.blob_events, folder.sink)
     };
     sink = restored_sink;

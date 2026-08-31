@@ -132,20 +132,33 @@ impl GraphInterner {
         }))
     }
 
+    /// Resolve a quoted-triple term's components.
+    ///
+    /// A self-describing term (wire `"tt"`) states them itself. Only a term
+    /// written in the older indirect spelling has to go through a reifier id —
+    /// and since `rdf:reifies` is not functional, that id may bind several
+    /// triples, of which such a term can only mean the first (the GTS reader
+    /// raises `ConflictingReifier` for exactly that shape).
     fn intern_triple(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {
-        let Some(reifier_id) = self.terms[gts_id].reifier else {
-            return Err(RdfDiagnostic::error(
-                "gts-unbound-triple-term",
-                "GTS triple term has no reifier binding",
-            )
-            .with_location(self.location(gts_id)));
-        };
-        let Some(&(s, p, o)) = self.reifier_bindings.get(&reifier_id) else {
-            return Err(RdfDiagnostic::error(
-                "gts-missing-reifier-binding",
-                format!("GTS triple term references missing reifier {reifier_id}"),
-            )
-            .with_location(self.location(gts_id).with_gts_reifier(reifier_id)));
+        let (s, p, o) = match (self.terms[gts_id].triple, self.terms[gts_id].reifier) {
+            (Some(components), _) => components,
+            (None, Some(reifier_id)) => {
+                let Some(&components) = self.reifier_bindings.get(&reifier_id) else {
+                    return Err(RdfDiagnostic::error(
+                        "gts-missing-reifier-binding",
+                        format!("GTS triple term references missing reifier {reifier_id}"),
+                    )
+                    .with_location(self.location(gts_id).with_gts_reifier(reifier_id)));
+                };
+                components
+            }
+            (None, None) => {
+                return Err(RdfDiagnostic::error(
+                    "gts-unbound-triple-term",
+                    "GTS triple term names neither its own components nor a reifier",
+                )
+                .with_location(self.location(gts_id)));
+            }
         };
         let s = self.intern(s, depth + 1)?;
         let p = self.intern(p, depth + 1)?;
@@ -218,17 +231,19 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         ..
     } = graph;
 
-    // purrdf-gts 0.9.11 reifier rows are `(reifier_id, (s,p,o), graph?)`. This map serves
-    // ONE purpose — resolving a GTS triple TERM, whose single `Term.reifier` slot names a
-    // reifier id and whose meaning is the `(s,p,o)` shape that id binds. That is a shape
-    // question, not a graph question, so the graph slot is not part of this lookup's key.
-    // It is emphatically NOT dropped from the IR: the statement layer is keyed per graph,
-    // and the binding loop below carries each row's graph through
-    // `push_reifier_in_graph` / `push_annotation_in_graph`.
-    let reifier_bindings: HashMap<usize, (usize, usize, usize)> = reifiers
-        .iter()
-        .map(|&(reifier_id, triple, _graph)| (reifier_id, triple))
-        .collect();
+    // Reifier rows are `(reifier_id, (s,p,o), graph?)`. This map serves ONE purpose —
+    // resolving a LEGACY GTS triple TERM, one whose `Term.reifier` slot names a reifier
+    // id instead of stating its own components. That is a shape question, not a graph
+    // question, so the graph slot is not part of this lookup's key. Nothing is dropped
+    // from the IR: the statement layer is keyed per graph, and the binding loop below
+    // carries EVERY row (including several rows for one reifier id, which
+    // `rdf:reifies` being non-functional makes legal) through
+    // `push_reifier_in_graph` / `push_annotation_in_graph`. Only this legacy lookup is
+    // single-valued, and it keeps the FIRST binding to match `Graph::reifier`.
+    let mut reifier_bindings: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+    for &(reifier_id, triple, _graph) in &reifiers {
+        reifier_bindings.entry(reifier_id).or_insert(triple);
+    }
 
     let mut interner = GraphInterner {
         builder: RdfDatasetBuilder::new(),
@@ -303,6 +318,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -314,6 +330,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -397,6 +414,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(3),
+            triple: None,
         }); // 4 inner triple term
         graph.terms.push(iri_term("http://example.org/asserts")); // 5
         graph.terms.push(iri_term("http://example.org/r1")); // 6 reifier resource
@@ -408,6 +426,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(6),
+            triple: None,
         }); // 7 outer triple term
         graph.quads.push((0, 5, 7, None));
 
@@ -432,6 +451,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: Some(0),
+            triple: None,
         }); // 0
         graph.terms.push(iri_term("http://example.org/p")); // 1
         graph.reifiers.push((0, (1, 1, 0), None));
@@ -452,6 +472,7 @@ mod tests {
             lang: Some("FR".to_owned()),
             direction: None,
             reifier: None,
+            triple: None,
         });
         graph.quads.push((0, 1, 2, None));
 

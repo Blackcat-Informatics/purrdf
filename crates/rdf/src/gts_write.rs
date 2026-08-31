@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use ciborium::value::Value;
 use purrdf_gts::codec::CodecError;
-use purrdf_gts::model::{Graph, Suppression, Term, TermKind, Triple3};
+use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
 use purrdf_gts::writer::Writer;
 
 use crate::ir::RdfDataset;
@@ -120,11 +120,6 @@ pub fn to_gts(
 struct InternState {
     terms: Vec<Term>,
     index: HashMap<RdfTerm, usize>,
-    /// Triple component ids → reifier term ids. RDF 1.2 permits several distinct
-    /// explicit reifiers for one (s,p,o); they are all retained.
-    /// A nested triple term reuses the first-bound reifier for its single
-    /// `Term.reifier` slot. Reifiers are IRI/blank-node terms already in `terms`.
-    reifier_map: HashMap<Triple3, Vec<usize>>,
 }
 
 impl InternState {
@@ -132,11 +127,18 @@ impl InternState {
         Self {
             terms: Vec::new(),
             index: HashMap::new(),
-            reifier_map: HashMap::new(),
         }
     }
 }
 
+/// Intern an explicit reifier declaration's terms and enforce the ONE structural
+/// rule RDF 1.2 puts on a reifier: it is an IRI or a blank node.
+///
+/// It deliberately records no reifier↔triple association: `rdf:reifies` is not
+/// functional, so one reifier id may bind several triples and one triple may
+/// have several reifiers. Every declaration is emitted as its own
+/// `graph.reifiers` row, and a quoted-triple TERM carries its own components
+/// (`Term::triple`) rather than borrowing some reifier's binding.
 fn bind_explicit_reifier(
     state: &mut InternState,
     reifier: &RdfReifier,
@@ -148,19 +150,9 @@ fn bind_explicit_reifier(
             "RDF 1.2 reifier must be an IRI or blank node",
         ));
     }
-    let s = intern_term(state, &reifier.statement.subject)?;
-    let p = intern_iri(state, &reifier.statement.predicate)?;
-    let o = intern_term(state, &reifier.statement.object)?;
-
-    // RDF 1.2 allows several distinct explicit reifiers for the same triple
-    // content; record each one, deduplicating only an identical
-    // (rid, (s,p,o)) pair. Every distinct reifier is emitted as its own
-    // `graph.reifiers` row below, so no binding is collapsed.
-    let bound = state.reifier_map.entry((s, p, o)).or_default();
-    if !bound.contains(&rid) {
-        bound.push(rid);
-    }
-
+    intern_term(state, &reifier.statement.subject)?;
+    intern_iri(state, &reifier.statement.predicate)?;
+    intern_term(state, &reifier.statement.object)?;
     Ok(())
 }
 
@@ -212,6 +204,7 @@ fn intern_term_depth(
                     lang: None,
                     direction: None,
                     reifier: None,
+                    triple: None,
                 },
             );
             Ok(id)
@@ -227,6 +220,7 @@ fn intern_term_depth(
                     lang: None,
                     direction: None,
                     reifier: None,
+                    triple: None,
                 },
             );
             Ok(id)
@@ -267,6 +261,7 @@ fn intern_literal(
             lang,
             direction,
             reifier: None,
+            triple: None,
         },
     );
     Ok(id)
@@ -281,19 +276,12 @@ fn intern_triple_term(
     let p = intern_iri(state, &triple.predicate)?;
     let o = intern_term_depth(state, &triple.object, depth + 1)?;
 
-    let reifier_id = if let Some(rid) = state
-        .reifier_map
-        .get(&(s, p, o))
-        .and_then(|rids| rids.first())
-        .copied()
-    {
-        rid
-    } else {
-        let rid = create_anonymous_reifier(state);
-        state.reifier_map.entry((s, p, o)).or_default().push(rid);
-        rid
-    };
-
+    // The quoted triple names its OWN components. It borrows no reifier: a
+    // triple term is a term, not a statement, and the reifier id it used to be
+    // routed through can bind several different triples — which is exactly how
+    // a multi-binding reifier used to collapse two distinct triple terms into
+    // one. No anonymous reifier is fabricated either, so the term table carries
+    // no blank node the dataset never contained.
     let id = push_term(
         state,
         &RdfTerm::Triple(Box::new(triple.clone())),
@@ -303,25 +291,11 @@ fn intern_triple_term(
             datatype: None,
             lang: None,
             direction: None,
-            reifier: Some(reifier_id),
+            reifier: None,
+            triple: Some((s, p, o)),
         },
     );
     Ok(id)
-}
-
-fn create_anonymous_reifier(state: &mut InternState) -> usize {
-    let label = format!("purrdf_auto_{}", state.terms.len());
-    let id = state.terms.len();
-    state.terms.push(Term {
-        kind: TermKind::Bnode,
-        value: Some(label.clone()),
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-    });
-    state.index.insert(RdfTerm::BlankNode(label), id);
-    id
 }
 
 fn push_term(state: &mut InternState, key: &RdfTerm, term: Term) -> usize {
@@ -604,7 +578,7 @@ mod tests {
         let rids: std::collections::BTreeSet<usize> =
             graph.reifiers.iter().map(|(rid, _, _)| *rid).collect();
         assert_eq!(rids.len(), 2, "the two reifiers must be distinct");
-        let triples: std::collections::BTreeSet<Triple3> =
+        let triples: std::collections::BTreeSet<purrdf_gts::model::Triple3> =
             graph.reifiers.iter().map(|(_, t, _)| *t).collect();
         assert_eq!(triples.len(), 1, "both reify the same (s,p,o)");
     }

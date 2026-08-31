@@ -101,8 +101,13 @@ pub enum PublicValue {
 }
 
 /// One dictionary term row: `(term_id, kind, value, datatype_id, lang,
-/// reifier_id)` where `kind` is `0` IRI / `1` literal / `2` blank node /
+/// reifier_id, triple)` where `kind` is `0` IRI / `1` literal / `2` blank node /
 /// `3` triple term.
+///
+/// `triple` carries a quoted-triple term's OWN `(s, p, o)` component ids when
+/// the term is self-describing. It is not derivable from `reifier_id`: one
+/// reifier id may bind several different triples, so a projection that offered
+/// only the reifier column could not say which triple THIS term is.
 pub type TermRow = (
     usize,
     u8,
@@ -110,6 +115,7 @@ pub type TermRow = (
     Option<usize>,
     Option<String>,
     Option<usize>,
+    Option<(usize, usize, usize)>,
 );
 /// One quad row of dictionary term ids: `(subject, predicate, object, graph?)`.
 pub type QuadRow = (usize, usize, usize, Option<usize>);
@@ -765,6 +771,7 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
                     term.datatype,
                     term.lang.clone(),
                     term.reifier,
+                    term.triple,
                 )
             })
             .collect(),
@@ -840,7 +847,7 @@ fn render_term(graph: &Graph, tid: usize) -> String {
             .as_ref()
             .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
         TermKind::Literal => render_literal(graph, term),
-        TermKind::Triple => graph.reifier(term.reifier.unwrap_or(tid)).map_or_else(
+        TermKind::Triple => graph.triple_of(tid).map_or_else(
             || format!("_:unbound_triple_{tid}"),
             |(s, p, o)| {
                 format!(
@@ -924,6 +931,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -935,6 +943,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -946,6 +955,7 @@ mod tests {
             lang: lang.map(str::to_string),
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 

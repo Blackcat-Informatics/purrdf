@@ -98,6 +98,7 @@ fn iri(value: impl Into<String>) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -109,6 +110,7 @@ fn literal(value: impl Into<String>, datatype: usize) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
