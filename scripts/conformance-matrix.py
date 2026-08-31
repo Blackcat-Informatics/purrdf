@@ -429,7 +429,8 @@ def _suite_describe_corpus() -> SuiteResult:
         passed, total = int(m.group(1)), int(m.group(2))
         detail = (
             f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
-            "statement layer on both sides of its subject-or-object disjunction"
+            "statement layer on both sides of its subject-or-object disjunction and "
+            "its per-graph scope over TriG"
         )
         return SuiteResult(
             "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",

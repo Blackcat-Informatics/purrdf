@@ -1422,9 +1422,10 @@ impl RdfDataset {
         self.term_id_by_iri(RDF_REIFIES)
     }
 
-    /// Iterate the reifier side-table AS resolved virtual triples: each
-    /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
-    /// quad in the default graph (`g == None`).
+    /// Iterate the reifier side-table AS resolved virtual quads: each
+    /// `(reifier, triple-term, graph)` declaration becomes a
+    /// `(reifier, rdf:reifies, triple-term)` quad in the graph that declared it
+    /// (`g == None` for the default graph).
     ///
     /// The RDF 1.2 reification layer is stored in a SEPARATE side-table — it is NOT in
     /// the `quads` table — so this view is the only way a triple-pattern matcher can see
@@ -1480,9 +1481,10 @@ impl RdfDataset {
         })
     }
 
-    /// Iterate the annotation side-table AS resolved virtual triples: each
-    /// `(reifier, predicate, object)` annotation becomes a `(reifier, predicate, object)`
-    /// quad in the default graph (`g == None`).
+    /// Iterate the annotation side-table AS resolved virtual quads: each
+    /// `(reifier, predicate, object, graph)` annotation becomes a
+    /// `(reifier, predicate, object)` quad in the graph that asserted it (`g == None`
+    /// for the default graph).
     ///
     /// Like [`reifier_quads`](Self::reifier_quads), the annotation layer lives in a
     /// SEPARATE side-table outside `quads`; this is the only triple-pattern view of it.

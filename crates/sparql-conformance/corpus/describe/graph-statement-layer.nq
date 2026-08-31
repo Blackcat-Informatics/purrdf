@@ -1,0 +1,7 @@
+# The reifier declaration and BOTH annotations were asserted in <g1> alongside the
+# base quad, and every line here carries <g1>: a describer that folded the statement
+# layer into the default graph would write three of these four lines graph-less.
+<http://example.org/a> <http://example.org/knows> <http://example.org/b> <http://example.org/g1> .
+<http://example.org/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/a> <http://example.org/knows> <http://example.org/b> )>> <http://example.org/g1> .
+<http://example.org/r1> <http://example.org/certainty> "high" <http://example.org/g1> .
+<http://example.org/r1> <http://example.org/recordedBy> <http://example.org/editor> <http://example.org/g1> .

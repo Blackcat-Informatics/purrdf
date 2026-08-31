@@ -26,6 +26,8 @@
                  :absentSubject :literalBindingIgnored :namedGraph
                  :statementLayerSubject :statementLayerObject
                  :statementLayerBlankClosure
+                 :graphStatementLayer :graphStatementLayerCrossGraph
+                 :graphStatementLayerScope
                  :syntax :noTargetSyntax ) .
 
 :concreteIri a mf:QueryEvaluationTest ;
@@ -85,6 +87,28 @@
     mf:name "the blank-node closure runs through a blank reifier and a blank annotation object" ;
     mf:action [ qt:query <statement-layer-blank-closure.rq> ; qt:data <statements.ttl> ] ;
     mf:result <statement-layer-blank-closure.ttl> .
+
+# ── Clause 4 crossed with GRAPH SCOPE ────────────────────────────────────────
+#
+# `statements.ttl` is default-graph-only, so the three cases above can observe
+# only that a reifier was SELECTED, never where its declaration and annotations
+# LAND. These three read `statements-graphs.trig` and expect N-Quads, so every
+# expectation pins a graph on every row.
+
+:graphStatementLayer a mf:QueryEvaluationTest ;
+    mf:name "a reifier declaration and its annotations stay in the named graph that asserted them" ;
+    mf:action [ qt:query <graph-statement-layer.rq> ; qt:data <statements-graphs.trig> ] ;
+    mf:result <graph-statement-layer.nq> .
+
+:graphStatementLayerCrossGraph a mf:QueryEvaluationTest ;
+    mf:name "a reifier declared in a DIFFERENT graph than the triple it reifies is selected, and stays in its own graph" ;
+    mf:action [ qt:query <graph-statement-layer-cross-graph.rq> ; qt:data <statements-graphs.trig> ] ;
+    mf:result <graph-statement-layer-cross-graph.nq> .
+
+:graphStatementLayerScope a mf:QueryEvaluationTest ;
+    mf:name "an annotation rides with the declaration it annotates: one reifier id in two graphs harvests only the selected graph's rows" ;
+    mf:action [ qt:query <graph-statement-layer-scope.rq> ; qt:data <statements-graphs.trig> ] ;
+    mf:result <graph-statement-layer-scope.nq> .
 
 :syntax a mf:PositiveSyntaxTest11 ;
     mf:name "DESCRIBE with several variable targets and a WHERE parses" ;

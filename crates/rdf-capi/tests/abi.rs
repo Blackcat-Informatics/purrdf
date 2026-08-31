@@ -1412,6 +1412,83 @@ fn construct_graph_result_keeps_its_graph_name() {
     }
 }
 
+/// A graph-scoped RDF 1.2 statement layer: the base quad, the reifier declaration and
+/// the annotation are all asserted in `<http://g>`, and nothing is in the default graph.
+const GRAPH_STAR_NQUADS: &str = concat!(
+    "<http://s> <http://p> <http://o> <http://g> .\n",
+    "<http://r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s> <http://p> <http://o> )>> <http://g> .\n",
+    "<http://r> <http://note> \"n\" <http://g> .\n",
+);
+
+/// A `DESCRIBE` hands C the graphs its description came from, at EVERY layer.
+///
+/// No `DESCRIBE` names a graph — there is no template to name one in — but the
+/// Symmetric CBD keeps a base quad, a reifier declaration and an annotation in the graph
+/// that asserted each, so a description over graph-scoped data carries graph names just
+/// as a quad-template `CONSTRUCT` does. The C egress is the same `PurrdfDataset` handle
+/// for both, and this pins that the DESCRIBE lane reaches it with the graphs intact
+/// rather than relocated into the default graph.
+#[test]
+fn describe_graph_result_keeps_its_graph_name_on_every_layer() {
+    unsafe {
+        let dataset = parse("application/n-quads", GRAPH_STAR_NQUADS);
+        let cq = CString::new("DESCRIBE <http://s>").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 1);
+        assert!(!graph.is_null());
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut serialize_error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            graph,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut serialize_error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 3, "base quad + reifier + annotation: {text}");
+        assert!(
+            lines.iter().all(|l| l.contains("<http://g> .")),
+            "a graph-less row means the statement layer was collapsed: {text}"
+        );
+        assert!(
+            text.contains("#reifies>"),
+            "the reifier declaration must survive: {text}"
+        );
+        assert!(
+            text.contains("<http://note>"),
+            "the annotation must survive: {text}"
+        );
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
 /// An N-Quads document that loses something different to each single-graph target.
 ///
 /// One default-graph base quad, two base quads in two DIFFERENT named graphs, one

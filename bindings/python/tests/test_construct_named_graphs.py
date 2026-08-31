@@ -7,9 +7,15 @@ write several named graphs and may mix them with default-graph triples. `Triple`
 no graph slot, so the Python egress splits by what the result CARRIES:
 
 * every statement in the default graph → `QueryTriples`, unchanged (this is every
-  SPARQL 1.1 CONSTRUCT and every DESCRIBE — the backward-compatibility pin below);
+  SPARQL 1.1 CONSTRUCT, and every DESCRIBE over default-graph data — the
+  backward-compatibility pin below);
 * any statement in a named graph → `QueryQuads`, whose members carry `graph_name` and
   whose `serialize` round-trips through every quad-capable syntax.
+
+A DESCRIBE reaches the same split from the other direction: it has no template to name
+a graph with, but the Symmetric CBD keeps every layer — base quad, reifier declaration
+and annotation — in the graph that asserted it, so a description over graph-scoped data
+carries graph names too.
 
 Asking a `QueryQuads` for a single-graph syntax raises rather than dropping the
 graphs, mirroring the `purrdf query` CLI refusal: silently emitting a well-formed
@@ -280,9 +286,59 @@ def test_default_graph_construct_is_still_query_triples() -> None:
 
 
 def test_describe_is_still_query_triples() -> None:
-    """DESCRIBE has no graph template at all and is unaffected."""
+    """A DESCRIBE over default-graph data is unaffected by the split."""
     result = _store().query(f"DESCRIBE <{EX}s>")
     assert type(result) is purrdf.QueryTriples
+
+
+# ── DESCRIBE reaches the same egress, because a description carries graphs ────────
+
+# A graph-scoped RDF 1.2 statement layer: base quad, reifier declaration and
+# annotation all asserted in `ex:g`.
+_GRAPH_STAR_TRIG = (
+    f"@prefix ex: <{EX}> .\n"
+    'GRAPH ex:g { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }\n'
+).encode()
+
+_REIFIES = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"
+
+
+def _graph_star_store() -> purrdf.Store:
+    """A store whose every statement — base, reifier and annotation — is in `ex:g`."""
+    store = purrdf.Store()
+    store.load(_GRAPH_STAR_TRIG, format=purrdf.RdfFormat.TRIG)
+    return store
+
+
+def test_describe_over_named_graphs_is_query_quads() -> None:
+    """A DESCRIBE result carrying named graphs takes the SAME widening a CONSTRUCT does.
+
+    No DESCRIBE names a graph — there is no template to name one in — but the
+    description is graph-faithful at every layer, so it can carry graphs the source
+    asserted. `Triple` has no graph slot, so the result must materialize as
+    `QueryQuads` or the graphs are lost on the way into Python.
+    """
+    result = _graph_star_store().query(f"DESCRIBE <{EX}s>")
+    assert isinstance(result, purrdf.QueryQuads)
+    assert result.graph_names == [f"<{EX}g>"]
+    assert _nquad_lines(result.serialize(purrdf.RdfFormat.N_QUADS)) == {
+        f"<{EX}s> <{EX}p> <{EX}o> <{EX}g> .",
+        f"<{EX}r> <{_REIFIES}> <<( <{EX}s> <{EX}p> <{EX}o> )>> <{EX}g> .",
+        f'<{EX}r> <{EX}note> "n" <{EX}g> .',
+    }
+
+
+@pytest.mark.parametrize("format", _SINGLE_GRAPH)
+def test_describe_over_named_graphs_refuses_a_single_graph_format(
+    format: purrdf.RdfFormat,
+) -> None:
+    """The refusal covers a DESCRIBE result too, naming the graph it would drop."""
+    result = _graph_star_store().query(f"DESCRIBE <{EX}s>")
+    with pytest.raises(ValueError) as excinfo:
+        result.serialize(format)
+    message = str(excinfo.value)
+    assert f"<{EX}g>" in message
+    assert "DROPPED" in message
 
 
 @pytest.mark.parametrize("format", _SINGLE_GRAPH + _QUAD_CAPABLE)

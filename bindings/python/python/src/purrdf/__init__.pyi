@@ -312,17 +312,21 @@ class QuerySolutions:
     def __len__(self) -> int: ...
 
 # A CONSTRUCT/DESCRIBE result whose statements all land in the DEFAULT graph — every
-# SPARQL 1.1 CONSTRUCT, every DESCRIBE. A template that names a graph yields
-# `QueryQuads` instead, because a `Triple` has no slot to carry the graph name in.
+# SPARQL 1.1 CONSTRUCT, and every DESCRIBE over default-graph data. A result carrying a
+# named graph yields `QueryQuads` instead, because a `Triple` has no slot to carry the
+# graph name in: a template that names a graph, or a DESCRIBE whose description is
+# graph-scoped in the source (an SCBD keeps every layer — base quad, reifier declaration
+# and annotation — in the graph that asserted it).
 class QueryTriples:
     def __iter__(self) -> QueryTriples: ...
     def __next__(self) -> Triple: ...
     def __len__(self) -> int: ...
     def serialize(self, format: RdfFormat) -> bytes: ...
 
-# A CONSTRUCT result carrying at least one NAMED graph (a quad template:
-# `CONSTRUCT { GRAPH ?g { ... } }` — a first-party extension, NOT defined by SPARQL
-# 1.2). One result may span several graphs and may mix
+# A CONSTRUCT/DESCRIBE result carrying at least one NAMED graph — a quad template
+# (`CONSTRUCT { GRAPH ?g { ... } }`, a first-party extension, NOT defined by SPARQL 1.2),
+# or a DESCRIBE whose description is graph-scoped in the source. One result may span
+# several graphs and may mix
 # them with default-graph statements, so the members are `Quad`s with a live
 # `graph_name`. `serialize` raises `ValueError` for a single-graph syntax
 # (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`) rather than dropping the graphs.

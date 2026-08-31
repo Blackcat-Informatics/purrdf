@@ -16,6 +16,7 @@
 
 use std::path::PathBuf;
 
+use purrdf_core::{DatasetView, TermRef};
 use purrdf_sparql_conformance::manifest::TestKind;
 
 /// The corpus manifest.
@@ -60,13 +61,13 @@ fn describe_corpus_case_count_and_kinds() {
     let cases = purrdf_sparql_conformance::manifest::load(&manifest())
         .unwrap_or_else(|e| panic!("load the DESCRIBE corpus manifest: {e}"));
 
-    assert_eq!(cases.len(), 13, "the corpus declares 13 cases");
+    assert_eq!(cases.len(), 16, "the corpus declares 16 cases");
     assert_eq!(
         cases
             .iter()
             .filter(|c| c.kind == TestKind::QueryEval)
             .count(),
-        11
+        14
     );
     assert_eq!(
         cases
@@ -188,5 +189,105 @@ fn the_corpus_measures_the_rdf_12_statement_layer() {
         !expected.contains(":mentions :q ."),
         "the object-half fixture's reified triple must stay unasserted, or the case \
          no longer isolates the object side of the disjunction"
+    );
+}
+
+/// The graph slot of every row in one expectation file, as
+/// `(row-description, graph-IRI-or-None)`.
+///
+/// The rows are read through the parsed dataset rather than off the text so the
+/// RDF 1.2 statement layer is read where it actually lives — the reifier and
+/// annotation side-tables — instead of being inferred from N-Quads line shapes.
+fn expectation_graphs(case_local: &str) -> Vec<(String, Option<String>)> {
+    let cases = purrdf_sparql_conformance::manifest::load(&manifest())
+        .unwrap_or_else(|e| panic!("load the DESCRIBE corpus manifest: {e}"));
+    let case = cases
+        .iter()
+        .find(|c| c.iri.ends_with(case_local))
+        .unwrap_or_else(|| panic!("{case_local} must be a declared case"));
+    let purrdf_sparql_conformance::manifest::ExpectedResult::Graph(path) = &case.expected else {
+        panic!("{case_local} must expect a graph result");
+    };
+    assert_eq!(
+        path.extension().and_then(std::ffi::OsStr::to_str),
+        Some("nq"),
+        "{case_local} must expect N-Quads: a Turtle expectation cannot carry a graph \
+         at all, so it could not observe where a described statement landed"
+    );
+    let bytes = std::fs::read(path).expect("read the expected result");
+    let ds = purrdf::parse_dataset(&bytes, "application/n-quads", None)
+        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+    let name = |g: Option<purrdf_core::TermId>| {
+        g.map(|g| match ds.resolve(g) {
+            TermRef::Iri(iri) => iri.to_owned(),
+            other => panic!("a graph name must be an IRI, got {other:?}"),
+        })
+    };
+    let mut rows: Vec<(String, Option<String>)> = Vec::new();
+    for q in ds.quads() {
+        rows.push(("base".to_owned(), name(q.g)));
+    }
+    for (_, _, g) in ds.reifiers_with_graph() {
+        rows.push(("reifier".to_owned(), name(g)));
+    }
+    for (_, _, _, g) in ds.annotations_with_graph() {
+        rows.push(("annotation".to_owned(), name(g)));
+    }
+    rows
+}
+
+/// Clause 4 crossed with GRAPH SCOPE: the corpus must pin where a described
+/// statement LANDS, not merely that it was selected.
+///
+/// The clause-4 cases above all read a default-graph-only fixture, so every row
+/// they expect is graph-less and a describer that relocated the whole statement
+/// layer into the default graph would pass all of them. These three read TriG and
+/// expect N-Quads, so the graph of every reifier declaration and every annotation
+/// is pinned — which is the only way that relocation is observable.
+#[test]
+fn the_corpus_measures_the_statement_layers_graph_scope() {
+    for case_local in [
+        "graphStatementLayer",
+        "graphStatementLayerCrossGraph",
+        "graphStatementLayerScope",
+    ] {
+        let rows = expectation_graphs(case_local);
+        assert!(
+            rows.iter().any(|(kind, _)| kind == "reifier"),
+            "{case_local} must expect a reifier declaration"
+        );
+        assert!(
+            rows.iter().any(|(kind, _)| kind == "annotation"),
+            "{case_local} must expect an annotation"
+        );
+        for (kind, graph) in &rows {
+            assert!(
+                graph.is_some(),
+                "{case_local} expects a graph-less {kind} row — a default-graph row \
+                 cannot witness the collapse these cases exist to catch"
+            );
+        }
+    }
+
+    // The cross-graph case only isolates cross-graph selection if the declaration's
+    // graph actually DIFFERS from the graph its reified triple is asserted in.
+    let cross = expectation_graphs("graphStatementLayerCrossGraph");
+    let base: Vec<&Option<String>> = cross
+        .iter()
+        .filter(|(kind, _)| kind == "base")
+        .map(|(_, g)| g)
+        .collect();
+    let declared: Vec<&Option<String>> = cross
+        .iter()
+        .filter(|(kind, _)| kind == "reifier")
+        .map(|(_, g)| g)
+        .collect();
+    assert_eq!(base.len(), 1, "the cross-graph case asserts one base quad");
+    assert_eq!(declared.len(), 1, "and declares one reifier about it");
+    assert_ne!(
+        base[0], declared[0],
+        "the cross-graph case must declare its reifier in a DIFFERENT graph than the \
+         one asserting the triple it reifies, or it grades nothing the same-graph case \
+         does not already grade"
     );
 }

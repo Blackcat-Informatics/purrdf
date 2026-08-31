@@ -2020,6 +2020,60 @@ mod tests {
         assert_eq!(default_graph_format(&plain), "turtle");
     }
 
+    /// A graph-scoped RDF 1.2 statement layer: base quad, reifier declaration and
+    /// annotation all asserted in `ex:g`.
+    const GRAPH_STAR_TRIG: &str = concat!(
+        "@prefix ex: <https://example.org/> .\n",
+        "GRAPH ex:g { ex:s ex:p ex:o ~ex:r {| ex:note \"n\" |} . }\n",
+    );
+
+    /// A `DESCRIBE` reaches the SAME egress a quad-template `CONSTRUCT` does: the
+    /// description's graphs survive to JS, the default format widens to TriG rather
+    /// than emitting nothing, and an explicit single-graph format refuses.
+    ///
+    /// `describe` and `construct` are one function behind two names
+    /// (`graph_result_from_sparql`), and a description is graph-faithful at every layer
+    /// — base quad, reifier declaration and annotation alike — so the DESCRIBE lane
+    /// carries named graphs even though no `DESCRIBE` ever names one.
+    #[test]
+    fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
+        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None).expect("TriG parses");
+        let described = QueryEngine::new()
+            .describe(&source, "DESCRIBE <https://example.org/s>", None)
+            .expect("DESCRIBE evaluates");
+        let nquads = described.serialize("nquads").expect("N-Quads serializes");
+        for row in [
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+             <https://example.org/g> .",
+            "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> \
+             <https://example.org/g> .",
+            "<https://example.org/r> <https://example.org/note> \"n\" \
+             <https://example.org/g> .",
+        ] {
+            assert!(
+                nquads.contains(row),
+                "the description must carry `{row}`:\n{nquads}"
+            );
+        }
+
+        let frozen = described.inner.freeze().expect("freeze");
+        assert_eq!(
+            default_graph_format(&frozen),
+            "trig",
+            "the default must widen, not empty the description out"
+        );
+        for token in ["turtle", "ntriples", "rdfxml"] {
+            let fmt = resolve_format(token).expect("format resolves");
+            let message = uncarriable_named_graphs(&frozen, fmt, token)
+                .expect("a single-graph syntax must refuse a graph-carrying description");
+            assert!(
+                message.contains("carrying 1 named graph (<https://example.org/g>)"),
+                "the refusal names the graph: {message}"
+            );
+        }
+    }
+
     impl Dataset {
         /// `queryRaw` with an explicit format and no provenance namespace — the
         /// two-argument shape these tests exercise.

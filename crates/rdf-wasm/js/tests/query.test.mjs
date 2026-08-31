@@ -316,6 +316,59 @@ test("an explicit single-graph format still serializes a default-graph CONSTRUCT
   );
 });
 
+// ── A DESCRIBE reaches the same egress, because a description carries graphs ────
+//
+// No DESCRIBE names a graph — there is no template to name one in — but the Symmetric
+// CBD keeps every layer of a statement (the base quad, the reifier declaration and the
+// annotation) in the graph that asserted it, so a description over graph-scoped data
+// carries graph names too. `describe` and `construct` are ONE egress here, so the
+// default must widen for a description exactly as it does for a quad template, and an
+// explicit single-graph format must throw rather than hand JS an empty document.
+
+const GRAPH_STAR_TRIG = `
+@prefix ex: <https://e/> .
+graph <https://e/g> { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }
+`;
+const GRAPH_DESCRIBE = "DESCRIBE <https://e/s>";
+
+test("the default query() format carries a named-graph DESCRIBE instead of emptying it", () => {
+  const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
+  const out = ds.query(GRAPH_DESCRIBE);
+  assert.notEqual(out.trim(), "", "a description must never come back as a silent empty result");
+  assert.ok(out.includes("https://e/g"), `the graph the source asserted must survive: ${out}`);
+  const engine = new QueryEngine();
+  const nquads = engine.queryRaw(ds, GRAPH_DESCRIBE, { format: "nquads" });
+  for (const row of [
+    "<https://e/s> <https://e/p> <https://e/o> <https://e/g> .",
+    "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://e/s> <https://e/p> <https://e/o> )>> <https://e/g> .",
+    '<https://e/r> <https://e/note> "n" <https://e/g> .',
+  ]) {
+    assert.ok(nquads.includes(row), `the description must carry \`${row}\`: ${nquads}`);
+  }
+});
+
+test("an explicit single-graph format throws for a named-graph DESCRIBE", () => {
+  const engine = new QueryEngine();
+  for (const format of ["turtle", "ntriples", "rdfxml"]) {
+    const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
+    assert.throws(
+      () => engine.queryRaw(ds, GRAPH_DESCRIBE, { format }),
+      (error) => {
+        assert.ok(
+          error.message.includes("carrying 1 named graph (<https://e/g>)"),
+          `the refusal names the graph: ${error.message}`,
+        );
+        assert.ok(
+          error.message.includes(format),
+          `the refusal names the offending format: ${error.message}`,
+        );
+        return true;
+      },
+      `${format} must refuse a graph-carrying description`,
+    );
+  }
+});
+
 // ── The transcode lane counts what it drops ────────────────────────────────────
 //
 // `Dataset#serialize` cannot refuse the way the CONSTRUCT lane does — asking a TriG
