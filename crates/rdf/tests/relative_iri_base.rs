@@ -34,6 +34,32 @@ const YAMLLD_RELATIVE_SUBJECT: &str = concat!(
     "  \"@id\": \"http://example.org/o\"\n",
 );
 
+/// The TriX spelling of a one-triple document whose subject is the relative `foo`.
+const TRIX_RELATIVE_SUBJECT: &str = concat!(
+    "<TriX xmlns=\"http://www.w3.org/2004/03/trix/trix-1/\"><graph><triple>",
+    "<uri>foo</uri><uri>http://example.org/p</uri><uri>http://example.org/o</uri>",
+    "</triple></graph></TriX>",
+);
+
+/// The `HexTuples` spelling of the same one-triple document.
+const HEXTUPLES_RELATIVE_SUBJECT: &str =
+    "[\"foo\",\"http://example.org/p\",\"http://example.org/o\",\"globalId\",\"\",\"\"]\n";
+
+/// [`JSONLD_RELATIVE_SUBJECT`] with an in-document `@context` `@base`.
+const JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE: &str = concat!(
+    "{\"@context\":{\"@base\":\"http://inner.example/\"},",
+    "\"@id\":\"foo\",\"http://example.org/p\":{\"@id\":\"http://example.org/o\"}}",
+);
+
+/// The YAML-LD spelling of [`JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE`].
+const YAMLLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE: &str = concat!(
+    "\"@context\":\n",
+    "  \"@base\": \"http://inner.example/\"\n",
+    "\"@id\": foo\n",
+    "\"http://example.org/p\":\n",
+    "  \"@id\": \"http://example.org/o\"\n",
+);
+
 /// Turtle source asserting `reference` in SUBJECT position, under `base` if given.
 fn turtle_with(base: Option<&str>, reference: &str) -> String {
     match base {
@@ -289,8 +315,12 @@ fn a_prefix_namespace_is_fixed_when_the_directive_is_read() {
 
 // ── Grammars that admit no relative reference ───────────────────────────────────
 
-/// N-Triples / N-Quads / TriX / HexTuples must refuse a relative reference with the
-/// same code WHETHER OR NOT a base is supplied — the base is never applied to them.
+/// An absolute-only grammar must refuse a relative reference with the same code WHETHER
+/// OR NOT a base is supplied — the base is never applied to it.
+///
+/// The line family is spelled out here because the `base is irrelevant` half needs both
+/// arms; TriX and HexTuples get the same treatment from the totality test below, which
+/// drives every registered format rather than a hand list.
 #[test]
 fn absolute_only_grammars_refuse_relative_references_with_and_without_a_base() {
     let cases: &[(&str, &str)] = &[
@@ -326,12 +356,16 @@ fn absolute_only_grammars_refuse_relative_references_with_and_without_a_base() {
 #[test]
 fn every_format_applies_the_policy_its_capability_column_declares() {
     for format in NativeRdfFormat::all() {
-        // Every format with a one-triple spelling is exercised, TREE SYNTAXES INCLUDED.
-        // JSON-LD and YAML-LD used to be skipped here, and that skip is why the dropped
-        // base survived: both declare `admits_relative_iri: true`, both codecs bound the
-        // base and threw it away, and the caller's `--base` was a silent no-op for
-        // exactly the two formats this loop had waived. A capability column is only a
-        // contract if the totality test reads it for every row it can spell.
+        // EVERY registered format is spelled — the match is exhaustive with no `_`
+        // arm, so adding a codec to `FORMATS` fails to compile here until somebody
+        // writes its one-triple spelling. It cannot be waived by omission.
+        //
+        // JSON-LD and YAML-LD used to be skipped, and that skip is why the dropped base
+        // survived: both declare `admits_relative_iri: true`, both codecs bound the base
+        // and threw it away, and the caller's `--base` was a silent no-op for exactly the
+        // formats this loop had waived. RDF/XML, TriX and HexTuples were waived beside
+        // them. A capability column is only a contract if the totality test reads it for
+        // every row.
         let text = match format {
             NativeRdfFormat::Turtle | NativeRdfFormat::TriG => {
                 format!("<foo> {P} {O} .\n")
@@ -341,7 +375,9 @@ fn every_format_applies_the_policy_its_capability_column_declares() {
             }
             NativeRdfFormat::JsonLd => JSONLD_RELATIVE_SUBJECT.to_owned(),
             NativeRdfFormat::YamlLd => YAMLLD_RELATIVE_SUBJECT.to_owned(),
-            _ => continue,
+            NativeRdfFormat::RdfXml => rdfxml_with_no_base("foo"),
+            NativeRdfFormat::TriX => TRIX_RELATIVE_SUBJECT.to_owned(),
+            NativeRdfFormat::HexTuples => HEXTUPLES_RELATIVE_SUBJECT.to_owned(),
         };
         let result = parse_dataset(text.as_bytes(), format.media_type(), None);
         let error = result.err().unwrap_or_else(|| {
@@ -613,10 +649,85 @@ fn yamlld_resolves_a_relative_id_identically_to_jsonld() {
 /// matching Turtle's `@base` overriding the caller).
 #[test]
 fn a_jsonld_context_base_overrides_the_caller_base() {
-    let doc = "{\"@context\":{\"@base\":\"http://inner.example/\"},\
-               \"@id\":\"foo\",\"http://example.org/p\":{\"@id\":\"http://example.org/o\"}}";
-    let subject = only_subject(doc, "application/ld+json", Some("http://outer.example/"));
+    let subject = only_subject(
+        JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+        "application/ld+json",
+        Some("http://outer.example/"),
+    );
     assert_eq!(subject, "http://inner.example/foo");
+}
+
+// The base-precedence trio, stated for YAML-LD in its own right rather than only by
+// agreement with JSON-LD. The YAML→JSON bridge is structural, so the two surfaces should
+// answer identically — but "should" is the claim under test, and a bridge that dropped
+// the base would still agree with a JSON-LD path that had also dropped it.
+
+/// An external base resolves a relative `@id`, and is READ rather than merely accepted:
+/// the resolved subject moves with the base.
+#[test]
+fn yamlld_resolves_a_relative_id_against_the_caller_base() {
+    let a = only_subject(
+        YAMLLD_RELATIVE_SUBJECT,
+        "application/ld+yaml",
+        Some("http://a.example/"),
+    );
+    let b = only_subject(
+        YAMLLD_RELATIVE_SUBJECT,
+        "application/ld+yaml",
+        Some("http://b.example/"),
+    );
+    assert_eq!(a, "http://a.example/foo");
+    assert_eq!(b, "http://b.example/foo");
+    assert_ne!(a, b, "the resolved subject must move with the base");
+}
+
+/// With NO base at all, YAML-LD refuses exactly as JSON-LD does — the bridge carries the
+/// absence of a base as faithfully as it carries one.
+#[test]
+fn yamlld_without_a_base_still_refuses_a_relative_id() {
+    let error = parse_dataset(
+        YAMLLD_RELATIVE_SUBJECT.as_bytes(),
+        "application/ld+yaml",
+        None,
+    )
+    .expect_err("a relative @id with no base must fail");
+    assert_eq!(
+        error.code, "iri-relative-no-base",
+        "the refusal is the workspace-shared condition, not a YAML-LD-local spelling"
+    );
+    assert!(
+        error.message.contains("\"foo\""),
+        "the refusal names the reference verbatim: {}",
+        error.message
+    );
+}
+
+/// An in-document `@context` `@base` beats the external base here too.
+#[test]
+fn a_yamlld_context_base_overrides_the_caller_base() {
+    let subject = only_subject(
+        YAMLLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+        "application/ld+yaml",
+        Some("http://outer.example/"),
+    );
+    assert_eq!(subject, "http://inner.example/foo");
+}
+
+/// The two surfaces agree on the precedence itself, not merely on the simple case.
+#[test]
+fn jsonld_and_yamlld_agree_on_context_base_precedence() {
+    assert_eq!(
+        only_subject(
+            JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+            "application/ld+json",
+            Some("http://outer.example/"),
+        ),
+        only_subject(
+            YAMLLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+            "application/ld+yaml",
+            Some("http://outer.example/"),
+        ),
+    );
 }
 
 /// With NO base at all a relative `@id` is still refused — the fix resolves, it does not

@@ -244,16 +244,24 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> TermId {
     }
 }
 
+/// Validate an IRI-position cell against the shared IRI layer.
+///
+/// HexTuples' row in `FORMATS` sets `admits_relative_iri: false`, so this routes through
+/// [`BaseScope::resolve_absolute_only`](purrdf_iri::BaseScope::resolve_absolute_only):
+/// a relative reference reports `iri-not-absolute-by-grammar` — the code that says
+/// "supplying a base will not help" — and no base is ever applied, because none may be.
+///
+/// This replaces a hand-rolled check that tested only for the PRESENCE of a `:`, which
+/// admitted a `path-noscheme` reference whose first segment merely contained one (RFC-3986
+/// §4.2) as though it were absolute, and reported everything else as a generic parse
+/// error. TriX and RDF/XML carried the byte-identical check; all three are gone.
 fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    if value.is_empty()
-        || !value.contains(':')
-        || value
-            .chars()
-            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace() || ch == '<' || ch == '>')
-    {
-        return Err(parse_err(format!("invalid IRI {value:?}")));
-    }
-    Ok(())
+    purrdf_iri::BaseScope::empty()
+        .resolve_absolute_only(value)
+        .map(|_| ())
+        .map_err(|error| {
+            RdfDiagnostic::error(error.diagnostic_code(), format!("HexTuples: {error}"))
+        })
 }
 
 /// Blank-node label contract for a `_:`-prefixed HexTuples identifier: the same
