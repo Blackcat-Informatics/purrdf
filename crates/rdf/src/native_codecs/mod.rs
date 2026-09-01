@@ -73,7 +73,7 @@ mod codec;
 mod stream;
 
 pub use media_type::{NativeRdfFormat, classify};
-pub use parse::{parse_dataset, parse_dataset_with};
+pub use parse::{ParseOutcome, parse_dataset, parse_dataset_with};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;
@@ -95,6 +95,42 @@ use crate::{
     RdfDataset, RdfDiagnostic, RdfParseRequest, RdfParserBackend, RdfSerializeRequest,
     RdfSerializer,
 };
+
+/// Transcode a document from one native syntax to another, re-emitting it under the base
+/// the SOURCE document itself declared.
+///
+/// This is the round trip the two base legs exist for, and the reason
+/// [`ParseOutcome::document_base`] is reported rather than discarded. Ingress resolves the
+/// document's relative references against whatever base ends up in force — the caller's,
+/// or the one the document declares with Turtle's `@base`, a root `xml:base`, or a
+/// JSON-LD `@context` `@base`. Egress then hands that SAME base to the serializer, so a
+/// target syntax that can express a document base (the registry's `emits_base` column)
+/// re-declares it and relativizes against it. The IRIs are absolute in the IR throughout;
+/// only their SPELLING travels.
+///
+/// Without this the two legs did not meet: a caller could supply a base on the way in and
+/// a base on the way out, but had no way to learn what the document's own base was, so
+/// preserving it meant re-reading the source text by hand — a second, drifting base
+/// parser in every consumer.
+///
+/// `base_iri` is the caller's base (RFC-3986 §5.1.2), used when the document declares
+/// none. A document that declares one OVERRIDES it, exactly as it does on the parse leg.
+/// A target that cannot express a base emits absolute IRIs and reports that in the
+/// returned [`SerializeOutcome`]'s loss counters, unchanged.
+///
+/// # Errors
+///
+/// Propagates a parse failure of `bytes`, an unknown media type on either end, and a
+/// serialize failure of the resulting dataset.
+pub fn transcode_under_document_base(
+    bytes: &[u8],
+    from_media_type: &str,
+    to: NativeRdfFormat,
+    base_iri: Option<&str>,
+) -> Result<SerializeOutcome, RdfDiagnostic> {
+    let outcome = parse_dataset_with(bytes, from_media_type, base_iri, &ParseOptions::default())?;
+    serialize_dataset_to_format(&*outcome.dataset, to, outcome.document_base_iri())
+}
 
 /// The native codec backend: a codec-only [`RdfParserBackend`] + [`RdfSerializer`] over
 /// the `purrdf-gts` text codecs. Holds no state and references no oxigraph Store.

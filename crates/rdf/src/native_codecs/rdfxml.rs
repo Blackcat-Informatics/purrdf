@@ -59,7 +59,7 @@ impl RdfCodec for RdfXmlCodec {
     fn parse(
         &self,
         text: &str,
-        base: &purrdf_iri::BaseScope,
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         super::parse::parse_rdfxml_without_panicking(text, base)
@@ -174,9 +174,14 @@ struct XmlRow {
 /// reification as plain quads, and RDF-1.2 reifiers as `rdf:reifies` rows — then interns
 /// each into a [`RdfDatasetBuilder`] and folds them through the shared
 /// [`fold_statement_layer`], identically to the line/Turtle-family path.
+///
+/// `base` is `&mut`: `xml:base` on the ROOT element establishes the document base, so on
+/// return the scope holds the base in force at the end of the document. `xml:base` deeper
+/// in the tree is subtree-scoped and has popped by then, which is exactly right — a base
+/// that governed one element never governed the document.
 pub(super) fn parse_rdfxml_to_dataset(
     text: &str,
-    base: &purrdf_iri::BaseScope,
+    base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
     // nested document, so the nesting is measured on the SOURCE and refused here. This is
@@ -197,7 +202,7 @@ pub(super) fn parse_rdfxml_to_dataset(
         base: base.clone(),
         ..Default::default()
     };
-    parser.parse_document(document.root_element(), &context)?;
+    *base = parser.parse_document(document.root_element(), &context)?;
     parser.freeze()
 }
 
@@ -285,11 +290,14 @@ impl RdfXmlParser {
         builder.freeze()
     }
 
+    /// Returns the base scope the ROOT element left in force — the document base, after
+    /// any `xml:base` the root itself carries. Child elements get their own cloned
+    /// context, so a subtree's `xml:base` never reaches this answer.
     fn parse_document(
         &mut self,
         root: Node<'_, '_>,
         context: &ParseContext,
-    ) -> Result<(), RdfDiagnostic> {
+    ) -> Result<purrdf_iri::BaseScope, RdfDiagnostic> {
         let context = context.for_child(root)?;
         if is_rdf(root, "RDF") {
             for child in element_children(root) {
@@ -298,7 +306,7 @@ impl RdfXmlParser {
         } else {
             self.parse_node_element(root, &context)?;
         }
-        Ok(())
+        Ok(context.base)
     }
 
     fn parse_node_element(
@@ -1498,7 +1506,7 @@ mod tests {
 
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
-        parse_rdfxml_to_dataset(text, &scope(base)).expect("parse rdf/xml")
+        parse_rdfxml_to_dataset(text, &mut scope(base)).expect("parse rdf/xml")
     }
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
@@ -1533,7 +1541,7 @@ mod tests {
         );
 
         for (name, text) in [("node striping", &striped), ("XML literal", &xml_literal)] {
-            let error = parse_rdfxml_to_dataset(text, &scope(None))
+            let error = parse_rdfxml_to_dataset(text, &mut scope(None))
                 .err()
                 .unwrap_or_else(|| panic!("{name}: a 20 000-deep document must be refused"));
             assert!(

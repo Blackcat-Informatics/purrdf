@@ -31,7 +31,7 @@ use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
 use purrdf_core::blank_label::LabelAlphabet;
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -128,30 +128,79 @@ pub fn parse_dataset(
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)
+        .map(|(dataset, _base)| dataset)
 }
 
-/// [`parse_dataset`] with a runtime option to also return a source-position side table.
+/// Everything one parse of one document produced.
 ///
-/// The frozen [`RdfDataset`] is IDENTICAL to what [`parse_dataset`] returns — the same
-/// triples, term ids, and order. When [`ParseOptions::track_source_spans`] is set, the
-/// second element is a populated [`SpanTable`] mapping each statement subject (by its
-/// bare-IRI / `_:label` lexical key) to the source [`Position`](purrdf_iri::Position)
-/// where it was first asserted; otherwise it is `None`.
+/// The ingress mirror of [`SerializeOutcome`](super::SerializeOutcome): a parse yields
+/// more than a dataset, and the extras arrive together in ONE value rather than as a
+/// growing tuple or a family of `parse_dataset_*` twins.
+#[derive(Debug, Clone)]
+pub struct ParseOutcome {
+    /// The frozen dataset. IDENTICAL to what [`parse_dataset`] returns for the same
+    /// input — same triples, same term ids, same order.
+    pub dataset: Arc<RdfDataset>,
+    /// The opt-in source-position side table (see
+    /// [`ParseOptions::track_source_spans`]), or `None` when tracking was off.
+    pub spans: Option<SpanTable>,
+    /// The base IRI in force at the END of the document, with the
+    /// [`BaseOrigin`] provenance of how it came to be in force —
+    /// [`BaseOrigin::Caller`] when only the caller supplied one,
+    /// [`BaseOrigin::Directive`] for a Turtle/TriG `@base`, [`BaseOrigin::Enclosing`]
+    /// for a root `xml:base` or a JSON-LD `@context` `@base`.
+    ///
+    /// `None` means the document truly ended under NO base — either none was ever
+    /// supplied or declared, or a JSON-LD `"@base": null` cleared the caller's.
+    ///
+    /// This closes the ingress/egress asymmetry: a caller could hand a base IN and
+    /// (since the serializer base leg) hand one OUT, but could not ask what base the
+    /// DOCUMENT ended up under, so a round trip preserving a document's own `@base`
+    /// could not be written without re-reading the text by hand.
+    ///
+    /// [`BaseOrigin`]: purrdf_iri::BaseOrigin
+    /// [`BaseOrigin::Caller`]: purrdf_iri::BaseOrigin::Caller
+    /// [`BaseOrigin::Directive`]: purrdf_iri::BaseOrigin::Directive
+    /// [`BaseOrigin::Enclosing`]: purrdf_iri::BaseOrigin::Enclosing
+    pub document_base: Option<ScopedBase>,
+}
+
+impl ParseOutcome {
+    /// The document base as the `Option<&str>` the serialize leg takes, discarding the
+    /// provenance. The join between the two legs of a base-preserving round trip.
+    #[must_use]
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base.as_ref().map(|base| base.iri().as_str())
+    }
+}
+
+/// [`parse_dataset`] reporting everything the parse learned: the dataset, the opt-in
+/// source-position side table, and the base the document ended up under.
+///
+/// This is the ONE extended parse seam — deliberately not a `parse_dataset_with_base`
+/// twin beside a `parse_dataset_with_spans` one. What a parse can tell you grows; the
+/// number of ways to ask must not.
 ///
 /// Span tracking is OPT-IN: it costs memory and pins the sequential line pipeline
 /// (the chunk-parallel N-Triples/N-Quads path never records spans), so
 /// [`parse_dataset`] — the hot path — is left untouched. Formats without a text
 /// tokenizer that carries source spans (RDF/XML, TriX, HexTuples) return an EMPTY
-/// [`SpanTable`] under tracking (physical-location fallback is by design).
+/// [`SpanTable`] under tracking (physical-location fallback is by design). The document
+/// base is reported unconditionally: every codec already tracks its own base scope, so
+/// reading it back costs nothing.
 pub fn parse_dataset_with(
     bytes: &[u8],
     media_type: &str,
     base_iri: Option<&str>,
     options: &ParseOptions,
-) -> Result<(Arc<RdfDataset>, Option<SpanTable>), RdfDiagnostic> {
+) -> Result<ParseOutcome, RdfDiagnostic> {
     if !options.track_source_spans {
-        let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
-        return Ok((dataset, None));
+        let (dataset, base) = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+        return Ok(ParseOutcome {
+            dataset,
+            spans: None,
+            document_base: base.current().cloned(),
+        });
     }
 
     let format = classify(media_type)?;
@@ -166,21 +215,29 @@ pub fn parse_dataset_with(
         // is a distinct `SpanTable` monomorphization of `text_parse_without_panicking`,
         // so the hot `NoSpans` path the codec's `parse` drives stays zero-cost.
         let mut table = SpanTable::default();
-        let base = base_scope_for(base_iri)?;
+        let mut base = base_scope_for(base_iri)?;
         let graph = text_parse_without_panicking(
             format,
             text,
-            &base,
+            &mut base,
             LineParseMode::ForceSequential,
             &mut table,
         )?;
         let dataset = dataset_from_text_ser_graph(&graph)?;
-        Ok((dataset, Some(table)))
+        Ok(ParseOutcome {
+            dataset,
+            spans: Some(table),
+            document_base: base.current().cloned(),
+        })
     } else {
         // RDF/XML, TriX, HexTuples: no span-carrying text tokenizer, so return an empty
         // table alongside the identical dataset (physical-location fallback by design).
-        let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
-        Ok((dataset, Some(SpanTable::default())))
+        let (dataset, base) = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+        Ok(ParseOutcome {
+            dataset,
+            spans: Some(SpanTable::default()),
+            document_base: base.current().cloned(),
+        })
     }
 }
 
@@ -198,6 +255,7 @@ pub fn parse_dataset_forced_sequential(
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::ForceSequential)
+        .map(|(dataset, _base)| dataset)
 }
 
 /// Build the in-scope base stack for a caller-supplied base string.
@@ -219,14 +277,17 @@ pub(super) fn base_scope_for(base_iri: Option<&str>) -> Result<BaseScope, RdfDia
     }
 }
 
+/// Parse and hand back BOTH the frozen dataset and the base scope the document left in
+/// force — the two halves every caller of this function needs between them, so neither is
+/// recomputed and neither can be reported from a different parse than the other.
 fn parse_dataset_mode(
     bytes: &[u8],
     media_type: &str,
     base_iri: Option<&str>,
     mode: LineParseMode,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+) -> Result<(Arc<RdfDataset>, BaseScope), RdfDiagnostic> {
     let format = classify(media_type)?;
-    let base = base_scope_for(base_iri)?;
+    let mut base = base_scope_for(base_iri)?;
     let text = std::str::from_utf8(bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
 
@@ -239,7 +300,12 @@ fn parse_dataset_mode(
     // bnode minting — see `text_parse::parse_to_gts_graph_mode`); RDF/XML, TriX and
     // HexTuples intern straight into the frozen IR through the SAME shared fold, no
     // intermediate GTS graph. `mode` is honored only by the line/Turtle family.
-    super::codec::codec_for(format).parse(text, &base, mode)
+    //
+    // The codec leaves `base` holding whatever the DOCUMENT left in force: a Turtle
+    // `@base`, a root `xml:base`, a JSON-LD `@context` `@base` — or, for a grammar with no
+    // base directive, the caller's base untouched.
+    let dataset = super::codec::codec_for(format).parse(text, &mut base, mode)?;
+    Ok((dataset, base))
 }
 
 /// Run a first-party codec parse under a panic guard, converting any unwind into a
@@ -267,7 +333,7 @@ where
 pub(super) fn text_parse_without_panicking<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
-    base: &BaseScope,
+    base: &mut BaseScope,
     mode: LineParseMode,
     collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
@@ -289,7 +355,7 @@ pub(super) fn text_parse_without_panicking<S: SpanCollector>(
 
 pub(super) fn parse_rdfxml_without_panicking(
     text: &str,
-    base: &BaseScope,
+    base: &mut BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         super::rdfxml::parse_rdfxml_to_dataset(text, base)
@@ -808,13 +874,14 @@ mod tests {
         // With tracking off the side table is absent and the dataset is byte-for-byte
         // what `parse_dataset` produces (same canonical serialization).
         let nt = "<https://e/s> <https://e/p> <https://e/o> .\n";
-        let (with_ds, table) = parse_dataset_with(
+        let outcome = parse_dataset_with(
             nt.as_bytes(),
             "application/n-triples",
             None,
             &ParseOptions::default(),
         )
         .expect("parse");
+        let (with_ds, table) = (outcome.dataset, outcome.spans);
         assert!(table.is_none(), "tracking off yields no side table");
         let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
         assert_eq!(with_ds.quad_count(), plain.quad_count());
@@ -848,10 +915,10 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
         };
-        let (_ds, table) =
-            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
-                .expect("parse");
-        let table = table.expect("tracking on yields a table");
+        let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+            .expect("parse")
+            .spans
+            .expect("tracking on yields a table");
         assert_eq!(
             table
                 .position_for_subject("http://example.org/alice")
@@ -888,10 +955,10 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
         };
-        let (_ds, table) =
-            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
-                .expect("parse");
-        let table = table.expect("tracking on yields a table");
+        let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+            .expect("parse")
+            .spans
+            .expect("tracking on yields a table");
         // First line: offset 0 must be recorded, not dropped.
         assert_eq!(
             table
@@ -930,9 +997,10 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
         };
-        let (_ds, table) =
-            parse_dataset_with(ttl.as_bytes(), "text/turtle", None, &options).expect("parse");
-        let table = table.expect("tracking on yields a table");
+        let table = parse_dataset_with(ttl.as_bytes(), "text/turtle", None, &options)
+            .expect("parse")
+            .spans
+            .expect("tracking on yields a table");
         let position = table
             .position_for_subject("http://example.org/s")
             .expect("subject tracked");
@@ -949,9 +1017,9 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
         };
-        let (tracked, _table) =
-            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
-                .expect("tracked parse");
+        let tracked = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+            .expect("tracked parse")
+            .dataset;
         let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("plain");
         assert_eq!(tracked.quad_count(), plain.quad_count());
         assert!(

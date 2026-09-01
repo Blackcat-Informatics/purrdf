@@ -48,10 +48,19 @@ pub(super) trait RdfCodec {
     /// references resolves through [`BaseScope::resolve`]; one that does not routes
     /// through [`BaseScope::resolve_absolute_only`] and NEVER applies the base, so a
     /// relative reference fails identically whether or not a base was supplied.
+    ///
+    /// The scope is `&mut` because a document can MOVE it: Turtle's `@base`, RDF/XML's
+    /// root `xml:base`, and JSON-LD's `@context` `@base` each rebind the base for the
+    /// rest of the document. On return the scope holds the base actually in force at the
+    /// END of the document, which is what [`ParseOutcome::document_base`] reports. A
+    /// codec whose grammar has no base directive simply leaves it alone, so the answer is
+    /// the caller's base — correctly, and without that codec having to say anything.
+    ///
+    /// [`ParseOutcome::document_base`]: super::parse::ParseOutcome::document_base
     fn parse(
         &self,
         text: &str,
-        base: &BaseScope,
+        base: &mut BaseScope,
         mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
 
@@ -88,7 +97,7 @@ impl RdfCodec for LineCodec {
     fn parse(
         &self,
         text: &str,
-        base: &BaseScope,
+        base: &mut BaseScope,
         mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         // The hot path never records spans; the span-tracking path in

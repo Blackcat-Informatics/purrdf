@@ -128,11 +128,11 @@ pub use purrdf_gts::transport::{
 };
 
 pub use native_codecs::{
-    GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions,
+    GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions, ParseOutcome,
     SerializeOutcome, SourceFormat, SpanTable, classify, classify_source, parse_dataset,
     parse_dataset_from_reader, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
     serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_with_jsonld_options,
+    serialize_dataset_with_jsonld_options, transcode_under_document_base,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
