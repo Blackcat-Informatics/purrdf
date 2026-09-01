@@ -88,6 +88,12 @@ pub(crate) struct FormatDescriptor {
     /// [`NativeRdfFormat::is_line_oriented`]). This is the property that makes a
     /// format parseable from a `Read` without buffering the source.
     pub line_oriented: bool,
+    /// Whether this syntax's GRAMMAR admits a relative IRI reference — i.e. it has an
+    /// in-document base directive or honours an externally supplied base.
+    pub admits_relative_iri: bool,
+    /// Whether this syntax can EXPRESS a document base on output (`@base` / `xml:base` /
+    /// `@context.@base`), i.e. whether its serializer can relativize.
+    pub emits_base: bool,
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` for formats
     /// that carry no loss-ledger codec identity (TriX / HexTuples).
     pub loss_codec_name: Option<&'static str>,
@@ -107,6 +113,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: false,
         line_oriented: false,
         tokenizer_carries_spans: true,
+        admits_relative_iri: true,
+        emits_base: true,
         loss_codec_name: Some("turtle"),
     },
     FormatDescriptor {
@@ -120,6 +128,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: false,
         tokenizer_carries_spans: true,
+        admits_relative_iri: true,
+        emits_base: true,
         loss_codec_name: Some("trig"),
     },
     FormatDescriptor {
@@ -133,6 +143,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: false,
         line_oriented: true,
         tokenizer_carries_spans: true,
+        admits_relative_iri: false,
+        emits_base: false,
         loss_codec_name: Some("ntriples"),
     },
     FormatDescriptor {
@@ -146,6 +158,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: true,
         tokenizer_carries_spans: true,
+        admits_relative_iri: false,
+        emits_base: false,
         loss_codec_name: Some("nquads"),
     },
     FormatDescriptor {
@@ -163,6 +177,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: false,
         line_oriented: false,
         tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
         loss_codec_name: Some("rdfxml"),
     },
     FormatDescriptor {
@@ -176,6 +192,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
+        admits_relative_iri: false,
+        emits_base: false,
         loss_codec_name: None,
     },
     FormatDescriptor {
@@ -189,6 +207,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: true,
         tokenizer_carries_spans: false,
+        admits_relative_iri: false,
+        emits_base: false,
         loss_codec_name: None,
     },
     FormatDescriptor {
@@ -202,6 +222,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
         loss_codec_name: Some("jsonld-star"),
     },
     FormatDescriptor {
@@ -215,6 +237,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         line_oriented: false,
         tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
         loss_codec_name: Some("yaml-ld-star"),
     },
 ];
@@ -297,6 +321,35 @@ impl NativeRdfFormat {
     /// their grammars require it.
     pub fn is_line_oriented(self) -> bool {
         descriptor(self).line_oriented
+    }
+
+    /// Whether this syntax's GRAMMAR admits a relative IRI reference.
+    ///
+    /// True for Turtle, TriG, RDF/XML, JSON-LD and YAML-LD, each of which has an
+    /// in-document base directive (`@base`/`BASE`, `xml:base`, `@context.@base`) and
+    /// honours an externally supplied base. FALSE for N-Triples, N-Quads, TriX and
+    /// HexTuples, whose grammars admit only absolute IRIs.
+    ///
+    /// This is the column the parse dispatch reads to choose between
+    /// [`BaseScope::resolve`](purrdf_iri::BaseScope::resolve) and
+    /// [`BaseScope::resolve_absolute_only`](purrdf_iri::BaseScope::resolve_absolute_only)
+    /// — the ONE place that policy is decided, so a newly added codec cannot escape it.
+    /// For a `false` format a base is never applied on ingress: a relative reference is
+    /// `iri-not-absolute-by-grammar` whether or not a base was supplied.
+    pub fn admits_relative_iri(self) -> bool {
+        descriptor(self).admits_relative_iri
+    }
+
+    /// Whether this syntax can EXPRESS a document base on output, i.e. whether its
+    /// serializer is able to relativize IRIs against one.
+    ///
+    /// Currently equal to [`admits_relative_iri`](Self::admits_relative_iri) — every
+    /// syntax that can read a base can also write one — but the two are independent
+    /// facts, not one fact spelled twice: they answer different questions (ingress
+    /// resolution vs egress relativization) and a syntax that admitted a base only on
+    /// the parse leg would set them apart.
+    pub fn emits_base(self) -> bool {
+        descriptor(self).emits_base
     }
 
     /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this format
@@ -415,6 +468,44 @@ mod tests {
                 format.carries_direction(),
                 "{format:?} must carry base direction"
             );
+        }
+    }
+
+    /// The base columns name exactly the syntaxes with a base directive. Spelled as a
+    /// closed partition of the whole registry so a new row must choose a side here.
+    #[test]
+    fn base_columns_name_exactly_the_base_bearing_syntaxes() {
+        let admits: Vec<&str> = NativeRdfFormat::all()
+            .filter(|f| f.admits_relative_iri())
+            .map(NativeRdfFormat::id)
+            .collect();
+        assert_eq!(
+            admits,
+            vec!["turtle", "trig", "rdfxml", "jsonld", "yamlld"],
+            "only the syntaxes with an in-document base directive admit relative IRIs"
+        );
+
+        let emits: Vec<&str> = NativeRdfFormat::all()
+            .filter(|f| f.emits_base())
+            .map(NativeRdfFormat::id)
+            .collect();
+        assert_eq!(
+            emits, admits,
+            "every syntax that can read a base can currently also write one"
+        );
+
+        // The absolute-only family, named explicitly: these must NEVER apply a base.
+        for format in [
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::TriX,
+            NativeRdfFormat::HexTuples,
+        ] {
+            assert!(
+                !format.admits_relative_iri(),
+                "{format:?} admits only absolute IRIs by grammar"
+            );
+            assert!(!format.emits_base(), "{format:?} cannot express a base");
         }
     }
 
