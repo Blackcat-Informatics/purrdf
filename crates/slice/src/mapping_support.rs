@@ -285,7 +285,7 @@ pub(crate) fn collect_dsl_store(root: &Path, vocab: &SliceVocab) -> Result<Datas
     dsl_files.sort();
     for path in &dsl_files {
         let bytes = std::fs::read(path).map_err(SliceError::Io)?;
-        acc.add_turtle(&bytes, &path.display().to_string())?;
+        acc.add_file(&bytes, path)?;
     }
     let slices_dir = root.join("slices");
     if slices_dir.is_dir() {
@@ -301,7 +301,7 @@ pub(crate) fn collect_dsl_store(root: &Path, vocab: &SliceVocab) -> Result<Datas
         }
         slice_mappings.sort_by(|a, b| a.0.cmp(&b.0));
         for (path, bytes) in &slice_mappings {
-            acc.add_turtle(bytes, &path.display().to_string())?;
+            acc.add_file(bytes, path)?;
         }
     }
     acc.freeze()

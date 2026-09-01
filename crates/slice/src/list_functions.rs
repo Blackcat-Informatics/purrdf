@@ -269,9 +269,12 @@ mod tests {
     /// Parse the emitted N-Triples into a dataset (the new committed-artifact form).
     fn emitted_store() -> Dataset {
         let text = emit_list_functions(&vocab());
+        // Emitted in memory by this crate, so there is no retrieval IRI: `None` is the
+        // honest base, and N-Triples admits no relative reference to need one anyway.
         Dataset::parse(
             text.as_bytes(),
             "application/n-triples",
+            None,
             "emitted list-functions",
         )
         .unwrap()
