@@ -130,7 +130,14 @@ pub(crate) fn run(
     refuse_inapplicable_flags(options, ledger_target)?;
 
     let data_format = format::resolve(options.from, options.input)?;
-    format::refuse_base_with_container(data_format, options.base, "the --from data graph")?;
+    // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
+    // its own retrieval IRI, and the validation report is a fresh graph `emit` serializes
+    // with no base at all (it passes `None`). So a data syntax that admits no relative IRI
+    // leaves the flag with nowhere to go.
+    format::refuse_unconsumable_base(
+        options.base,
+        &[format::BaseUse::parse(data_format, "the --from data graph")],
+    )?;
     let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;

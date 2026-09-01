@@ -283,3 +283,51 @@ fn schemas_shexc_matches_shexj_ground_truth() {
         "XFAIL_CROSS entries now pass (remove them): {stale_xfails:?}"
     );
 }
+
+/// The corpus's own proof that a ShExJ document carries relative references in
+/// the ordinary IRI positions — not only in `imports`.
+///
+/// `validation/1dot-relative.json` is frozen upstream ground truth and writes
+/// `"id": "S1"`, `"predicate": "p1"` and `"values": ["o1"]`. Those are the
+/// positions a reader that demanded absolute IRIs would REJECT and a reader that
+/// interned them verbatim would turn into constraints no data term can match; both
+/// are wrong, and the `.shex` twin beside it — `<S1> { <p1> [<o1>] }` — is what
+/// says so, because ShExC resolves the identical references against the identical
+/// base. The `sht:relativeIRI` validation entries then select the shape as `<S1>`
+/// relative to the manifest, which resolves to the same absolute IRI.
+///
+/// The `schemas/` directory (which the harness above walks) contains no such
+/// document, so without this the corpus evidence for the ShExJ base leg would go
+/// untested.
+#[test]
+fn the_corpus_relative_shexj_document_resolves_exactly_as_its_shexc_twin() {
+    let dir = corpus().join("validation");
+    let shex_path = dir.join("1dot-relative.shex");
+    let json_path = dir.join("1dot-relative.json");
+    let url = document_url(&shex_path);
+
+    let json = fs::read_to_string(&json_path).expect("read .json");
+    assert!(
+        json.contains("\"id\": \"S1\"") && json.contains("\"predicate\": \"p1\""),
+        "the corpus document must still hold RELATIVE references outside `imports`"
+    );
+
+    let from_shexj = parse_shexj(&json, Some(&url)).expect("the ShExJ document resolves");
+    let from_shexc = parse_shexc(
+        &fs::read_to_string(&shex_path).expect("read .shex"),
+        Some(&url),
+    )
+    .expect("the ShExC twin resolves");
+    assert_eq!(
+        from_shexj, from_shexc,
+        "the two syntaxes must denote one schema under one base"
+    );
+
+    // The resolved label is what the manifest's `sht:shape <S1>` resolves to.
+    let expected = format!("{CORPUS_URL}validation/S1");
+    assert_eq!(from_shexj.shapes[0].id, expected);
+
+    // And with no base the same document is refused rather than interned verbatim.
+    let err = parse_shexj(&json, None).expect_err("no base, so nothing resolves");
+    assert!(err.to_string().contains("iri-relative-no-base"), "{err}");
+}

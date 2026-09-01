@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_shex::{
-    ConformanceStatus, NodeSelector, ShapeSelector, parse_shape_map, parse_shexc,
-    resolve_shape_map, validate,
+    ConformanceStatus, NodeSelector, ShapeSelector, ShexError, ValidationOptions, parse_shape_map,
+    parse_shexc, resolve_imports, resolve_shape_map, validate, validate_shape_map,
 };
 
 const P1: &str = "http://a.example/p1";
@@ -242,4 +242,116 @@ fn resolve_then_validate() {
             .iter()
             .all(|e| e.status == ConformanceStatus::Conformant)
     );
+}
+
+// ── A shape the schema does not declare ────────────────────────────────────────
+//
+// Undefined in both specifications: ShEx 2.1 §5.7's reference requirement binds a
+// `shapeExprRef` written INSIDE a schema, and `satisfies` is defined only where the
+// label resolves to a shape expression; the ShapeMap specification is silent, and
+// its `status` vocabulary is conformant/nonconformant with no third value. The
+// no-optionality/hard-fail doctrine decides it as a caller error.
+
+#[test]
+fn a_map_naming_an_undeclared_shape_is_refused_not_answered_nonconformant() {
+    let data = data();
+    let schema = parse_shexc("<http://a.example/S> {}", None).expect("schema");
+
+    let err = validate_shape_map(
+        &schema,
+        &data,
+        "<http://a.example/s1>@<http://a.example/Missing>",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect_err("an undeclared shape is refused");
+    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("<http://a.example/Missing>, which the schema does not declare"),
+        "the refusal names the selector as the ShapeMap grammar writes it: {err}"
+    );
+
+    // The declared label on the same schema and map still validates.
+    let ok = validate_shape_map(
+        &schema,
+        &data,
+        "<http://a.example/s1>@<http://a.example/S>",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect("a declared label decides normally");
+    assert!(ok.all_conformant());
+}
+
+/// `START` against a schema with no `start` is the same mistake and is refused too.
+#[test]
+fn a_map_naming_start_on_a_startless_schema_is_refused() {
+    let data = data();
+    let startless = parse_shexc("<http://a.example/S> {}", None).expect("schema");
+    let err = validate_shape_map(
+        &startless,
+        &data,
+        "<http://a.example/s1>@START",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect_err("no start shape to decide against");
+    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+    assert!(err.to_string().contains("START"), "{err}");
+
+    let with_start = parse_shexc("start = {}", None).expect("schema with a start");
+    let ok = validate_shape_map(
+        &with_start,
+        &data,
+        "<http://a.example/s1>@START",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect("a declared start decides normally");
+    assert!(ok.all_conformant());
+}
+
+/// The refusal is decided from the MAP and the SCHEMA alone, so a selector that
+/// happens to select no node is refused exactly as one that selects many is.
+///
+/// Otherwise the mistake would be invisible precisely when the result shape map is
+/// empty — the case an operator is least able to tell from "nothing matched".
+#[test]
+fn an_undeclared_shape_is_refused_even_when_the_selector_matches_nothing() {
+    let data = data();
+    let schema = parse_shexc("<http://a.example/S> {}", None).expect("schema");
+    let err = validate_shape_map(
+        &schema,
+        &data,
+        "{FOCUS <http://a.example/nothingHasThis> _}@<http://a.example/Missing>",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect_err("refused before the selector is expanded");
+    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+}
+
+/// A label an IMPORTED schema declares counts as declared, because
+/// `resolve_imports` folds the closure in before validation.
+#[test]
+fn a_label_from_the_import_closure_counts_as_declared() {
+    let data = data();
+    let root = parse_shexc(
+        "IMPORT <http://a.example/imported>\n<http://a.example/S> {}",
+        None,
+    )
+    .expect("root schema");
+    let imported = parse_shexc("<http://a.example/Inherited> {}", None).expect("imported schema");
+    let folded = resolve_imports(root, &|_| Ok(imported.clone())).expect("import folds");
+
+    let ok = validate_shape_map(
+        &folded,
+        &data,
+        "<http://a.example/s1>@<http://a.example/Inherited>",
+        None,
+        &ValidationOptions::default(),
+    )
+    .expect("an imported label is declared");
+    assert!(ok.all_conformant());
 }

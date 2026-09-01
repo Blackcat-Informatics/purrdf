@@ -42,6 +42,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// than appended — it belongs immediately beside the document it qualifies, and
 /// one declared break beats a permanently confusing argument order — so the
 /// version, not the signature, absorbs the incompatibility.
+///
+/// The same bump also carries a second mid-list insertion, deliberately bundled
+/// rather than deferred: `purrdf_serialize_jsonld_configured` gained `base_iri`
+/// after `media_type`, the slot it occupies on `purrdf_serialize`. `0.7.0` is
+/// unreleased, so a consumer recompiles against this header exactly once for
+/// both; splitting them across two versions would break the same consumer twice
+/// for one reason. A THIRD incompatible change made after `0.7.0` ships must
+/// bump again — the ledger here is what makes that judgement possible.
 pub const PURRDF_ABI_MINOR: u32 = 7;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
