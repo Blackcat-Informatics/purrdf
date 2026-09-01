@@ -431,7 +431,7 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 ///   both are meaningful only through the PARTITION they induce on the rows, so that is
 ///   what is compared below.
 ///
-/// Applying that term-by-term reading to the eight documented rows: drop the three
+/// Applying that term-by-term reading to the eight documented rows: drop the four
 /// `step = 0` rows (paths 0, 1, 2 and 3 each contribute one), and drop path 0 entirely —
 /// it is the identity path `1 → 1`, which consists of ONLY a step-0 row. What remains,
 /// rewritten as `(?start, ?end, ?step, ?node)`, is:
