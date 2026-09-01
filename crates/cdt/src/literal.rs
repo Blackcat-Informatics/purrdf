@@ -1,7 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! One closed enum over both value spaces this crate can reach.
+//! One closed enum over both value spaces this crate can reach, and the crate's
+//! **single lexical-to-value choke point**.
+//!
+//! Every place in `purrdf-cdt` that turns a `(lexical form, datatype IRI)` pair into
+//! a value goes through [`parse_literal`]: the SEP-0009 comparison and equality
+//! relations in [`crate::ops`], and the integer-argument coercion in
+//! [`crate::functions`]. Nothing reaches for `purrdf_xsd::parse_by_iri` on its own,
+//! because that function's tri-state is one `.ok().flatten()` away from being
+//! collapsed, and the difference it carries — ill-typed against opaque — is the
+//! difference between a defect a validator must report and an ordinary RDF term this
+//! crate simply cannot decide about.
 
 use alloc::string::{String, ToString};
 

@@ -189,6 +189,38 @@ impl fmt::Display for CdtError {
 
 impl core::error::Error for CdtError {}
 
+/// Why a value-space comparison had no answer.
+///
+/// A query cannot tell these apart — SPARQL propagates every one of them as the same
+/// expression error — but a **validator** must, because only one of them is a defect
+/// in the data. Keeping them separate here is what lets a consumer report "this
+/// literal is ill-typed" instead of "something could not be compared".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CdtTypeErrorKind {
+    /// A literal whose datatype PurRDF **does** model, carrying a lexical form that is
+    /// not in that datatype's lexical space — `"abc"^^xsd:integer`, or a `cdt:List`
+    /// literal whose lexical form does not parse.
+    ///
+    /// The literal denotes nothing, so no comparison with it has an answer. This is a
+    /// **defect**: the data says what it means and then fails to mean it, and a
+    /// validator must report it. Pinned by
+    /// `vectors/sparql-cdt/list-functions/list-less-than-error-03.rq`, which compares
+    /// `"1"^^cdt:List` — a well-formed literal with a malformed lexical form — and
+    /// requires the result to be unbound.
+    IllTyped,
+    /// A literal whose datatype is outside every value space PurRDF models.
+    ///
+    /// **Not** a defect: the literal is perfectly well-formed RDF that this crate
+    /// simply has nothing to say about. Two such literals might denote the same value
+    /// or different ones — the datatype could even be a user-defined restriction of
+    /// one PurRDF does model — so the honest answer is "no answer", never `false`.
+    Unmodelled,
+    /// Both terms denote, and the relation is simply not defined over the pair: two
+    /// IRIs under `<`, a blank node under any order, a `null` against a term.
+    Undefined,
+}
+
 /// A SPARQL **type error** raised by a value-space comparison.
 ///
 /// This is the third outcome of [`crate::list_equal`] / [`crate::list_less_than`]
@@ -197,8 +229,62 @@ impl core::error::Error for CdtError {}
 /// enclosing expression becomes an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdtTypeError {
+    /// Which of the three ways the comparison had no answer this is.
+    pub kind: CdtTypeErrorKind,
     /// A short, stable explanation of which pair could not be compared and why.
     pub reason: &'static str,
+}
+
+impl CdtTypeError {
+    /// A comparison refused because one side is ill-typed — a defect in the data.
+    #[must_use]
+    pub const fn ill_typed(reason: &'static str) -> Self {
+        Self {
+            kind: CdtTypeErrorKind::IllTyped,
+            reason,
+        }
+    }
+
+    /// A comparison refused because one side's datatype is outside every value space
+    /// PurRDF models. Not a defect.
+    #[must_use]
+    pub const fn unmodelled(reason: &'static str) -> Self {
+        Self {
+            kind: CdtTypeErrorKind::Unmodelled,
+            reason,
+        }
+    }
+
+    /// A comparison refused because the relation is not defined over this pair of
+    /// terms, both of which denote perfectly well.
+    #[must_use]
+    pub const fn undefined(reason: &'static str) -> Self {
+        Self {
+            kind: CdtTypeErrorKind::Undefined,
+            reason,
+        }
+    }
+
+    /// Whether this refusal is a defect in the data rather than a gap in the relation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtLiteral, CdtTerm, term_equal};
+    ///
+    /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    /// let ill = CdtTerm::Literal(CdtLiteral::typed("abc", XSD_INTEGER));
+    /// let one = CdtTerm::Literal(CdtLiteral::typed("1", XSD_INTEGER));
+    /// let opaque = CdtTerm::Literal(CdtLiteral::typed("x", "http://example.org/custom"));
+    ///
+    /// assert!(term_equal(&ill, &one).unwrap_err().is_ill_typed());
+    /// // An unmodelled datatype is well-formed RDF, so it is not a defect.
+    /// assert!(!term_equal(&opaque, &one).unwrap_err().is_ill_typed());
+    /// ```
+    #[must_use]
+    pub const fn is_ill_typed(&self) -> bool {
+        matches!(self.kind, CdtTypeErrorKind::IllTyped)
+    }
 }
 
 impl fmt::Display for CdtTypeError {

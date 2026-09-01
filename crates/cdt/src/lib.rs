@@ -140,7 +140,7 @@ pub use datatype::{
     CDT_LIST, CDT_MAP, CDT_NS, CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN,
     XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING,
 };
-pub use error::{CdtError, CdtTypeError};
+pub use error::{CdtError, CdtTypeError, CdtTypeErrorKind};
 pub use functions::{
     CDT_FUNCTIONS, CdtArity, CdtFn, CdtOutcome, MapRemoval, concat, contains, contains_key, get,
     head, integer_argument, keys, list_concat, list_constructor, list_contains, list_get,

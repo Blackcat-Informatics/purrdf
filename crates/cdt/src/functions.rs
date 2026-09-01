@@ -64,6 +64,7 @@ use purrdf_xsd::XsdValue;
 
 use crate::error::{CdtError, CdtTypeError};
 use crate::limits::{check_extent, list_extent, map_extent};
+use crate::literal::LiteralValue;
 use crate::ops::total_key_cmp;
 use crate::term::{CdtEntry, CdtKey, CdtTerm};
 use crate::value::{CdtContents, CdtValue};
@@ -444,7 +445,7 @@ impl<T> CdtOutcome<T> {
 
 /// A SPARQL expression error with a fixed explanation.
 fn raise<T>(reason: &'static str) -> CdtOutcome<T> {
-    CdtOutcome::Error(CdtTypeError { reason })
+    CdtOutcome::Error(CdtTypeError::undefined(reason))
 }
 
 // ── Argument coercion ───────────────────────────────────────────────────────────
@@ -493,9 +494,20 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
     if literal.language.is_some() {
         return None;
     }
-    match purrdf_xsd::parse_by_iri(&literal.lexical, &literal.datatype) {
-        Ok(Some(XsdValue::Integer { value, .. })) => Some(value),
-        _ => None,
+    // Routed through the crate's single lexical-to-value choke point rather than
+    // through `purrdf_xsd::parse_by_iri`, so the tri-state is never collapsed by
+    // accident here either. `cdt:get`'s contract makes all three non-integer outcomes
+    // one answer — `get-error-05.rq` (a string) and `get-error-06.rq` (an
+    // `xsd:decimal`) both require the call to be unbound — so this function returns
+    // `None` for an unmodelled datatype and for an ill-typed one alike. The
+    // distinction is preserved where it is observable, which is the comparison
+    // relations in `crate::ops`, not here.
+    match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
+        LiteralValue::Xsd(XsdValue::Integer { value, .. }) => Some(value),
+        LiteralValue::Xsd(_)
+        | LiteralValue::Cdt(_)
+        | LiteralValue::IllTyped { .. }
+        | LiteralValue::Opaque => None,
     }
 }
 
@@ -934,6 +946,16 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
 /// rule for an existential over comparisons, and it is the reason a single opaque
 /// element in a list cannot stop `cdt:contains` from finding what is there.
 ///
+/// # A blank node in the list is a definite miss, not an undecidable comparison
+///
+/// `contains-05.rq` searches `"[_:b,null,'_:b']"^^cdt:List` for a freshly minted
+/// `BNODE()` and requires the answer to be **bound** and `false`, while
+/// `contains-06.rq` requires the very term `cdt:head` just returned from that list to
+/// be found. Membership therefore compares blank nodes by identity, which is *not*
+/// what SEP-0009's `=` does — `list-equals-06.rq` requires `[_:b1] = [_:b2]` to be
+/// unbound. The two relations are asking different questions, and
+/// [`crate::ops::membership_equal`] is where the difference lives.
+///
 /// **The corpus does not exercise searching for `null` itself** — a SPARQL argument
 /// is never the null element, since an unbound argument raises before the call. If a
 /// consumer does pass [`CdtTerm::Null`], the answer follows [`crate::term_equal`],
@@ -956,7 +978,7 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
 pub fn list_contains(items: &[CdtTerm], term: &CdtTerm) -> CdtOutcome<bool> {
     let mut withheld: Option<CdtTypeError> = None;
     for item in items {
-        match crate::ops::term_equal(item, term) {
+        match crate::ops::membership_equal(item, term) {
             Ok(true) => return CdtOutcome::Value(true),
             Ok(false) => {}
             Err(error) => {
@@ -1352,7 +1374,7 @@ pub fn map_merge(maps: &[&[CdtEntry]]) -> CdtOutcome<CdtValue> {
 
 /// A SPARQL type error for a function applied to the wrong composite datatype.
 fn wrong_datatype<T>(wanted: &'static str) -> CdtOutcome<T> {
-    CdtOutcome::Error(CdtTypeError { reason: wanted })
+    CdtOutcome::Error(CdtTypeError::undefined(wanted))
 }
 
 /// `cdt:size(…)` — dispatching on the argument's composite datatype.
