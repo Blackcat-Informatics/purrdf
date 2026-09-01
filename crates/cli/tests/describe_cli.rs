@@ -570,84 +570,230 @@ fn base_resolves_relative_iris_while_parsing() {
     );
 }
 
-/// `--base` is refused when NEITHER leg can spend it, and honoured when either one can.
+/// A RELATIVE `--iri` resolves against the base in force instead of silently matching
+/// nothing.
 ///
-/// A pack SOURCE leaves nothing to resolve — a pack stores fully-resolved terms — and an
-/// N-Triples source cannot resolve one either, so with a pack target (which can express no
-/// base) both are refused by name. But a Turtle source with a pack target is NOT refused:
-/// the parse leg spends the base, and refusing there would reject a flag that is doing real
-/// work. That asymmetry is the whole point of deciding on both legs rather than one.
+/// `--iri` is command-line text with no retrieval IRI of its own, and it is compared against
+/// graph terms that are absolute by the time the parser is done. So a relative selector used
+/// to match nothing at all, and `Describer::describe_iris` drops a term the dataset does not
+/// contain: the command exited 0 with an EMPTY document and said nothing about a required
+/// argument that denoted no resource.
 #[test]
-fn base_with_a_pack_end_is_refused_by_name() {
+fn a_relative_iri_selector_resolves_against_the_base_in_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "rel.ttl", "<alice> <../knows> <bob> .\n");
+
+    // The reproduction, now answered: `--iri alice` denotes what `<alice>` in the document
+    // denotes, because both resolve against the same base.
+    let based = run(&[
+        "describe",
+        "--iri",
+        "alice",
+        "--from",
+        "turtle",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/dir/",
+        &data,
+    ]);
+    assert_eq!(code(&based), 0, "{}", stderr(&based));
+    assert_eq!(
+        stdout(&based).trim_end(),
+        "<http://example.org/dir/alice> <http://example.org/knows> \
+         <http://example.org/dir/bob> .",
+        "the selector must resolve against --base, not match nothing"
+    );
+
+    // The absolute spelling of the same request is byte-for-byte the same answer — the
+    // resolution adds a spelling, it does not change what an absolute selector denotes.
+    let absolute = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/dir/alice",
+        "--from",
+        "turtle",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/dir/",
+        &data,
+    ]);
+    assert_eq!(
+        stdout(&based),
+        stdout(&absolute),
+        "the relative and absolute spellings must name the same resource"
+    );
+
+    // With NO `--base`, a filesystem input still has its own derived `file://` retrieval
+    // IRI, and the selector resolves against THAT — the same base the document parsed under,
+    // which is what makes the selector able to match at all.
+    let derived = run(&[
+        "describe", "--iri", "alice", "--from", "turtle", "--to", "ntriples", &data,
+    ]);
+    assert_eq!(code(&derived), 0, "{}", stderr(&derived));
+    let retrieval =
+        purrdf_cli::file_retrieval_iri(&data).expect("the fixture has a file:// retrieval IRI");
+    let resolved = retrieval.replace("/rel.ttl", "/alice");
+    assert!(
+        stdout(&derived).contains(&format!("<{resolved}>")),
+        "the derived retrieval IRI must resolve the selector too:\n{}",
+        stdout(&derived)
+    );
+}
+
+/// A relative `--iri` with NOTHING in scope is REFUSED, and an absolute one the graph does
+/// not mention is still a legitimate empty description. The two are deliberately not
+/// conflated.
+///
+/// A relative reference denotes no resource until it is resolved, so it is a malformed
+/// request — a usage error decided before the source is read. An absolute IRI that is simply
+/// absent is a well-formed question whose true answer is empty, exactly as `DESCRIBE` defines
+/// it; refusing that would break "describe each of these IRIs" and contradict the library.
+#[test]
+fn an_unresolvable_selector_is_refused_and_an_absent_one_is_an_empty_answer() {
+    let refused = pipe(
+        &[
+            "describe", "--iri", "alice", "--from", "ntriples", "--to", "ntriples", "-",
+        ],
+        "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n",
+    );
+    assert_eq!(
+        code(&refused),
+        2,
+        "a selector that denotes nothing is a usage error:\n{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("iri-relative-no-base"),
+        "the refusal carries the shared code:\n{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("--iri") && stderr(&refused).contains("--base"),
+        "the refusal names the argument and the remedy that applies to it:\n{}",
+        stderr(&refused)
+    );
+    // The remedy must be one the operator can actually apply to a command-line argument —
+    // the library's own `@base`/`xml:base` hint names document directives `--iri` has none of.
+    assert!(
+        !stderr(&refused).contains("@base"),
+        "a command-line argument must not be told to add a document directive:\n{}",
+        stderr(&refused)
+    );
+    assert!(
+        stdout(&refused).trim().is_empty(),
+        "a refused request emits no description:\n{}",
+        stdout(&refused)
+    );
+
     let dir = tempfile::tempdir().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
+    let absent = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/nobody",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(
+        code(&absent),
+        0,
+        "an absolute IRI absent from the graph is a true empty answer:\n{}",
+        stderr(&absent)
+    );
+    assert!(
+        stdout(&absent).trim().is_empty(),
+        "and the answer is empty:\n{}",
+        stdout(&absent)
+    );
+}
+
+/// `--base` is NEVER refused by `describe`, because `--iri` always spends it.
+///
+/// This combination used to be refused on the format rows alone — a pack source and an
+/// N-Triples target can spend a base on neither the parse nor the serialize leg — and that
+/// refusal stood on the old wiring, in which `--iri` was compared verbatim. Now that the
+/// selector resolves, `describe` has a leg no format row can describe (the same shape as a
+/// ShEx shape map), so refusing here would reject a base doing the one job that makes the
+/// selector denote anything.
+#[test]
+fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "rel.ttl", "<alice> <../knows> <bob> .\n");
     let pack = dir
         .path()
         .join("data.purrpck")
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/dir/",
+        &data,
+        &pack,
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
+    // A pack SOURCE stores fully-resolved terms and an N-Triples TARGET can express no base,
+    // so neither format leg can spend it — and it is still honoured, by `--iri`.
     let from_pack = run(&[
         "describe",
         "--iri",
-        "http://example.org/alice",
+        "alice",
         "--to",
         "ntriples",
         "--base",
-        "http://example.org/",
+        "http://example.org/dir/",
         &pack,
     ]);
-    assert_eq!(code(&from_pack), 2, "{}", stderr(&from_pack));
-    assert!(
-        stderr(&from_pack).contains("--base"),
-        "{}",
+    assert_eq!(
+        code(&from_pack),
+        0,
+        "the pack lane's base is spent by --iri: {}",
         stderr(&from_pack)
     );
+    assert!(
+        stdout(&from_pack).contains("<http://example.org/dir/alice>"),
+        "and it really resolved the selector:\n{}",
+        stdout(&from_pack)
+    );
 
-    let out_pack = dir
-        .path()
-        .join("out.purrpck")
-        .to_str()
-        .expect("temp path")
-        .to_owned();
-    // A pack TARGET with a source whose grammar admits no relative IRI: neither leg can
-    // spend the base, so it is refused by name rather than accepted and never read.
+    // The same for an absolute-only source AND an absolute-only target: the combination the
+    // format rows call inert is exactly the one `--iri` makes live.
     let ntriples = write_file(
         dir.path(),
         "data.nt",
-        "<http://example.org/alice> <http://example.org/p> <http://example.org/bob> .\n",
+        "<http://example.org/dir/alice> <http://example.org/p> <http://example.org/bob> .\n",
     );
-    let to_pack = run(&[
+    let both_inert = run(&[
         "describe",
         "--iri",
-        "http://example.org/alice",
+        "alice",
+        "--from",
+        "ntriples",
+        "--to",
+        "ntriples",
         "--base",
-        "http://example.org/",
+        "http://example.org/dir/",
         &ntriples,
-        &out_pack,
-    ]);
-    assert_eq!(code(&to_pack), 2, "{}", stderr(&to_pack));
-    assert!(stderr(&to_pack).contains("--base"), "{}", stderr(&to_pack));
-
-    // The same pack target with a TURTLE source is honoured: the parse leg spends the base,
-    // and a refusal there would reject a flag that is resolving the document's own IRIs.
-    let turtle_to_pack = run(&[
-        "describe",
-        "--iri",
-        "http://example.org/alice",
-        "--base",
-        "http://example.org/",
-        &data,
-        &out_pack,
     ]);
     assert_eq!(
-        code(&turtle_to_pack),
+        code(&both_inert),
         0,
-        "a base the parse leg spends must not be refused: {}",
-        stderr(&turtle_to_pack)
+        "neither format leg can spend it, but --iri can: {}",
+        stderr(&both_inert)
+    );
+    assert!(
+        stdout(&both_inert).contains("<http://example.org/dir/alice>"),
+        "and the selector resolved:\n{}",
+        stdout(&both_inert)
     );
 }
 

@@ -83,6 +83,29 @@ w3c/
 Each `manifest.ttl` declares its `mf:assumedTestBase`; the harness resolves each
 action/result file's base IRI as `assumedTestBase + filename`.
 
+## Adding a fixture moves three numbers, not one
+
+The harness counts cases itself, but three places restate the count and none of
+them derives it, so a new fixture reddens gates that look unrelated:
+
+1. **`docs/CONFORMANCE.md`, the generated matrix block** — regenerate with
+   `python3 scripts/conformance-matrix.py --write-doc`. Note that
+   `make conformance` *verifies* this block but never writes it, so it fails
+   with a diff until you regenerate.
+2. **`docs/CONFORMANCE.md`, the hand-maintained "Scoreboard (per engine)" row** —
+   `--write-doc` does **not** touch it. Update the `N / N` and the per-format
+   split by hand.
+3. **`scripts/check-doc-claims.py`, the syntax-codec claim** — only the suite
+   TOTAL reaches the generated matrix block, so that claim hard-anchors
+   `nquads`/`ntriples`/`rdfxml`/`trig` and derives `turtle` as the remainder.
+   Adding a Turtle fixture needs no edit there; adding one to any **other**
+   format means moving its anchor, or the remainder absorbs the change and the
+   gate fails naming turtle. Vendoring the `iri/` sub-suite moved the `trig`
+   anchor from 60 to 67 for exactly this reason.
+
+The split is anchored rather than derived on purpose: it is what makes a
+per-format drift visible instead of cancelling out inside the total.
+
 ## License
 
 The vendored test files are W3C test-suite content, dual-licensed under the

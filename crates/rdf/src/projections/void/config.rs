@@ -720,6 +720,7 @@ pub struct VoidConfig {
     static_statements: Vec<VoidStaticStatement>,
     limits: ProjectionLimits,
     execution_limits: VoidExecutionLimits,
+    document_base_iri: Option<String>,
 }
 
 impl VoidConfig {
@@ -910,7 +911,39 @@ impl VoidConfig {
             static_statements,
             limits,
             execution_limits,
+            document_base_iri: None,
         })
+    }
+
+    /// Name the IRI the emitted VoID document is published at.
+    ///
+    /// This is the document's own base, distinct from
+    /// [`dataset_iri`](Self::dataset_iri) (the resource the description is ABOUT) and from
+    /// [`generated_resource_base_iri`](Self::generated_resource_base_iri) (the namespace
+    /// generated partition and linkset terms are minted under). A projection that emits
+    /// Turtle and cannot declare its own base is the same accepted-and-absent asymmetry
+    /// the ingress side refuses.
+    ///
+    /// Caller-owned with no fabricated default: unset, the document declares no base and
+    /// writes every IRI absolute, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a base that is not an absolute IRI.
+    pub fn with_document_base_iri(
+        mut self,
+        document_base_iri: Option<String>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(base) = &document_base_iri {
+            validate_absolute_iri(base, "VoID document base IRI")?;
+        }
+        self.document_base_iri = document_base_iri;
+        Ok(self)
+    }
+
+    /// The IRI the emitted document is published at, when the caller named one.
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base_iri.as_deref()
     }
 
     /// Selected registered native RDF syntax.
@@ -1013,6 +1046,8 @@ struct RawVoidConfig {
     static_statements: Vec<VoidStaticStatement>,
     limits: ProjectionLimits,
     execution_limits: VoidExecutionLimits,
+    #[serde(default)]
+    document_base_iri: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for VoidConfig {
@@ -1039,6 +1074,8 @@ impl<'de> Deserialize<'de> for VoidConfig {
             raw.limits,
             raw.execution_limits,
         )
+        .map_err(serde::de::Error::custom)?
+        .with_document_base_iri(raw.document_base_iri)
         .map_err(serde::de::Error::custom)
     }
 }

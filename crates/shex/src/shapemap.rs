@@ -29,6 +29,40 @@
 //! Node and predicate IRIs are written `<iri>` (resolved against an optional
 //! base); blank nodes `_:label`; literals `"lex"`, `"lex"^^<dt>`, `"lex"@tag`.
 //! The shape label is `@START` or `@<label>`.
+//!
+//! # No prefixed names, because the grammar has none and the spec declines to
+//! # say what one would mean
+//!
+//! `ex:S1` is rejected everywhere an IRI is expected, and the diagnostic says so
+//! by name rather than as a bare syntax error. This is the grammar's own answer,
+//! not a shortcut:
+//!
+//! * the ShapeMap grammar's `[136s] iri` production is **`IRIREF`** — the
+//!   `| prefixedName` alternative is present in the specification's source but
+//!   **commented out**, as are `shapeSpec`'s `ATPNAME_NS`/`ATPNAME_LN` arms. The
+//!   `prefixedName`/`PNAME_LN`/`PNAME_NS`/`PN_PREFIX` productions survive as
+//!   defined-but-unreachable, so the exclusion is deliberate rather than an
+//!   oversight. ShapeMap does **not** inherit ShExC's
+//!   `iri ::= IRIREF | PrefixedName`; it defines its own and drops the alternative;
+//! * the one paragraph that mentions prefixes (§ "ShapeMap grammar") introduces a
+//!   *resolution context* — "a base IRI and a map of prefix to namespace IRI" —
+//!   and then says: "Though it is common practice to resolve shape references
+//!   against a `resolution context` found in the schema and node references
+//!   agianst \[sic] a `resolution context` found in the data (e.g. Turtle
+//!   prefixes), **this specification does not specifiy \[sic] that behavior**."
+//!
+//! So the spec names the exact rule an implementer would reach for and explicitly
+//! refuses to standardize it. Resolving `ex:` against the schema's prefixes would
+//! be inventing a binding the specification withheld — the same fabricated default
+//! this repository refuses for every other caller-supplied vocabulary — and the
+//! spec's own sentence has the two halves of one association resolving against
+//! *different* documents, which can bind one prefix to two namespaces. There is no
+//! single rule to implement, so none is: a prefixed name is refused with the reason.
+//!
+//! The **base** is a different case and is threaded, which is why `<S1>` works: a
+//! relative `IRIREF` is live in the grammar, and the base half of the resolution
+//! context has a caller-supplied source (RFC-3986 §5.1.2). A prefixed name is a
+//! disabled production whose environment the spec declined to define.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
@@ -384,9 +418,15 @@ impl MapParser {
         match self.peek() {
             Some('<') if self.peek_at(1) == Some('<') => self.parse_triple_term(),
             Some('<') => Ok(TermValue::iri(self.parse_iri()?)),
+            // `_` first: `_:label` is a blank node, and `peek_prefixed_name` excludes it.
             Some('_') => self.parse_blank(),
             Some('"') => self.parse_literal(),
-            _ => Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)")),
+            _ => match self.peek_prefixed_name() {
+                Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
+                None => {
+                    Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)"))
+                }
+            },
         }
     }
 
@@ -415,6 +455,11 @@ impl MapParser {
     }
 
     fn parse_predicate(&mut self) -> Result<String> {
+        // BEFORE the `a` keyword: `a:b` is a prefixed name whose prefix happens to be
+        // `a`, and taking the keyword first would read it as rdf:type plus junk.
+        if let Some(name) = self.peek_prefixed_name() {
+            return Err(self.prefixed_name_err(&name, "a predicate must be `a` or an IRI"));
+        }
         if self.take_keyword("a") {
             return Ok(RDF_TYPE.to_owned());
         }
@@ -426,6 +471,11 @@ impl MapParser {
     }
 
     fn parse_shape_label(&mut self) -> Result<ShapeSelector> {
+        // BEFORE the `START` keyword, for the reason `parse_predicate` checks before `a`:
+        // `START:S` is a prefixed name, not the start-shape keyword followed by junk.
+        if let Some(name) = self.peek_prefixed_name() {
+            return Err(self.prefixed_name_err(&name, "a shape label must be `START` or an IRI"));
+        }
         if self.take_keyword("START") {
             return Ok(ShapeSelector::Start);
         }
@@ -436,7 +486,76 @@ impl MapParser {
         }
     }
 
+    /// The Turtle-family PREFIXED NAME at the cursor (`ex:S1`, `:S1`, `ex:`), if the
+    /// input looks like one. Detection only — nothing is consumed.
+    ///
+    /// `_:label` is deliberately NOT one: that is `BLANK_NODE_LABEL`, which the grammar
+    /// does admit wherever a term is allowed, so it must keep reaching [`Self::parse_blank`].
+    fn peek_prefixed_name(&self) -> Option<String> {
+        let mut at = self.pos;
+        let mut name = String::new();
+        while let Some(&c) = self.chars.get(at) {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                name.push(c);
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        // `PNAME_NS ::= PN_PREFIX? ':'`, so an empty prefix still forms one.
+        if self.chars.get(at) != Some(&':') || name == "_" {
+            return None;
+        }
+        name.push(':');
+        at += 1;
+        while let Some(&c) = self.chars.get(at) {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '%') {
+                name.push(c);
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        Some(name.trim_end_matches('.').to_owned())
+    }
+
+    /// Reject a prefixed name by NAMING the reason, rather than as a bare syntax error.
+    ///
+    /// The ShapeMap grammar's `iri` production is `IRIREF` alone; the specification's own
+    /// source carries the `| prefixedName` alternative COMMENTED OUT (and the same for
+    /// `shapeSpec`'s `ATPNAME_NS`/`ATPNAME_LN` arms), so this is a deliberate exclusion
+    /// rather than an omission. See the module documentation for why PurRDF does not
+    /// extend past it.
+    fn prefixed_name_err(&self, name: &str, position: &str) -> ShexError {
+        ShexError::syntax(
+            format!(
+                "{position} in angle brackets; `{name}` is a prefixed name, and the ShapeMap \
+                 grammar admits none — its `iri` production is IRIREF only. The specification \
+                 also declines to say where a prefix map would come from, recording that \
+                 resolving shape references against the schema's prefixes and node references \
+                 against the data's is \"common practice\" that \"this specification does not \
+                 specify\"; two documents may bind one prefix differently, so PurRDF resolves \
+                 none rather than silently choosing a side. Write the IRI in full \
+                 (`<http://example.org/S1>`), or a relative `<S1>` against a base"
+            ),
+            self.pos,
+        )
+    }
+
+    /// An `IRIREF`: `'<' … '>'`, resolved against the base in scope.
+    ///
+    /// The opening `<` is verified HERE rather than trusted from the caller. It used not
+    /// to be, and the one caller that did not pre-check — a literal's `^^` datatype — read
+    /// the first character of `"7"^^xsd:integer`'s datatype as the opening bracket and ran
+    /// to end-of-input, reporting `unterminated IRI` for a document whose real defect was a
+    /// prefixed name.
     fn parse_iri(&mut self) -> Result<String> {
+        if self.peek() != Some('<') {
+            if let Some(name) = self.peek_prefixed_name() {
+                return Err(self.prefixed_name_err(&name, "an IRI must be written"));
+            }
+            return Err(self.err("expected an IRI in angle brackets"));
+        }
         self.pos += 1; // '<'
         let mut raw = String::new();
         loop {

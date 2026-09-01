@@ -42,13 +42,17 @@
 //! fall back to and §5.1.3 is vacuous there. Those surfaces therefore hard-fail exactly
 //! where §5.1.4 says to.
 //!
-//! §5.1.3 is implemented in ONE place, `purrdf-cli`, which is the one surface that has a
-//! retrieval IRI: a filesystem input's RFC-8089 `file://` IRI, derived from the
-//! canonicalized path and applied only when no base of higher precedence was given.
-//! Keeping it there is what preserves byte determinism for every other surface (a base
-//! invented from the local filesystem would differ per machine and leak local paths into
-//! published RDF) while still answering §5.1.3 where the retrieval IRI genuinely exists.
-//! Nothing filesystem-shaped crosses into this crate or into `purrdf-rdf`.
+//! §5.1.3 is implemented in ONE place, `purrdf_slice::retrieval`: a filesystem input's
+//! RFC-8089 `file://` IRI, derived from the canonicalized path (with the Windows
+//! extended-length and UNC translation that derivation requires) and applied only when no
+//! base of higher precedence was given. `purrdf-slice` is the only *library* crate in the
+//! workspace that opens files, and the two other surfaces that have a retrieval IRI —
+//! `purrdf-shapes`' shape-union loader and `purrdf-cli` — consume it rather than
+//! re-deriving one. Keeping it in a single filesystem-facing crate is what preserves byte
+//! determinism for every other surface (a base invented from the local filesystem would
+//! differ per machine and leak local paths into published RDF) while still answering
+//! §5.1.3 where the retrieval IRI genuinely exists. Nothing filesystem-shaped crosses into
+//! this crate or into `purrdf-rdf`, which is what keeps both wasm32-clean.
 //!
 //! [`BaseIri`] carries the "is absolute" invariant in the type, so the check
 //! happens once at construction instead of at every resolution site, and

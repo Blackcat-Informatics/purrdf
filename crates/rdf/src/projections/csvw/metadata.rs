@@ -10,6 +10,8 @@ use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 use serde_json::{Map, Value};
 
+use purrdf_iri::BaseIri;
+
 use super::super::{ProjectionError, validate_absolute_iri};
 use super::config::{CsvwConfig, CsvwContext};
 use super::input::{CsvwAction, CsvwInput, CsvwWarning, CsvwWarningKind};
@@ -87,7 +89,7 @@ impl MetadataLoader<'_> {
         let context_value = object.get("@context").ok_or_else(|| {
             ProjectionError::integrity("CSVW metadata requires an @context").at_path(resource)
         })?;
-        let mut base_iri = resource.to_owned();
+        let mut base_iri = document_base(resource)?;
         let mut language = None;
         let mut prefixes = self.config.context().prefixes().clone();
         match context_value {
@@ -281,7 +283,7 @@ impl MetadataLoader<'_> {
                         .at_path(&iri)
                 })?;
                 let schema_context = DocumentContext {
-                    base_iri: iri.clone(),
+                    base_iri: document_base(&iri)?,
                     language: context.language.clone(),
                     expansion: context.expansion.clone(),
                 };
@@ -686,7 +688,7 @@ impl MetadataLoader<'_> {
     ) -> Result<CsvwDialect, ProjectionError> {
         check_type(object, "Dialect", resource)?;
         if let Some(value) = object.get("@id") {
-            parse_id_value(value, resource, resource)?;
+            parse_id_value(value, resource, &document_base(resource)?)?;
         }
         let mut dialect = CsvwDialect::default();
         dialect.comment_prefix = optional_string(
@@ -803,7 +805,7 @@ impl MetadataLoader<'_> {
             resource,
             location,
             &DocumentContext {
-                base_iri: resource.to_owned(),
+                base_iri: document_base(resource)?,
                 language: None,
                 expansion: self.config.context().clone(),
             },
@@ -1270,7 +1272,12 @@ impl MetadataLoader<'_> {
 
 #[derive(Clone)]
 struct DocumentContext {
-    base_iri: String,
+    /// The base every relative reference in this document resolves against, carried as
+    /// a [`BaseIri`] so RFC-3986 §5.1's "the base is absolute" precondition is checked
+    /// ONCE, where the base is established, instead of re-derived at every resolution
+    /// site (or, as before, never checked at all because `purrdf_iri::parse` accepts a
+    /// relative one and only the resolved OUTPUT was inspected).
+    base_iri: BaseIri,
     language: Option<String>,
     expansion: CsvwContext,
 }
@@ -1451,7 +1458,7 @@ fn ensure_unique_table_urls(tables: &[CsvwTable], resource: &str) -> Result<(), 
 fn parse_context_object(
     map: &Map<String, Value>,
     resource: &str,
-    base_iri: &mut String,
+    base_iri: &mut BaseIri,
     language: &mut Option<String>,
     prefixes: &mut BTreeMap<String, String>,
     config: &CsvwConfig,
@@ -1466,7 +1473,13 @@ fn parse_context_object(
                             .at_path(resource),
                     );
                 };
-                *base_iri = resolve_iri(base_iri, reference, "CSVW context base")?;
+                // RFC-3986 §5.1.1: an in-document `@base` may itself be relative and then
+                // resolves against the base already in force, so this REBINDS rather than
+                // replaces — and the rebound value is still a checked `BaseIri`.
+                *base_iri = base_iri.rebind(reference).map_err(|error| {
+                    ProjectionError::syntax(format!("invalid CSVW context base: {error}"))
+                        .at_path(resource)
+                })?;
             }
             "@language" => {
                 if let Some(tag) = value.as_str().filter(|tag| valid_language_tag(tag)) {
@@ -1526,14 +1539,38 @@ fn parse_context_object(
     Ok(())
 }
 
-fn resolve_iri(base: &str, reference: &str, role: &str) -> Result<String, ProjectionError> {
-    let base = purrdf_iri::parse(base)
-        .map_err(|error| ProjectionError::configuration(format!("invalid {role} base: {error}")))?;
+/// Resolve one CSVW IRI reference against the document base.
+///
+/// `base` is a [`BaseIri`], not a string: RFC-3986 §5.1 requires the base to be absolute,
+/// and this seam used to skip that precondition entirely — `purrdf_iri::parse` accepts a
+/// relative base, so the only thing standing between a relative base and a resolved term
+/// was the absoluteness check on the OUTPUT, which passes whenever the reference happens
+/// to be absolute. Taking the checked type means the precondition holds by construction
+/// at every call site, and cannot be re-derived differently at any of them.
+///
+/// The output check stays, because it is a DIFFERENT check: [`validate_absolute_iri`]
+/// runs the RFC-3987 term-position grammar the IR interns under, which resolution alone
+/// does not guarantee.
+fn resolve_iri(base: &BaseIri, reference: &str, role: &str) -> Result<String, ProjectionError> {
     let resolved = base
         .resolve(reference)
         .map_err(|error| ProjectionError::syntax(format!("invalid {role}: {error}")))?;
     validate_absolute_iri(resolved.as_str(), role)?;
     Ok(resolved.as_str().to_owned())
+}
+
+/// The document's own retrieval IRI as a checked base.
+///
+/// Every CSVW resource and action IRI is already validated absolute at the input boundary
+/// (`CsvwInput`), so this cannot fail for a well-formed input; when it does, it is a
+/// configuration error naming the resource rather than a resolution failure blamed on
+/// some reference further down the document.
+fn document_base(resource: &str) -> Result<BaseIri, ProjectionError> {
+    BaseIri::parse(resource).map_err(|error| {
+        ProjectionError::configuration(format!(
+            "CSVW resource `{resource}` is not a usable document base: {error}"
+        ))
+    })
 }
 
 fn parse_optional_id(
@@ -1551,12 +1588,16 @@ fn parse_optional_id(
             .transpose(),
         Some(_) => {
             invalid_warning(resource, location, "link string", warnings);
-            Ok(Some(context.base_iri.clone()))
+            Ok(Some(context.base_iri.as_str().to_owned()))
         }
     }
 }
 
-fn parse_id_value(value: &Value, resource: &str, base: &str) -> Result<String, ProjectionError> {
+fn parse_id_value(
+    value: &Value,
+    resource: &str,
+    base: &BaseIri,
+) -> Result<String, ProjectionError> {
     let value = value
         .as_str()
         .ok_or_else(|| ProjectionError::integrity("CSVW @id must be a string").at_path(resource))?;
@@ -2048,7 +2089,7 @@ fn column_reference_property(
 
 fn link_property(
     value: Option<&Value>,
-    base: &str,
+    base: &BaseIri,
     resource: &str,
     location: &str,
     warnings: &mut Vec<CsvwWarning>,

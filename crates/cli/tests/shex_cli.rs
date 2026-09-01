@@ -601,6 +601,71 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
     );
 }
 
+/// A prefixed name in the `MAP` is refused with the GRAMMAR's reason, not a bare syntax error.
+///
+/// `ex:UserShape` is a natural thing to try, because the operator just wrote `PREFIX ex:` in
+/// the schema this very command loaded. It is nonetheless not ShapeMap: the grammar's `iri`
+/// production is `IRIREF` only — the specification's source carries the `| prefixedName`
+/// alternative commented out — and the one paragraph that mentions prefixes calls resolving
+/// shape references against the schema's prefixes "common practice" that "this specification
+/// does not specify". So the answer is a refusal that says all of that and names the remedy,
+/// rather than leaving the operator to guess at "syntax error".
+#[test]
+fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    // The schema really does declare `ex:`, so this is the tempting invocation.
+    assert!(SCHEMA.contains("PREFIX ex: <http://example.org/>"));
+    let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "ex:alice@ex:UserShape",
+    ]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let why = stderr(&out);
+    assert!(
+        why.contains("`ex:alice` is a prefixed name"),
+        "the refusal quotes what it rejected: {why}"
+    );
+    assert!(
+        why.contains("IRIREF only"),
+        "and names the grammar production: {why}"
+    );
+    assert!(
+        why.contains("does not") && why.contains("specify"),
+        "and says the spec declined to define the prefix map: {why}"
+    );
+    assert!(
+        why.contains("Write the IRI in full"),
+        "and names the remedy: {why}"
+    );
+    assert!(stdout(&out).is_empty(), "no verdict is invented");
+
+    // The remedy actually works, in both halves of the association.
+    let full = run(&["shex", "--schema", &schema, "--data", &data, ALICE]);
+    assert_eq!(code(&full), 0, "{}", stderr(&full));
+    assert!(stderr(&full).contains("shex nonconformant 1\n"));
+
+    // And so does the relative form the message offers, against `--base`.
+    let relative = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "--base",
+        "http://example.org/",
+        "<alice>@<UserShape>",
+    ]);
+    assert_eq!(code(&relative), 0, "{}", stderr(&relative));
+    assert!(stderr(&relative).contains("shex nonconformant 1\n"));
+}
+
 /// A schema that violates the ShEx 2.1 §5.7 structural requirements is refused, naming the
 /// section, rather than validated against a dangling reference.
 #[test]
@@ -1101,9 +1166,18 @@ fn a_schema_on_stdin_with_a_relative_iri_is_refused_not_vacuously_decided() {
     );
 }
 
-/// `--base` with a pack data source is refused by name (a pack stores fully-resolved terms).
+/// `--base` with a PACK data source is accepted, because the shape map still consumes it.
+///
+/// A pack stores fully-resolved terms and cannot use a base, so this pairing used to be
+/// refused on the data source's syntax alone. That was an over-refusal of a legitimate
+/// command — a verified pack validated through a relative shape map — and the justification
+/// for it (`--base` also reaching the SCHEMA) no longer exists now that the schema carries
+/// its own retrieval IRI. `MAP` is required, is command-line text with no retrieval IRI, and
+/// its grammar admits relative references, so a base handed to `shex` always has a live
+/// consumer. This is the same one-live-leg rule that keeps `convert --base X --to ntriples`
+/// working from a relative-admitting source.
 #[test]
-fn base_with_a_pack_data_source_is_refused_by_name() {
+fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
     let dir = tempfile::tempdir().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
@@ -1116,7 +1190,50 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
     let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
+    // A RELATIVE shape map over the pack: only `--base` can resolve `<alice>` and
+    // `<UserShape>`, so the run decides a node exactly when the base did real work.
     let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &pack,
+        "--base",
+        "http://example.org/",
+        "<alice>@<UserShape>",
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"node\":\"<http://example.org/alice>\""),
+        "the shape map's relative node resolved against --base:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("shex nonconformant 1\n"),
+        "and the resolved association was actually decided against the pack's terms: {}",
+        stderr(&out)
+    );
+
+    // The negative control that keeps the positive honest: without `--base` the same
+    // relative map is REFUSED, because argv carries no retrieval IRI to fall back to.
+    let unbased = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &pack,
+        "<alice>@<UserShape>",
+    ]);
+    assert_eq!(code(&unbased), 1, "{}", stdout(&unbased));
+    assert!(
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal names the condition --base fixes: {}",
+        stderr(&unbased)
+    );
+
+    // An ABSOLUTE map over the pack still works with `--base` present and simply unused by
+    // that document — accepted, exactly as `convert` accepts a base only one leg spends.
+    let absolute = run(&[
         "shex",
         "--schema",
         &schema,
@@ -1126,8 +1243,8 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
         "http://example.org/",
         ALICE,
     ]);
-    assert_eq!(code(&out), 2, "a usage error");
-    assert!(stderr(&out).contains("--base"), "{}", stderr(&out));
+    assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
+    assert!(stderr(&absolute).contains("shex nonconformant 1\n"));
 }
 
 /// The two global document flags are refused rather than silently ignored: `shex` transcodes

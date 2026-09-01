@@ -28,12 +28,13 @@
 
 use purrdf_iri::BaseOrigin;
 use purrdf_rdf::native_codecs::{
-    NativeRdfFormat, parse_dataset, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options, transcode_under_document_base,
+    NativeRdfFormat, SerializeOptions, StatementLayer, parse_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_with,
+    transcode_under_document_base,
 };
 use purrdf_rdf::{
     JsonLdSerializeOptions, ParseOptions, SerializeGraph, TermValue, datasets_isomorphic,
-    parse_dataset_with, serialize_dataset,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset,
 };
 
 const P: &str = "<http://example.org/p>";
@@ -666,6 +667,242 @@ fn a_context_that_declares_its_own_base_keeps_it_over_the_egress_base() {
     assert!(
         !text.contains(EGRESS_BASE),
         "the caller-supplied base must not override the document's own:\n{text}"
+    );
+}
+
+// ── The combination that had no entry point: base + selection + statement layer ──
+//
+// `serialize_dataset` took a selection and the statement layer but hardcoded no base;
+// `serialize_dataset_to_format` took a base but forced `SerializeGraph::Dataset` AND the
+// projection contract, which drops every reifier and annotation row for a star-incapable
+// format. Three consumer surfaces (wasm `Dataset.serialize`, Python `to_rdf_xml`, Python
+// `Store.dump`) therefore had to choose between a base and the RDF 1.2 statement layer.
+// `serialize_dataset_with` is the row that was missing from the table.
+
+/// A one-quad document with a POPULATED RDF 1.2 statement layer: the base triple, a
+/// reifier binding it, and one annotation on that reifier.
+///
+/// The subject sits inside the egress base's directory and the object beside it, so a
+/// document written under the base has something to relativize as well as something to
+/// reify.
+fn egress_source_with_statement_layer() -> String {
+    format!(
+        "<{EGRESS_IN_DIR}> <{EGRESS_PREDICATE}> <{EGRESS_SIBLING}> .\n\
+         <http://example.org/dir/r> \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+         <<( <{EGRESS_IN_DIR}> <{EGRESS_PREDICATE}> <{EGRESS_SIBLING}> )>> .\n\
+         <http://example.org/dir/r> <http://example.org/dir/confidence> \"0.9\" .\n"
+    )
+}
+
+/// A DOCUMENT BASE AND THE RDF 1.2 STATEMENT LAYER, TOGETHER, UNDER A NON-`Dataset`
+/// SELECTION — for every format that can express a base.
+///
+/// This is the exact combination no public entry point could express. The assertion is
+/// deliberately both halves at once, because the defect was that you could have either
+/// one but not both: the emitted document must DECLARE its base and relativize against
+/// it, AND every reifier and annotation row must still be there. Isomorphism against the
+/// source is what proves the second half — a dropped reifier is not isomorphic — and the
+/// explicit row counts are asserted first so a failure names which half broke.
+///
+/// `SerializeGraph::DefaultGraph` is the non-`Dataset` selection under test because it is
+/// the one that KEEPS the statement layer (a `Named` selection emits no statement rows at
+/// all, by the same oxigraph-parity filter, and is covered by the accounting test below).
+/// It is also exactly what Python's `Store.dump` passes.
+#[test]
+fn a_base_and_the_statement_layer_survive_together_under_a_non_dataset_selection() {
+    let source = egress_source_with_statement_layer();
+    let dataset = parse_dataset(
+        source.as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("statement-layer fixture parses");
+    assert_eq!(dataset.reifiers().count(), 1, "fixture has one reifier");
+    assert_eq!(
+        dataset.annotations().count(),
+        1,
+        "fixture has one annotation"
+    );
+
+    for format in NativeRdfFormat::all().filter(|format| format.emits_base()) {
+        let outcome = serialize_dataset_with(
+            &dataset,
+            format,
+            Some(EGRESS_BASE),
+            &SerializeOptions {
+                selection: SerializeGraph::DefaultGraph,
+                statement_layer: StatementLayer::Emit,
+                jsonld_options: None,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{format:?}: base + statement layer must serialize: {e}"));
+
+        assert_eq!(
+            outcome.statement_rows_dropped, 0,
+            "{format:?} was asked to EMIT the statement layer, so nothing may be reported \
+             dropped"
+        );
+
+        let text = String::from_utf8(outcome.bytes.clone()).expect("utf-8 output");
+
+        // Half one: the base is declared where this syntax reads a base from, and the
+        // subject is spelled against it.
+        let directive = base_directive(format)
+            .unwrap_or_else(|| panic!("{format:?} emits_base() but declares no directive"));
+        assert!(
+            text.contains(&directive),
+            "{format:?} must declare its base as `{directive}`:\n{text}"
+        );
+        assert!(
+            !text.contains(EGRESS_IN_DIR),
+            "{format:?} declared a base but still writes the absolute `{EGRESS_IN_DIR}`:\n{text}"
+        );
+
+        // Half two: every statement-layer row is still in the document. Re-parsed with
+        // NO caller base, because the document carries its own.
+        let reparsed =
+            parse_dataset(&outcome.bytes, format.media_type(), None).unwrap_or_else(|e| {
+                panic!("{format:?}: the emitted document must re-parse: {e}\n{text}")
+            });
+        assert_eq!(
+            reparsed.reifiers().count(),
+            1,
+            "{format:?} must keep the reifier binding, not trade it for a base \
+             declaration:\n{text}"
+        );
+        assert_eq!(
+            reparsed.annotations().count(),
+            1,
+            "{format:?} must keep the annotation row:\n{text}"
+        );
+        assert!(
+            datasets_isomorphic(&dataset, &reparsed),
+            "{format:?}: base + statement layer must round-trip losslessly:\n{text}"
+        );
+    }
+}
+
+/// The statement-layer axis is REAL on every format, and its drop count stays truthful.
+///
+/// `Emit` and `Project` must actually differ, and `PerFormatCapability` must land on
+/// whichever of the two the registry's `carries_star()` column names — asserted per
+/// format rather than for a hand-picked one, so a format cannot quietly ignore the axis.
+/// TriX and HexTuples have no triple-term surface at all and FAIL CLOSED under `Emit`,
+/// which is the honest answer and is asserted as such rather than skipped.
+#[test]
+fn the_statement_layer_axis_is_honoured_and_counted_by_every_format() {
+    let source = egress_source_with_statement_layer();
+    let dataset = parse_dataset(
+        source.as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("statement-layer fixture parses");
+    // One reifier binding + one annotation = the two rows a projection drops.
+    let rows = dataset.reifiers().count() + dataset.annotations().count();
+    assert_eq!(rows, 2);
+
+    for format in NativeRdfFormat::all() {
+        let with_layer = |statement_layer| {
+            serialize_dataset_with(
+                &dataset,
+                format,
+                None,
+                &SerializeOptions {
+                    selection: SerializeGraph::Dataset,
+                    statement_layer,
+                    jsonld_options: None,
+                },
+            )
+        };
+
+        // `Project` always succeeds and always reports the full dropped count.
+        let projected = with_layer(StatementLayer::Project).unwrap_or_else(|e| {
+            panic!("{format:?}: projecting the statement layer must succeed: {e}")
+        });
+        assert_eq!(
+            projected.statement_rows_dropped, rows,
+            "{format:?} projected the statement layer, so it must report all {rows} rows"
+        );
+
+        // `Emit` either renders the layer (0 dropped) or fails closed. It never silently
+        // drops — that is the whole distinction from `Project`.
+        match with_layer(StatementLayer::Emit) {
+            Ok(emitted) => {
+                assert_eq!(
+                    emitted.statement_rows_dropped, 0,
+                    "{format:?} emitted the statement layer, so nothing was dropped"
+                );
+                assert_ne!(
+                    emitted.bytes, projected.bytes,
+                    "{format:?}: emitting the statement layer must produce a DIFFERENT \
+                     document than projecting it away — otherwise the axis is inert"
+                );
+            }
+            Err(error) => {
+                assert!(
+                    !format.carries_star(),
+                    "{format:?} carries the star layer, so emitting it must not fail: {error}"
+                );
+                assert_eq!(error.code, "native-codec-serialize", "{format:?}: {error}");
+            }
+        }
+
+        // `PerFormatCapability` is exactly one of the two, chosen by the registry.
+        let per_format = with_layer(StatementLayer::PerFormatCapability);
+        if format.carries_star() {
+            let per_format = per_format
+                .unwrap_or_else(|e| panic!("{format:?} carries star, so this must succeed: {e}"));
+            assert_eq!(per_format.statement_rows_dropped, 0, "{format:?}");
+        } else {
+            let per_format = per_format.expect("projection always succeeds");
+            assert_eq!(
+                per_format.statement_rows_dropped, rows,
+                "{format:?} is star-incapable, so the transcode contract projects and counts"
+            );
+            assert_eq!(
+                per_format.bytes, projected.bytes,
+                "{format:?}: PerFormatCapability must BE the projection for a \
+                 star-incapable format, not a third behaviour"
+            );
+        }
+    }
+}
+
+/// A `Named` selection carries no statement rows whatever the format could express, so
+/// the drop count says so rather than reporting zero because the FORMAT was capable.
+///
+/// Reporting zero here would be precisely the silent drop this accounting exists to
+/// prevent: the caller asked for the layer, the selection removed it, and nothing would
+/// have told them.
+#[test]
+fn a_named_selection_reports_the_statement_rows_it_drops() {
+    let source = egress_source_with_statement_layer();
+    let dataset = parse_dataset(
+        source.as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("statement-layer fixture parses");
+    let graph_name = TermValue::Iri("http://example.org/dir/g".to_owned());
+
+    // TriG carries both named graphs and the star layer, so neither the format nor the
+    // statement-layer axis can be blamed for the drop — only the selection.
+    let outcome = serialize_dataset_with(
+        &dataset,
+        NativeRdfFormat::TriG,
+        None,
+        &SerializeOptions {
+            selection: SerializeGraph::Named(&graph_name),
+            statement_layer: StatementLayer::Emit,
+            jsonld_options: None,
+        },
+    )
+    .expect("a named selection serializes");
+    assert_eq!(
+        outcome.statement_rows_dropped, 2,
+        "a Named selection emits no statement rows, and the count must not claim otherwise"
     );
 }
 
@@ -1581,4 +1818,124 @@ fn a_transcode_with_no_base_anywhere_invents_none() {
     )
     .expect("utf-8");
     assert!(!text.contains("@base"), "no base was ever in force: {text}");
+}
+
+// ── The refusal must not lie about the base ─────────────────────────────────────
+//
+// `iri-not-absolute-by-grammar` says "supplying a base will not help", which is true —
+// but the codecs raising it built a LOCAL `BaseScope::empty()` at the call site instead
+// of passing the caller's scope down, so the message also said "no base IRI is in scope"
+// to a user who had just run `--base http://example.org/dir/`. A diagnostic that denies
+// the state of the world sends the reader hunting for a dropped parameter instead of at
+// the relative IRI in their document. The base is still never APPLIED; it is now VISIBLE.
+
+/// The one-triple document each absolute-only grammar spells with a relative subject.
+const RELATIVE_SUBJECT_BY_FORMAT: &[(&str, &str)] = &[
+    (
+        "application/n-triples",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    (
+        "application/n-quads",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    ("application/trix", TRIX_RELATIVE_SUBJECT),
+    ("application/x-hextuples", HEXTUPLES_RELATIVE_SUBJECT),
+];
+
+#[test]
+fn an_absolute_only_refusal_names_the_base_in_scope_instead_of_denying_it() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, Some("http://example.org/dir/"))
+            .expect_err("a relative reference is refused whatever the base");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("<http://example.org/dir/>"),
+            "{media_type} must name the base in scope: {}",
+            error.message,
+        );
+        assert!(
+            error.message.contains("is never applied here"),
+            "{media_type} must say the base is deliberately not applied: {}",
+            error.message,
+        );
+        assert!(
+            !error.message.contains("no base IRI is in scope"),
+            "{media_type} must not deny a base the caller supplied: {}",
+            error.message,
+        );
+    }
+}
+
+/// With NO base the same refusal says so — the fix makes the message TRACK the scope, it
+/// does not simply delete the "absent" wording.
+#[test]
+fn an_absolute_only_refusal_still_reports_an_absent_base_as_absent() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, None)
+            .expect_err("a relative reference is refused with no base either");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("no base IRI is in scope"),
+            "{media_type} with nothing in scope must say so: {}",
+            error.message,
+        );
+    }
+}
+
+/// RDF/XML's one non-reference IRI position — an element name built from a RELATIVE
+/// `xmlns:` namespace — refused with the same denial. It resolves against nothing, which
+/// is exactly why the message has to name the base rather than claim there is none.
+#[test]
+fn an_rdfxml_qualified_name_refusal_names_the_base_in_scope() {
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"foo/\">",
+        "<rdf:Description rdf:about=\"http://example.org/s\"><ex:p>v</ex:p>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    let error = parse_dataset(
+        text.as_bytes(),
+        "application/rdf+xml",
+        Some("http://example.org/dir/"),
+    )
+    .expect_err("a relative xmlns namespace yields a relative element IRI");
+    assert_eq!(error.code, "iri-not-absolute-by-grammar");
+    assert!(
+        error.message.contains("<http://example.org/dir/>")
+            && !error.message.contains("no base IRI is in scope"),
+        "the refusal must name the base in scope: {}",
+        error.message,
+    );
+}
+
+/// The STREAMING lane carried the same defect twice over: `parse_dataset_from_reader`
+/// took a base and never built a scope from it at all, so every line-oriented refusal
+/// reported "no base IRI is in scope" no matter what the caller passed. The streamed
+/// message must be the buffered message, byte for byte — that is the whole contract
+/// between the two lanes.
+#[test]
+fn the_streaming_lane_reports_the_same_base_as_the_buffered_lane() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        if !matches!(
+            *media_type,
+            "application/n-triples" | "application/n-quads" | "application/x-hextuples"
+        ) {
+            continue; // only the line-oriented grammars stream
+        }
+        for base in [None, Some("http://example.org/dir/")] {
+            let streamed = parse_dataset_from_reader(text.as_bytes(), media_type, base)
+                .expect_err("the streamed parse refuses it too");
+            let buffered = parse_dataset(text.as_bytes(), media_type, base)
+                .expect_err("the buffered parse refuses it");
+            assert_eq!(
+                streamed.code, buffered.code,
+                "{media_type} with base = {base:?}"
+            );
+            assert_eq!(
+                streamed.message, buffered.message,
+                "{media_type} with base = {base:?}: the two lanes must say the same thing"
+            );
+        }
+    }
 }

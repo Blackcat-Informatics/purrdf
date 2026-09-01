@@ -851,9 +851,11 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for the relative IRIs of the DATA graph and the MAP — the two inputs
-        /// with no base of their own (a shape map is command-line text, so `--base` is the
-        /// only base it can ever have). NOT the schema's: `--schema` is an independent
+        /// Base IRI for the relative IRIs of the DATA graph and the MAP. It OVERRIDES the
+        /// data graph's own `file://` retrieval IRI, and it is the only base the MAP can
+        /// ever have (a shape map is command-line text, so it has no retrieval IRI) — which
+        /// is why this flag is never inert here and never refused, even against a pack or
+        /// GTS data source that cannot spend it. NOT the schema's: `--schema` is an independent
         /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
         /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
         /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
@@ -890,7 +892,11 @@ pub(crate) enum Command {
     Describe {
         /// A resource to describe: repeatable, and at least one is required. Several are
         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
-        /// as several documents.
+        /// as several documents. A RELATIVE reference resolves against the base in force —
+        /// the same base the data graph parses under, so `--iri alice` denotes what
+        /// `<alice>` written inside the document denotes — and one with no base in scope is
+        /// refused rather than silently matching nothing. An IRI the graph does not mention
+        /// is a legitimate EMPTY description, not an error.
         #[arg(long = "iri", value_name = "IRI", required = true)]
         iris: Vec<String>,
         /// Input format override; inferred from the input extension when omitted.
@@ -899,11 +905,14 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI, on BOTH legs: relative IRIs in the input resolve against it while
-        /// parsing, and a `--to` syntax that can write a base directive (turtle, trig,
-        /// rdfxml, jsonld, yamlld) emits it as the description's base and relativizes
-        /// against it. When omitted, a filesystem input is still parsed under its own
-        /// `file://` retrieval IRI.
+        /// Base IRI, on THREE legs: relative IRIs in the input resolve against it while
+        /// parsing, every `--iri` selector resolves against it, and a `--to` syntax that can
+        /// write a base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
+        /// description's base and relativizes against it. When omitted, a filesystem input
+        /// is still parsed — and its `--iri` selectors resolved — under its own `file://`
+        /// retrieval IRI. Because `--iri` is required and always resolves against it, this
+        /// flag is never inert here and is never refused, even against a pack or GTS source
+        /// whose own syntax could not spend it.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).

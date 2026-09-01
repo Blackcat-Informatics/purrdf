@@ -61,6 +61,12 @@ check-brand-casing: ## Reject bare lowercase 'purrdf' in prose (project is PurRD
 	python3 scripts/check-brand-casing.py
 
 changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
+	@# git-cliff regenerates the WHOLE file from commit SUBJECTS and has no
+	@# keep-region, so hand-authored release notes — in particular the prose that
+	@# tells a consumer what to DO about a breaking change — are destroyed rather
+	@# than merged. Refuse before the write, not after. Set
+	@# CHANGELOG_ALLOW_REGENERATE=1 once the section has been preserved.
+	@test -n "$(CHANGELOG_ALLOW_REGENERATE)" || python3 scripts/check-changelog-handwritten.py
 	@command -v git-cliff >/dev/null 2>&1 || { \
 		echo "ERROR: git-cliff not found — install the pinned version:"; \
 		echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
