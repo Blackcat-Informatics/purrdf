@@ -14,8 +14,12 @@ W3C syntax suites and **round-trip** them with no oxigraph dependency.
 
 - **Upstream:** <https://github.com/w3c/rdf-tests>
 - **Commit SHA:** `851911047ab1f01daca51498227cbf231e7d6705`
-- **Upstream path:** `rdf/rdf12/{rdf-turtle,rdf-trig,rdf-n-triples,rdf-n-quads,rdf-xml}/`
-- All five formats have an RDF 1.2 suite, so no RDF 1.1 fallback was needed.
+- **Upstream path (`syntax/`, `eval/`):**
+  `rdf/rdf12/{rdf-turtle,rdf-trig,rdf-n-triples,rdf-n-quads,rdf-xml}/`
+- **Upstream path (`iri/`):** `rdf/rdf11/{rdf-turtle,rdf-trig}/`
+
+All five formats have an RDF 1.2 suite, so the `syntax/`/`eval/` sub-suites need
+no RDF 1.1 fallback. The `iri/` sub-suite is the one exception, explained below.
 
 ## What was vendored (and what was trimmed)
 
@@ -25,6 +29,35 @@ plus every file each manifest references via `mf:action` / `mf:result`. RDF-XML
 has no `syntax/` subdir upstream; its negative-syntax tests live in
 `eval/manifest.ttl` and were taken with it.
 
+### The `iri/` sub-suite (base-IRI resolution)
+
+RDF 1.2 has **no** IRI test suite of its own, and the RDF 1.2 Turtle/TriG suites
+carry no base-resolution eval tests. The base-IRI cases still live only in the
+RDF 1.1 Turtle and TriG suites, so `turtle/iri/` and `trig/iri/` vendor them
+from `rdf/rdf11/`:
+
+| Case | What it pins |
+|---|---|
+| `IRI-resolution-01` | RFC 3986 §5.4 reference resolution against `http://a/bb/ccc/d;p?q` — including the empty reference `<>` |
+| `IRI-resolution-02` | the same table against a base with a trailing slash |
+| `IRI-resolution-07` | the same table against a base with a file path |
+| `IRI-resolution-08` | `.`/`..` against bases with empty and colon-bearing segments |
+| `IRIREF_datatype` | an `IRIREF` in datatype position |
+| `IRI_with_four_digit_numeric_escape` | `\uXXXX` inside an `IRIREF` |
+| `IRI_with_eight_digit_numeric_escape` | `\UXXXXXXXX` inside an `IRIREF` |
+
+These are RDF 1.1 **syntax** documents whose every construct is also RDF 1.2
+Turtle/TriG, and they are graded exactly like the RDF 1.2 eval tests — parse,
+round-trip, and compare against `mf:result`. They are the end-to-end half of the
+base-IRI contract that `crates/iri/tests/` states unit-by-unit against RFC 3986
+§5.4; see `crates/iri/tests/PROVENANCE.md`.
+
+Each `iri/manifest.ttl` is a **trimmed extract** of the upstream RDF 1.1
+`manifest.ttl`: header, prefixes, `mf:assumedTestBase` and every retained entry
+stanza are verbatim; only unrelated entries were removed. The upstream
+`IRI-resolution` series is numbered `01, 02, 07, 08` — `03`–`06` do not exist
+upstream and are not missing here.
+
 **Trimmed:** the `c14n/` (canonicalization) sub-suites for N-Triples and N-Quads
 were **not** vendored — they test RDF dataset canonicalization (RDFC-1.0), not
 text-codec round-trip, and are out of scope here. The top-level aggregator
@@ -32,14 +65,16 @@ text-codec round-trip, and are out of scope here. The top-level aggregator
 suites) was also not vendored; the harness reads the `syntax/`/`eval/`
 sub-manifests directly.
 
-Total: ~340 files, ~1.4 MB.
+Total: ~370 files, ~1.4 MB.
 
 ## Layout
 
 ```
 w3c/
-  turtle/   { syntax/manifest.ttl + .ttl,  eval/manifest.ttl + .ttl/.nt }
-  trig/     { syntax/manifest.ttl + .trig, eval/manifest.ttl + .trig/.nq }
+  turtle/   { syntax/manifest.ttl + .ttl,  eval/manifest.ttl + .ttl/.nt,
+              iri/manifest.ttl + .ttl/.nt }
+  trig/     { syntax/manifest.ttl + .trig, eval/manifest.ttl + .trig/.nq,
+              iri/manifest.ttl + .trig/.nq }
   ntriples/ { syntax/manifest.ttl + .nt }
   nquads/   { syntax/manifest.ttl + .nq }
   rdfxml/   { eval/manifest.ttl + .rdf/.nt }
