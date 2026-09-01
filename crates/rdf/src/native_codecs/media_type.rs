@@ -413,6 +413,57 @@ pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
 mod tests {
     use super::*;
 
+    /// A distinct bit per format, assigned by an EXHAUSTIVE match with no `_` arm.
+    ///
+    /// Adding a variant to [`NativeRdfFormat`] fails to compile here. That is the point:
+    /// see [`the_registry_has_a_row_for_every_format`].
+    const fn format_bit(format: NativeRdfFormat) -> u32 {
+        match format {
+            NativeRdfFormat::Turtle => 1 << 0,
+            NativeRdfFormat::TriG => 1 << 1,
+            NativeRdfFormat::NTriples => 1 << 2,
+            NativeRdfFormat::NQuads => 1 << 3,
+            NativeRdfFormat::RdfXml => 1 << 4,
+            NativeRdfFormat::TriX => 1 << 5,
+            NativeRdfFormat::HexTuples => 1 << 6,
+            NativeRdfFormat::JsonLd => 1 << 7,
+            NativeRdfFormat::YamlLd => 1 << 8,
+        }
+    }
+
+    /// The union of every bit [`format_bit`] can return. A tenth format must widen it.
+    const EVERY_FORMAT_BIT: u32 = (1 << 9) - 1;
+
+    /// [`FORMATS`] carries a row for EVERY `NativeRdfFormat` variant, each exactly once.
+    ///
+    /// Every "for every format" test in this workspace — the ingress totality test, the
+    /// egress `emits_base` test, the loss matrix, the codec-registry sweeps — iterates
+    /// [`NativeRdfFormat::all`], which maps `FORMATS`. Their `match`es over the enum are
+    /// exhaustive and so look total, but their DRIVER is the table: a variant added to the
+    /// enum and not to `FORMATS` is skipped by every one of them in silence, and only
+    /// [`descriptor`] would ever notice, by panicking at runtime in whatever call site
+    /// reached it first.
+    ///
+    /// This closes that: the bit assignment is a match over the ENUM, so a tenth format
+    /// cannot compile without an arm, and the union check then fails until `FORMATS` gains
+    /// its row. The exhaustive-match discipline and the table are bound to each other.
+    #[test]
+    fn the_registry_has_a_row_for_every_format() {
+        let mut seen = 0_u32;
+        for format in NativeRdfFormat::all() {
+            let bit = format_bit(format);
+            assert_eq!(seen & bit, 0, "{format:?} has two rows in FORMATS");
+            seen |= bit;
+        }
+        assert_eq!(
+            seen, EVERY_FORMAT_BIT,
+            "a NativeRdfFormat variant has no FORMATS row; every `for format in \
+             NativeRdfFormat::all()` sweep in this workspace is silently skipping it, and \
+             `descriptor` will panic the first time production code asks for it"
+        );
+        assert_eq!(NativeRdfFormat::all().len(), 9);
+    }
+
     #[test]
     fn classify_resolves_canonical_media_types() {
         assert_eq!(classify("text/turtle").unwrap(), NativeRdfFormat::Turtle);
