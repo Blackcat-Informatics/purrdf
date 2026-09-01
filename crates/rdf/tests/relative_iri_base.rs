@@ -1006,6 +1006,202 @@ fn jsonld_and_yamlld_agree_on_context_base_precedence() {
     );
 }
 
+// ── The vocab position ──────────────────────────────────────────────────────────
+//
+// JSON-LD 1.1 Expansion §13.4.4 expands `@type` with BOTH `vocab` and `documentRelative`
+// set, so a relative `@type` falls back to the document base when no `@vocab` is in
+// scope. The codec passed `false` for the second flag, which made `@type` the ONE IRI
+// position that could not see a base the document itself declared: the sibling `@id` in
+// the very same document resolved, so the base was demonstrably in scope and simply not
+// consulted. The upstream W3C `toRdf` vectors pinned under
+// `tests/fixtures/jsonld-w3c-rec/` reach the base only through `@id` and `@type: @id`
+// coercion (the `0120`-`0132` IRI-resolution family), never through a bare vocab-position
+// term — which is exactly why the defect survived a 73/73 conformance pass, and why these
+// direct tests exist.
+
+/// A relative `@type` resolves against the document's own `@context` `@base`.
+///
+/// This is the library form of the production reproduction
+/// `purrdf convert --from jsonld --to ntriples -`, which used to exit non-zero with
+/// `jsonld-context-invalid: relative IRI `Thing` has no applicable @vocab or @base`.
+const JSONLD_RELATIVE_TYPE_WITH_CONTEXT_BASE: &str =
+    "{\"@context\":{\"@base\":\"http://example.org/\"},\"@id\":\"x\",\"@type\":\"Thing\"}";
+
+/// The YAML-LD spelling of [`JSONLD_RELATIVE_TYPE_WITH_CONTEXT_BASE`].
+const YAMLLD_RELATIVE_TYPE_WITH_CONTEXT_BASE: &str = concat!(
+    "\"@context\":\n",
+    "  \"@base\": \"http://example.org/\"\n",
+    "\"@id\": x\n",
+    "\"@type\": Thing\n",
+);
+
+/// The N-Triples both of the above must produce.
+const RELATIVE_TYPE_EXPECTED: &str = concat!(
+    "<http://example.org/x> ",
+    "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://example.org/Thing> .\n",
+);
+
+/// The whole document, as N-Triples, exactly as the CLI emits it.
+fn ntriples_of(text: &str, media_type: &str, base: Option<&str>) -> String {
+    let dataset = parse_dataset(text.as_bytes(), media_type, base)
+        .unwrap_or_else(|e| panic!("parse {media_type} failed: {e}"));
+    String::from_utf8(
+        serialize_dataset(&dataset, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize N-Triples"),
+    )
+    .expect("utf-8")
+}
+
+#[test]
+fn jsonld_relative_type_resolves_against_the_document_base() {
+    assert_eq!(
+        ntriples_of(
+            JSONLD_RELATIVE_TYPE_WITH_CONTEXT_BASE,
+            "application/ld+json",
+            None,
+        ),
+        RELATIVE_TYPE_EXPECTED,
+    );
+}
+
+/// The base is READ in vocab position, not merely present: the resolved type moves with
+/// the caller-supplied base just as the subject does.
+#[test]
+fn jsonld_relative_type_resolves_against_the_caller_base() {
+    let document = "{\"@id\":\"x\",\"@type\":\"Thing\"}";
+    for base in ["http://a.example/", "http://b.example/"] {
+        assert_eq!(
+            ntriples_of(document, "application/ld+json", Some(base)),
+            format!(
+                "<{base}x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{base}Thing> .\n"
+            ),
+            "@type must move with the base, exactly as @id does",
+        );
+    }
+}
+
+/// The asymmetry that made the defect visible: `@id` and `@type` sit in the same document
+/// under the same base, so they must either BOTH resolve or BOTH refuse. They must never
+/// disagree about whether a base is in scope.
+#[test]
+fn jsonld_id_and_type_agree_about_whether_a_base_is_in_scope() {
+    let document = "{\"@id\":\"x\",\"@type\":\"Thing\"}";
+    let with_base = parse_dataset(
+        document.as_bytes(),
+        "application/ld+json",
+        Some("http://example.org/"),
+    );
+    let without_base = parse_dataset(document.as_bytes(), "application/ld+json", None);
+    assert!(with_base.is_ok(), "a base in scope resolves both positions");
+    assert!(
+        without_base.is_err(),
+        "no base in scope refuses both positions",
+    );
+}
+
+/// An `@vocab` still wins over the base in vocab position — the document-relative leg is a
+/// FALLBACK, not a replacement for vocabulary expansion.
+#[test]
+fn a_jsonld_vocab_still_beats_the_base_in_vocab_position() {
+    let document = concat!(
+        "{\"@context\":{\"@base\":\"http://base.example/\",",
+        "\"@vocab\":\"http://vocab.example/\"},",
+        "\"@id\":\"x\",\"@type\":\"Thing\"}",
+    );
+    assert_eq!(
+        ntriples_of(document, "application/ld+json", None),
+        concat!(
+            "<http://base.example/x> ",
+            "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://vocab.example/Thing> .\n",
+        ),
+        "@id takes the base and @type takes the vocab",
+    );
+}
+
+/// A value object's `@type` is the same §13.4.4 position, so a relative datatype resolves
+/// against the document base too.
+#[test]
+fn a_jsonld_value_object_datatype_resolves_against_the_document_base() {
+    let document = concat!(
+        "{\"@context\":{\"@base\":\"http://example.org/\"},\"@id\":\"x\",",
+        "\"http://example.org/p\":{\"@value\":\"v\",\"@type\":\"MyType\"}}",
+    );
+    assert_eq!(
+        ntriples_of(document, "application/ld+json", None),
+        "<http://example.org/x> <http://example.org/p> \"v\"^^<http://example.org/MyType> .\n",
+    );
+}
+
+/// YAML-LD bridges to the same expander and must agree in vocab position too.
+#[test]
+fn yamlld_relative_type_resolves_identically_to_jsonld() {
+    assert_eq!(
+        ntriples_of(
+            YAMLLD_RELATIVE_TYPE_WITH_CONTEXT_BASE,
+            "application/ld+yaml",
+            None,
+        ),
+        ntriples_of(
+            JSONLD_RELATIVE_TYPE_WITH_CONTEXT_BASE,
+            "application/ld+json",
+            None,
+        ),
+    );
+}
+
+/// With no base and no `@vocab`, the refusal is the WORKSPACE-SHARED condition. It used to
+/// be an eighth private spelling — `jsonld-context-invalid: relative IRI `Thing` has no
+/// applicable @vocab or @base` — so a caller grepping for `iri-relative-no-base` believed
+/// JSON-LD had no such failure mode in this position.
+#[test]
+fn jsonld_without_a_base_refuses_a_relative_type_with_the_shared_code() {
+    let error = parse_dataset(
+        "{\"@id\":\"http://example.org/x\",\"@type\":\"Thing\"}".as_bytes(),
+        "application/ld+json",
+        None,
+    )
+    .expect_err("a relative @type with no base and no @vocab must fail");
+    assert_eq!(
+        error.code, "iri-relative-no-base",
+        "the refusal is the workspace-shared condition, not a JSON-LD-local spelling",
+    );
+    assert!(
+        error.message.contains("\"Thing\""),
+        "the refusal names the reference verbatim: {}",
+        error.message,
+    );
+}
+
+/// The vocab-ONLY positions — a term definition's `@id` — are a DIFFERENT condition, and
+/// keep saying so. The base is never consulted there, so reporting `iri-relative-no-base`
+/// would send an author off to add a `@base` that cannot help; the message must name the
+/// remedy that works and must not mention `@base` as if it applied.
+#[test]
+fn a_vocab_only_position_is_not_reported_as_a_missing_base() {
+    let error = parse_dataset(
+        concat!(
+            "{\"@context\":{\"@base\":\"http://example.org/\",\"t\":{\"@id\":\"bar\"}},",
+            "\"@id\":\"http://example.org/x\",\"t\":\"v\"}",
+        )
+        .as_bytes(),
+        "application/ld+json",
+        None,
+    )
+    .expect_err("a term @id that no @vocab can expand must fail");
+    assert_eq!(error.code, "jsonld-context-invalid");
+    assert_ne!(
+        error.code, "iri-relative-no-base",
+        "a base is in scope and still cannot fix this, so it is not the no-base condition",
+    );
+    assert!(
+        error.message.contains("@vocab"),
+        "the message names the remedy that works: {}",
+        error.message,
+    );
+}
+
 /// With NO base at all a relative `@id` is still refused — the fix resolves, it does not
 /// invent.
 #[test]

@@ -173,6 +173,140 @@ fn absolute_reference_resolves_without_a_base() {
     );
 }
 
+/// Absolute references that carry dot segments — the shapes the §5.4 table never
+/// writes, and the ones that expose whether the base layer normalizes behind the
+/// document's back.
+const ABSOLUTE_WITH_DOT_SEGMENTS: &[&str] = &[
+    "http://a/b/../c",
+    "http://a/./b",
+    "http://a/b/c/../../d",
+    "http://a/../../g",
+    "http://a/b/c/.",
+    "http://a/b/c/..",
+    "http://a/b/../c?x=../y#../z",
+    "g:./h",
+    "http:g/../h",
+    // The exact spellings the W3C JSON-LD REC vectors 0122/0123 pin.
+    "http://a/bb/ccc/./d;p?q",
+    "http://a/bb/ccc/../d;p?y",
+];
+
+/// Every ABSOLUTE reference — the §5.4 corpus's absolute inputs, every resolved
+/// output fed back in, and the dot-bearing spellings above — must produce the
+/// IDENTICAL IRI with and without a base in scope.
+///
+/// This was the defect: with a base in scope the reference went through RFC-3986
+/// §5.2.2, whose scheme-bearing branch applies `remove_dot_segments(R.path)`, and
+/// without one it did not. `<http://a/b/../c>` therefore interned as `http://a/c`
+/// in a document with a `@base` and `http://a/b/../c` in the same document without
+/// one: identical bytes, two graphs, two RDFC-1.0 digests.
+#[test]
+fn absolute_references_resolve_identically_with_and_without_a_base() {
+    let rooted = rooted_scope();
+    let empty = BaseScope::empty();
+
+    let corpus = NORMAL
+        .iter()
+        .chain(ABNORMAL.iter())
+        .flat_map(|(reference, expected)| [*reference, *expected])
+        // The relative half of the corpus is meaningless without a base; the
+        // absolute half is what must agree.
+        .filter(|s| parse(s).is_ok_and(|iri| iri.scheme().is_some()))
+        .chain(ABSOLUTE_WITH_DOT_SEGMENTS.iter().copied());
+
+    let mut checked = 0usize;
+    for reference in corpus {
+        let with = rooted
+            .resolve(reference)
+            .unwrap_or_else(|e| panic!("rooted resolve({reference:?}) failed: {e}"));
+        let without = empty
+            .resolve(reference)
+            .unwrap_or_else(|e| panic!("empty resolve({reference:?}) failed: {e}"));
+        assert_eq!(
+            without.as_str(),
+            with.as_str(),
+            "absolute reference {reference:?} resolved differently without a base"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 40, "corpus collapsed to {checked} references");
+}
+
+/// …and the agreed answer is the reference VERBATIM, in both grammar families.
+///
+/// The RDF grammars resolve relative IRIs only; `remove_dot_segments` on an IRI a
+/// document spelled absolutely is RFC-3986 §6.2.2.3 syntax-based normalization,
+/// which RDF Concepts §3.2 forbids ("Further normalization MUST NOT be performed").
+/// The W3C JSON-LD REC vectors pin it directly: 0122/0123 require
+/// `<http://a/bb/ccc/../d;p?q>` to come out intact, and `crates/rdf`'s N-Quads
+/// oracle re-parses exactly those bytes.
+#[test]
+fn an_absolute_reference_is_never_normalized_by_either_grammar_family() {
+    let empty = BaseScope::empty();
+    let rooted = rooted_scope();
+
+    let absolute = NORMAL
+        .iter()
+        .chain(ABNORMAL.iter())
+        .flat_map(|(reference, expected)| [*reference, *expected])
+        .filter(|s| parse(s).is_ok_and(|iri| iri.scheme().is_some()))
+        .chain(ABSOLUTE_WITH_DOT_SEGMENTS.iter().copied())
+        // A near-miss set: `.`/`..` inside a segment is ordinary path data and must
+        // survive too, so a sloppy normalizer cannot pass by trimming those instead.
+        .chain(["http://a/b/.c/..d/e./f..", "http://a/b%2E%2E/c"]);
+
+    for reference in absolute {
+        for (label, scope) in [("empty", &empty), ("rooted", &rooted)] {
+            assert_eq!(
+                &resolve_through_scope(scope, reference),
+                reference,
+                "resolve({reference:?}) rewrote an absolute IRI in the {label} scope"
+            );
+            assert_eq!(
+                scope
+                    .resolve_absolute_only(reference)
+                    .unwrap_or_else(|e| panic!("resolve_absolute_only({reference:?}): {e}"))
+                    .as_str(),
+                reference,
+                "resolve_absolute_only({reference:?}) rewrote an absolute IRI \
+                 in the {label} scope"
+            );
+        }
+    }
+}
+
+/// A `@base` directive is a reference too, and obeys the same rule: an absolute one
+/// establishes exactly what it says, whether or not a base preceded it.
+#[test]
+fn an_absolute_base_directive_is_taken_verbatim_with_or_without_a_predecessor() {
+    let directive = "http://a/bb/ccc/./d;p?q";
+
+    let mut from_empty = BaseScope::empty();
+    from_empty
+        .rebind(directive, BaseOrigin::Directive { line: 1, column: 1 })
+        .expect("absolute directive roots the scope");
+
+    let mut from_rooted = rooted_scope();
+    from_rooted
+        .rebind(directive, BaseOrigin::Directive { line: 2, column: 1 })
+        .expect("absolute directive replaces the base");
+
+    for scope in [&from_empty, &from_rooted] {
+        assert_eq!(
+            scope.current().expect("a base is in force").iri().as_str(),
+            directive
+        );
+    }
+
+    // And the base's own dot segments survive resolution of a relative reference
+    // against it — RFC-3986 §5.2.2 copies the base path verbatim for an empty-path
+    // reference, which is what the W3C JSON-LD vectors pin.
+    assert_eq!(
+        &resolve_through_scope(&from_rooted, "?y"),
+        "http://a/bb/ccc/./d;p?y"
+    );
+}
+
 /// `resolve_absolute_only` is for grammars whose syntax admits no relative
 /// reference at all. The base is NEVER applied — the same input must fail
 /// identically whether or not a base happens to be in scope.

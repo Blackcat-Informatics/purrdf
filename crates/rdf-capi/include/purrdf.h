@@ -2265,11 +2265,32 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
 
 /**
  * Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,
- * `"application/n-quads"`). `base_iri` may be null. The output bytes go to
- * `*out_buffer` (free with `purrdf_buffer_free`). When `out_statement_rows_dropped`
- * is non-null it receives the number of RDF-1.2 statement-layer rows dropped
- * because the target format cannot represent quoted triples (`0` for
- * star-capable formats) — so the caller can detect lossy projection.
+ * `"application/n-quads"`). The output bytes go to `*out_buffer` (free with
+ * `purrdf_buffer_free`). When `out_statement_rows_dropped` is non-null it
+ * receives the number of RDF-1.2 statement-layer rows dropped because the
+ * target format cannot represent quoted triples (`0` for star-capable formats)
+ * — so the caller can detect lossy projection.
+ *
+ * # `base_iri` — the EGRESS base, read rather than accepted-and-dropped
+ *
+ * `base_iri` is the document base the output is *written under*, and may be
+ * null. It is not advisory and it is not discarded:
+ *
+ * - **A syntax that can express a base emits it and relativizes against it.**
+ *   Serializing to `"text/turtle"` or `"application/trig"` under
+ *   `"http://example.org/dir/"` writes a leading `@base <http://example.org/dir/> .`
+ *   and spells `http://example.org/dir/a` as `<a>`.
+ * - **A syntax that cannot express one emits absolute IRIs.** N-Triples,
+ *   N-Quads, TriX and HexTuples admit no relative IRI by grammar, so passing a
+ *   base changes nothing in their bytes. That is the only output those grammars
+ *   admit — decided once from the format registry, not swallowed per codec.
+ * - **A malformed base is a hard failure, for every format.** A `base_iri` that
+ *   is not an absolute IRI returns `PURRDF_STATUS_SERIALIZE_ERROR` with the
+ *   shared `iri-*` diagnostic code, even for a format that would not have
+ *   applied it. The caller is told their base is wrong instead of having the
+ *   mistake absorbed into plausible-looking output.
+ * - **Null means absolute output**, not "guess a base": PurRDF never invents a
+ *   retrieval IRI a C host did not supply.
  *
  * # Safety
  * `dataset` must be a live handle; the `c_char` pointers must be null or

@@ -95,8 +95,15 @@ fn resolve_requires_absolute_base() {
     let err = rel
         .resolve("x")
         .expect_err("relative base must be rejected");
-    assert_eq!(
-        format!("{err}"),
-        "base IRI is not absolute (no scheme): \"/b/c/d\""
+    let rendered = format!("{err}");
+    assert!(
+        rendered.starts_with("base IRI is not absolute (no scheme): \"/b/c/d\""),
+        "{rendered:?}"
+    );
+    // The remedy is part of the rendered message, not a field a consumer has to
+    // remember to fetch — every surface prints `{err}` and nothing else.
+    assert!(
+        rendered.ends_with(err.remedy_hint().expect("a scheme-less base has a remedy")),
+        "{rendered:?}"
     );
 }

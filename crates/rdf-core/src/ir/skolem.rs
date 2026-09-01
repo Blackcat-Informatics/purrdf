@@ -205,15 +205,15 @@ fn genid_prefix(authority: &str) -> Result<String, SkolemError> {
              well-known path)",
         ));
     }
-    let Some(colon) = authority.find(':') else {
-        return Err(refuse("it has no IRI scheme (no ':')"));
-    };
-    let scheme = &authority[..colon];
-    let mut scheme_chars = scheme.chars();
-    let scheme_ok = scheme_chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && scheme_chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-    if !scheme_ok {
-        return Err(refuse("it does not start with a legal IRI scheme"));
+    // Decided by the workspace's one IRI layer. The RFC 3986 §3.1 scheme
+    // production used to be retyped here; a second copy of it is free to drift
+    // from the one every parser and serializer applies, and the whole point of
+    // this check is that the genid prefix agrees with them.
+    let parsed = purrdf_iri::parse(authority).map_err(|_| refuse("it is not a legal IRI"))?;
+    if !parsed.has_scheme() {
+        return Err(refuse(
+            "it has no IRI scheme (an absolute IRI must begin `scheme:`)",
+        ));
     }
     if authority.ends_with('/') {
         return Err(refuse(
