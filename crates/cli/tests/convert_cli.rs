@@ -1563,3 +1563,203 @@ fn canonical_without_to_emits_canonical_nquads() {
         "output must equal the RDFC-1.0 canonical N-Quads of the input"
     );
 }
+
+// ── Relative IRI references and the document base ───────────────────────────────
+//
+// A relative IRI reference used to be interned VERBATIM when no base was in scope, so
+// `<>` tripped an unrelated downstream guard and `<foo>` "converted" into N-Triples that
+// is not valid N-Triples. Resolution is now typed, and the CLI supplies the one base a
+// library layer cannot: the input's own RFC-8089 `file://` retrieval IRI (RFC-3986 5.1.3).
+
+/// stdout of an [`Output`] as a `String`.
+fn convert_stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The `file://` IRI the CLI derives for a fixture path, so assertions stay
+/// machine-independent.
+fn retrieval_iri(path: &str) -> String {
+    let absolute = std::fs::canonicalize(path).expect("fixture path canonicalizes");
+    format!("file://{}", absolute.to_str().expect("temp path is UTF-8"))
+}
+
+/// The empty IRI reference `<>` denotes the document itself. From a FILE that is the
+/// file's own `file://` IRI, so the reporter's exact command now succeeds.
+#[test]
+fn empty_iri_reference_from_a_file_resolves_to_the_files_own_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "empty-subject.ttl",
+        "<> a <http://example.org/test> .\n",
+    );
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        convert_stdout(&out).trim_end(),
+        format!(
+            "<{}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/test> .",
+            retrieval_iri(&input)
+        )
+    );
+}
+
+/// The SAME bytes on stdin are refused: a pipe has no retrieval IRI, so there is no
+/// base to derive and no honest answer but to fail. The message names `--base`.
+#[test]
+fn the_same_document_on_stdin_is_refused_and_names_the_remedy() {
+    let mut child = purrdf()
+        .args(["convert", "--to", "ntriples", "--from", "turtle", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn purrdf");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(b"<> a <http://example.org/test> .\n")
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait for purrdf");
+
+    assert!(
+        !out.status.success(),
+        "stdin has no retrieval IRI to fall back to"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("iri-relative-no-base"), "{err}");
+    assert!(
+        err.contains("pass a base IRI") || err.contains("--base"),
+        "the refusal must point at the remedy: {err}"
+    );
+    assert!(
+        convert_stdout(&out).trim().is_empty(),
+        "nothing partial is emitted"
+    );
+}
+
+/// An explicit `--base` always wins over the derived retrieval IRI — and a parse-side
+/// base is valid even when the OUTPUT format cannot express one (N-Triples cannot).
+#[test]
+fn an_explicit_base_wins_over_the_derived_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "empty-subject.ttl",
+        "<> a <http://example.org/test> .\n",
+    );
+
+    let out = run(&[
+        "convert",
+        "--base",
+        "http://example.org/d",
+        "--to",
+        "ntriples",
+        "--from",
+        "turtle",
+        &input,
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        convert_stdout(&out).trim_end(),
+        "<http://example.org/d> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.org/test> ."
+    );
+}
+
+/// A non-empty relative reference resolves against the derived base rather than being
+/// emitted as invalid N-Triples.
+#[test]
+fn a_relative_reference_from_a_file_resolves_rather_than_emitting_invalid_ntriples() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "rel.ttl",
+        "<foo> a <http://example.org/test> .\n",
+    );
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = convert_stdout(&out);
+    assert!(
+        !text.starts_with("<foo>"),
+        "a bare relative reference is not valid N-Triples: {text}"
+    );
+    // `<foo>` resolves against the file IRI, replacing the file's last segment.
+    let expected = retrieval_iri(&input).replace("/rel.ttl", "/foo");
+    assert!(
+        text.starts_with(&format!("<{expected}> ")),
+        "expected subject <{expected}> in: {text}"
+    );
+}
+
+/// The RFC-3986 5.2 corners, driven through the binary with an explicit `--base` that
+/// carries both a query and a fragment.
+#[test]
+fn rfc3986_reference_corners_resolve_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cases: &[(&str, &str)] = &[
+        // The empty reference keeps the base's query and drops its fragment.
+        ("", "http://example.org/d?q=1"),
+        ("#x", "http://example.org/d?q=1#x"),
+        ("?y=2", "http://example.org/d?y=2"),
+        // A network-path reference keeps the base's scheme and replaces the authority.
+        ("//example.org/x", "http://example.org/x"),
+    ];
+    for (reference, expected) in cases {
+        let input = write_file(
+            dir.path(),
+            "corner.ttl",
+            &format!("<{reference}> a <http://example.org/test> .\n"),
+        );
+        let out = run(&[
+            "convert",
+            "--base",
+            "http://example.org/d?q=1#frag",
+            "--to",
+            "ntriples",
+            "--from",
+            "turtle",
+            &input,
+        ]);
+        assert!(out.status.success(), "<{reference}>: {}", stderr(&out));
+        assert!(
+            convert_stdout(&out).starts_with(&format!("<{expected}> ")),
+            "<{reference}> must resolve to <{expected}>, got: {}",
+            convert_stdout(&out)
+        );
+    }
+}
+
+/// A `--base` that is not an absolute IRI is a USAGE error at the argument boundary,
+/// not a codec diagnostic from somewhere that no longer knows where the value came from.
+#[test]
+fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(dir.path(), "d.ttl", "<> a <http://example.org/test> .\n");
+
+    let out = run(&[
+        "convert",
+        "--base",
+        "/tmp/not-an-iri",
+        "--to",
+        "ntriples",
+        "--from",
+        "turtle",
+        &input,
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "clap usage error: {}",
+        stderr(&out)
+    );
+    let err = stderr(&out);
+    assert!(err.contains("must be absolute"), "{err}");
+    assert!(
+        err.contains("file:///tmp/not-an-iri"),
+        "the refusal names the spelling that would have worked: {err}"
+    );
+}

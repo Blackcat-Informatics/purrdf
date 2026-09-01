@@ -26,6 +26,11 @@ path = "src/main.rs"
 # `serialize_dataset_to_format`, and `NativeRdfFormat`. This is the format
 # authority the CLI's `--from`/`--to` routing resolves against.
 purrdf-rdf = { workspace = true }
+# The IRI value space. The CLI needs `BaseIri` for two things the library layers
+# deliberately cannot do: validating `--base` at the argument boundary, and deriving
+# the RFC-8089 `file://` retrieval IRI of a filesystem input (RFC-3986 5.1.3), which
+# only this surface has.
+purrdf-iri = { workspace = true }
 # The oxigraph-free kernel: the frozen `RdfDataset`/`DatasetView` model, the
 # pack container (`PackBuilder`/`PackView`/`verify_pack`/`dataset_from_view`),
 # the loss ledger, and the `SparqlResult` model.

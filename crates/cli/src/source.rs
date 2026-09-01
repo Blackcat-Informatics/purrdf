@@ -220,12 +220,105 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
 ///
 /// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
 /// and is what every non-line-oriented syntax takes.
+/// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
+///
+/// RFC-3986 §5.1.3 makes the retrieval URI the base of last resort, and the CLI is the
+/// one surface in this project that HAS one. The library crates are handed bytes and
+/// must hard-fail instead (§5.1.4): a library that invented a base would break byte
+/// determinism, diverge across surfaces with no retrieval IRI (stdin, wasm, the C ABI),
+/// and leak local filesystem paths into published RDF. So this derivation lives here,
+/// in `purrdf-cli`, and nothing filesystem-shaped crosses into `purrdf-rdf`.
+///
+/// The path is canonicalized first, so the base does not depend on the working
+/// directory or on `..` segments in the argument. A path that cannot be expressed as a
+/// `file://` IRI is a hard error, never a silent fall back to "no base".
+fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
+    let absolute = std::fs::canonicalize(path)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
+    let text = absolute.to_str().ok_or_else(|| {
+        CliError::Runtime(format!(
+            "{}: the input path is not valid UTF-8, so it has no file:// IRI; \
+             pass --base explicitly",
+            display_path(path)
+        ))
+    })?;
+
+    // RFC-3986 §3.3 `path-abempty`: keep `unreserved` / `sub-delims` / `:` `@`, keep the
+    // `/` separators, and percent-encode everything else — space, `#`, `?`, `%` and every
+    // non-ASCII byte — so the result round-trips as a URI rather than re-parsing as a
+    // query or fragment.
+    let mut encoded = String::with_capacity(text.len() + 8);
+    for &byte in text.as_bytes() {
+        let keep = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            );
+        if keep {
+            encoded.push(byte as char);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+
+    // An empty authority is the RFC-8089 local-file form: `file:///path`.
+    let iri = format!("file://{encoded}");
+    purrdf_iri::BaseIri::parse(&iri).map_err(|error| {
+        CliError::Runtime(format!(
+            "{}: the input path has no usable file:// IRI ({error}); pass --base explicitly",
+            display_path(path)
+        ))
+    })?;
+    Ok(iri)
+}
+
+/// The base to parse `path` under: an explicit `--base` always wins, otherwise the
+/// input's own retrieval IRI.
+///
+/// `-` (stdin) gets NO base and keeps the hard error, because a piped document has no
+/// retrieval IRI to derive one from — there is no honest answer, so the parse refuses
+/// and the message names `--base`. A syntax whose grammar admits no relative reference
+/// gets no derived base either: it could not use one, and deriving it would only pay a
+/// `canonicalize` to hand over a value that is never read.
+fn effective_base(
+    path: &str,
+    format: NativeRdfFormat,
+    base: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    if let Some(explicit) = base {
+        return Ok(Some(explicit.to_owned()));
+    }
+    if path == "-" || !format.admits_relative_iri() {
+        return Ok(None);
+    }
+    retrieval_base_iri(path).map(Some)
+}
+
 fn load_native(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
     policy: TransportPolicy,
 ) -> Result<Arc<RdfDataset>, CliError> {
+    let base = effective_base(path, format, base)?;
+    let base = base.as_deref();
     if !format.is_line_oriented() {
         let bytes = read_bytes_with_transport(path, policy)?;
         return Ok(parse_dataset(&bytes, format.media_type(), base)?);
