@@ -169,7 +169,9 @@ fn collect_constraints_classes(constraints: &[Constraint], classes: &mut FastSet
                     collect_shape_classes(sibling, classes);
                 }
             }
-            Constraint::Expression { expr, .. } => collect_expression_classes(expr, classes),
+            Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
+                collect_expression_classes(expr, classes);
+            }
             Constraint::Datatype(_)
             | Constraint::NodeKind(_)
             | Constraint::MinCount(_)
@@ -198,12 +200,42 @@ fn collect_constraints_classes(constraints: &[Constraint], classes: &mut FastSet
 
 fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>) {
     match expr {
-        NodeExpr::Constant(_) | NodeExpr::This | NodeExpr::Path(_) => {}
+        NodeExpr::Constant(_)
+        | NodeExpr::This
+        | NodeExpr::Path(_)
+        | NodeExpr::Empty
+        | NodeExpr::Var(_)
+        | NodeExpr::List(_) => {}
+        // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
+        // of a class, so that class must be resolved in the validation plan exactly
+        // like an `sh:class` constraint or the membership view answers "no
+        // instances" for it.
+        NodeExpr::InstancesOf(class) => {
+            classes.insert(class.clone());
+        }
         NodeExpr::Filter { nodes, shape } => {
             collect_expression_classes(nodes, classes);
             collect_shape_classes(shape, classes);
         }
-        NodeExpr::Union(items) | NodeExpr::Intersection(items) => {
+        NodeExpr::FindFirst { nodes, shape } | NodeExpr::MatchAll { nodes, shape } => {
+            collect_expression_classes(nodes, classes);
+            collect_shape_classes(shape, classes);
+        }
+        NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, classes),
+        NodeExpr::ConformsToShape { node, shape } => {
+            collect_expression_classes(node, classes);
+            collect_shape_classes(shape, classes);
+        }
+        NodeExpr::Remove { nodes, remove } => {
+            collect_expression_classes(nodes, classes);
+            collect_expression_classes(remove, classes);
+        }
+        NodeExpr::FlatMap { nodes, map } => {
+            collect_expression_classes(nodes, classes);
+            collect_expression_classes(map, classes);
+        }
+        NodeExpr::PathValues { focus, .. } => collect_expression_classes(focus, classes),
+        NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             for item in items {
                 collect_expression_classes(item, classes);
             }

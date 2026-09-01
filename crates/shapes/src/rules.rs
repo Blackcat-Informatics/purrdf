@@ -224,9 +224,9 @@ pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
         NodeExpr::Constant(term) => term_carries_blank(term),
         NodeExpr::This | NodeExpr::Path(_) => false,
         NodeExpr::Filter { nodes, .. } => node_expr_mints_blank(nodes),
-        NodeExpr::Union(operands) | NodeExpr::Intersection(operands) => {
-            operands.iter().any(node_expr_mints_blank)
-        }
+        NodeExpr::Union(operands)
+        | NodeExpr::Intersection(operands)
+        | NodeExpr::Concat(operands) => operands.iter().any(node_expr_mints_blank),
         NodeExpr::If { then, els, .. } => node_expr_mints_blank(then) || node_expr_mints_blank(els),
         NodeExpr::Distinct(of)
         | NodeExpr::Min(of)
@@ -237,6 +237,35 @@ pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
         // Aggregations and existence tests yield literals, never blank nodes.
         NodeExpr::Count { .. } | NodeExpr::Sum(_) | NodeExpr::Exists(_) => false,
         NodeExpr::Call(_) => false,
+
+        // ── SHACL 1.2 Node Expressions ─────────────────────────────────────────
+        // `shnex:EmptyExpression` derives nothing at all; a var expression resolves
+        // to the focus node or to a scope binding, both of which are terms the
+        // evaluation context already holds; `shnex:instancesOf` and
+        // `shnex:nodesMatching` select nodes already present in the focus graph.
+        NodeExpr::Empty
+        | NodeExpr::Var(_)
+        | NodeExpr::InstancesOf(_)
+        | NodeExpr::NodesMatching(_) => false,
+        // A list expression's members are literals or IRIs by the spec's own syntax
+        // rule, but this walk still tests them rather than trusting the parser: a
+        // false "cannot mint" answer would silently classify a diverging rule as
+        // run-once and UNDER-derive.
+        NodeExpr::List(members) => members.iter().any(term_carries_blank),
+        // Selection over an already-present node set, so only the operand that can
+        // introduce a fresh constant matters.
+        NodeExpr::Remove { nodes, .. } | NodeExpr::FindFirst { nodes, .. } => {
+            node_expr_mints_blank(nodes)
+        }
+        // Both halves reach the output: `shnex:flatMap` concatenates the per-node
+        // results of `map`, and either side may carry a blank constant.
+        NodeExpr::FlatMap { nodes, map } => {
+            node_expr_mints_blank(nodes) || node_expr_mints_blank(map)
+        }
+        // Path traversal from a computed focus selects existing value nodes only.
+        NodeExpr::PathValues { .. } => false,
+        // Conformance predicates yield booleans, never blank nodes.
+        NodeExpr::MatchAll { .. } | NodeExpr::ConformsToShape { .. } => false,
     }
 }
 
@@ -2065,22 +2094,44 @@ mod tests {
     }
 
     /// The claim [`node_expr_mints_blank`] rests on: a `sh:TripleRule` head cannot
-    /// carry an authored blank node at all, because a blank node in a head position
-    /// must parse as a structural node expression or a function call — a bare one
-    /// is REJECTED. So there is no silent third case the classification could miss.
+    /// carry an authored blank node that becomes a FRESH term.
+    ///
+    /// A blank node in a head position is one of exactly two things. If it bears
+    /// triples it parses as a structural node expression or a function call, and
+    /// the walk above inspects it. If it bears none it is a
+    /// `shnex:EmptyExpression` (SHACL 1.2 Node Expressions §4.1.1), whose output
+    /// nodes are the empty list — so the head produces NOTHING and no triple is
+    /// derived from it at all. Either way there is no silent third case in which a
+    /// bare blank reaches the derived graph as a fresh term.
     #[test]
-    fn a_bare_blank_in_a_triple_rule_head_is_rejected() {
+    fn a_bare_blank_in_a_triple_rule_head_produces_nothing() {
         for position in [
             "sh:subject _:x ; sh:predicate ex:p ; sh:object ex:o",
             "sh:subject sh:this ; sh:predicate ex:p ; sh:object _:x",
         ] {
-            let err = parse_shapes_err(&format!(
+            let shapes = parse_shapes(&format!(
                 "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
                    sh:rule [ a sh:TripleRule ; {position} ] ."
             ));
+            let rule = shapes
+                .node_shapes
+                .iter()
+                .flat_map(|s| &s.rules)
+                .next()
+                .expect("the shape declares one rule");
+            let RuleBody::Triple {
+                subject, object, ..
+            } = &rule.body
+            else {
+                panic!("expected a sh:TripleRule head for {position}");
+            };
             assert!(
-                err.contains("unrecognised node expression"),
-                "a bare blank head must hard-fail at load; got: {err}"
+                matches!(subject, NodeExpr::Empty) || matches!(object, NodeExpr::Empty),
+                "a bare blank head position is an empty expression for {position}"
+            );
+            assert!(
+                !node_expr_mints_blank(subject) && !node_expr_mints_blank(object),
+                "an empty expression mints nothing for {position}"
             );
         }
     }

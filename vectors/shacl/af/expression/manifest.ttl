@@ -8,4 +8,7 @@
   a mf:Manifest ;
   rdfs:label "SHACL-AF expression constraint tests" ;
   mf:include <booleans-001.ttl> ;
+  mf:include <node-by-expression-001.ttl> ;
+  mf:include <node-expr-shnex-001.ttl> ;
+  mf:include <node-expr-shnex-002.ttl> ;
   .

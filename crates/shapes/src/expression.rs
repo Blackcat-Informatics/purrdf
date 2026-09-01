@@ -1,11 +1,43 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SHACL Advanced Features node-expression evaluation.
+//! SHACL node-expression evaluation.
 //!
-//! A SHACL-AF *node expression* maps a focus node to a set of nodes (a
+//! A *node expression* maps a focus node to a sequence of nodes (a
 //! [`Vec<Term>`]). This module defines the intermediate representation
-//! ([`NodeExpr`]) and a deterministic evaluator ([`eval_node_expr`]).
+//! ([`NodeExpr`]) and a deterministic evaluator ([`eval_node_expr_in_scope`], with
+//! [`eval_node_expr`] as its empty-scope entry point).
+//!
+//! # Two spec surfaces, one implementation
+//!
+//! Two W3C specifications define this language: SHACL Advanced Features, which
+//! spells its kinds in the `sh:` namespace, and SHACL 1.2 Node Expressions, which
+//! spells them in `shnex:` (`http://www.w3.org/ns/shacl-node-expr#`) and adds
+//! kinds the older document has no term for. PurRDF accepts BOTH spellings and
+//! maps them onto the SAME [`NodeExpr`] arms — there is exactly one evaluation
+//! path per arm, nothing here is conditional or absent, and a node carrying both
+//! spellings of one kind is an ambiguity that hard-fails at parse time. It is the
+//! same arrangement as supporting two RDF syntaxes over one graph model.
+//!
+//! The kinds contributed by SHACL 1.2 Node Expressions are [`NodeExpr::Empty`]
+//! (§4.1.1), [`NodeExpr::Var`] (§4.1.2), [`NodeExpr::List`] (§4.1.3),
+//! [`NodeExpr::PathValues`] (§4.1.4), [`NodeExpr::Concat`] (§4.2.3),
+//! [`NodeExpr::Remove`] (§4.2.4), [`NodeExpr::FlatMap`] (§4.3.1),
+//! [`NodeExpr::FindFirst`] (§4.3.2), [`NodeExpr::MatchAll`] (§4.3.3),
+//! [`NodeExpr::InstancesOf`] (§4.5.1), [`NodeExpr::NodesMatching`] (§4.5.2) and
+//! [`NodeExpr::ConformsToShape`] (§4.5.3). An RDF 1.2 triple term is a triple term
+//! expression (§3.1.3) — a constant that evaluates to itself — and is a first-class
+//! value everywhere else in the language, focus nodes and value nodes alike.
+//!
+//! # Scope
+//!
+//! Evaluation carries a [`Scope`]: the `scope` argument of the specification's
+//! `evalExpr(expr, focusGraph, focusNode, scope)`. It is a borrowed linked list of
+//! [`Binding`] frames, so the empty case (the overwhelming majority of the tree)
+//! costs one word and no allocation. `sh:expression` binds `value` to the value
+//! node under test (§7.1); `sh:nodeByExpression` evaluates in the empty scope
+//! (§7.2); `shnex:flatMap` and `shnex:orderBy` rebind the FOCUS NODE per element
+//! and thread the caller's scope through unchanged.
 //!
 //! The wiring-free expression kinds are implemented directly: [`NodeExpr::Constant`],
 //! [`NodeExpr::This`], [`NodeExpr::Path`], [`NodeExpr::Union`],
@@ -37,13 +69,23 @@
 //! is a node-expression predicate: true iff its inner expression yields at least
 //! one node for the focus.
 //!
-//! # Determinism
+//! # Determinism, and which kinds are sequences
 //!
-//! [`Term`] is intentionally not `Ord`, so this module orders any set-shaped
+//! [`Term`] is intentionally not `Ord`, so this module orders any SET-shaped
 //! output with `crate::term::sort_terms_canonical(&mut v); v.dedup();`, using the
 //! allocation-free canonical term comparator. The sibling
 //! [`crate::sparql::eval_target`] uses the same ordering. The evaluator is
 //! wasm32-clean: no clocks, threads, RNG, or filesystem.
+//!
+//! Several SHACL 1.2 kinds are SEQUENCE-valued and order-significant, and those
+//! are deliberately NOT sorted and NOT deduplicated — canonicalizing them would
+//! destroy the very thing the spec defines them to produce.
+//! [`NodeExpr::List`] returns its members in list order; [`NodeExpr::Concat`]
+//! concatenates its operands left to right, duplicates included;
+//! [`NodeExpr::FlatMap`] concatenates its per-node results in input order;
+//! [`NodeExpr::Remove`] preserves the order of its input; [`NodeExpr::OrderBy`]
+//! produces the order it was asked for. Their determinism comes from their inputs
+//! being deterministic, not from a final sort.
 
 use ::purrdf::{FastMap, FastSet};
 
@@ -52,6 +94,19 @@ use crate::model::xsd;
 use crate::path;
 use crate::shapes::{Path, Shape};
 use crate::term::{Literal, NamedNode, Term};
+
+/// The reserved `shnex:var` name that denotes the current focus node.
+///
+/// SHACL 1.2 Node Expressions §4.1.2 resolves this name BEFORE consulting the
+/// scope, so a scope binding of the same name can never shadow the focus node.
+pub const FOCUS_NODE_VAR: &str = "focusNode";
+
+/// The `sh:expression` scope variable bound to the value node under test.
+///
+/// SHACL 1.2 Node Expressions §7.1 evaluates an expression constraint as
+/// `evalExpr(expr, data graph, focusNode, {value: v})`, which is what makes
+/// `[ shnex:var "value" ]` resolve inside an expression constraint.
+pub const VALUE_VAR: &str = "value";
 
 // ── Intermediate representation ─────────────────────────────────────────────────
 
@@ -137,6 +192,95 @@ pub enum NodeExpr {
     Exists(Box<Self>),
     /// A builtin or user-defined function call.
     Call(FnCall),
+
+    // ── SHACL 1.2 Node Expressions (W3C WD, `shnex:` namespace) ─────────────────
+    /// `shnex:EmptyExpression` (§4.1.1) — a blank node that is the subject of no
+    /// triple. Its output nodes are the empty list.
+    Empty,
+    /// `shnex:var` (§4.1.2) — a variable reference resolved against the evaluation
+    /// [`Scope`]. The name `"focusNode"` always denotes the current focus node; any
+    /// other name resolves against the scope, and an unbound name yields the empty
+    /// list (the spec's third case — an absence, not an error).
+    Var(String),
+    /// `shnex:ListExpression` (§4.1.3) — an RDF collection whose members (each an
+    /// IRI or a literal) ARE the output nodes, in list order.
+    ///
+    /// SEQUENCE-valued and order-significant: the members are returned exactly as
+    /// authored, never sorted and never deduplicated.
+    List(Vec<Term>),
+    /// `shnex:pathValues` with an explicit `shnex:focusNode` (§4.1.4) — the value
+    /// nodes of `path` starting from the single node `focus` produces.
+    ///
+    /// A `shnex:pathValues` WITHOUT `shnex:focusNode` parses to [`Self::Path`]
+    /// instead: the spec defines the omitted case as "the focus node from the
+    /// evaluation context", which is exactly what [`Self::Path`] already walks.
+    /// The explicit form needs its own arm because the spec makes a focus
+    /// expression yielding MORE than one node an evaluation failure, where
+    /// [`Self::FlatMap`] would concatenate.
+    PathValues {
+        /// The SHACL property path to walk.
+        path: Path,
+        /// The focus-node expression; must yield at most one node.
+        focus: Box<Self>,
+    },
+    /// `shnex:concat` (§4.2.3) — the concatenation of the operands' output nodes.
+    ///
+    /// SEQUENCE-valued and order-significant: operand order is preserved and
+    /// duplicates are kept (this is what distinguishes it from `sh:union`, which
+    /// is the SHACL-AF set union and canonicalizes).
+    Concat(Vec<Self>),
+    /// `shnex:remove` / `shnex:nodes` (§4.2.4) — the nodes of `nodes` that are not
+    /// also nodes of `remove`, preserving the order of `nodes`.
+    ///
+    /// Membership is TERM equality per the spec, so `"01"^^xsd:integer` does not
+    /// remove `"1"^^xsd:integer`.
+    Remove {
+        /// The input-nodes expression.
+        nodes: Box<Self>,
+        /// The expression naming the nodes to drop.
+        remove: Box<Self>,
+    },
+    /// `shnex:flatMap` / `shnex:nodes` (§4.3.1) — `map` evaluated once per input
+    /// node WITH THAT NODE AS FOCUS, all results concatenated in input order.
+    ///
+    /// SEQUENCE-valued and order-significant; duplicates are preserved.
+    FlatMap {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The per-node expression (`shnex:flatMap`).
+        map: Box<Self>,
+    },
+    /// `shnex:findFirst` / `shnex:nodes` (§4.3.2) — the first input node that
+    /// conforms to `shape`, or the empty list when none does.
+    FindFirst {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The shape the first matching node must conform to.
+        shape: Box<Shape>,
+    },
+    /// `shnex:matchAll` / `shnex:nodes` (§4.3.3) — `true` iff EVERY input node
+    /// conforms to `shape`, `false` otherwise (an empty input is vacuously true).
+    MatchAll {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The shape every input node must conform to.
+        shape: Box<Shape>,
+    },
+    /// `shnex:instancesOf` (§4.5.1) — every SHACL instance of the class in the
+    /// focus graph, including instances of its subclasses.
+    InstancesOf(NamedNode),
+    /// `shnex:nodesMatching` (§4.5.2) — every node of the focus graph that conforms
+    /// to the shape.
+    NodesMatching(Box<Shape>),
+    /// `shnex:conformsToShape` (§4.5.3) — `true` iff the single node the operand
+    /// produces conforms to `shape`, `false` otherwise, and the empty list when the
+    /// operand produces no node.
+    ConformsToShape {
+        /// The node expression producing the node under test (at most one node).
+        node: Box<Self>,
+        /// The shape the node is validated against.
+        shape: Box<Shape>,
+    },
 }
 
 /// A function-call node expression (`sh:SPARQLFunction` / builtin).
@@ -156,6 +300,92 @@ pub enum FnCall {
         /// The argument expressions.
         args: Vec<NodeExpr>,
     },
+}
+
+// ── Evaluation scope ────────────────────────────────────────────────────────────
+
+/// One `name → node` binding frame of an evaluation [`Scope`].
+///
+/// A binding is a BORROWED stack frame: it holds references to a name and a term
+/// the caller already owns, plus the enclosing scope. Building one is a pointer
+/// write, not an allocation, so pushing a binding on the hot path costs nothing
+/// beyond a stack slot.
+#[derive(Debug, Clone, Copy)]
+pub struct Binding<'a> {
+    name: &'a str,
+    value: &'a Term,
+    outer: Scope<'a>,
+}
+
+impl<'a> Binding<'a> {
+    /// Bind `name` to `value` on top of `outer`.
+    #[must_use]
+    pub const fn new(name: &'a str, value: &'a Term, outer: Scope<'a>) -> Self {
+        Self { name, value, outer }
+    }
+}
+
+/// The variable-binding environment a node expression is evaluated in — the
+/// `scope` argument of the SHACL 1.2 Node Expressions `evalExpr(expr, focusGraph,
+/// focusNode, scope)` signature.
+///
+/// The scope is a borrowed singly-linked list of [`Binding`] frames rather than a
+/// map, because the shape of real SHACL evaluation is "empty almost everywhere,
+/// one or two bindings at a constraint boundary". [`Scope::EMPTY`] is a null
+/// pointer, so the overwhelmingly common empty case costs one word and no
+/// allocation, and [`lookup`](Self::lookup) walks at most as many links as the
+/// caller actually pushed. The type is `Copy`, so passing it down the evaluator is
+/// a register move.
+///
+/// # Who binds what
+///
+/// * `sh:expression` (Node Expressions §7.1) binds `value` to the value node under
+///   test, which is what makes `[ shnex:var "value" ]` resolve inside an
+///   expression constraint.
+/// * `sh:nodeByExpression` (§7.2) evaluates in the EMPTY scope, by the spec's own
+///   `evalExpr(expr, data graph, v, {})`.
+/// * `shnex:var "focusNode"` never consults the scope at all: §4.1.2 resolves that
+///   name against the focus node directly, before the scope is searched.
+///
+/// `shnex:flatMap` (§4.3.1) and `shnex:orderBy` (§4.2.8) rebind the FOCUS NODE per
+/// element rather than a scope variable, so they thread the caller's scope through
+/// unchanged — the spec writes them as `evalExpr(inner, focusGraph, n, scope)`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Scope<'a> {
+    frame: Option<&'a Binding<'a>>,
+}
+
+impl<'a> Scope<'a> {
+    /// The empty scope — no variable is bound.
+    pub const EMPTY: Self = Self { frame: None };
+
+    /// The scope whose innermost frame is `binding`.
+    #[must_use]
+    pub const fn bound(binding: &'a Binding<'a>) -> Self {
+        Self {
+            frame: Some(binding),
+        }
+    }
+
+    /// The node bound to `name`, innermost binding first, or `None` when the name
+    /// is not in scope.
+    #[must_use]
+    pub fn lookup(&self, name: &str) -> Option<&'a Term> {
+        let mut cursor = self.frame;
+        while let Some(binding) = cursor {
+            if binding.name == name {
+                return Some(binding.value);
+            }
+            cursor = binding.outer.frame;
+        }
+        None
+    }
+
+    /// Whether no variable is bound.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.frame.is_none()
+    }
 }
 
 // ── Recursion guard ─────────────────────────────────────────────────────────────
@@ -382,20 +612,46 @@ pub fn eval_node_expr(
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
 ) -> Result<Vec<Term>, String> {
+    eval_node_expr_in_scope(store, focus, expr, guard, Scope::EMPTY)
+}
+
+/// Evaluate a node expression against `store`, from `focus`, with `scope` in force.
+///
+/// This is the full `evalExpr(expr, focusGraph, focusNode, scope)` of the SHACL 1.2
+/// Node Expressions specification. [`eval_node_expr`] is exactly this function
+/// under [`Scope::EMPTY`] — the spec's own top-level entry, not a convenience
+/// variant with different semantics.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`].
+pub fn eval_node_expr_in_scope(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
     guard.enter_node_expr()?;
     // Capture, unwind one level, THEN propagate: an early `?` here would leave
     // the structural counter permanently raised for the rest of the evaluation.
-    let result = eval_node_expr_at_depth(store, focus, expr, guard);
+    let result = eval_node_expr_at_depth(store, focus, expr, guard, scope);
     guard.exit_node_expr();
     result
 }
 
-/// One structural level of [`eval_node_expr`], with the depth already charged.
+/// One structural level of [`eval_node_expr_in_scope`], with the depth already charged.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per SHACL node-expression kind; splitting the dispatch would \
+              hide the exhaustive spec-to-arm correspondence this match exists to show"
+)]
 fn eval_node_expr_at_depth(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
+    scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
     match expr {
         NodeExpr::Constant(t) => Ok(vec![t.clone()]),
@@ -413,7 +669,7 @@ fn eval_node_expr_at_depth(
         NodeExpr::Union(exprs) => {
             let mut out: Vec<Term> = Vec::new();
             for sub in exprs {
-                out.extend(eval_node_expr(store, focus, sub, guard)?);
+                out.extend(eval_node_expr_in_scope(store, focus, sub, guard, scope)?);
             }
             crate::term::sort_terms_canonical(&mut out);
             out.dedup();
@@ -424,15 +680,16 @@ fn eval_node_expr_at_depth(
             let Some(first) = iter.next() else {
                 return Ok(Vec::new());
             };
-            let mut acc: FastSet<Term> = eval_node_expr(store, focus, first, guard)?
-                .into_iter()
-                .collect();
+            let mut acc: FastSet<Term> =
+                eval_node_expr_in_scope(store, focus, first, guard, scope)?
+                    .into_iter()
+                    .collect();
             // Reuse a single scratch set across operands (clear + refill) rather
             // than allocating a fresh set per iteration.
             let mut next: FastSet<Term> = FastSet::default();
             for sub in iter {
                 next.clear();
-                next.extend(eval_node_expr(store, focus, sub, guard)?);
+                next.extend(eval_node_expr_in_scope(store, focus, sub, guard, scope)?);
                 acc.retain(|t| next.contains(t));
             }
             let mut out: Vec<Term> = acc.into_iter().collect();
@@ -442,7 +699,7 @@ fn eval_node_expr_at_depth(
         }
         NodeExpr::If { cond, then, els } => {
             // Propagate a condition error rather than swallowing it.
-            let cond_nodes = eval_node_expr(store, focus, cond, guard)?;
+            let cond_nodes = eval_node_expr_in_scope(store, focus, cond, guard, scope)?;
             // Per SHACL-AF the condition is a single value routed through SPARQL
             // effective-boolean-value. `IF(?c, true, false)` applies EBV to its
             // first argument, so a bound `?result` of `true`^^xsd:boolean means
@@ -479,7 +736,7 @@ fn eval_node_expr_at_depth(
                     ));
                 }
             };
-            eval_node_expr(store, focus, branch, guard)
+            eval_node_expr_in_scope(store, focus, branch, guard, scope)
         }
         // Builtin and user-defined (`sh:SPARQLFunction`) calls lower identically:
         // both render an `<iri>(…)` call and route through the SPARQL seam. The only
@@ -500,7 +757,7 @@ fn eval_node_expr_at_depth(
             // call is a single empty tuple → one invocation.
             let arg_values: Vec<Vec<Term>> = args
                 .iter()
-                .map(|arg| eval_node_expr(store, focus, arg, guard))
+                .map(|arg| eval_node_expr_in_scope(store, focus, arg, guard, scope))
                 .collect::<Result<_, _>>()?;
             let placeholders: Vec<String> =
                 (0..arg_values.len()).map(|i| format!("?a{i}")).collect();
@@ -554,13 +811,13 @@ fn eval_node_expr_at_depth(
             Ok(out)
         }
         NodeExpr::Distinct(of) => {
-            let mut out = eval_node_expr(store, focus, of, guard)?;
+            let mut out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
             crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
         NodeExpr::Count { distinct, of } => {
-            let mut out = eval_node_expr(store, focus, of, guard)?;
+            let mut out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
             if *distinct {
                 crate::term::sort_terms_canonical(&mut out);
                 out.dedup();
@@ -583,7 +840,7 @@ fn eval_node_expr_at_depth(
             // over their keys (numeric/typed value order — e.g.
             // "2"^^xsd:integer < "10"^^xsd:integer — NOT N-Triples lexical
             // order). Direction defaults to ascending (`descending` flips it).
-            let elements = eval_node_expr(store, focus, of, guard)?;
+            let elements = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
             if elements.is_empty() {
                 return Ok(Vec::new());
             }
@@ -591,7 +848,7 @@ fn eval_node_expr_at_depth(
             // element (0 or >1 is a hard error — no optionality).
             let mut keyed: Vec<(Term, Term)> = Vec::with_capacity(elements.len());
             for e in elements {
-                let ks = eval_node_expr(store, &e, key, guard)?;
+                let ks = eval_node_expr_in_scope(store, &e, key, guard, scope)?;
                 let [k] = ks.as_slice() else {
                     return Err(format!(
                         "sh:orderby key must yield exactly one value per node, got {} for {e}",
@@ -634,7 +891,7 @@ fn eval_node_expr_at_depth(
             Ok(out.into_iter().map(|(e, _, _)| e).collect())
         }
         NodeExpr::Offset { of, n } => {
-            let out = eval_node_expr(store, focus, of, guard)?;
+            let out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
             let skip =
                 usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
             // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
@@ -644,13 +901,167 @@ fn eval_node_expr_at_depth(
             Ok(out.into_iter().skip(skip).collect())
         }
         NodeExpr::Limit { of, n } => {
-            let out = eval_node_expr(store, focus, of, guard)?;
+            let out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
             let take = usize::try_from(*n).map_err(|e| format!("sh:limit value too large: {e}"))?;
             Ok(out.into_iter().take(take).collect())
         }
-        NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard),
-        NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard),
-        NodeExpr::Sum(of) => aggregate(store, focus, of, "SUM", guard),
+        // ── SHACL 1.2 Node Expressions ─────────────────────────────────────────
+        // §4.1.1 Empty expression: the empty list, always.
+        NodeExpr::Empty => Ok(Vec::new()),
+        // §4.1.2 Var expression, in the spec's stated order: `"focusNode"` names
+        // the focus node; any other name resolves against the scope; an unbound
+        // name yields the empty list (an absence, not an error).
+        NodeExpr::Var(name) => Ok(match name.as_str() {
+            FOCUS_NODE_VAR => vec![focus.clone()],
+            other => scope.lookup(other).cloned().into_iter().collect(),
+        }),
+        // §4.1.3 List expression: the members, IN LIST ORDER. Sequence-valued —
+        // deliberately NOT sorted and NOT deduplicated.
+        NodeExpr::List(members) => Ok(members.clone()),
+        // §4.1.4 Path values expression WITH an explicit `shnex:focusNode`: the
+        // focus expression must yield at most one node (0 ⇒ empty, >1 ⇒ a hard
+        // evaluation failure), and the path is walked from that node.
+        NodeExpr::PathValues {
+            path: walk,
+            focus: from,
+        } => {
+            let starts = eval_node_expr_in_scope(store, focus, from, guard, scope)?;
+            match starts.as_slice() {
+                [] => Ok(Vec::new()),
+                [start] => {
+                    let mut v = path::eval(store.core(), start, walk);
+                    crate::term::sort_terms_canonical(&mut v);
+                    v.dedup();
+                    Ok(v)
+                }
+                more => Err(format!(
+                    "shnex:focusNode must yield at most one node, got {}",
+                    more.len()
+                )),
+            }
+        }
+        // §4.2.3 Concat expression: operand outputs concatenated left to right.
+        // Sequence-valued — order preserved, duplicates preserved.
+        NodeExpr::Concat(operands) => {
+            let mut out: Vec<Term> = Vec::new();
+            for operand in operands {
+                out.extend(eval_node_expr_in_scope(
+                    store, focus, operand, guard, scope,
+                )?);
+            }
+            Ok(out)
+        }
+        // §4.2.4 Remove expression: N minus M by TERM equality, preserving N's
+        // order. `"01"^^xsd:integer` therefore does not remove `"1"^^xsd:integer`.
+        NodeExpr::Remove { nodes, remove } => {
+            let keep = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let drop: FastSet<Term> = eval_node_expr_in_scope(store, focus, remove, guard, scope)?
+                .into_iter()
+                .collect();
+            Ok(keep.into_iter().filter(|t| !drop.contains(t)).collect())
+        }
+        // §4.3.1 FlatMap expression: `map` evaluated once per input node WITH THAT
+        // NODE AS FOCUS, results concatenated in input order. The scope threads
+        // through unchanged — the spec rebinds the focus node here, not a variable.
+        NodeExpr::FlatMap { nodes, map } => {
+            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let mut out: Vec<Term> = Vec::new();
+            for node in &inputs {
+                out.extend(eval_node_expr_in_scope(store, node, map, guard, scope)?);
+            }
+            Ok(out)
+        }
+        // §4.3.2 FindFirst expression: the FIRST input node conforming to `shape`.
+        // Short-circuits, so a long candidate list costs only as many conformance
+        // checks as it takes to hit one.
+        NodeExpr::FindFirst { nodes, shape } => {
+            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            for node in inputs {
+                if conforms_guarded(store, &node, shape, guard)? {
+                    return Ok(vec![node]);
+                }
+            }
+            Ok(Vec::new())
+        }
+        // §4.3.3 MatchAll expression: true iff EVERY input node conforms. An empty
+        // input is vacuously true ("every node in N conforms" over an empty N).
+        NodeExpr::MatchAll { nodes, shape } => {
+            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            for node in inputs {
+                if !conforms_guarded(store, &node, shape, guard)? {
+                    return Ok(vec![bool_literal(false)]);
+                }
+            }
+            Ok(vec![bool_literal(true)])
+        }
+        // §4.5.1 InstancesOf expression: the SHACL instances of the class in the
+        // focus graph — which, per the spec's own note, INCLUDES instances of its
+        // subclasses. The shared class-membership view already answers exactly that
+        // question (it is what `sh:class` and `sh:targetClass` consult), so this
+        // reuses it rather than walking `rdfs:subClassOf` a second time.
+        NodeExpr::InstancesOf(class) => {
+            store.prepare_class_membership();
+            let class_term = Term::NamedNode(class.clone());
+            let Some(class_id) = crate::data::resolve_id(store.core(), &class_term) else {
+                // A class IRI absent from the data graph has no instances. That is
+                // an empty answer, not a malformed expression.
+                return Ok(Vec::new());
+            };
+            let mut out: Vec<Term> = store
+                .class_view()
+                .instances_of(class_id)
+                .map(|id| crate::term::term_id_to_native(store.core(), id))
+                .collect();
+            crate::term::sort_terms_canonical(&mut out);
+            out.dedup();
+            Ok(out)
+        }
+        // §4.5.2 NodesMatching expression: every node of the focus graph that
+        // conforms to `shape`. The spec itself warns this output "may be very
+        // large"; the candidate set is every subject and object of the graph,
+        // canonicalized before the conformance sweep so the result is deterministic
+        // and each distinct node is checked exactly once.
+        NodeExpr::NodesMatching(shape) => {
+            let mut candidates: Vec<Term> = Vec::new();
+            for (subject, _, object) in crate::data::native_quads(
+                store.core(),
+                None,
+                None,
+                None,
+                crate::data::GraphFilter::AnyGraph,
+            ) {
+                candidates.push(subject);
+                candidates.push(object);
+            }
+            crate::term::sort_terms_canonical(&mut candidates);
+            candidates.dedup();
+            let mut out: Vec<Term> = Vec::new();
+            for node in candidates {
+                if conforms_guarded(store, &node, shape, guard)? {
+                    out.push(node);
+                }
+            }
+            Ok(out)
+        }
+        // §4.5.3 ConformsToShape expression: a list parameter function, so the node
+        // argument must produce at most one node. No node ⇒ the empty list (the
+        // spec's stated "no value" case); otherwise the boolean conformance answer.
+        NodeExpr::ConformsToShape { node, shape } => {
+            let candidates = eval_node_expr_in_scope(store, focus, node, guard, scope)?;
+            match candidates.as_slice() {
+                [] => Ok(Vec::new()),
+                [only] => Ok(vec![bool_literal(conforms_guarded(
+                    store, only, shape, guard,
+                )?)]),
+                more => Err(format!(
+                    "shnex:conformsToShape node argument must yield at most one node, got {}",
+                    more.len()
+                )),
+            }
+        }
+        NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard, scope),
+        NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard, scope),
+        NodeExpr::Sum(of) => aggregate(store, focus, of, "SUM", guard, scope),
         NodeExpr::Filter { nodes, shape } => {
             // Candidate nodes retained iff they conform to `shape`. The re-entry
             // into `conforms` is a fresh guard/subtree, so we (a) guard the
@@ -658,25 +1069,26 @@ fn eval_node_expr_at_depth(
             // and (b) thread the monotone depth across the constraint boundary so
             // a cross-shape filter cycle fails closed (depth ceiling) rather than
             // overflowing the stack.
-            let candidates = eval_node_expr(store, focus, nodes, guard)?;
-            let shape_id = shape.id.to_string();
-            let next_depth = guard.depth().saturating_add(1);
+            let candidates = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
             let mut kept: Vec<Term> = Vec::new();
             for value in candidates {
-                let value_str = value.to_string();
-                guard.enter(&shape_id, &value_str)?;
-                // Capture the Result, exit the guard, THEN propagate — a clean
-                // exit before the `?` avoids leaving stale in-flight state.
-                let keep =
-                    crate::constraints::conforms_with_depth(store, &value, shape, next_depth);
-                guard.exit(&shape_id, &value_str);
-                if keep? {
+                if conforms_guarded(store, &value, shape, guard)? {
                     kept.push(value);
                 }
             }
             // Canonicalize the node-expression set output here (sort+dedup) so
             // sh:offset / sh:limit over a bare Filter set are deterministic
             // rather than store-iteration-order dependent.
+            //
+            // This is the SHACL-AF set reading of the kind, and it is what both
+            // spellings get: `sh:filterShape` and `shnex:filterShape` share one
+            // arm and one evaluator, and the frozen `sh:`-written corpus pins the
+            // canonicalized answer. SHACL 1.2 Node Expressions §4.2.5 instead says
+            // "preserving the order in the list", so a filter placed directly over
+            // a sequence-valued input (`shnex:concat`, `shnex:flatMap`) is sorted
+            // and deduplicated here where that section would have kept the
+            // sequence. Every other sequence-valued kind does preserve its order;
+            // only this one is set-shaped, and deliberately so.
             crate::term::sort_terms_canonical(&mut kept);
             kept.dedup();
             Ok(kept)
@@ -685,10 +1097,40 @@ fn eval_node_expr_at_depth(
             // `sh:exists` is a node-expression predicate: true iff `inner`
             // produces at least one node for the focus. A nested Filter inside
             // `inner` re-enters the guarded constraint engine itself.
-            let out = eval_node_expr(store, focus, inner, guard)?;
+            let out = eval_node_expr_in_scope(store, focus, inner, guard, scope)?;
             Ok(vec![bool_literal(!out.is_empty())])
         }
     }
+}
+
+/// Conformance-check `node` against `shape`, under the shared recursion guard.
+///
+/// Every shape-bearing node-expression kind — `sh:filterShape` /
+/// `shnex:filterShape` (§4.2.5), `shnex:findFirst` (§4.3.2), `shnex:matchAll`
+/// (§4.3.3), `shnex:nodesMatching` (§4.5.2) and `shnex:conformsToShape` (§4.5.3) —
+/// re-enters the constraint engine, and each such re-entry builds a FRESH guard
+/// inside [`crate::constraints::conforms_with_depth`]. So the two layers are
+/// applied here, once, for all of them: the in-flight `(shape id, node)` pair
+/// catches a cycle within one expression tree, and the monotone depth carries the
+/// re-entry count across the constraint boundary so a mutually-recursive
+/// shape/expression cycle fails closed at [`MAX_RECURSION_DEPTH`] instead of
+/// overflowing the native stack (which would ABORT rather than return).
+///
+/// The guard is exited BEFORE the verdict is propagated, so an erroring
+/// sub-validation never leaves a stale in-flight entry behind.
+fn conforms_guarded(
+    store: &ShaclData,
+    node: &Term,
+    shape: &Shape,
+    guard: &mut RecursionGuard,
+) -> Result<bool, String> {
+    let shape_id = shape.id.to_string();
+    let node_key = node.to_string();
+    let next_depth = guard.depth().saturating_add(1);
+    guard.enter(&shape_id, &node_key)?;
+    let verdict = crate::constraints::conforms_with_depth(store, node, shape, next_depth);
+    guard.exit(&shape_id, &node_key);
+    verdict
 }
 
 /// Evaluate a set aggregate (`"MIN"`/`"MAX"`/`"SUM"`) over `of`'s result via the
@@ -704,8 +1146,9 @@ fn aggregate(
     of: &NodeExpr,
     agg: &str,
     guard: &mut RecursionGuard,
+    scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
-    let operands = eval_node_expr(store, focus, of, guard)?;
+    let operands = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
     match crate::sparql::eval_aggregate_view(store.sparql_view(), agg, &operands)? {
         Some(term) => Ok(vec![term]),
         None => Ok(Vec::new()),

@@ -352,6 +352,16 @@ pub mod sh {
     /// `sh:exists` — a boolean existence node expression.
     pub const EXISTS: &str = "http://www.w3.org/ns/shacl#exists";
 
+    /// `sh:nodeByExpression` — the node shapes every value node must conform to,
+    /// computed by a node expression (SHACL 1.2 Node Expressions §7.2).
+    pub const NODE_BY_EXPRESSION: &str = "http://www.w3.org/ns/shacl#nodeByExpression";
+
+    /// `sh:NodeByExpressionConstraintComponent` — the constraint component IRI
+    /// reported for a failed `sh:nodeByExpression` constraint (SHACL 1.2 Node
+    /// Expressions §7.2).
+    pub const NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#NodeByExpressionConstraintComponent";
+
     /// `sh:SPARQLFunction` — the class of SPARQL-bodied SHACL-AF functions.
     pub const SPARQL_FUNCTION: &str = "http://www.w3.org/ns/shacl#SPARQLFunction";
 
@@ -531,6 +541,111 @@ pub mod sh {
     /// `sh:QualifiedMaxCountConstraintComponent` — the component reported for `sh:qualifiedMaxCount` violations.
     pub const QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#QualifiedMaxCountConstraintComponent";
+}
+
+/// SHACL 1.2 node-expression namespace constants
+/// (`http://www.w3.org/ns/shacl-node-expr#`).
+///
+/// These IRIs are DEFINED BY the W3C "SHACL 1.2 Node Expressions" specification;
+/// PurRDF mints none of them. Every constant below is transcribed verbatim from
+/// the section named in its doc comment.
+///
+/// Where a kind here has an older SHACL Advanced Features spelling in the [`sh`]
+/// namespace (`sh:union`, `sh:if`, `sh:count`, …), BOTH spellings parse to the
+/// SAME `crate::expression::NodeExpr` arm and run through the SAME evaluator —
+/// two spec-defined surfaces over one intermediate representation, exactly as two
+/// RDF syntaxes parse to one graph model.
+pub mod shnex {
+    /// The SHACL 1.2 node-expression namespace itself.
+    pub const NS: &str = "http://www.w3.org/ns/shacl-node-expr#";
+
+    /// `shnex:var` — the variable name of a var expression (§4.1.2).
+    pub const VAR: &str = "http://www.w3.org/ns/shacl-node-expr#var";
+
+    /// `shnex:pathValues` — the SHACL property path of a path values expression (§4.1.4).
+    pub const PATH_VALUES: &str = "http://www.w3.org/ns/shacl-node-expr#pathValues";
+
+    /// `shnex:focusNode` — the (optional) focus-node expression of a path values
+    /// expression (§4.1.4).
+    pub const FOCUS_NODE: &str = "http://www.w3.org/ns/shacl-node-expr#focusNode";
+
+    /// `shnex:exists` — the operand of an exists expression (§4.1.5).
+    pub const EXISTS: &str = "http://www.w3.org/ns/shacl-node-expr#exists";
+
+    /// `shnex:if` — the condition of an if expression (§4.1.6).
+    pub const IF: &str = "http://www.w3.org/ns/shacl-node-expr#if";
+
+    /// `shnex:then` — the then-branch of an if expression (§4.1.6).
+    pub const THEN: &str = "http://www.w3.org/ns/shacl-node-expr#then";
+
+    /// `shnex:else` — the else-branch of an if expression (§4.1.6).
+    pub const ELSE: &str = "http://www.w3.org/ns/shacl-node-expr#else";
+
+    /// `shnex:distinct` — the operand of a distinct expression (§4.2.1).
+    pub const DISTINCT: &str = "http://www.w3.org/ns/shacl-node-expr#distinct";
+
+    /// `shnex:intersection` — the member list of an intersection expression (§4.2.2).
+    pub const INTERSECTION: &str = "http://www.w3.org/ns/shacl-node-expr#intersection";
+
+    /// `shnex:concat` — the member list of a concat expression (§4.2.3).
+    pub const CONCAT: &str = "http://www.w3.org/ns/shacl-node-expr#concat";
+
+    /// `shnex:remove` — the nodes removed by a remove expression (§4.2.4).
+    pub const REMOVE: &str = "http://www.w3.org/ns/shacl-node-expr#remove";
+
+    /// `shnex:nodes` — the input-nodes expression shared by the remove, filter
+    /// shape, limit, offset, order by, flat map, find first and match all
+    /// expressions (§4.2.4–§4.3.3).
+    pub const NODES: &str = "http://www.w3.org/ns/shacl-node-expr#nodes";
+
+    /// `shnex:filterShape` — the filter shape of a filter shape expression (§4.2.5).
+    pub const FILTER_SHAPE: &str = "http://www.w3.org/ns/shacl-node-expr#filterShape";
+
+    /// `shnex:limit` — the maximum node count of a limit expression (§4.2.6).
+    pub const LIMIT: &str = "http://www.w3.org/ns/shacl-node-expr#limit";
+
+    /// `shnex:offset` — the skipped node count of an offset expression (§4.2.7).
+    pub const OFFSET: &str = "http://www.w3.org/ns/shacl-node-expr#offset";
+
+    /// `shnex:orderBy` — the sort-key expression of an order by expression (§4.2.8).
+    ///
+    /// Note the capital `B`: the SHACL-AF spelling this repository already
+    /// supports is the all-lowercase [`sh::ORDERBY`](super::sh::ORDERBY).
+    pub const ORDER_BY: &str = "http://www.w3.org/ns/shacl-node-expr#orderBy";
+
+    /// `shnex:desc` — the descending flag of an order by expression (§4.2.8).
+    pub const DESC: &str = "http://www.w3.org/ns/shacl-node-expr#desc";
+
+    /// `shnex:flatMap` — the per-node expression of a flat map expression (§4.3.1).
+    pub const FLAT_MAP: &str = "http://www.w3.org/ns/shacl-node-expr#flatMap";
+
+    /// `shnex:findFirst` — the shape of a find first expression (§4.3.2).
+    pub const FIND_FIRST: &str = "http://www.w3.org/ns/shacl-node-expr#findFirst";
+
+    /// `shnex:matchAll` — the shape of a match all expression (§4.3.3).
+    pub const MATCH_ALL: &str = "http://www.w3.org/ns/shacl-node-expr#matchAll";
+
+    /// `shnex:count` — the operand of a count expression (§4.4.1).
+    pub const COUNT: &str = "http://www.w3.org/ns/shacl-node-expr#count";
+
+    /// `shnex:min` — the operand of a min expression (§4.4.2).
+    pub const MIN: &str = "http://www.w3.org/ns/shacl-node-expr#min";
+
+    /// `shnex:max` — the operand of a max expression (§4.4.3).
+    pub const MAX: &str = "http://www.w3.org/ns/shacl-node-expr#max";
+
+    /// `shnex:sum` — the operand of a sum expression (§4.4.4).
+    pub const SUM: &str = "http://www.w3.org/ns/shacl-node-expr#sum";
+
+    /// `shnex:instancesOf` — the class of an instancesOf expression (§4.5.1).
+    pub const INSTANCES_OF: &str = "http://www.w3.org/ns/shacl-node-expr#instancesOf";
+
+    /// `shnex:nodesMatching` — the shape of a nodes matching expression (§4.5.2).
+    pub const NODES_MATCHING: &str = "http://www.w3.org/ns/shacl-node-expr#nodesMatching";
+
+    /// `shnex:conformsToShape` — the two-member argument list of a conformsToShape
+    /// expression (§4.5.3).
+    pub const CONFORMS_TO_SHAPE: &str = "http://www.w3.org/ns/shacl-node-expr#conformsToShape";
 }
 
 /// The CALLER-SUPPLIED graph-box role vocabulary for the OPTIONAL box-role

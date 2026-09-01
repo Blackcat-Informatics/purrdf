@@ -66,7 +66,7 @@ const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/sh
 /// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
 /// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
 /// The vendored SHACL-AF seam at `af/` adds 6 more `sht:Validate` entries.
-const TOTAL_TESTS: usize = 126;
+const TOTAL_TESTS: usize = 129;
 
 mod mf {
     pub(crate) const INCLUDE: &str =
@@ -481,7 +481,7 @@ fn w3c_shacl_conformance() {
     // First-party AF (Advanced Features) seam: the vendored root manifest stays
     // pristine (no mf:include is added to it), so future upstream AF manifests
     // slot in at `af/manifest.ttl` and are discovered here without re-vendoring.
-    // Today this adds 6 SHACL-AF validation tests from expression/, function/,
+    // Today this adds 9 SHACL-AF validation tests from expression/, function/,
     // and target/ sub-manifests.
     let af = root.join("af/manifest.ttl");
     if af.exists() {

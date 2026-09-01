@@ -11,7 +11,7 @@ use purrdf_sparql_algebra::{Query, SparqlParser};
 use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::{FnCall, NodeExpr};
-use crate::model::{rdf, sh};
+use crate::model::{rdf, sh, shnex};
 use crate::term::{NamedNode, Term};
 
 use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Shape};
@@ -364,6 +364,38 @@ impl Parser<'_> {
             });
         }
 
+        // sh:nodeByExpression — SHACL 1.2 Node Expressions §7.2. The expression
+        // computes the NODE SHAPES every value node must conform to, so the
+        // constraint also carries the shared top-level-shape index that resolves
+        // those shape IRIs at validation time.
+        let mut node_by_expr_nodes: Vec<Term> = self.objects_of(id, sh::NODE_BY_EXPRESSION);
+        crate::term::sort_terms_canonical(&mut node_by_expr_nodes);
+        for expr_node in node_by_expr_nodes {
+            let expr = self.parse_node_expr(&expr_node)?;
+
+            let mut messages: Vec<String> = self
+                .objects_of(&expr_node, sh::MESSAGE)
+                .into_iter()
+                .filter_map(|t| match t {
+                    Term::Literal(lit) => Some(lit.value().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            messages.sort();
+            let message = messages.into_iter().next();
+
+            let severity = self
+                .first_object_of(&expr_node, sh::SEVERITY)
+                .and_then(|t| severity_from_term(&t));
+
+            constraints.push(Constraint::NodeByExpression {
+                expr,
+                shapes: self.share_node_shape_index(),
+                message,
+                severity,
+            });
+        }
+
         // sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals — the
         // property-pair constraint components (§4.3). Each object must be an IRI;
         // a non-IRI object is malformed and hard-fails (no silent drop).
@@ -651,27 +683,7 @@ impl Parser<'_> {
         // `sh:desc` boolean flag (default ascending).
         if let Some(key_node) = self.first_object_of(node, sh::ORDERBY) {
             let key = self.parse_node_expr(&key_node)?;
-            let descending = match self.first_object_of(node, sh::DESC) {
-                None => false,
-                Some(term @ Term::Literal(_)) => {
-                    let Term::Literal(lit) = &term else {
-                        unreachable!()
-                    };
-                    match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
-                        Ok(Some(purrdf_xsd::XsdValue::Boolean(b))) => b,
-                        _ => {
-                            return Err(format!(
-                                "sh:desc must be an xsd:boolean literal, got {term}"
-                            ));
-                        }
-                    }
-                }
-                Some(other) => {
-                    return Err(format!(
-                        "sh:desc must be an xsd:boolean literal, got {other}"
-                    ));
-                }
-            };
+            let descending = self.parse_desc_flag(node, sh::DESC)?;
             expr = NodeExpr::OrderBy {
                 of: Box::new(expr),
                 key: Box::new(key),
@@ -705,12 +717,31 @@ impl Parser<'_> {
 
     /// Parse the non-paging *core* of a node expression.
     ///
-    /// Dispatches on the single structural SHACL-AF key the node carries, in a
-    /// fixed deterministic order, and hard-fails when a node carries two
-    /// mutually-exclusive expression keys (ambiguous).
+    /// Dispatches on the single structural key the node carries, in a fixed
+    /// deterministic order, and hard-fails when a node carries two mutually
+    /// exclusive expression keys (ambiguous).
+    ///
+    /// Both spec surfaces are accepted: the SHACL Advanced Features `sh:` spelling
+    /// and the SHACL 1.2 Node Expressions `shnex:` spelling. They are NOT two
+    /// dialects with two behaviours — [`PRIMARY_KEYS`] maps each IRI onto one
+    /// [`ExprKind`], every kind lowers to one [`NodeExpr`] arm, and that arm has
+    /// exactly one evaluation path. A node that carries BOTH spellings of the same
+    /// kind is ambiguous and hard-fails exactly like a node carrying two different
+    /// kinds — the writer is asked which one they meant, never silently given one.
     fn parse_node_expr_core(&mut self, node: &Term) -> Result<NodeExpr, String> {
         // Literals are always constant term expressions (they bear no triples).
+        // SHACL 1.2 Node Expressions §3.1.2: a literal expression evaluates to
+        // itself.
         if matches!(node, Term::Literal(_)) {
+            return Ok(NodeExpr::Constant(node.clone()));
+        }
+        // RDF 1.2 triple terms are likewise constants. SHACL 1.2 Node Expressions
+        // §3.1.3: "The output nodes of a triple term expression are the list
+        // consisting of exactly the node expression itself." A triple term bears no
+        // outgoing triples of its own, so it can never be a structured expression,
+        // and it must be recognised BEFORE the blank-node paths below or an
+        // authored `<<( ex:s ex:p ex:o )>>` would be rejected as unrecognised.
+        if matches!(node, Term::Triple(_)) {
             return Ok(NodeExpr::Constant(node.clone()));
         }
         // The focus-node expression `sh:this`.
@@ -720,56 +751,135 @@ impl Parser<'_> {
             return Ok(NodeExpr::This);
         }
 
-        // Which mutually-exclusive structural key does the node carry?
-        let primary = [
-            sh::PATH,
-            sh::FILTER_SHAPE,
-            sh::UNION,
-            sh::INTERSECTION,
-            sh::IF,
-            sh::COUNT,
-            sh::DISTINCT,
-            sh::MIN,
-            sh::MAX,
-            sh::SUM,
-            sh::EXISTS,
-        ];
-        let present: Vec<&str> = primary
-            .into_iter()
-            .filter(|&p| self.first_object_of(node, p).is_some())
+        // Which mutually-exclusive structural key does the node carry? Both the
+        // `sh:` and the `shnex:` spelling of a kind appear in this scan, so a node
+        // carrying both is caught by the very same arity check.
+        let present: Vec<(&str, ExprKind)> = PRIMARY_KEYS
+            .iter()
+            .copied()
+            .filter(|&(iri, _)| self.first_object_of(node, iri).is_some())
             .collect();
         if present.len() > 1 {
+            let keys: Vec<&str> = present.iter().map(|&(iri, _)| iri).collect();
             return Err(format!(
-                "ambiguous node expression on {node}: multiple expression keys {present:?}"
+                "ambiguous node expression on {node}: multiple expression keys {keys:?}"
             ));
         }
 
-        if let Some(&key) = present.first() {
-            return self.parse_structural_node_expr(node, key);
+        if let Some(&(iri, kind)) = present.first() {
+            return self.parse_structural_node_expr(node, iri, kind);
         }
 
-        // No structural key: a function call, a plain constant IRI, or malformed.
+        // No structural key: an empty expression, a function call, a plain constant
+        // IRI, or malformed.
         self.parse_call_or_constant(node)
     }
 
-    /// Dispatch a node carrying exactly one structural expression `key`.
-    fn parse_structural_node_expr(&mut self, node: &Term, key: &str) -> Result<NodeExpr, String> {
-        match key {
-            sh::PATH => {
-                let path_node = self
-                    .first_object_of(node, sh::PATH)
-                    .ok_or_else(|| format!("sh:path node expression on {node} lost its object"))?;
-                let path = self.parse_path(&path_node, node, &mut FastSet::default())?;
-                Ok(NodeExpr::Path(path))
+    /// The `sh:desc` / `shnex:desc` descending flag on `node` (default ascending).
+    fn parse_desc_flag(&self, node: &Term, predicate: &str) -> Result<bool, String> {
+        match self.first_object_of(node, predicate) {
+            None => Ok(false),
+            Some(Term::Literal(lit)) => {
+                match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
+                    Ok(Some(purrdf_xsd::XsdValue::Boolean(b))) => Ok(b),
+                    _ => Err(format!(
+                        "<{predicate}> must be an xsd:boolean literal, got {}",
+                        Term::Literal(lit)
+                    )),
+                }
             }
-            sh::FILTER_SHAPE => {
-                let shape_ref = self
-                    .first_object_of(node, sh::FILTER_SHAPE)
-                    .ok_or_else(|| {
-                        format!("sh:filterShape node expression on {node} lost its object")
-                    })?;
-                let nodes_obj = self.first_object_of(node, sh::NODES).ok_or_else(|| {
-                    format!("sh:filterShape node expression on {node} requires sh:nodes")
+            Some(other) => Err(format!(
+                "<{predicate}> must be an xsd:boolean literal, got {other}"
+            )),
+        }
+    }
+
+    /// The `shnex:nodes` input-node expression of `node`, defaulting to the focus
+    /// node when absent.
+    ///
+    /// SHACL 1.2 Node Expressions §4.3.1–§4.3.3 spell that default as "if omitted,
+    /// defaults to the focus node", which is exactly [`NodeExpr::This`] — so the
+    /// default is a real expression on the ordinary evaluation path, not a
+    /// special case the evaluator has to know about.
+    fn parse_shnex_nodes_or_focus(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        match self.first_object_of(node, shnex::NODES) {
+            Some(nodes) => self.parse_node_expr(&nodes),
+            None => Ok(NodeExpr::This),
+        }
+    }
+
+    /// The REQUIRED `shnex:nodes` input-node expression of `node`.
+    fn parse_shnex_nodes_required(&mut self, node: &Term, owner: &str) -> Result<NodeExpr, String> {
+        let nodes = self
+            .first_object_of(node, shnex::NODES)
+            .ok_or_else(|| format!("{owner} node expression on {node} requires shnex:nodes"))?;
+        self.parse_node_expr(&nodes)
+    }
+
+    /// The prefixed spelling of a `shnex:` key, for error messages that quote the
+    /// key the writer actually authored.
+    fn shnex_label(iri: &str) -> String {
+        match iri.strip_prefix(shnex::NS) {
+            Some(local) => format!("shnex:{local}"),
+            None => format!("<{iri}>"),
+        }
+    }
+
+    /// Dispatch a node carrying exactly one structural expression key.
+    ///
+    /// `iri` is the spelling actually authored (used verbatim in error messages, so
+    /// a writer is told about the key they wrote); `kind` is the spelling-independent
+    /// kind it denotes.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per node-expression kind; splitting it would hide the \
+                  exhaustive kind-to-IR correspondence this match exists to show"
+    )]
+    fn parse_structural_node_expr(
+        &mut self,
+        node: &Term,
+        iri: &str,
+        kind: ExprKind,
+    ) -> Result<NodeExpr, String> {
+        // Every structural key has an object — `parse_node_expr_core` only reaches
+        // here for a key it just observed — so a missing object is an internal
+        // inconsistency, reported as such rather than papered over. Resolved once,
+        // up front, because the borrow of `self` must end before the arms below
+        // recurse through `&mut self`.
+        let object = self
+            .first_object_of(node, iri)
+            .ok_or_else(|| format!("<{iri}> node expression on {node} lost its object"))?;
+        match kind {
+            // `sh:path` (SHACL-AF) / `shnex:pathValues` (§4.1.4). Without an
+            // explicit focus expression both are the value nodes of the path from
+            // the evaluation context's focus node — literally the same arm. With
+            // `shnex:focusNode` the spec adds a single-node requirement on the
+            // computed focus, which needs its own arm to keep that failure mode.
+            ExprKind::Path => {
+                let path_node = object;
+                let path = self.parse_path(&path_node, node, &mut FastSet::default())?;
+                match self.first_object_of(node, shnex::FOCUS_NODE) {
+                    None => Ok(NodeExpr::Path(path)),
+                    Some(focus_node) => Ok(NodeExpr::PathValues {
+                        path,
+                        focus: Box::new(self.parse_node_expr(&focus_node)?),
+                    }),
+                }
+            }
+            // `sh:filterShape` (SHACL-AF) / `shnex:filterShape` (§4.2.5). The
+            // operand key follows the spelling of the expression key: `sh:nodes`
+            // for the `sh:` surface, `shnex:nodes` for the `shnex:` one.
+            ExprKind::FilterShape => {
+                let shape_ref = object;
+                // The operand key follows the spelling of the expression key, and
+                // the error names it in the same prefixed form the writer used.
+                let (nodes_key, nodes_label, owner) = if iri == sh::FILTER_SHAPE {
+                    (sh::NODES, "sh:nodes", "sh:filterShape")
+                } else {
+                    (shnex::NODES, "shnex:nodes", "shnex:filterShape")
+                };
+                let nodes_obj = self.first_object_of(node, nodes_key).ok_or_else(|| {
+                    format!("{owner} node expression on {node} requires {nodes_label}")
                 })?;
                 let inner = self.parse_node_expr(&nodes_obj)?;
                 let shape = self.parse_inline_shape(shape_ref)?;
@@ -778,24 +888,30 @@ impl Parser<'_> {
                     shape: Box::new(shape),
                 })
             }
-            sh::UNION => Ok(NodeExpr::Union(self.parse_node_expr_list(node, sh::UNION)?)),
-            sh::INTERSECTION => Ok(NodeExpr::Intersection(
-                self.parse_node_expr_list(node, sh::INTERSECTION)?,
+            ExprKind::Union => Ok(NodeExpr::Union(self.parse_node_expr_list(node, iri)?)),
+            ExprKind::Intersection => Ok(NodeExpr::Intersection(
+                self.parse_node_expr_list(node, iri)?,
             )),
-            sh::IF => {
-                let cond_obj = self
-                    .first_object_of(node, sh::IF)
-                    .ok_or_else(|| format!("sh:if node expression on {node} lost its object"))?;
-                let cond = self.parse_node_expr(&cond_obj)?;
-                // Per spec a missing `sh:then`/`sh:else` yields the empty set; the
-                // empty union is the canonical empty-set node expression.
-                let then = match self.first_object_of(node, sh::THEN) {
-                    Some(t) => self.parse_node_expr(&t)?,
-                    None => NodeExpr::Union(vec![]),
+            // `shnex:concat` (§4.2.3) — the SEQUENCE analogue of `sh:union`:
+            // operand order and duplicates are both significant.
+            ExprKind::Concat => Ok(NodeExpr::Concat(self.parse_node_expr_list(node, iri)?)),
+            // `sh:if` (SHACL-AF) / `shnex:if` (§4.1.6).
+            ExprKind::If => {
+                let cond = self.parse_node_expr(&object)?;
+                let (then_key, else_key) = if iri == sh::IF {
+                    (sh::THEN, sh::ELSE)
+                } else {
+                    (shnex::THEN, shnex::ELSE)
                 };
-                let els = match self.first_object_of(node, sh::ELSE) {
+                // Per spec a missing then/else branch yields the empty list, which
+                // is exactly what `NodeExpr::Empty` (§4.1.1) evaluates to.
+                let then = match self.first_object_of(node, then_key) {
                     Some(t) => self.parse_node_expr(&t)?,
-                    None => NodeExpr::Union(vec![]),
+                    None => NodeExpr::Empty,
+                };
+                let els = match self.first_object_of(node, else_key) {
+                    Some(t) => self.parse_node_expr(&t)?,
+                    None => NodeExpr::Empty,
                 };
                 Ok(NodeExpr::If {
                     cond: Box::new(cond),
@@ -803,61 +919,158 @@ impl Parser<'_> {
                     els: Box::new(els),
                 })
             }
-            sh::COUNT => {
-                let of_obj = self
-                    .first_object_of(node, sh::COUNT)
-                    .ok_or_else(|| format!("sh:count node expression on {node} lost its object"))?;
-                // Distinct counting is `[ sh:count [ sh:distinct <expr> ] ]`: an
-                // inner `sh:distinct` lowers to `Count { distinct: true, .. }`.
-                match self.parse_node_expr(&of_obj)? {
-                    NodeExpr::Distinct(inner) => Ok(NodeExpr::Count {
-                        distinct: true,
-                        of: inner,
-                    }),
-                    other => Ok(NodeExpr::Count {
-                        distinct: false,
-                        of: Box::new(other),
-                    }),
+            // `sh:count` (SHACL-AF) / `shnex:count` (§4.4.1). Distinct counting is
+            // `[ sh:count [ sh:distinct <expr> ] ]`: an inner distinct lowers to
+            // `Count { distinct: true, .. }`.
+            ExprKind::Count => match self.parse_node_expr(&object)? {
+                NodeExpr::Distinct(inner) => Ok(NodeExpr::Count {
+                    distinct: true,
+                    of: inner,
+                }),
+                other => Ok(NodeExpr::Count {
+                    distinct: false,
+                    of: Box::new(other),
+                }),
+            },
+            ExprKind::Distinct => Ok(NodeExpr::Distinct(Box::new(self.parse_node_expr(&object)?))),
+            ExprKind::Min => Ok(NodeExpr::Min(Box::new(self.parse_node_expr(&object)?))),
+            ExprKind::Max => Ok(NodeExpr::Max(Box::new(self.parse_node_expr(&object)?))),
+            ExprKind::Sum => Ok(NodeExpr::Sum(Box::new(self.parse_node_expr(&object)?))),
+            // `sh:exists` (adopted SHACL-AF) / `shnex:exists` (§4.1.5): a
+            // node-expression predicate — true iff its inner NODE EXPRESSION yields
+            // at least one node for the focus. (A shape does not "produce nodes",
+            // so the operand is an expression, not a shape.)
+            ExprKind::Exists => Ok(NodeExpr::Exists(Box::new(self.parse_node_expr(&object)?))),
+
+            // ── SHACL 1.2 Node Expressions: `shnex:`-only kinds ────────────────
+            // §4.1.2 Var expression. The name must be a non-empty string literal
+            // (`sh:datatype xsd:string`, `sh:minLength 1`).
+            ExprKind::Var => {
+                let name = match object {
+                    Term::Literal(lit) => lit.value().to_owned(),
+                    other => {
+                        return Err(format!(
+                            "shnex:var on {node} must be a string literal, got {other}"
+                        ));
+                    }
+                };
+                if name.is_empty() {
+                    return Err(format!("shnex:var on {node} must not be the empty string"));
                 }
+                Ok(NodeExpr::Var(name))
             }
-            sh::DISTINCT => {
-                let of_obj = self.first_object_of(node, sh::DISTINCT).ok_or_else(|| {
-                    format!("sh:distinct node expression on {node} lost its object")
+            // §4.1.3 List expression. Its members ARE the output nodes, so they are
+            // taken as terms, not re-parsed as expressions; the spec restricts them
+            // to IRIs and literals, and a blank-node member hard-fails rather than
+            // silently becoming an unevaluated structure.
+            ExprKind::List => {
+                let members = self.walk_rdf_list(node, node)?;
+                for member in &members {
+                    if !matches!(member, Term::NamedNode(_) | Term::Literal(_)) {
+                        return Err(format!(
+                            "shnex:ListExpression member on {node} must be an IRI or a literal, \
+                             got {member}"
+                        ));
+                    }
+                }
+                Ok(NodeExpr::List(members))
+            }
+            // §4.2.4 Remove expression: `shnex:remove` names the removed nodes and
+            // `shnex:nodes` the input; both are mandatory.
+            ExprKind::Remove => {
+                let remove = self.parse_node_expr(&object)?;
+                let nodes = self.parse_shnex_nodes_required(node, "shnex:remove")?;
+                Ok(NodeExpr::Remove {
+                    nodes: Box::new(nodes),
+                    remove: Box::new(remove),
+                })
+            }
+            // §4.2.6 / §4.2.7 Limit and Offset expressions. Unlike the SHACL-AF
+            // `sh:limit` / `sh:offset` keys — which WRAP the same node's own core
+            // expression — the `shnex:` spellings are named-parameter functions
+            // with their own `shnex:nodes` operand, so they are cores, not wrappers.
+            // Both spellings still lower to the same `NodeExpr` arm.
+            ExprKind::Limit | ExprKind::Offset => {
+                let label = Self::shnex_label(iri);
+                let n = crate::shapes::parse_u64(&object).ok_or_else(|| {
+                    format!("{label} value is not a non-negative integer on {node}")
                 })?;
-                Ok(NodeExpr::Distinct(Box::new(self.parse_node_expr(&of_obj)?)))
+                let of = Box::new(self.parse_shnex_nodes_required(node, &label)?);
+                Ok(if matches!(kind, ExprKind::Limit) {
+                    NodeExpr::Limit { of, n }
+                } else {
+                    NodeExpr::Offset { of, n }
+                })
             }
-            sh::MIN => {
-                let of_obj = self
-                    .first_object_of(node, sh::MIN)
-                    .ok_or_else(|| format!("sh:min node expression on {node} lost its object"))?;
-                Ok(NodeExpr::Min(Box::new(self.parse_node_expr(&of_obj)?)))
+            // §4.2.8 OrderBy expression, likewise a core rather than a wrapper.
+            ExprKind::OrderBy => {
+                let key = self.parse_node_expr(&object)?;
+                let of = self.parse_shnex_nodes_required(node, "shnex:orderBy")?;
+                let descending = self.parse_desc_flag(node, shnex::DESC)?;
+                Ok(NodeExpr::OrderBy {
+                    of: Box::new(of),
+                    key: Box::new(key),
+                    descending,
+                })
             }
-            sh::MAX => {
-                let of_obj = self
-                    .first_object_of(node, sh::MAX)
-                    .ok_or_else(|| format!("sh:max node expression on {node} lost its object"))?;
-                Ok(NodeExpr::Max(Box::new(self.parse_node_expr(&of_obj)?)))
+            // §4.3.1 FlatMap expression; `shnex:nodes` defaults to the focus node.
+            ExprKind::FlatMap => {
+                let map = self.parse_node_expr(&object)?;
+                let nodes = self.parse_shnex_nodes_or_focus(node)?;
+                Ok(NodeExpr::FlatMap {
+                    nodes: Box::new(nodes),
+                    map: Box::new(map),
+                })
             }
-            sh::SUM => {
-                let of_obj = self
-                    .first_object_of(node, sh::SUM)
-                    .ok_or_else(|| format!("sh:sum node expression on {node} lost its object"))?;
-                Ok(NodeExpr::Sum(Box::new(self.parse_node_expr(&of_obj)?)))
+            // §4.3.2 / §4.3.3 FindFirst and MatchAll: a SHAPE operand plus an
+            // optional `shnex:nodes` defaulting to the focus node.
+            ExprKind::FindFirst | ExprKind::MatchAll => {
+                let shape = Box::new(self.parse_inline_shape(object)?);
+                let nodes = Box::new(self.parse_shnex_nodes_or_focus(node)?);
+                Ok(if matches!(kind, ExprKind::FindFirst) {
+                    NodeExpr::FindFirst { nodes, shape }
+                } else {
+                    NodeExpr::MatchAll { nodes, shape }
+                })
             }
-            sh::EXISTS => {
-                // Adopted semantics: `sh:exists` is a node-expression predicate —
-                // true iff its inner NODE EXPRESSION yields at least one node for
-                // the focus. (A shape does not "produce nodes", so the operand is
-                // an expression, not a shape.)
-                let inner_obj = self.first_object_of(node, sh::EXISTS).ok_or_else(|| {
-                    format!("sh:exists node expression on {node} lost its object")
-                })?;
-                let inner = self.parse_node_expr(&inner_obj)?;
-                Ok(NodeExpr::Exists(Box::new(inner)))
+            // §4.5.1 InstancesOf expression: the class is constrained to
+            // `sh:nodeKind sh:IRI`.
+            ExprKind::InstancesOf => match object {
+                Term::NamedNode(class) => Ok(NodeExpr::InstancesOf(class)),
+                other => Err(format!(
+                    "shnex:instancesOf on {node} must be an IRI, got {other}"
+                )),
+            },
+            // §4.5.2 NodesMatching expression.
+            ExprKind::NodesMatching => Ok(NodeExpr::NodesMatching(Box::new(
+                self.parse_inline_shape(object)?,
+            ))),
+            // §4.5.3 ConformsToShape expression: a LIST parameter function whose
+            // argument list has exactly two members — the node expression under
+            // test and an expression producing the shape IRI. The spec constrains
+            // that second argument to `sh:nodeKind sh:IRI` ("Must produce the IRI
+            // of a well-formed shape"), and this parser requires it to BE that IRI
+            // so the shape is resolved once, here, against the shapes graph.
+            ExprKind::ConformsToShape => {
+                let members = self.walk_rdf_list(&object, node)?;
+                let [node_arg, shape_arg] = members.as_slice() else {
+                    return Err(format!(
+                        "shnex:conformsToShape on {node} requires a list of exactly two members, \
+                         got {}",
+                        members.len()
+                    ));
+                };
+                let Term::NamedNode(_) = shape_arg else {
+                    return Err(format!(
+                        "shnex:conformsToShape on {node} requires its second argument to be the \
+                         IRI of a shape, got {shape_arg}"
+                    ));
+                };
+                Ok(NodeExpr::ConformsToShape {
+                    node: Box::new(self.parse_node_expr(node_arg)?),
+                    shape: Box::new(self.parse_inline_shape(shape_arg.clone())?),
+                })
             }
-            other => Err(format!(
-                "internal error: unhandled node-expression key <{other}> on {node}"
-            )),
         }
     }
 
@@ -878,57 +1091,48 @@ impl Parser<'_> {
         Ok(exprs)
     }
 
-    /// Parse a node carrying no structural key: a function call or a plain
-    /// constant IRI (a blank node with neither hard-fails).
+    /// Parse a node carrying no structural key: an empty expression, a function
+    /// call, or a plain constant IRI.
     fn parse_call_or_constant(&mut self, node: &Term) -> Result<NodeExpr, String> {
         // A function-call node expression is always a blank node `[ <fn> ( … ) ]`.
         // A NamedNode reaching here (not a literal, not sh:this, no structural key)
         // is therefore a plain constant IRI — even when it bears unrelated outgoing
-        // triples in the shapes graph (e.g. an `rdfs:label`).
+        // triples in the shapes graph (e.g. an `rdfs:label`). SHACL 1.2 Node
+        // Expressions §3.1.1 states this directly: an IRI expression evaluates to
+        // itself.
         if matches!(node, Term::NamedNode(_)) {
             return Ok(NodeExpr::Constant(node.clone()));
         }
-        // The SHACL-AF vocabulary terms that structure a node expression — none of
-        // them can be the predicate of a function-call expression.
-        const KNOWN: &[&str] = &[
-            sh::PATH,
-            sh::FILTER_SHAPE,
-            sh::NODES,
-            sh::UNION,
-            sh::INTERSECTION,
-            sh::IF,
-            sh::THEN,
-            sh::ELSE,
-            sh::COUNT,
-            sh::DISTINCT,
-            sh::MIN,
-            sh::MAX,
-            sh::SUM,
-            sh::LIMIT,
-            sh::OFFSET,
-            sh::ORDERBY,
-            sh::DESC,
-            sh::EXISTS,
-        ];
+        // Every outgoing triple of the node, before any filtering — the empty
+        // expression is defined by their TOTAL absence, so it must be decided here
+        // rather than after the structural keys are filtered out.
+        let outgoing = native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph);
+        if outgoing.is_empty() {
+            // SHACL 1.2 Node Expressions §4.1.1: "A blank node that is not the
+            // subject of any triple is called an empty expression"; its output
+            // nodes are the empty list. Only blank nodes reach here (IRIs returned
+            // above as constants, literals and triple terms in the caller), so this
+            // is exactly the spec's condition.
+            return Ok(NodeExpr::Empty);
+        }
         // Gather the candidate (function IRI, arg-list head) triples, ignoring
         // rdf:type (a classification triple) and every SHACL structural key.
-        let mut candidates: Vec<(NamedNode, Term)> =
-            native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
-                .into_iter()
-                .filter(|(_, predicate, _)| {
-                    predicate.as_str() != rdf::TYPE && !KNOWN.contains(&predicate.as_str())
-                })
-                .map(|(_, predicate, object)| (predicate, object))
-                .collect();
+        let mut candidates: Vec<(NamedNode, Term)> = outgoing
+            .into_iter()
+            .filter(|(_, predicate, _)| {
+                predicate.as_str() != rdf::TYPE && !NON_FUNCTION_KEYS.contains(&predicate.as_str())
+            })
+            .map(|(_, predicate, object)| (predicate, object))
+            .collect();
         candidates.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
         candidates.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
 
         if candidates.is_empty() {
-            // No structural key and no function predicate: only blank nodes reach
-            // here (NamedNodes returned early as constants above), and a blank
-            // node with neither is malformed.
+            // The node bears triples, but every one of them is a structural key or
+            // an rdf:type — so it names no expression kind and calls no function.
             return Err(format!(
-                "unrecognised node expression on {node}: no SHACL-AF key and no function call"
+                "unrecognised node expression on {node}: no SHACL node-expression key and no \
+                 function call"
             ));
         }
         if candidates.len() > 1 {
@@ -969,6 +1173,178 @@ impl Parser<'_> {
         Ok(NodeExpr::Call(call))
     }
 }
+
+/// A node-expression KIND, independent of which spec surface spelled it.
+///
+/// SHACL Advanced Features and SHACL 1.2 Node Expressions give several of the same
+/// operations two IRIs (`sh:union` / `shnex:concat` aside, which are genuinely
+/// different operations). This enum is the one name each operation has inside
+/// PurRDF: [`PRIMARY_KEYS`] maps every accepted IRI onto a kind, every kind lowers
+/// to one [`NodeExpr`] arm, and that arm has exactly one evaluator. Nothing here is
+/// conditional or feature-gated — two spec-defined surfaces, one implementation,
+/// exactly as two RDF syntaxes parse to one graph model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprKind {
+    /// `sh:path` / `shnex:pathValues` — path value nodes.
+    Path,
+    /// `sh:filterShape` / `shnex:filterShape` — shape-filtered nodes.
+    FilterShape,
+    /// `sh:union` — SHACL-AF set union (no `shnex:` spelling exists).
+    Union,
+    /// `sh:intersection` / `shnex:intersection` — set intersection.
+    Intersection,
+    /// `shnex:concat` — sequence concatenation (no `sh:` spelling exists).
+    Concat,
+    /// `sh:if` / `shnex:if` — conditional.
+    If,
+    /// `sh:count` / `shnex:count` — cardinality.
+    Count,
+    /// `sh:distinct` / `shnex:distinct` — duplicate elimination.
+    Distinct,
+    /// `sh:min` / `shnex:min` — minimum.
+    Min,
+    /// `sh:max` / `shnex:max` — maximum.
+    Max,
+    /// `sh:sum` / `shnex:sum` — sum.
+    Sum,
+    /// `sh:exists` / `shnex:exists` — existence predicate.
+    Exists,
+    /// `shnex:var` — a scope/focus variable reference.
+    Var,
+    /// `rdf:first` — an RDF collection read as a `shnex:ListExpression`.
+    List,
+    /// `shnex:remove` — set difference preserving input order.
+    Remove,
+    /// `shnex:limit` — the named-parameter limit expression.
+    Limit,
+    /// `shnex:offset` — the named-parameter offset expression.
+    Offset,
+    /// `shnex:orderBy` — the named-parameter order-by expression.
+    OrderBy,
+    /// `shnex:flatMap` — per-node mapping with concatenation.
+    FlatMap,
+    /// `shnex:findFirst` — the first conforming input node.
+    FindFirst,
+    /// `shnex:matchAll` — whether every input node conforms.
+    MatchAll,
+    /// `shnex:instancesOf` — the SHACL instances of a class.
+    InstancesOf,
+    /// `shnex:nodesMatching` — every conforming node of the focus graph.
+    NodesMatching,
+    /// `shnex:conformsToShape` — a two-argument conformance predicate.
+    ConformsToShape,
+}
+
+/// Every IRI that identifies a node-expression kind, with the kind it identifies.
+///
+/// Both spec surfaces appear here, so `parse_node_expr_core`'s single
+/// "exactly one key" check rejects a node carrying two DIFFERENT kinds and a node
+/// carrying the two spellings of the SAME kind with the same message — the writer
+/// is asked which they meant rather than silently given one of them.
+///
+/// `sh:limit` / `sh:offset` / `sh:orderby` are deliberately ABSENT: on the
+/// SHACL-AF surface those keys WRAP the node's own core expression (peeled by
+/// `parse_node_expr_wrapped`), whereas their `shnex:` counterparts are
+/// named-parameter functions carrying their own `shnex:nodes` operand and so are
+/// cores in their own right. Both spellings still lower to the same `NodeExpr` arm.
+static PRIMARY_KEYS: &[(&str, ExprKind)] = &[
+    // SHACL Advanced Features spellings.
+    (sh::PATH, ExprKind::Path),
+    (sh::FILTER_SHAPE, ExprKind::FilterShape),
+    (sh::UNION, ExprKind::Union),
+    (sh::INTERSECTION, ExprKind::Intersection),
+    (sh::IF, ExprKind::If),
+    (sh::COUNT, ExprKind::Count),
+    (sh::DISTINCT, ExprKind::Distinct),
+    (sh::MIN, ExprKind::Min),
+    (sh::MAX, ExprKind::Max),
+    (sh::SUM, ExprKind::Sum),
+    (sh::EXISTS, ExprKind::Exists),
+    // SHACL 1.2 Node Expressions spellings.
+    (shnex::PATH_VALUES, ExprKind::Path),
+    (shnex::FILTER_SHAPE, ExprKind::FilterShape),
+    (shnex::INTERSECTION, ExprKind::Intersection),
+    (shnex::CONCAT, ExprKind::Concat),
+    (shnex::IF, ExprKind::If),
+    (shnex::COUNT, ExprKind::Count),
+    (shnex::DISTINCT, ExprKind::Distinct),
+    (shnex::MIN, ExprKind::Min),
+    (shnex::MAX, ExprKind::Max),
+    (shnex::SUM, ExprKind::Sum),
+    (shnex::EXISTS, ExprKind::Exists),
+    (shnex::VAR, ExprKind::Var),
+    (rdf::FIRST, ExprKind::List),
+    (shnex::REMOVE, ExprKind::Remove),
+    (shnex::LIMIT, ExprKind::Limit),
+    (shnex::OFFSET, ExprKind::Offset),
+    (shnex::ORDER_BY, ExprKind::OrderBy),
+    (shnex::FLAT_MAP, ExprKind::FlatMap),
+    (shnex::FIND_FIRST, ExprKind::FindFirst),
+    (shnex::MATCH_ALL, ExprKind::MatchAll),
+    (shnex::INSTANCES_OF, ExprKind::InstancesOf),
+    (shnex::NODES_MATCHING, ExprKind::NodesMatching),
+    (shnex::CONFORMS_TO_SHAPE, ExprKind::ConformsToShape),
+];
+
+/// Every vocabulary term that structures a node expression — none of them can be
+/// the predicate of a function-call expression, so `parse_call_or_constant` must
+/// not mistake one for a function IRI.
+///
+/// This is the union of [`PRIMARY_KEYS`], the operand/modifier keys of both
+/// surfaces (`sh:nodes`, `sh:then`, `shnex:nodes`, `shnex:desc`, …) and the
+/// SHACL-AF paging wrappers.
+static NON_FUNCTION_KEYS: &[&str] = &[
+    // SHACL Advanced Features.
+    sh::PATH,
+    sh::FILTER_SHAPE,
+    sh::NODES,
+    sh::UNION,
+    sh::INTERSECTION,
+    sh::IF,
+    sh::THEN,
+    sh::ELSE,
+    sh::COUNT,
+    sh::DISTINCT,
+    sh::MIN,
+    sh::MAX,
+    sh::SUM,
+    sh::LIMIT,
+    sh::OFFSET,
+    sh::ORDERBY,
+    sh::DESC,
+    sh::EXISTS,
+    // SHACL 1.2 Node Expressions.
+    shnex::VAR,
+    shnex::PATH_VALUES,
+    shnex::FOCUS_NODE,
+    shnex::EXISTS,
+    shnex::IF,
+    shnex::THEN,
+    shnex::ELSE,
+    shnex::DISTINCT,
+    shnex::INTERSECTION,
+    shnex::CONCAT,
+    shnex::REMOVE,
+    shnex::NODES,
+    shnex::FILTER_SHAPE,
+    shnex::LIMIT,
+    shnex::OFFSET,
+    shnex::ORDER_BY,
+    shnex::DESC,
+    shnex::FLAT_MAP,
+    shnex::FIND_FIRST,
+    shnex::MATCH_ALL,
+    shnex::COUNT,
+    shnex::MIN,
+    shnex::MAX,
+    shnex::SUM,
+    shnex::INSTANCES_OF,
+    shnex::NODES_MATCHING,
+    shnex::CONFORMS_TO_SHAPE,
+    // RDF collection cells — a list expression's own structure, never a call.
+    rdf::FIRST,
+    rdf::REST,
+];
 
 /// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
 fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {

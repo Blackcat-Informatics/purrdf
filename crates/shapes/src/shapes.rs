@@ -13,6 +13,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use ::purrdf::FastMap;
 use ::purrdf::FastSet;
 use ::purrdf::RdfDataset;
 
@@ -260,6 +261,34 @@ pub enum Constraint {
     Expression {
         /// The parsed node expression to evaluate per value node.
         expr: NodeExpr,
+        /// Optional per-constraint message override (from `sh:message` on the
+        /// expression node).
+        message: Option<String>,
+        /// Optional per-constraint severity override (from `sh:severity` on the
+        /// expression node).
+        severity: Option<Severity>,
+    },
+    /// `sh:nodeByExpression <node expression>` — SHACL 1.2 Node Expressions §7.2.
+    ///
+    /// For each value node `v` the expression is evaluated with `v` as the focus
+    /// node and the EMPTY scope (the spec's own `evalExpr(expr, data graph, v,
+    /// {})`); every output node is a shape IRI, and `v` must conform to each of
+    /// them. This is the mirror image of [`Constraint::Expression`]: there the
+    /// expression computes a boolean about the value node, here it computes the
+    /// SHAPES the value node is judged against.
+    NodeByExpression {
+        /// The parsed node expression producing the node shapes to check against.
+        expr: NodeExpr,
+        /// The IRI-named shapes of the shapes graph, so an output shape IRI
+        /// resolves to a parsed shape at validation time.
+        ///
+        /// Shared by `Arc` across every `sh:nodeByExpression` constraint of one
+        /// shapes graph: the expression's output shape IRIs are only known during
+        /// evaluation, so the resolution table has to travel with the constraint,
+        /// and cloning the shapes per constraint would be pure waste. The
+        /// `OnceLock` is filled once, at the end of the shapes-graph parse, so a
+        /// shape carrying this constraint can itself appear in the table.
+        shapes: Arc<OnceLock<FastMap<String, Shape>>>,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
         message: Option<String>,
@@ -529,6 +558,18 @@ pub(crate) struct Parser<'s> {
     /// shapes graph. Populated before shape parsing so target-type instances can
     /// be resolved during target parsing.
     target_types: std::collections::BTreeMap<String, SparqlTargetType>,
+    /// The shared top-level-shape index handed to every `sh:nodeByExpression`
+    /// constraint (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// A `sh:nodeByExpression` expression only yields its shape IRIs during
+    /// VALIDATION, so the constraint must carry a way to resolve them. The handle
+    /// is created empty here and filled exactly once, at the end of [`Self::parse`],
+    /// from the parsed top-level shapes — the same resolution domain
+    /// [`crate::rules`] already uses for `sh:condition`. Creating the handle before
+    /// any shape is parsed is what makes the arrangement re-entrant: a shape that
+    /// carries a `sh:nodeByExpression` is itself in the index, and a map built
+    /// eagerly during its own parse would recurse forever.
+    node_shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -622,6 +663,7 @@ impl<'s> Parser<'s> {
             shapes_dataset,
             shapes_graph,
             target_types: std::collections::BTreeMap::new(),
+            node_shape_index: Arc::new(OnceLock::new()),
         }
     }
 
@@ -707,6 +749,28 @@ impl<'s> Parser<'s> {
 
         let functions = self.parse_sparql_functions()?;
 
+        // Fill the shared `sh:nodeByExpression` resolution table (§7.2) now that
+        // every top-level shape is parsed. The handle was created before parsing
+        // began and every such constraint already holds a clone of it, so this one
+        // write makes the shapes visible to all of them at once.
+        //
+        // A shapes graph WITHOUT any `sh:nodeByExpression` never hands the handle
+        // out, so the extra reference count is exactly the "is anyone going to read
+        // this?" test — and the shape clones are skipped entirely in that (normal)
+        // case rather than being built and thrown away.
+        if Arc::strong_count(&self.node_shape_index) > 1 {
+            let index: FastMap<String, Shape> = node_shapes
+                .iter()
+                .map(|shape| (shape.id.to_string(), shape.clone()))
+                .collect();
+            if self.node_shape_index.set(index).is_err() {
+                return Err(
+                    "internal error: the sh:nodeByExpression shape index was already filled"
+                        .to_owned(),
+                );
+            }
+        }
+
         Ok(Shapes {
             node_shapes,
             box_role_vocab: self.box_role_vocab.clone(),
@@ -716,6 +780,16 @@ impl<'s> Parser<'s> {
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
         })
+    }
+
+    /// A handle on the shared top-level-shape index for a `sh:nodeByExpression`
+    /// constraint (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// Taking a handle is also what tells [`Self::parse`] the index is wanted: a
+    /// shapes graph with no such constraint never calls this, so the index is never
+    /// built.
+    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<String, Shape>>> {
+        Arc::clone(&self.node_shape_index)
     }
 
     /// The first object of `(subject, predicate, ?)` as a string literal value.
@@ -2694,8 +2768,11 @@ mod tests {
         let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:if sh:this ] .")).expect("parse");
         match expr {
             NodeExpr::If { then, els, .. } => {
-                assert!(matches!(*then, NodeExpr::Union(ref v) if v.is_empty()));
-                assert!(matches!(*els, NodeExpr::Union(ref v) if v.is_empty()));
+                // A missing branch is the SHACL 1.2 Node Expressions §4.1.1 empty
+                // expression, which is the arm that names "no output nodes"
+                // directly rather than encoding it as a zero-operand union.
+                assert!(matches!(*then, NodeExpr::Empty));
+                assert!(matches!(*els, NodeExpr::Empty));
             }
             other => panic!("expected If, got {other:?}"),
         }
