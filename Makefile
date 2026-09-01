@@ -212,6 +212,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf-text \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \

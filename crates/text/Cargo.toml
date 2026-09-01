@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-text"
+description = "Deterministic in-memory full-text search over RDF 1.2 literals, exposed to SPARQL through the property-function seam under caller-supplied IRIs; exact fixed-point BM25 ranking with no floating-point arithmetic."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-text"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["rdf", "sparql", "full-text", "bm25", "search"]
+categories = ["text-processing", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only. The crate is a library seam: it hands ranked rows to the evaluator's
+# property-function table and is never a binary or a cdylib of its own. It must
+# stay wasm32-unknown-unknown-clean, which is also why every score is computed in
+# integer arithmetic rather than in floats.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_text"
+
+[dependencies]
+# The frozen RDF 1.2 IR: literals are read from it and terms are fingerprinted
+# from its `TermValue`.
+purrdf-core.workspace = true
+# The property-function seam this crate plugs a relation into, and the typed
+# error channel every failure is reduced to at that boundary.
+purrdf-sparql-eval.workspace = true
+# Fixed-output-length hashing for the index fingerprint. Deterministic and
+# keyless, so the same index yields the same digest on every target.
+blake3.workspace = true
+# NFC normalization (Unicode Annex UAX 15) applied before segmentation.
+unicode-normalization.workspace = true
+# Unicode Annex UAX 29 word boundaries — the tokenizer's segmentation rule.
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions.workspace = true
+# Property tests: encoding injectivity, and the fixed-point arithmetic laws.
+proptest.workspace = true
+# Solution-sequence shapes for the ranked-row tests.
+purrdf-sparql-results.workspace = true
