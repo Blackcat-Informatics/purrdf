@@ -1524,6 +1524,16 @@ pub struct AggregateExpression {
     /// back; see the struct docs for why a public setter would let a
     /// checked-valid value be mutated into one the serializer cannot render.
     pub(crate) scalarvals: Vec<(String, Literal)>,
+    /// SEP-0009 `FOLD`'s own `ORDER BY orderconditions` clause — the sort
+    /// applied to each GROUP's solution sequence before the fold runs (the
+    /// spec's `OrderGroups` algebra symbol). EMPTY for every aggregate that
+    /// wrote no `ORDER BY`, and structurally empty for every function other
+    /// than [`AggregateFunction::Fold`]: no other SPARQL aggregate has an
+    /// order-conditions surface to fill it from, so a non-empty value there is
+    /// refused by [`Self::new_fold`] rather than silently rendered as text no
+    /// parser accepts. Private outside this crate — go through
+    /// [`Self::new_fold`] to build one, [`Self::order_by`] to read it back.
+    pub(crate) order_by: Vec<OrderExpression>,
     /// Whether `DISTINCT` was present.
     pub distinct: bool,
 }
@@ -1564,9 +1574,54 @@ impl AggregateExpression {
         scalarvals: Vec<(String, Literal)>,
         distinct: bool,
     ) -> Result<Self, AggregateExpressionError> {
-        if args.is_empty() && !matches!(function, AggregateFunction::Count) {
+        Self::build(function, args, scalarvals, Vec::new(), distinct)
+    }
+
+    /// The checked constructor for SEP-0009's `FOLD` — the one aggregate that
+    /// carries its own `ORDER BY orderconditions`.
+    ///
+    /// `FOLD(expr)` folds a group into a `cdt:List` literal and `FOLD(kexpr,
+    /// vexpr)` folds it into a `cdt:Map` literal, so `args` must hold exactly
+    /// one or exactly two expressions. `order_by` is the spec's
+    /// `( 'ORDER' 'BY' OrderCondition+ )?` tail: empty when the query wrote no
+    /// `ORDER BY`, and otherwise the sort applied to each group's solution
+    /// sequence before the fold (the `OrderGroups` algebra symbol). `FOLD`
+    /// admits no scalarval, so none is taken.
+    ///
+    /// # Errors
+    ///
+    /// [`AggregateExpressionError::Arity`] if `args` is empty or holds more
+    /// than two expressions — `FOLD` has no `'*'` form and no three-argument
+    /// form.
+    pub fn new_fold(
+        args: Vec<Expression>,
+        order_by: Vec<OrderExpression>,
+        distinct: bool,
+    ) -> Result<Self, AggregateExpressionError> {
+        Self::build(
+            AggregateFunction::Fold,
+            args,
+            Vec::new(),
+            order_by,
+            distinct,
+        )
+    }
+
+    /// The one place an [`AggregateExpression`] comes into existence, and
+    /// therefore the one place every invariant this type protects is checked:
+    /// the `args` arity admitted by `function`, the `scalarvals` keys it
+    /// admits, and whether it admits an `ORDER BY` tail at all.
+    fn build(
+        function: AggregateFunction,
+        args: Vec<Expression>,
+        scalarvals: Vec<(String, Literal)>,
+        order_by: Vec<OrderExpression>,
+        distinct: bool,
+    ) -> Result<Self, AggregateExpressionError> {
+        if !arity_is_admitted(&function, args.len()) {
             return Err(AggregateExpressionError::Arity(AggregateArityError {
                 function,
+                arity: args.len(),
             }));
         }
         if let Some((key, _)) = scalarvals
@@ -1580,10 +1635,16 @@ impl AggregateExpression {
                 },
             ));
         }
+        if !order_by.is_empty() && !matches!(function, AggregateFunction::Fold) {
+            return Err(AggregateExpressionError::OrderBy(AggregateOrderByError {
+                function,
+            }));
+        }
         Ok(Self {
             function,
             args,
             scalarvals,
+            order_by,
             distinct,
         })
     }
@@ -1618,23 +1679,55 @@ impl AggregateExpression {
         &self.scalarvals
     }
 
-    /// Decompose into `(function, args, scalarvals, distinct)`, consuming
-    /// `self`. The inverse of [`Self::new`] minus its checks — for a caller
-    /// (an expression-substitution or query-planning rewrite) that only ever
-    /// replaces `args` with a same-length transform of itself and leaves
-    /// `function`/`scalarvals` untouched, so neither invariant this type
-    /// protects can be disturbed by the round trip: feed the tuple back
-    /// through [`Self::new`] and the call cannot fail.
+    /// SEP-0009 `FOLD`'s `ORDER BY` sort keys; see the field docs. Empty for
+    /// every other aggregate, and for a `FOLD` that wrote no `ORDER BY` —
+    /// [`Self::new_fold`] enforces that for every value that exists.
     #[must_use]
-    pub fn into_parts(
-        self,
-    ) -> (
-        AggregateFunction,
-        Vec<Expression>,
-        Vec<(String, Literal)>,
-        bool,
-    ) {
-        (self.function, self.args, self.scalarvals, self.distinct)
+    pub fn order_by(&self) -> &[OrderExpression] {
+        &self.order_by
+    }
+
+    /// Decompose into `(function, args, scalarvals, order_by, distinct)`,
+    /// consuming `self`. The inverse of [`Self::new`]/[`Self::new_fold`] minus
+    /// their checks — for a caller (an expression-substitution or
+    /// query-planning rewrite) that only ever replaces `args` with a
+    /// same-length transform of itself and leaves `function`/`scalarvals`
+    /// untouched, so no invariant this type protects can be disturbed by the
+    /// round trip: feed the tuple back through [`Self::rebuild`] and the call
+    /// cannot fail.
+    ///
+    /// `order_by` is part of the tuple precisely so a rewrite cannot drop it:
+    /// a four-slot decomposition would hand a `FOLD(?v ORDER BY ?k)` back as a
+    /// `FOLD(?v)` with the sort silently gone, which is a different answer, not
+    /// a simplification.
+    #[must_use]
+    pub fn into_parts(self) -> AggregateParts {
+        (
+            self.function,
+            self.args,
+            self.scalarvals,
+            self.order_by,
+            self.distinct,
+        )
+    }
+
+    /// Rebuild from the exact tuple [`Self::into_parts`] produced, re-running
+    /// every check [`Self::new`]/[`Self::new_fold`] run.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::new`] would refuse for the same parts — see its
+    /// `# Errors` section — plus [`AggregateExpressionError::OrderBy`] when a
+    /// non-empty `order_by` is paired with a function other than
+    /// [`AggregateFunction::Fold`].
+    pub fn rebuild(
+        function: AggregateFunction,
+        args: Vec<Expression>,
+        scalarvals: Vec<(String, Literal)>,
+        order_by: Vec<OrderExpression>,
+        distinct: bool,
+    ) -> Result<Self, AggregateExpressionError> {
+        Self::build(function, args, scalarvals, order_by, distinct)
     }
 
     /// `GROUP_CONCAT`'s `SEPARATOR` scalarval, if present (looked up by key in
@@ -1648,6 +1741,18 @@ impl AggregateExpression {
             .map(|(_, v)| v.value())
     }
 }
+
+/// The tuple [`AggregateExpression::into_parts`] yields and
+/// [`AggregateExpression::rebuild`] takes back: `(function, args, scalarvals,
+/// order_by, distinct)`, one slot per field the type carries, so a rewrite that
+/// round-trips through it cannot silently lose one.
+pub type AggregateParts = (
+    AggregateFunction,
+    Vec<Expression>,
+    Vec<(String, Literal)>,
+    Vec<OrderExpression>,
+    bool,
+);
 
 /// Whether `key` is a `scalarvals` entry [`AggregateExpression::new`] admits for
 /// `function` — the single source of truth the constructor's validation and this
@@ -1663,7 +1768,37 @@ fn scalarval_key_is_admitted(function: &AggregateFunction, key: &str) -> bool {
         | AggregateFunction::Avg
         | AggregateFunction::Min
         | AggregateFunction::Max
-        | AggregateFunction::Sample => false,
+        | AggregateFunction::Sample
+        | AggregateFunction::Fold => false,
+    }
+}
+
+/// Whether `arity` is an `args` length [`AggregateExpression::new`] admits for
+/// `function` — the single source of truth the constructor's validation and this
+/// module's docs both describe.
+///
+/// * [`AggregateFunction::Count`] admits `0` (the spec's `'*'` empty exprlist)
+///   and `1` (`COUNT(?x)`), and nothing else.
+/// * [`AggregateFunction::Fold`] admits `1` (`FOLD(?v)`, a `cdt:List`) and `2`
+///   (`FOLD(?k, ?v)`, a `cdt:Map`) — SEP-0009 §11.1's `Expression ( ',' Expression )?`.
+/// * Every other SPARQL built-in is fixed-arity ONE. Admitting more would let a
+///   value exist whose extra arguments the evaluator never reads and therefore
+///   silently discards — a wrong answer dressed as a valid call, which is
+///   exactly what a checked constructor exists to make unrepresentable.
+/// * [`AggregateFunction::Custom`] is positional-only, one-or-more: its arity is
+///   whatever the `AGG(<iri>, …)` call supplied, checked against the registered
+///   aggregate's own declaration at prepare time in `sparql-eval`, not here.
+const fn arity_is_admitted(function: &AggregateFunction, arity: usize) -> bool {
+    match function {
+        AggregateFunction::Count => arity <= 1,
+        AggregateFunction::Fold => arity == 1 || arity == 2,
+        AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Sample
+        | AggregateFunction::GroupConcat => arity == 1,
+        AggregateFunction::Custom(_) => arity >= 1,
     }
 }
 
@@ -1678,17 +1813,20 @@ pub enum AggregateExpressionError {
     Arity(AggregateArityError),
     /// See [`AggregateScalarvalError`].
     Scalarval(AggregateScalarvalError),
+    /// See [`AggregateOrderByError`].
+    OrderBy(AggregateOrderByError),
 }
 
 impl AggregateExpressionError {
     /// The function that was refused, regardless of which arm this is —
-    /// [`AggregateArityError::function`]/[`AggregateScalarvalError::function`]
-    /// under the hood.
+    /// [`AggregateArityError::function`]/[`AggregateScalarvalError::function`]/
+    /// [`AggregateOrderByError::function`] under the hood.
     #[must_use]
     pub fn function(&self) -> &AggregateFunction {
         match self {
             Self::Arity(error) => error.function(),
             Self::Scalarval(error) => error.function(),
+            Self::OrderBy(error) => error.function(),
         }
     }
 }
@@ -1698,6 +1836,7 @@ impl core::fmt::Display for AggregateExpressionError {
         match self {
             Self::Arity(error) => core::fmt::Display::fmt(error, f),
             Self::Scalarval(error) => core::fmt::Display::fmt(error, f),
+            Self::OrderBy(error) => core::fmt::Display::fmt(error, f),
         }
     }
 }
@@ -1716,35 +1855,97 @@ impl From<AggregateScalarvalError> for AggregateExpressionError {
     }
 }
 
-/// Why [`AggregateExpression::new`] refused to build a value: `args` was
-/// empty for a `function` other than [`AggregateFunction::Count`]. SPARQL's
-/// `'*'` exprlist shorthand is defined only in the `Count` production
-/// (SPARQL 1.1/1.2 §18.5.1/§19.8); every other aggregate — built-in or
-/// [`AggregateFunction::Custom`] — requires at least one expression argument.
+impl From<AggregateOrderByError> for AggregateExpressionError {
+    fn from(error: AggregateOrderByError) -> Self {
+        Self::OrderBy(error)
+    }
+}
+
+/// Why [`AggregateExpression::new`] refused to build a value: `args` held a
+/// number of expressions `function` does not admit — see
+/// [`arity_is_admitted`] for the per-function rule.
+///
+/// SPARQL's `'*'` exprlist shorthand is defined only in the `Count` production
+/// (SPARQL 1.1/1.2 §18.5.1/§19.8), so an EMPTY `args` names `COUNT(*)` and
+/// nothing else; at the other end, every built-in but `COUNT` and SEP-0009's
+/// `FOLD` is fixed-arity one, so a second argument is refused rather than
+/// carried into an evaluator that would never read it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AggregateArityError {
     function: AggregateFunction,
+    arity: usize,
 }
 
 impl AggregateArityError {
-    /// The function that was refused an empty `args`.
+    /// The function that was refused this `args` length.
+    #[must_use]
+    pub fn function(&self) -> &AggregateFunction {
+        &self.function
+    }
+
+    /// The `args` length that was refused.
+    #[must_use]
+    pub const fn arity(&self) -> usize {
+        self.arity
+    }
+}
+
+impl core::fmt::Display for AggregateArityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let admitted = match self.function {
+            AggregateFunction::Count => "an empty exprlist ('*') or exactly one argument",
+            AggregateFunction::Fold => "exactly one argument (a cdt:List) or two (a cdt:Map)",
+            AggregateFunction::Custom(_) => "at least one argument",
+            AggregateFunction::Sum
+            | AggregateFunction::Avg
+            | AggregateFunction::Min
+            | AggregateFunction::Max
+            | AggregateFunction::Sample
+            | AggregateFunction::GroupConcat => "exactly one argument",
+        };
+        write!(
+            f,
+            "{:?} admits {admitted}, not {}",
+            self.function, self.arity
+        )
+    }
+}
+
+impl std::error::Error for AggregateArityError {}
+
+/// Why [`AggregateExpression::rebuild`]/[`AggregateExpression::new_fold`]
+/// refused to build a value: a non-empty `order_by` was paired with a function
+/// that has no `ORDER BY` surface to have parsed it from.
+///
+/// SEP-0009's `FOLD` is the only SPARQL aggregate whose production carries
+/// `( 'ORDER' 'BY' OrderCondition+ )?`. Attaching sort keys to any other
+/// aggregate would produce a value [`crate::serialize`] must either render as
+/// text no parser accepts, or silently drop — the same hole the `scalarvals`
+/// check closes one field over.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AggregateOrderByError {
+    function: AggregateFunction,
+}
+
+impl AggregateOrderByError {
+    /// The function that was refused an `ORDER BY` tail.
     #[must_use]
     pub fn function(&self) -> &AggregateFunction {
         &self.function
     }
 }
 
-impl core::fmt::Display for AggregateArityError {
+impl core::fmt::Display for AggregateOrderByError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "only COUNT accepts an empty exprlist ('*'); {:?} requires at least one argument",
+            "only FOLD carries its own ORDER BY sort keys; {:?} admits none",
             self.function
         )
     }
 }
 
-impl std::error::Error for AggregateArityError {}
+impl std::error::Error for AggregateOrderByError {}
 
 /// Why [`AggregateExpression::new`] refused to build a value: `scalarvals`
 /// carried a key `function` does not admit. Every built-in but
@@ -1803,6 +2004,38 @@ pub enum AggregateFunction {
     /// spec's scalar-values map is a property of the aggregation node, not of
     /// the function name.
     GroupConcat,
+    /// SEP-0009's `FOLD` set function: fold a group's solution sequence into a
+    /// composite literal.
+    ///
+    /// `FOLD(expr)` is the spec's `Fold1` — a `cdt:List` literal with one
+    /// element per solution in the group, in group order, an element that
+    /// errored or came out unbound written as the composite `null`.
+    /// `FOLD(kexpr, vexpr)` is `Fold2` — a `cdt:Map` literal built from the
+    /// pairs, where a pair whose KEY errored, came out unbound, or is not a map
+    /// key (a blank node) vanishes entirely, a pair whose VALUE errored keeps
+    /// its key with a `null` value, and a repeated key keeps the LAST binding.
+    /// Both are exactly the behaviour of the `cdt:List`/`cdt:Map` constructor
+    /// functions applied to the flattened group, which is what the spec says
+    /// and what makes them share one implementation.
+    ///
+    /// # This is a keyword aggregate, not the `AGG(<iri>, …)` surface
+    ///
+    /// SEP-0009 production `[127+]` adds `FOLD` as a KEYWORD alternative of
+    /// `Aggregate`, alongside `SUM` and `GROUP_CONCAT`. It is deliberately NOT
+    /// routed through [`Self::Custom`]: that surface demands `AGG` `(` IRI `,`,
+    /// and the spec defines no aggregate IRI for `FOLD` — inventing one would
+    /// mint a vocabulary IRI, which this project does not do.
+    ///
+    /// # The one aggregate with its own `ORDER BY`
+    ///
+    /// `FOLD` is the only SPARQL aggregate whose production carries
+    /// `( 'ORDER' 'BY' OrderCondition+ )?`, the spec's `OrderGroups` symbol:
+    /// each group's solution sequence is sorted by those conditions BEFORE the
+    /// fold runs, which is what makes the element order of the resulting
+    /// `cdt:List` — and which binding of a repeated `cdt:Map` key survives —
+    /// defined rather than implementation-dependent. The conditions live on
+    /// [`AggregateExpression::order_by`].
+    Fold,
     /// A custom aggregate identified by an arbitrary IRI, parsed from
     /// `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`: positional
     /// expression arguments (`args`, evaluated PER ROW like any built-in

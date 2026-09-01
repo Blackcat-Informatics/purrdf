@@ -96,6 +96,7 @@ pub mod eval;
 mod exists_admission_gate;
 mod expr;
 mod fallible;
+mod fold_agg;
 mod governed;
 pub mod governor;
 mod list_fn;

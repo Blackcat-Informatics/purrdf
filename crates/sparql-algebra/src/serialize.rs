@@ -1316,6 +1316,7 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         AggregateFunction::Max => "MAX",
         AggregateFunction::Sample => "SAMPLE",
         AggregateFunction::GroupConcat => "GROUP_CONCAT",
+        AggregateFunction::Fold => "FOLD",
         AggregateFunction::Custom(n) => {
             // `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` — the
             // custom-aggregate surface (see `AggregateFunction::Custom`'s
@@ -1356,6 +1357,27 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         s.push_str("; SEPARATOR=\"");
         push_escaped(s, sep);
         s.push('"');
+    }
+    // SEP-0009 `FOLD`'s own `( 'ORDER' 'BY' OrderCondition+ )?` tail, INSIDE the
+    // aggregate's parentheses. Only `FOLD` can carry one — `AggregateExpression`'s
+    // constructor refuses a non-empty `order_by` for any other function — so this
+    // never emits an `ORDER BY` where the grammar has no production for it.
+    if !agg.order_by.is_empty() {
+        s.push_str(" ORDER BY");
+        for oe in &agg.order_by {
+            match oe {
+                OrderExpression::Asc(e) => {
+                    s.push_str(" ASC(");
+                    fmt_expr(s, e);
+                    s.push(')');
+                }
+                OrderExpression::Desc(e) => {
+                    s.push_str(" DESC(");
+                    fmt_expr(s, e);
+                    s.push(')');
+                }
+            }
+        }
     }
     s.push(')');
 }

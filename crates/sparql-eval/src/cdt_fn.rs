@@ -211,7 +211,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
                     Ok(Some(intern(ctx, original)))
                 }
                 CdtOutcome::Error(_) => Ok(None),
-                CdtOutcome::Bound(error) => Err(bound(&error)),
+                CdtOutcome::Bound(error) => Err(composite_bound(&error)),
             }
         }
     }
@@ -223,7 +223,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
 
 /// A refused mint: the value the function was asked to build crosses one of
 /// `purrdf-cdt`'s three bounds. A hard failure, never an expression error.
-fn bound(error: &CdtError) -> EvalError {
+pub(crate) fn composite_bound(error: &CdtError) -> EvalError {
     EvalError::composite_bound(error.to_string())
 }
 
@@ -236,7 +236,7 @@ fn value_result<D: DatasetView + Sync>(
     match outcome {
         CdtOutcome::Value(value) => Ok(Some(intern(ctx, composite_literal(&value)))),
         CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
+        CdtOutcome::Bound(error) => Err(composite_bound(&error)),
     }
 }
 
@@ -253,7 +253,7 @@ fn term_result<D: DatasetView + Sync>(
             None => Ok(None),
         },
         CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
+        CdtOutcome::Bound(error) => Err(composite_bound(&error)),
     }
 }
 
@@ -265,7 +265,7 @@ fn bool_result<D: DatasetView + Sync>(
     match outcome {
         CdtOutcome::Value(answer) => Ok(Some(bool_term(ctx, answer))),
         CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
+        CdtOutcome::Bound(error) => Err(composite_bound(&error)),
     }
 }
 
@@ -276,7 +276,7 @@ fn bool_result<D: DatasetView + Sync>(
 /// A **constructor** argument: a failed one is the SEP-0009 `null` element rather
 /// than a failure of the call (`list-functions/list-constructor-null-01.rq`,
 /// `list-constructor-null-02.rq`, `map-functions/put-03.rq`).
-fn argument_element(value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
+pub(crate) fn argument_element(value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
     match value {
         None => Ok(CdtTerm::Null),
         Some(value) => to_cdt_term(value),
@@ -425,7 +425,9 @@ fn to_cdt_term(value: &TermValue) -> Result<CdtTerm, EvalError> {
                 let object = pop(&mut done)?;
                 let predicate = pop(&mut done)?;
                 let subject = pop(&mut done)?;
-                done.push(CdtTerm::triple(subject, predicate, object).map_err(|e| bound(&e))?);
+                done.push(
+                    CdtTerm::triple(subject, predicate, object).map_err(|e| composite_bound(&e))?,
+                );
             }
             InJob::Visit(TermValue::Iri(iri)) => done.push(CdtTerm::Iri(iri.clone())),
             InJob::Visit(TermValue::Blank { label, scope }) => {
@@ -440,7 +442,7 @@ fn to_cdt_term(value: &TermValue) -> Result<CdtTerm, EvalError> {
                 },
             ) => {
                 if let Some(composite) = as_composite(literal) {
-                    done.push(CdtTerm::composite(composite).map_err(|e| bound(&e))?);
+                    done.push(CdtTerm::composite(composite).map_err(|e| composite_bound(&e))?);
                 } else {
                     done.push(CdtTerm::Literal(cdt_literal(
                         lexical_form,

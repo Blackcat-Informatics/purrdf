@@ -4019,14 +4019,33 @@ impl<'a> Parser<'a, '_> {
             let inner = self.parse_expression();
             self.in_aggregate_argument = saved_in_aggregate_argument;
             let inner = inner?;
-            let mut scalarvals = Vec::new();
-            if matches!(func, AggregateFunction::GroupConcat)
-                && let Some(sep) = self.parse_optional_separator()?
-            {
-                scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
+            if matches!(func, AggregateFunction::Fold) {
+                // SEP-0009 `[127+]`: `'FOLD' '(' 'DISTINCT'? Expression
+                // ( ',' Expression )? ( 'ORDER' 'BY' OrderCondition+ )? ')'`.
+                // The first `Expression` is already parsed above (the shared
+                // `in_aggregate_argument` window); the optional SECOND one and
+                // the optional `ORDER BY` tail are FOLD's alone.
+                let mut args = vec![inner];
+                if self.eat(&Token::Comma) {
+                    let saved = self.in_aggregate_argument;
+                    self.in_aggregate_argument = true;
+                    let second = self.parse_expression();
+                    self.in_aggregate_argument = saved;
+                    args.push(second?);
+                }
+                let order_by = self.parse_fold_order_conditions()?;
+                AggregateExpression::new_fold(args, order_by, distinct)
+                    .expect("FOLD parses exactly one or two arguments")
+            } else {
+                let mut scalarvals = Vec::new();
+                if matches!(func, AggregateFunction::GroupConcat)
+                    && let Some(sep) = self.parse_optional_separator()?
+                {
+                    scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
+                }
+                AggregateExpression::new(func, vec![inner], scalarvals, distinct)
+                    .expect("a one-element args list is always a valid AggregateExpression")
             }
-            AggregateExpression::new(func, vec![inner], scalarvals, distinct)
-                .expect("a one-element args list is always a valid AggregateExpression")
         };
         self.expect(&Token::RParen)?;
         let synth = self.fresh_agg_var();
@@ -4092,6 +4111,69 @@ impl<'a> Parser<'a, '_> {
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
+    }
+
+    /// Parse SEP-0009 `FOLD`'s optional trailing
+    /// `( 'ORDER' 'BY' OrderCondition+ )?` clause — the spec's `OrderGroups`
+    /// symbol, which sorts each GROUP's solution sequence before the fold runs.
+    ///
+    /// The `OrderCondition` alternatives are exactly the query-level ones
+    /// ([`Self::parse_solution_modifiers`]'s `ORDER BY` loop): `ASC(expr)`,
+    /// `DESC(expr)`, or a bare `Constraint | Var`. Two things differ, both
+    /// forced by where the clause sits:
+    ///
+    /// * The conditions are parsed with `in_aggregate_argument` set, exactly
+    ///   like `FOLD`'s own arguments, so an `EXISTS` inside one gets the same
+    ///   scope basis as an `EXISTS` inside the aggregate's argument.
+    /// * They are NOT parsed through the aggregate-lifting expression parser.
+    ///   A nested aggregate is not legal SPARQL anywhere, and a sort key inside
+    ///   `FOLD` is inside an aggregate already — lifting one here would hoist
+    ///   an aggregate out of an aggregate.
+    ///
+    /// `OrderCondition+` is ONE OR MORE: `FOLD(?v ORDER BY)` names no sort key
+    /// and is a hard syntax error, never a silent unordered fold.
+    fn parse_fold_order_conditions(&mut self) -> Result<Vec<OrderExpression>> {
+        if !self.eat_kw("ORDER") {
+            return Ok(Vec::new());
+        }
+        self.expect_kw("BY")?;
+        let saved = self.in_aggregate_argument;
+        self.in_aggregate_argument = true;
+        let parsed = self.parse_fold_order_condition_list();
+        self.in_aggregate_argument = saved;
+        let conditions = parsed?;
+        if conditions.is_empty() {
+            return Err(ParseError::syntax(
+                "FOLD's ORDER BY requires at least one sort condition".to_owned(),
+                self.span(),
+            ));
+        }
+        Ok(conditions)
+    }
+
+    /// The `OrderCondition+` loop [`Self::parse_fold_order_conditions`] runs
+    /// inside its `in_aggregate_argument` window.
+    fn parse_fold_order_condition_list(&mut self) -> Result<Vec<OrderExpression>> {
+        let mut conditions = Vec::new();
+        loop {
+            let cond = if self.eat_kw("ASC") {
+                self.expect(&Token::LParen)?;
+                let e = self.parse_expression()?;
+                self.expect(&Token::RParen)?;
+                OrderExpression::Asc(e)
+            } else if self.eat_kw("DESC") {
+                self.expect(&Token::LParen)?;
+                let e = self.parse_expression()?;
+                self.expect(&Token::RParen)?;
+                OrderExpression::Desc(e)
+            } else if self.order_key_ahead() {
+                OrderExpression::Asc(self.parse_primary_expression()?)
+            } else {
+                break;
+            };
+            conditions.push(cond);
+        }
+        Ok(conditions)
     }
 
     /// Parse the `AGG(<iri>, …)` surface's optional trailing named
@@ -5113,6 +5195,10 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
         "MAX" => AggregateFunction::Max,
         "SAMPLE" => AggregateFunction::Sample,
         "GROUP_CONCAT" => AggregateFunction::GroupConcat,
+        // SEP-0009 `[127+]` adds `FOLD` as a KEYWORD alternative of `Aggregate`,
+        // exactly like the seven above — not through the `AGG(<iri>, …)` custom
+        // surface, for which the spec defines no aggregate IRI.
+        "FOLD" => AggregateFunction::Fold,
         _ => return None,
     })
 }
@@ -9040,6 +9126,243 @@ mod tests {
             panic!("expected a literal");
         };
         assert_eq!(literal.value(), spelling);
+    }
+
+    // ── SEP-0009 FOLD (grammar `[127+]`, a KEYWORD Aggregate alternative) ─────
+
+    /// The single `(variable, AggregateExpression)` a `SELECT (FOLD(…) AS ?x)`
+    /// query lifts, asserting there is EXACTLY one.
+    fn only_aggregate(q: &str) -> AggregateExpression {
+        let mut pattern = select_pattern_with(q, &ParserOptions::default());
+        loop {
+            match pattern {
+                GraphPattern::Group { aggregates, .. } => {
+                    assert_eq!(
+                        aggregates.len(),
+                        1,
+                        "expected exactly one lifted aggregate, got {}",
+                        aggregates.len()
+                    );
+                    return aggregates.into_iter().next().expect("one aggregate").1;
+                }
+                GraphPattern::Project { inner, .. }
+                | GraphPattern::Extend { inner, .. }
+                | GraphPattern::Filter { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. }
+                | GraphPattern::OrderBy { inner, .. } => pattern = *inner,
+                other => panic!("no Group node under {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn fold_is_a_keyword_aggregate_not_the_agg_iri_surface() {
+        // SEP-0009 `[127+]` adds FOLD beside SUM and GROUP_CONCAT. It must NOT be
+        // spelled through `AGG(<iri>, …)`: the spec defines no aggregate IRI, and
+        // inventing one would mint a vocabulary IRI.
+        let agg = only_aggregate(&format!(
+            "{}SELECT (FOLD(?v) AS ?l) WHERE {{ ?s ?p ?v }}",
+            cdt_prologue()
+        ));
+        assert_eq!(agg.function(), &AggregateFunction::Fold);
+        assert_eq!(agg.args().len(), 1);
+        assert!(agg.order_by().is_empty());
+        assert!(!agg.distinct);
+    }
+
+    #[test]
+    fn fold_takes_a_second_argument_for_the_map_form() {
+        let agg = only_aggregate(&format!(
+            "{}SELECT (FOLD(?k, ?v) AS ?m) WHERE {{ ?k ?p ?v }}",
+            cdt_prologue()
+        ));
+        assert_eq!(agg.function(), &AggregateFunction::Fold);
+        assert_eq!(agg.args().len(), 2);
+    }
+
+    #[test]
+    fn fold_parses_distinct_and_every_order_condition_shape() {
+        // `DISTINCT` precedes the arguments; the ORDER BY tail admits the bare,
+        // `ASC(…)` and `DESC(…)` forms, one or more of them.
+        let agg = only_aggregate(&format!(
+            "{}SELECT (FOLD(DISTINCT ?v ORDER BY ?a ASC(?b) DESC(?c)) AS ?l) \
+             WHERE {{ ?a ?b ?c . ?a ?b ?v }}",
+            cdt_prologue()
+        ));
+        assert!(agg.distinct);
+        assert_eq!(agg.args().len(), 1);
+        assert_eq!(agg.order_by().len(), 3);
+        assert!(matches!(agg.order_by()[0], OrderExpression::Asc(_)));
+        assert!(matches!(agg.order_by()[1], OrderExpression::Asc(_)));
+        assert!(matches!(agg.order_by()[2], OrderExpression::Desc(_)));
+    }
+
+    #[test]
+    fn fold_order_by_belongs_to_the_map_form_too() {
+        let agg = only_aggregate(&format!(
+            "{}SELECT (FOLD(?k, ?v ORDER BY DESC(?s)) AS ?m) WHERE {{ ?k ?s ?v }}",
+            cdt_prologue()
+        ));
+        assert_eq!(agg.args().len(), 2);
+        assert_eq!(agg.order_by().len(), 1);
+    }
+
+    #[test]
+    fn fold_rejects_the_star_exprlist_and_still_accepts_one_argument() {
+        // `FOLD(*)` names nothing: the `'*'` shorthand is COUNT's alone.
+        let star = format!(
+            "{}SELECT (FOLD(*) AS ?l) WHERE {{ ?s ?p ?v }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new()
+            .parse_query(&star)
+            .expect_err("FOLD(*) is not SPARQL");
+        assert!(err.to_string().contains('*'), "got {err}");
+        // The neighbouring VALID case still parses.
+        let ok = format!(
+            "{}SELECT (FOLD(?v) AS ?l) WHERE {{ ?s ?p ?v }}",
+            cdt_prologue()
+        );
+        assert!(SparqlParser::new().parse_query(&ok).is_ok());
+    }
+
+    #[test]
+    fn fold_rejects_a_third_argument_and_still_accepts_two() {
+        let three = format!(
+            "{}SELECT (FOLD(?a, ?b, ?c) AS ?m) WHERE {{ ?a ?b ?c }}",
+            cdt_prologue()
+        );
+        assert!(
+            SparqlParser::new().parse_query(&three).is_err(),
+            "FOLD has no three-argument form"
+        );
+        // The neighbouring VALID case still parses.
+        let two = format!(
+            "{}SELECT (FOLD(?a, ?b) AS ?m) WHERE {{ ?a ?p ?b }}",
+            cdt_prologue()
+        );
+        assert!(SparqlParser::new().parse_query(&two).is_ok());
+    }
+
+    #[test]
+    fn fold_rejects_an_empty_order_by_and_still_accepts_a_populated_one() {
+        // `OrderCondition+` is one or more: a bare `ORDER BY` names no sort key
+        // and must be a hard syntax error, never a silent unordered fold.
+        let empty = format!(
+            "{}SELECT (FOLD(?v ORDER BY) AS ?l) WHERE {{ ?s ?p ?v }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new()
+            .parse_query(&empty)
+            .expect_err("FOLD's ORDER BY requires a condition");
+        assert!(
+            err.to_string().contains("at least one sort condition"),
+            "the refusal must say what was missing, got {err}"
+        );
+        // The neighbouring VALID case still parses.
+        let ok = format!(
+            "{}SELECT (FOLD(?v ORDER BY ?v) AS ?l) WHERE {{ ?s ?p ?v }}",
+            cdt_prologue()
+        );
+        assert!(SparqlParser::new().parse_query(&ok).is_ok());
+    }
+
+    #[test]
+    fn fold_round_trips_through_the_serializer() {
+        for query in [
+            "SELECT (FOLD(?v) AS ?l) WHERE { ?s ?p ?v }",
+            "SELECT (FOLD(DISTINCT ?v) AS ?l) WHERE { ?s ?p ?v }",
+            "SELECT (FOLD(?k, ?v) AS ?m) WHERE { ?k ?p ?v }",
+            "SELECT (FOLD(?v ORDER BY ?v) AS ?l) WHERE { ?s ?p ?v }",
+            "SELECT (FOLD(DISTINCT ?k, ?v ORDER BY ASC(?k) DESC(?v)) AS ?m) WHERE { ?k ?p ?v }",
+        ] {
+            let q = format!("{}{query}", cdt_prologue());
+            let pattern = select_pattern_with(&q, &ParserOptions::default());
+            let text = crate::serialize::pattern_to_select_query(&pattern);
+            assert!(
+                text.contains("FOLD("),
+                "the serializer must emit the FOLD keyword; text = {text}"
+            );
+            let reparsed = select_pattern_with(&text, &ParserOptions::default());
+            assert_eq!(
+                crate::serialize::pattern_to_select_query(&reparsed),
+                text,
+                "re-serializing the re-parse must be a fixpoint for: {query}"
+            );
+            // The aggregate itself must survive byte-identically. The whole
+            // PATTERN cannot be compared: the serializer wraps every aggregate
+            // query in `SELECT * WHERE { { … } }` (`SUM` no less than `FOLD`),
+            // so a re-parse gains one `Project` node — a pre-existing property
+            // of the renderer, not of this production.
+            assert_eq!(
+                only_aggregate(&text),
+                only_aggregate(&q),
+                "the round trip must preserve the aggregate exactly for: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_fold_may_carry_order_by_sort_keys() {
+        // The checked constructor is the gate: no other aggregate has an ORDER BY
+        // surface to have parsed one from, so attaching one is refused rather than
+        // rendered as text no parser accepts.
+        let keys = vec![OrderExpression::Asc(Expression::Variable(Variable::new(
+            "k",
+        )))];
+        let args = vec![Expression::Variable(Variable::new("v"))];
+        let err = AggregateExpression::rebuild(
+            AggregateFunction::Sum,
+            args.clone(),
+            Vec::new(),
+            keys.clone(),
+            false,
+        )
+        .expect_err("SUM admits no ORDER BY");
+        assert!(matches!(
+            err,
+            crate::algebra::AggregateExpressionError::OrderBy(_)
+        ));
+        // The neighbouring VALID cases: the same keys on FOLD, and the same SUM
+        // with no keys.
+        assert!(AggregateExpression::new_fold(args.clone(), keys, false).is_ok());
+        assert!(AggregateExpression::new(AggregateFunction::Sum, args, Vec::new(), false).is_ok());
+    }
+
+    #[test]
+    fn a_unary_builtin_aggregate_refuses_a_second_argument() {
+        // A second argument no evaluator reads is a silently discarded value, so
+        // the constructor refuses it outright.
+        let two = vec![
+            Expression::Variable(Variable::new("a")),
+            Expression::Variable(Variable::new("b")),
+        ];
+        for function in [
+            AggregateFunction::Sum,
+            AggregateFunction::Avg,
+            AggregateFunction::Min,
+            AggregateFunction::Max,
+            AggregateFunction::Sample,
+            AggregateFunction::GroupConcat,
+            AggregateFunction::Count,
+        ] {
+            let err = AggregateExpression::new(function.clone(), two.clone(), Vec::new(), false)
+                .expect_err("a unary built-in admits exactly one argument");
+            assert!(
+                matches!(&err, crate::algebra::AggregateExpressionError::Arity(e) if e.arity() == 2),
+                "{function:?}: got {err:?}"
+            );
+            // The neighbouring VALID case: the same function, one argument.
+            assert!(
+                AggregateExpression::new(function.clone(), vec![two[0].clone()], Vec::new(), false)
+                    .is_ok(),
+                "{function:?} must still admit one argument"
+            );
+        }
+        // FOLD is the one built-in that DOES admit two.
+        assert!(AggregateExpression::new_fold(two, Vec::new(), false).is_ok());
     }
 
     // ── property-function seam (caller-configured; OFF by default) ────────────

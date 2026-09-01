@@ -482,7 +482,11 @@ fn eval_graph_var<D: DatasetView + Sync>(
 // ---------------------------------------------------------------------------
 
 /// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
-fn compare_keys(a: &[SortKey<'_>], b: &[SortKey<'_>], exprs: &[OrderExpression]) -> Ordering {
+pub(crate) fn compare_keys(
+    a: &[SortKey<'_>],
+    b: &[SortKey<'_>],
+    exprs: &[OrderExpression],
+) -> Ordering {
     for ((ka, kb), oe) in a.iter().zip(b).zip(exprs) {
         let mut ord = total_order(ka, kb);
         if matches!(oe, OrderExpression::Desc(_)) {
@@ -937,6 +941,16 @@ fn eval_aggregate<D: DatasetView + Sync>(
         return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
     }
 
+    // SEP-0009 `FOLD` is dispatched away here for the same reason `Custom` is:
+    // the shared phase-1 loop below reads exactly ONE argument expression and
+    // SKIPS a row whose argument came out unbound, and `FOLD` does neither —
+    // it reads one or two, and an unbound argument is a `null` element of the
+    // composite rather than an absent row. It also carries its own `ORDER BY`,
+    // which re-orders the group before the fold. See `crate::fold_agg`.
+    if matches!(agg.function(), AggregateFunction::Fold) {
+        return crate::fold_agg::eval_fold_aggregate(agg, idxs, rows, schema, ctx);
+    }
+
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
     // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
     // that can ever carry one — so dispatch reads `agg.function()` itself
@@ -1090,6 +1104,14 @@ fn eval_aggregate<D: DatasetView + Sync>(
         AggregateFunction::Custom(_) => {
             return Err(EvalError::internal(
                 "AggregateFunction::Custom reached the built-in dispatch arm; the Custom \
+                 short-circuit at the top of eval_aggregate should have already handled it",
+            ));
+        }
+        // `Fold` is dispatched away alongside `Custom`, above, for the reasons
+        // stated there — this arm is the same unencodable-invariant stand-in.
+        AggregateFunction::Fold => {
+            return Err(EvalError::internal(
+                "AggregateFunction::Fold reached the built-in dispatch arm; the Fold \
                  short-circuit at the top of eval_aggregate should have already handled it",
             ));
         }
