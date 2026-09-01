@@ -57,6 +57,14 @@
  * than appended — it belongs immediately beside the document it qualifies, and
  * one declared break beats a permanently confusing argument order — so the
  * version, not the signature, absorbs the incompatibility.
+ *
+ * The same bump also carries a second mid-list insertion, deliberately bundled
+ * rather than deferred: `purrdf_serialize_jsonld_configured` gained `base_iri`
+ * after `media_type`, the slot it occupies on `purrdf_serialize`. `0.7.0` is
+ * unreleased, so a consumer recompiles against this header exactly once for
+ * both; splitting them across two versions would break the same consumer twice
+ * for one reason. A THIRD incompatible change made after `0.7.0` ships must
+ * bump again — the ledger here is what makes that judgement possible.
  */
 #define PURRDF_ABI_MINOR 7
 
@@ -2248,14 +2256,42 @@ void purrdf_jsonld_context_free(PurrdfJsonLdContext *context);
  * reusable compiled context. `yaml_schema_url` may be null and overrides the
  * options document for YAML-LD when supplied.
  *
+ * # `base_iri` — the EGRESS base, in the same slot and with the same contract it has on
+ * `purrdf_serialize`
+ *
+ * `base_iri` is the document base the output is *written under*, sits immediately after
+ * `media_type` exactly as it does on `purrdf_serialize`, and may be null. It is not
+ * advisory and it is not discarded:
+ *
+ * - **JSON-LD and YAML-LD express a base, so they emit it and relativize against it.**
+ *   Both carry `emits_base` in the format registry: serializing under
+ *   `"http://example.org/dir/"` writes `"@base": "http://example.org/dir/"` into the
+ *   emitted `@context` (`'@base': …` for YAML-LD) and spells
+ *   `http://example.org/dir/a` as `a`. A caller context composes with it rather than
+ *   being dropped — the base joins as a later context member, which is JSON-LD 1.1's own
+ *   composition.
+ * - **A context that already declares `@base` keeps it.** The document's own base wins
+ *   over the caller-supplied one, matching the precedence the parse leg applies to an
+ *   in-document `@context.@base`.
+ * - **A malformed base is a hard failure.** A `base_iri` that is not an absolute IRI
+ *   returns `PURRDF_STATUS_SERIALIZE_ERROR` carrying the shared `iri-*` diagnostic code,
+ *   rather than being absorbed into plausible-looking output.
+ * - **Null means absolute output**, not "guess a base": PurRDF never invents a retrieval
+ *   IRI a C host did not supply.
+ *
+ * This parameter exists so a C host is not the one surface that can express an egress
+ * base for Turtle but not for the JSON-LD family. There is no base-less variant of this
+ * entry point.
+ *
  * # Safety
  * `dataset` and `media_type` must be live/non-null. If `options_json` is not
  * null it points to `options_len` readable bytes and `context` must be null; if
  * `options_json` is null, `options_len` must be zero and `context` must be live.
- * Output pointers must be writable.
+ * `base_iri` must be null or a NUL-terminated C string. Output pointers must be writable.
  */
 int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
                                            const char *media_type,
+                                           const char *base_iri,
                                            const uint8_t *options_json,
                                            size_t options_len,
                                            const PurrdfJsonLdContext *context,

@@ -436,15 +436,22 @@ impl PyQueryTriples {
 
     /// Serialize the constructed triples to bytes in `format` (the N-Triples
     /// fast path the `sparql` seam uses for its rdflib hand-off).
+    ///
+    /// `base` is the document base the output is written under, the same parameter
+    /// the module-level `serialize` carries: a format that can express a base writes
+    /// it and relativizes against it, one that cannot emits absolute IRIs, and a base
+    /// that is not an absolute IRI is a hard failure on either.
+    #[pyo3(signature = (format, *, base=None))]
     fn serialize<'py>(
         &self,
         py: Python<'py>,
         format: PyRdfFormat,
+        base: Option<String>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         // The native serialization runs detached (GIL released).
         let triples = &self.triples;
         let bytes = py
-            .detach(|| serialize_triples(triples, format.to_native()))
+            .detach(move || serialize_triples(triples, format.to_native(), base.as_deref()))
             .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
         Ok(PyBytes::new(py, &bytes))
     }

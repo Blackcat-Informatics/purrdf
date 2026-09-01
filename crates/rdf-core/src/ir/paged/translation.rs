@@ -65,7 +65,13 @@ impl PageTranslation {
             // then intern that value into the shared dictionary. Equal values across
             // pages collapse to one GlobalTermId.
             let value = page.term_value(local);
-            let global = dict.intern(&value);
+            // `page` is a FROZEN `RdfDataset`, and the only way to obtain one is
+            // `RdfDatasetBuilder::freeze`, which refuses a relative IRI. Every value
+            // here therefore already satisfies the IR-boundary absoluteness invariant,
+            // so this walk re-interns without re-parsing — see
+            // `GlobalDictionary::reintern_validated` for why that entry point exists
+            // and why a new caller must not use it.
+            let global = dict.reintern_validated(&value);
             local_to_global.push(global);
             global_to_local.push((global, local));
         }

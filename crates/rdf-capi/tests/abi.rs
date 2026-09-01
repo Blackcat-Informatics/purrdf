@@ -808,6 +808,148 @@ fn serialize_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
     }
 }
 
+/// Serialize configured JSON-LD/YAML-LD through the real C entry point and return
+/// `(status, bytes, error)`. `base` is passed exactly as a C host would: `None`
+/// becomes a null pointer.
+unsafe fn serialize_jsonld_with_base(
+    dataset: *const PurrdfDataset,
+    media_type: &str,
+    base: Option<&str>,
+    options: &str,
+) -> (i32, Option<String>, *mut PurrdfError) {
+    unsafe {
+        let media = CString::new(media_type).expect("media type C string");
+        let base = base.map(|value| CString::new(value).expect("base C string"));
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize_jsonld_configured(
+            dataset,
+            media.as_ptr(),
+            base.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            options.as_ptr(),
+            options.len(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        let text = if buffer.is_null() {
+            None
+        } else {
+            let text = String::from_utf8(buffer_bytes(buffer)).expect("utf8 output");
+            purrdf_buffer_free(buffer);
+            Some(text)
+        };
+        (status, text, error)
+    }
+}
+
+/// `purrdf_serialize_jsonld_configured`'s `base_iri` is honored end to end, so a C
+/// host can express an egress base for the JSON-LD family exactly as it can for
+/// Turtle. Before this parameter existed the entry point hardcoded "no base" and
+/// a C caller had no way to reach the leg every sibling surface already had.
+///
+/// The JSON-LD family expresses its base as `@context.@base` (`'@base':` in
+/// YAML-LD), so both the directive and the relativized IRIs are observable in the
+/// emitted bytes. Each format is driven twice — with the base and with NULL —
+/// because "the bytes contain `@base`" alone would not prove the argument caused
+/// it. The caller's own context term must also survive: the base joins the
+/// context as a later member rather than replacing it.
+#[test]
+fn configured_jsonld_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
+    const BASE: &str = "http://example.org/dir/";
+    const SUBJECT: &str = "http://example.org/dir/alice";
+    const INPUT: &str = "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .";
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+
+    unsafe {
+        let dataset = parse("application/n-triples", INPUT);
+        for (media_type, directive) in [
+            ("application/ld+json", format!("\"@base\": \"{BASE}\"")),
+            ("application/ld+yaml", format!("'@base': {BASE}")),
+        ] {
+            let (status, based, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some(BASE), OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let based = based.expect("configured bytes");
+            assert!(
+                based.contains(&directive),
+                "the caller base must reach the emitted {media_type} context, got: {based}"
+            );
+            assert!(
+                !based.contains(SUBJECT),
+                "the subject must be relativized against the base, got: {based}"
+            );
+            assert!(
+                based.contains("schema"),
+                "the caller's own context term must survive beside the base, got: {based}"
+            );
+
+            // The NULL-base control: same dataset, same format, same options.
+            let (status, plain, error) =
+                serialize_jsonld_with_base(dataset, media_type, None, OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let plain = plain.expect("configured bytes");
+            assert!(
+                !plain.contains("@base"),
+                "a null base must not synthesize one for {media_type}, got: {plain}"
+            );
+            assert!(
+                plain.contains(SUBJECT),
+                "a null base must leave IRIs absolute for {media_type}, got: {plain}"
+            );
+            assert_ne!(
+                based, plain,
+                "the emitted {media_type} bytes must be attributable to the base argument"
+            );
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A non-absolute `base_iri` is a HARD failure on the configured JSON-LD entry
+/// point too, with no buffer handed back to free — the same refusal
+/// `purrdf_serialize` gives, so the two serialize legs cannot drift apart on the
+/// one question a caller is most likely to get wrong.
+#[test]
+fn configured_jsonld_refuses_a_non_absolute_base_through_the_c_abi() {
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+    unsafe {
+        let dataset = parse(
+            "application/n-triples",
+            "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .",
+        );
+        for media_type in ["application/ld+json", "application/ld+yaml"] {
+            let (status, bytes, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some("dir/"), OPTIONS);
+            assert_eq!(
+                status,
+                PurrdfStatus::SerializeError as i32,
+                "a relative base must be refused for {media_type}"
+            );
+            assert!(
+                bytes.is_none(),
+                "a refused serialize must hand back no buffer for {media_type}"
+            );
+            assert!(!error.is_null());
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .expect("utf8 diagnostic");
+            assert!(
+                message.contains("dir/"),
+                "the diagnostic must name the offending base, got: {message}"
+            );
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
 /// A `base_iri` that is not an absolute IRI is a HARD failure through the C
 /// entry point — for a format that would have applied it and for one that would
 /// not. A base silently ignored is how a caller ships a document whose relative
@@ -933,6 +1075,7 @@ fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
                     dataset,
                     media.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     0,
                     context,
                     schema
@@ -961,6 +1104,7 @@ fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
             purrdf_serialize_jsonld_configured(
                 dataset,
                 media.as_ptr(),
+                std::ptr::null(),
                 OPTIONS.as_ptr(),
                 OPTIONS.len(),
                 context,

@@ -117,6 +117,16 @@ name = "intern_content_id"
 harness = false
 
 [[bench]]
+# IR-boundary absoluteness invariant: the intern-time cost of proving every IRI
+# term is absolute, split so the store-once claim is readable — all-misses
+# (one parse per distinct IRI) vs all-hits (no parse at all) vs a realistic
+# reused-vocabulary mix, plus the same worst case on the `GlobalDictionary`
+# table. Report-only — no timing/speedup assertions. `make bench` lane only —
+# excluded from `make check`.
+name = "intern_absoluteness"
+harness = false
+
+[[bench]]
 # SSSOM document-layout hot paths: validated column construction and sparse
 # deterministic serialization over a retained source layout. Report-only; no
 # timing threshold is asserted.

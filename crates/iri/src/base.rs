@@ -387,9 +387,10 @@ impl Reference {
 
 /// Where the base IRI currently in force came from.
 ///
-/// Carried so a diagnostic can say *"resolved against the `@base` on line 3, which
-/// itself resolved against the caller-supplied base"* rather than merely quoting a
-/// string with no provenance.
+/// [`Display`](core::fmt::Display) renders it as the noun phrase a diagnostic reads
+/// it as — *"the `@base` at line 3 column 1"*, *"the caller-supplied base"*, *"the
+/// enclosing scope's base"* — which is how it reaches users, through
+/// [`BaseInScope`] on the base-related [`IriError`] variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BaseOrigin {
     /// Supplied by the caller through the API (or the CLI), not by the document.
@@ -405,6 +406,69 @@ pub enum BaseOrigin {
     /// Inherited from an enclosing lexical scope — an outer XML element, or an
     /// outer JSON-LD context frame.
     Enclosing,
+}
+
+impl core::fmt::Display for BaseOrigin {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Caller => f.write_str("the caller-supplied base"),
+            Self::Directive { line, column } => {
+                write!(f, "the `@base` at line {line} column {column}")
+            }
+            Self::Enclosing => f.write_str("the enclosing scope's base"),
+        }
+    }
+}
+
+/// The base-IRI situation at the point a resolution failed.
+///
+/// This is what makes [`BaseOrigin`] observable: it rides on the base-related
+/// [`IriError`] variants and is rendered by their
+/// [`Display`](core::fmt::Display), so a diagnostic says *which* base was in force
+/// and where it came from. Because every consumer in the workspace already prints
+/// `{err}`, that reaches every surface — Rust, wasm, the C ABI, Python and the CLI —
+/// with no consumer edit at all.
+///
+/// It is an enum rather than an `Option<ScopedBase>` on purpose: "no base was in
+/// scope" is a first-class RFC-3986 §5.1.4 answer with its own rendering, not the
+/// absence of one, and this crate's `Option`-returning surfaces are a closed list of
+/// two ([`expand_curie`](crate::expand_curie) and [`BaseIri::relativize`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BaseInScope {
+    /// No base IRI was in scope at all — RFC-3986 §5.1.4.
+    Absent,
+    /// A base was in force, with this provenance.
+    InForce {
+        /// The base IRI in force, verbatim.
+        iri: String,
+        /// How it came to be in force.
+        origin: BaseOrigin,
+    },
+}
+
+impl BaseInScope {
+    /// The state of the innermost base of `scope`.
+    #[must_use]
+    pub fn of(scope: &BaseScope) -> Self {
+        match scope.current() {
+            None => Self::Absent,
+            Some(scoped) => Self::InForce {
+                iri: scoped.iri().as_str().to_owned(),
+                origin: scoped.origin(),
+            },
+        }
+    }
+}
+
+impl core::fmt::Display for BaseInScope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Absent => f.write_str("no base IRI is in scope"),
+            Self::InForce { iri, origin } => {
+                write!(f, "{origin}, <{iri}>, is in scope")
+            }
+        }
+    }
 }
 
 /// A base IRI together with the provenance of how it came to be in force.
@@ -599,12 +663,16 @@ impl BaseScope {
         if reference.is_empty() {
             return Err(IriError::NotAbsoluteByGrammar {
                 reference: String::new(),
+                base: BaseInScope::of(self),
             });
         }
         match Reference::parse(reference)? {
             Reference::Absolute(iri) => Ok(iri),
             Reference::Relative(_) => Err(IriError::NotAbsoluteByGrammar {
                 reference: reference.to_owned(),
+                // The base is not applied, but it IS in scope, and saying so is what
+                // stops a caller who passed `--base` concluding it was dropped.
+                base: BaseInScope::of(self),
             }),
         }
     }
