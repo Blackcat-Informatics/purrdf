@@ -2091,6 +2091,321 @@ fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
     );
 }
 
+// ── The absolute-only refusal must not deny a base the caller supplied ──────────────
+//
+// N-Triples, N-Quads, TriX and HexTuples admit no relative IRI reference at all, so a
+// relative one is refused whatever base is in scope. The refusal used to be built AFTER
+// the base had been discarded, so a user who passed `--base` was told "no base IRI is in
+// scope" — a diagnostic that contradicted the command line the user had just typed.
+//
+// Reproducing it from the CLI needs care: `--base` is now refused up front when neither
+// leg can spend it, so the obvious `--from ntriples --to ntriples --base <abs>` exits 2 at
+// the guard and never reaches the parser. A BASE-EMITTING target (`--to turtle`) gives the
+// serialize leg something to spend, the guard passes, and the parse leg is reached with
+// the base genuinely in scope — which is the only shape in which this defect is
+// observable in production.
+
+/// The `--base` every case below passes, and the exact phrase the refusal must carry when
+/// it is in scope.
+const SCOPED_BASE: &str = "http://example.org/dir/";
+
+/// The refusal's shared core, byte for byte, when a base IS in scope. Every absolute-only
+/// grammar must produce this identical sentence — only the codec's own prefix (`TriX: `)
+/// and the optional source location differ around it.
+const REFUSAL_WITH_BASE: &str = concat!(
+    "relative IRI reference \"foo\" is not permitted by this syntax ",
+    "(the caller-supplied base, <http://example.org/dir/>, is in scope but is never ",
+    "applied here); write the IRI in absolute form; this syntax admits no relative IRI ",
+    "reference, so supplying a base will not help",
+);
+
+/// The same core when NOTHING is in scope — the negative control's oracle.
+const REFUSAL_WITHOUT_BASE: &str = concat!(
+    "relative IRI reference \"foo\" is not permitted by this syntax (no base IRI is in ",
+    "scope); write the IRI in absolute form; this syntax admits no relative IRI ",
+    "reference, so supplying a base will not help",
+);
+
+/// The denial the fix deleted. It must never appear when a base was passed.
+const DENIAL: &str = "no base IRI is in scope";
+
+/// One relative-subject document per absolute-only grammar: `(--from token, filename,
+/// bytes)`.
+const ABSOLUTE_ONLY_RELATIVE_SUBJECT: &[(&str, &str, &str)] = &[
+    (
+        "ntriples",
+        "rel.nt",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    (
+        "nquads",
+        "rel.nq",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    (
+        "trix",
+        "rel.trix",
+        concat!(
+            "<TriX xmlns=\"http://www.w3.org/2004/03/trix/trix-1/\"><graph><triple>",
+            "<uri>foo</uri><uri>http://example.org/p</uri><uri>http://example.org/o</uri>",
+            "</triple></graph></TriX>",
+        ),
+    ),
+    (
+        "hextuples",
+        "rel.hext",
+        "[\"foo\",\"http://example.org/p\",\"http://example.org/o\",\"globalId\",\"\",\"\"]\n",
+    ),
+];
+
+/// Whether the CLI parses `token` through the STREAMING lane, read off the format registry
+/// rather than listed here — `source::load_native` branches on exactly this column.
+fn streams(token: &str) -> bool {
+    purrdf_rdf::classify(token)
+        .expect("every token names a native syntax")
+        .is_line_oriented()
+}
+
+/// Each absolute-only grammar's refusal NAMES the base the caller passed, and the
+/// no-`--base` control still reports an absent base as absent.
+///
+/// The control is what makes this a test of the base reaching the diagnostic rather than a
+/// test of the wording: without it, a message that hardcoded either half would pass.
+#[test]
+fn an_absolute_only_refusal_names_the_base_the_caller_supplied() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+
+    for (token, name, text) in ABSOLUTE_ONLY_RELATIVE_SUBJECT {
+        let input = write_file(dir, name, text);
+
+        let based = run(&[
+            "convert",
+            "--from",
+            token,
+            "--to",
+            "turtle",
+            "--base",
+            SCOPED_BASE,
+            &input,
+            "-",
+        ]);
+        assert_eq!(
+            based.status.code(),
+            Some(1),
+            "{token}: a relative reference is refused whatever the base: {}",
+            stderr(&based)
+        );
+        let err = stderr(&based);
+        assert!(
+            err.contains("iri-not-absolute-by-grammar"),
+            "{token}: the refusal carries its code: {err}"
+        );
+        assert!(
+            err.contains(REFUSAL_WITH_BASE),
+            "{token}: the refusal must name the base the caller supplied: {err}"
+        );
+        assert!(
+            !err.contains(DENIAL),
+            "{token}: the refusal must not deny a base that was passed: {err}"
+        );
+
+        // The control: the SAME document with no `--base`. An absolute-only syntax gets no
+        // derived retrieval IRI either (`effective_base` skips the derivation for a grammar
+        // that could not use one), so nothing is in scope and the message must say so.
+        let bare = run(&["convert", "--from", token, "--to", "turtle", &input, "-"]);
+        assert_eq!(
+            bare.status.code(),
+            Some(1),
+            "{token}: still refused with no base: {}",
+            stderr(&bare)
+        );
+        let err = stderr(&bare);
+        assert!(
+            err.contains(REFUSAL_WITHOUT_BASE),
+            "{token}: with nothing in scope the refusal must say so: {err}"
+        );
+        assert!(
+            !err.contains(SCOPED_BASE),
+            "{token}: no base may be invented for a run that named none: {err}"
+        );
+    }
+}
+
+/// The STREAMED and BUFFERED lanes word that refusal identically.
+///
+/// The lane is not a CLI choice: `source::load_native` streams a LINE-ORIENTED syntax and
+/// buffers every other, so N-Triples, N-Quads and HexTuples take the streaming path while
+/// TriX takes the buffered one. That asymmetry is exactly where the defect lived — the
+/// streaming entry point accepted a base and never built a scope from it, so every streamed
+/// refusal denied the base no matter what was passed, while the buffered lane had a
+/// different cause for the same lie.
+///
+/// So this asserts two things the per-format loop above cannot: that BOTH lanes are
+/// actually exercised (if the registry ever moved every absolute-only format onto one lane,
+/// this coverage would silently evaporate), and that the two produce the same sentence byte
+/// for byte.
+#[test]
+fn the_streamed_and_buffered_lanes_word_the_refusal_identically() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+
+    let mut streamed = Vec::new();
+    let mut buffered = Vec::new();
+    for (token, name, text) in ABSOLUTE_ONLY_RELATIVE_SUBJECT {
+        let input = write_file(dir, name, text);
+        let out = run(&[
+            "convert",
+            "--from",
+            token,
+            "--to",
+            "turtle",
+            "--base",
+            SCOPED_BASE,
+            &input,
+            "-",
+        ]);
+        assert!(
+            stderr(&out).contains(REFUSAL_WITH_BASE),
+            "{token}: {}",
+            stderr(&out)
+        );
+        if streams(token) {
+            streamed.push(*token);
+        } else {
+            buffered.push(*token);
+        }
+    }
+    assert!(
+        !streamed.is_empty() && !buffered.is_empty(),
+        "both parse lanes must be covered; streamed = {streamed:?}, buffered = {buffered:?}"
+    );
+
+    // A streamed source reads the same from a FILE and from STDIN, and neither may fall
+    // back to the denial: the streaming lane is taken either way, and the message must not
+    // depend on which `Read` it was handed.
+    let input = write_file(dir, "pipe.nt", ABSOLUTE_ONLY_RELATIVE_SUBJECT[0].2);
+    let from_file = run(&[
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "turtle",
+        "--base",
+        SCOPED_BASE,
+        &input,
+        "-",
+    ]);
+    let from_stdin = run_with_stdin(
+        &[
+            "convert",
+            "--from",
+            "ntriples",
+            "--to",
+            "turtle",
+            "--base",
+            SCOPED_BASE,
+            "-",
+            "-",
+        ],
+        ABSOLUTE_ONLY_RELATIVE_SUBJECT[0].2.as_bytes(),
+    );
+    assert_eq!(
+        stderr(&from_file),
+        stderr(&from_stdin),
+        "a streamed refusal must not depend on whether the bytes came from a file or a pipe"
+    );
+}
+
+/// RDF/XML's one non-reference IRI position — an element name built from a RELATIVE
+/// `xmlns:` namespace — carried the same denial, and RDF/XML reaches it differently from
+/// the four above: its grammar DOES admit relative IRIs, so `--base` is never refused for
+/// it and, with no `--base` at all, a file input is parsed under its own derived `file://`
+/// retrieval IRI. That makes it the one case where the CLI can show the DERIVED base
+/// reaching the diagnostic, which is a fact about this binary that no library test can pin.
+#[test]
+fn an_rdfxml_qualified_name_refusal_names_whichever_base_is_in_scope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"foo/\">",
+        "<rdf:Description rdf:about=\"http://example.org/s\"><ex:p>v</ex:p>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    let input = write_file(dir, "qname.rdf", text);
+
+    let based = run(&[
+        "convert",
+        "--from",
+        "rdfxml",
+        "--to",
+        "turtle",
+        "--base",
+        SCOPED_BASE,
+        &input,
+        "-",
+    ]);
+    assert_eq!(based.status.code(), Some(1), "{}", stderr(&based));
+    assert!(
+        stderr(&based).contains(&format!("the caller-supplied base, <{SCOPED_BASE}>,"))
+            && !stderr(&based).contains(DENIAL),
+        "the refusal must name the base the caller supplied: {}",
+        stderr(&based)
+    );
+
+    // No `--base`, but a FILE: the CLI's own retrieval IRI is what is in scope, and the
+    // message names THAT rather than denying a base.
+    let derived = run(&["convert", "--from", "rdfxml", "--to", "turtle", &input, "-"]);
+    let retrieval =
+        purrdf_cli::file_retrieval_iri(&input).expect("the fixture has a file:// retrieval IRI");
+    assert!(
+        stderr(&derived).contains(&format!("the caller-supplied base, <{retrieval}>,"))
+            && !stderr(&derived).contains(DENIAL),
+        "the derived retrieval IRI must reach the diagnostic: {}",
+        stderr(&derived)
+    );
+
+    // The control: stdin has no retrieval IRI to derive and no `--base`, so nothing is in
+    // scope and the denial is the honest answer.
+    let bare = run_with_stdin(
+        &["convert", "--from", "rdfxml", "--to", "turtle", "-", "-"],
+        text.as_bytes(),
+    );
+    assert_eq!(bare.status.code(), Some(1), "{}", stderr(&bare));
+    assert!(
+        stderr(&bare).contains(DENIAL),
+        "with nothing in scope the refusal must say so: {}",
+        stderr(&bare)
+    );
+}
+
+/// Run `purrdf` with `args`, writing `stdin` to the child, and return the captured output.
+fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
+    let mut child = purrdf()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the built purrdf binary");
+    let written = child
+        .stdin
+        .take()
+        .expect("piped child stdin")
+        .write_all(stdin);
+    if let Err(error) = written {
+        // A refusal can close the pipe before the whole document is written; that is the
+        // behaviour under test, not a harness failure.
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write to child stdin: {error}"
+        );
+    }
+    child.wait_with_output().expect("await the purrdf child")
+}
+
 /// Run `purrdf` with `args` from the working directory `cwd`, so a dot-relative argument
 /// means something the test controls.
 fn run_in(cwd: &Path, args: &[&str]) -> Output {
