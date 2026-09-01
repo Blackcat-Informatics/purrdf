@@ -680,6 +680,24 @@ pub struct PathGraph {
     /// those rows.
     reverse: OnceLock<Vec<Vec<u32>>>,
     fingerprint: PathSnapshotFingerprint,
+    shape: GraphShape,
+}
+
+/// The four measurements of a snapshot a declared row bound is a function of.
+///
+/// Kept apart from [`PathSnapshotFingerprint`] because that value is a cache
+/// discriminator a host compares, whereas this one is cost-model input nobody outside
+/// this module reads.
+#[derive(Debug, Clone, Copy)]
+struct GraphShape {
+    /// Distinct participating nodes: the number of seeds an unbound `?start` explores.
+    node_count: u64,
+    /// Edges across every adjacency list.
+    edge_count: u64,
+    /// The largest out-degree of any node: the branching factor of one hop.
+    max_out_degree: u64,
+    /// The largest in-degree of any node: how many edges can land on a bound `?end`.
+    max_in_degree: u64,
 }
 
 impl PathGraph {
@@ -846,6 +864,17 @@ impl PathGraph {
             list.dedup_by_key(|edge| (edge.to, edge.statement));
             edge_count += list.len();
         }
+        // The two branching factors the declared row bound is derived from, measured once
+        // here rather than re-derived per invocation: a plan may price a call many times.
+        let mut in_degree = vec![0u64; nodes.len()];
+        let mut max_out_degree = 0u64;
+        for list in &adjacency {
+            max_out_degree = max_out_degree.max(list.len() as u64);
+            for edge in list {
+                in_degree[edge.to as usize] += 1;
+            }
+        }
+        let max_in_degree = in_degree.into_iter().max().unwrap_or(0);
 
         Ok(Self {
             fingerprint: PathSnapshotFingerprint {
@@ -853,6 +882,12 @@ impl PathGraph {
                 term_count: dataset.term_count(),
                 node_count: nodes.len(),
                 edge_count,
+            },
+            shape: GraphShape {
+                node_count: nodes.len() as u64,
+                edge_count: edge_count as u64,
+                max_out_degree,
+                max_in_degree,
             },
             nodes,
             statements,
@@ -1326,24 +1361,108 @@ impl Prepared {
     }
 }
 
-/// The row bound shared by both relations, given how many walks one seed can contribute.
+/// The row bound shared by both relations, derived from the SNAPSHOT'S SHAPE.
 ///
-/// Every product is `saturating`, because a bound that WRAPPED would be reported as a
-/// small number — and [`PropertyFunction::rows_per_invocation`] is held to the same
-/// honesty contract as a cardinality estimate: an under-statement turns an admission
-/// decision into a wrong one, where an over-statement only costs a worse plan.
-fn row_bound(mode: BindingPattern, walks_per_seed: u64, node_count: u64, max_hops: u64) -> u64 {
+/// # Why the bound has to be tight in BOTH directions
+///
+/// The obvious half is that an under-statement is a lie: the engine would plan and admit
+/// against a number the relation then exceeds.
+///
+/// The other half is the one that bites, and it is not "an over-statement costs a worse
+/// plan". In this engine a relation's [`PropertyFunction::rows_per_invocation`] is
+/// multiplied by the driving row count into
+/// [`PlanEstimate::rows`](crate::governor::ledger::PlanEstimate) and its `peak_rows`
+/// twin; `PlanEstimate::peak_cells` multiplies that by the call's arity; and admission
+/// control refuses the whole query — unevaluated, as `TrippedGovernor::Refused` on
+/// `ResourceDimension::IntermediateCells` — the moment that product exceeds the caller's
+/// ceiling. An over-declared bound therefore REFUSES legitimate input. It does not
+/// degrade a plan; it withholds an answer.
+///
+/// That is why nothing here is a function of [`PathLimits::max_paths_per_seed`] alone.
+/// That guard is a caller-chosen statement about how much work it will buy, not a
+/// property of the graph, and letting it dominate made a four-node chain declare tens of
+/// thousands of rows. It appears below only as a CEILING — the traversal errors out on
+/// the candidate that exceeds it, so it can never be exceeded — taken as a `min` against
+/// what the graph could actually produce.
+///
+/// # The structural bound
+///
+/// A walk of `k` hops is bounded two independent ways, and the tighter one wins:
+///
+/// * **Branching.** At most [`GraphShape::max_out_degree`] edges leave any node, so a
+///   `k`-hop walk is one of at most `d_out^k` edge sequences. With `?end` bound, the last
+///   hop must instead be one of the at most [`GraphShape::max_in_degree`] edges arriving
+///   there, giving `d_out^(k-1) × d_in`.
+/// * **Edge distinctness.** A simple-prefix walk's first `k` nodes are distinct, so its
+///   `k` hops leave `k` distinct nodes and are therefore `k` distinct edges: at most
+///   `edge_count × (edge_count - 1) × … × (edge_count - k + 1)` of them. This term is
+///   what makes a walk longer than the edge count impossible rather than merely unlikely,
+///   and it is why a three-edge cycle under `max_hops = 8` declares three walks and not
+///   eight.
+///
+/// Only lengths in `[min_hops, max_hops]` are summed, because a shorter walk is not a
+/// candidate and contributes no row. A walk of `k` hops emits `k` rows, or exactly one
+/// when `?step` is bound.
+///
+/// Every product is `saturating`. A bound that WRAPPED would be reported as a small
+/// number, which is the under-statement case above wearing the over-statement's clothes.
+fn row_bound(
+    mode: BindingPattern,
+    shape: GraphShape,
+    limits: PathLimits,
+    walks_per_seed_cap: u64,
+) -> u64 {
     let seeds = if mode.is_bound(POS_START) {
         1
     } else {
-        node_count
+        shape.node_count
     };
+    let end_bound = mode.is_bound(POS_END);
+    let step_bound = mode.is_bound(POS_STEP);
     // A walk of `k <= max_hops` hops emits at most `k` rows; a bound `?step` reduces
     // every walk to at most the single row at that ordinal.
-    let per_walk_rows = if mode.is_bound(POS_STEP) { 1 } else { max_hops };
-    let base = seeds
-        .saturating_mul(walks_per_seed)
-        .saturating_mul(per_walk_rows);
+    let per_walk_rows = if step_bound {
+        1
+    } else {
+        u64::from(limits.max_hops())
+    };
+
+    // `branching` is `d_out^hops` and `distinct` is the falling factorial of the edge
+    // count, both carried across the loop so the whole sum is O(max_hops) rather than
+    // O(max_hops²).
+    let mut branching = 1u64;
+    let mut distinct = 1u64;
+    let mut structural_walks = 0u64;
+    let mut structural_rows = 0u64;
+    for hops in 1..=u64::from(limits.max_hops()) {
+        let branching_before = branching;
+        branching = branching.saturating_mul(shape.max_out_degree);
+        distinct = distinct.saturating_mul(shape.edge_count.saturating_sub(hops - 1));
+        if hops < u64::from(limits.min_hops()) {
+            continue;
+        }
+        let reachable = if end_bound {
+            branching_before.saturating_mul(shape.max_in_degree)
+        } else {
+            branching
+        };
+        let walks = reachable.min(distinct);
+        structural_walks = structural_walks.saturating_add(walks);
+        let rows = if step_bound {
+            walks
+        } else {
+            walks.saturating_mul(hops)
+        };
+        structural_rows = structural_rows.saturating_add(rows);
+    }
+
+    // The relation's own cap (one witness per endpoint, for the shortest form) and the
+    // resource guard, both as ceilings on a number the graph already bounds.
+    let walks = structural_walks
+        .min(walks_per_seed_cap)
+        .min(limits.max_paths_per_seed());
+    let per_seed = structural_rows.min(walks.saturating_mul(per_walk_rows));
+    let base = seeds.saturating_mul(per_seed);
     if mode.is_bound(POS_PATH_ID) {
         // The identifier is injective over walks — it digests the walk's whole node and
         // statement sequence, and the snapshot records no two distinct walks with the
@@ -1436,15 +1555,10 @@ impl PropertyFunction for PathWitnessRelation {
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
-        // At most `max_paths_per_seed` candidate walks are ACCEPTED per seed: the guard
-        // errors on the count that exceeds it, so the traversal never emits from a
-        // later one.
-        row_bound(
-            mode,
-            self.limits.max_paths_per_seed(),
-            self.graph.node_count() as u64,
-            u64::from(self.limits.max_hops()),
-        )
+        // This relation enumerates every simple-prefix walk, so it imposes no cap of its
+        // own beyond the snapshot's shape and the resource guard `row_bound` already
+        // applies.
+        row_bound(mode, self.graph.shape, self.limits, u64::MAX)
     }
 
     fn open(
@@ -1725,24 +1839,17 @@ impl PropertyFunction for ShortestPathWitnessRelation {
     }
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
-        let node_count = self.graph.node_count() as u64;
-        // Two independent bounds on the walks one seed can contribute, whichever is
-        // tighter: at most ONE witness per distinct endpoint (breadth-first search
-        // records a node once), and at most `max_paths_per_seed` candidates before the
-        // guard fails the invocation.
-        let mut walks_per_seed = node_count.min(self.limits.max_paths_per_seed());
-        if mode.is_bound(POS_END) {
-            // With the endpoint pinned, at most one of those witnesses — the one for that
-            // very pair — can agree with the bound position, and rows from any other are
-            // filtered before they are emitted.
-            walks_per_seed = walks_per_seed.min(1);
-        }
-        row_bound(
-            mode,
-            walks_per_seed,
-            node_count,
-            u64::from(self.limits.max_hops()),
-        )
+        // This relation's own cap, on top of the structural one: breadth-first search
+        // records each node ONCE, so a seed contributes at most one witness per distinct
+        // endpoint. With `?end` pinned, at most one of those witnesses — the one for that
+        // very pair — can agree with the bound position, and rows from any other are
+        // filtered before they are emitted.
+        let walks_per_seed_cap = if mode.is_bound(POS_END) {
+            1
+        } else {
+            self.graph.shape.node_count
+        };
+        row_bound(mode, self.graph.shape, self.limits, walks_per_seed_cap)
     }
 
     fn open(

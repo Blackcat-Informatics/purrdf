@@ -24,8 +24,9 @@ use purrdf_core::{
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph, PathLimits,
-    PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryOptions,
+    GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph,
+    PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions,
 };
 
 // ---------------------------------------------------------------------------
@@ -1480,4 +1481,64 @@ fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step(
         ],
         "exactly the walks the present alternative admits"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A23 — the declared row bound is what admission control refuses against
+// ---------------------------------------------------------------------------
+
+/// A four-node chain is not refused by an intermediate-cell ceiling twenty times its
+/// true cost.
+///
+/// This is not a plan-quality assertion. A relation's
+/// [`PropertyFunction::rows_per_invocation`] is multiplied by the driving row count into
+/// `PlanEstimate::rows` / `peak_rows`, `peak_cells()` multiplies that by the call's arity,
+/// and admission control refuses the whole query — unevaluated, as
+/// `TrippedGovernor::Refused` on `ResourceDimension::IntermediateCells` — when that
+/// product exceeds the caller's ceiling. So an over-declared bound does not merely cost a
+/// worse join order; it REFUSES legitimate input.
+///
+/// The query below emits six rows over seven columns: forty-two cells. The ceiling here is
+/// a thousand, twenty-three times the true cost and far more headroom than any host would
+/// think it needed. A bound derived from `max_paths_per_seed` — a caller-chosen resource
+/// guard, not a property of the graph — declared `1 × 4096 × 3 = 12,288` rows, i.e. 86,016
+/// cells, and this four-node query was refused.
+#[test]
+fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
+    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
+    // The very envelope the rest of this file uses: a generous guard, deliberately far
+    // above what this graph could ever need.
+    let registry = walk_registry(graph, limits(1, 3));
+
+    let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
+                   ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
+                   } ORDER BY ?len ?step");
+    let outcome = engine()
+        .query_governed(
+            &data,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                property_functions: &registry,
+                ..QueryOptions::EMPTY
+            },
+            &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1_000),
+        )
+        .expect("a refusal would be an outcome, not an error");
+
+    let GovernedOutcome::Complete { result, .. } = outcome else {
+        panic!(
+            "a six-row query must not be refused by a thousand-cell ceiling; the declared \
+             bound is what admission compares, so an over-declaration is an over-refusal: \
+             {outcome:?}"
+        );
+    };
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("a SELECT returns solutions");
+    };
+    assert_eq!(rows.len(), 6, "a→b, a→b→c and a→b→c→d, hop by hop");
 }
