@@ -425,12 +425,6 @@ impl PathStep {
         }
         Ok(Self { alternatives })
     }
-
-    /// The step's alternation, in the order it was supplied.
-    #[must_use]
-    pub fn alternatives(&self) -> &[(TermValue, PathDirection)] {
-        &self.alternatives
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2665,6 +2659,79 @@ mod tests {
         assert_eq!(fingerprint.stats_fingerprint, data.stats_fingerprint());
         assert_eq!(graph.node_count(), fingerprint.node_count);
         assert_eq!(graph.edge_count(), fingerprint.edge_count);
+    }
+
+    #[test]
+    fn the_snapshot_fingerprint_discriminates_datasets_that_differ() {
+        // The direction that makes the fingerprint a DISCRIMINATOR rather than a label.
+        // It is the documented mitigation for the wrong-answer channel a mispaired
+        // snapshot opens, and a value that compared equal across differing datasets would
+        // mitigate nothing — a host would compare it, see no movement, and keep the stale
+        // snapshot. Each variation below moves it for a different reason: more quads,
+        // fewer quads, the same counts over different terms, and the same dataset under a
+        // different step.
+        let (_base_data, base) = chain();
+        let base_print = base.snapshot_fingerprint();
+
+        let longer = dataset(&[
+            ("a", "p", "b"),
+            ("b", "p", "c"),
+            ("c", "p", "d"),
+            ("d", "p", "e"),
+        ]);
+        let shorter = dataset(&[("a", "p", "b"), ("b", "p", "c")]);
+        for (label, data) in [("one more edge", &longer), ("one fewer edge", &shorter)] {
+            let other = snapshot(data, &[("p", PathDirection::Forward)]).snapshot_fingerprint();
+            assert_ne!(
+                base_print, other,
+                "{label}: a fingerprint that cannot tell two datasets apart cannot tell a \
+                 host to rebuild"
+            );
+        }
+
+        // The same dataset under a DIFFERENT step is also a different snapshot: the node
+        // and edge counts are the snapshot's own, not the dataset's.
+        let two_way = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+        let two_way_print = snapshot(
+            &two_way,
+            &[("p", PathDirection::Forward), ("p", PathDirection::Inverse)],
+        )
+        .snapshot_fingerprint();
+        assert_eq!(
+            base_print.stats_fingerprint, two_way_print.stats_fingerprint,
+            "the source dataset is the same one"
+        );
+        assert_ne!(
+            base_print, two_way_print,
+            "a snapshot of a different step over the same data is a different snapshot"
+        );
+
+        // ...and the LIMIT, pinned as deliberately as the power, because a mitigation
+        // whose reach is unstated is a mitigation a host will over-trust. EVERY component
+        // here is a count — `stats_fingerprint` hashes the source's quad and term counts,
+        // and the other three are cardinalities — so two datasets of the same size compare
+        // EQUAL however differently they are wired. A renamed term and a completely
+        // re-pointed topology are both invisible. That is what "a discriminator, not a
+        // content digest" costs, it is exactly why equality is evidence and never proof,
+        // and it is the honest boundary of what pairing check can promise.
+        for (label, triples) in [
+            (
+                "a renamed term",
+                &[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "z")],
+            ),
+            (
+                "a completely different topology",
+                &[("a", "p", "b"), ("a", "p", "c"), ("a", "p", "d")],
+            ),
+        ] {
+            let same_size = dataset(triples);
+            assert_eq!(
+                base_print,
+                snapshot(&same_size, &[("p", PathDirection::Forward)]).snapshot_fingerprint(),
+                "{label} of the same cardinality is invisible to a size discriminator; a \
+                 host that needs proof of sameness must not read one"
+            );
+        }
     }
 
     // ---- 8: the declared row bound is honest -----------------------------

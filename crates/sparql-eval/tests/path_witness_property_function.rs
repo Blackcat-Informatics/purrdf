@@ -26,7 +26,7 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph,
     PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions,
+    QueryOptions, ShortestPathWitnessRelation,
 };
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,11 @@ const WALK: &str = "http://example.org/pf#walk";
 /// A second caller IRI, for the differently-shaped consumer of the same seam.
 const RANKED: &str = "http://example.org/pf#ranked";
 
+/// The caller IRI the SHORTEST-witness relation is registered and called under. A
+/// different question gets a different name: a host that wants only the polynomial form
+/// registers this one and never [`WALK`].
+const SHORTEST: &str = "http://example.org/pf#shortest";
+
 /// `rdf:reifies`, the RDF 1.2 predicate that binds a reifier to the triple term it
 /// reifies. Not a minted vocabulary: it is the standard RDF 1.2 name, and it is how the
 /// engine projects its reifier side-table as quads.
@@ -58,7 +63,7 @@ fn parser_options() -> ParserOptions {
     ParserOptions {
         extension_fn_namespaces: Vec::new(),
         property_fn_namespaces: Vec::new(),
-        property_fn_iris: vec![WALK.to_owned(), RANKED.to_owned()],
+        property_fn_iris: vec![WALK.to_owned(), RANKED.to_owned(), SHORTEST.to_owned()],
     }
 }
 
@@ -130,6 +135,16 @@ fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionR
     registry.register(
         WALK.to_owned(),
         Arc::new(PathWitnessRelation::new(graph, limits)),
+    );
+    registry
+}
+
+/// A registry holding one [`ShortestPathWitnessRelation`] under [`SHORTEST`].
+fn shortest_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        SHORTEST.to_owned(),
+        Arc::new(ShortestPathWitnessRelation::new(graph, limits)),
     );
     registry
 }
@@ -1541,4 +1556,120 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
         panic!("a SELECT returns solutions");
     };
     assert_eq!(rows.len(), 6, "a→b, a→b→c and a→b→c→d, hop by hop");
+}
+
+// ---------------------------------------------------------------------------
+// A24 — the shortest-witness relation, through the query surface and against
+//       an observed `T_SHORTEST_ONLY` run
+// ---------------------------------------------------------------------------
+
+/// `ShortestPathWitnessRelation` through the genuine query surface, against output
+/// observed from Virtuoso's `T_SHORTEST_ONLY`.
+///
+/// Half the shipped surface had no query-surface test at all: every assertion about this
+/// relation lived in the crate's own unit tests, driving a cursor directly. By this file's
+/// doctrine that is not evidence a host can use — a seam whose halves only line up from
+/// inside is a seam no host can use — and the relation's documented status as the analogue
+/// of Virtuoso's `T_SHORTEST_ONLY` transitivity option had never been checked against that
+/// option at all.
+///
+/// # The observed run
+///
+/// The fixture is a diamond with a shortcut: `ex:a ex:p ex:b`, `ex:b ex:p ex:d`,
+/// `ex:a ex:p ex:c`, `ex:c ex:p ex:d`, `ex:a ex:p ex:d`. Loaded into a named graph of
+/// **Virtuoso Open Source Edition, Version 07.20.3243** and queried in the §16.2.11
+/// `OPTION(TRANSITIVE ...)` shape with `t_shortest_only`:
+///
+/// ```text
+/// SPARQL SELECT ?s ?o ?link ?path ?step WHERE {
+///   { SELECT ?s ?o WHERE { GRAPH ex:g { ?s ex:p ?o } } }
+///   OPTION ( TRANSITIVE, t_distinct, t_shortest_only, t_in(?s), t_out(?o), t_min(1),
+///            t_step(?s) as ?link, t_step('path_id') as ?path,
+///            t_step('step_no') as ?step ) .
+///   FILTER ( ?s = ex:a )
+/// } ORDER BY ?o ?step;
+/// ```
+///
+/// The observed output was exactly three rows, one per reachable endpoint, each a single
+/// hop (IRIs abbreviated to `ex:` here; the run printed them in full):
+///
+/// ```text
+/// ?s      ?o      ?link   ?path  ?step
+/// ex:a    ex:b    ex:b    1      1
+/// ex:a    ex:c    ex:c    2      1
+/// ex:a    ex:d    ex:d    0      1
+/// ```
+///
+/// `ex:d` is reached in ONE hop — the direct `ex:a ex:p ex:d` edge — and not two. That is
+/// the entire content of shortest-only: the two-hop witnesses `a→b→d` and `a→c→d` exist in
+/// the graph and are suppressed. Under the column correspondence A2 establishes (`?s` is
+/// `?start`, `?o` is `?end`, `?link` is `?node`, `?path` is read only through the
+/// partition it induces) those three rows are the vector asserted below, transcribed. The
+/// harness does NOT run Virtuoso; what is pinned is a transcription of the named version's
+/// output.
+#[test]
+fn a24_the_shortest_witness_relation_matches_the_virtuoso_shortest_only_reference() {
+    // `?o` is unique per row above, so one witness per endpoint is also one row per
+    // endpoint — which is what makes the comparison a row-for-row one.
+    let data = dataset(&[
+        ("a", "p", "b"),
+        ("b", "p", "d"),
+        ("a", "p", "c"),
+        ("c", "p", "d"),
+        ("a", "p", "d"),
+    ]);
+    let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
+    // Four hops is well past the longest walk the graph admits, so the envelope is not
+    // what suppresses the two-hop witnesses; the relation's question is.
+    let registry = shortest_registry(graph, limits(1, 4));
+
+    let answers = solve(
+        &data,
+        &q("SELECT ?start ?end ?pathId ?len ?step ?node WHERE { \
+            ?start <http://example.org/pf#shortest> ( ?end ?pathId ?len ?step ?node ?edge ) . \
+            FILTER ( ?start = ex:a ) \
+            } ORDER BY ?end ?step"),
+        &registry,
+    );
+    let rows = answers.project(&["start", "end", "pathId", "len", "step", "node"]);
+
+    let projection: Vec<Vec<TermValue>> = rows
+        .iter()
+        .map(|row| {
+            vec![
+                row[0].clone(),
+                row[1].clone(),
+                row[4].clone(),
+                row[5].clone(),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        projection,
+        vec![
+            // (?s=ex:a, ?o=ex:b, ?link=ex:b, step=1)
+            vec![iri("a"), iri("b"), int(1), iri("b")],
+            // (?s=ex:a, ?o=ex:c, ?link=ex:c, step=1)
+            vec![iri("a"), iri("c"), int(1), iri("c")],
+            // (?s=ex:a, ?o=ex:d, ?link=ex:d, step=1) — ONE hop, not two.
+            vec![iri("a"), iri("d"), int(1), iri("d")],
+        ],
+        "the observed Virtuoso 07.20.3243 OPTION(TRANSITIVE ..., t_shortest_only) output, \
+         transcribed under the documented t_step column correspondence"
+    );
+
+    // `path_id` gave those three rows three distinct values, i.e. a partition into three
+    // singletons. `?pathId` must induce the SAME partition; the values are opaque in both
+    // systems.
+    assert_eq!(
+        distinct_column(&rows, 2).len(),
+        3,
+        "three witnesses, three identifiers: {rows:?}"
+    );
+    // The suppressed derivations, stated as an assertion rather than left implicit: the
+    // two-hop walks to ex:d are real walks of this graph and are deliberately absent.
+    assert!(
+        rows.iter().all(|row| row[3] == int(1)),
+        "every shortest witness here is one hop: {rows:?}"
+    );
 }
