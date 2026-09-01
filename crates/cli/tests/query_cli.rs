@@ -2250,6 +2250,15 @@ fn a_governed_query_over_a_path_relation_trips_on_an_answer_cap() {
 /// `--explain` reaches the same registry, so the rendered `relations` block NAMES the
 /// registered relation instead of being empty. (Before this flag existed the CLI had no
 /// registration surface at all, and the block was empty on every call.)
+///
+/// The assertion is scoped to that BLOCK rather than to the whole receipt: searching all of
+/// stdout for the IRI would also pass if the `relations` block were empty and the IRI
+/// merely leaked into a ledger node label or a `join-orders` entry, which is the one
+/// outcome this test exists to exclude. The block's line is pinned whole, so the declared
+/// row bound the planner published (`fffffff=24`, the all-free mode of a four-node chain)
+/// is pinned at the operator-visible surface too — the same number
+/// `the_row_bound_is_pinned_against_what_is_emitted` fixes inside the crate, and the number
+/// admission control refuses against.
 #[test]
 fn explain_lists_the_registered_path_relation() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2272,14 +2281,37 @@ fn explain_lists_the_registered_path_relation() {
         stderr(&out)
     );
     let body = stdout(&out);
-    assert!(
-        body.contains(WALK_IRI),
-        "the explanation's relations block must name the registered relation; got:\n{body}"
+    let block = body
+        .split_once("\nrelations\n")
+        .and_then(|(_, rest)| rest.lines().next())
+        .unwrap_or_else(|| panic!("the receipt must carry a relations block; got:\n{body}"));
+    assert_eq!(
+        block,
+        format!("  {WALK_IRI} arity=1,6 volatility=stable fffffff=24"),
+        "the relations block names the registered relation, its call arity, the stable \
+         volatility that makes it fork-join eligible, and the row bound it declares in the \
+         all-free mode; got:\n{body}"
     );
 }
 
 /// `purrdf update --path-relation` reaches an `INSERT … WHERE`, which is a triple-pattern
 /// context exactly as a query's is, and the relation is read from the PRE-update state.
+///
+/// # Why the update has two operations
+///
+/// The second half of that sentence needs a case that can DISPROVE it, and inserting under
+/// a predicate the step never traverses is not one: a snapshot rebuilt after the update
+/// would produce byte-identical output, so the test would pass either way and prove only
+/// the first half.
+///
+/// So the first operation inserts an edge under the step's OWN predicate — `ex:d ex:p ex:e`,
+/// extending the chain — and the second operation walks it. A relation re-snapshotted
+/// between operations would reach `ex:e`; one snapshotted from the loaded dataset does not.
+/// The output is asserted as an exact set for the same reason: `contains` cannot see an
+/// EXTRA row, and the extra row is precisely what a re-snapshot would add.
+///
+/// The inserted edge is asserted present too. Without it the walk's silence would be
+/// ambiguous — an update that never ran also fails to reach `ex:e`.
 #[test]
 fn update_registers_a_path_relation_for_its_where_clause() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2298,7 +2330,9 @@ fn update_registers_a_path_relation_for_its_where_clause() {
         "--path-relation",
         &walk_spec("shortest"),
         &format!(
-            "INSERT {{ <http://example.org/a> <http://example.org/reaches> ?end }} WHERE {{ \
+            "INSERT DATA {{ <http://example.org/d> <http://example.org/p> \
+             <http://example.org/e> }} ; \
+             INSERT {{ <http://example.org/a> <http://example.org/reaches> ?end }} WHERE {{ \
              <http://example.org/a> <{WALK_IRI}> ( ?end ?pathId ?len ?step ?node ?edge ) }}"
         ),
     ]);
@@ -2309,15 +2343,28 @@ fn update_registers_a_path_relation_for_its_where_clause() {
     );
 
     let body = std::fs::read_to_string(&out_path).expect("read the updated dataset");
-    for local in ["b", "c", "d"] {
-        assert!(
-            body.contains(&format!(
-                "<http://example.org/a> <http://example.org/reaches> \
-                 <http://example.org/{local}> ."
-            )),
-            "the WHERE clause must have reached ex:{local} through the relation; got:\n{body}"
-        );
-    }
+    assert!(
+        body.contains("<http://example.org/d> <http://example.org/p> <http://example.org/e> ."),
+        "the first operation must actually have inserted the extending edge, or the walk's \
+         silence below proves nothing; got:\n{body}"
+    );
+
+    let mut reached: Vec<&str> = body
+        .lines()
+        .filter(|line| line.contains("<http://example.org/reaches>"))
+        .collect();
+    reached.sort_unstable();
+    assert_eq!(
+        reached,
+        vec![
+            "<http://example.org/a> <http://example.org/reaches> <http://example.org/b> .",
+            "<http://example.org/a> <http://example.org/reaches> <http://example.org/c> .",
+            "<http://example.org/a> <http://example.org/reaches> <http://example.org/d> .",
+        ],
+        "exactly the pre-update chain's reachable set — ex:e is absent although the edge \
+         reaching it was inserted first, which is what makes the snapshot demonstrably the \
+         PRE-update one; got:\n{body}"
+    );
 }
 
 // ── `CONSTRUCT GRAPH` × the nine RDF `--results-format` syntaxes ────────────────────
