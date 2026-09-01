@@ -1,6 +1,10 @@
 # First-party SHACL Rules ERROR case: a non-terminating rule.
-# The SPARQLRule mints a FRESH blank ex:Counter every round, which becomes a new
-# focus node that mints another, and so on — unbounded fresh-term introduction.
+# The SPARQLRule mints a strictly LONGER ex:Counter IRI every round, and each new
+# Counter becomes a focus node that mints another — unbounded fresh-term
+# introduction. The CONSTRUCT template carries no blank node, so this is a
+# GENERAL rule (SPARQL 1.2 RL §4.4 stratification layers): it is evaluated
+# repeatedly to fixpoint rather than exactly once, and nothing bounds it but the
+# divergence guard.
 # `apply_rules` detects the divergence (fresh-term-minting rounds exceed the
 # deterministic, input-derived bound) and returns Err rather than looping forever.
 # This directory has NO expected-inferred.ttl; the harness asserts the error.
@@ -16,5 +20,6 @@ ex:CounterRule
   sh:targetClass ex:Counter ;
   sh:rule [
       rdf:type sh:SPARQLRule ;
-      sh:construct """CONSTRUCT { $this ex:next _:n . _:n a ex:Counter . }
-                      WHERE { $this a ex:Counter }""" ] .
+      sh:construct """CONSTRUCT { $this ex:next ?n . ?n a ex:Counter . }
+                      WHERE { $this a ex:Counter .
+                              BIND(IRI(CONCAT(STR($this), "0")) AS ?n) }""" ] .

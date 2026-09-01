@@ -1,0 +1,9 @@
+# Derived triples ONLY (the delta over input.ttl's graph).
+#
+# The order-1 rule's head (ex:alice ex:untagged true) is ABSENT: the order-0
+# stratum's tag was materialized before the order-1 rule's sh:condition ran, so
+# ex:alice no longer conforms to ex:Untagged.
+
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:tag ex:seen .

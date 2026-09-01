@@ -80,8 +80,16 @@ vendored suite does not exercise:
   output, in a later round).
 - **`fp-condition-gating`** — `sh:condition` gating: one focus node fires, another
   is skipped.
-- **`fp-order`** — `sh:order` on two rules; order-independence of the final
-  closure is additionally proven by a Rust test in the harness.
+- **`fp-order`** — `sh:order` on two INDEPENDENT MONOTONIC rules; such strata
+  commute, so the final closure is the same either way — additionally proven by a
+  Rust test in the harness.
+- **`layered-stratum-gating`** — layered stratified execution (SPARQL 1.2 RL §6.5):
+  the order-0 stratum's inferences are materialized before the order-1 rule's
+  `sh:condition` runs, so a condition reading ABSENCE now fails and the order-1
+  head is absent. Distinguishes layered execution from a single flat fixpoint.
+- **`once-stratum-mint`** — a run-once rule (blank node in the CONSTRUCT template,
+  SPARQL 1.2 RL §4.4) starting the order-1 layer: it sees the order-0 layer's
+  output and mints exactly one resource per focus node.
 - **`fp-deactivated`** — a `sh:deactivated` rule and a `sh:deactivated` shape are
   both skipped; only the active rule fires.
 - **`fp-cyclic-data`** — a symmetric-closure rule over a 3-cycle terminates
@@ -90,13 +98,14 @@ vendored suite does not exercise:
   break the condition next round: SHACL Rules are monotonic-accumulative, so the
   rule fires once at check time and the derived triple is never retracted.
 - **`fp-blank-minting`** — a `sh:SPARQLRule` CONSTRUCT that mints a fresh blank
-  node (compared by isomorphism).
+  node (compared by isomorphism); a run-once rule under SPARQL 1.2 RL §4.4.
 - **`fp-named-graph`** — data in a named graph; the rules see the flattened
   default-graph projection.
 - **`err-literal-subject`** — a rule producing a literal in subject position;
   `apply_rules` must error.
-- **`err-diverging-fresh-term`** — a rule minting a fresh term every round;
-  `apply_rules` must error at the divergence bound rather than loop forever.
+- **`err-diverging-fresh-term`** — a GENERAL rule (no blank in the CONSTRUCT
+  template) minting a strictly longer IRI every round; `apply_rules` must error at
+  the divergence bound rather than loop forever.
 
 The `entail_dataset = apply_rules ∘ project_dataset` composition is pinned by a
 Rust test (`entail_dataset_composes_project_then_apply_rules`) in the harness.

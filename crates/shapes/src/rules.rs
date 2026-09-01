@@ -16,28 +16,55 @@
 //!
 //! A rule fires for a focus node only if the node conforms to EVERY
 //! `sh:condition` shape, is not `sh:deactivated`, and its owning shape is active.
-//! Rules run lowest-`sh:order` first (missing order defaults to `0`), tie-broken
-//! by rule-node identity.
 //!
-//! [`apply_rules`] drives an **iterative fixpoint**: each round runs every rule
-//! over the current dataset, adds the genuinely-new inferred triples, and rebuilds
-//! the dataset for the next round; it stops when a round adds nothing. The result
-//! is a NEW frozen `Arc<RdfDataset>` holding the base graph plus every inferred
-//! triple, emitted in a deterministic order.
+//! # Layered stratified execution
+//!
+//! [`apply_rules`] evaluates the rule set the way *SPARQL 1.2 RL* (SRL) §6.5
+//! "Evaluation of a Rule Set" specifies, over the rule vocabulary *SHACL
+//! Advanced Features* defines (`sh:rule`, `sh:condition`, `sh:order`).
+//!
+//! Rules are partitioned into **strata** keyed by their effective `sh:order`
+//! (missing order = `0`), and the strata are visited in ascending order. Each
+//! stratum is a *stratification layer* in the SRL §4.4 sense: a pair of disjoint
+//! rule sets (`once`, `general`).
+//!
+//! - `once` — the run-once rules: those that **produce blank nodes in the rule
+//!   head** (see [`RuleSchedule`]). Each is evaluated **exactly once** at the
+//!   start of its stratum.
+//! - `general` — every remaining rule, evaluated **repeatedly until no new
+//!   triple is inferred**.
+//!
+//! A stratum's inferences are materialized into the dataset the producers read
+//! **before** the next stratum runs, and (per SRL §6.5) also between individual
+//! rules, so a lower-order rule's derived facts are visible to a higher-order
+//! rule's `sh:condition` and body. `sh:order` therefore genuinely changes the
+//! closure: a condition reading the ABSENCE of a fact sees stratum *N*'s output
+//! when it runs in stratum *N+1*.
+//!
+//! Independent monotonic rules still commute — strata that neither feed nor gate
+//! one another compute the same closure in either order — so layering does not
+//! disturb an order-insensitive rule set.
+//!
+//! The result is a NEW frozen `Arc<RdfDataset>` holding the base graph plus every
+//! inferred triple, emitted in a deterministic order.
 //!
 //! # Termination
 //!
-//! Value-preserving rules over the finite term universe (base ∪ rules graph)
-//! reach a fixpoint with no artificial cap: each round strictly grows a set that
-//! is bounded by `terms³`. The only divergence mode is a rule minting a fresh
-//! term each round (e.g. a CONSTRUCT `BNODE()` or a value-growing expression). The
-//! driver tracks the base∪rules term universe; if fresh-term-introducing rounds
-//! exceed a deterministic, input-derived bound, [`apply_rules`] returns `Err`
-//! naming the offending rule and term rather than looping forever.
+//! Run-once rules terminate by construction (one evaluation each). Value-preserving
+//! `general` rules over the finite term universe (base ∪ rules graph) reach a
+//! fixpoint with no artificial cap: each round strictly grows a set that is bounded
+//! by `terms³`. The remaining divergence mode is a `general` rule minting a fresh
+//! term each round (a value-growing expression, e.g. a CONSTRUCT that builds a
+//! longer IRI from the focus node every pass). The driver tracks the base∪rules
+//! term universe; if fresh-term-introducing rounds exceed a deterministic,
+//! input-derived bound, [`apply_rules`] returns `Err` naming the offending rule and
+//! term rather than looping forever.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use ::purrdf::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
 
 use crate::constraints::conforms;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
@@ -107,6 +134,100 @@ impl OrderKey {
     }
 }
 
+/// Which half of its *stratification layer* a rule belongs to.
+///
+/// *SPARQL 1.2 RL* (SRL) §4.4 defines a stratification layer as a pair of
+/// disjoint rule sets: `SL.once` — "run-once rules, which are rules that use
+/// assignment elements or produce blank nodes in the rule head; these rules are
+/// each evaluated exactly once at the start" — and `SL.general`, "the remaining
+/// rules, which are evaluated repeatedly until no new triples are inferred".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleSchedule {
+    /// A run-once rule: its head produces blank nodes, so it is evaluated
+    /// exactly once at the start of its stratum.
+    Once,
+    /// A general rule: evaluated repeatedly, to fixpoint, within its stratum.
+    General,
+}
+
+/// Whether a `sh:SPARQLRule` CONSTRUCT template mints blank nodes.
+///
+/// Decided on the PARSED algebra, never on the query text: a blank node
+/// anywhere in the `CONSTRUCT { … }` template (including inside an RDF 1.2
+/// quoted triple term) is minted fresh per solution (SPARQL 1.1 §16.2), so the
+/// rule is a run-once rule under SRL §4.4.
+#[must_use]
+pub fn construct_template_mints_blank(query: &Query) -> bool {
+    let Query::Construct { template, .. } = query else {
+        return false;
+    };
+    template.iter().any(triple_pattern_mints_blank)
+}
+
+/// Whether a CONSTRUCT template triple pattern carries a blank node in either
+/// term position (recursing through RDF 1.2 quoted triple patterns).
+fn triple_pattern_mints_blank(pattern: &TriplePattern) -> bool {
+    term_pattern_mints_blank(&pattern.subject) || term_pattern_mints_blank(&pattern.object)
+}
+
+/// Whether a CONSTRUCT template term position is (or nests) a blank node.
+fn term_pattern_mints_blank(pattern: &TermPattern) -> bool {
+    match pattern {
+        TermPattern::BlankNode(_) => true,
+        TermPattern::Triple(inner) => triple_pattern_mints_blank(inner),
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
+    }
+}
+
+/// Whether a `sh:TripleRule` head node expression can put a blank node into the
+/// derived triple that is not already a term of the data or shapes graph.
+///
+/// Every SHACL-AF node-expression kind other than [`NodeExpr::Constant`] either
+/// selects terms already present (`sh:this`, `sh:path`, the set combinators,
+/// the paging/ordering wrappers) or computes a LITERAL (`sh:count`, `sh:sum`,
+/// `sh:min`, `sh:max`, `sh:exists`) — none of which is a blank node. So the only
+/// way a blank node can be authored into a `sh:TripleRule` head is a constant,
+/// and this walk tests exactly that, recursing through RDF 1.2 quoted triple
+/// constants so a blank nested inside a triple term is not missed.
+///
+/// A function call (`FnCall`) is deliberately NOT treated as a minter: its
+/// result is opaque here, and misclassifying a general rule as run-once would
+/// silently UNDER-derive. Leaving it `general` means a call that does mint a
+/// fresh term instead trips the divergence bound in [`apply_rules`] and hard-fails
+/// — a loud refusal rather than a quiet wrong answer.
+#[must_use]
+pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
+    match expr {
+        NodeExpr::Constant(term) => term_carries_blank(term),
+        NodeExpr::This | NodeExpr::Path(_) => false,
+        NodeExpr::Filter { nodes, .. } => node_expr_mints_blank(nodes),
+        NodeExpr::Union(operands) | NodeExpr::Intersection(operands) => {
+            operands.iter().any(node_expr_mints_blank)
+        }
+        NodeExpr::If { then, els, .. } => node_expr_mints_blank(then) || node_expr_mints_blank(els),
+        NodeExpr::Distinct(of)
+        | NodeExpr::Min(of)
+        | NodeExpr::Max(of)
+        | NodeExpr::Limit { of, .. }
+        | NodeExpr::Offset { of, .. }
+        | NodeExpr::OrderBy { of, .. } => node_expr_mints_blank(of),
+        // Aggregations and existence tests yield literals, never blank nodes.
+        NodeExpr::Count { .. } | NodeExpr::Sum(_) | NodeExpr::Exists(_) => false,
+        NodeExpr::Call(_) => false,
+    }
+}
+
+/// Whether `term` is a blank node, or an RDF 1.2 quoted triple nesting one.
+fn term_carries_blank(term: &Term) -> bool {
+    match term {
+        Term::BlankNode(_) => true,
+        Term::Triple(inner) => {
+            term_carries_blank(&inner.subject) || term_carries_blank(&inner.object)
+        }
+        Term::NamedNode(_) | Term::Literal(_) => false,
+    }
+}
+
 /// A single SHACL-AF rule attached to a shape.
 #[derive(Debug, Clone)]
 pub struct Rule {
@@ -119,10 +240,16 @@ pub struct Rule {
     /// only if the node conforms to every one, resolved against the shapes graph's
     /// top-level shapes at firing time.
     pub conditions: Vec<Term>,
-    /// The `sh:order` sort key, if declared (missing = default order `0`).
+    /// The `sh:order` sort key, if declared (missing = default order `0`). Rules
+    /// sharing an effective order form one stratification layer, and layers run
+    /// lowest-order first with each layer's inferences materialized before the
+    /// next runs.
     pub order: Option<OrderKey>,
     /// Whether `sh:deactivated true` is set — a deactivated rule never fires.
     pub deactivated: bool,
+    /// The SRL §4.4 half of its stratification layer this rule belongs to,
+    /// decided from the rule head at parse time (see [`RuleSchedule`]).
+    pub schedule: RuleSchedule,
 }
 
 impl Rule {
@@ -144,23 +271,212 @@ struct PreparedRule<'a> {
     order: f64,
     tiebreak: String,
     rule_id: String,
+    schedule: RuleSchedule,
     producer: Producer<'a>,
+}
+
+/// Everything the round-dataset rebuild needs that does not change across the run.
+struct RoundContext<'a> {
+    base: &'a Arc<RdfDataset>,
+    shapes: &'a Shapes,
+    shapes_graph_iri: Option<&'a str>,
+    original: &'a FastSet<[Term; 3]>,
+}
+
+/// What folding one rule's head triples into `GE` accomplished.
+struct Absorbed {
+    /// Whether at least one genuinely-new triple was added (SRL §6.5's `Y` is
+    /// non-empty, which is what un-finishes a `general` loop pass).
+    added: bool,
+    /// The first freshly-minted term among the new triples — a term absent from
+    /// the base∪rules universe, i.e. the divergence signal.
+    fresh: Option<Term>,
+}
+
+/// SRL §6.5's `GE`: the accumulated fact set together with the frozen dataset the
+/// producers read it through.
+///
+/// The view is rebuilt LAZILY. §6.5 folds each rule's output into `GE` right
+/// away, so the NEXT rule must see it; re-freezing eagerly after every rule would
+/// rebuild even when nothing changed. Deferring the rebuild to the moment a rule
+/// is about to read — exactly when staleness becomes observable — bounds the
+/// number of rebuilds by the number of PRODUCTIVE rule firings, and keeps a
+/// non-productive pass free of any dataset work at all.
+struct Materialized {
+    facts: FastSet<[Term; 3]>,
+    core: Arc<RdfDataset>,
+    /// Whether `core` no longer reflects `facts` and must be re-frozen. Starts
+    /// `false`: the seed core IS the base projection, so the first reader reuses
+    /// it rather than re-freezing an unchanged graph.
+    stale: bool,
+    /// `None` once a rule has added a fact: the next reader re-materializes.
+    view: Option<ShaclData>,
+}
+
+impl Materialized {
+    /// The dataset view the producers read, re-materializing first when a previous
+    /// rule's inferences invalidated it.
+    fn view(&mut self, ctx: &RoundContext<'_>) -> Result<&ShaclData, String> {
+        if self.view.is_none() {
+            if self.stale {
+                self.core = rebuild_dataset(ctx.base, &self.facts, ctx.original)?;
+                self.stale = false;
+            }
+            let sparql = build_round_base(&self.core, ctx.shapes, ctx.shapes_graph_iri)?;
+            self.view = Some(ShaclData::new(
+                Arc::clone(&self.core),
+                sparql,
+                ctx.shapes_graph_iri.map(ToOwned::to_owned),
+            ));
+        }
+        self.view
+            .as_ref()
+            .ok_or_else(|| "internal error: rules round view was not materialized".to_owned())
+    }
+
+    /// Fold one rule's head triples into the fact set (SRL §6.5's
+    /// `Y = { t in X | t not in GE }`, then `GI = GI ∪ Y`, `GE = GE ∪ Y`).
+    fn absorb(&mut self, produced: Vec<[Term; 3]>, universe: &FastSet<Term>) -> Absorbed {
+        let mut out = Absorbed {
+            added: false,
+            fresh: None,
+        };
+        for triple in produced {
+            if self.facts.contains(&triple) {
+                continue;
+            }
+            if out.fresh.is_none()
+                && let Some(term) = fresh_term(&triple, universe)
+            {
+                out.fresh = Some(term.clone());
+            }
+            self.facts.insert(triple);
+            out.added = true;
+        }
+        if out.added {
+            // Neither the frozen core nor the view reflects `facts` any more; the
+            // next reader re-materializes both.
+            self.stale = true;
+            self.view = None;
+        }
+        out
+    }
+}
+
+/// Run the whole rule set under the *SPARQL 1.2 RL* (SRL) §6.5 layered model and
+/// return the accumulated fact set (`G0 ∪ GI`).
+///
+/// `prepared` must already be sorted by `(sh:order, rule identity)`: rules that
+/// compare EQUAL on the order key form one stratification layer, so consecutive
+/// equal-order runs of the slice ARE the strata, visited lowest-order first.
+/// Within a stratum, the SRL §4.4 run-once rules are evaluated exactly once, then
+/// the general rules are iterated until a full pass adds nothing.
+///
+/// The walk is ITERATIVE end to end — no stratum re-enters the scheduler — so no
+/// rule set can drive it into an uncatchable stack overflow.
+///
+/// # Errors
+///
+/// Propagates a producer's firing-time error, and returns `Err` when a stratum's
+/// general loop exceeds the divergence `bound` while still minting fresh terms.
+fn run_strata(
+    prepared: &[PreparedRule<'_>],
+    ctx: &RoundContext<'_>,
+    universe: &FastSet<Term>,
+    bound: usize,
+) -> Result<FastSet<[Term; 3]>, String> {
+    // `GE` starts at `G0` (there is no SRL DATA element in the SHACL-AF rule
+    // vocabulary, so `GI` starts empty). The seed core IS the base projection and
+    // the view is built on first demand, so an empty rule set does no work at all.
+    let mut state = Materialized {
+        facts: ctx.original.clone(),
+        core: Arc::clone(ctx.base),
+        stale: false,
+        view: None,
+    };
+    let mut fresh_rounds = 0usize;
+
+    for stratum in prepared.chunk_by(|a, b| a.order.total_cmp(&b.order) == Ordering::Equal) {
+        // SL.once: "these rules are each evaluated exactly once at the start"
+        // (SRL §4.4). Each one's output is folded into `GE` before the next runs.
+        // A run-once rule terminates by construction, so it is outside the
+        // divergence accounting entirely.
+        for prep in stratum
+            .iter()
+            .filter(|prep| prep.schedule == RuleSchedule::Once)
+        {
+            let produced = (prep.producer)(state.view(ctx)?)?;
+            state.absorb(produced, universe);
+        }
+
+        // SL.general: "evaluated repeatedly until no new triples are inferred".
+        loop {
+            let mut finished = true;
+            let mut offender: Option<(&str, Term)> = None;
+            for prep in stratum
+                .iter()
+                .filter(|prep| prep.schedule == RuleSchedule::General)
+            {
+                let produced = (prep.producer)(state.view(ctx)?)?;
+                let absorbed = state.absorb(produced, universe);
+                if absorbed.added {
+                    finished = false;
+                }
+                if offender.is_none()
+                    && let Some(term) = absorbed.fresh
+                {
+                    offender = Some((prep.rule_id.as_str(), term));
+                }
+            }
+
+            if finished {
+                break;
+            }
+
+            // Only a pass that introduced a term outside the base∪rules universe
+            // can diverge; value-preserving passes are bounded by `terms³` and
+            // never touch the counter.
+            if let Some((rule_id, term)) = offender {
+                fresh_rounds += 1;
+                if fresh_rounds > bound {
+                    return Err(format!(
+                        "SHACL rules did not reach a fixpoint: rule {rule_id} keeps deriving \
+                         fresh terms not present in the base or rules graph (e.g. {term}) after \
+                         {fresh_rounds} rounds (bound {bound})"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(state.facts)
 }
 
 /// Apply every active SHACL-AF rule to `data` under `shapes`, materializing a NEW
 /// frozen dataset of the base graph plus all inferred triples.
 ///
 /// The rules read and write the FLATTENED default graph (the same projection the
-/// validator operates over, exposed by [`ShaclData::core`]). Rule firing is an
-/// iterative fixpoint over the ordered rule list; the returned dataset is
-/// deterministic (byte-stable across runs and under isomorphic input relabeling).
+/// validator operates over, exposed by [`ShaclData::core`]).
+///
+/// Rule firing follows *SPARQL 1.2 RL* (SRL) §6.5 "Evaluation of a Rule Set" over
+/// the *SHACL Advanced Features* rule vocabulary: rules are partitioned into
+/// strata by effective `sh:order`, the strata run in ascending order, and each
+/// stratum runs its run-once rules (SRL §4.4 `SL.once`) exactly once before
+/// iterating its general rules (`SL.general`) to fixpoint. Every rule's
+/// inferences are materialized into the dataset the next rule reads, so a
+/// lower-order rule's derived facts gate a higher-order rule's `sh:condition`.
+///
+/// The returned dataset is deterministic (byte-stable across runs, under
+/// isomorphic input relabeling, and under permutation of the shapes graph's
+/// insertion order).
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when a rule is malformed at firing time (an illegal
 /// subject/predicate in a produced triple, an unresolvable `sh:condition`, a
-/// failing node-expression / CONSTRUCT evaluation) or when the rule set does not
-/// reach a fixpoint (a fresh-term-minting rule exceeding the divergence bound).
+/// failing node-expression / CONSTRUCT evaluation) or when a stratum's general
+/// loop does not reach a fixpoint (a fresh-term-minting rule exceeding the
+/// divergence bound).
 pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>, String> {
     // Declared SHACL-AF functions, and any caller-injected custom aggregates, are in
     // scope for node expressions and CONSTRUCT bodies for the whole run; the guards
@@ -214,65 +530,27 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         }
     }
 
-    // Order: lowest sh:order first, tie-broken by rule-node identity.
+    // Order: lowest sh:order first, tie-broken by rule-node identity. Rules that
+    // compare EQUAL on the order key form one stratification layer, so this sort
+    // both orders the strata and fixes a deterministic sequence inside each.
     prepared.sort_by(|a, b| {
         a.order
             .total_cmp(&b.order)
             .then_with(|| a.tiebreak.cmp(&b.tiebreak))
     });
 
-    // No rules → the base graph unchanged (still a fresh frozen projection).
-    let mut facts = original.clone();
-    let mut current_core = Arc::clone(&base);
-
     // Deterministic, input-derived divergence bound: the number of distinct base∪
     // rules terms plus the rule count. Value-preserving rounds never touch it (they
     // introduce no fresh term); only fresh-term-minting rounds are capped.
     let bound = base_universe.len() + prepared.len() + 1;
-    let mut fresh_rounds = 0usize;
 
-    loop {
-        let current_sparql = build_round_base(&current_core, shapes, shapes_graph_iri.as_deref())?;
-        let round_data = ShaclData::new(
-            Arc::clone(&current_core),
-            current_sparql,
-            shapes_graph_iri.clone(),
-        );
-        let mut round_new: Vec<[Term; 3]> = Vec::new();
-        let mut fresh_offender: Option<(String, Term)> = None;
-
-        for prep in &prepared {
-            for triple in (prep.producer)(&round_data)? {
-                if facts.contains(&triple) {
-                    continue;
-                }
-                if fresh_offender.is_none()
-                    && let Some(term) = fresh_term(&triple, &base_universe)
-                {
-                    fresh_offender = Some((prep.rule_id.clone(), term.clone()));
-                }
-                facts.insert(triple.clone());
-                round_new.push(triple);
-            }
-        }
-
-        if round_new.is_empty() {
-            break;
-        }
-
-        if let Some((rule_id, term)) = fresh_offender {
-            fresh_rounds += 1;
-            if fresh_rounds > bound {
-                return Err(format!(
-                    "SHACL rules did not reach a fixpoint: rule {rule_id} keeps deriving \
-                     fresh terms not present in the base or rules graph (e.g. {term}) after \
-                     {fresh_rounds} rounds (bound {bound})"
-                ));
-            }
-        }
-
-        current_core = rebuild_dataset(&base, &facts, &original)?;
-    }
+    let ctx = RoundContext {
+        base: &base,
+        shapes,
+        shapes_graph_iri: shapes_graph_iri.as_deref(),
+        original: &original,
+    };
+    let facts = run_strata(&prepared, &ctx, &base_universe, bound)?;
 
     // Materialize base ⊎ inferred, emitting inferred triples in a stable sorted
     // order (freeze canonicalizes quad order, but sorting keeps the builder input
@@ -360,6 +638,7 @@ fn prepare_rule<'a>(
         order: rule.order_value(),
         tiebreak: rule_id.clone(),
         rule_id,
+        schedule: rule.schedule,
         producer,
     }
 }
@@ -1377,6 +1656,293 @@ mod tests {
         assert_eq!(canon(&forward), canon(&swapped));
     }
 
+    // ── Layered stratified execution (SRL §6.5) ──────────────────────────────────
+
+    /// The order-0 rule tags the focus node; the order-1 rule is gated on a shape
+    /// demanding ZERO tags. Under LAYERED execution stratum 0 is materialized
+    /// before stratum 1 evaluates its `sh:condition`, so the condition FAILS and
+    /// the order-1 head is ABSENT.
+    ///
+    /// A single global fixpoint over one flat rule list evaluates both rules
+    /// against the same unmaterialized round graph, sees an untagged focus node,
+    /// and derives `ex:untagged true` — so the exact-set assertion below is what
+    /// separates the two models.
+    const LAYERED_GATING_DATA: &str = "ex:alice a ex:Person .";
+
+    /// The gating shapes graph, parameterized on the two rules' `sh:order` values.
+    fn layered_gating_shapes(tag_order: u32, gated_order: u32) -> String {
+        format!(
+            r"
+            ex:Untagged a sh:NodeShape ; sh:property [ sh:path ex:tag ; sh:maxCount 0 ] .
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:TripleRule ; sh:order {tag_order} ;
+                        sh:subject sh:this ; sh:predicate ex:tag ; sh:object ex:seen ] ;
+              sh:rule [ a sh:TripleRule ; sh:order {gated_order} ; sh:condition ex:Untagged ;
+                        sh:subject sh:this ; sh:predicate ex:untagged ; sh:object true ] ."
+        )
+    }
+
+    /// The default-graph triples of `ds` as a sorted, deduplicated set.
+    fn triple_set(ds: &RdfDataset) -> std::collections::BTreeSet<(String, String, String)> {
+        triples(ds).into_iter().collect()
+    }
+
+    #[test]
+    fn layered_execution_differs_from_flat_fixpoint() {
+        let out = entail(LAYERED_GATING_DATA, &layered_gating_shapes(0, 1));
+        let expected: std::collections::BTreeSet<(String, String, String)> = [
+            (
+                ex("alice"),
+                "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>".to_owned(),
+                ex("Person"),
+            ),
+            (ex("alice"), ex("tag"), ex("seen")),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            triple_set(&out),
+            expected,
+            "the order-1 head must be ABSENT: stratum 0's tag was materialized before \
+             the order-1 rule checked ex:Untagged"
+        );
+    }
+
+    /// Swapping the two `sh:order` values changes the INFERRED SET: with the gated
+    /// rule in the LOWER stratum it fires (nothing has tagged the node yet) and the
+    /// tag rule then also fires, so both heads are derived.
+    ///
+    /// This is the assertion that proves `sh:order` is no longer semantically
+    /// inert — under a flat global fixpoint both spellings produce the same set.
+    #[test]
+    fn swapping_orders_changes_the_inferred_set() {
+        let forward = entail(LAYERED_GATING_DATA, &layered_gating_shapes(0, 1));
+        let swapped = entail(LAYERED_GATING_DATA, &layered_gating_shapes(1, 0));
+
+        assert_ne!(
+            canon(&forward),
+            canon(&swapped),
+            "swapping sh:order over a condition-gated rule must change the closure"
+        );
+        // And concretely: the gated head appears only when its rule runs FIRST.
+        assert!(!has_iri(&forward, "alice", "untagged", "true"));
+        assert!(
+            triple_set(&swapped).contains(&(
+                ex("alice"),
+                ex("untagged"),
+                "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>".to_owned(),
+            )),
+            "with the gated rule in stratum 0 it fires: {:?}",
+            triple_set(&swapped)
+        );
+        assert!(has_iri(&swapped, "alice", "tag", "seen"));
+    }
+
+    /// A head-minting `sh:SPARQLRule` is a run-once rule (SRL §4.4): it is
+    /// evaluated exactly once at the start of its stratum, so each focus node gets
+    /// EXACTLY ONE minted resource — not one per fixpoint round, and not a
+    /// divergence error.
+    #[test]
+    fn once_rule_runs_exactly_once_and_terminates() {
+        let out = entail(
+            "ex:alice a ex:Person . ex:bob a ex:Person .",
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Person }" ] ."#,
+        );
+
+        // One ex:addr edge per focus node, each to a DISTINCT minted subject.
+        let addrs: Vec<(String, String)> = triples(&out)
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("addr"))
+            .map(|(s, _, o)| (s, o))
+            .collect();
+        assert_eq!(addrs.len(), 2, "exactly one mint per focus node: {addrs:?}");
+        let minted: FastSet<&String> = addrs.iter().map(|(_, o)| o).collect();
+        assert_eq!(minted.len(), 2, "the two foci mint distinct blanks");
+        let sources: FastSet<&String> = addrs.iter().map(|(s, _)| s).collect();
+        assert_eq!(sources.len(), 2, "one edge from each focus node");
+
+        // Each minted subject carries its whole head, exactly once.
+        let cities: Vec<String> = triples(&out)
+            .into_iter()
+            .filter(|(_, p, o)| *p == ex("city") && *o == ex("Metropolis"))
+            .map(|(s, _, _)| s)
+            .collect();
+        assert_eq!(cities.len(), 2, "one ex:city per minted blank: {cities:?}");
+    }
+
+    /// Entailment is byte-identical when the SAME shapes graph is spelled with its
+    /// rule triples emitted in a DIFFERENT insertion order.
+    ///
+    /// The scheduler sorts strata by `sh:order` and rules within a stratum by
+    /// rule-node identity, so nothing downstream may depend on the order the
+    /// shapes document happened to assert its triples in. The proof is a byte
+    /// comparison of the serialized N-Triples, not an isomorphism check.
+    #[test]
+    fn layered_entailment_is_byte_identical_under_insertion_permutation() {
+        let data = "ex:alice a ex:Employee . ex:bob a ex:Employee .";
+
+        // The same nine rule assertions, emitted in two different orders. Named
+        // rule nodes keep the two spellings term-for-term identical, so any byte
+        // difference is a scheduling artefact rather than a blank-label artefact.
+        let forward = r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Employee ; sh:rule ex:r1, ex:r2, ex:r3 .
+            ex:T a sh:NodeShape ; sh:targetClass ex:Person ; sh:rule ex:r4 .
+            ex:r1 a sh:TripleRule ; sh:order 0 ; sh:subject sh:this ; sh:predicate rdf:type ; sh:object ex:Person .
+            ex:r2 a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y .
+            ex:r3 a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x .
+            ex:r4 a sh:SPARQLRule ; sh:order 2 ; sh:construct
+                "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Person }" .
+        "#;
+        let permuted = r#"
+            ex:r4 a sh:SPARQLRule ; sh:order 2 ; sh:construct
+                "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Person }" .
+            ex:r3 a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x .
+            ex:T a sh:NodeShape ; sh:targetClass ex:Person ; sh:rule ex:r4 .
+            ex:r1 a sh:TripleRule ; sh:order 0 ; sh:subject sh:this ; sh:predicate rdf:type ; sh:object ex:Person .
+            ex:S a sh:NodeShape ; sh:targetClass ex:Employee ; sh:rule ex:r3 .
+            ex:r2 a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y .
+            ex:S sh:rule ex:r2 .
+            ex:S sh:rule ex:r1 .
+        "#;
+
+        let serialize = |shapes_body: &str| {
+            let entailed = entail(data, shapes_body);
+            ::purrdf::serialize_dataset(
+                entailed.as_ref(),
+                "application/n-triples",
+                ::purrdf::SerializeGraph::Dataset,
+            )
+            .expect("N-Triples serialization must succeed")
+        };
+
+        let a = serialize(forward);
+        let b = serialize(permuted);
+        assert_eq!(
+            std::str::from_utf8(&a).expect("N-Triples is UTF-8"),
+            std::str::from_utf8(&b).expect("N-Triples is UTF-8"),
+            "permuting the shapes graph's insertion order must not move a single \
+             output byte"
+        );
+        // The permuted spelling really did exercise the whole layered pipeline.
+        let entailed = entail(data, forward);
+        assert!(has_iri(&entailed, "alice", "a", "x"));
+        assert!(has_iri(&entailed, "alice", "b", "y"));
+        assert_eq!(
+            triples(&entailed)
+                .into_iter()
+                .filter(|(_, p, _)| *p == ex("addr"))
+                .count(),
+            2,
+            "the order-2 run-once rule saw the order-0 stratum's ex:Person typing"
+        );
+    }
+
+    /// The SRL §4.4 run-once test is read off the PARSED head, not the query text:
+    /// a CONSTRUCT template carrying a blank node is `Once`, one whose only
+    /// non-IRI positions are variables is `General`.
+    #[test]
+    fn run_once_classification_is_read_off_the_rule_head() {
+        let classify = |body: &str| {
+            parse_shapes(body)
+                .node_shapes
+                .iter()
+                .flat_map(|s| &s.rules)
+                .map(|r| r.schedule)
+                .next()
+                .expect("a rule")
+        };
+
+        assert_eq!(
+            classify(
+                r#"ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                     sh:rule [ a sh:SPARQLRule ; sh:construct
+                       "CONSTRUCT { $this ex:addr _:a } WHERE { $this a ex:Person }" ] ."#
+            ),
+            RuleSchedule::Once,
+            "a blank node in the CONSTRUCT template makes the rule run-once"
+        );
+        assert_eq!(
+            classify(
+                r#"ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                     sh:rule [ a sh:SPARQLRule ; sh:construct
+                       "CONSTRUCT { $this ex:addr ?o } WHERE { $this ex:x ?o }" ] ."#
+            ),
+            RuleSchedule::General,
+            "a variable-only template is a general rule"
+        );
+        // The template text mentioning `_:` inside a STRING literal is not a
+        // template blank — a text scan would misread this as run-once.
+        assert_eq!(
+            classify(
+                r#"ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                     sh:rule [ a sh:SPARQLRule ; sh:construct
+                       "CONSTRUCT { $this ex:label \"_:a\" } WHERE { $this a ex:Person }" ] ."#
+            ),
+            RuleSchedule::General,
+            "a literal spelling `_:a` is not a template blank node"
+        );
+        assert_eq!(
+            classify(
+                r"ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                    sh:rule [ a sh:TripleRule ; sh:subject sh:this ;
+                              sh:predicate ex:p ; sh:object [ sh:path ex:q ] ] ."
+            ),
+            RuleSchedule::General,
+            "a sh:TripleRule head selects existing terms; it mints nothing"
+        );
+    }
+
+    /// The claim [`node_expr_mints_blank`] rests on: a `sh:TripleRule` head cannot
+    /// carry an authored blank node at all, because a blank node in a head position
+    /// must parse as a structural node expression or a function call — a bare one
+    /// is REJECTED. So there is no silent third case the classification could miss.
+    #[test]
+    fn a_bare_blank_in_a_triple_rule_head_is_rejected() {
+        for position in [
+            "sh:subject _:x ; sh:predicate ex:p ; sh:object ex:o",
+            "sh:subject sh:this ; sh:predicate ex:p ; sh:object _:x",
+        ] {
+            let err = parse_shapes_err(&format!(
+                "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                   sh:rule [ a sh:TripleRule ; {position} ] ."
+            ));
+            assert!(
+                err.contains("unrecognised node expression"),
+                "a bare blank head must hard-fail at load; got: {err}"
+            );
+        }
+    }
+
+    /// A blank node reached through a node expression is a REFERENCE to a term the
+    /// graph already carries, not a mint, so the rule stays `General`.
+    #[test]
+    fn node_expr_blank_constant_is_the_only_triple_rule_minter() {
+        use crate::term::{NamedNode, Triple};
+        assert!(node_expr_mints_blank(&NodeExpr::Constant(Term::blank("b"))));
+        assert!(node_expr_mints_blank(&NodeExpr::Constant(Term::Triple(
+            Box::new(Triple::new(
+                Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#s")),
+                NamedNode::new_unchecked("http://example.org/ns#p"),
+                Term::blank("o"),
+            ))
+        ))));
+        assert!(node_expr_mints_blank(&NodeExpr::Union(vec![
+            NodeExpr::This,
+            NodeExpr::Constant(Term::blank("b")),
+        ])));
+        assert!(!node_expr_mints_blank(&NodeExpr::This));
+        assert!(!node_expr_mints_blank(&NodeExpr::Constant(
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#x"))
+        )));
+        assert!(!node_expr_mints_blank(&NodeExpr::Count {
+            distinct: false,
+            of: Box::new(NodeExpr::This),
+        }));
+    }
+
     // ── Termination ───────────────────────────────────────────────────────────────
 
     #[test]
@@ -1398,16 +1964,61 @@ mod tests {
 
     #[test]
     fn diverging_fresh_term_rule_errors() {
-        // Each round mints a fresh blank Counter that becomes a new focus node →
-        // unbounded fresh-term minting → the divergence bound trips.
+        // A GENERAL rule (no blank node in the CONSTRUCT template, so SRL §4.4 does
+        // not make it run-once) that mints a strictly LONGER IRI each pass: every
+        // round's fresh Counter becomes the next round's focus, so fresh-term
+        // minting never stops and the divergence bound trips.
         let err = entail_err(
+            "ex:c0 a ex:Counter .",
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Counter ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:next ?n . ?n a ex:Counter } WHERE { $this a ex:Counter . BIND(IRI(CONCAT(STR($this), \"0\")) AS ?n) }" ] ."#,
+        );
+        assert!(err.contains("did not reach a fixpoint"), "got: {err}");
+    }
+
+    /// The SAME shape of self-feeding rule, but with the fresh term MINTED AS A
+    /// BLANK NODE in the CONSTRUCT template, terminates: a head that produces
+    /// blank nodes is a run-once rule (SRL §4.4), evaluated exactly once at the
+    /// start of its stratum, so the minted `ex:Counter` never becomes a focus node
+    /// for a second firing.
+    ///
+    /// Under the old flat global fixpoint this exact rule set was a divergence
+    /// error; the layered model is what makes it terminate, and the assertion
+    /// below pins the EXACT derived set rather than merely accepting `Ok`.
+    #[test]
+    fn head_minting_self_feeding_rule_runs_once_and_terminates() {
+        let out = entail(
             "ex:c0 a ex:Counter .",
             r#"
             ex:S a sh:NodeShape ; sh:targetClass ex:Counter ;
               sh:rule [ a sh:SPARQLRule ; sh:construct
                 "CONSTRUCT { $this ex:next _:n . _:n a ex:Counter } WHERE { $this a ex:Counter }" ] ."#,
         );
-        assert!(err.contains("did not reach a fixpoint"), "got: {err}");
+        // Exactly one minted Counter: `ex:c0 ex:next _:n` plus `_:n a ex:Counter`.
+        let nexts: Vec<String> = triples(&out)
+            .into_iter()
+            .filter(|(s, p, _)| *s == ex("c0") && *p == ex("next"))
+            .map(|(_, _, o)| o)
+            .collect();
+        assert_eq!(nexts.len(), 1, "one firing → one minted Counter: {nexts:?}");
+        assert!(
+            nexts[0].starts_with("_:"),
+            "the minted term is a blank node"
+        );
+        let counters: Vec<String> = triples(&out)
+            .into_iter()
+            .filter(|(_, p, o)| {
+                *p == "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>" && *o == ex("Counter")
+            })
+            .map(|(s, _, _)| s)
+            .collect();
+        assert_eq!(
+            counters.len(),
+            2,
+            "the base ex:c0 and exactly one minted Counter: {counters:?}"
+        );
     }
 
     // ── Determinism ───────────────────────────────────────────────────────────────
