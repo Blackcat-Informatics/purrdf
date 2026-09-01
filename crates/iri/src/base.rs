@@ -13,11 +13,28 @@
 //!   N-Quads, TriX, `HexTuples`) require an absolute IRI regardless of whether a
 //!   base happens to be available — [`BaseScope::resolve_absolute_only`].
 //!
-//! When a relative reference appears and **no base is in scope**, resolution is a
-//! hard [`IriError::NoBase`]. PurRDF never derives a base from a retrieval IRI or
-//! the filesystem: doing so would break byte determinism, diverge across surfaces
-//! (stdin, wasm, and the C ABI have no retrieval IRI at all), and leak local paths
-//! into published RDF.
+//! # Where the base comes from (RFC-3986 §5.1)
+//!
+//! The precedence is the spec's, in the spec's order: an in-document base directive
+//! (§5.1.1 — Turtle `@base`, SPARQL `BASE`, `xml:base`, JSON-LD `@context.@base`); else
+//! the base the caller supplied through the API or `--base` (§5.1.2); else the
+//! document's **retrieval IRI** (§5.1.3); else the reference cannot be resolved and the
+//! resolution is a hard [`IriError::NoBase`] (§5.1.4) — never a silently interned
+//! relative IRI, and never a fabricated default.
+//!
+//! `purrdf-iri` implements the first two steps and the §5.1.4 failure, and that is all
+//! any library surface can implement: this crate — and with it every Rust library,
+//! wasm, C-ABI and Python entry point — is handed BYTES, so it has no retrieval IRI to
+//! fall back to and §5.1.3 is vacuous there. Those surfaces therefore hard-fail exactly
+//! where §5.1.4 says to.
+//!
+//! §5.1.3 is implemented in ONE place, `purrdf-cli`, which is the one surface that has a
+//! retrieval IRI: a filesystem input's RFC-8089 `file://` IRI, derived from the
+//! canonicalized path and applied only when no base of higher precedence was given.
+//! Keeping it there is what preserves byte determinism for every other surface (a base
+//! invented from the local filesystem would differ per machine and leak local paths into
+//! published RDF) while still answering §5.1.3 where the retrieval IRI genuinely exists.
+//! Nothing filesystem-shaped crosses into this crate or into `purrdf-rdf`.
 //!
 //! [`BaseIri`] carries the "is absolute" invariant in the type, so the check
 //! happens once at construction instead of at every resolution site, and
@@ -432,8 +449,9 @@ impl BaseScope {
     /// (Turtle, TriG, N3, RDF/XML, JSON-LD, SPARQL).
     ///
     /// An absolute reference resolves normally. A relative reference with no base in
-    /// scope is [`IriError::NoBase`] — never a silently-interned relative IRI, and
-    /// never a base fabricated from a retrieval IRI.
+    /// scope is [`IriError::NoBase`] (RFC-3986 §5.1.4) — never a silently-interned
+    /// relative IRI, and never a base this layer invented for it. A retrieval IRI
+    /// reaches the scope only by having been PUSHED into it by a surface that has one.
     ///
     /// # Examples
     ///
