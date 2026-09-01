@@ -45,6 +45,11 @@ purrdf-cdt = { workspace = true }
 # The XSD value space for FILTER/BIND/ORDER: value-space equality/ordering
 # (value_cmp/value_eq), effective boolean value, and the numeric tower.
 purrdf-xsd = { workspace = true }
+# The SEP-0009 composite datatypes (`cdt:List` / `cdt:Map`): their lexical scanner
+# and the crate's syntactic TOTAL order, which is what `ORDER BY` sorts composite
+# literals by (the SEP-0009 value relations are partial and raise, so a sort cannot
+# use them). Wasm-clean, no_std-compatible, no oxigraph-family edge.
+purrdf-cdt = { workspace = true }
 # Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
 # in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr
 # (no oxigraph-family edge — gated by `make rdf-core-hygiene`).

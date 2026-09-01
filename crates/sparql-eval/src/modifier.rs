@@ -609,15 +609,17 @@ pub(crate) struct LiteralKey<'a> {
 /// projection of that relation, paired with the one [`total_order`] over it and
 /// shared by `ORDER BY`, `MIN`/`MAX` and the statistical aggregates. A key borrows
 /// from the [`TermValue`] it came from, so [`project`] allocates nothing but the
-/// box a nested triple term needs, and the per-literal XSD parse is paid once per
-/// term instead of on every comparison inside an `O(n log n)` sort.
+/// box a nested triple term needs and the parsed contents a composite literal
+/// carries, and the per-literal XSD parse is paid once per term instead of on
+/// every comparison inside an `O(n log n)` sort.
 ///
 /// # Adding a term category
 ///
-/// A new recursive category (a composite datatype, say) is one variant here plus
-/// one arm each in [`project`], [`SortKey::rank`] and [`total_order`]; its members
-/// recurse back through `total_order`, exactly as [`SortKey::Triple`] does, so the
-/// category inherits the whole relation instead of restating any of it.
+/// A new recursive category is one variant here plus one arm each in [`project`],
+/// [`SortKey::rank`] and [`total_order`]; its members recurse back through
+/// `total_order`, exactly as [`SortKey::Triple`] does, so the category inherits the
+/// whole relation instead of restating any of it. [`SortKey::Composite`] is the
+/// worked example.
 pub(crate) enum SortKey<'a> {
     /// Unbound — sorts before every bound term.
     Unbound,
@@ -627,19 +629,39 @@ pub(crate) enum SortKey<'a> {
     Iri(&'a str),
     /// Literal — see [`LiteralKey`].
     Literal(LiteralKey<'a>),
+    /// A SEP-0009 composite literal (`cdt:List` / `cdt:Map`) whose lexical form
+    /// parses, ordered by the value it denotes rather than by that lexical form.
+    ///
+    /// # Where composites sit relative to the other kinds, and why that is a choice
+    ///
+    /// §15.1 does not mention composite datatypes, and neither does SEP-0009's own
+    /// `ORDER BY` corpus: every one of its cases sorts a column of composites
+    /// against other composites, so nothing there pins where a `cdt:List` sits
+    /// relative to an unbound, a blank node, an IRI or a plain literal. This crate
+    /// pins it HERE, by declaration order: after [`SortKey::Literal`] and before
+    /// [`SortKey::Triple`]. A composite literal IS an RDF literal, so it belongs on
+    /// the literal side of §15.1's kind order rather than below the IRIs; and it is
+    /// a container of terms, like a triple term, so it belongs beside the other
+    /// container rather than interleaved with the scalars. A composite whose
+    /// lexical form does NOT parse never reaches this variant at all — it is an
+    /// ordinary [`ValueClass::Opaque`] literal, sorted by its lexical form, one
+    /// rank below every composite that does parse.
+    Composite(purrdf_cdt::CdtValue),
     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
     Triple(Box<[Self; 3]>),
 }
 
 impl SortKey<'_> {
-    /// §15.1's kind order, extended with the triple terms it does not mention.
+    /// §15.1's kind order, extended with the composite and triple terms it does not
+    /// mention. The ranks are declaration order and nothing else reads them.
     const fn rank(&self) -> u8 {
         match self {
             Self::Unbound => 0,
             Self::Blank(..) => 1,
             Self::Iri(_) => 2,
             Self::Literal(_) => 3,
-            Self::Triple(_) => 4,
+            Self::Composite(_) => 4,
+            Self::Triple(_) => 5,
         }
     }
 }
@@ -656,6 +678,19 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
             language,
             ..
         }) => {
+            // The composite datatypes are decided by their datatype IRI FIRST, so a
+            // `cdt:List` never pays the XSD parse and an `xsd:string` never pays the
+            // composite scan. A composite whose lexical form does not parse falls
+            // through to the ordinary literal path and lands in
+            // `ValueClass::Opaque`, which is the honest place for a literal that
+            // denotes nothing — `ORDER BY` must still be total over it.
+            if matches!(
+                datatype.as_str(),
+                purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP
+            ) && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
+            {
+                return SortKey::Composite(composite);
+            }
             let parsed = parse_by_iri(lexical_form, datatype).ok().flatten();
             let (class, value) = ValueClass::of(parsed, lexical_form);
             SortKey::Literal(LiteralKey {
@@ -677,6 +712,19 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
 /// and the syntactic tiebreak. A value comparison and a syntactic one never mix
 /// inside a class, which is what keeps it transitive (see [`ValueClass`]).
 /// `Unbound` needs no arm: it ranks below every bound key, two of them as equals.
+///
+/// # Composites use the CDT crate's SYNTACTIC order, deliberately
+///
+/// [`purrdf_cdt::total_value_cmp`] is that crate's exported total order, and it is
+/// the one a sort may use. SEP-0009's own value relations
+/// (`purrdf_cdt::value_less_than` and friends) are partial and RAISE on a pair they
+/// cannot decide, which `ORDER BY` cannot do — a sort must be total and must never
+/// error — and the obvious repair, "value order with a structural tie-break", is
+/// itself intransitive for exactly the reason [`ValueClass`] documents one level
+/// up (`crates/cdt/tests/value_relations.rs` exhibits the cycle). The syntactic
+/// order is a lexicographic product of total orders, so it is transitive by
+/// construction, and it is what the CDT crate already sorts map entries and renders
+/// canonical lexical forms with.
 pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
     match (a, b) {
         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
@@ -692,6 +740,7 @@ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
             }
             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
         }
+        (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
         (SortKey::Triple(x), SortKey::Triple(y)) => total_order(&x[0], &y[0])
             .then_with(|| total_order(&x[1], &y[1]))
             .then_with(|| total_order(&x[2], &y[2])),
@@ -3759,6 +3808,25 @@ mod tests {
                 TermValue::iri("http://ex/q"),
                 xsd("P1D", "duration"),
             )),
+            // The composite category, including the two spellings of one value
+            // (which must tie), a nested composite, and two lexical forms that do
+            // NOT parse (which must fall back to the opaque-literal block instead
+            // of raising or of ranking with the composites).
+            Some(TermValue::typed_literal("[]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[  ]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[1]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[ 1, null]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal(
+                "[[1],{ 1:2 }]",
+                purrdf_cdt::CDT_LIST,
+            )),
+            Some(TermValue::typed_literal("{}", purrdf_cdt::CDT_MAP)),
+            Some(TermValue::typed_literal(
+                "{ 3:1, 1:2 }",
+                purrdf_cdt::CDT_MAP,
+            )),
+            Some(TermValue::typed_literal("[1,", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("nonsense", purrdf_cdt::CDT_MAP)),
         ];
         let keys: Vec<_> = samples.iter().map(|v| project(v.as_ref())).collect();
 
