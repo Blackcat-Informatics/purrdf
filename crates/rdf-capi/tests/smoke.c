@@ -444,7 +444,15 @@ int main(int argc, char **argv) {
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
     printf("libpurrdf ABI %u.%u.%u\n", version.major, version.minor, version.patch);
-    CHECK(version.major == 0 && version.minor == 6, "abi 0.6.x");
+    /* The invariant a real C consumer depends on: the library it LINKED against
+     * reports the same ABI the header it COMPILED against declares. Comparing
+     * against the header macros rather than a literal means an intentional bump
+     * needs no edit here, while a library/header mismatch — the exact condition
+     * that silently mis-binds arguments — still fails loudly. The prototype list
+     * behind this triple is frozen in tests/abi_signatures.snapshot. */
+    CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
+              version.patch == PURRDF_ABI_PATCH,
+          "linked library reports the header's ABI version");
 
     /* parse */
     const char *doc = "<http://a> <http://b> <http://c> .";

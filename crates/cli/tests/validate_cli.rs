@@ -1002,14 +1002,16 @@ fn a_turtle_shapes_graph_resolves_relative_iris_against_its_retrieval_iri() {
     );
 
     // The source shape is named by its RESOLVED IRI — the shapes file's own `file://`
-    // IRI with the last segment replaced — not by the bare `PersonShape` token.
-    let resolved = std::fs::canonicalize(&shapes)
-        .expect("fixture canonicalizes")
-        .to_str()
-        .expect("temp path is UTF-8")
-        .replace("/shapes.ttl", "/PersonShape");
+    // IRI with the last segment replaced — not by the bare `PersonShape` token. The IRI
+    // comes from the binary's OWN derivation (`purrdf_cli::file_retrieval_iri`), never a
+    // second transcription of it in this harness: a local `format!("file://{path}")`
+    // percent-encodes nothing and has no Windows answer at all, so it would agree with
+    // itself while the binary emitted something else.
+    let resolved =
+        purrdf_cli::file_retrieval_iri(&shapes).expect("fixture has a file:// retrieval IRI");
+    let resolved = resolved.replace("/shapes.ttl", "/PersonShape");
     assert!(
-        stdout(&out).contains(&format!("<file://{resolved}>")),
+        stdout(&out).contains(&format!("<{resolved}>")),
         "the source shape must be the resolved absolute IRI:\n{}",
         stdout(&out)
     );
