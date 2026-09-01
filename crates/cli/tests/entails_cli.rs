@@ -1088,6 +1088,84 @@ fn base_with_a_pack_document_is_refused_by_name() {
     );
 }
 
+/// `--base` is decided over ALL the documents at once, not one at a time.
+///
+/// Every document here crosses the boundary as N-Quads, which can express no base, so the
+/// PARSE of the named documents is the only leg a base has. With every document in N-Triples
+/// — whose grammar admits no relative IRI reference — nothing can spend it, and it is refused
+/// by name. With a TURTLE premise beside the same N-Triples conclusion it is honoured: the
+/// premise's parse spends it, and a per-document test would have refused a flag doing work.
+#[test]
+fn base_is_refused_only_when_no_document_can_spend_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise_nt = write_file(
+        dir,
+        "premise.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ",
+            "<http://example.org/B> .\n",
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/A> .\n",
+        ),
+    );
+    let conclusion_nt = write_file(
+        dir,
+        "conclusion.nt",
+        concat!(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/B> .\n",
+        ),
+    );
+
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_nt,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "usage errors exit 2: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("--base has no effect"),
+        "the refusal must name --base: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("the --premise document")
+            && stderr(&refused).contains("the --conclusion document"),
+        "the refusal names every leg that would have consumed it: {}",
+        stderr(&refused)
+    );
+
+    let premise_ttl = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let honoured = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_ttl,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert!(
+        honoured.status.success(),
+        "a base the premise's parse spends must not be refused: {}",
+        stderr(&honoured)
+    );
+}
+
 /// A PREMISE ON STDIN with `--from` is answered, and the verdict goes to stdout.
 #[test]
 fn a_stdin_premise_is_answered() {

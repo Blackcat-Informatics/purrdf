@@ -135,8 +135,9 @@ pub(crate) fn run(
         options.base,
         options.transport,
     );
-    // Resolve (and refuse `--base` against a container for) EVERY source up front, so a
-    // list whose third entry is unreadable fails before the first two are read.
+    // Resolve EVERY source's format up front, so a list whose third entry is unreadable
+    // fails before the first two are read. `--base` is decided later, once the target is
+    // resolved too: whether it can be spent depends on both legs.
     let formats = sources.resolve_formats()?;
 
     refuse_inapplicable_combinations(options, report_target)?;
@@ -155,7 +156,13 @@ pub(crate) fn run(
     }
 
     let target_format = format::resolve_target(options.to, output, "the --to target")?;
-    format::refuse_base_with_container(target_format, options.base, "the --to target")?;
+    refuse_unconsumable_base(
+        &sources,
+        &formats,
+        target_format,
+        "the --to target",
+        options,
+    )?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
 
     // One native/pack source: the untouched zero-copy lane. A GTS source is excluded
@@ -241,6 +248,33 @@ fn source_codec(formats: &[SourceFormat]) -> Option<&'static str> {
     }
 }
 
+/// Refuse `--base` when NEITHER leg of this conversion can spend it.
+///
+/// The legs are every source's PARSE and the target's SERIALIZE, so `--base X --from turtle
+/// --to ntriples` still works (the parse leg spends it) while `--from ntriples --to
+/// ntriples` is refused by name instead of exiting 0 having ignored the flag. The predicate
+/// is `format::refuse_unconsumable_base`'s, driven off the format registry's own columns.
+fn refuse_unconsumable_base(
+    sources: &Sources<'_>,
+    formats: &[SourceFormat],
+    target: SourceFormat,
+    target_role: &str,
+    options: &ConvertOptions<'_>,
+) -> Result<(), CliError> {
+    let roles: Vec<String> = sources
+        .paths
+        .iter()
+        .map(|path| format!("the source `{path}`"))
+        .collect();
+    let mut legs: Vec<format::BaseUse<'_>> = formats
+        .iter()
+        .zip(&roles)
+        .map(|(format, role)| format::BaseUse::parse(*format, role))
+        .collect();
+    legs.push(format::BaseUse::serialize(target, target_role));
+    format::refuse_unconsumable_base(options.base, &legs)
+}
+
 /// Refuse the flag combinations `convert` cannot honour, each by name.
 fn refuse_inapplicable_combinations(
     options: &ConvertOptions<'_>,
@@ -297,10 +331,19 @@ fn run_with_transforms(
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
+        // `--canonical` writes RDFC-1.0 canonical N-Quads unconditionally, so the egress
+        // leg is N-Quads whatever else was named — and N-Quads can express no base.
+        refuse_unconsumable_base(
+            sources,
+            formats,
+            SourceFormat::Native(purrdf_rdf::NativeRdfFormat::NQuads),
+            "the --canonical N-Quads output",
+            options,
+        )?;
         None
     } else {
         let target = format::resolve_target(options.to, output, "the --to target")?;
-        format::refuse_base_with_container(target, options.base, "the --to target")?;
+        refuse_unconsumable_base(sources, formats, target, "the --to target", options)?;
         sink::validate_jsonld_options(target, options.jsonld_options)?;
         Some(target)
     };

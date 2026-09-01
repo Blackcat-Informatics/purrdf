@@ -107,9 +107,13 @@ impl<'a> Sources<'a> {
         }
     }
 
-    /// Resolve every source's format, refusing `--base` against a container, refusing an
-    /// explicit `--transport` against a pack, and refusing a second `-` (stdin can be
-    /// consumed once).
+    /// Resolve every source's format, refusing an explicit `--transport` against a pack and
+    /// refusing a second `-` (stdin can be consumed once).
+    ///
+    /// `--base` is NOT decided here. Whether it can be spent depends on the SERIALIZE leg
+    /// as well as these parse legs — `--base X --from turtle --to ntriples` is honoured on
+    /// the way in, and `--from ntriples --to ntriples` can spend it on neither side — so the
+    /// one refusal lives where both halves are known, in [`crate::convert`].
     pub(crate) fn resolve_formats(&self) -> Result<Vec<SourceFormat>, CliError> {
         let mut stdin_seen = false;
         let mut formats = Vec::with_capacity(self.paths.len());
@@ -125,7 +129,6 @@ impl<'a> Sources<'a> {
                 stdin_seen = true;
             }
             let format = format::resolve(self.from, path)?;
-            format::refuse_base_with_container(format, self.base, &format!("the source `{path}`"))?;
             // A pack is acquired as immutable bytes and verified in place; the transport
             // decoder is never reached for one, so a `--transport` naming an encoding for
             // a pack source would be accepted and never read.

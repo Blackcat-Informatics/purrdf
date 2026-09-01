@@ -79,7 +79,7 @@ int32_t purrdf_rowcursor_term(const PurrdfRowCursor *rc, size_t column, PurrdfTe
 int32_t purrdf_rowcursor_variable_count(const PurrdfRowCursor *rc, size_t *out)
 int32_t purrdf_rowcursor_variable_name(const PurrdfRowCursor *rc, size_t i, const char **out)
 int32_t purrdf_serialize(const PurrdfDataset *dataset, const char *media_type, const char *base_iri, PurrdfBuffer **out_buffer, size_t *out_statement_rows_dropped, PurrdfError **out_error)
-int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, const char *media_type, const uint8_t *options_json, size_t options_len, const PurrdfJsonLdContext *context, const char *yaml_schema_url, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, const char *media_type, const char *base_iri, const uint8_t *options_json, size_t options_len, const PurrdfJsonLdContext *context, const char *yaml_schema_url, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_term_to_ntriples(const PurrdfDataset *dataset, const PurrdfTermView *view, PurrdfBuffer **out_buffer, PurrdfError **out_error)
