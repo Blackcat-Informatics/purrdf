@@ -17,7 +17,17 @@ type PyTermRow = (
     Option<String>,
     Option<String>,
     Option<usize>,
+    Option<(usize, usize, usize)>,
 );
+
+/// One statement-layer reifier row as Python exchanges it: `(reifier_id, (s, p, o),
+/// graph?)`. The graph slot is the term id of the named graph the declaration was
+/// asserted in (`None` = default graph); the RDF 1.2 statement layer is keyed per
+/// graph, so it is part of the row's identity.
+type PyReifierRow = (usize, (usize, usize, usize), Option<usize>);
+/// One statement-layer annotation row: `(reifier_id, predicate, value, graph?)`; the
+/// graph slot is the one described on [`PyReifierRow`].
+type PyAnnotationRow = (usize, usize, usize, Option<usize>);
 
 #[pyclass(name = "GtsFoldViewNative")]
 #[derive(Debug)]
@@ -29,12 +39,12 @@ pub struct PyGtsFoldView {
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
     #[staticmethod]
-    fn from_bytes(py: Python<'_>, data: &[u8]) -> Self {
+    fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
         py.detach(|| {
             let graph = purrdf_gts::reader::read(data, true, None);
-            Self {
-                inner: GtsFoldView::new(graph),
-            }
+            Ok(Self {
+                inner: fold_view(graph)?,
+            })
         })
     }
 
@@ -43,13 +53,13 @@ impl PyGtsFoldView {
         py: Python<'_>,
         terms: Vec<PyTermRow>,
         quads: Vec<(usize, usize, usize, Option<usize>)>,
-        reifiers: Vec<(usize, (usize, usize, usize))>,
-        annotations: Vec<(usize, usize, usize)>,
+        reifiers: Vec<PyReifierRow>,
+        annotations: Vec<PyAnnotationRow>,
     ) -> PyResult<Self> {
         py.detach(|| {
             let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
             Ok(Self {
-                inner: GtsFoldView::new(graph),
+                inner: fold_view(graph)?,
             })
         })
     }
@@ -79,6 +89,7 @@ impl PyGtsFoldView {
             term.lang.clone(),
             term.direction.clone(),
             term.reifier,
+            term.triple,
         ))
     }
 
@@ -176,22 +187,18 @@ impl PyGtsFoldView {
         self.inner.rdf_list(head_tid, scope.as_deref())
     }
 
-    fn reifiers(&self) -> Vec<(usize, (usize, usize, usize))> {
-        // The Python projection carries no graph axis (purrdf reification is
-        // standpoint-scoped); drop the always-`None` 0.9.11 graph slot.
-        self.inner
-            .reifiers()
-            .iter()
-            .map(|&(rid, spo, _graph)| (rid, spo))
-            .collect()
+    /// `(reifier_id, (s, p, o), graph?)` — the graph slot is the term id of the named
+    /// graph the declaration was asserted in (`None` = default graph). It is carried,
+    /// not dropped: the RDF 1.2 statement layer is keyed per graph, so one reifier id
+    /// may be declared in several graphs and those are distinct rows.
+    fn reifiers(&self) -> Vec<PyReifierRow> {
+        self.inner.reifiers().to_vec()
     }
 
-    fn annotations(&self) -> Vec<(usize, usize, usize)> {
-        self.inner
-            .annotations()
-            .iter()
-            .map(|&(r, p, o, _graph)| (r, p, o))
-            .collect()
+    /// `(reifier_id, predicate, value, graph?)`; the graph slot mirrors
+    /// [`Self::reifiers`].
+    fn annotations(&self) -> Vec<PyAnnotationRow> {
+        self.inner.annotations().to_vec()
     }
 
     fn tag_map(&self) -> BTreeMapString {
@@ -321,11 +328,25 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// Build the Rust-owned view, turning the fold's refusal into a `ValueError`.
+///
+/// The view REFUSES a term table in which a term resolves through itself: every
+/// accessor that renders a quoted triple (`nq_token`, `python_value`, the public-text
+/// family) walks its components to the leaves, and an unbounded walk overflows the
+/// stack — which in Rust aborts the process, killing the interpreter outright rather
+/// than raising anything Python could catch. `from_parts` accepts a term table
+/// straight from the caller, so this is the boundary where that is stopped: term ids
+/// are range-checked in [`validate_terms`], and the shape they describe is checked for
+/// termination here.
+fn fold_view(graph: Graph) -> PyResult<GtsFoldView> {
+    GtsFoldView::new(graph).map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))
+}
+
 fn graph_from_parts(
     terms: Vec<PyTermRow>,
     quads: Vec<(usize, usize, usize, Option<usize>)>,
-    reifiers: Vec<(usize, (usize, usize, usize))>,
-    annotations: Vec<(usize, usize, usize)>,
+    reifiers: Vec<PyReifierRow>,
+    annotations: Vec<PyAnnotationRow>,
 ) -> PyResult<Graph> {
     let term_count = terms.len();
     validate_terms(&terms, term_count)?;
@@ -335,28 +356,26 @@ fn graph_from_parts(
     Ok(Graph {
         terms: terms
             .into_iter()
-            .map(|(kind, value, datatype, lang, direction, reifier)| {
-                Ok(Term {
-                    kind: term_kind(kind)?,
-                    value,
-                    datatype,
-                    lang,
-                    direction,
-                    reifier,
-                })
-            })
+            .map(
+                |(kind, value, datatype, lang, direction, reifier, triple)| {
+                    Ok(Term {
+                        kind: term_kind(kind)?,
+                        value,
+                        datatype,
+                        lang,
+                        direction,
+                        reifier,
+                        triple,
+                    })
+                },
+            )
             .collect::<PyResult<Vec<_>>>()?,
         quads,
-        // Widen the narrow Python rows to the 0.9.11 row-array; purrdf rows are
-        // never graph-scoped, so the graph slot is `None`.
-        reifiers: reifiers
-            .into_iter()
-            .map(|(rid, spo)| (rid, spo, None))
-            .collect(),
-        annotations: annotations
-            .into_iter()
-            .map(|(r, p, o)| (r, p, o, None))
-            .collect(),
+        // The Python rows are already the 0.9.11 row-array shape, graph slot included:
+        // the statement layer is keyed per graph, so the caller states the graph each
+        // declaration and annotation was asserted in (`None` = default graph).
+        reifiers,
+        annotations,
         ..Graph::default()
     })
 }
@@ -374,9 +393,19 @@ fn term_kind(kind: u8) -> PyResult<TermKind> {
 }
 
 fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
-    for (idx, (_, _value, datatype, _lang, _direction, reifier)) in terms.iter().enumerate() {
+    for (idx, (_, _value, datatype, _lang, _direction, reifier, triple)) in terms.iter().enumerate()
+    {
         validate_optional_term_id(*datatype, term_count, &format!("terms[{idx}].datatype"))?;
         validate_optional_term_id(*reifier, term_count, &format!("terms[{idx}].reifier"))?;
+        // A self-describing quoted triple names its own components; every id is
+        // validated exactly like the reifier slot, so no silent acceptance. Range is
+        // all this pass can say: whether the SHAPE those ids describe terminates is a
+        // property of the whole table, checked once in `fold_view`.
+        if let Some((s, p, o)) = *triple {
+            validate_term_id(s, term_count, &format!("terms[{idx}].triple.s"))?;
+            validate_term_id(p, term_count, &format!("terms[{idx}].triple.p"))?;
+            validate_term_id(o, term_count, &format!("terms[{idx}].triple.o"))?;
+        }
     }
     Ok(())
 }
@@ -394,24 +423,23 @@ fn validate_quads(
     Ok(())
 }
 
-fn validate_reifiers(
-    reifiers: &[(usize, (usize, usize, usize))],
-    term_count: usize,
-) -> PyResult<()> {
-    for (idx, (r, (s, p, o))) in reifiers.iter().enumerate() {
+fn validate_reifiers(reifiers: &[PyReifierRow], term_count: usize) -> PyResult<()> {
+    for (idx, (r, (s, p, o), g)) in reifiers.iter().enumerate() {
         validate_term_id(*r, term_count, &format!("reifiers[{idx}].reifier"))?;
         validate_term_id(*s, term_count, &format!("reifiers[{idx}].s"))?;
         validate_term_id(*p, term_count, &format!("reifiers[{idx}].p"))?;
         validate_term_id(*o, term_count, &format!("reifiers[{idx}].o"))?;
+        validate_optional_term_id(*g, term_count, &format!("reifiers[{idx}].g"))?;
     }
     Ok(())
 }
 
-fn validate_annotations(annotations: &[(usize, usize, usize)], term_count: usize) -> PyResult<()> {
-    for (idx, (r, p, v)) in annotations.iter().enumerate() {
+fn validate_annotations(annotations: &[PyAnnotationRow], term_count: usize) -> PyResult<()> {
+    for (idx, (r, p, v, g)) in annotations.iter().enumerate() {
         validate_term_id(*r, term_count, &format!("annotations[{idx}].reifier"))?;
         validate_term_id(*p, term_count, &format!("annotations[{idx}].predicate"))?;
         validate_term_id(*v, term_count, &format!("annotations[{idx}].value"))?;
+        validate_optional_term_id(*g, term_count, &format!("annotations[{idx}].g"))?;
     }
     Ok(())
 }

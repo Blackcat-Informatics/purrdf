@@ -145,6 +145,28 @@ pub enum GraphMatchValue<'a> {
 
 /// A static, allocation-free read view over an RDF dataset (purrdf backend
 /// contract, C2/C3/C6). All methods are infallible for a frozen, validated dataset.
+///
+/// # Termination
+///
+/// `DatasetView` is public, so this trait cannot enforce the one structural
+/// invariant a generic consumer relies on: resolving a quoted-triple term's
+/// `(s, p, o)` through repeated [`resolve`](Self::resolve) calls, and a literal's
+/// datatype the same way, MUST terminate. Code generic over `D: DatasetView` — the
+/// native-codec serializers foremost among it — walks exactly that recursion with
+/// no depth bound and no visited set, the same discipline every producer of a term
+/// table in this codebase gives its own hot-path walkers. This is the
+/// implementor's obligation, in the spirit of a documented `unsafe` trait
+/// contract: the library cannot check it, only assume it. A view whose
+/// triple-term components resolve back to the term itself hands that recursion an
+/// input it will not return from — the stack overflows, and in Rust that aborts
+/// the process rather than panicking, uncatchable at any call boundary.
+///
+/// Every implementor in this repository satisfies the contract by construction:
+/// each resolves through a dictionary that either interns a triple term's
+/// components strictly before the term itself (ids only ever grow, so a component
+/// id is always smaller than the term naming it), or runs an explicit
+/// freeze-time acyclicity pass before this trait can see the result. An
+/// out-of-tree implementor owes the library the same guarantee directly.
 pub trait DatasetView {
     /// The dataset-local id type this view mints and reads in (C0.8). For the
     /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies

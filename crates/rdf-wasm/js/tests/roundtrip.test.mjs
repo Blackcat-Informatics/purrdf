@@ -423,3 +423,46 @@ test("Quad.equals does not consume its argument", () => {
   ds.add(qb);
   assert.equal(ds.has(qb), true, "dataset.add(qb) must succeed after qa.equals(qb)");
 });
+
+// The two serialization lanes, on the shipped surface, for the three formats where
+// they deliberately DIVERGE. `serialize` is writer-native and `serializeWithLoss`
+// applies the declared transcode contract; the package's own types claimed the two
+// returned the same document, which is true only for a star-capable target. TriX and
+// HexTuples have no triple-term surface, so the native lane REFUSES rather than
+// dropping a layer it has no count to report — the half that cannot be exercised off
+// wasm, and therefore the half that belongs here.
+test("serialize refuses what serializeWithLoss projects, for a star-incapable target", () => {
+  const ds = Dataset.parse(
+    `<https://e/s> <https://e/p> <https://e/o> .
+<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://e/s> <https://e/p> <https://e/o> )>> .
+`,
+    "nquads",
+  );
+
+  for (const format of ["turtle", "ntriples", "nquads", "trig"]) {
+    const plain = ds.serialize(format);
+    const counted = ds.serializeWithLoss(format);
+    assert.ok(plain.includes("<<("), `${format} must keep the triple term`);
+    assert.equal(counted.text, plain, `${format} lanes must agree byte for byte`);
+    assert.equal(counted.statementRowsDropped, 0, format);
+  }
+
+  // RDF/XML HAS a surface for the layer, so the native lane writes it and the
+  // contract lane projects it away: two different documents from one dataset.
+  const xmlPlain = ds.serialize("rdfxml");
+  const xmlCounted = ds.serializeWithLoss("rdfxml");
+  assert.ok(xmlPlain.includes('rdf:parseType="Triple"'));
+  assert.ok(!xmlCounted.text.includes('rdf:parseType="Triple"'));
+  assert.notEqual(xmlCounted.text, xmlPlain);
+  assert.equal(xmlCounted.statementRowsDropped, 1);
+
+  // TriX / HexTuples: refusal on one lane, a counted projection on the other.
+  for (const format of ["trix", "hextuples"]) {
+    assert.throws(
+      () => ds.serialize(format),
+      /no triple-term surface/,
+      `${format} must refuse, not drop silently`,
+    );
+    assert.equal(ds.serializeWithLoss(format).statementRowsDropped, 1, format);
+  }
+});

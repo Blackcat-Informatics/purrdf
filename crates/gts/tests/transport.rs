@@ -17,6 +17,7 @@ fn writer_reader_round_trips_terms_and_quads() {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         },
         Term {
             kind: TermKind::Iri,
@@ -25,6 +26,7 @@ fn writer_reader_round_trips_terms_and_quads() {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         },
         Term {
             kind: TermKind::Literal,
@@ -33,6 +35,7 @@ fn writer_reader_round_trips_terms_and_quads() {
             lang: Some("en".to_string()),
             direction: None,
             reifier: None,
+            triple: None,
         },
     ];
     let quads = vec![(0, 1, 2, None)];

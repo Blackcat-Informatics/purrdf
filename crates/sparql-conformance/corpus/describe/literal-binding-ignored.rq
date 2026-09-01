@@ -1,0 +1,2 @@
+PREFIX : <http://example.org/>
+DESCRIBE ?n WHERE { :b :name ?n }

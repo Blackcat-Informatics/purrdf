@@ -303,14 +303,15 @@ fn build_fixture() -> Arc<RdfDataset> {
     });
 
     // The RDF 1.2 triple term `<<(alice knows bob)>>`, used as the OBJECT of an
-    // asserted quad (`meta statesFact <<...>>`) below, AND as the SUBJECT of a
-    // NESTED triple term `<<<<(alice knows bob)>> certainty "high">>` (a component
-    // position — legal per `require_triple_component_subject`, unlike an asserted
-    // quad's top-level subject, which may never be a triple term). The nested term
-    // is itself asserted as the object of a second quad, so `alice_knows_bob`
-    // genuinely occupies both roles.
+    // asserted quad (`meta statesFact <<...>>`) below, AND as the OBJECT of a
+    // NESTED triple term `<<( meta certainty <<(alice knows bob)>> )>>`. The
+    // object is the ONE position RDF 1.2 nests a triple term in (see
+    // `require_triple_component_subject`, which holds a triple term's subject to
+    // the same IRI-or-blank rule an asserted subject carries), and the nested
+    // term is itself asserted as the object of a second quad, so
+    // `alice_knows_bob` genuinely occupies both roles.
     let alice_knows_bob = b.intern_triple(alice, knows, bob);
-    let annotated_alice_knows_bob = b.intern_triple(alice_knows_bob, certainty, high);
+    let annotated_alice_knows_bob = b.intern_triple(meta, certainty, alice_knows_bob);
 
     // -- Default graph --------------------------------------------------------
     b.push_quad(alice, knows, bob, None);

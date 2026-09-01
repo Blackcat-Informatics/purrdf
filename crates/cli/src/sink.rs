@@ -14,8 +14,15 @@
 //! It returns the [`LossLedger`] for the conversion so `main` can surface it under
 //! `--loss-ledger`. The ledger combines the **contract** losses for the
 //! `(source-codec → target-codec)` pair ([`pair_loss_ledger`], when both codec
-//! names are known) with the **realized** count of RDF-1.2 statement-layer rows the
-//! serializer actually dropped (recorded as a runtime entry only when non-zero).
+//! names are known) with the **realized** counts of what the serializer actually
+//! dropped ([`RealizedDrops`] — statement-layer rows, base-direction literals, and
+//! named-graph rows), each recorded as a runtime entry only when non-zero.
+//!
+//! The two halves are not interchangeable, and the realized half is the one that
+//! always reports: the contract half needs BOTH codec names, so a lane that
+//! serializes a freshly-built dataset (a CONSTRUCT result, a reasoned closure) has
+//! no source codec and gets no contract entries at all. Every loss that lane can
+//! realize must therefore be counted, or it is silent.
 
 use std::borrow::Cow;
 use std::io::Write;
@@ -39,6 +46,17 @@ const STATEMENT_ROWS_DROPPED_CODE: &str = "statement-rows-dropped";
 /// serializer dropped because the target format (TriX / HexTuples) has no
 /// direction surface — it keeps the language tag but cannot carry `--ltr` / `--rtl`.
 const DIRECTION_DROPPED_CODE: &str = "rdf12-direction-dropped";
+
+/// The runtime loss code recording how many rows the serializer dropped because
+/// the target format is a single-graph syntax with no named-graph construct.
+///
+/// The REALIZED twin of `purrdf_core::loss`'s static `named-graph-dropped` contract
+/// entry, and the reason it exists: the contract half is only reachable when both
+/// codec names are known (`src_codec` is `Some`), so before this counter a lane with
+/// no source codec — a freshly-CONSTRUCTed graph, a reasoned closure — could discard
+/// every named graph it held and hand back an EMPTY ledger. A realized count needs no
+/// source codec, so the drop is now reported on every lane that can produce it.
+const NAMED_GRAPH_ROWS_DROPPED_CODE: &str = "named-graph-rows-dropped";
 
 /// Write `bytes` to `out`, or to stdout when `out` is `-`.
 ///
@@ -87,8 +105,11 @@ pub(crate) fn write_rdf<D: DatasetView>(
             Ok(build_ledger(
                 src_codec,
                 format.loss_codec_name(),
-                outcome.statement_rows_dropped,
-                outcome.directional_literals_dropped,
+                &RealizedDrops {
+                    statement_rows: outcome.statement_rows_dropped,
+                    directional_literals: outcome.directional_literals_dropped,
+                    named_graph_rows: outcome.named_graph_rows_dropped,
+                },
             ))
         }
         SourceFormat::Pack => {
@@ -125,14 +146,33 @@ pub(crate) fn validate_jsonld_options(
     Ok(())
 }
 
+/// What the serializer ACTUALLY discarded on this one emission, by cause.
+///
+/// The three counts partition the dropped rows — star layer, base direction, graph
+/// scoping — so no row is reported twice and none is reported under a cause that did
+/// not produce it.
+struct RealizedDrops {
+    /// RDF-1.2 statement-layer rows dropped because the target has no star layer.
+    statement_rows: usize,
+    /// Object literals whose base direction the target has no surface for.
+    directional_literals: usize,
+    /// Rows dropped because the target is a single-graph syntax.
+    named_graph_rows: usize,
+}
+
 /// Combine the contract losses for `(src_codec → dst_codec)` with the realized
-/// dropped-row counts (RDF-1.2 statement-layer rows and base-direction literals).
+/// dropped-row counts (RDF-1.2 statement-layer rows, base-direction literals, and
+/// named-graph rows).
 fn build_ledger(
     src_codec: Option<&str>,
     dst_codec: Option<&str>,
-    statement_rows_dropped: usize,
-    directional_literals_dropped: usize,
+    realized: &RealizedDrops,
 ) -> LossLedger {
+    let &RealizedDrops {
+        statement_rows: statement_rows_dropped,
+        directional_literals: directional_literals_dropped,
+        named_graph_rows: named_graph_rows_dropped,
+    } = realized;
     let mut ledger = match (src_codec, dst_codec) {
         (Some(from), Some(to)) => pair_loss_ledger(from, to),
         _ => LossLedger::new(),
@@ -159,6 +199,20 @@ fn build_ledger(
                 "{directional_literals_dropped} literal base direction(s) were dropped because \
                  the target format (TriX / HexTuples) has no direction surface — the language \
                  tag is retained but `--ltr` / `--rtl` is lost"
+            )),
+            location: None,
+        });
+    }
+    if named_graph_rows_dropped > 0 {
+        ledger.record(LossEntry {
+            code: Cow::Borrowed(NAMED_GRAPH_ROWS_DROPPED_CODE),
+            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
+            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
+            note: Cow::Owned(format!(
+                "{named_graph_rows_dropped} row(s) asserted in a named graph (base quads plus \
+                 the statement-layer rows scoped to them) were DROPPED because the target \
+                 format is a single-graph syntax with no named-graph construct — they are not \
+                 folded into the default graph"
             )),
             location: None,
         });

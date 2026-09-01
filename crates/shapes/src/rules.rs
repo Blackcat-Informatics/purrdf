@@ -179,12 +179,19 @@ pub enum RuleSchedule {
 /// anywhere in the `CONSTRUCT { … }` template (including inside an RDF 1.2
 /// quoted triple term) is minted fresh per solution (SPARQL 1.1 §16.2), so the
 /// rule is a run-once rule under SRL §4.4.
+///
+/// The template is a `QuadPattern` list because this crate's parser accepts the
+/// quad-producing `CONSTRUCT`; the graph name cannot carry a blank node (it is
+/// an IRI or a variable), and a `sh:SPARQLRule` naming one is refused at load
+/// time anyway, so only the triple half is walked.
 #[must_use]
 pub fn construct_template_mints_blank(query: &Query) -> bool {
     let Query::Construct { template, .. } = query else {
         return false;
     };
-    template.iter().any(triple_pattern_mints_blank)
+    template
+        .iter()
+        .any(|quad| triple_pattern_mints_blank(&quad.triple))
 }
 
 /// Whether a CONSTRUCT template triple pattern carries a blank node in either
@@ -1238,6 +1245,63 @@ mod tests {
               sh:rule [ a sh:SPARQLRule ; sh:construct "SELECT $this WHERE { $this a ex:Person }" ] ."#,
         );
         assert!(err.contains("must be a CONSTRUCT"), "got: {err}");
+    }
+
+    /// The quad-producing `CONSTRUCT` parses as a `CONSTRUCT`, but a SHACL rule
+    /// head produces TRIPLES inferred into the data graph — `sparql_rule_producer`
+    /// returns `[Term; 3]` and has nowhere to put a graph name. Accepting one
+    /// would silently discard the named graph, so the rule loader refuses EVERY
+    /// spelling that names a graph and names the graph it refused: the
+    /// whole-template shorthand, a `GRAPH` block inside the template, a graph
+    /// block that scopes only PART of the template, and a graph VARIABLE.
+    #[test]
+    fn sparql_rule_construct_graph_errors() {
+        for (construct, named) in [
+            (
+                "CONSTRUCT GRAPH <http://example.org/g> { $this ex:x ex:y } \
+                 WHERE { $this a ex:Person }",
+                "<http://example.org/g>",
+            ),
+            (
+                "CONSTRUCT { GRAPH <http://example.org/g> { $this ex:x ex:y } } \
+                 WHERE { $this a ex:Person }",
+                "<http://example.org/g>",
+            ),
+            (
+                "CONSTRUCT { $this ex:x ex:y . GRAPH <http://example.org/g> { $this ex:x ex:z } } \
+                 WHERE { $this a ex:Person }",
+                "<http://example.org/g>",
+            ),
+            (
+                "CONSTRUCT { GRAPH ?g { $this ex:x ex:y } } \
+                 WHERE { $this a ex:Person . GRAPH ?g { $this a ex:Person } }",
+                "?g",
+            ),
+        ] {
+            let err = parse_shapes_err(&format!(
+                r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct "{construct}" ] ."#
+            ));
+            assert!(err.contains("CONSTRUCT GRAPH"), "got: {err}");
+            assert!(
+                err.contains(named),
+                "the diagnostic must name `{named}`, got: {err}"
+            );
+        }
+    }
+
+    /// The counterpart that keeps the refusal falsifiable: a `sh:SPARQLRule`
+    /// whose template names NO graph is still accepted.
+    #[test]
+    fn sparql_rule_without_a_target_graph_loads() {
+        let shapes = parse_shapes(
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:x ex:y } WHERE { $this a ex:Person }" ] ."#,
+        );
+        assert_eq!(shapes.node_shapes.len(), 1);
     }
 
     #[test]

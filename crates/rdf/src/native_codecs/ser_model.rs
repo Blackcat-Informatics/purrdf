@@ -368,6 +368,19 @@ fn cmp_graph(
 /// `escape_iri` and `escape_literal` already return a [`Cow`], so an unescaped value —
 /// which is nearly all of them — is borrowed straight from the term table and reaches
 /// `out` without an intermediate of any kind.
+///
+/// # Termination
+///
+/// This recurses on a literal's datatype and on a quoted triple's `(s, p, o)` with no
+/// depth bound and no visited set — a serializer's inner loop should carry neither —
+/// so it is sound only because every producer of a [`SerGraph`] hands it a term table
+/// that terminates. There are exactly three, and each owes that guarantee: the text
+/// parsers and the [`DatasetView`](crate::DatasetView) lowering in `serialize.rs` both
+/// intern a triple term's components BEFORE the term itself, so a component id is
+/// always strictly smaller than the term naming it; and `crate::gts::gts_to_ser`,
+/// whose input is a caller-supplied GTS graph and which therefore proves it, refusing
+/// a self-reaching table with `gts-self-reaching-term`. A fourth producer must do the
+/// same — a stack overflow here aborts the process rather than panicking.
 fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
     use std::fmt::Write as _;
 
@@ -548,6 +561,12 @@ pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiag
 /// the declared prefix rather than as a full IRI — so this mirrors [`write_term`] and
 /// appends for the same reason: a term built as its own `String` is an allocation whose
 /// every byte was going to be copied into the output regardless.
+///
+/// # Termination
+///
+/// It also mirrors [`write_term`]'s unguarded recursion, and rests on the same
+/// invariant: a [`SerGraph`]'s term table terminates because every producer of one
+/// guarantees it.
 fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
     use std::fmt::Write as _;
 

@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A named-graph fixture (loaded as `qt:graphData`, so its graph IRI is this
+# file's own manifest-relative IRI).
+@prefix : <http://example.org/> .
+
+:d :knows :e .

@@ -1,0 +1,5 @@
+@prefix : <http://example.org/> .
+# Clause 4, subject half: the reifier of :a's outgoing edge, and its annotations.
+# The reifier :r3 of `:m :knows :n` is absent, because its reified triple touches
+# the closure at neither endpoint.
+:a :knows :b ~:r1 {| :certainty "high" ; :recordedBy :editor |} .

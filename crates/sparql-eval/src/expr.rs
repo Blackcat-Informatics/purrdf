@@ -3128,37 +3128,77 @@ fn eval_function<D: DatasetView + Sync>(
         }
 
         // ---- hash functions ------------------------------------------------
-        Function::Md5 => match string_arg(&vals, 0) {
+        //
+        // Every arm here reads its argument through `string_arg_ref`, NOT
+        // `string_arg`: a hash consumes the lexical form as bytes and never
+        // keeps it, so copying it into a fresh `String` first would be one
+        // wasted heap allocation and one wasted memcpy of the whole literal,
+        // per solution row, on every one of these nine built-ins. The only
+        // allocation a hash call still makes per row is the hex digest it
+        // returns, which is genuinely new text.
+        Function::Md5 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha1 => match string_arg(&vals, 0) {
+        Function::Sha1 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha256 => match string_arg(&vals, 0) {
+        Function::Sha256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha384 => match string_arg(&vals, 0) {
+        Function::Sha384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha512 => match string_arg(&vals, 0) {
+        Function::Sha512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+            }
+            None => Ok(None),
+        },
+
+        // SEP-0008 SHA-3 (FIPS 202). Same call convention as SHA1/SHA256: one
+        // simple-literal/xsd:string argument in, the lowercase hex digest out,
+        // an unbound/ill-typed argument yielding an error (`None`).
+        Function::Sha3_224 => match string_arg_ref(&vals, 0) {
+            Some((s, _)) => {
+                let digest = sha3::Sha3_224::digest(s.as_bytes());
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+            }
+            None => Ok(None),
+        },
+        Function::Sha3_256 => match string_arg_ref(&vals, 0) {
+            Some((s, _)) => {
+                let digest = sha3::Sha3_256::digest(s.as_bytes());
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+            }
+            None => Ok(None),
+        },
+        Function::Sha3_384 => match string_arg_ref(&vals, 0) {
+            Some((s, _)) => {
+                let digest = sha3::Sha3_384::digest(s.as_bytes());
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+            }
+            None => Ok(None),
+        },
+        Function::Sha3_512 => match string_arg_ref(&vals, 0) {
+            Some((s, _)) => {
+                let digest = sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
@@ -3707,6 +3747,35 @@ fn is_numeric(v: &XsdValue) -> bool {
 /// argument. `None` for any other term (a string-function type error).
 fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
     string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
+}
+
+/// [`string_arg`] without the copy: `(lexical, language)` BORROWED from the
+/// argument rather than cloned out of it.
+///
+/// The accepted-datatype rule is identical to [`string_arg`]'s (simple literal,
+/// `xsd:string`, `rdf:langString`, `rdf:dirLangString`); only the ownership
+/// differs. Callers that merely READ the lexical form — the hash built-ins,
+/// which feed it straight to `Digest::update` as bytes — must use this one:
+/// [`string_arg`] heap-allocates a fresh `String` per call, and these are
+/// evaluated once per solution row, so a `SHA3-256(?o)` over a million-row scan
+/// paid a million allocations to hand `as_bytes()` a pointer it could have had
+/// for free. The hex digest is still allocated (it is a genuinely new string),
+/// so the per-row allocation count for a hash call drops from two to one.
+fn string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
+    match arg(vals, i)? {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        } if datatype == XSD_STRING
+            || datatype == RDF_LANG_STRING
+            || datatype == RDF_DIR_LANG_STRING =>
+        {
+            Some((lexical_form.as_str(), language.as_deref()))
+        }
+        _ => None,
+    }
 }
 
 /// Extract the lexical form of a *plain* string argument — a simple literal or
@@ -5378,6 +5447,195 @@ mod tests {
             lex(&ds, &expr),
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned())
         );
+    }
+
+    // ---- SEP-0008 SHA-3 known-answer vectors ------------------------------
+
+    /// The three NIST FIPS 202 example messages every SHA-3 known-answer table
+    /// is published against: the empty message, `"abc"` (24 bits), and the
+    /// 896-bit message. Kept in one place so a digest size cannot be pinned
+    /// against a *different* message than its siblings.
+    const KAT_MESSAGES: [&str; 3] = [
+        "",
+        "abc",
+        "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    ];
+
+    /// Assert `func` reproduces the three published digests for
+    /// [`KAT_MESSAGES`], in order.
+    fn assert_kat(func: &Function, expected: [&str; 3]) {
+        let ds = empty_ds();
+        for (message, want) in KAT_MESSAGES.iter().zip(expected) {
+            let expr = Expression::FunctionCall(func.clone(), vec![lit(message)]);
+            assert_eq!(
+                lex(&ds, &expr).as_deref(),
+                Some(want),
+                "{func:?} of {message:?} does not match its published FIPS 202 vector"
+            );
+        }
+    }
+
+    #[test]
+    fn sha3_224_matches_the_published_fips_202_vectors() {
+        assert_kat(
+            &Function::Sha3_224,
+            [
+                "6b4e03423667dbb73b6e15454f0eb1abd4597f9a1b078e3f5b5a6bc7",
+                "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf",
+                "8a24108b154ada21c9fd5574494479ba5c7e7ab76ef264ead0fcce33",
+            ],
+        );
+    }
+
+    #[test]
+    fn sha3_256_matches_the_published_fips_202_vectors() {
+        assert_kat(
+            &Function::Sha3_256,
+            [
+                "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
+                "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+                "41c0dba2a9d6240849100376a8235e2c82e1b9998a999e21db32dd97496d3376",
+            ],
+        );
+    }
+
+    #[test]
+    fn sha3_384_matches_the_published_fips_202_vectors() {
+        assert_kat(
+            &Function::Sha3_384,
+            [
+                "0c63a75b845e4f7d01107d852e4c2485c51a50aaaa94fc61995e71bbee983a2ac371383\
+                 1264adb47fb6bd1e058d5f004",
+                "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88ce\
+                 a927ac7f539f1edf228376d25",
+                "991c665755eb3a4b6bbdfb75c78a492e8c56a22c5c4d7e429bfdbc32b9d4ad5aa04a1f0\
+                 76e62fea19eef51acd0657c22",
+            ],
+        );
+    }
+
+    #[test]
+    fn sha3_512_matches_the_published_fips_202_vectors() {
+        assert_kat(
+            &Function::Sha3_512,
+            [
+                "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123\
+                 af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26",
+                "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e\
+                 9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+                "04a371e84ecfb5b8b77cb48610fca8182dd457ce6f326a0fd3d7ec2f1e91636dee691fb\
+                 e0c985302ba1b0d8dc78c086346b533b49c030d99a27daf1139d6e75e",
+            ],
+        );
+    }
+
+    /// The four SHA-3 sizes must be four DIFFERENT functions: a dispatch table
+    /// that routed two of them to the same digest would still pass each
+    /// individual vector test only if the vectors were wrong, but this pins the
+    /// distinctness (and the digest LENGTHS) independently of the vectors.
+    #[test]
+    fn the_four_sha3_sizes_are_distinct_and_correctly_sized() {
+        let ds = empty_ds();
+        let digests: Vec<String> = [
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+        ]
+        .into_iter()
+        .map(|f| lex(&ds, &Expression::FunctionCall(f, vec![lit("abc")])).expect("a SHA-3 digest"))
+        .collect();
+        // Two hex chars per octet: 224/256/384/512 bits → 56/64/96/128 chars.
+        assert_eq!(
+            digests.iter().map(String::len).collect::<Vec<_>>(),
+            vec![56, 64, 96, 128]
+        );
+        let unique: std::collections::BTreeSet<&String> = digests.iter().collect();
+        assert_eq!(
+            unique.len(),
+            4,
+            "the four SHA-3 sizes collided: {digests:?}"
+        );
+    }
+
+    /// SEP-0008 keeps the SHA1/SHA256 call convention, whose error contract is
+    /// "not a string argument → an expression error". A non-literal argument
+    /// must therefore be an error, not a digest of its lexical form.
+    #[test]
+    fn sha3_over_a_non_string_argument_is_an_expression_error() {
+        let ds = empty_ds();
+        for f in [
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+        ] {
+            let expr = Expression::FunctionCall(
+                f.clone(),
+                vec![Expression::NamedNode(
+                    NamedNode::new("http://example.org/s").expect("a valid test IRI"),
+                )],
+            );
+            assert_eq!(lex(&ds, &expr), None, "{f:?} over an IRI must error");
+        }
+    }
+
+    /// The hash built-ins read their argument through the BORROWING accessor
+    /// (`string_arg_ref`) rather than the cloning one, and that swap must not
+    /// have narrowed which arguments they accept.
+    ///
+    /// `string_arg` admits a simple literal, an explicitly `xsd:string`-typed
+    /// one, an `rdf:langString` and an RDF 1.2 `rdf:dirLangString` — hashing the
+    /// LEXICAL form in every case and ignoring the tag — and refuses everything
+    /// else. This pins the same four accepts and one refuse across all nine
+    /// hash functions, against the `xsd:string` digest of the same lexical form,
+    /// so an accessor that dropped an accepted datatype (or started hashing the
+    /// language tag along with the text) fails here rather than silently
+    /// erroring on tagged data at a host boundary.
+    #[test]
+    fn every_hash_builtin_accepts_the_same_argument_shapes_by_reference() {
+        let ds = empty_ds();
+        let functions = [
+            Function::Md5,
+            Function::Sha1,
+            Function::Sha256,
+            Function::Sha384,
+            Function::Sha512,
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+        ];
+        for f in functions {
+            let baseline = lex(&ds, &Expression::FunctionCall(f.clone(), vec![lit("abc")]))
+                .unwrap_or_else(|| panic!("{f:?} must hash a simple literal"));
+            for accepted in [
+                typed_lit("abc", "http://www.w3.org/2001/XMLSchema#string"),
+                Expression::Literal(Literal::new_lang("abc", "en", None)),
+                Expression::Literal(Literal::new_lang(
+                    "abc",
+                    "en",
+                    Some(purrdf_sparql_algebra::BaseDirection::Ltr),
+                )),
+            ] {
+                assert_eq!(
+                    lex(&ds, &Expression::FunctionCall(f.clone(), vec![accepted])).as_deref(),
+                    Some(baseline.as_str()),
+                    "{f:?} must hash the lexical form of every string-shaped literal"
+                );
+            }
+            assert_eq!(
+                lex(
+                    &ds,
+                    &Expression::FunctionCall(
+                        f.clone(),
+                        vec![typed_lit("1", "http://www.w3.org/2001/XMLSchema#integer")]
+                    )
+                ),
+                None,
+                "{f:?} over a non-string literal must stay an expression error"
+            );
+        }
     }
 
     // ---- Gap 4: date/time component extraction ----------------------------

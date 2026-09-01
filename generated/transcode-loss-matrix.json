@@ -298,7 +298,7 @@
     "from": "gts",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -312,7 +312,7 @@
     "from": "gts",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -326,7 +326,7 @@
     "from": "gts",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -347,14 +347,14 @@
     "from": "gts",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "gts",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -368,14 +368,14 @@
     "from": "gts",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "gts",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -389,7 +389,7 @@
     "from": "gts",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -403,7 +403,7 @@
     "from": "gts",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "bnode-scope-flatten",
@@ -417,7 +417,7 @@
     "from": "gts",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-unrepresentable",
@@ -431,7 +431,7 @@
     "from": "gts",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "additional-properties-validation-narrowed",
@@ -1040,7 +1040,7 @@
     "from": "jsonld",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -1054,7 +1054,7 @@
     "from": "jsonld",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -1068,7 +1068,7 @@
     "from": "jsonld",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "n3-projection",
@@ -1082,14 +1082,14 @@
     "from": "jsonld",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -1103,14 +1103,14 @@
     "from": "jsonld",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -1124,7 +1124,7 @@
     "from": "jsonld",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -1138,21 +1138,21 @@
     "from": "jsonld",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "canonical-rdf12-projection",
@@ -1166,7 +1166,7 @@
     "from": "jsonld-star",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -1180,7 +1180,7 @@
     "from": "jsonld-star",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -1194,7 +1194,7 @@
     "from": "jsonld-star",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -1215,14 +1215,14 @@
     "from": "jsonld-star",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld-star",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -1236,14 +1236,14 @@
     "from": "jsonld-star",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld-star",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -1257,7 +1257,7 @@
     "from": "jsonld-star",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -1271,14 +1271,14 @@
     "from": "jsonld-star",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "jsonld-star",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-unrepresentable",
@@ -1292,7 +1292,7 @@
     "from": "jsonld-star",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "additional-properties-schema-widened",
@@ -1495,7 +1495,7 @@
     "from": "nquads",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -1509,7 +1509,7 @@
     "from": "nquads",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -1523,7 +1523,7 @@
     "from": "nquads",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -1544,14 +1544,14 @@
     "from": "nquads",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "nquads",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -1565,14 +1565,14 @@
     "from": "nquads",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "nquads",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -1586,7 +1586,7 @@
     "from": "nquads",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -1600,14 +1600,14 @@
     "from": "nquads",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "nquads",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-unrepresentable",
@@ -1621,7 +1621,7 @@
     "from": "nquads",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "canonical-rdf12-projection",
@@ -2629,7 +2629,7 @@
     "from": "trig",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -2643,7 +2643,7 @@
     "from": "trig",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -2657,7 +2657,7 @@
     "from": "trig",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -2678,14 +2678,14 @@
     "from": "trig",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "trig",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -2699,14 +2699,14 @@
     "from": "trig",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "trig",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -2720,7 +2720,7 @@
     "from": "trig",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -2734,14 +2734,14 @@
     "from": "trig",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "trig",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-unrepresentable",
@@ -2755,7 +2755,7 @@
     "from": "trig",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "canonical-rdf12-projection",
@@ -2979,7 +2979,7 @@
     "from": "yaml-ld-star",
     "to": "canonical-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "datalog-projection",
@@ -2993,7 +2993,7 @@
     "from": "yaml-ld-star",
     "to": "datalog",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "gufo-projection",
@@ -3007,7 +3007,7 @@
     "from": "yaml-ld-star",
     "to": "gufo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-jsonld-rejected",
@@ -3028,14 +3028,14 @@
     "from": "yaml-ld-star",
     "to": "n3",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "yaml-ld-star",
     "to": "nemo",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "nemo-projection",
@@ -3049,14 +3049,14 @@
     "from": "yaml-ld-star",
     "to": "ntriples",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "yaml-ld-star",
     "to": "owl-dl",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-dl-projection",
@@ -3070,7 +3070,7 @@
     "from": "yaml-ld-star",
     "to": "owl-el",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "owl-el-projection",
@@ -3084,14 +3084,14 @@
     "from": "yaml-ld-star",
     "to": "owl-rdf12",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "named-graph-dropped",
     "from": "yaml-ld-star",
     "to": "rdfxml",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   },
   {
     "code": "rdf12-star-unrepresentable",
@@ -3105,6 +3105,6 @@
     "from": "yaml-ld-star",
     "to": "turtle",
     "intentional": true,
-    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+    "note": "The target syntax has no named-graph construct; a quad asserted in a named graph is DROPPED entirely — statement and graph name alike — and only the default graph survives. The quads are NOT folded into the default graph."
   }
 ]

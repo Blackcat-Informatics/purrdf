@@ -1,0 +1,7 @@
+# One reifier id, two graphs. Only the <g4> declaration reifies a triple of :c, so only
+# it and the annotation asserted in <g4> are described. The <g5> declaration of the same
+# reifier id, and its <g5> annotation under the same predicate, are absent: an annotation
+# rides with the declaration it annotates, not with the reifier resource.
+<http://example.org/c> <http://example.org/worksAt> <http://example.org/acme> <http://example.org/g4> .
+<http://example.org/rs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/c> <http://example.org/worksAt> <http://example.org/acme> )>> <http://example.org/g4> .
+<http://example.org/rs> <http://example.org/since> "2020" <http://example.org/g4> .

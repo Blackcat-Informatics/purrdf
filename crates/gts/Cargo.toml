@@ -68,6 +68,10 @@ aes-gcm = { workspace = true }
 # Authoring hot-path regression watch. Defaults off like sibling crates so the
 # bench lane stays lightweight and report-only.
 criterion = { workspace = true }
+# Reads the frozen corpus's `<id>.expected.json` fold oracles so a test can
+# compare what this reader produces against what the shared cross-engine
+# expectation states. Test-only: the library itself never parses JSON.
+serde_json = { workspace = true }
 
 [[bench]]
 # GTS writer/codec authoring hot paths: rsyncable zstd block compression and

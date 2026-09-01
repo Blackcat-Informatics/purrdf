@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The RDF 1.2 STATEMENT-LAYER fixture: clause 4 of the symmetric CBD — the
+# reifiers whose reified triple's subject OR OBJECT lies in the closure,
+# together with their annotations.
+#
+# It sits beside `data.ttl` rather than inside it so clause 4 is isolated the way
+# clauses 1-3 are, and so every clause-4 case is graded against data that also
+# carries a reifier about a triple the description must NOT reach.
+@prefix :    <http://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+# The SUBJECT half of the disjunction: an asserted outgoing edge of :a, reified
+# by :r1, which carries two annotations.
+:a :knows :b ~:r1 {| :certainty "high" ; :recordedBy :editor |} .
+
+# The OBJECT half: :r2 reifies a triple that is NOT asserted, and :q is that
+# triple's OBJECT and the subject of nothing at all — so the entire description
+# of :q is clause 4 reached through the object position, and no other clause can
+# supply a single statement of it.
+:r2 rdf:reifies <<( :p :mentions :q )>> .
+:r2 :source :ledger .
+
+# Clause 3 crossed with clause 4: a BLANK reifier, and an annotation whose object
+# is a blank node. Both must ride along transitively — the blank annotation
+# object's own triples describe it, and a subgraph that emitted the blank without
+# them would dangle.
+:c :worksAt :acme {| :since "2020" ; :recordedBy [ :name "Ed" ] |} .
+
+# A reifier about a triple no clause of any description here reaches: clause 4
+# selects by reified-triple endpoint, not "every reifier in the dataset".
+:m :knows :n ~:r3 {| :certainty "low" |} .

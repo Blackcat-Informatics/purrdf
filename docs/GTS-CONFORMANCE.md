@@ -298,7 +298,7 @@ Severity values:
 | `UnknownCodec` | warning | transform capability | Preserve the frame as opaque and continue folding known content. | yes | `unknown-codec` | Baseline Reader |
 | `MissingKey` | warning | encrypted transform | Preserve the frame as opaque and continue folding known content. | yes | `missing-key` | Full Reader when decrypt support is claimed |
 | `KeyWrapFailed` | warning | deferred multi-recipient encrypted transform | Preserve the frame as opaque when ECDH recipient metadata or AES-KW unwrap fails. | yes | `missing-key` | Future Full Reader when `cose-encrypt`/ECDH support is claimed |
-| `ConflictingReifier` | error | graph fold | Keep the first binding in file order and ignore the conflicting binding. | yes | none | Baseline Reader |
+| `ConflictingReifier` | error | graph fold | Keep EVERY reifier row (`rdf:reifies` is not functional) and resolve the affected `"tt"`-less quoted-triple term through the first binding in file order. | yes | none | Baseline Reader |
 | `PositionConstraint` | error | graph fold | Reject the offending row and continue folding other rows/frames. | yes | none | Baseline Reader |
 | `ForwardReference` | error | term dictionary | Drop or ignore the invalid forward reference and continue folding safely. | yes | none | Baseline Reader |
 | `SegmentBoundary` | fatal | pre-segment compatibility mode | Stop before misfolding a later segment as file-global ids. | no for that mode | none | Baseline Reader compatibility test |

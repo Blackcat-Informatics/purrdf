@@ -31,6 +31,7 @@
 //!     lang: None,
 //!     direction: None,
 //!     reifier: None,
+//!     triple: None,
 //! };
 //! let terms = vec![
 //!     iri("http://example.org/cat"),
@@ -42,6 +43,7 @@
 //!         lang: Some("en".to_string()),
 //!         direction: None,
 //!         reifier: None,
+//!         triple: None,
 //!     },
 //! ];
 //!

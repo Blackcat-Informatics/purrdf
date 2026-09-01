@@ -164,6 +164,19 @@ The **result shape** selects which half of `--results-format` is legal:
 A shape/format mismatch (e.g. SELECT solutions with `turtle`, or a CONSTRUCT graph
 with `csv`) is a hard runtime error (exit 1). Results always go to stdout.
 
+A **quad-template `CONSTRUCT`** (`CONSTRUCT { GRAPH ?g { … } }`, or the
+whole-template `CONSTRUCT GRAPH <iri> { … }` shorthand) narrows that further. Only
+six of the nine RDF syntaxes can carry a graph name — `trig`, `nquads`, `trix`,
+`hextuples`, `jsonld`, `yamlld`. The other three (`turtle`, `ntriples`, `rdfxml`)
+have no named-graph construct, and the single-graph serializers **drop** every
+graph-scoped statement rather than folding it into the default graph. So a result
+carrying any named graph, asked for one of those three, is a **usage refusal (exit
+2)** whose stderr names the graphs, the format, and the quad-capable alternatives —
+never a well-formed document silently missing what the query asked for. A mixed
+template (default-graph triples plus named-graph quads) is refused as a whole for
+the same reason; a result with only default-graph statements — every SPARQL 1.1
+`CONSTRUCT`, every `DESCRIBE` — serializes to `turtle` unchanged.
+
 ### Execution governors
 
 Six flags bound what one query is allowed to cost. Each is optional and each bounds

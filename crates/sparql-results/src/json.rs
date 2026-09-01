@@ -20,8 +20,13 @@
 //! literal — a genuine spelling divergence from the spec, now fixed (see
 //! `simple_literal_serializes_bare_per_spec` below for the pin). The
 //! CONSTRUCT (`Graph`) branch, meanwhile, uses the wasm-clean [`crate::graph`]
-//! N-Triples writer (no oxigraph) and therefore additionally carries
-//! RDF-1.2-star reifier/annotation lines (maximal information flow).
+//! N-QUADS writer (no oxigraph) and therefore additionally carries
+//! RDF-1.2-star reifier/annotation lines AND every row's named graph (maximal
+//! information flow). `{"graph": …}` is PurRDF's own envelope member, not a W3C
+//! SRJ one, and a quad-template `CONSTRUCT { GRAPH ?g { … } }` result rendered
+//! through a triple-only writer would have dropped the graph names the query
+//! spelled out — see [`crate::graph`] for why this member widens rather than
+//! refusing. A default-graph-only result is byte-identical either way.
 //!
 //! When the supplied [`ResultProvenance`] is non-empty AND the caller supplies a
 //! [`ProvenanceNamespace`], an additive top-level member (keyed by
@@ -44,7 +49,7 @@
 
 use crate::SerializeOutcome;
 use crate::error::Error;
-use crate::graph::dataset_to_ntriples;
+use crate::graph::dataset_to_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
@@ -185,12 +190,13 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
             out.push_str("]}}");
         }
         SparqlResult::Graph(graph) => {
-            // Wasm-clean deviation from rdf-capi: render N-Triples directly from
+            // Wasm-clean deviation from rdf-capi: render N-Quads directly from
             // the rdf-core kernel (no oxigraph), additionally carrying
-            // reifier/annotation lines.
-            let nt = dataset_to_ntriples(graph.as_ref());
+            // reifier/annotation lines and every row's graph slot (see
+            // [`crate::graph`] for why this envelope widens rather than refuses).
+            let nq = dataset_to_nquads(graph.as_ref());
             out.push_str("{\"graph\":");
-            json_string(&nt, out);
+            json_string(&nq, out);
             out.push('}');
         }
     }
@@ -737,9 +743,9 @@ mod tests {
         );
     }
 
-    // 7. GRAPH — CONSTRUCT result renders `{"graph":"<nt>"}` carrying the triple.
+    // 7. GRAPH — CONSTRUCT result renders `{"graph":"<nq>"}` carrying the triple.
     #[test]
-    fn graph_result_wraps_ntriples() {
+    fn graph_result_wraps_nquads() {
         let mut builder = RdfDatasetBuilder::new();
         builder.push_owned_quad(&RdfQuad {
             subject: RdfTerm::iri("http://example.org/s"),
@@ -754,10 +760,41 @@ mod tests {
         let text = json_text(&result, &ResultProvenance::default());
         assert!(text.starts_with("{\"graph\":\""), "graph envelope: {text}");
         assert!(text.ends_with("\"}"), "graph envelope close: {text}");
-        // The embedded N-Triples (JSON-escaped) contains the expected line.
-        assert!(
-            text.contains("<http://example.org/s> <http://example.org/p> <http://example.org/o> ."),
-            "missing triple line: {text}"
+        // The embedded N-Quads (JSON-escaped) contains the expected line, with no
+        // fourth term — a default-graph row renders exactly as it always did.
+        assert_eq!(
+            text,
+            "{\"graph\":\"<http://example.org/s> <http://example.org/p> \
+             <http://example.org/o> .\\n\"}",
+        );
+    }
+
+    /// A quad-template `CONSTRUCT` result carries its graph name INTO the envelope.
+    ///
+    /// This member used to be rendered by a triple-only writer, so the graph name
+    /// the query spelled out disappeared with no error and no loss count — the same
+    /// silent-drop the CLI, Python, wasm and `purrdf_serialize` all refuse or
+    /// count. `{"graph": …}` is PurRDF's own envelope rather than a caller-chosen
+    /// RDF syntax, so it widens to N-Quads instead of refusing.
+    #[test]
+    fn graph_result_carries_the_named_graph() {
+        let mut builder = RdfDatasetBuilder::new();
+        builder.push_owned_quad(&RdfQuad {
+            subject: RdfTerm::iri("http://example.org/s"),
+            predicate: "http://example.org/p".to_string(),
+            object: RdfTerm::iri("http://example.org/o"),
+            graph_name: Some(RdfTerm::iri("http://example.org/g1")),
+            location: None,
+        });
+        let dataset = builder.freeze().expect("dataset freezes");
+        let result = SparqlResult::Graph(dataset);
+
+        let text = json_text(&result, &ResultProvenance::default());
+        assert_eq!(
+            text,
+            "{\"graph\":\"<http://example.org/s> <http://example.org/p> \
+             <http://example.org/o> <http://example.org/g1> .\\n\"}",
+            "the named graph must survive the envelope",
         );
     }
 
