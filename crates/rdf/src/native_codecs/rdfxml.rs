@@ -1575,16 +1575,22 @@ mod tests {
         );
     }
 
-    /// Serialize a frozen dataset to RDF/XML through the native base-only egress (the
-    /// star layer is declared loss for RDF/XML), matching the production arm.
+    /// Serialize a frozen dataset to RDF/XML with the RDF 1.2 statement layer PROJECTED
+    /// away (declared loss for RDF/XML under the transcode contract), matching the
+    /// production arm `serialize_dataset_to_format` takes for this format.
     fn serialize(dataset: &RdfDataset) -> String {
-        let bytes = crate::native_codecs::serialize_dataset_base_only(
+        crate::native_codecs::serialize_dataset_with(
             dataset,
-            "application/rdf+xml",
-            crate::SerializeGraph::Dataset,
+            crate::NativeRdfFormat::RdfXml,
+            None,
+            &crate::native_codecs::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::native_codecs::StatementLayer::Project,
+                jsonld_options: None,
+            },
         )
-        .expect("serialize rdf/xml");
-        String::from_utf8(bytes).expect("utf8")
+        .map(|outcome| String::from_utf8(outcome.bytes).expect("utf8"))
+        .expect("serialize rdf/xml")
     }
 
     #[test]

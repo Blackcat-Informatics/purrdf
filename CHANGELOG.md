@@ -103,6 +103,23 @@ called out below with what a consumer must do.
   a syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) now emits it and
   relativizes against a supplied base; one that cannot (N-Triples, N-Quads, TriX, HexTuples) keeps
   writing absolute IRIs. See "Base IRIs & Relative References" in The PurRDF Book.
+- **BREAKING** **rdf:** `serialize_dataset_base_only` is **removed**, and `serialize_dataset_with`
+  is added as the one serialization seam the rest of the family is now expressed through. The
+  split family could not state a document base together with a graph selection or the RDF 1.2
+  statement layer: `serialize_dataset` took the selection and the layer but no base, while
+  `serialize_dataset_to_format` took a base but forced `SerializeGraph::Dataset` and the transcode
+  projection — so asking for a base on RDF/XML silently traded away reifier and annotation rows
+  the RDF/XML emitter can in fact render. `serialize_dataset_with(dataset, format, base_iri,
+  &SerializeOptions { selection, statement_layer, jsonld_options })` states all four axes, and the
+  new `StatementLayer` enum makes the third an explicit choice — `Emit` (render it, or fail closed
+  where there is no surface for it), `Project` (drop it and REPORT the count), or
+  `PerFormatCapability` (the registry's `carries_star()` decision, which is what every
+  `*_to_format` spelling applies). `serialize_dataset`, `serialize_dataset_with_jsonld_options`,
+  `serialize_dataset_to_format` and `serialize_dataset_to_format_with_jsonld_options` keep their
+  signatures and behaviour and are one-expression delegations, so there is no second code path.
+  Replace `serialize_dataset_base_only(d, media_type, selection)` with `serialize_dataset_with`
+  under `StatementLayer::Project`, which additionally hands back the dropped-row count instead of
+  leaving the caller to recompute it.
 - **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
   views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
   clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the
