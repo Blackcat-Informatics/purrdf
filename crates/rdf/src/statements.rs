@@ -461,15 +461,13 @@ ex:ax a owl:Axiom ;
 
     #[test]
     fn conflicting_reifies_is_rejected() {
-        // Two DIFFERENT rdf:reifies triple terms for one reifier subject: corrupt
-        // input the codec must hard-fail on, never silently last-write-win.
-        //
-        // FINDING: the rejection now fires EARLIER — the native
-        // `parse_dataset` folds the statement layer during parse and detects the
-        // conflicting reifier rebind there, so `parse_quads` surfaces it as a
-        // `statements-turtle-parse` error before `normalize_rdf12_to_owl` reaches its
-        // own `set_once_or_error` guard. The conflict is still hard-failed (P7), only
-        // the detection point and error code moved into the shared native fold.
+        // Two DIFFERENT rdf:reifies triple terms for one reifier subject are
+        // legal RDF 1.2 (`rdf:reifies` is not functional) and parse cleanly, but
+        // they CANNOT be downcast to OWL: `owl:annotatedSource`/`Property`/
+        // `Target` describe exactly one statement per axiom resource, so the
+        // downcast hard-fails at its own `set_once_or_error` guard rather than
+        // silently last-write-winning. The refusal belongs to the OWL
+        // vocabulary's functional properties, not to `rdf:reifies`.
         const RDF12_CONFLICT: &str = r"
 @prefix ex: <https://example.org/vocab/> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
@@ -480,10 +478,7 @@ ex:ax rdf:reifies <<( ex:s ex:p ex:o )>> ;
 ";
         let err = normalize_rdf12_to_owl(RDF12_CONFLICT)
             .expect_err("conflicting rdf:reifies must hard-fail, not be silently dropped");
-        assert_eq!(err.code, "statements-turtle-parse");
-        assert!(
-            err.to_string().contains("conflicting rdf:reifies binding"),
-            "{err:?}"
-        );
+        assert_eq!(err.code, "statements-conflicting-structural");
+        assert!(err.to_string().contains("conflicting"), "{err:?}");
     }
 }

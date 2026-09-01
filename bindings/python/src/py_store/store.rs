@@ -23,7 +23,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
-use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
+use super::io::{
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
+    read_input,
+};
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
     PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
@@ -729,6 +732,29 @@ impl PyStore {
             }
             None => Ok(Some(PyBytes::new(py, &buf).unbind())),
         }
+    }
+
+    /// Dump the WHOLE store in `format`, with the realized loss of doing so attached.
+    ///
+    /// The counting twin of [`dump`](Self::dump): same bytes, plus the three
+    /// independent loss counts a `SerializeLoss` carries. `dump(format=RdfFormat.TURTLE)`
+    /// on a store holding named graphs returns a well-formed document with every
+    /// graph-scoped statement missing and no signal at all; this is the entry point that
+    /// says how many. Mirrors the C ABI's `purrdf_serialize` count out-params and the
+    /// wasm `Dataset.serializeWithLoss`, so one serialization reports the same three
+    /// numbers on every host.
+    ///
+    /// There is deliberately no `from_graph` and no JSON-LD configuration here: a graph
+    /// SELECTION would make the named-graph count meaningless (the caller would already
+    /// have chosen what to keep), and the JSON-LD family is dataset-capable and
+    /// star-capable, so its loss is zero by construction. Use `dump` for either.
+    #[pyo3(signature = (format))]
+    fn dump_with_loss(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<PySerializeLoss> {
+        let native = format.to_native();
+        py.detach(|| {
+            dump_quads_with_loss(&self.collect_all_quads(), native)
+                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+        })
     }
 
     fn __len__(&self) -> usize {

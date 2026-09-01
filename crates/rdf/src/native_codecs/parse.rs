@@ -65,10 +65,20 @@ pub(crate) struct FoldRow {
 /// oxigraph-quads path so the two can never drift (the parity fixture is the guard).
 ///
 /// Pass 1 binds reifiers: a row whose predicate is `rdf:reifies` with a triple-term
-/// object becomes a `push_reifier(subject, triple)` binding and the subject id is
-/// recorded as a reifier. Pass 2 classifies the remaining rows: a reifier subject's
-/// other triples are annotations (`push_annotation`), everything else a base quad
-/// (`push_quad`). This mirrors `dataset_io.rs:34-65` exactly.
+/// object becomes a `push_reifier_in_graph(subject, triple, graph)` binding and the
+/// `(graph, subject)` pair is recorded as a reifier. Pass 2 classifies the remaining
+/// rows: a triple whose subject is a reifier declared in the SAME graph is an
+/// annotation (`push_annotation_in_graph`), everything else a base quad (`push_quad`).
+///
+/// The reifier key carries the graph because the RDF 1.2 statement layer is per-graph:
+/// a reifier declared in `GRAPH g1` is not a reifier in `g2`, so a triple about that
+/// same subject in `g2` is an ordinary triple of `g2` and nothing more. Keying on the
+/// subject alone would let a reifier declared anywhere in the document silently
+/// reclassify every other graph's triples about it — and would put this reader at odds
+/// with the `CONSTRUCT` template evaluator, which keys on `(graph, reifier)`, so a
+/// constructed dataset and its own serialization would no longer read back the same.
+/// With a single-graph document the graph half is constant and the key degenerates to
+/// the subject, which is exactly the pre-per-graph behaviour.
 pub(crate) fn fold_statement_layer<I>(
     builder: &mut RdfDatasetBuilder,
     rows: I,
@@ -77,7 +87,7 @@ where
     I: IntoIterator<Item = FoldRow>,
 {
     // Pass 1: bind reifiers; collect the rest as pending base/annotation rows.
-    let mut reifier_ids: HashSet<TermId> = HashSet::new();
+    let mut reifier_ids: HashSet<(Option<TermId>, TermId)> = HashSet::new();
     let mut pending: Vec<(TermId, TermId, TermId, Option<TermId>)> = Vec::new();
     for row in rows {
         let FoldRow {
@@ -93,7 +103,7 @@ where
             // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
             // graph carry `graph == None`, byte-identical to the old fold.
             builder.push_reifier_in_graph(subject, triple_term, graph);
-            reifier_ids.insert(subject);
+            reifier_ids.insert((graph, subject));
             continue;
         }
         let object_id = match object {
@@ -103,10 +113,10 @@ where
         pending.push((subject, predicate, object_id, graph));
     }
 
-    // Pass 2: a reifier subject's other triples are annotations (carrying their own
-    // graph); the rest base quads.
+    // Pass 2: the other triples of a reifier declared in THIS graph are its
+    // annotations (carrying that graph); the rest base quads.
     for (subject, predicate, object, graph) in pending {
-        if reifier_ids.contains(&subject) {
+        if reifier_ids.contains(&(graph, subject)) {
             builder.push_annotation_in_graph(subject, predicate, object, graph);
         } else {
             builder.push_quad(subject, predicate, object, graph);
@@ -429,8 +439,9 @@ pub(crate) fn dataset_from_text_ser_graph(
 /// `store_from_dataset(.., GraphPolicy::FlattenToDefaultGraph)`. This is the load
 /// path the native conformance gate replays against the frozen oxigraph goldens
 /// (which were captured over a flattened store). The statement layer (`rdf:reifies`
-/// reifiers + annotations) has no graph dimension, so only the base-quad graph
-/// component changes.
+/// reifiers + annotations) is flattened with everything else, so a reifier and its
+/// annotations all land at `graph == None` and the fold's per-graph reifier key
+/// degenerates to the reifier id.
 pub(crate) fn flattened_dataset_from_ser_graph(
     graph: &SerGraph,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
@@ -580,6 +591,16 @@ impl SerInterner<'_> {
     /// Intern a GTS term id, returning a [`FoldNode`]: a leaf becomes `Term`, a
     /// quoted-triple term becomes `Triple` (its components already interned) so a
     /// caller can fold it as a reifier binding rather than re-interning it.
+    ///
+    /// # Termination
+    ///
+    /// `intern_node` → `intern` → `intern_node` recurses on a quoted triple's
+    /// components with no depth bound and no visited set. It terminates because the
+    /// term table it walks does: every producer of a [`SerGraph`] guarantees that, and
+    /// the one that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it,
+    /// refusing a self-reaching table with `gts-self-reaching-term`. The IR's own
+    /// acyclicity check runs at `freeze()`, which is far too late — this walk would
+    /// have overflowed the stack, and aborted, long before reaching it.
     fn intern_node(
         &self,
         builder: &mut RdfDatasetBuilder,
@@ -761,6 +782,34 @@ mod tests {
         assert_eq!(ds.quad_count(), 0, "reifier rows are not base quads");
         assert_eq!(ds.reifiers().count(), 1);
         assert_eq!(ds.annotations().count(), 1);
+    }
+
+    #[test]
+    fn an_annotation_only_attaches_to_a_same_graph_reifier() {
+        // The RDF 1.2 statement layer is per-graph. `_:r` is a reifier in `g1` and
+        // nothing at all in `g2`, so the SAME `(subject, predicate, object)` shape is
+        // an annotation in `g1` and an ordinary quad in `g2`. Keying the fold on the
+        // subject alone would swallow the `g2` row into the annotation table, putting
+        // this reader at odds with the `CONSTRUCT` template evaluator and making a
+        // constructed dataset unequal to the re-parse of its own serialization.
+        let nq = concat!(
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> <https://e/g1> .\n",
+            "<https://e/r> <https://e/confidence> \"0.9\" <https://e/g1> .\n",
+            "<https://e/r> <https://e/confidence> \"0.1\" <https://e/g2> .\n",
+        );
+        let ds = parse_dataset(nq.as_bytes(), "application/n-quads", None).expect("parse");
+        assert_eq!(ds.reifiers().count(), 1, "one reifier, declared in g1");
+        assert_eq!(
+            ds.annotations().count(),
+            1,
+            "only the g1 row annotates the g1 reifier"
+        );
+        assert_eq!(
+            ds.quad_count(),
+            1,
+            "the g2 row is an ordinary quad of g2, not an annotation"
+        );
     }
 
     #[test]

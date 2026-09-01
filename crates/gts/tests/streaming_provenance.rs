@@ -176,6 +176,7 @@ fn three_frame_fixture() -> Vec<u8> {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         },
         Term {
             kind: TermKind::Iri,
@@ -184,6 +185,7 @@ fn three_frame_fixture() -> Vec<u8> {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         },
         Term {
             kind: TermKind::Literal,
@@ -192,6 +194,7 @@ fn three_frame_fixture() -> Vec<u8> {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         },
     ]);
     w.add_quads(&[(0, 1, 2, None)]);

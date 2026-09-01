@@ -285,29 +285,62 @@ fn exported_signatures_match_the_frozen_snapshot() {
     panic!("{report}");
 }
 
-/// The two functions whose mid-list `shapes_base_iri` insertion forced
-/// `0.6.0` → `0.7.0`, pinned by name so the break that motivated this freeze
-/// cannot silently revert to the four-parameter form.
+/// The exported prototype named `name`, or a panic naming the missing symbol.
+fn prototype_of(name: &str) -> String {
+    exported_prototypes()
+        .into_iter()
+        .find(|candidate| {
+            candidate
+                .find('(')
+                .is_some_and(|open| trailing_identifier(candidate[..open].trim_end()) == name)
+        })
+        .unwrap_or_else(|| panic!("{name} is no longer exported"))
+}
+
+/// Every signature whose change forced `0.6.0` → `0.7.0`, pinned by name and full
+/// parameter list so the breaks that motivated this freeze cannot silently revert.
+///
+/// The snapshot above already fails on any of these, but it fails on *every* other
+/// prototype too, and a wholesale re-freeze would carry a revert through unnoticed.
+/// These four are spelled out so a reverted break is named at the point of failure.
 #[test]
-fn the_shacl_entry_points_carry_the_shapes_base_parameter() {
-    for name in [
-        "purrdf_shacl_validate_to_sarif",
-        "purrdf_shacl_entail_to_ntriples",
-    ] {
-        let prototype = exported_prototypes()
-            .into_iter()
-            .find(|candidate| {
-                candidate
-                    .find('(')
-                    .is_some_and(|open| trailing_identifier(candidate[..open].trim_end()) == name)
-            })
-            .unwrap_or_else(|| panic!("{name} is no longer exported"));
+fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
+    let expected: [(&str, String); 4] = [
+        (
+            "purrdf_shacl_validate_to_sarif",
+            "int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, \
+             const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, \
+             PurrdfError **out_error)"
+                .to_owned(),
+        ),
+        (
+            "purrdf_shacl_entail_to_ntriples",
+            "int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, \
+             const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, \
+             PurrdfError **out_error)"
+                .to_owned(),
+        ),
+        (
+            "purrdf_serialize",
+            "int32_t purrdf_serialize(const PurrdfDataset *dataset, const char *media_type, \
+             const char *base_iri, PurrdfBuffer **out_buffer, size_t *out_statement_rows_dropped, \
+             size_t *out_directional_literals_dropped, size_t *out_named_graph_rows_dropped, \
+             PurrdfError **out_error)"
+                .to_owned(),
+        ),
+        (
+            "purrdf_serialize_jsonld_configured",
+            "int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, \
+             const char *media_type, const char *base_iri, const uint8_t *options_json, \
+             size_t options_len, const PurrdfJsonLdContext *context, \
+             const char *yaml_schema_url, PurrdfBuffer **out_buffer, PurrdfError **out_error)"
+                .to_owned(),
+        ),
+    ];
+    for (name, wanted) in expected {
         assert_eq!(
-            prototype,
-            format!(
-                "int32_t {name}(const char *shapes_ttl, const char *shapes_base_iri, \
-                 const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)"
-            ),
+            prototype_of(name),
+            wanted,
             "{name} no longer has the parameter list ABI {} declares.\n\n{WHAT_TO_DO}",
             source_version()
         );

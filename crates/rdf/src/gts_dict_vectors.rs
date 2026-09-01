@@ -12,6 +12,13 @@
 //! start from different bytes. (The generator and the guard used to duplicate
 //! the builder because a `[[bin]]` target exposes no importable surface — this
 //! module is that surface.)
+//!
+//! It also hosts the shared cross-engine expected-fold oracle
+//! ([`expected_fold_json`], [`expected_fold_json_in_mode`],
+//! [`render_expected_json`]). The oracle is not dictionary-specific: it
+//! reproduces the `<id>.expected.json` of EVERY vector in the frozen corpus,
+//! which is what `tests/gts_corpus_expected_fold.rs` grades the whole corpus
+//! against.
 
 use std::collections::BTreeMap;
 
@@ -234,9 +241,42 @@ pub fn expected_fold_json(pack: &[u8]) -> Json {
         "the conformance vector must fold cleanly: {:?}",
         graph.diagnostics
     );
+    fold_json(&graph, DEFAULT_MODE)
+}
 
-    let nquads = nquads_sorted(&graph);
-    let quad_count = nquads.len();
+/// The vector-corpus read mode that folds a file as a whole, segments included.
+pub const DEFAULT_MODE: &str = "default";
+/// The vector-corpus read mode that refuses segmentation, so a segmented file
+/// stops at the first boundary and reports `SegmentBoundary`.
+pub const PRE_SEGMENT_MODE: &str = "pre-segment";
+
+/// Build the expected-fold JSON for a vector read under the corpus `mode` it
+/// declares, tolerating diagnostics.
+///
+/// [`expected_fold_json`] covers the clean-folding positive vectors the
+/// dictionary corpus is made of. The frozen corpus also contains negative
+/// vectors, which fold WITH diagnostics, and `pre-segment` vectors, which must
+/// be read with segmentation refused; both are oracles too, and this is the
+/// entry point that can reproduce them.
+///
+/// # Panics
+///
+/// Panics under the same invalid-vector conditions as [`expected_fold_json`]:
+/// an undecodable blob, absent blob media-type metadata, or a folded graph that
+/// will not project to native N-Quads.
+#[must_use]
+pub fn expected_fold_json_in_mode(pack: &[u8], mode: &str) -> Json {
+    let graph = read(pack, mode != PRE_SEGMENT_MODE, None);
+    fold_json(&graph, mode)
+}
+
+/// The shared body behind both entry points.
+fn fold_json(graph: &Graph, mode: &str) -> Json {
+    let nquads = nquads_sorted(graph);
+    // The corpus schema counts BASE quads here, not projected N-Quads lines:
+    // the statement layer (reifier and annotation rows) also serializes to
+    // N-Quads, so the two numbers part company on any vector that carries one.
+    let quad_count = graph.quads.len();
     let mut profiles = graph.segment_profiles.clone();
     profiles.sort();
     profiles.dedup();
@@ -254,13 +294,13 @@ pub fn expected_fold_json(pack: &[u8]) -> Json {
     let segment_heads: Vec<String> = graph.segment_heads.iter().map(|head| hex(head)).collect();
 
     json!({
-        "blobs": blobs_json(&graph),
+        "blobs": blobs_json(graph),
         "diagnostics": graph
             .diagnostics
             .iter()
             .map(|diagnostic| diagnostic.code.clone())
             .collect::<Vec<_>>(),
-        "mode": "default",
+        "mode": mode,
         "nquads": nquads,
         "opaque_reasons": graph
             .opaque

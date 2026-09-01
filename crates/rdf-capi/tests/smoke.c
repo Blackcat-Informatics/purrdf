@@ -265,7 +265,7 @@ static char *rdfxml_file_to_nquads(const char *path) {
         goto done;
     }
     if (purrdf_serialize(parsed, "application/n-quads", NULL, &serialized, NULL,
-                         &error) != PURRDF_STATUS_OK) {
+                         NULL, NULL, &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "cannot serialize %s: %s\n", path,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
         goto done;
@@ -449,7 +449,8 @@ int main(int argc, char **argv) {
      * against the header macros rather than a literal means an intentional bump
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
-     * behind this triple is frozen in tests/abi_signatures.snapshot. */
+     * behind this triple is frozen in tests/abi_signatures.snapshot, and the
+     * literal `0.7.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -496,16 +497,95 @@ int main(int argc, char **argv) {
     /* serialize */
     PurrdfBuffer *serialized = NULL;
     size_t dropped = 99;
+    size_t directional = 99;
+    size_t named_graph_rows = 99;
     rc = purrdf_serialize(dataset, "application/n-triples", NULL, &serialized,
-                          &dropped, &error);
+                          &dropped, &directional, &named_graph_rows, &error);
     CHECK(rc == PURRDF_STATUS_OK && serialized != NULL, "serialize");
     CHECK(dropped == 0, "no statement rows dropped for n-triples");
+    CHECK(directional == 0, "no base directions dropped for n-triples");
+    CHECK(named_graph_rows == 0,
+          "no named-graph rows dropped: this dataset has no named graph");
     const uint8_t *sbytes = NULL;
     size_t slen = 0;
     CHECK(purrdf_buffer_data(serialized, &sbytes, &slen) == PURRDF_STATUS_OK,
           "buffer_data");
     CHECK(slen > 0, "serialized bytes present");
     purrdf_buffer_free(serialized);
+
+    /* A graph-carrying dataset meeting a single-graph syntax.
+     *
+     * This lane FLATTENS and COUNTS: it does not refuse the way the query lane
+     * does, and it does not widen to a syntax the caller did not name. Both rows
+     * below are scoped to a named graph, so `text/turtle` is the correct rendering
+     * of an EMPTY default graph — status OK, no error object, zero bytes — with the
+     * whole of the loss in `out_named_graph_rows_dropped`. Asserted from C because
+     * that is the contract purrdf.h publishes to a C consumer, and prose alone has
+     * already drifted from it once. */
+    const char *graph_doc = "<http://s1> <http://p> <http://o1> <http://g1> .\n"
+                            "<http://s2> <http://p> <http://o2> <http://g2> .\n";
+    PurrdfDataset *graph_dataset = NULL;
+    rc = purrdf_parse((const uint8_t *)graph_doc, strlen(graph_doc),
+                      "application/n-quads", NULL, NULL, &graph_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && graph_dataset != NULL,
+          "parse an all-named-graph n-quads document");
+
+    PurrdfBuffer *flattened = NULL;
+    size_t flat_statements = 99;
+    size_t flat_directional = 99;
+    size_t flat_named_graph_rows = 99;
+    rc = purrdf_serialize(graph_dataset, "text/turtle", NULL, &flattened,
+                          &flat_statements, &flat_directional,
+                          &flat_named_graph_rows, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && flattened != NULL,
+          "turtle serialization of a graph-carrying dataset SUCCEEDS (no refusal)");
+    CHECK(flat_statements == 0, "turtle carries the star layer: nothing charged there");
+    CHECK(flat_directional == 0, "no directional literal in this document");
+    CHECK(flat_named_graph_rows == 2,
+          "both graph-scoped base quads charged to the named-graph count");
+    const uint8_t *fbytes = NULL;
+    size_t flen = 99;
+    CHECK(purrdf_buffer_data(flattened, &fbytes, &flen) == PURRDF_STATUS_OK,
+          "buffer_data over the flattened document");
+    CHECK(flen == 0, "an all-named-graph dataset flattens to an EMPTY turtle document");
+    purrdf_buffer_free(flattened);
+
+    /* The same call with every count DECLINED. Null means "do not report", never
+     * "do not serialize": identical status, identical (empty) bytes, no error. The
+     * counts are the only signal this lane offers, so a caller that declines all
+     * three has asked for the document alone and receives exactly that. */
+    PurrdfBuffer *flattened_unreported = NULL;
+    rc = purrdf_serialize(graph_dataset, "text/turtle", NULL, &flattened_unreported,
+                          NULL, NULL, NULL, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && flattened_unreported != NULL,
+          "null loss counts still serialize");
+    const uint8_t *ubytes = NULL;
+    size_t ulen = 99;
+    CHECK(purrdf_buffer_data(flattened_unreported, &ubytes, &ulen) ==
+              PURRDF_STATUS_OK,
+          "buffer_data with the counts declined");
+    CHECK(ulen == 0, "declining the counts does not change the document");
+    purrdf_buffer_free(flattened_unreported);
+
+    /* And the loss is a property of the TARGET, not of the dataset: a
+     * dataset-capable syntax keeps both graphs and charges nothing. */
+    PurrdfBuffer *kept = NULL;
+    flat_named_graph_rows = 99;
+    rc = purrdf_serialize(graph_dataset, "application/n-quads", NULL, &kept,
+                          &flat_statements, &flat_directional,
+                          &flat_named_graph_rows, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL && kept != NULL,
+          "n-quads serialization of the same dataset");
+    CHECK(flat_named_graph_rows == 0, "a dataset-capable target drops no graph row");
+    const uint8_t *kbytes = NULL;
+    size_t klen = 0;
+    CHECK(purrdf_buffer_data(kept, &kbytes, &klen) == PURRDF_STATUS_OK,
+          "buffer_data over the n-quads document");
+    CHECK(contains_bytes(kbytes, klen, "http://g1") &&
+              contains_bytes(kbytes, klen, "http://g2"),
+          "both graph names survive into n-quads");
+    purrdf_buffer_free(kept);
+    purrdf_dataset_free(graph_dataset);
 
     /* GTS round-trip (plain graph) */
     PurrdfBuffer *gts = NULL;

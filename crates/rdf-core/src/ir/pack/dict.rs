@@ -1231,10 +1231,12 @@ mod tests {
             p: Box::new(iri("b")),
             o: Box::new(TermValue::simple_literal("leaf")),
         };
+        // RDF 1.2 nests a triple term in exactly one position — the OBJECT of
+        // another triple term — so that is where the recursion is measured.
         let outer = TermValue::Triple {
-            s: Box::new(inner),
+            s: Box::new(iri("target")),
             p: Box::new(iri("meta")),
-            o: Box::new(iri("target")),
+            o: Box::new(inner),
         };
         let dataset = build_dataset(&[(iri("subj"), iri("about"), outer.clone())]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");

@@ -101,6 +101,18 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// To project the statement layer away and receive the dropped-row count instead, or to
 /// write under a document base, call [`serialize_dataset_with`] with the
 /// [`StatementLayer`] and base you want. It is the same code path.
+///
+/// # Termination
+///
+/// `D: DatasetView` is a public trait. The `SerGraph` lowering this function
+/// drives — `build_ser_graph`'s term interner — resolves a quoted-triple term's
+/// components through `DatasetView::resolve` with no depth bound and no visited
+/// set, so it terminates only if `dataset` does. That is [`DatasetView`]'s own
+/// contract (see its `# Termination` doc), not something this function — or
+/// `ensure_terms_terminate`, which polices a concrete GTS `Graph` and
+/// structurally cannot police an arbitrary trait impl — can check on `dataset`'s
+/// behalf. Every in-repo `DatasetView` satisfies it; a caller supplying a
+/// third-party one owes it directly.
 pub fn serialize_dataset<D: DatasetView>(
     dataset: &D,
     media_type: &str,
@@ -232,6 +244,20 @@ pub fn serialize_dataset_with<D: DatasetView>(
         count_directional_object_literals(dataset)
     };
 
+    // Independent of BOTH the star layer and the direction surface: a caller who asked
+    // for the WHOLE dataset and named a target with no named-graph construct gets a
+    // flattening, and the flattening DROPS every graph-scoped row rather than folding it
+    // into the default graph. `DefaultGraph` and `Named` are not flattenings — the
+    // caller wrote the subset they wanted, and a row outside a selection the caller
+    // spelled out is not a loss to report.
+    let flattened =
+        matches!(options.selection, SerializeGraph::Dataset) && !format.supports_datasets();
+    let named_graph_rows_dropped = if flattened {
+        count_named_graph_rows(dataset)
+    } else {
+        0
+    };
+
     let graph = build_ser_graph(
         dataset,
         format,
@@ -257,10 +283,19 @@ pub fn serialize_dataset_with<D: DatasetView>(
     // filter in `build_ser_graph`), so rows the caller asked to emit still did not reach
     // the document and the count must say so. Reporting zero because the FORMAT could
     // have carried them would be the silent drop this accounting exists to prevent.
+    //
+    // Attributed by CAUSE, so the two counts partition the loss and no row is charged
+    // twice: a graph-scoped statement row that a flattening discarded is already in
+    // `named_graph_rows_dropped`, so only the DEFAULT-graph rows are charged to the
+    // statement-layer policy here. Without a flattening every statement row that did not
+    // reach the document is charged here, exactly as before.
     let reached_the_document =
         include_statement_layer && !matches!(options.selection, SerializeGraph::Named(_));
     let statement_rows_dropped = if reached_the_document {
         0
+    } else if flattened {
+        dataset.reifier_quads().filter(|q| q.g.is_none()).count()
+            + dataset.annotation_quads().filter(|q| q.g.is_none()).count()
     } else {
         dataset.reifier_quads().count() + dataset.annotation_quads().count()
     };
@@ -269,6 +304,7 @@ pub fn serialize_dataset_with<D: DatasetView>(
         bytes: text.into_bytes(),
         statement_rows_dropped,
         directional_literals_dropped,
+        named_graph_rows_dropped,
     })
 }
 
@@ -370,12 +406,30 @@ pub struct SerializeOutcome {
     /// The number of RDF-1.2 statement-layer rows (reifier bindings + annotation
     /// triples) dropped because the target format does not carry the star layer in
     /// the transcode contract. Zero for star-capable formats.
+    ///
+    /// Rows dropped for the OTHER reason — they were scoped to a named graph a
+    /// single-graph target cannot carry — are counted by
+    /// [`Self::named_graph_rows_dropped`] instead, never here and never twice: the
+    /// two counts partition the dropped rows by CAUSE, so their sum is the total.
     pub statement_rows_dropped: usize,
     /// The number of base-quad object literals whose RDF-1.2 base direction was
     /// dropped because the target format has no direction surface (TriX / HexTuples
     /// keep the language tag but cannot carry `--ltr` / `--rtl`). Zero for every
     /// direction-capable format. Recorded as declared loss — never a silent drop.
     pub directional_literals_dropped: usize,
+    /// The number of rows the single-graph flattening dropped because the target
+    /// format has no named-graph construct: base quads asserted in a named graph,
+    /// plus the RDF-1.2 statement-layer rows (reifier bindings + annotation
+    /// triples) scoped to one. Zero for every dataset-capable format (TriG,
+    /// N-Quads, TriX, HexTuples, JSON-LD, YAML-LD).
+    ///
+    /// The rows are DROPPED, not folded into the default graph — see
+    /// `purrdf_core::loss`'s `named-graph-dropped` contract note. Without this
+    /// count the flattening was a silent loss: `statement_rows_dropped` is about
+    /// the STAR layer and says nothing about graph scoping, so a star-capable
+    /// single-graph target (Turtle, N-Triples) reported zero loss while discarding
+    /// every named graph it was handed.
+    pub named_graph_rows_dropped: usize,
 }
 
 /// Serialize the frozen IR to a concrete [`NativeRdfFormat`], returning the bytes and
@@ -409,7 +463,9 @@ pub struct SerializeOutcome {
 ///
 /// Graph selection follows [`SerializeGraph::Dataset`]: dataset-capable formats
 /// (N-Quads, TriG) emit all named graphs; the single-graph syntaxes (Turtle,
-/// N-Triples, RDF/XML) flatten to the default graph.
+/// N-Triples, RDF/XML) DROP every named graph and emit the default graph alone,
+/// reporting what they discarded as
+/// [`SerializeOutcome::named_graph_rows_dropped`].
 ///
 /// This is the TRANSCODE spelling of [`serialize_dataset_with`], and it fixes two of that
 /// function's axes: [`SerializeGraph::Dataset`] and
@@ -460,7 +516,9 @@ pub fn serialize_dataset_to_format_with_jsonld_options<D: DatasetView>(
             selection: SerializeGraph::Dataset,
             // Both JSON-LD-family rows are `carries_star`, so this resolves to `Emit` and
             // the reported drop counts stay zero — stated through the registry rather
-            // than hardcoded, so a capability change cannot leave the count lying.
+            // than hardcoded, so a capability change cannot leave the count lying. Both
+            // are dataset-capable too, so nothing is scoped away and
+            // `named_graph_rows_dropped` is zero for the same structural reason.
             statement_layer: StatementLayer::PerFormatCapability,
             jsonld_options: Some(options),
         },
@@ -494,6 +552,20 @@ fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> usize {
             )
         })
         .count()
+}
+
+/// Count every row a single-graph target's flattening discards: base quads asserted in
+/// a named graph, plus the RDF-1.2 statement-layer rows (reifier bindings + annotation
+/// triples) scoped to one.
+///
+/// This is the realized twin of the `named-graph-dropped` transcode contract, and it is
+/// counted for EVERY single-graph target — including the star-capable ones (Turtle,
+/// N-Triples), whose graph-scoped statement rows [`build_ser_graph`]'s
+/// `default_graph_only` pass also drops and which no other counter sees.
+fn count_named_graph_rows<D: DatasetView>(dataset: &D) -> usize {
+    dataset.quads().filter(|q| q.g.is_some()).count()
+        + dataset.reifier_quads().filter(|q| q.g.is_some()).count()
+        + dataset.annotation_quads().filter(|q| q.g.is_some()).count()
 }
 
 /// Build the first-party [`SerGraph`] from the frozen IR, applying the

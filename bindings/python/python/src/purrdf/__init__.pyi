@@ -311,6 +311,12 @@ class QuerySolutions:
     def __next__(self) -> QuerySolution: ...
     def __len__(self) -> int: ...
 
+# A CONSTRUCT/DESCRIBE result whose statements all land in the DEFAULT graph — every
+# SPARQL 1.1 CONSTRUCT, and every DESCRIBE over default-graph data. A result carrying a
+# named graph yields `QueryQuads` instead, because a `Triple` has no slot to carry the
+# graph name in: a template that names a graph, or a DESCRIBE whose description is
+# graph-scoped in the source (an SCBD keeps every layer — base quad, reifier declaration
+# and annotation — in the graph that asserted it).
 class QueryTriples:
     def __iter__(self) -> QueryTriples: ...
     def __next__(self) -> Triple: ...
@@ -320,6 +326,43 @@ class QueryTriples:
     def serialize(
         self, format: RdfFormat, *, base: str | None = ...
     ) -> bytes: ...
+
+# A CONSTRUCT/DESCRIBE result carrying at least one NAMED graph — a quad template
+# (`CONSTRUCT { GRAPH ?g { ... } }`, a first-party extension, NOT defined by SPARQL 1.2),
+# or a DESCRIBE whose description is graph-scoped in the source. One result may span
+# several graphs and may mix
+# them with default-graph statements, so the members are `Quad`s with a live
+# `graph_name`. `serialize` raises `ValueError` for a single-graph syntax
+# (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`) rather than dropping the graphs.
+class QueryQuads:
+    def __iter__(self) -> QueryQuads: ...
+    def __next__(self) -> Quad: ...
+    def __len__(self) -> int: ...
+    # Every distinct named graph the result carries, in N-Triples term syntax, sorted.
+    @property
+    def graph_names(self) -> list[str]: ...
+    def serialize(self, format: RdfFormat) -> bytes: ...
+
+# One serialized document plus the WHOLE realized loss of producing it, partitioned by
+# CAUSE — the return of `Store.dump_with_loss` / `MutableDataset.dump_with_loss`.
+#
+# `dump` answers with bytes alone: a multi-graph store dumped to `RdfFormat.TURTLE`
+# comes back well-formed with every graph-scoped statement missing and no signal at
+# all. These counts are that signal. They partition the loss, so their sum is the total
+# and no row is charged twice; reading one alone cannot distinguish "nothing was lost"
+# from "the loss was charged to a cause I am not reading". Every count is REALIZED —
+# what this document actually discarded — not the static pair contract
+# `loss_matrix_json()` describes. The same three numbers are the C ABI's
+# `purrdf_serialize` out-params and the wasm `Dataset.serializeWithLoss` getters.
+class SerializeLoss:
+    @property
+    def bytes(self) -> bytes: ...
+    @property
+    def statement_rows_dropped(self) -> int: ...
+    @property
+    def directional_literals_dropped(self) -> int: ...
+    @property
+    def named_graph_rows_dropped(self) -> int: ...
 
 class QueryBoolean:
     def __bool__(self) -> bool: ...
@@ -379,7 +422,7 @@ class PartialAnswers:
     @property
     def is_certain(self) -> bool: ...
     @property
-    def result(self) -> QuerySolutions | QueryTriples | QueryBoolean | None: ...
+    def result(self) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
     @property
     def is_positional_prefix(self) -> bool | None: ...
     @property
@@ -391,7 +434,7 @@ class QueryOutcome:
     # The COMPLETE result only; `None` when a governor tripped. The rows a trip
     # reached are on `partial`, behind the certificate that says what they bound.
     @property
-    def result(self) -> QuerySolutions | QueryTriples | QueryBoolean | None: ...
+    def result(self) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean | None: ...
     @property
     def partial(self) -> PartialAnswers | None: ...
     @property
@@ -497,7 +540,7 @@ class Store:
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         aggregate_namespace: str | None = ...,
-    ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
     # wall-clock budget in milliseconds. A trip is returned in the `QueryOutcome`,
@@ -614,6 +657,10 @@ class Store:
         yaml_schema_url: str | None = ...,
         base: str | None = ...,
     ) -> bytes: ...
+    # The counting twin of `dump`: same bytes, plus the realized loss of producing
+    # them. No `from_graph` and no JSON-LD configuration — a graph selection would make
+    # the named-graph count meaningless, and the JSON-LD family loses nothing.
+    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     def __len__(self) -> int: ...
 
 class MutableDataset:
@@ -666,6 +713,8 @@ class MutableDataset:
         yaml_schema_url: str | None = ...,
         base: str | None = ...,
     ) -> bytes: ...
+    # The counting twin of `dump`; see `Store.dump_with_loss`.
+    def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
     # `aggregate_namespace` (see `Store.query`).
     def query(
@@ -679,7 +728,7 @@ class MutableDataset:
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         aggregate_namespace: str | None = ...,
-    ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
     # `Store.query_governed` / `Store.update_governed`.
     def query_governed(
@@ -781,7 +830,7 @@ def parse(
 ) -> list[Quad]: ...
 @overload
 def serialize(
-    input: QueryTriples,
+    input: QueryTriples | QueryQuads,
     output: IO[bytes],
     format: RdfFormat,
     *,
@@ -789,7 +838,7 @@ def serialize(
 ) -> None: ...
 @overload
 def serialize(
-    input: QueryTriples,
+    input: QueryTriples | QueryQuads,
     output: None = ...,
     *,
     format: RdfFormat,
@@ -957,12 +1006,17 @@ def feedback_bundle_native(
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
 
-_TermRow = tuple[int, int, str | None, int | None, str | None, int | None]
+_TermRow = tuple[
+    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
+]
 _QuadRow = tuple[int, int, int, int | None]
-_ReifierRow = tuple[int, int, int, int]
-_AnnotationRow = tuple[int, int, int]
+_ReifierRow = tuple[int, int, int, int, int | None]
+_AnnotationRow = tuple[int, int, int, int | None]
+_FoldReifierRow = tuple[int, tuple[int, int, int], int | None]
 _BlobExportRow = tuple[str, bytes]
-_InputTermRow = tuple[int, str | None, int | None, str | None, str | None, int | None]
+_InputTermRow = tuple[
+    int, str | None, int | None, str | None, str | None, int | None, tuple[int, int, int] | None
+]
 
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
@@ -978,7 +1032,7 @@ class GtsFoldViewNative:
     def from_parts(
         terms: list[_InputTermRow],
         quads: list[_QuadRow],
-        reifiers: list[tuple[int, tuple[int, int, int]]],
+        reifiers: list[_FoldReifierRow],
         annotations: list[_AnnotationRow],
     ) -> GtsFoldViewNative: ...
     def term_count(self) -> int: ...
@@ -1010,7 +1064,7 @@ class GtsFoldViewNative:
         self, s_tid: int, p_iri: str, o_tid: int, scope: str | None = ...
     ) -> bool: ...
     def rdf_list(self, head_tid: int, scope: str | None = ...) -> list[int]: ...
-    def reifiers(self) -> list[tuple[int, tuple[int, int, int]]]: ...
+    def reifiers(self) -> list[_FoldReifierRow]: ...
     def annotations(self) -> list[_AnnotationRow]: ...
     def tag_map(self) -> dict[str, str]: ...
     def available_languages(self) -> list[str]: ...

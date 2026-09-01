@@ -49,6 +49,12 @@ GUARDED_ROOTS: dict[str, str] = {
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
+    "crates/sparql-conformance/corpus/construct": (
+        "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
+    ),
+    "crates/sparql-conformance/corpus/describe": (
+        "scripts/conformance-frozen/sparql-conformance-corpus-describe.sha256"
+    ),
     "crates/sparql-conformance/entailment-suite/w3c-owl2": (
         "scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256"
     ),

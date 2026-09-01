@@ -77,15 +77,14 @@ fn build_fixture() -> Fixture {
     // "only_subject" plays a subject role and NOTHING else anywhere in the
     // fixture — the dedicated "never an object" absent-probe term.
     let only_subject = b.intern_iri("http://example.org/only_subject");
-    // The RDF 1.2 triple term `<< s1 p1 o1 >>`. RDF 1.2 forbids a quoted triple
-    // as the SUBJECT of an asserted quad (`rdf-ir-triple-subject`), so "used as a
-    // subject" here means the STRUCTURAL subject slot of an OUTER triple term
-    // (`outer_triple`, below) — the legitimate way a triple term appears in
-    // subject position. `inner_triple` is ALSO used directly as an object
-    // (G1b), giving it the "both a subject and an object" role the fixture
-    // brief calls for.
+    // The RDF 1.2 triple term `<<( s1 p1 o1 )>>`. RDF 1.2 nests a triple term in
+    // exactly ONE position — the OBJECT of another triple term — and forbids it
+    // in every subject position, asserted or nested (`rdf-ir-triple-subject`).
+    // So `inner_triple` earns its two roles the only way the term model allows:
+    // the structural OBJECT slot of an OUTER triple term (`outer_triple`,
+    // below), and directly as the object of an asserted quad (G1b).
     let inner_triple = b.intern_triple(s1, p1, o1);
-    let outer_triple = b.intern_triple(inner_triple, p2, o1);
+    let outer_triple = b.intern_triple(s3, p2, inner_triple);
     let g1 = b.intern_iri("http://example.org/g1");
     let g2 = b.intern_iri("http://example.org/g2");
 
@@ -100,7 +99,7 @@ fn build_fixture() -> Fixture {
 
     // -- Named graph g1 -------------------------------------------------------
     b.push_quad(s3, p2, outer_triple, Some(g1)); // outer triple as OBJECT
-    // (`inner_triple` sits in `outer_triple`'s structural SUBJECT slot).
+    // (`inner_triple` sits in `outer_triple`'s structural OBJECT slot).
     b.push_quad(s2, p1, inner_triple, Some(g1)); // inner triple as OBJECT too
 
     // -- Named graph g2 ---------------------------------------------------
@@ -141,9 +140,9 @@ fn build_fixture() -> Fixture {
         o: Box::new(o1v.clone()),
     };
     let outer_triple_v = TermValue::Triple {
-        s: Box::new(inner_triple_v.clone()),
+        s: Box::new(s3v.clone()),
         p: Box::new(p2v.clone()),
-        o: Box::new(o1v.clone()),
+        o: Box::new(inner_triple_v.clone()),
     };
 
     let mk = |v: TermValue, pack_id: PackTermId| Probe {
@@ -155,8 +154,9 @@ fn build_fixture() -> Fixture {
     // Subject/object axes both resolve via the non-predicate unified id space
     // (matching how `Triples::encode` resolves s/o) — including the dedicated
     // "never a subject"/"never an object" absent probes. Neither triple term is
-    // a subject probe: RDF 1.2 forbids a quoted triple as an asserted quad's
-    // subject, so no query could ever legitimately bind "s" to one.
+    // a subject probe: RDF 1.2 forbids a quoted triple in EVERY subject position,
+    // asserted or nested inside another triple term, so no query could ever
+    // legitimately bind "s" to one.
     let subject_probes = vec![
         mk(s1v.clone(), non_predicate_id(&s1v)),
         mk(s2v.clone(), non_predicate_id(&s2v)),

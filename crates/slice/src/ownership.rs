@@ -833,8 +833,16 @@ fn extract_query_iris(
         purrdf_sparql_algebra::Query::Construct {
             template, pattern, ..
         } => {
-            for tp in template {
-                walk_triple_pattern(tp, &mut out);
+            // A template quad's GRAPH slot carries dependency IRIs in term
+            // position, exactly like DESCRIBE's `targets` above: the graph a
+            // CONSTRUCT writes into is named nowhere else in the query (the
+            // `WHERE` need not mention it at all), so walking only the
+            // statement patterns would drop the target-graph edge entirely.
+            for quad in template {
+                walk_triple_pattern(&quad.triple, &mut out);
+                if let Some(graph) = &quad.graph {
+                    walk_named_node_pattern(graph, &mut out);
+                }
             }
             walk_graph_pattern(pattern, &mut out);
         }

@@ -15,14 +15,24 @@
 /// wasm. The `#[wasm_bindgen]` call sites map the `String` to a `JsError`. `classify`
 /// already lowercases and strips any `;charset=…` parameter.
 pub(crate) fn resolve_media_type(format: &str) -> Result<&'static str, String> {
-    purrdf::classify(format)
-        .map(purrdf::NativeRdfFormat::media_type)
-        .map_err(|_| {
-            format!(
-                "unsupported RDF format {format:?} (use turtle/ntriples/nquads/trig/rdfxml/\
-                 trix/hextuples/jsonld/yamlld or their media types)"
-            )
-        })
+    resolve_format(format).map(purrdf::NativeRdfFormat::media_type)
+}
+
+/// Resolve a caller-supplied format string to the typed
+/// [`NativeRdfFormat`](purrdf::NativeRdfFormat).
+///
+/// The typed twin of [`resolve_media_type`], for the call sites that must ask the
+/// format a QUESTION — most importantly `supports_datasets()`, which decides whether a
+/// graph-carrying result can be serialized at all. Re-deriving that from the media-type
+/// string would be a second, drifting format table; this is the same single `classify`
+/// registry, one step earlier.
+pub(crate) fn resolve_format(format: &str) -> Result<purrdf::NativeRdfFormat, String> {
+    purrdf::classify(format).map_err(|_| {
+        format!(
+            "unsupported RDF format {format:?} (use turtle/ntriples/nquads/trig/rdfxml/\
+             trix/hextuples/jsonld/yamlld or their media types)"
+        )
+    })
 }
 
 #[cfg(test)]

@@ -1430,3 +1430,512 @@ fn rules_without_entailment_is_refused_by_name() {
         stderr(&out)
     );
 }
+
+// ── `CONSTRUCT GRAPH` × the nine RDF `--results-format` syntaxes ────────────────────
+
+/// The six `--results-format` RDF syntaxes that carry named graphs.
+const QUAD_CAPABLE: [&str; 6] = ["trig", "nquads", "trix", "hextuples", "jsonld", "yamlld"];
+
+/// The three `--results-format` RDF syntaxes that do NOT: single-graph syntaxes with
+/// no named-graph construct at all.
+const SINGLE_GRAPH: [&str; 3] = ["turtle", "ntriples", "rdfxml"];
+
+/// A whole-template `CONSTRUCT GRAPH ex:out { … }` over [`DATA_TTL`].
+const CONSTRUCT_ONE_GRAPH: &str = "PREFIX ex: <http://example.org/> \
+     CONSTRUCT GRAPH ex:out { ?s ex:rel ?o } WHERE { ?s ex:knows ?o }";
+
+/// A per-statement quad template writing into TWO named graphs, declared in the
+/// template in `g2`-then-`g1` order so the refusal's ordering cannot be an accident of
+/// template order.
+const CONSTRUCT_TWO_GRAPHS: &str = "PREFIX ex: <http://example.org/> \
+     CONSTRUCT { GRAPH ex:g2 { ?s ex:rel ?o } GRAPH ex:g1 { ?s ex:other ?o } } \
+     WHERE { ?s ex:knows ?o }";
+
+/// A per-statement quad template MIXING a default-graph triple with a named-graph
+/// quad: the shape that would otherwise emit the default-graph half and drop the rest,
+/// reporting a partial answer as a complete one.
+const CONSTRUCT_MIXED: &str = "PREFIX ex: <http://example.org/> \
+     CONSTRUCT { ?s ex:plain ?o GRAPH ex:named { ?s ex:rel ?o } } WHERE { ?s ex:knows ?o }";
+
+/// Run `CONSTRUCT GRAPH` into one `--results-format`, with the bare `--loss-ledger` on
+/// so a silent drop would have to show up as an empty ledger beside empty stdout.
+fn construct_graph_into(format: &str, query: &str, ttl: &str) -> Output {
+    run(&[
+        "--loss-ledger",
+        "query",
+        "--data",
+        ttl,
+        "--results-format",
+        format,
+        query,
+    ])
+}
+
+/// Every quad-capable `--results-format` EMITS the named graph a `CONSTRUCT GRAPH`
+/// result carries: the graph IRI and the constructed statement both appear, and the
+/// run exits 0.
+#[test]
+fn construct_graph_into_quad_capable_formats_emits_the_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    for format in QUAD_CAPABLE {
+        let out = construct_graph_into(format, CONSTRUCT_ONE_GRAPH, &ttl);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "CONSTRUCT GRAPH -> {format} must exit 0; stderr:\n{}",
+            stderr(&out)
+        );
+        let body = stdout(&out);
+        assert!(
+            body.contains("http://example.org/out"),
+            "{format} is dataset-capable and must name the graph; got:\n{body}"
+        );
+        assert!(
+            body.contains("http://example.org/rel") && body.contains("http://example.org/bob"),
+            "{format} must carry the constructed statement; got:\n{body}"
+        );
+    }
+}
+
+/// Every single-graph `--results-format` REFUSES a `CONSTRUCT GRAPH` result rather
+/// than serializing it: exit 2 (a usage error — the caller named a graph in the query
+/// and a format that cannot carry it), nothing on stdout, and a stderr message naming
+/// BOTH the graph and the format and pointing at the quad-capable alternatives.
+///
+/// This is the regression net for the shipped behaviour it replaces: one statement in,
+/// ZERO bytes out, an EMPTY loss ledger, and exit 0.
+#[test]
+fn construct_graph_into_single_graph_formats_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    for format in SINGLE_GRAPH {
+        let out = construct_graph_into(format, CONSTRUCT_ONE_GRAPH, &ttl);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "CONSTRUCT GRAPH -> {format} must be a usage refusal (exit 2); stderr:\n{}",
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).is_empty(),
+            "a refused emission must write nothing to stdout; got:\n{}",
+            stdout(&out)
+        );
+        let message = stderr(&out);
+        assert!(
+            message.contains("<http://example.org/out>"),
+            "{format}'s refusal must NAME the offending graph; got:\n{message}"
+        );
+        assert!(
+            message.contains(&format!("`{format}`")),
+            "{format}'s refusal must name the format; got:\n{message}"
+        );
+        assert!(
+            message.contains("trig/nquads/trix/hextuples/jsonld/yamlld"),
+            "{format}'s refusal must point at a quad-capable alternative; got:\n{message}"
+        );
+        assert!(
+            message.contains("DROPPED"),
+            "{format}'s refusal must say the statements would be dropped; got:\n{message}"
+        );
+    }
+}
+
+/// A MULTI-graph template refused against a single-graph format names EVERY distinct
+/// graph, in lexicographic order — not template order, and not a hash-map order that
+/// could differ between runs.
+#[test]
+fn a_multi_graph_template_refusal_names_every_graph_in_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    let out = construct_graph_into("turtle", CONSTRUCT_TWO_GRAPHS, &ttl);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a two-graph template -> turtle must be refused; stderr:\n{}",
+        stderr(&out)
+    );
+    let message = stderr(&out);
+    assert!(
+        message.contains("2 named graphs"),
+        "the refusal must count both graphs; got:\n{message}"
+    );
+    assert!(
+        message.contains("(<http://example.org/g1>, <http://example.org/g2>)"),
+        "the refusal must name both graphs, sorted (g1 before g2 despite the template \
+         declaring g2 first); got:\n{message}"
+    );
+    // Deterministic: the identical run produces byte-identical stderr.
+    let again = construct_graph_into("turtle", CONSTRUCT_TWO_GRAPHS, &ttl);
+    assert_eq!(
+        again.stderr, out.stderr,
+        "the refusal message must be byte-deterministic across runs"
+    );
+}
+
+/// A template MIXING default-graph triples with a named-graph quad is refused too: it
+/// still carries a named graph, and serializing the default-graph half alone would be
+/// a partial answer reported as a complete one.
+#[test]
+fn a_mixed_default_and_named_template_is_still_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    for format in SINGLE_GRAPH {
+        let out = construct_graph_into(format, CONSTRUCT_MIXED, &ttl);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "a mixed default+named template -> {format} must be refused; stderr:\n{}",
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).is_empty(),
+            "{format} must not emit the default-graph half of a refused result; got:\n{}",
+            stdout(&out)
+        );
+        assert!(
+            stderr(&out).contains("<http://example.org/named>"),
+            "{format}'s refusal must name the graph; got:\n{}",
+            stderr(&out)
+        );
+    }
+    // The SAME template into a quad-capable format keeps both halves.
+    let trig = construct_graph_into("trig", CONSTRUCT_MIXED, &ttl);
+    assert_eq!(trig.status.code(), Some(0), "mixed -> trig must exit 0");
+    let body = stdout(&trig);
+    assert!(
+        body.contains("http://example.org/plain") && body.contains("http://example.org/named"),
+        "trig must carry both the default-graph triple and the named graph; got:\n{body}"
+    );
+}
+
+/// A plain (default-graph) `CONSTRUCT` still serializes to every single-graph syntax,
+/// byte for byte, with an EMPTY loss ledger. The refusal above triggers on a
+/// non-default graph and on nothing else.
+///
+/// The expected bytes are pinned literally rather than probed, so a change to the
+/// serializer's output shows up here as a diff rather than as a passing test.
+#[test]
+fn a_plain_construct_still_serializes_to_every_single_graph_syntax() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let query = "CONSTRUCT { ?s <http://example.org/friend> ?o } \
+                 WHERE { ?s <http://example.org/knows> ?o }";
+
+    let expected: [(&str, &str); 3] = [
+        (
+            "turtle",
+            concat!(
+                "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
+                "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+                "\n",
+                "<http://example.org/alice> <http://example.org/friend> \
+                 <http://example.org/bob> .\n",
+            ),
+        ),
+        (
+            "ntriples",
+            "<http://example.org/alice> <http://example.org/friend> \
+             <http://example.org/bob> .\n",
+        ),
+        (
+            "rdfxml",
+            concat!(
+                "<?xml version=\"1.0\"?>\n",
+                "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+                "xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\" ",
+                "xmlns:ns0=\"http://example.org/\" rdf:version=\"1.2\">\n",
+                "  <rdf:Description rdf:about=\"http://example.org/alice\">\n",
+                "    <ns0:friend rdf:resource=\"http://example.org/bob\"/>\n",
+                "  </rdf:Description>\n",
+                "</rdf:RDF>\n",
+            ),
+        ),
+    ];
+
+    for (format, bytes) in expected {
+        let out = construct_graph_into(format, query, &ttl);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a default-graph CONSTRUCT -> {format} must exit 0; stderr:\n{}",
+            stderr(&out)
+        );
+        assert_eq!(
+            stdout(&out),
+            bytes,
+            "a default-graph CONSTRUCT -> {format} must emit the same bytes it always has"
+        );
+        let ledger = stderr(&out);
+        assert!(
+            ledger.contains("\"losses\": [\n  ]"),
+            "a default-graph CONSTRUCT -> {format} loses nothing; got:\n{ledger}"
+        );
+    }
+}
+
+/// `DESCRIBE` shares the graph-result lane, so the same refusal covers it — and a
+/// `DESCRIBE` over default-graph data carries no named graph, so it is untouched.
+#[test]
+fn describe_over_default_graph_data_is_never_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+
+    for format in SINGLE_GRAPH {
+        let out = construct_graph_into(format, "DESCRIBE <http://example.org/alice>", &ttl);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "DESCRIBE -> {format} over default-graph data must exit 0; stderr:\n{}",
+            stderr(&out)
+        );
+        // `knows` is spelled `<http://example.org/knows>` in the line/Turtle family and
+        // `ns0:knows` in RDF/XML, so the assertion pins the local name plus the object.
+        let body = stdout(&out);
+        assert!(
+            body.contains("knows") && body.contains("http://example.org/bob"),
+            "DESCRIBE -> {format} must still emit the described triples; got:\n{body}"
+        );
+    }
+}
+
+/// A template writing into MORE graphs than the message spells out reports a bounded,
+/// deterministically-ordered sample plus an exact count of the tail — never a silent
+/// truncation, and never an unbounded message.
+#[test]
+fn a_refusal_over_many_graphs_samples_deterministically_and_counts_the_tail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    // Ten graphs, declared in reverse alphabetical order so neither the sample nor its
+    // ordering can be an artifact of the template's own order.
+    let mut template = String::from("PREFIX ex: <http://example.org/> CONSTRUCT {");
+    for name in ["j", "i", "h", "g", "f", "e", "d", "c", "b", "a"] {
+        use std::fmt::Write as _;
+        write!(template, " GRAPH ex:{name} {{ ?s ex:r ?o }}").expect("write to a String");
+    }
+    template.push_str(" } WHERE { ?s ex:knows ?o }");
+
+    let out = construct_graph_into("turtle", &template, &ttl);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a ten-graph template -> turtle must be refused; stderr:\n{}",
+        stderr(&out)
+    );
+    let message = stderr(&out);
+    assert!(
+        message.contains("10 named graphs"),
+        "the count must be exact even though the list is sampled; got:\n{message}"
+    );
+    assert!(
+        message.contains(
+            "(<http://example.org/a>, <http://example.org/b>, <http://example.org/c>, \
+             <http://example.org/d>, <http://example.org/e>, <http://example.org/f>, \
+             <http://example.org/g>, <http://example.org/h>, and 2 more)"
+        ),
+        "the first eight graphs must be named in sorted order and the tail counted; \
+         got:\n{message}"
+    );
+}
+
+// ── SEP-0008 SHA-3 through the built binary ─────────────────────────────────────
+//
+// The evaluator's own tests pin the digests against NIST FIPS 202. They cannot pin
+// what a HOST receives: the CLI parses the query text, evaluates it, and writes a
+// SPARQL-results document, and every one of those three steps is a place a
+// hyphen-bearing keyword or a fresh built-in can be lost. This block drives the
+// shipped executable end to end, from query text to the JSON on stdout.
+
+/// A fixture whose object is the NIST FIPS 202 example message `"abc"` — the message
+/// every published SHA-3 known-answer table is written against, so the expected
+/// digests below are citable values rather than recorded output.
+const SHA3_DATA_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:s ex:message \"abc\" .\n",
+);
+
+/// `(function name, SELECT alias, published FIPS 202 digest of "abc")`.
+///
+/// Provenance: NIST FIPS 202 publishes `"abc"` as a worked example for all four
+/// SHA-3 sizes. Each value below was taken from that table and independently
+/// cross-checked against two implementations that are not the code under test —
+/// OpenSSL (`printf 'abc' | openssl dgst -sha3-256`) and CPython's `hashlib`
+/// (`hashlib.new("sha3_256", b"abc").hexdigest()`), which agree with each other and
+/// with these strings.
+const SHA3_ABC_VECTORS: [(&str, &str, &str); 4] = [
+    (
+        "SHA3-224",
+        "h224",
+        "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf",
+    ),
+    (
+        "SHA3-256",
+        "h256",
+        "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    ),
+    (
+        "SHA3-384",
+        "h384",
+        "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f5\
+         39f1edf228376d25",
+    ),
+    (
+        "SHA3-512",
+        "h512",
+        "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c9\
+         1a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+    ),
+];
+
+/// One `SELECT` projecting all four SHA-3 digests of `?m`, spelled with `spelling`
+/// applied to each function name.
+fn sha3_select(spelling: impl Fn(&str) -> String) -> String {
+    let mut q = String::from("PREFIX ex: <http://example.org/> SELECT");
+    for (name, alias, _) in SHA3_ABC_VECTORS {
+        use std::fmt::Write as _;
+        write!(q, " ({}(?m) AS ?{alias})", spelling(name)).expect("write to a String");
+    }
+    q.push_str(" WHERE { ?s ex:message ?m }");
+    q
+}
+
+/// The one solution row of a `--results-format json` run, as `alias -> value`.
+fn sha3_row(out: &Output) -> serde_json::Map<String, serde_json::Value> {
+    assert!(
+        out.status.success(),
+        "a SHA-3 SELECT must exit 0; stderr:\n{}",
+        stderr(out)
+    );
+    let body = stdout(out);
+    let doc: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("--results-format json must emit JSON ({e}); got:\n{body}"));
+    let bindings = doc["results"]["bindings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results.bindings array in:\n{body}"));
+    assert_eq!(bindings.len(), 1, "the fixture binds one row; got:\n{body}");
+    bindings[0]
+        .as_object()
+        .unwrap_or_else(|| panic!("the binding row is not an object in:\n{body}"))
+        .clone()
+}
+
+/// The four SEP-0008 built-ins, evaluated by the SHIPPED binary, reproduce their
+/// published FIPS 202 `"abc"` digests in the SPARQL-results JSON it writes.
+#[test]
+fn sha3_builtins_reach_their_published_digests_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        &sha3_select(str::to_owned),
+    ]);
+    let row = sha3_row(&out);
+    for (name, alias, want) in SHA3_ABC_VECTORS {
+        let got = row[alias]["value"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{alias} is not a literal value in {row:?}"));
+        assert_eq!(
+            got, want,
+            "{name} through the CLI does not match its published FIPS 202 vector"
+        );
+    }
+    // The four sizes must not collide: a dispatch table sending SHA3-384 to the
+    // 256-bit arm would fail above, but this also pins the digest LENGTHS.
+    let lengths: Vec<usize> = SHA3_ABC_VECTORS
+        .iter()
+        .map(|(_, alias, _)| row[*alias]["value"].as_str().expect("a literal").len())
+        .collect();
+    assert_eq!(lengths, vec![56, 64, 96, 128]);
+}
+
+/// SEP-0008 spells its four functions with an UNDERSCORE, so a query copied out of
+/// the proposal must reach the same digests through the same shipped binary.
+#[test]
+fn sha3_underscored_sep_spelling_reaches_the_same_digests_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        &sha3_select(|name| name.replace('-', "_")),
+    ]);
+    let row = sha3_row(&out);
+    for (name, alias, want) in SHA3_ABC_VECTORS {
+        assert_eq!(
+            row[alias]["value"].as_str(),
+            Some(want),
+            "the underscored spelling of {name} must reach the same digest"
+        );
+    }
+}
+
+/// The hyphen/spacing rule, at the surface a user types into a shell: `SHA3-256(?m)`
+/// is one built-in call, a SPACED `SHA3 - 256` is not a function at all (a hard
+/// parse failure, never a silently different answer), and an ordinary subtraction
+/// beside a SHA-3 call still subtracts.
+#[test]
+fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
+
+    let spaced = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "PREFIX ex: <http://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }",
+    ]);
+    assert!(
+        !spaced.status.success(),
+        "`SHA3 - 256` must not resolve to the built-in; stdout:\n{}",
+        stdout(&spaced)
+    );
+
+    // `STRLEN(SHA3-256(?m)) - 4` is subtraction: 64 hex chars minus 4.
+    let arith = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "PREFIX ex: <http://example.org/> \
+         SELECT (STRLEN(SHA3-256(?m)) - 4 AS ?n) WHERE { ?s ex:message ?m }",
+    ]);
+    assert!(
+        arith.status.success(),
+        "a subtraction beside a SHA-3 call must exit 0; stderr:\n{}",
+        stderr(&arith)
+    );
+    let body = stdout(&arith);
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("JSON results");
+    assert_eq!(
+        doc["results"]["bindings"][0]["n"]["value"].as_str(),
+        Some("60"),
+        "STRLEN(SHA3-256(?m)) - 4 must be 64 - 4; got:\n{body}"
+    );
+}

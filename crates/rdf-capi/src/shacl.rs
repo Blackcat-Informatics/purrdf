@@ -96,6 +96,10 @@ fn entail_to_ntriples_bytes(
 /// `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
 /// and read rather than accepted-and-dropped.
 ///
+/// Nothing is dropped on the way out: the underlying writer is the graph-carrying
+/// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+/// are single-graph syntaxes, not because a graph slot was discarded.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `shapes_base_iri` must be null or a NUL-terminated C string;

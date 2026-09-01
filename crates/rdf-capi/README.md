@@ -115,14 +115,20 @@ executes that example against the generated shared library and committed header.
   so a signature edit fails the ordinary `cargo test` gate until the version and
   the snapshot are both updated on purpose. (`make capi-check` only proves the
   header agrees with the source; it cannot see that the contract *moved*.)
-  `0.6.0` → `0.7.0` carries exactly two such breaks, bundled into one bump so a
-  consumer recompiles once rather than twice for the same reason:
+  The minor number therefore tracks the exported signatures: any change to a
+  parameter list, a return contract, or the documented behaviour of an exported
+  symbol bumps it, **additive changes included**, because an additive parameter is
+  still a recompile for every C consumer.
+  `0.6.0` → `0.7.0` carries exactly four such breaks, bundled into one bump so a
+  consumer recompiles once rather than four times for the same reason:
   `purrdf_shacl_validate_to_sarif` and `purrdf_shacl_entail_to_ntriples` gained a
-  `shapes_base_iri` parameter between `shapes_ttl` and `data_nt`, and
+  `shapes_base_iri` parameter between `shapes_ttl` and `data_nt`,
   `purrdf_serialize_jsonld_configured` gained `base_iri` after `media_type` — the
-  slot it already occupies on `purrdf_serialize`. Recompile against the new
-  header; there is no `_v2` alias, because two entry points for one job is the
-  duplication this library exists to avoid.
+  slot it already occupies on `purrdf_serialize` — and `purrdf_serialize` itself
+  gained `out_directional_literals_dropped` and `out_named_graph_rows_dropped`
+  before `out_error`. Recompile against the new header; there is no `_v2` alias,
+  because two entry points for one job is the duplication this library exists to
+  avoid.
 
 ## Base IRIs across the surface
 

@@ -19,8 +19,34 @@
 //!    object lies in the closure, together with their annotations.
 //!
 //! Named-node endpoints do **not** expand (that would pull in the whole graph); only
-//! blank nodes do. Reification is standpoint-scoped and carries no graph dimension, so
-//! reifiers are selected by reified-triple membership, never by graph.
+//! blank nodes do.
+//!
+//! # Graph scope: selection is graph-blind, emission is graph-faithful
+//!
+//! Every clause above **selects** by term membership alone and **emits** each statement
+//! into the graph it was asserted in. Clauses 1-3 have always done that — `by_endpoint`
+//! indexes a quad under its subject/object whatever `q.g` says, and the emission carries
+//! `q.g` through. Clause 4 now does the same:
+//!
+//! * a reifier **declaration** is the row `(reifier, triple-term, graph)`. It is selected
+//!   when the reified triple's subject *or* object lies in the closure — **graph
+//!   membership takes no part in that test** — and is re-emitted into its own `graph`.
+//!   So a declaration in `<g>` about a triple asserted in the default graph (or about a
+//!   triple asserted nowhere at all — a reified triple need not be asserted, so there is
+//!   no "graph of the reified triple" a selector could even match against) is kept, and
+//!   kept in `<g>`.
+//! * an **annotation** rides with the declaration it annotates, not with the reifier
+//!   resource: rows are harvested per `(reifier, graph)` and re-emitted into that graph.
+//!   The RDF 1.2 statement layer is keyed per graph, so an annotation belongs to the
+//!   declaration made in the same graph; harvesting a reifier's rows across graphs would
+//!   emit an annotation into a graph whose declaration the description never selected.
+//!
+//! This is deliberate, and it is the opposite of what this module did before: it used to
+//! drop the graph slot and re-emit the whole statement layer into the default graph, on
+//! the rationale that reification is standpoint-scoped and carries no graph dimension.
+//! It does carry one — the reifier and annotation side-tables are keyed by
+//! `(graph, term)` — so that collapse silently relocated statements out of the graph they
+//! were asserted in, which is the one thing a description must never do.
 //!
 //! The extracted subgraph is a fresh, structurally valid [`RdfDataset`] that can be
 //! handed straight to the `native_codecs` serializers (Turtle / N-Triples / N-Quads /
@@ -74,8 +100,23 @@ fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> RdfTerm {
 /// A view id → the quads touching it as subject/object (the endpoint adjacency).
 type EndpointQuads<I> = BTreeMap<I, Vec<QuadIds<I>>>;
 
-/// A view id → a list of `(id, id)` bindings (reifier/triple or annotation `(p, o)`).
-type EndpointPairs<I> = BTreeMap<I, Vec<(I, I)>>;
+/// One reifier **declaration**: `(reifier, triple-term, graph)`, where `graph` is `None`
+/// for the default graph. The unit clause 4 selects and emits — not `(reifier, triple)`,
+/// because the statement layer is keyed per graph.
+type ReifierDeclaration<I> = (I, I, Option<I>);
+
+/// One annotation as it hangs off a reifier: `(predicate, object, graph)`.
+type AnnotationBinding<I> = (I, I, Option<I>);
+
+/// One annotation row as harvested: `(reifier, predicate, object, graph)`.
+type AnnotationRow<I> = (I, I, I, Option<I>);
+
+/// A view id → the reifier declarations whose reified triple has it as subject or object.
+type EndpointReifiers<I> = BTreeMap<I, Vec<ReifierDeclaration<I>>>;
+
+/// A reifier id → the annotation rows hung off that reifier, each in the graph it was
+/// asserted in.
+type ReifierAnnotations<I> = BTreeMap<I, Vec<AnnotationBinding<I>>>;
 
 /// A reusable extractor: it builds the subject/object adjacency and the reifier
 /// endpoint index **once**, so extracting the SCBD of many subjects (one per exported
@@ -90,11 +131,12 @@ pub struct Describer<'a, D: DatasetView = RdfDataset> {
     dataset: &'a D,
     /// term id → the quads that touch it as subject or object.
     by_endpoint: EndpointQuads<D::Id>,
-    /// term id → the `(reifier, triple-term)` bindings whose reified triple has this
-    /// id as its subject or object.
-    reifiers_by_endpoint: EndpointPairs<D::Id>,
-    /// reifier id → the `(p, o)` annotation bindings hung off that reifier.
-    annotations_by_reifier: EndpointPairs<D::Id>,
+    /// term id → the `(reifier, triple-term, graph)` declarations whose reified triple
+    /// has this id as its subject or object. The graph slot is carried, not indexed on:
+    /// selection is by reified-triple endpoint alone (see the module docs).
+    reifiers_by_endpoint: EndpointReifiers<D::Id>,
+    /// reifier id → the `(p, o, graph)` annotation rows hung off that reifier.
+    annotations_by_reifier: ReifierAnnotations<D::Id>,
 }
 
 impl<'a, D: DatasetView> Describer<'a, D> {
@@ -110,28 +152,28 @@ impl<'a, D: DatasetView> Describer<'a, D> {
             }
         }
 
-        let mut reifiers_by_endpoint: EndpointPairs<D::Id> = BTreeMap::new();
-        for (reifier, triple) in dataset.reifier_quads().map(|q| (q.s, q.o)) {
+        let mut reifiers_by_endpoint: EndpointReifiers<D::Id> = BTreeMap::new();
+        for (reifier, triple, g) in dataset.reifier_quads().map(|q| (q.s, q.o, q.g)) {
             if let TermRef::Triple { s, p: _, o } = dataset.resolve(triple) {
                 reifiers_by_endpoint
                     .entry(s)
                     .or_default()
-                    .push((reifier, triple));
+                    .push((reifier, triple, g));
                 if o != s {
                     reifiers_by_endpoint
                         .entry(o)
                         .or_default()
-                        .push((reifier, triple));
+                        .push((reifier, triple, g));
                 }
             }
         }
 
-        let mut annotations_by_reifier: EndpointPairs<D::Id> = BTreeMap::new();
-        for (reifier, p, o) in dataset.annotation_quads().map(|q| (q.s, q.p, q.o)) {
+        let mut annotations_by_reifier: ReifierAnnotations<D::Id> = BTreeMap::new();
+        for (reifier, p, o, g) in dataset.annotation_quads().map(|q| (q.s, q.p, q.o, q.g)) {
             annotations_by_reifier
                 .entry(reifier)
                 .or_default()
-                .push((p, o));
+                .push((p, o, g));
         }
 
         Self {
@@ -192,9 +234,14 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         }
 
         let mut quads: HashSet<QuadIds<D::Id>> = HashSet::new();
-        let mut reifiers: BTreeSet<(D::Id, D::Id)> = BTreeSet::new();
-        let mut annotations: Vec<(D::Id, D::Id, D::Id)> = Vec::new();
-        let mut visited_reifiers: HashSet<D::Id> = HashSet::new();
+        // The selected reifier DECLARATIONS, `(reifier, triple-term, graph)`.
+        let mut reifiers: BTreeSet<ReifierDeclaration<D::Id>> = BTreeSet::new();
+        // The harvested annotation rows, `(reifier, p, o, graph)`.
+        let mut annotations: Vec<AnnotationRow<D::Id>> = Vec::new();
+        // Keyed by `(reifier, graph)`, not by the reifier alone: annotations are
+        // harvested per DECLARATION, so a reifier declared in two graphs harvests each
+        // graph's rows exactly once.
+        let mut visited_reifiers: HashSet<(D::Id, Option<D::Id>)> = HashSet::new();
 
         // Expand a blank endpoint into the frontier; named nodes never expand (that
         // would drag in the entire neighbourhood of the graph).
@@ -216,13 +263,14 @@ impl<'a, D: DatasetView> Describer<'a, D> {
                 }
             }
 
-            // Reifiers whose reified triple is about this anchor. Selection is by
-            // reified-triple endpoint; a named-node reifier is still kept (only blank
-            // ids/objects expand).
+            // Reifier declarations whose reified triple is about this anchor. Selection
+            // is by reified-triple endpoint and by nothing else — the declaration's
+            // graph is carried, never matched on; a named-node reifier is still kept
+            // (only blank ids/objects expand).
             if let Some(bindings) = self.reifiers_by_endpoint.get(&anchor) {
-                for &b @ (reifier, triple) in bindings {
+                for &b @ (reifier, triple, graph) in bindings {
                     reifiers.insert(b);
-                    // Close THIS binding's blank endpoints every time: a reifier may
+                    // Close THIS declaration's blank endpoints every time: a reifier may
                     // reify more than one triple, so each triple's blank subject/object
                     // (and a blank reifier id, whose own plain quads live in
                     // `by_endpoint`) must be anchored — `expand_blank!` is idempotent.
@@ -231,14 +279,16 @@ impl<'a, D: DatasetView> Describer<'a, D> {
                         expand_blank!(frontier, anchors, s);
                         expand_blank!(frontier, anchors, o);
                     }
-                    // Harvest the reifier's annotations ONCE — they are keyed by the
-                    // reifier, not by the individual binding, so only this needs the
-                    // visited-guard.
-                    if visited_reifiers.insert(reifier)
+                    // Harvest this DECLARATION's annotations once: the rows keyed by
+                    // this reifier that were asserted in the declaration's own graph.
+                    // The guard is `(reifier, graph)` because a reifier that reifies two
+                    // triples in one graph must not re-harvest, while the same reifier
+                    // declared in a second graph must harvest that graph's rows too.
+                    if visited_reifiers.insert((reifier, graph))
                         && let Some(annos) = self.annotations_by_reifier.get(&reifier)
                     {
-                        for &(p, o) in annos {
-                            annotations.push((reifier, p, o));
+                        for &(p, o, _) in annos.iter().filter(|&&(_, _, g)| g == graph) {
+                            annotations.push((reifier, p, o, graph));
                             expand_blank!(frontier, anchors, p);
                             expand_blank!(frontier, anchors, o);
                         }
@@ -264,16 +314,21 @@ impl<'a, D: DatasetView> Describer<'a, D> {
             let g = q.g.map(|g| self.map_id(&mut builder, &mut remap, g));
             builder.push_quad(s, p, o, g);
         }
-        for &(reifier, triple) in &reifiers {
+        // The statement layer is re-emitted through the `_in_graph` forms, so a
+        // declaration and its annotations land back in the graph they were asserted in
+        // rather than being relocated into the default graph.
+        for &(reifier, triple, g) in &reifiers {
             let r = self.map_id(&mut builder, &mut remap, reifier);
             let t = self.map_id(&mut builder, &mut remap, triple);
-            builder.push_reifier(r, t);
+            let g = g.map(|g| self.map_id(&mut builder, &mut remap, g));
+            builder.push_reifier_in_graph(r, t, g);
         }
-        for &(reifier, p, o) in &annotations {
+        for &(reifier, p, o, g) in &annotations {
             let r = self.map_id(&mut builder, &mut remap, reifier);
             let p = self.map_id(&mut builder, &mut remap, p);
             let o = self.map_id(&mut builder, &mut remap, o);
-            builder.push_annotation(r, p, o);
+            let g = g.map(|g| self.map_id(&mut builder, &mut remap, g));
+            builder.push_annotation_in_graph(r, p, o, g);
         }
 
         builder.freeze()
@@ -560,6 +615,148 @@ mod tests {
         assert!(
             has_by,
             "the blank annotation object's own triple must be included"
+        );
+    }
+
+    /// The IRI a described dataset's single reifier declaration is scoped to, or
+    /// `None` for the default graph. Panics unless there is exactly one declaration.
+    fn only_reifier_graph(ds: &RdfDataset) -> Option<String> {
+        let mut rows = ds.reifiers_with_graph();
+        let (_, _, g) = rows.next().expect("exactly one reifier declaration");
+        assert!(rows.next().is_none(), "exactly one reifier declaration");
+        g.map(|g| match ds.resolve(g) {
+            TermRef::Iri(i) => i.to_string(),
+            other => panic!("a graph name must be an IRI, got {other:?}"),
+        })
+    }
+
+    /// The graph IRIs (or `None`) the described dataset's annotation rows are scoped to.
+    fn annotation_graphs(ds: &RdfDataset) -> Vec<Option<String>> {
+        let mut out: Vec<Option<String>> = ds
+            .annotations_with_graph()
+            .map(|(_, _, _, g)| {
+                g.map(|g| match ds.resolve(g) {
+                    TermRef::Iri(i) => i.to_string(),
+                    other => panic!("a graph name must be an IRI, got {other:?}"),
+                })
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn reifier_and_annotation_stay_in_their_source_graph() {
+        // `GRAPH <g> { S p o ~:r {| certainty "high" |} }`. The base quad, the reifier
+        // declaration and the annotation were all asserted in <g>, and the description
+        // must keep all three there — collapsing the statement layer into the default
+        // graph would relocate two of the three.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let g = b.intern_iri("https://e/g");
+        b.push_quad(s, p, o, Some(g));
+        let triple_term = b.intern_triple(s, p, o);
+        let reifier = b.intern_iri("https://e/r");
+        b.push_reifier_in_graph(reifier, triple_term, Some(g));
+        let certainty = b.intern_iri("https://e/certainty");
+        let high = b.intern_literal(RdfLiteral::simple("high"));
+        b.push_annotation_in_graph(reifier, certainty, high, Some(g));
+        let ds = b.freeze().unwrap();
+
+        let scbd = describe(&ds, S).unwrap();
+        assert_eq!(
+            only_reifier_graph(&scbd),
+            Some("https://e/g".to_owned()),
+            "the reifier declaration must stay in the graph that declared it"
+        );
+        assert_eq!(
+            annotation_graphs(&scbd),
+            vec![Some("https://e/g".to_owned())],
+            "the annotation must stay in the graph that asserted it"
+        );
+        let base_graph = scbd
+            .quad_refs()
+            .map(|q| q.g.map(|g| format!("{g:?}")))
+            .collect::<Vec<_>>();
+        assert_eq!(base_graph.len(), 1, "one base quad");
+        assert!(base_graph[0].is_some(), "the base quad keeps its graph too");
+    }
+
+    #[test]
+    fn a_reifier_declared_in_another_graph_than_its_reified_triple_is_kept_there() {
+        // The cross-graph case the graph-blind SELECTION rule admits: the base quad is
+        // asserted in <g1>, and <g2> declares a reifier about it with an annotation.
+        // Selection ignores graphs, so the declaration is reached; emission is faithful,
+        // so it lands in <g2> — not in <g1>, and not in the default graph.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let g1 = b.intern_iri("https://e/g1");
+        let g2 = b.intern_iri("https://e/g2");
+        b.push_quad(s, p, o, Some(g1));
+        let triple_term = b.intern_triple(s, p, o);
+        let reifier = b.intern_iri("https://e/r");
+        b.push_reifier_in_graph(reifier, triple_term, Some(g2));
+        let source = b.intern_iri("https://e/source");
+        let ledger = b.intern_iri("https://e/ledger");
+        b.push_annotation_in_graph(reifier, source, ledger, Some(g2));
+        let ds = b.freeze().unwrap();
+
+        let scbd = describe(&ds, S).unwrap();
+        assert_eq!(
+            only_reifier_graph(&scbd),
+            Some("https://e/g2".to_owned()),
+            "a declaration in <g2> about a triple asserted in <g1> stays in <g2>"
+        );
+        assert_eq!(
+            annotation_graphs(&scbd),
+            vec![Some("https://e/g2".to_owned())],
+            "its annotation stays in <g2> as well"
+        );
+    }
+
+    #[test]
+    fn each_declaration_harvests_only_its_own_graphs_annotations() {
+        // ONE reifier id, TWO graphs. <g1> declares it about a triple of S; <g2> declares
+        // the SAME reifier id about an unrelated triple and annotates it there. The
+        // annotation harvest is keyed by `(reifier, graph)`, so describing S keeps the
+        // <g1> declaration and the <g1> annotation, and leaves the <g2> pair alone —
+        // a reifier-only harvest would emit the <g2> annotation into a graph whose
+        // declaration is not in the description at all.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let other = b.intern_iri(OTHER);
+        let g1 = b.intern_iri("https://e/g1");
+        let g2 = b.intern_iri("https://e/g2");
+        b.push_quad(s, p, o, Some(g1));
+        b.push_quad(other, p, o, Some(g2));
+        let about_s = b.intern_triple(s, p, o);
+        let about_other = b.intern_triple(other, p, o);
+        let reifier = b.intern_iri("https://e/r");
+        b.push_reifier_in_graph(reifier, about_s, Some(g1));
+        b.push_reifier_in_graph(reifier, about_other, Some(g2));
+        let source = b.intern_iri("https://e/source");
+        let here = b.intern_iri("https://e/here");
+        let elsewhere = b.intern_iri("https://e/elsewhere");
+        b.push_annotation_in_graph(reifier, source, here, Some(g1));
+        b.push_annotation_in_graph(reifier, source, elsewhere, Some(g2));
+        let ds = b.freeze().unwrap();
+
+        let scbd = describe(&ds, S).unwrap();
+        assert_eq!(
+            only_reifier_graph(&scbd),
+            Some("https://e/g1".to_owned()),
+            "only the <g1> declaration reifies a triple of S"
+        );
+        assert_eq!(
+            annotation_graphs(&scbd),
+            vec![Some("https://e/g1".to_owned())],
+            "the <g2> annotation belongs to the <g2> declaration, which was not selected"
         );
     }
 

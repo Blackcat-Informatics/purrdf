@@ -1,0 +1,7 @@
+@prefix :    <http://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+# Clause 4, object half, alone: :q is the OBJECT of :r2's reified triple and the
+# subject of nothing, and the reified triple itself is unasserted — so every
+# statement here was selected through the object side of the disjunction.
+:r2 rdf:reifies <<( :p :mentions :q )>> .
+:r2 :source :ledger .

@@ -1,0 +1,2 @@
+PREFIX : <http://example.org/>
+CONSTRUCT GRAPH <http://example.org/out> WHERE { ?s :knows ?o }

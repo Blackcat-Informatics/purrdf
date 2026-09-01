@@ -601,7 +601,12 @@ export class Dataset implements Iterable<Quad> {
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
   /**
-   * Serialize to any of the nine RDF formats.
+   * The writer-native lane: emits everything the target's writer has a surface for
+   * and throws for what it does not. The RDF-1.2 statement layer survives Turtle,
+   * N-Triples, N-Quads and TriG (`<<( … )>>`), RDF/XML (`rdf:parseType="Triple"`)
+   * and JSON-LD / YAML-LD (`@triple`); `trix` and `hextuples` have no triple-term
+   * surface and throw rather than drop it silently. A single-graph target emits the
+   * default graph alone.
    *
    * `base` is the document base the output is written under — the egress mirror of
    * `parse`'s. A syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD,
@@ -609,13 +614,17 @@ export class Dataset implements Iterable<Quad> {
    * N-Quads, TriX, HexTuples) emits absolute IRIs, the only spelling those grammars
    * admit. A base that is not an absolute IRI throws whatever the format; omitting it
    * emits absolute IRIs. No base is ever fabricated.
-   *
-   * The RDF 1.2 statement layer is EMITTED, not projected away: this is a dataset you
-   * are reading back, so reifier and annotation rows survive. RDF/XML renders them as
-   * `rdf:parseType="Triple"`; TriX and HexTuples have no triple-term surface and throw
-   * rather than dropping them silently.
    */
   serialize(format: string, base?: string | null): string;
+  /**
+   * The transcode lane: the declared format contract plus the realized loss.
+   * Byte-identical to `serialize(format, base)` for a star-capable target; for
+   * `rdfxml`, `trix` and `hextuples` it projects the RDF-1.2 statement layer to base
+   * quads and counts it instead of throwing.
+   *
+   * `base` carries the same meaning it does on `serialize`.
+   */
+  serializeWithLoss(format: string, base?: string | null): SerializeLoss;
   /**
    * `base` is the document base the output is written under: both JSON-LD and
    * YAML-LD can express one, so it reaches the emitted `@context` as `@base` and
@@ -639,6 +648,43 @@ export class Dataset implements Iterable<Quad> {
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+/**
+ * One serialized document plus the realized loss of producing it, partitioned by
+ * cause — the return of `Dataset#serializeWithLoss`.
+ *
+ * The counts partition the loss, so their sum is the total and no row is charged
+ * twice: reading one alone cannot distinguish "nothing was lost" from "the loss was
+ * charged to a cause I am not reading". Every count is REALIZED — what this document
+ * actually discarded — not the static pair contract `lossMatrixJson` describes.
+ */
+export class SerializeLoss {
+  /**
+   * The serialized document. Identical to what `serialize(format)` returns for a
+   * star-capable target; for `rdfxml`, `trix` and `hextuples` it is the contract's
+   * projected document instead — the statement layer reduced to base quads and
+   * charged to `statementRowsDropped`.
+   */
+  readonly text: string;
+  /**
+   * RDF-1.2 statement-layer rows dropped because the target cannot represent quoted
+   * triples. `0` for star-capable formats. Rows dropped for being scoped to a named
+   * graph are counted by `namedGraphRowsDropped` instead, never here and never twice.
+   */
+  readonly statementRowsDropped: number;
+  /**
+   * Object literals whose RDF-1.2 base direction the target has no surface for.
+   * `0` for every direction-capable format.
+   */
+  readonly directionalLiteralsDropped: number;
+  /**
+   * Rows the single-graph flattening dropped because the target has no named-graph
+   * construct. `0` for every dataset-capable format. The rows are DROPPED, not
+   * folded into the default graph.
+   */
+  readonly namedGraphRowsDropped: number;
   free(): void;
 }
 

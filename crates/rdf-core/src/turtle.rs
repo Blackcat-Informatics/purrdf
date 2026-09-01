@@ -254,19 +254,85 @@ fn write_dataset_predicate(dataset: &RdfDataset, id: TermId, out: &mut String) {
     out.push('>');
 }
 
-/// Append one ID-native quad as the same default-graph statement emitted by
-/// [`emit_quad`]. The graph-name slot is intentionally ignored by this Turtle
-/// projection, matching the owned emitter.
-pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
-    write_dataset_term(dataset, quad.s, out);
+/// The `rdf:reifies` IRI every reifier binding is written under.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
+/// Append `s p o [g] .\n` — the one statement writer behind every `write_dataset_*`
+/// entry point below, so the N-Triples and N-Quads spellings of a row cannot drift
+/// apart in anything but the graph slot.
+///
+/// `graph` is `None` for the default graph AND for every triple-only projection;
+/// `Some(id)` appends the fourth N-Quads term. A graph name is an IRI or a blank
+/// node in the RDF 1.2 abstract syntax, but it is rendered through the same total
+/// [`write_dataset_term`] as every other position rather than a partial match, for
+/// the same reason that function is total.
+fn write_dataset_statement(
+    dataset: &RdfDataset,
+    subject: TermId,
+    predicate: TermId,
+    object: TermId,
+    graph: Option<TermId>,
+    out: &mut String,
+) {
+    write_dataset_term(dataset, subject, out);
     out.push(' ');
-    write_dataset_predicate(dataset, quad.p, out);
+    write_dataset_predicate(dataset, predicate, out);
     out.push(' ');
-    write_dataset_term(dataset, quad.o, out);
+    write_dataset_term(dataset, object, out);
+    if let Some(graph) = graph {
+        out.push(' ');
+        write_dataset_term(dataset, graph, out);
+    }
     out.push_str(" .\n");
 }
 
+/// Append `<reifier> rdf:reifies <statement> [g] .\n`.
+fn write_dataset_reifier_statement(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    statement: TermId,
+    graph: Option<TermId>,
+    out: &mut String,
+) {
+    write_dataset_term(dataset, reifier, out);
+    out.push_str(" <");
+    out.push_str(RDF_REIFIES);
+    out.push_str("> ");
+    write_dataset_term(dataset, statement, out);
+    if let Some(graph) = graph {
+        out.push(' ');
+        write_dataset_term(dataset, graph, out);
+    }
+    out.push_str(" .\n");
+}
+
+/// Append one ID-native quad as the same default-graph statement emitted by
+/// [`emit_quad`]. The graph-name slot is intentionally ignored by this Turtle
+/// projection, matching the owned emitter.
+///
+/// Ignoring the graph is only honest for a caller that has already established it
+/// has nowhere to put one. A caller rendering a graph-CARRYING dataset wants
+/// [`write_dataset_nquad`], which spells the slot out instead of dropping it.
+pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+    write_dataset_statement(dataset, quad.s, quad.p, quad.o, None, out);
+}
+
+/// Append one ID-native quad as an N-Quads statement, CARRYING its graph slot:
+/// `s p o .` in the default graph and `s p o g .` in a named one.
+///
+/// The graph-preserving twin of [`write_dataset_quad`]. A default-graph-only
+/// dataset renders byte-identically through either, because an N-Quads line with
+/// no graph term IS the N-Triples line — which is why widening a triple-only
+/// egress to this writer never changes an existing document, and only ever adds
+/// the term that was being dropped.
+pub fn write_dataset_nquad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+    write_dataset_statement(dataset, quad.s, quad.p, quad.o, quad.g, out);
+}
+
 /// Append one ID-native annotation row without materializing owned terms.
+///
+/// The annotation's own graph slot is dropped, exactly as [`write_dataset_quad`]
+/// drops a base quad's; [`write_dataset_annotation_nquad`] keeps it.
 pub fn write_dataset_annotation(
     dataset: &RdfDataset,
     reifier: TermId,
@@ -274,28 +340,51 @@ pub fn write_dataset_annotation(
     object: TermId,
     out: &mut String,
 ) {
-    write_dataset_term(dataset, reifier, out);
-    out.push(' ');
-    write_dataset_predicate(dataset, predicate, out);
-    out.push(' ');
-    write_dataset_term(dataset, object, out);
-    out.push_str(" .\n");
+    write_dataset_statement(dataset, reifier, predicate, object, None, out);
+}
+
+/// Append one ID-native annotation row as an N-Quads statement, carrying the graph
+/// slot the annotation was asserted in.
+///
+/// The RDF 1.2 statement layer is keyed PER GRAPH — one reifier id may be
+/// annotated independently in two graphs — so an annotation's graph is content,
+/// not decoration, and a graph-carrying egress that dropped it would silently
+/// merge two graphs' annotations of the same reifier.
+pub fn write_dataset_annotation_nquad(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    predicate: TermId,
+    object: TermId,
+    graph: Option<TermId>,
+    out: &mut String,
+) {
+    write_dataset_statement(dataset, reifier, predicate, object, graph, out);
 }
 
 /// Append one ID-native reifier binding without materializing its statement tree.
+///
+/// The declaration's own graph slot is dropped;
+/// [`write_dataset_reifier_nquad`] keeps it.
 pub fn write_dataset_reifier(
     dataset: &RdfDataset,
     reifier: TermId,
     statement: TermId,
     out: &mut String,
 ) {
-    const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-    write_dataset_term(dataset, reifier, out);
-    out.push_str(" <");
-    out.push_str(RDF_REIFIES);
-    out.push_str("> ");
-    write_dataset_term(dataset, statement, out);
-    out.push_str(" .\n");
+    write_dataset_reifier_statement(dataset, reifier, statement, None, out);
+}
+
+/// Append one ID-native reifier binding as an N-Quads statement, carrying the graph
+/// slot the declaration was made in (see [`write_dataset_annotation_nquad`] for why
+/// that slot is content).
+pub fn write_dataset_reifier_nquad(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    statement: TermId,
+    graph: Option<TermId>,
+    out: &mut String,
+) {
+    write_dataset_reifier_statement(dataset, reifier, statement, graph, out);
 }
 
 /// Render an [`RdfTerm`] in Turtle term syntax WITHOUT applying the blank-node
@@ -400,7 +489,6 @@ pub fn emit_quad(quad: &RdfQuad) -> String {
 /// bypasses that escaping.
 #[must_use]
 pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, RdfTerm)]) -> String {
-    const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
     let subject = match &reifier.reifier {
         RdfTerm::BlankNode(_) if !annotations.is_empty() => "[]".to_owned(),
         other => emit_term(other),

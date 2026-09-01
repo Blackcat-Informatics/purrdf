@@ -13,9 +13,21 @@
 //! 2. A template **blank node is minted fresh per solution row** — the same label
 //!    co-refers within one row (the `blanks` map), distinct across rows (the
 //!    cross-row monotonic [`EvalCtx::bnode_counter`]).
-//! 3. **Positional validity** (a literal in subject position / a non-IRI predicate)
-//!    is decided by the *caller* after instantiation, because the two callers intern
-//!    into different sinks (a builder vs. a [`MutableDataset`](purrdf_core::MutableDataset)).
+//! 3. **Positional validity** (an asserted subject that is not an IRI or a blank
+//!    node, a non-IRI predicate, or an object triple term whose own components break
+//!    the RDF 1.2 term model) is decided by the *caller* after instantiation, because
+//!    the two callers intern into different sinks (a builder vs. a
+//!    [`MutableDataset`](purrdf_core::MutableDataset)).
+//!
+//! The invariant rule 3 enforces is the **RDF 1.2 term model — what a PurRDF reader
+//! accepts**, not merely what the interner tolerates. Every statement these helpers
+//! let through must re-parse from the bytes PurRDF writes for it: the N-Triples /
+//! N-Quads / Turtle / TriG readers
+//! (`purrdf_rdf::native_codecs`) and the IR's pre-freeze validator
+//! (`purrdf_core::ir::validate`) enforce the same term model, position by position,
+//! so a template instantiation that is skipped here is exactly one that a reader
+//! would refuse. Loosening this predicate below the term model does not "emit more";
+//! it emits documents PurRDF cannot read back.
 //!
 //! These helpers stop at the dataset-independent [`TermValue`]: a bound variable is
 //! resolved via `ctx.scratch.value_of(ctx.dataset, term)`, so the value is valid
@@ -29,12 +41,67 @@ use crate::convert::{literal_to_value, named_node_to_value};
 use crate::eval::EvalCtx;
 use crate::solution::{Solution, VarSchema};
 
-/// SPARQL §16.2 positional validity: an instantiated triple is **ill-formed** (and
-/// the caller skips it) when its subject is a literal or its predicate is not an IRI.
-/// Shared by `CONSTRUCT`, the UPDATE `DELETE`/`INSERT` templates, and the variable-free
-/// `DATA` path so the rule lives in exactly one place.
-pub(crate) fn positionally_ill_formed(subject: &TermValue, predicate: &TermValue) -> bool {
-    matches!(subject, TermValue::Literal { .. }) || !matches!(predicate, TermValue::Iri(_))
+/// SPARQL §16.2 positional validity: an instantiated triple is **ill-formed** — and
+/// the caller SKIPS it rather than erroring — when it is not a legal RDF 1.2
+/// statement. Shared by `CONSTRUCT`, the UPDATE `DELETE`/`INSERT` templates, and the
+/// variable-free `DATA` path so the rule lives in exactly one place.
+///
+/// The rule is the RDF 1.2 term model, position by position — the model a PurRDF
+/// reader accepts, so that everything this predicate lets through both interns
+/// (no skippable instantiation may instead hard-fail the whole query at `freeze`
+/// time) and re-parses from the bytes PurRDF writes for it:
+///
+/// * **subject** — an ASSERTED subject is an IRI or a blank node. A literal is
+///   illegal, and so is a triple term: a quoted triple is a *value*, and an asserted
+///   statement cannot be made about one without a reifier standing in for it. Both
+///   are reachable purely from data — `CONSTRUCT { ?o ?p ?s }` over RDF 1.2 annotated
+///   input binds `?o` to a triple term exactly as easily as to a literal.
+/// * **predicate** — an IRI, and nothing else (a literal, a blank node and a triple
+///   term are all illegal).
+/// * **object** — every term kind is legal, but when the object *is* a triple term
+///   its own components carry the triple-term rules, recursively; see
+///   [`triple_term_well_formed`].
+///
+/// A graph term is NOT decided here: the two callers reach it by different routes
+/// (a plan-time slot versus a `WITH`-defaulted pattern) and each rejects a non-IRI
+/// graph name at its own site.
+pub(crate) fn positionally_ill_formed(
+    subject: &TermValue,
+    predicate: &TermValue,
+    object: &TermValue,
+) -> bool {
+    !matches!(subject, TermValue::Iri(_) | TermValue::Blank { .. })
+        || !matches!(predicate, TermValue::Iri(_))
+        || !triple_term_well_formed(object)
+}
+
+/// Whether `term` is legal WHERE IT STANDS as a triple-term component (an object
+/// position, or a position nested inside a quoted triple).
+///
+/// A non-triple term is always legal there — an IRI, a blank node and a literal are
+/// all admissible objects. A triple term is legal when its own components satisfy the
+/// RDF 1.2 term model for a triple term, recursively:
+///
+/// * its **subject** is an IRI or a blank node — the SAME rule as an asserted
+///   subject. A literal is illegal there, and so is a nested triple term: RDF 1.2
+///   admits a triple term only in the OBJECT of another triple term, and every
+///   PurRDF reader enforces exactly that (`purrdf_rdf::native_codecs`'s
+///   N-Triples/N-Quads statement validator, and `purrdf_core::ir::validate`'s
+///   pre-freeze pass). A weaker rule here would emit a document PurRDF then refuses
+///   to read — silently, with a zero exit status, and on the UPDATE path persisted.
+/// * its **predicate** is an IRI, and nothing else.
+/// * its **object** is any term, recursing when it is itself a triple term.
+///
+/// The subject arm needs no recursion: an IRI or a blank node has no components, and
+/// every other term kind is already refused, so recursing on the subject could only
+/// re-derive `true`.
+fn triple_term_well_formed(term: &TermValue) -> bool {
+    let TermValue::Triple { s, p, o } = term else {
+        return true;
+    };
+    matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+        && matches!(**p, TermValue::Iri(_))
+        && triple_term_well_formed(o)
 }
 
 /// Instantiate a **variable-free** template term (the `INSERT DATA` / `DELETE DATA`

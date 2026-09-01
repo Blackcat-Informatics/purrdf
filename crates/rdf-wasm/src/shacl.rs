@@ -72,6 +72,10 @@ pub(crate) fn entail_to_ntriples_impl(
 /// `shapesBase` carries the same meaning it does on
 /// [`shacl_validate_to_sarif`] — the shapes document's own base IRI, supplied by the
 /// host because a wasm guest has no retrieval IRI to derive one from.
+///
+/// Nothing is dropped on the way out: the underlying writer is the graph-carrying
+/// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+/// are single-graph syntaxes, not because a graph slot was discarded.
 #[wasm_bindgen(js_name = shaclEntail)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_entail(

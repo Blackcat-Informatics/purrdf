@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The FIRST-PARTY CONSTRUCT conformance corpus, in the W3C mf: manifest shape.
+#
+# Two halves, deliberately paired case-for-case:
+#
+#   * the SPARQL 1.1 §16.2 triple-producing form, whose expected results are
+#     Turtle (a graph, so every statement lands in the DEFAULT graph — a result
+#     that started carrying a graph term would no longer match), and
+#   * the quad-producing `CONSTRUCT GRAPH <iri>` form, whose expected results
+#     are N-Quads carrying the target graph on every line.
+#
+# Every triple-form evaluation case has a `graph`-prefixed counterpart, and the
+# corpus test checks that rather than trusting this comment. The syntax verdicts
+# grade the quad grammar itself — one accepted spelling and the seven refused
+# ones that bound it — and `:graphReifierScope` needs two graphs to say
+# anything, so none of those has a triple-form twin.
+#
+# Run by `crates/sparql-conformance/tests/construct_corpus.rs`, NOT by the
+# datatest harness (which is rooted at `suite/`), so this corpus reports its own
+# row in the conformance matrix instead of folding into the full-corpus tally.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/construct#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :rewrite :shortForm :unboundSkipped :illFormedSkipped
+                 :tripleTermSubjectSkipped :nestedTripleTermSubjectSkipped
+                 :blankFresh :fromNamedGraph :modifiers :reified
+                 :graphRewrite :graphShortForm :graphBlankFresh
+                 :graphFromNamedGraph :graphUnboundSkipped
+                 :graphIllFormedSkipped :graphTripleTermSubjectSkipped
+                 :graphNestedTripleTermSubjectSkipped
+                 :graphModifiers :graphReified
+                 :graphReifierScope
+                 :graphSyntax :graphNoNameSyntax :graphLiteralNameSyntax
+                 :graphBlankNameSyntax :graphNestedBlockSyntax
+                 :graphBlockNoBracesSyntax :graphShortFormBlockSyntax
+                 :graphBlockPathSyntax ) .
+
+# ── SPARQL 1.1 §16.2: the triple-producing form ──────────────────────────────
+
+:rewrite a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT rewrites a predicate into the default graph" ;
+    mf:action [ qt:query <rewrite.rq> ; qt:data <data.ttl> ] ;
+    mf:result <rewrite.ttl> .
+
+:shortForm a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT WHERE short form: the template IS the WHERE block" ;
+    mf:action [ qt:query <short-form.rq> ; qt:data <data.ttl> ] ;
+    mf:result <short-form.ttl> .
+
+:unboundSkipped a mf:QueryEvaluationTest ;
+    mf:name "a template triple with an unbound variable is skipped" ;
+    mf:action [ qt:query <unbound-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+:illFormedSkipped a mf:QueryEvaluationTest ;
+    mf:name "a literal instantiated into subject position is skipped" ;
+    mf:action [ qt:query <ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.ttl> .
+
+# The other half of the §16.2 subject rule. An asserted subject is an IRI or a
+# blank node, so a TRIPLE TERM is as ill-formed there as a literal — and RDF 1.2
+# data puts one within reach of an ordinary triple pattern, so this is a skip an
+# engine has to perform on real input, not a curiosity. The template keeps one
+# well-formed triple beside the skipped one, so the expectation distinguishes
+# "the skip fired" from "the WHERE matched nothing".
+:tripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 triple term instantiated into subject position is skipped" ;
+    mf:action [ qt:query <triple-term-subject-skipped.rq> ; qt:data <annotated.ttl> ] ;
+    mf:result <triple-term-subject-skipped.ttl> .
+
+# The same rule one level DOWN. RDF 1.2 nests a triple term in exactly one
+# position — the OBJECT of another triple term — so a triple term in the SUBJECT
+# of a nested one is ill-formed for the same reason an asserted triple-term
+# subject is, and §16.2 skips it for the same reason. Graded separately because
+# the asserted case is decided by one predicate and the nested case by that
+# predicate's RECURSION: an engine that enforced the term model only at the
+# asserted level would pass the case above while emitting, at exit status zero,
+# a document its own N-Triples/N-Quads/Turtle readers refuse to parse.
+:nestedTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 triple term instantiated into a NESTED triple term's subject is skipped" ;
+    mf:action [ qt:query <nested-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <nested-triple-term-subject-skipped.ttl> .
+
+:blankFresh a mf:QueryEvaluationTest ;
+    mf:name "a template blank node is minted fresh per solution row" ;
+    mf:action [ qt:query <blank-fresh.rq> ; qt:data <data.ttl> ] ;
+    mf:result <blank-fresh.ttl> .
+
+:fromNamedGraph a mf:QueryEvaluationTest ;
+    mf:name "a WHERE matching a named graph still CONSTRUCTs into the default graph" ;
+    mf:action [ qt:query <from-named-graph.rq> ; qt:data <data.ttl> ;
+                qt:graphData <worlds.ttl> ] ;
+    mf:result <from-named-graph.ttl> .
+
+:modifiers a mf:QueryEvaluationTest ;
+    mf:name "ORDER BY + LIMIT restrict the rows the template is instantiated over" ;
+    mf:action [ qt:query <modifiers.rq> ; qt:data <data.ttl> ] ;
+    mf:result <modifiers.ttl> .
+
+:reified a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 reifier + annotation template lands wholly in the default graph" ;
+    mf:action [ qt:query <reified.rq> ; qt:data <data.ttl> ] ;
+    mf:result <reified.ttl> .
+
+# ── The quad-producing form: CONSTRUCT GRAPH <iri> ───────────────────────────
+
+:graphRewrite a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH emits quads in the named graph, not the default graph" ;
+    mf:action [ qt:query <graph-rewrite.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-rewrite.nq> .
+
+:graphShortForm a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH accepts the WHERE short form" ;
+    mf:action [ qt:query <graph-short-form.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-short-form.nq> .
+
+:graphBlankFresh a mf:QueryEvaluationTest ;
+    mf:name "per-row blank freshness is unchanged inside the target graph" ;
+    mf:action [ qt:query <graph-blank-fresh.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-blank-fresh.nq> .
+
+:graphFromNamedGraph a mf:QueryEvaluationTest ;
+    mf:name "CONSTRUCT GRAPH moves matches from one named graph into another" ;
+    mf:action [ qt:query <graph-from-named-graph.rq> ; qt:data <data.ttl> ;
+                qt:graphData <worlds.ttl> ] ;
+    mf:result <graph-from-named-graph.nq> .
+
+:graphUnboundSkipped a mf:QueryEvaluationTest ;
+    mf:name "the unbound-variable skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-unbound-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.nq> .
+
+:graphIllFormedSkipped a mf:QueryEvaluationTest ;
+    mf:name "the ill-formed-triple skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-ill-formed-skipped.rq> ; qt:data <data.ttl> ] ;
+    mf:result <empty.nq> .
+
+:graphTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "the triple-term-subject skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <graph-triple-term-subject-skipped.nq> .
+
+:graphNestedTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "the nested triple-term-subject skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-nested-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <graph-nested-triple-term-subject-skipped.nq> .
+
+:graphModifiers a mf:QueryEvaluationTest ;
+    mf:name "ORDER BY + LIMIT restrict the rows a CONSTRUCT GRAPH is instantiated over" ;
+    mf:action [ qt:query <graph-modifiers.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-modifiers.nq> .
+
+:graphReified a mf:QueryEvaluationTest ;
+    mf:name "the RDF 1.2 statement layer follows the template into the target graph" ;
+    mf:action [ qt:query <graph-reified.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-reified.nq> .
+
+:graphReifierScope a mf:QueryEvaluationTest ;
+    mf:name "an annotation attaches only to a reifier declared in the SAME graph" ;
+    mf:action [ qt:query <graph-reifier-scope.rq> ; qt:data <data.ttl> ] ;
+    mf:result <graph-reifier-scope.nq> .
+
+:graphSyntax a mf:PositiveSyntaxTest11 ;
+    mf:name "CONSTRUCT GRAPH <iri> { ... } WHERE { ... } parses" ;
+    mf:action <graph-syntax.rq> .
+
+# The refused half of the quad-template grammar. Each case pins ONE spelling
+# the parser does not accept, so the boundary of the accepted grammar is
+# measured rather than assumed: a future relaxation has to delete a case here
+# and say so, and a future over-tightening turns a positive case red instead.
+
+:graphNoNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "CONSTRUCT GRAPH without a graph name is a syntax error" ;
+    mf:action <graph-no-name-syntax.rq> .
+
+:graphLiteralNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a target graph name is a VarOrIri: a literal is a syntax error" ;
+    mf:action <graph-literal-name-syntax.rq> .
+
+:graphBlankNameSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block's name is a VarOrIri: a blank node is a syntax error" ;
+    mf:action <graph-blank-name-syntax.rq> .
+
+:graphNestedBlockSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block's body is a TriplesTemplate: a nested GRAPH block is a syntax error" ;
+    mf:action <graph-nested-block-syntax.rq> .
+
+:graphBlockNoBracesSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block inside a template requires its braces" ;
+    mf:action <graph-block-no-braces-syntax.rq> .
+
+:graphShortFormBlockSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "a GRAPH block in the CONSTRUCT short form is a syntax error" ;
+    mf:action <graph-short-form-block-syntax.rq> .
+
+:graphBlockPathSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "the template's property-path ban still holds inside a GRAPH block" ;
+    mf:action <graph-block-path-syntax.rq> .

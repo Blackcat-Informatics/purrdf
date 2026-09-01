@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The default-graph fixture every DESCRIBE case reads. It carries, on purpose:
+# an outgoing edge from :a, an INCOMING edge to :a (the "symmetric" half of the
+# symmetric CBD), a blank-node hop off :a (the closure half), and a literal
+# object (which is not a describable subject).
+@prefix : <http://example.org/> .
+
+:a :knows :b .
+:a :address [ :city "Springfield" ] .
+:x :refersTo :a .
+:b :name "Bee" .

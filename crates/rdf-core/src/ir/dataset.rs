@@ -61,6 +61,17 @@ pub type ReifierRow = (TermId, TermId, Option<TermId>);
 /// [`ReifierRow`].
 pub type AnnotationRow = (TermId, TermId, TermId, Option<TermId>);
 
+/// Whether an owned graph slot — a quad's `graph_name` or a statement-layer row's
+/// `graph` — names the named graph whose IRI is `graph`.
+///
+/// One predicate for all three tables, so [`RdfDataset::project_named_graph`] cannot
+/// drift into selecting the base layer by one rule and the statement layer by
+/// another. `None` is the default graph and is never a named graph; a blank-node
+/// graph name is not addressable by IRI, so neither answers `true`.
+fn graph_slot_names(slot: Option<&RdfTerm>, graph: &str) -> bool {
+    matches!(slot, Some(RdfTerm::Iri(iri)) if iri == graph)
+}
+
 /// A handle identifying a pushed quad by its dense (deduplicated) ordinal, used to
 /// attach a source location sparsely. Like [`TermId`], it is local to one frozen
 /// dataset and is **not** persistent or merge-stable.
@@ -743,117 +754,68 @@ impl RdfDataset {
         self.named_graphs().map(|g| self.to_owned_term(g))
     }
 
-    /// Project the quads of one named graph into a fresh default-graph dataset.
+    /// Project one named graph into a fresh default-graph dataset — the named
+    /// graph's whole content, base layer and RDF 1.2 statement layer alike, in
+    /// isolation.
     ///
-    /// Only quads whose graph name is the IRI `graph` contribute, and their graph
-    /// label is dropped so the result is the named graph's content in isolation.
+    /// Selection is graph-FAITHFUL and emission is graph-ERASING, uniformly across
+    /// both layers:
     ///
-    /// The RDF 1.2 statement side-tables (reifiers and annotations) are FILTERED to
-    /// only those whose reifier IRI appears as a subject in one of the projected
-    /// quads. This prevents side-table entries that belong exclusively to OTHER named
-    /// graphs from contaminating the per-graph digest (pin-invariant correctness: each
-    /// backing per-graph digest must be isolated to that graph's own content only).
+    /// * a base quad contributes when its graph name is the IRI `graph`, and is
+    ///   re-emitted with no graph name;
+    /// * a statement-layer row — a reifier declaration `(reifier, triple-term,
+    ///   graph)` or an annotation `(reifier, predicate, object, graph)` — contributes
+    ///   when **its own graph slot** is the IRI `graph`, and is likewise re-emitted
+    ///   with its graph slot cleared.
+    ///
+    /// A default-graph row (`graph == None`) is not part of any named graph and is
+    /// never projected; nor is a row under a blank-node graph name, which no IRI
+    /// argument can address.
+    ///
+    /// This is the exact mirror image of the rule [`mod@crate::describe`] settled on
+    /// (graph-BLIND selection, graph-FAITHFUL emission), and deliberately so — a
+    /// projection is not a description. A description is a term-reachability closure
+    /// answering "what does this dataset say about `x`", so it must look in every
+    /// graph and must carry each statement back into the graph that asserted it. A
+    /// projection's selector IS the graph, and its result is single-graph by
+    /// construction, so it must look only in that graph and has no graph left to
+    /// preserve.
+    ///
+    /// Selecting statement-layer rows any other way is a correctness defect rather
+    /// than an approximation. The statement layer is keyed per graph (see
+    /// [`push_reifier_in_graph`](super::builder::RdfDatasetBuilder::push_reifier_in_graph)),
+    /// so one reifier id may be declared and annotated independently in two graphs. A
+    /// membership proxy — "carry the row when its reifier appears as a subject among
+    /// the projected quads" — would pull `<g2>`'s declarations and annotations into
+    /// `<g1>`'s projection, and hence make
+    /// [`PipelineBundle::graph_digest`](super::pipeline_bundle::PipelineBundle::graph_digest)
+    /// a digest partly over another graph's content.
     #[must_use]
     pub fn project_named_graph(&self, graph: &str) -> Self {
-        use std::collections::HashSet;
-
         let mut builder = super::builder::RdfDatasetBuilder::new();
 
-        // First pass: collect the subjects of every quad in the target named graph.
-        // The RDF 1.2 reifier side-table has NO graph dimension (reifier bindings are
-        // always `g: None`), so we use the set of quad subjects as the proxy for
-        // "this reifier was asserted in the context of this named graph".
-        let mut graph_subjects: HashSet<RdfTerm> = HashSet::new();
-
-        for quad in self.owned_quads() {
-            let in_graph = matches!(
-                &quad.graph_name,
-                Some(RdfTerm::Iri(iri)) if iri == graph
-            );
-            if !in_graph {
+        for mut quad in self.owned_quads() {
+            if !graph_slot_names(quad.graph_name.as_ref(), graph) {
                 continue;
             }
-            graph_subjects.insert(quad.subject.clone());
-            let mut projected = quad;
-            projected.graph_name = None;
-            builder.push_owned_quad(&projected);
+            quad.graph_name = None;
+            builder.push_owned_quad(&quad);
         }
 
-        // Second pass: carry only the reifiers whose reifier IRI appeared as a subject
-        // in the projected graph's quads (i.e. the reifier is "owned by" this graph).
-        // The projection collapses the target named graph INTO a default-graph dataset
-        // (base quads had their graph dropped above), so the overlay rows flatten too —
-        // otherwise the projected dataset's per-graph digest would drift.
         for mut reifier in self.owned_reifiers() {
-            if graph_subjects.contains(&reifier.reifier) {
-                reifier.graph = None;
-                builder.push_owned_reifier(&reifier);
-            }
-        }
-
-        // Likewise filter the annotation side-table by reifier subject membership.
-        for mut annotation in self.owned_annotations() {
-            if graph_subjects.contains(&annotation.reifier) {
-                annotation.graph = None;
-                builder.push_owned_annotation(&annotation);
-            }
-        }
-
-        Arc::try_unwrap(
-            builder
-                .freeze()
-                .expect("a named-graph projection of a valid dataset is valid"),
-        )
-        .unwrap_or_else(|arc| arc.owned_snapshot())
-    }
-
-    /// Like [`Self::project_named_graph`], but carries a reifier/annotation when its
-    /// reifier term **or its reified statement's subject** appears as a subject in the
-    /// projected graph. The strict projection keys reifiers on the reifier term only,
-    /// which drops an RDF 1.2 anonymous reifier whose sole appearances are the
-    /// side-tables (`[] rdf:reifies << s p o >>` + annotations); the reified statement's
-    /// subject, in contrast, lives in the graph as a base quad, so keying on it recovers
-    /// the full reified statement and a per-file RDF-star fold round-trips
-    /// byte-for-byte. Used by the superset gate's fold; the strict projection backs the
-    /// digest/pin path (unchanged, so per-graph digests are stable).
-    #[must_use]
-    pub fn project_named_graph_full(&self, graph: &str) -> Self {
-        use std::collections::HashSet;
-
-        let mut builder = super::builder::RdfDatasetBuilder::new();
-        let mut graph_subjects: HashSet<RdfTerm> = HashSet::new();
-
-        for quad in self.owned_quads() {
-            let in_graph = matches!(
-                &quad.graph_name,
-                Some(RdfTerm::Iri(iri)) if iri == graph
-            );
-            if !in_graph {
+            if !graph_slot_names(reifier.graph.as_ref(), graph) {
                 continue;
             }
-            graph_subjects.insert(quad.subject.clone());
-            let mut projected = quad;
-            projected.graph_name = None;
-            builder.push_owned_quad(&projected);
+            reifier.graph = None;
+            builder.push_owned_reifier(&reifier);
         }
 
-        let mut kept_reifiers: HashSet<RdfTerm> = HashSet::new();
-        for mut reifier in self.owned_reifiers() {
-            if graph_subjects.contains(&reifier.reifier)
-                || graph_subjects.contains(&reifier.statement.subject)
-            {
-                kept_reifiers.insert(reifier.reifier.clone());
-                reifier.graph = None;
-                builder.push_owned_reifier(&reifier);
-            }
-        }
         for mut annotation in self.owned_annotations() {
-            if graph_subjects.contains(&annotation.reifier)
-                || kept_reifiers.contains(&annotation.reifier)
-            {
-                annotation.graph = None;
-                builder.push_owned_annotation(&annotation);
+            if !graph_slot_names(annotation.graph.as_ref(), graph) {
+                continue;
             }
+            annotation.graph = None;
+            builder.push_owned_annotation(&annotation);
         }
 
         Arc::try_unwrap(
@@ -1422,9 +1384,10 @@ impl RdfDataset {
         self.term_id_by_iri(RDF_REIFIES)
     }
 
-    /// Iterate the reifier side-table AS resolved virtual triples: each
-    /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
-    /// quad in the default graph (`g == None`).
+    /// Iterate the reifier side-table AS resolved virtual quads: each
+    /// `(reifier, triple-term, graph)` declaration becomes a
+    /// `(reifier, rdf:reifies, triple-term)` quad in the graph that declared it
+    /// (`g == None` for the default graph).
     ///
     /// The RDF 1.2 reification layer is stored in a SEPARATE side-table — it is NOT in
     /// the `quads` table — so this view is the only way a triple-pattern matcher can see
@@ -1480,9 +1443,10 @@ impl RdfDataset {
         })
     }
 
-    /// Iterate the annotation side-table AS resolved virtual triples: each
-    /// `(reifier, predicate, object)` annotation becomes a `(reifier, predicate, object)`
-    /// quad in the default graph (`g == None`).
+    /// Iterate the annotation side-table AS resolved virtual quads: each
+    /// `(reifier, predicate, object, graph)` annotation becomes a
+    /// `(reifier, predicate, object)` quad in the graph that asserted it (`g == None`
+    /// for the default graph).
     ///
     /// Like [`reifier_quads`](Self::reifier_quads), the annotation layer lives in a
     /// SEPARATE side-table outside `quads`; this is the only triple-pattern view of it.
@@ -3096,6 +3060,126 @@ mod tests {
             let estimate = ds.cardinality_estimate(s, p, o, GraphMatch::Any);
             prop_assert_eq!(estimate, count,
                 "a prefix-covered pattern must be EXACT, not just an upper bound");
+        }
+    }
+
+    mod named_graph_projection {
+        use super::*;
+
+        /// The `graphReifierScope` shape, doubled: ONE reifier id `r1` is declared
+        /// and annotated independently in `<g1>` and in `<g2>`, and is additionally a
+        /// plain quad subject in BOTH graphs — so a projection that selected the
+        /// statement layer by "the reifier appears as a subject among the projected
+        /// quads" would admit every statement-layer row into every graph.
+        fn two_graphs_sharing_one_reifier() -> Arc<RdfDataset> {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let bb = iri(&mut b, "b");
+            let c = iri(&mut b, "c");
+            let r1 = iri(&mut b, "r1");
+            let kind = iri(&mut b, "kind");
+            let record = iri(&mut b, "record");
+            let source = iri(&mut b, "source");
+            let ledger = iri(&mut b, "ledger");
+            let elsewhere = iri(&mut b, "elsewhere");
+            let g1 = iri(&mut b, "g1");
+            let g2 = iri(&mut b, "g2");
+
+            // Base layer: one asserted statement per graph, plus a plain quad that
+            // puts `r1` in each graph's subject set.
+            b.push_quad(a, related, bb, Some(g1));
+            b.push_quad(r1, kind, record, Some(g1));
+            b.push_quad(a, related, c, Some(g2));
+            b.push_quad(r1, kind, record, Some(g2));
+
+            // Statement layer: the same reifier id, declared about a different triple
+            // in each graph, annotated differently in each graph.
+            let t1 = b.intern_triple(a, related, bb);
+            let t2 = b.intern_triple(a, related, c);
+            b.push_reifier_in_graph(r1, t1, Some(g1));
+            b.push_reifier_in_graph(r1, t2, Some(g2));
+            b.push_annotation_in_graph(r1, source, ledger, Some(g1));
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+
+            b.freeze().expect("valid dataset")
+        }
+
+        fn term(n: &str) -> RdfTerm {
+            RdfTerm::iri(format!("http://example.org/{n}"))
+        }
+
+        /// Projecting `<g1>` must carry `<g1>`'s reifier declaration and annotation and
+        /// NOT `<g2>`'s, even though the two graphs share the reifier id and each puts
+        /// it in its own subject set.
+        #[test]
+        fn projection_does_not_absorb_another_graphs_statement_layer() {
+            let ds = two_graphs_sharing_one_reifier();
+
+            let g1 = ds.project_named_graph("http://example.org/g1");
+            let quads: Vec<_> = g1.owned_quads().collect();
+            assert_eq!(quads.len(), 2, "only <g1>'s two base quads: {quads:?}");
+            assert!(
+                quads.iter().all(|q| q.graph_name.is_none()),
+                "the projection is a default-graph dataset: {quads:?}"
+            );
+
+            let reifiers: Vec<_> = g1.owned_reifiers().collect();
+            assert_eq!(
+                reifiers.len(),
+                1,
+                "<g2>'s declaration of the same reifier must not be absorbed: {reifiers:?}"
+            );
+            assert_eq!(reifiers[0].reifier, term("r1"));
+            assert_eq!(
+                reifiers[0].statement.object,
+                term("b"),
+                "the kept declaration is the one made in <g1>"
+            );
+            assert!(reifiers[0].graph.is_none());
+
+            let annotations: Vec<_> = g1.owned_annotations().collect();
+            assert_eq!(
+                annotations.len(),
+                1,
+                "<g2>'s annotation of the same reifier must not be absorbed: {annotations:?}"
+            );
+            assert_eq!(annotations[0].object, term("ledger"));
+            assert!(annotations[0].graph.is_none());
+
+            // The mirror image, so the test cannot pass by preferring one graph.
+            let g2 = ds.project_named_graph("http://example.org/g2");
+            let reifiers: Vec<_> = g2.owned_reifiers().collect();
+            let annotations: Vec<_> = g2.owned_annotations().collect();
+            assert_eq!(reifiers.len(), 1);
+            assert_eq!(reifiers[0].statement.object, term("c"));
+            assert_eq!(annotations.len(), 1);
+            assert_eq!(annotations[0].object, term("elsewhere"));
+        }
+
+        /// A statement-layer row asserted in the DEFAULT graph belongs to no named
+        /// graph, so no named-graph projection may claim it — not even when its
+        /// reifier is a subject of that graph.
+        #[test]
+        fn projection_never_claims_a_default_graph_statement_row() {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let bb = iri(&mut b, "b");
+            let r1 = iri(&mut b, "r1");
+            let kind = iri(&mut b, "kind");
+            let record = iri(&mut b, "record");
+            let g1 = iri(&mut b, "g1");
+            b.push_quad(r1, kind, record, Some(g1));
+            let t1 = b.intern_triple(a, related, bb);
+            b.push_reifier_in_graph(r1, t1, None);
+            b.push_annotation_in_graph(r1, kind, record, None);
+            let ds = b.freeze().expect("valid dataset");
+
+            let g1 = ds.project_named_graph("http://example.org/g1");
+            assert_eq!(g1.owned_quads().count(), 1);
+            assert_eq!(g1.owned_reifiers().count(), 0);
+            assert_eq!(g1.owned_annotations().count(), 0);
         }
     }
 
