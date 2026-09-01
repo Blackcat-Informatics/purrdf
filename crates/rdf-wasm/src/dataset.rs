@@ -14,8 +14,8 @@ use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
     JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue,
-    canonical_flat_nquads, datasets_isomorphic, parse_dataset, serialize_dataset,
-    serialize_dataset_with_jsonld_options,
+    canonical_flat_nquads, classify, datasets_isomorphic, parse_dataset, serialize_dataset,
+    serialize_dataset_to_format_with_jsonld_options,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -227,6 +227,20 @@ impl Dataset {
     /// Object-position quoted-triple terms (RDF-1.2 triple terms) are preserved
     /// through N-Quads, JSON-LD, and YAML-LD; the other text syntaxes (Turtle,
     /// N-Triples, TriG, RDF/XML) flatten them.
+    ///
+    /// # No document base here, and why
+    ///
+    /// Unlike [`parse`](Self::parse) — and unlike
+    /// [`serializeConfigured`](Self::serialize_configured), which does take one — this
+    /// entry point carries no base. It reaches ALL NINE formats, three of which
+    /// (RDF/XML, TriX, HexTuples) are star-incapable in the transcode loss contract,
+    /// and the core's only public base-carrying serializer
+    /// (`serialize_dataset_to_format`) drops the RDF 1.2 statement layer for exactly
+    /// those three. Adding a base through it would silently trade this dataset's
+    /// reifier and annotation rows for a base declaration, which is the worse loss.
+    /// A base-carrying JSON-LD/YAML-LD document is reachable today through
+    /// `serializeConfigured`; the generic leg needs a core serializer that takes both
+    /// a base and the statement layer.
     #[wasm_bindgen(js_name = serialize)]
     pub fn serialize(&self, format: &str) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
@@ -238,22 +252,35 @@ impl Dataset {
     }
 
     /// Serialize JSON-LD/YAML-LD using the shared versioned options decoder.
+    ///
+    /// `base` is the document base the output is written under — the egress mirror of
+    /// [`parse`](Self::parse)'s. Both JSON-LD and YAML-LD can express a base, so it
+    /// reaches the emitted `@context` as `@base` and document-position `@id`s are
+    /// compacted against it. A base the caller's own context already declares wins,
+    /// matching the ingress precedence. A base that is not an absolute IRI throws.
     #[wasm_bindgen(js_name = serializeConfigured)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_configured(
         &self,
         format: &str,
         options_json: &str,
+        base: Option<String>,
     ) -> Result<String, JsError> {
-        self.serialize_with_options(format, &decode_options(options_json)?)
+        self.serialize_with_options(format, &decode_options(options_json)?, base.as_deref())
     }
 
     /// Serialize JSON-LD/YAML-LD using a reusable compiled context.
+    ///
+    /// `base` is the document base, honored exactly as in
+    /// [`serializeConfigured`](Self::serialize_configured).
     #[wasm_bindgen(js_name = serializeWithContext)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_with_context(
         &self,
         format: &str,
         context: &CompiledJsonLdContext,
         yaml_schema_url: Option<String>,
+        base: Option<String>,
     ) -> Result<String, JsError> {
         let mut options = context_options(context);
         if let Some(url) = yaml_schema_url {
@@ -261,7 +288,7 @@ impl Dataset {
                 .with_yaml_schema_url(&url)
                 .map_err(|error| JsError::new(&error.to_string()))?;
         }
-        self.serialize_with_options(format, &options)
+        self.serialize_with_options(format, &options, base.as_deref())
     }
 
     /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
@@ -406,21 +433,26 @@ impl Dataset {
 }
 
 impl Dataset {
+    /// The base-carrying JSON-LD/YAML-LD egress every configured serializer routes
+    /// through.
+    ///
+    /// `serialize_dataset_to_format_with_jsonld_options` is the base-carrying twin of
+    /// `serialize_dataset_with_jsonld_options` and applies the same
+    /// `SerializeGraph::Dataset` selection. Both JSON-LD and YAML-LD are star-capable,
+    /// so it reports zero dropped statement rows and the emitted bytes are identical
+    /// when `base` is `None` — the base is added, nothing is traded for it.
     pub(crate) fn serialize_with_options(
         &self,
         format: &str,
         options: &JsonLdSerializeOptions,
+        base: Option<&str>,
     ) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
-        let media_type = resolve_media_type(format).map_err(|error| JsError::new(&error))?;
-        let bytes = serialize_dataset_with_jsonld_options(
-            &frozen,
-            media_type,
-            SerializeGraph::Dataset,
-            options,
-        )
-        .map_err(|error| diag_to_err(&error))?;
-        String::from_utf8(bytes).map_err(|error| {
+        let native = classify(format).map_err(|error| diag_to_err(&error))?;
+        let outcome =
+            serialize_dataset_to_format_with_jsonld_options(&frozen, native, base, options)
+                .map_err(|error| diag_to_err(&error))?;
+        String::from_utf8(outcome.bytes).map_err(|error| {
             JsError::new(&format!("serialization produced non-UTF-8 bytes: {error}"))
         })
     }
@@ -665,6 +697,59 @@ mod tests {
         let ds = Dataset::parse(input, "turtle", Some("https://example.org/".to_owned())).unwrap();
         let out = ds.serialize("ntriples").unwrap();
         assert!(out.contains("https://example.org/rel"));
+    }
+
+    /// The configured JSON-LD/YAML-LD egress carries a document base — the egress
+    /// mirror of `parse`'s. (`JsError` is only built on the error path, which panics
+    /// off-wasm, so only success paths run here; the base's ERROR behaviour is pinned
+    /// by the JS suite, which runs on a real wasm host.)
+    #[test]
+    fn serialize_configured_declares_the_document_base() {
+        let base = "https://example.org/base/";
+        let input = "<https://example.org/base/s> <https://example.org/base/p> \
+                     <https://example.org/base/o> .\n";
+        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for format in ["jsonld", "yamlld"] {
+            let Ok(text) =
+                ds.serialize_with_options(format, &JsonLdSerializeOptions::expanded(), Some(base))
+            else {
+                panic!("configured {format} under a base failed");
+            };
+            assert!(
+                text.contains(base),
+                "{format} must carry the document base, got: {text}"
+            );
+        }
+    }
+
+    /// Adding the parameter costs nothing when no base is supplied: the base-carrying
+    /// core entry point applies the same `SerializeGraph::Dataset` selection, and
+    /// JSON-LD / YAML-LD are star-capable, so the RDF 1.2 statement layer still
+    /// reaches the document rather than being traded for the new parameter.
+    #[test]
+    fn serialize_configured_without_a_base_keeps_the_statement_layer() {
+        let input = concat!(
+            "<https://e/s> <https://e/p> <https://e/o> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+            "<https://e/r> <https://e/confidence> \"0.9\" .\n",
+        );
+        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for format in ["jsonld", "yamlld"] {
+            let Ok(text) =
+                ds.serialize_with_options(format, &JsonLdSerializeOptions::expanded(), None)
+            else {
+                panic!("configured {format} failed");
+            };
+            assert!(
+                text.contains("confidence"),
+                "{format} must keep the annotation row, got: {text}"
+            );
+        }
     }
 
     /// CROSS-PATH regression (the adversarial case): a directional literal PARSED
