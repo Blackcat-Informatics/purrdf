@@ -102,9 +102,12 @@ executes that example against the generated shared library and committed header.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.6.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.7.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
-  shim exercise it. `purrdf_abi_version` reports it.
+  shim exercise it. `purrdf_abi_version` reports it. The minor number tracks the
+  exported signatures: any change to a parameter list, a return contract, or the
+  documented behaviour of an exported symbol bumps it, additive changes included,
+  because an additive parameter is still a recompile for every C consumer.
 
 ### Status codes
 

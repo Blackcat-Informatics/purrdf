@@ -915,7 +915,7 @@ fn instantiate_ground_quad(
         NamedNodePattern::Variable(_) => return None,
     };
     let o = instantiate_ground_term(&qp.triple.object, blanks, counter)?;
-    if positionally_ill_formed(&s, &p) {
+    if positionally_ill_formed(&s, &p, &o) {
         return None;
     }
     let g = match &qp.graph {
@@ -929,8 +929,9 @@ fn instantiate_ground_quad(
 /// Instantiate one solution-driven `QuadPattern` (subject/pred/object + optional
 /// graph) into a concrete [`QuadValues`], with a `default_graph` (the WITH graph) used
 /// when the pattern's own graph slot is `None`. `None` if any position holds an unbound
-/// variable, or the result is positionally ill-formed (literal subject / non-IRI
-/// predicate), or the graph slot is a variable bound to a non-IRI.
+/// variable, or the result is positionally ill-formed (a non-IRI/blank asserted
+/// subject, a non-IRI predicate, or an ill-formed object triple term), or the graph
+/// slot is a variable bound to a non-IRI.
 fn instantiate_quad_with_default(
     qp: &QuadPattern,
     row: &Solution,
@@ -943,9 +944,10 @@ fn instantiate_quad_with_default(
     let p = instantiate_predicate(&qp.triple.predicate, row, schema, ctx)?;
     let o = instantiate_term(&qp.triple.object, row, schema, blanks, ctx)?;
 
-    // Positional validity (§16.2 / template rules): a literal subject or a non-IRI
-    // predicate is ill-formed → skip the quad (do not error).
-    if positionally_ill_formed(&s, &p) {
+    // Positional validity (§16.2 / template rules): an asserted subject that is not
+    // an IRI or a blank node, a non-IRI predicate, or an object triple term whose own
+    // components are illegal makes the quad ill-formed → skip it (do not error).
+    if positionally_ill_formed(&s, &p, &o) {
         return None;
     }
 
@@ -1149,6 +1151,187 @@ mod tests {
         run("INSERT { ?s ex:q ?o } WHERE { ?s ex:p ?o }", &mut m);
         assert!(m.contains(&QuadValues::triple(iri("a"), iri("p"), iri("b"))));
         assert!(m.contains(&QuadValues::triple(iri("a"), iri("q"), iri("b"))));
+    }
+
+    // ── SPARQL §16.2 positional validity, on the UPDATE path ─────────────────
+    //
+    // `DELETE`/`INSERT` templates and the variable-free `DATA` path share ONE
+    // ill-formedness gate with `CONSTRUCT`, and an instantiation that fails it
+    // is SKIPPED, not errored. The rule is graded here on every kind of term an
+    // asserted position refuses, because the CONSTRUCT-side tests cannot see the
+    // UPDATE sinks: a template quad that slips past the gate reaches
+    // `MutableDataset::freeze`, where it is a hard error that aborts the whole
+    // request rather than dropping one statement.
+
+    /// A base carrying ONE RDF 1.2 reifier declaration,
+    /// `ex:r rdf:reifies <<( ex:a ex:p ex:b )>>` — the ordinary shape that puts a
+    /// TRIPLE TERM in reach of a plain triple pattern.
+    fn mut_with_a_triple_term() -> MutableDataset {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let o = b.intern_iri(&format!("{EX}b"));
+        let r = b.intern_iri(&format!("{EX}r"));
+        let quoted = b.intern_triple(a, p, o);
+        b.push_reifier(r, quoted);
+        MutableDataset::new(b.freeze().expect("freeze base"))
+    }
+
+    /// A base holding the single triple `ex:a ex:p "hello"`.
+    fn mut_with_a_literal() -> MutableDataset {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let lit = b.intern_literal(RdfLiteral::simple("hello"));
+        b.push_quad(a, p, lit, None);
+        MutableDataset::new(b.freeze().expect("freeze base"))
+    }
+
+    const REIFIES_IRI: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>";
+
+    #[test]
+    fn insert_template_skips_a_literal_subject_and_keeps_its_sibling() {
+        let mut m = mut_with_a_literal();
+        run(
+            "INSERT { ?s ex:q ?o . ?o ex:q ?s } WHERE { ?s ex:p ?o }",
+            &mut m,
+        );
+        // The first template triple lands; the second puts the literal `?o` in
+        // subject position and is dropped.
+        assert!(m.contains(&QuadValues::triple(
+            iri("a"),
+            iri("q"),
+            TermValue::simple_literal("hello"),
+        )));
+        assert_eq!(quad_set(&m).len(), 2, "the base quad plus the kept insert");
+        m.freeze()
+            .expect("a skipped instantiation is never interned");
+    }
+
+    #[test]
+    fn insert_template_skips_a_triple_term_subject_and_keeps_its_sibling() {
+        let mut m = mut_with_a_triple_term();
+        let before = quad_set(&m).len();
+        run(
+            &format!("INSERT {{ ?r ex:q ?t . ?t ex:q ?r }} WHERE {{ ?r {REIFIES_IRI} ?t }}"),
+            &mut m,
+        );
+        // `?r ex:q ?t` is well-formed — a triple term is a legal OBJECT — so a
+        // dataset that merely stayed put would not prove the skip fired.
+        assert_eq!(
+            quad_set(&m).len(),
+            before + 1,
+            "exactly the well-formed template triple lands"
+        );
+        m.freeze()
+            .expect("a triple term in subject position is skipped, never interned");
+    }
+
+    #[test]
+    fn insert_template_skips_an_ill_formed_object_triple_term() {
+        // A triple term is a legal object, but its own components still carry the
+        // term model: `<<( "hello" ex:p ?s )>>` has a literal subject.
+        let mut m = mut_with_a_literal();
+        run(
+            "INSERT { ?s ex:q <<( ?o ex:p ?s )>> } WHERE { ?s ex:p ?o }",
+            &mut m,
+        );
+        assert_eq!(quad_set(&m).len(), 1, "only the base quad remains");
+        m.freeze()
+            .expect("an ill-formed object triple term is skipped, never interned");
+    }
+
+    #[test]
+    fn insert_template_skips_a_nested_triple_term_subject() {
+        // The OTHER half of the triple-term-component rule, and the one an
+        // INSERT makes PERSISTENT. RDF 1.2 nests a triple term in exactly one
+        // position — the OBJECT of another triple term — so `<<( ?t ex:q ?r )>>`
+        // with `?t` bound to a triple term is ill-formed, and `?t` is bound
+        // straight from the reifier declaration any RDF 1.2 input carries.
+        //
+        // Unlike the literal half, nothing downstream refuses this: it interned,
+        // it froze, and it was written out as a document PurRDF's own readers
+        // then rejected. So the assertion is a COUNT, not merely a successful
+        // freeze — the well-formed sibling proves the WHERE matched, and the
+        // absent second quad proves the skip fired rather than the row missing.
+        let mut m = mut_with_a_triple_term();
+        let before = quad_set(&m).len();
+        run(
+            &format!(
+                "INSERT {{ ?r ex:q ?t . ?r ex:q <<( ?t ex:q ?r )>> }} \
+                 WHERE {{ ?r {REIFIES_IRI} ?t }}"
+            ),
+            &mut m,
+        );
+        assert_eq!(
+            quad_set(&m).len(),
+            before + 1,
+            "exactly the well-formed template triple lands"
+        );
+        for q in m.quads_for_pattern(None, None, None, GraphMatchValue::Any) {
+            assert!(
+                object_term_model_holds(&q.o),
+                "a persisted object breaks the RDF 1.2 term model: {:?}",
+                q.o
+            );
+        }
+        m.freeze()
+            .expect("a nested triple-term subject is skipped, never interned");
+    }
+
+    /// The RDF 1.2 term model on an OBJECT: any term, and when it is a triple
+    /// term, an IRI-or-blank subject, an IRI predicate, and the same rule again
+    /// on its object. Spelled out here rather than reusing the evaluator's own
+    /// predicate on purpose — a test that called the code under test would agree
+    /// with it by construction.
+    fn object_term_model_holds(v: &TermValue) -> bool {
+        match v {
+            TermValue::Triple { s, p, o } => {
+                matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+                    && matches!(**p, TermValue::Iri(_))
+                    && object_term_model_holds(o)
+            }
+            _ => true,
+        }
+    }
+
+    /// The DELETE sink is a set removal, so it cannot *itself* reject an
+    /// ill-formed quad — no dataset can hold one — and this case is therefore
+    /// weaker than its INSERT twin by nature: it pins that the removal path
+    /// stays a no-op and never becomes an error, rather than proving the gate
+    /// fires. It is kept because DELETE and INSERT share the gate, so a future
+    /// change that made ill-formedness fatal would show up here first.
+    #[test]
+    fn delete_template_with_a_triple_term_subject_removes_nothing_and_errors_on_nothing() {
+        let mut m = mut_with_a_triple_term();
+        let before = quad_set(&m);
+        run(
+            &format!("DELETE {{ ?t ex:q ?r }} WHERE {{ ?r {REIFIES_IRI} ?t }}"),
+            &mut m,
+        );
+        assert_eq!(quad_set(&m), before);
+    }
+
+    #[test]
+    fn insert_data_skips_an_ill_formed_ground_quad() {
+        // The variable-free path runs the same gate, so a ground spelling the
+        // parser admits but the term model refuses is dropped rather than
+        // aborting the operation — exactly as a ground literal subject already is.
+        let mut m = mut_with(&[]);
+        run(
+            "INSERT DATA { <<( ex:a ex:p ex:b )>> ex:q ex:c . \
+             ex:d ex:q <<( \"hello\" ex:p ex:b )>> . \
+             ex:a ex:q ex:c }",
+            &mut m,
+        );
+        assert_eq!(
+            quad_set(&m).len(),
+            1,
+            "only the well-formed ground quad is inserted"
+        );
+        assert!(m.contains(&QuadValues::triple(iri("a"), iri("q"), iri("c"))));
+        m.freeze()
+            .expect("the ill-formed ground quads were skipped, never interned");
     }
 
     #[test]

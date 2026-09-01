@@ -201,7 +201,7 @@ fn map_core_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BlankNode, NamedNode, TermPattern, TriplePattern};
+    use crate::ast::{BlankNode, NamedNode, QuadPattern, TermPattern, TriplePattern};
     use crate::{NamedNodePattern, SparqlParser};
 
     fn iri_value(iri: &str) -> GroundTerm {
@@ -342,10 +342,13 @@ mod tests {
         assert_eq!(template.len(), 1);
         assert_eq!(
             template[0],
-            TriplePattern {
-                subject: TermPattern::Variable(this()),
-                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/r")),
-                object: TermPattern::Variable(Variable::new("o")),
+            QuadPattern {
+                triple: TriplePattern {
+                    subject: TermPattern::Variable(this()),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/r")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                },
+                graph: None,
             }
         );
         let GraphPattern::Join { left, .. } = pattern else {

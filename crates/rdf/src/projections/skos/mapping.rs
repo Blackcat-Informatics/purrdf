@@ -261,7 +261,10 @@ impl<'a> Projector<'a> {
                     "native Turtle serialization of SKOS view failed: {error}"
                 ))
             })?;
-        if serialized.statement_rows_dropped != 0 || serialized.directional_literals_dropped != 0 {
+        if serialized.statement_rows_dropped != 0
+            || serialized.directional_literals_dropped != 0
+            || serialized.named_graph_rows_dropped != 0
+        {
             return Err(ProjectionError::integrity(
                 "native Turtle serialization unexpectedly dropped SKOS dataset content",
             ));

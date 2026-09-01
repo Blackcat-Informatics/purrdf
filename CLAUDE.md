@@ -22,4 +22,13 @@ Quick orientation:
   inactive feature when absent); test fixtures use `example.org`.
 * **Perf changes need a bench**: extend the criterion benches rather than
   asserting a speedup.
+* **A refusal is a claim too — prove it.** Over-refusal (rejecting input that is
+  actually valid) is the mirror of the silent-drop bug, and it shows up exactly
+  when you are tightening validation. It hides well: every test passes, and a
+  refusal *looks* like correct strictness — nothing appears broken until a user
+  writes the query that should work and doesn't. So for every refusal you add or
+  tighten, execute two cases: the one you believe is invalid, and a neighbouring
+  one that is valid. Confirm the second still succeeds. Cost and size estimators
+  are the worst offenders, and they are not off by a little — one refused a query
+  at an estimated 86,016 intermediate cells that actually produced 42.
 * **`.deficiencies` is a last-resort emergency ledger, never an authorization surface.** Every entry below its marker is 100% unauthorized, 100% a bug, and means its originating issue or PR failed. It records critically undone work misrepresented to pass gates, misrepresented by an agent, or exposed when an agent is found fundamentally defective — literally a cry for help from a failing agent. The normal file contains only its notice and marker. Any entry blocks completion, PR creation, and merge of the work that produced it until the defect is verified and has a durable, visible remediation owner. Removing the entry does not resolve the bug or make the failed work successful.

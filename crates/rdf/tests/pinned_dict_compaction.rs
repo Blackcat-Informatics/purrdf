@@ -69,6 +69,7 @@ fn blobless_source() -> Vec<u8> {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     };
     let mut terms: Vec<Term> = (0..24u32)
         .map(|i| iri(&format!("https://example.org/memory/claim{i}")))

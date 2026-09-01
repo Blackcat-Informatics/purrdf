@@ -13,6 +13,9 @@ use std::fmt::Write as _;
 
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3};
 
+use crate::RdfDiagnostic;
+use crate::gts_resolve::ensure_terms_terminate;
+
 /// Scope name for the default graph (quads with no graph term).
 pub const DEFAULT_SCOPE: &str = "";
 /// Sentinel scope name selecting every quad regardless of graph.
@@ -101,8 +104,13 @@ pub enum PublicValue {
 }
 
 /// One dictionary term row: `(term_id, kind, value, datatype_id, lang,
-/// reifier_id)` where `kind` is `0` IRI / `1` literal / `2` blank node /
+/// reifier_id, triple)` where `kind` is `0` IRI / `1` literal / `2` blank node /
 /// `3` triple term.
+///
+/// `triple` carries a quoted-triple term's OWN `(s, p, o)` component ids when
+/// the term is self-describing. It is not derivable from `reifier_id`: one
+/// reifier id may bind several different triples, so a projection that offered
+/// only the reifier column could not say which triple THIS term is.
 pub type TermRow = (
     usize,
     u8,
@@ -110,13 +118,18 @@ pub type TermRow = (
     Option<usize>,
     Option<String>,
     Option<usize>,
+    Option<(usize, usize, usize)>,
 );
 /// One quad row of dictionary term ids: `(subject, predicate, object, graph?)`.
 pub type QuadRow = (usize, usize, usize, Option<usize>);
-/// One statement-layer reifier row: `(reifier_id, subject, predicate, object)`.
-pub type ReifierRow = (usize, usize, usize, usize);
-/// One statement-layer annotation row: `(reifier_id, predicate, value)`.
-pub type AnnotationRow = (usize, usize, usize);
+/// One statement-layer reifier row: `(reifier_id, subject, predicate, object,
+/// graph?)`. The graph slot is the term id of the named graph the declaration was
+/// asserted in, `None` for the default graph — the same axis [`QuadRow`] carries,
+/// because the RDF 1.2 statement layer is keyed per graph.
+pub type ReifierRow = (usize, usize, usize, usize, Option<usize>);
+/// One statement-layer annotation row: `(reifier_id, predicate, value, graph?)`;
+/// the graph slot is the one described on [`ReifierRow`].
+pub type AnnotationRow = (usize, usize, usize, Option<usize>);
 /// One decoded blob row: `(digest, payload bytes)`.
 pub type BlobRow = (String, Vec<u8>);
 
@@ -129,9 +142,9 @@ pub struct RelationalRows {
     pub terms: Vec<TermRow>,
     /// All quads as dictionary-id tuples.
     pub quads: Vec<QuadRow>,
-    /// The statement-layer reifier rows (graph slot flattened away).
+    /// The statement-layer reifier rows, each carrying the graph it was declared in.
     pub reifiers: Vec<ReifierRow>,
-    /// The statement-layer annotation rows (graph slot flattened away).
+    /// The statement-layer annotation rows, each carrying the graph it was asserted in.
     pub annotations: Vec<AnnotationRow>,
     /// The decoded blob payloads, keyed by content digest.
     pub blobs: Vec<BlobRow>,
@@ -166,12 +179,31 @@ impl GtsFoldView {
     /// built-in W3C/schema.org prefixes. Pass a [`GtsFoldViewConfig`] via
     /// [`GtsFoldView::with_config`] to supply the consumer's language vocab
     /// and CURIE prefixes.
-    pub fn new(graph: Graph) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
+    /// resolve through itself — see [`GtsFoldView::with_config`].
+    pub fn new(graph: Graph) -> Result<Self, RdfDiagnostic> {
         Self::with_config(graph, GtsFoldViewConfig::default())
     }
 
     /// A view configured with the consumer's [`GtsFoldViewConfig`].
-    pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
+    /// resolve through itself. The view's accessors — [`GtsFoldView::nq_token`],
+    /// [`GtsFoldView::public_value`] and everything built on them — walk a quoted
+    /// triple's resolved components to the leaves, so a self-reaching term would
+    /// recurse without bound and abort the process. A graph off the wire cannot
+    /// contain one (the reader refuses the row that would close the loop); a graph
+    /// a caller assembled can, so the view REFUSES to exist rather than handing
+    /// back an object whose every renderer is a process kill. This is the fold-time
+    /// refusal GTS-SPEC §7.3 permits, applied once at construction rather than as a
+    /// guard inside every walk.
+    pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Result<Self, RdfDiagnostic> {
+        ensure_terms_terminate(&graph)?;
         let mut view = Self {
             graph,
             iri_index: BTreeMap::new(),
@@ -185,7 +217,7 @@ impl GtsFoldView {
         if let Some(vocab) = &config.language_vocab {
             view.tag_map = view.build_tag_map(vocab);
         }
-        view
+        Ok(view)
     }
 
     /// Consume the view and return the underlying folded [`Graph`].
@@ -438,12 +470,16 @@ impl GtsFoldView {
     }
 
     /// The purrdf-gts 0.9.11 reifier rows `(reifier_id, (s,p,o), graph?)`. purrdf's
-    /// statement layer is standpoint-scoped, so the graph slot is always `None`.
+    /// statement layer is keyed per graph, so the graph slot is the term id of the
+    /// named graph the reifier was declared in, and `None` names the default graph.
+    /// A caller that reads a row must read its graph slot too: one reifier id may be
+    /// declared in several graphs, and those are distinct rows.
     pub fn reifiers(&self) -> &[(usize, Triple3, Option<usize>)] {
         &self.graph.reifiers
     }
 
-    /// The 0.9.11 annotation rows `(reifier, predicate, value, graph?)` (graph `None`).
+    /// The 0.9.11 annotation rows `(reifier, predicate, value, graph?)`; the graph slot
+    /// carries the same per-graph key as [`Self::reifiers`] (`None` = default graph).
     pub fn annotations(&self) -> &[(usize, usize, usize, Option<usize>)] {
         &self.graph.annotations
     }
@@ -731,8 +767,8 @@ type LitRow = (String, Option<String>, String);
 
 /// Project a folded GTS [`Graph`] to the compact dictionary-encoded
 /// [`RelationalRows`] view: the full term dictionary, all quads, the
-/// statement-layer reifier/annotation rows (with the always-`None` graph slot
-/// flattened away), and every blob decoded to bytes.
+/// statement-layer reifier/annotation rows (each with the graph it was asserted in,
+/// as [`ReifierRow`] describes), and every blob decoded to bytes.
 ///
 /// # Errors
 ///
@@ -757,22 +793,22 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
                     term.datatype,
                     term.lang.clone(),
                     term.reifier,
+                    term.triple,
                 )
             })
             .collect(),
         quads: graph.quads.clone(),
-        // Flatten the 0.9.11 row-array to the narrow relational view, dropping the
-        // always-`None` graph slot (the relational view carries no graph axis).
+        // Widen the 0.9.11 reifier row-array's nested triple into flat columns. The
+        // graph slot is CARRIED, exactly as it is for quads: the statement layer is
+        // keyed per graph, so one reifier id may be declared and annotated
+        // independently in several graphs, and a relational view that dropped the
+        // column would collapse those rows into one indistinguishable heap.
         reifiers: graph
             .reifiers
             .iter()
-            .map(|&(r, (s, p, o), _graph)| (r, s, p, o))
+            .map(|&(r, (s, p, o), g)| (r, s, p, o, g))
             .collect(),
-        annotations: graph
-            .annotations
-            .iter()
-            .map(|&(r, p, o, _graph)| (r, p, o))
-            .collect(),
+        annotations: graph.annotations.clone(),
         blobs,
     })
 }
@@ -824,6 +860,18 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
         .min_by(|a, b| rank_language(&a.1.2).cmp(&rank_language(&b.1.2)))
 }
 
+/// Render one term as its N-Quads token, resolving a quoted triple's components to
+/// the leaves.
+///
+/// # Termination
+///
+/// This recurses on the two structural edges a term carries — a quoted triple's
+/// `(s, p, o)` and a literal's datatype — with no depth bound and no visited set,
+/// because the graph it walks has already been proven to terminate. Every route to a
+/// `Graph` inside this module runs through [`GtsFoldView::with_config`], which
+/// refuses a self-reaching term table outright. Keep it that way: a new constructor
+/// that skips that check hands this function an input it will die on, and a stack
+/// overflow in Rust aborts the process rather than panicking.
 fn render_term(graph: &Graph, tid: usize) -> String {
     let term = &graph.terms[tid];
     match term.kind {
@@ -833,7 +881,7 @@ fn render_term(graph: &Graph, tid: usize) -> String {
             .as_ref()
             .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
         TermKind::Literal => render_literal(graph, term),
-        TermKind::Triple => graph.reifier(term.reifier.unwrap_or(tid)).map_or_else(
+        TermKind::Triple => graph.triple_of(tid).map_or_else(
             || format!("_:unbound_triple_{tid}"),
             |(s, p, o)| {
                 format!(
@@ -917,6 +965,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -928,6 +977,7 @@ mod tests {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -939,6 +989,7 @@ mod tests {
             lang: lang.map(str::to_string),
             direction: None,
             reifier: None,
+            triple: None,
         }
     }
 
@@ -979,6 +1030,7 @@ mod tests {
         writer.add_reifies(&[(16, (0, 1, 2), None)]);
         writer.add_annot(&[(16, 17, 18, None)]);
         GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate")
     }
 
     #[test]
@@ -1015,7 +1067,8 @@ mod tests {
             lit("false", None, Some(0)),
             lit("not-a-boolean", None, Some(0)),
         ]);
-        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None));
+        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate");
         assert_eq!(view.public_value(1), PublicValue::Boolean(false));
         assert_eq!(
             view.public_value(2),
@@ -1089,7 +1142,8 @@ mod tests {
                 language_vocab: Some(vocab),
                 curie_prefixes: vec![("ex".to_string(), EX.to_string())],
             },
-        );
+        )
+        .expect("the fixture graph's terms terminate");
         assert_eq!(
             view.tag_map().get("x-purrdf-english"),
             Some(&"en".to_string())
@@ -1111,7 +1165,8 @@ mod tests {
 
         // With NO vocab configured the retag map is empty — no fabricated
         // namespace scanning happens.
-        let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None));
+        let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None))
+            .expect("the fixture graph's terms terminate");
         assert!(bare.tag_map().is_empty());
     }
 
@@ -1121,8 +1176,46 @@ mod tests {
         let rows = view.relational_rows().expect("relational rows");
         assert_eq!(rows.terms.len(), view.graph().terms.len());
         assert_eq!(rows.quads.len(), view.graph().quads.len());
-        assert_eq!(rows.reifiers, vec![(16, 0, 1, 2)]);
-        assert_eq!(rows.annotations, vec![(16, 17, 18)]);
+        assert_eq!(rows.reifiers, vec![(16, 0, 1, 2, None)]);
+        assert_eq!(rows.annotations, vec![(16, 17, 18, None)]);
         assert!(rows.blobs.is_empty());
+    }
+
+    /// The relational projection keeps the statement layer's graph column. One
+    /// reifier id declared and annotated in two graphs must yield rows that a
+    /// consumer can still tell apart; flattening the column would collapse them into
+    /// an indistinguishable heap.
+    #[test]
+    fn relational_rows_keep_the_statement_layers_graph_column() {
+        let mut writer = Writer::new("dist");
+        writer.add_terms(&[
+            iri(&(EX.to_string() + "a")),
+            iri(&(EX.to_string() + "related")),
+            iri(&(EX.to_string() + "b")),
+            iri(&(EX.to_string() + "c")),
+            iri(&(EX.to_string() + "r1")),
+            iri(&(EX.to_string() + "source")),
+            iri(&(EX.to_string() + "ledger")),
+            iri(&(EX.to_string() + "elsewhere")),
+            iri(&(EX.to_string() + "g1")),
+            iri(&(EX.to_string() + "g2")),
+        ]);
+        writer.add_quads(&[(0, 1, 2, Some(8)), (0, 1, 2, Some(9))]);
+        // ONE reifier id, declared about the same triple in two graphs — two distinct
+        // statement-layer rows that only the graph column tells apart.
+        writer.add_reifies(&[(4, (0, 1, 2), Some(8)), (4, (0, 1, 2), Some(9))]);
+        writer.add_annot(&[(4, 5, 6, Some(8)), (4, 5, 7, Some(9))]);
+        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate");
+
+        let rows = view.relational_rows().expect("relational rows");
+        assert_eq!(
+            rows.reifiers,
+            vec![(4, 0, 1, 2, Some(8)), (4, 0, 1, 2, Some(9))]
+        );
+        assert_eq!(
+            rows.annotations,
+            vec![(4, 5, 6, Some(8)), (4, 5, 7, Some(9))]
+        );
     }
 }

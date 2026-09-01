@@ -42,7 +42,11 @@
 //!   (e.g. RDF/XML) projects the RDF-1.2 statement layer and the loss ledger records
 //!   the drop (the universal-sink invariant), surfaced under `--loss-ledger`;
 //! * a shape/format-kind MISMATCH (solutions/boolean + an RDF syntax, or a graph +
-//!   a SPARQL-results format) is a hard runtime error (exit 1).
+//!   a SPARQL-results format) is a hard runtime error (exit 1);
+//! * a graph result carrying a NAMED GRAPH + a single-graph syntax (turtle /
+//!   ntriples / rdfxml) is a usage refusal (exit 2), naming the graphs and a
+//!   quad-capable alternative — see [`refuse_uncarriable_named_graphs`] for why
+//!   this one is refused rather than serialized-and-ledgered.
 //!
 //! ## The governed lane, and what a trip puts on which stream
 //!
@@ -115,10 +119,11 @@
 //! registered statistical aggregate IRIs.
 
 use purrdf::GovernedEntailment;
+use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_rdf::SourceFormat;
+use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
     QueryGovernors, QueryOptions as EngineQueryOptions,
@@ -379,6 +384,10 @@ fn emit_result(
                     results_format.token()
                 )));
             };
+            // Refused BEFORE the serializer runs: a result the requested syntax would
+            // silently empty out never reaches stdout. See
+            // `refuse_uncarriable_named_graphs`.
+            refuse_uncarriable_named_graphs(&**graph, fmt, results_format)?;
             // The universal sink: a star-incapable target (RDF/XML, TriX, HexTuples)
             // projects the RDF-1.2 statement layer and records the drop in the ledger.
             // The graph is freshly constructed, so there is no source codec to seed the
@@ -394,6 +403,61 @@ fn emit_result(
             ledger::surface(ledger_target, &ledger)
         }
     }
+}
+
+/// The closing imperative of every named-graph refusal on this lane: the quad-capable
+/// `--results-format` tokens, in [`QueryFormat`] declaration order.
+///
+/// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
+/// verbatim with the Python and wasm hosts; only the remedy is per-host, because
+/// "`--results-format`" is a spelling this binary has and they do not.
+const QUAD_CAPABLE_REMEDY: &str =
+    "Re-run with a quad-capable --results-format (trig/nquads/trix/hextuples/jsonld/yamlld)";
+
+/// Refuse to serialize a graph result that carries named graphs to a single-graph
+/// RDF syntax, naming the graphs, the format, and what to use instead.
+///
+/// # Why this REFUSES rather than serializing and ledgering the loss
+///
+/// Every other loss in this pipeline is a transcode the caller asked for implicitly —
+/// they named a source document and a target syntax, and the sink reports what the
+/// pair cannot carry. A named graph in a CONSTRUCT result is not that: the graph name
+/// is in the QUERY the caller wrote, one token at a time (`CONSTRUCT GRAPH ex:out {…}`),
+/// so it is the single most explicit thing in the request. Turtle, N-Triples and
+/// RDF/XML have no named-graph construct, and the serializer's single-graph flattening
+/// DROPS every graph-scoped row (it does not fold them into the default graph — see
+/// `purrdf_core::loss`'s `named-graph-dropped` note). Serializing anyway would print a
+/// well-formed document that is missing exactly the statements the caller asked for,
+/// and exit 0 — the silent-wrong shape this binary refuses everywhere else.
+///
+/// A whole-template `CONSTRUCT GRAPH g {…}` against Turtle produced ZERO bytes, an
+/// EMPTY loss ledger and exit 0 before this refusal existed. That is the case it
+/// closes, and it closes the general one with it: a per-statement template may write
+/// into many graphs at once, or mix default-graph triples with named-graph quads, and
+/// a result that carries ANY non-default graph is refused, because the mixed case
+/// would otherwise emit the default-graph half and drop the rest — a partial answer
+/// reported as a complete one, which is worse than emitting nothing.
+///
+/// A result carrying ONLY default-graph triples is untouched: the plain
+/// SPARQL 1.1 `CONSTRUCT`/`DESCRIBE` lane serializes to Turtle, N-Triples and RDF/XML
+/// exactly as it always has.
+fn refuse_uncarriable_named_graphs<D: DatasetView>(
+    graph: &D,
+    fmt: NativeRdfFormat,
+    results_format: QueryFormat,
+) -> Result<(), CliError> {
+    if fmt.supports_datasets() {
+        return Ok(());
+    }
+    let names = distinct_graph_names(graph);
+    if names.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::Usage(named_graph_refusal(
+        &names,
+        results_format.token(),
+        QUAD_CAPABLE_REMEDY,
+    )))
 }
 
 /// Answer `query` over `dataset` under the resolved entailment plan AND the caller's

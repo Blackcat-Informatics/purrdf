@@ -74,6 +74,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query::PyQuerySolutions>()?;
     m.add_class::<query::PyQuerySolution>()?;
     m.add_class::<query::PyQueryTriples>()?;
+    m.add_class::<query::PyQueryQuads>()?;
+    m.add_class::<io::PySerializeLoss>()?;
     m.add_class::<query::PyQueryBoolean>()?;
     m.add_class::<query::PyCancellationToken>()?;
     m.add_class::<query::PyTrippedGovernor>()?;

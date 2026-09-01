@@ -87,7 +87,13 @@ ownership/free order. Profiles and configuration are described in
   `PURRDF_STATUS_CURSOR_EXHAUSTED` is the (non-error) end-of-rows signal.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields and
   functions are additive. `purrdf_abi_version` reports the current ABI
-  version (0.1.x, beta).
+  version at runtime; the `PURRDF_ABI_MAJOR`/`_MINOR`/`_PATCH` macros give the
+  same triple for the header you compiled against, and comparing the two is how
+  you check a library you did not build. The minor number tracks the exported
+  signatures: any change to a parameter list, a return contract, or the
+  documented behaviour of an exported symbol bumps it, additive parameters
+  included, because an additive parameter is still a recompile for every C
+  consumer.
 
 ## Ownership and lifetimes
 

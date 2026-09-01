@@ -833,6 +833,22 @@ pub fn is_projection(name: &str) -> bool {
     PROJECTION_CODECS.contains(&n)
 }
 
+/// The note carried by every `named-graph-dropped` contract entry
+/// [`pair_loss_ledger`] emits, written ONCE so the two arms that record it cannot
+/// drift into two different claims about the same behaviour.
+///
+/// It says DROPPED, and dropped is what the serializers do: a single-graph target
+/// emits the default graph and nothing else, so a quad asserted in a named graph
+/// leaves no trace in the output — its subject, predicate and object go with the
+/// graph name. The note used to promise the quads were "folded into the default
+/// graph", which was never true of any shipped codec, and folding is not the
+/// behaviour to move the code toward either: re-asserting a named graph's
+/// statements in the default graph would ASSERT content the source never asserted
+/// there, which is a semantic change no transcode is licensed to make silently.
+const NAMED_GRAPH_DROPPED_NOTE: &str = "The target syntax has no named-graph construct; a quad asserted in a named graph is \
+     DROPPED entirely — statement and graph name alike — and only the default graph \
+     survives. The quads are NOT folded into the default graph.";
+
 /// Compute the static loss contract for a `from → to` transcoding pair.
 ///
 /// Rules:
@@ -869,11 +885,7 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
 
     if is_projection(to) {
         if supports_quads(from) {
-            entries.push(entry(
-                "named-graph-dropped",
-                "The target syntax has no named-graph construct; quads are folded into the \
-                 default graph and graph names are dropped.",
-            ));
+            entries.push(entry("named-graph-dropped", NAMED_GRAPH_DROPPED_NOTE));
         }
         let proj_entry = match to {
             "owl-dl" => entry(
@@ -917,11 +929,7 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
     } else {
         // to is a syntax codec
         if supports_quads(from) && !supports_quads(to) {
-            entries.push(entry(
-                "named-graph-dropped",
-                "The target syntax has no named-graph construct; quads are folded into the \
-                 default graph and graph names are dropped.",
-            ));
+            entries.push(entry("named-graph-dropped", NAMED_GRAPH_DROPPED_NOTE));
         }
         if supports_stars(from) && !supports_stars(to) {
             let star_entry = match to {

@@ -25,7 +25,16 @@
 //!   ONE extraction pass — whole fenced blocks — that yields genuinely
 //!   complete, standalone queries worth round-tripping; that other test
 //!   already proves every embedded fragment PARSES, which this sweep does
-//!   not re-litigate).
+//!   not re-litigate). A fenced block may be a QUERY or an UPDATE request —
+//!   the guide teaches both — so each one is routed by what it actually
+//!   parses as (see [`collect_doc_examples`]'s call site): query text takes
+//!   the `.rq` lane below, update text takes the `.ru` lane's
+//!   `parse_update`/[`roundtrip_update`]/[`RU_XFAIL`] treatment. Routing it
+//!   rather than parsing every block as a query is deliberate: an `INSERT`
+//!   example handed only to `parse_query` fails to parse and would be tallied
+//!   into [`MAX_UNPARSEABLE_RQ`] — a ceiling that counts genuinely
+//!   NEGATIVE-SYNTAX fixtures — mislabelling a perfectly valid shipped
+//!   example as a syntax error and permanently blinding the ceiling by one.
 //!
 //! **`.ru` (UPDATE) files are swept too.** `Display for GraphUpdateOperation`/
 //! `Display for Update` (`crates/sparql-algebra/src/algebra.rs`) IS an
@@ -602,6 +611,11 @@ fn corpus_round_trips_through_the_serializer() {
     let mut unparseable = 0usize;
     let mut xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut failures = Vec::new();
+    // The `.ru` lane's counters, declared here rather than at that loop
+    // because a doc example that parses as an UPDATE is routed into them
+    // below, before the `.ru` files themselves are swept.
+    let mut unparseable_ru = 0usize;
+    let mut ru_xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     let mut items: Vec<(String, String)> = Vec::with_capacity(seen);
     for path in &rq_files {
@@ -613,7 +627,36 @@ fn corpus_round_trips_through_the_serializer() {
             .replace('\\', "/");
         items.push((label, text));
     }
-    items.extend(doc_examples);
+    // A doc example is a query OR an update (the guide teaches both), so route
+    // it by what it parses as — never by assuming the query form. Anything
+    // that is neither falls through to the `unparseable` tally exactly as a
+    // `.rq` file would.
+    let mut doc_updates = 0usize;
+    for (label, text) in doc_examples {
+        if parser.parse_query(&text).is_ok() {
+            items.push((label, text));
+            continue;
+        }
+        let Ok(update) = parser.parse_update(&text) else {
+            unparseable += 1;
+            continue;
+        };
+        doc_updates += 1;
+        let xfail_entry = RU_XFAIL.iter().find(|(path, _)| *path == label);
+        match (roundtrip_update(&update), xfail_entry) {
+            (Ok(()), None) => {}
+            (Ok(()), Some((path, construct))) => failures.push(format!(
+                "{path}: RU_XFAIL entry for {construct:?} round-trips cleanly now — remove the \
+                 ledger entry"
+            )),
+            (Err(msg), None) => failures.push(format!("{label}: {msg}")),
+            (Err(_), Some((path, construct))) => {
+                ru_xfail_matched.insert(path);
+                let _ = construct;
+            }
+        }
+    }
+    println!("doc examples routed to the UPDATE lane: {doc_updates}");
 
     for (label, text) in &items {
         let Ok(query) = parser.parse_query(text) else {
@@ -663,8 +706,6 @@ fn corpus_round_trips_through_the_serializer() {
     // manifests among the vendored `syntax-update-*` directories) are expected
     // and counted the same way the `.rq` side counts its own unparseable
     // items — never asserted on, just accounted for below.
-    let mut unparseable_ru = 0usize;
-    let mut ru_xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for path in &ru_files {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         let label = path
@@ -694,8 +735,8 @@ fn corpus_round_trips_through_the_serializer() {
     assert_eq!(
         ru_xfail_matched.len(),
         RU_XFAIL.len(),
-        "an RU_XFAIL entry never matched any swept, parseable .ru item — a dead ledger row \
-         (matched: {ru_xfail_matched:?})"
+        "an RU_XFAIL entry never matched any swept, parseable update item (.ru file or \
+         update-shaped doc example) — a dead ledger row (matched: {ru_xfail_matched:?})"
     );
 
     println!(

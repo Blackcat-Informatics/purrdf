@@ -334,6 +334,36 @@ fn broken_manifest_with_a_described_entry_loads_cleanly() {
     );
 }
 
+/// The PLACEMENT invariant the two first-party query-form corpora rely on: they
+/// live under `corpus/`, never under `suite/`.
+///
+/// `sparql_conformance.rs`'s `datatest_stable::harness!` is rooted at `suite/`
+/// and folds every manifest it finds into ONE conformance-matrix row. The
+/// CONSTRUCT and DESCRIBE corpora each report their OWN row (with their own
+/// ratchet budget in `scripts/conformance-baseline.json`), which only works
+/// while they are outside that root — moved under `suite/` they would be run
+/// twice and counted twice, and their own rows would double-count against the
+/// full-corpus row.
+#[test]
+fn the_first_party_query_form_corpora_live_outside_the_datatest_root() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    for name in ["construct", "describe"] {
+        let manifest = corpus.join(name).join("manifest.ttl");
+        assert!(
+            manifest.is_file(),
+            "the first-party {name} corpus lost its manifest ({}), so nothing now measures \
+             that query form",
+            manifest.display()
+        );
+        let leaked = suite_root().join(name);
+        assert!(
+            !leaked.exists(),
+            "the {name} corpus must stay under corpus/, not suite/, or the datatest harness \
+             would also run it and both rows would count the same cases"
+        );
+    }
+}
+
 /// Assert every `<tree>/<group>/manifest.ttl` is on disk.
 fn assert_manifests_present(tree: &str, groups: &[&str], label: &str) {
     let root = suite_root().join(tree);
