@@ -1525,23 +1525,24 @@ fn is_extension_control(value: &str) -> bool {
 
 /// Resolve a document-relative JSON-LD reference against the base currently in force.
 ///
-/// A reference that already carries a scheme is retained VERBATIM: JSON-LD expansion does
-/// not re-normalize an IRI a document spelled absolutely. Everything else goes through the
-/// workspace's shared [`purrdf_iri::BaseScope`], so the "relative reference with no base
-/// in scope" condition reports the SAME `iri-relative-no-base` code (and the same remedy
-/// text) that Turtle, TriG, RDF/XML, SPARQL and ShEx report — it stops being a fifth
-/// JSON-LD-local spelling of a condition every other syntax already names. Genuinely
-/// JSON-LD-specific context failures keep `jsonld-context-invalid`.
+/// EVERY reference goes through the workspace's shared [`purrdf_iri::BaseScope`] — the
+/// absolute ones included. That layer now returns an absolute reference verbatim whether
+/// or not a base is in scope (RDF Concepts §3.2 forbids syntax-based normalization, and
+/// the W3C JSON-LD vectors pin `<http://a/bb/ccc/../d;p?y>` unchanged), so the local
+/// "has a scheme? hand it straight back" passthrough this function used to run in front
+/// of the scope became a second copy of a rule the shared layer already enforces. Copies
+/// of a rule are how the rule comes to be enforced two different ways, so it is gone.
+///
+/// Routing everything through the scope also gives the "relative reference with no base
+/// in scope" condition the SAME `iri-relative-no-base` code (and the same remedy text)
+/// that Turtle, TriG, RDF/XML, SPARQL and ShEx report — it stops being a JSON-LD-local
+/// spelling of a condition every other syntax already names. Genuinely JSON-LD-specific
+/// context failures keep `jsonld-context-invalid`.
 fn resolve_reference(
     reference: &str,
     base: Option<&str>,
     description: &str,
 ) -> Result<String, RdfDiagnostic> {
-    if let Ok(parsed) = purrdf_iri::parse(reference)
-        && parsed.has_scheme()
-    {
-        return Ok(reference.to_owned());
-    }
     // The absent base is NOT decided here. `BaseScope::empty()` already owns "a relative
     // reference with no base in scope is `IriError::NoBase`", so re-deriving that
     // decision locally would be a second copy of it free to drift — and it is the drift,
@@ -1553,10 +1554,6 @@ fn resolve_reference(
     // parsed FIRST, so a MALFORMED relative reference reports its own syntax error rather
     // than being misreported as "no base", which would send the author off to add a
     // `@base` that cannot help.
-    //
-    // Only resolution is shared. JSON-LD's own absolute-reference passthrough above stays
-    // deliberately outside it, because `BaseIri::resolve` dot-normalizes and the W3C
-    // JSON-LD vectors pin the verbatim form.
     let scope = match base {
         None => purrdf_iri::BaseScope::empty(),
         Some(base) => {
