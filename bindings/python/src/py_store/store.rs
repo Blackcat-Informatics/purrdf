@@ -137,11 +137,16 @@ impl PyStore {
     /// PREFIX recognition; `standpoint_predicates` is the `(according_to,
     /// sharpens)` predicate table `heldIn` requires.
     ///
-    /// `relations` / `relations_from_graph` register host relations for THIS call
-    /// (see [`collect_relations`](super::query::collect_relations)):
+    /// `relations` / `relations_from_graph` / `path_relations` register host relations
+    /// for THIS call (see [`collect_relations`](super::query::collect_relations)):
     /// `{iri: (subject_arity, object_arity, rows)}` supplies the table as Python
     /// data, `{iri: (head, subject_arity, object_arity)}` reads it out of this
-    /// store's own default graph as an `rdf:List` of `rdf:List`s. A registered IRI
+    /// store's own default graph as an `rdf:List` of `rdf:List`s, and
+    /// `{iri: (steps, min_hops, max_hops, max_paths_per_seed,
+    /// max_expansions_per_invocation, mode)}` registers a PATH-WITNESS traversal over
+    /// this store's own edges — callable as
+    /// `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`, one row per hop, with
+    /// `?edge` the traversed statement as a first-class RDF 1.2 term. A registered IRI
     /// is recognized in predicate position EXACTLY, so no namespace declaration is
     /// needed to reach one.
     ///
@@ -160,6 +165,7 @@ impl PyStore {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
     ))]
     #[allow(
@@ -176,12 +182,13 @@ impl PyStore {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let subs = collect_substitutions(substitutions)?;
         // Python data is converted to owned `TermValue`s HERE, while the GIL is
         // held; nothing below re-enters the interpreter.
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -242,7 +249,7 @@ impl PyStore {
     /// of being noticed only once it has finished.
     ///
     /// `substitutions` / `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` behave exactly
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` behave exactly
     /// as on [`query`](Self::query). A relation's rows are charged through the same
     /// governors as every other row source, so a ceiling bounds a call as it bounds a
     /// scan.
@@ -255,6 +262,7 @@ impl PyStore {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -279,6 +287,7 @@ impl PyStore {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -289,7 +298,7 @@ impl PyStore {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -346,13 +355,14 @@ impl PyStore {
     /// the entailment-aware lane exactly as it reaches the ordinary one. Unset (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
-    /// `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly as on
+    /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
     /// [`query_governed`](Self::query_governed): a registered relation is reachable from the
     /// closure query exactly as it is from an ordinary one, so registering an IRI here and
     /// omitting it there cannot silently change which rows the SAME predicate position
-    /// yields. `relations_from_graph` reads its table from this store's PRE-entailment
-    /// snapshot — the base the closure is materialized from — matching
-    /// [`query`](Self::query)'s "this store's own default graph".
+    /// yields. `relations_from_graph` reads its table — and `path_relations` snapshots its
+    /// edges — from this store's PRE-entailment snapshot, the base the closure is
+    /// materialized from, matching [`query`](Self::query)'s "this store's own default
+    /// graph".
     #[pyo3(signature = (
         query,
         entailment,
@@ -364,6 +374,7 @@ impl PyStore {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -389,6 +400,7 @@ impl PyStore {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -399,7 +411,7 @@ impl PyStore {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let plan =
             QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
         let args = GovernorArgs {
@@ -450,11 +462,12 @@ impl PyStore {
 
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
     /// store unchanged). `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` configure the
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` configure the
     /// engine exactly as on [`query`](Self::query); a registered relation is reachable
     /// from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern context
-    /// exactly as a query's is. A `relations_from_graph` table is read from the
-    /// PRE-update snapshot, which is the same state the `WHERE` clause matches.
+    /// exactly as a query's is. A `relations_from_graph` table is read — and a
+    /// `path_relations` traversal is snapshotted — from the PRE-update state, which is
+    /// the same state the `WHERE` clause matches.
     #[pyo3(signature = (
         update,
         *,
@@ -463,6 +476,7 @@ impl PyStore {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
     ))]
     #[allow(
@@ -478,9 +492,10 @@ impl PyStore {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<()> {
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -529,7 +544,7 @@ impl PyStore {
     /// [`query_governed`](Self::query_governed) minus `max_answers`, which bounds an
     /// answer sequence an UPDATE does not have. A request's size is bounded by the
     /// ceilings on the work that computes it. The engine-configuration keywords —
-    /// including `relations` / `relations_from_graph` — are those of
+    /// including `relations` / `relations_from_graph` / `path_relations` — are those of
     /// [`update`](Self::update).
     ///
     /// **A tripped request applies nothing.** Not "not all of it": the store is left
@@ -545,6 +560,7 @@ impl PyStore {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -567,6 +583,7 @@ impl PyStore {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -575,7 +592,7 @@ impl PyStore {
         max_remote_requests: Option<u64>,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,

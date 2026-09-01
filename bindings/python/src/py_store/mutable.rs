@@ -211,7 +211,7 @@ impl PyMutableDataset {
     /// The engine-configuration and relation keywords are exactly those of
     /// `Store.query`: `extension_namespaces` / `property_fn_namespaces` declare
     /// prefix recognition, `standpoint_predicates` is the `(according_to, sharpens)`
-    /// table `heldIn` requires, and `relations` / `relations_from_graph` register
+    /// table `heldIn` requires, and `relations` / `relations_from_graph` / `path_relations` register
     /// host relations for this call.
     ///
     /// `aggregate_namespace` behaves exactly as on `Store.query` (see
@@ -225,6 +225,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
     ))]
     #[allow(
@@ -241,10 +242,11 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -295,6 +297,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -319,6 +322,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -329,7 +333,7 @@ impl PyMutableDataset {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -381,11 +385,11 @@ impl PyMutableDataset {
     ///
     /// `aggregate_namespace` behaves exactly as on `Store.query_entailment_governed`.
     ///
-    /// `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly as on
+    /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
     /// `Store.query_entailment_governed`: a registered relation is reachable from the closure
-    /// query exactly as it is from an ordinary one. `relations_from_graph` reads its table
-    /// from this dataset's PRE-entailment snapshot — the base the closure is materialized
-    /// from.
+    /// query exactly as it is from an ordinary one. `relations_from_graph` reads its table —
+    /// and `path_relations` snapshots its edges — from this dataset's PRE-entailment
+    /// snapshot, the base the closure is materialized from.
     #[pyo3(signature = (
         query,
         entailment,
@@ -397,6 +401,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -422,6 +427,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -432,7 +438,7 @@ impl PyMutableDataset {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let plan =
             QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
         let args = GovernorArgs {
@@ -483,7 +489,7 @@ impl PyMutableDataset {
 
     /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
     /// `UpdateOutcome`. The keywords — governors, engine configuration, and the
-    /// `relations` / `relations_from_graph` tables — and the all-or-nothing guarantee
+    /// `relations` / `relations_from_graph` / `path_relations` tables — and the all-or-nothing guarantee
     /// are exactly those of `Store.update_governed`.
     #[pyo3(signature = (
         update,
@@ -493,6 +499,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
         fuel=None,
         deadline_ms=None,
@@ -515,6 +522,7 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -523,7 +531,7 @@ impl PyMutableDataset {
         max_remote_requests: Option<u64>,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,
@@ -577,8 +585,9 @@ impl PyMutableDataset {
 
     /// Run a SPARQL UPDATE (COW-atomic: a failed update leaves the set unchanged).
     /// The engine-configuration and relation keywords configure the engine exactly
-    /// as on [`query`](Self::query); a `relations_from_graph` table is read from the
-    /// PRE-update snapshot, the state the `WHERE` clause matches.
+    /// as on [`query`](Self::query); a `relations_from_graph` table is read — and a
+    /// `path_relations` traversal is snapshotted — from the PRE-update state, the state
+    /// the `WHERE` clause matches.
     #[pyo3(signature = (
         update,
         *,
@@ -587,6 +596,7 @@ impl PyMutableDataset {
         standpoint_predicates=None,
         relations=None,
         relations_from_graph=None,
+        path_relations=None,
         aggregate_namespace=None,
     ))]
     #[allow(
@@ -602,9 +612,10 @@ impl PyMutableDataset {
         standpoint_predicates: Option<(String, String)>,
         relations: Option<&Bound<'_, PyDict>>,
         relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<()> {
-        let specs = collect_relations(relations, relations_from_graph)?;
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let config = EngineConfig {
             extension_namespaces,
             property_fn_namespaces,

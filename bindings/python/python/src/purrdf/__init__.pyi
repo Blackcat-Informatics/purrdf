@@ -299,6 +299,51 @@ _Term = NamedNode | BlankNode | Literal | Triple
 _Relation = tuple[int, int, Sequence[Sequence[_Term]]]
 _RelationFromGraph = tuple[_Term, int, int]
 
+# `_PathRelation` is the third spelling, and the one that is not a table at all: it
+# declares a TRAVERSAL over the store's own edges, and the relation binds the walk it
+# finds. A call reads
+#
+#     ?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )
+#
+# and emits ONE ROW PER HOP: row `i` of a `k`-hop walk binds `?len = k`, `?step = i`,
+# `?node` to the node that hop arrived at, and `?edge` to the STATEMENT it traversed —
+# an RDF 1.2 triple term, which joins straight back into the dataset by an ordinary
+# basic graph pattern. `GROUP BY ?pathId` reassembles one walk from its hop rows and
+# `ORDER BY ?step` puts them back in traversal order (`?step` and `?len` are
+# `xsd:integer` literals precisely so that ordering is numeric).
+#
+# It crosses the boundary as pure DATA, exactly as the two table spellings do: a
+# specification of which edges a hop may follow, never a Python callable the traversal
+# would call back into. That is what keeps the whole evaluation GIL-free.
+#
+# Every field is MANDATORY and none has a default. `PathLimits` deliberately has no
+# `Default`: a zero-hop path has no witness, and an unbounded traversal depth is a stack
+# overflow — an abort, which escapes the engine's panic containment entirely — so a limit
+# this binding invented would be one the caller never read. `min_hops == 0`, an empty
+# `min_hops..max_hops` interval, a `max_hops` past the engine's hard cap, a zero guard, an
+# empty or duplicated `steps`, and a non-IRI predicate all raise `ValueError` carrying the
+# engine's own diagnostic. A step ALTERNATIVE the store has no edges for is not among
+# them: it contributes zero edges, exactly as `p|q` does not fail when `q` matches
+# nothing.
+#
+#     store.query(
+#         "SELECT ?end ?step ?node WHERE { <http://example.org/a> "
+#         "<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } "
+#         "ORDER BY ?len ?step",
+#         path_relations={
+#             "http://example.org/pf#walk": (
+#                 [(NamedNode("http://example.org/p"), "forward")],
+#                 1, 4, 1024, 100000, "walk",
+#             )
+#         },
+#     )
+#
+# (steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation, mode)
+# steps: each (predicate_term, "forward" | "inverse"); at least one, no duplicates
+# mode: "walk" (every simple-prefix witness) | "shortest" (one shortest witness per pair)
+_PathStep = tuple[_Term, str]
+_PathRelation = tuple[Sequence[_PathStep], int, int, int, int, str]
+
 # ── Query results ───────────────────────────────────────────────────────────────
 
 class QuerySolution:
@@ -448,13 +493,18 @@ class Store:
     # PREFIX recognition, `standpoint_predicates` is the `(according_to, sharpens)`
     # predicate table the `heldIn` extension requires.
     #
-    # `relations` / `relations_from_graph` register host relations for THIS call
-    # (see `_Relation` / `_RelationFromGraph`). A registered IRI is recognized in
-    # predicate position EXACTLY, so reaching one needs no namespace declaration;
-    # declaring `property_fn_namespaces` is how a caller asks for the stricter
-    # reading, in which an UNREGISTERED IRI under the namespace is a hard error
-    # instead of a triple pattern that matches nothing. A duplicate IRI, a ragged
-    # table, or a torn `rdf:List` raises `ValueError`.
+    # `relations` / `relations_from_graph` / `path_relations` register host relations
+    # for THIS call (see `_Relation` / `_RelationFromGraph` / `_PathRelation`). A
+    # registered IRI is recognized in predicate position EXACTLY, so reaching one needs
+    # no namespace declaration; declaring `property_fn_namespaces` is how a caller asks
+    # for the stricter reading, in which an UNREGISTERED IRI under the namespace is a
+    # hard error instead of a triple pattern that matches nothing. A duplicate IRI —
+    # including one named in two of the three dicts — a ragged table, a torn `rdf:List`,
+    # an empty or duplicated step alternation, and an unbuildable traversal envelope all
+    # raise `ValueError`.
+    #
+    # All three cross the boundary as pure DATA and never as a Python callable, which is
+    # what lets the whole evaluation run with the GIL released.
     #
     # SPARQL 1.2's ADJUST(value, timezone) and the VERSION prologue declaration
     # need no kwarg here: both are ordinary grammar the parser and evaluator
@@ -492,6 +542,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
@@ -508,6 +559,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -520,11 +572,12 @@ class Store:
     # Governed two-phase entailment query. `outcome` and `report` are absent only
     # when the closure phase itself was stopped. `aggregate_namespace` behaves
     # exactly as on `query_governed` above. `property_fn_namespaces` / `relations` /
-    # `relations_from_graph` behave exactly as on `query_governed`, too: a
-    # registered relation is reachable from the closure query exactly as it is from
-    # an ordinary one, so registering one here and omitting it there cannot silently
-    # change which rows the SAME predicate position yields. `relations_from_graph`
-    # reads its table from this store's PRE-entailment snapshot.
+    # `relations_from_graph` / `path_relations` behave exactly as on `query_governed`,
+    # too: a registered relation is reachable from the closure query exactly as it is
+    # from an ordinary one, so registering one here and omitting it there cannot silently
+    # change which rows the SAME predicate position yields. `relations_from_graph` reads
+    # its table — and `path_relations` snapshots its edges — from this store's
+    # PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -537,6 +590,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -558,6 +612,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
@@ -571,6 +626,7 @@ class Store:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -660,6 +716,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
@@ -674,6 +731,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -683,10 +741,11 @@ class MutableDataset:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
-    # `property_fn_namespaces` / `relations` / `relations_from_graph` behave exactly
-    # as on `query_governed` above: a registered relation is reachable from the
-    # closure query exactly as it is from an ordinary one. `relations_from_graph`
-    # reads its table from this dataset's PRE-entailment snapshot.
+    # `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations`
+    # behave exactly as on `query_governed` above: a registered relation is reachable
+    # from the closure query exactly as it is from an ordinary one.
+    # `relations_from_graph` reads its table — and `path_relations` snapshots its edges —
+    # from this dataset's PRE-entailment snapshot.
     def query_entailment_governed(
         self,
         query: str,
@@ -699,6 +758,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -717,6 +777,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
     ) -> None: ...
     def update_governed(
@@ -728,6 +789,7 @@ class MutableDataset:
         standpoint_predicates: tuple[str, str] | None = ...,
         relations: dict[str, _Relation] | None = ...,
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
