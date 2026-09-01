@@ -772,7 +772,8 @@ pub(crate) enum Command {
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the data graph, the schema
-        /// (ShExC only — ShExJ has no relative-IRI syntax), and the shape map.
+        /// (BOTH syntaxes — ShExJ is a JSON-LD dialect, so its IRI-valued members are
+        /// document-relative exactly as ShExC's IRIREFs are), and the shape map.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
