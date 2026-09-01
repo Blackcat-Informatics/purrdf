@@ -54,8 +54,8 @@
       "note": "no ledgered gaps"
     },
     "rdflib LSP drop-in gate": {
-      "ledgered": 1,
-      "note": "rdflib-suite strict xfails: Graph-subclass set-operator identity, rdf:List/Collection mutation, Result.bindings/SELECT* subselect projection, graph-prefix forwarding, aggregate/nested-FILTER evaluation, and ConjunctiveGraph legacy semantics"
+      "ledgered": 5,
+      "note": "rdflib-suite strict xfails: one SPARQL strictness divergence (an upstream test typo projecting a non-group-key variable), plus four BatchAddGraph tests that name terms with bare relative URIRefs -- rdflib's URIRef is an unvalidated str subclass, while purrdf's IR carries no base and so cannot represent a relative IRI as a term. Both themes are purrdf being STRICTER than rdflib, not purrdf gaps, so these four will not shrink"
     },
     "Python binding suite": {
       "ledgered": 4,
