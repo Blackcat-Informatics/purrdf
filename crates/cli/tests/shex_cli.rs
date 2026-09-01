@@ -522,6 +522,85 @@ fn malformed_inputs_are_runtime_failures() {
     );
 }
 
+/// A `MAP` naming a shape the schema does not declare is REFUSED, not answered.
+///
+/// Neither the ShapeMap specification nor ShEx 2.1 defines this case — §5.7's reference
+/// requirement binds a `shapeExprRef` written inside a SCHEMA, and `satisfies` is defined only
+/// where the label resolves to a shape expression — and the result shape map's `status`
+/// vocabulary is `conformant`/`nonconformant` with no third value meaning "not evaluated".
+///
+/// This used to exit **0** with `"status":"nonconformant"` and the reason `reference to
+/// undeclared shape …`, which spends the one word the format has for a finding about the DATA
+/// on a mistake the data had no part in: a shell branching on `shex conformant false` would
+/// read a typo in its own argument as a validation result.
+#[test]
+fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconformant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "<http://example.org/alice>@<http://example.org/NoSuchShape>",
+    ]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("<http://example.org/NoSuchShape>"),
+        "the refusal names the undeclared label: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains(&schema),
+        "and the schema that was searched: {}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).is_empty(),
+        "no verdict is invented:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stderr(&out).contains("shex conformant"),
+        "no conformance summary may be reported over a shape that does not exist: {}",
+        stderr(&out)
+    );
+
+    // `START` on a schema that declares none is the same mistake, refused the same way.
+    let start = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "<http://example.org/alice>@START",
+    ]);
+    assert_eq!(code(&start), 1, "{}", stderr(&start));
+    assert!(stderr(&start).contains("START"), "{}", stderr(&start));
+    assert!(stdout(&start).is_empty());
+
+    // The refusal is decided from the map and the schema alone, so a selector that matches
+    // NOTHING is refused too — otherwise the mistake would be invisible exactly when the
+    // result map is empty and hardest to tell from "nothing matched".
+    let empty_selection = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "{FOCUS <http://example.org/nothingHasThis> _}@<http://example.org/NoSuchShape>",
+    ]);
+    assert_eq!(code(&empty_selection), 1, "{}", stderr(&empty_selection));
+    assert!(
+        stderr(&empty_selection).contains("<http://example.org/NoSuchShape>"),
+        "{}",
+        stderr(&empty_selection)
+    );
+}
+
 /// A schema that violates the ShEx 2.1 §5.7 structural requirements is refused, naming the
 /// section, rather than validated against a dangling reference.
 #[test]

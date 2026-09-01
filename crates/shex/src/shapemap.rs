@@ -152,10 +152,34 @@ pub fn resolve_shape_map(map: &ShapeMap, data: &RdfDataset) -> Vec<(TermValue, S
 /// call a single fixed shape map would use — and collected into a
 /// [`ResultShapeMap`] in that order.
 ///
+/// # A shape the schema does not declare is refused, not answered
+///
+/// Every association's shape selector must name something the schema declares —
+/// a label in its `shapes` map (after [`crate::resolve_imports`] has folded the
+/// import closure in), or `START` when the schema has a `start`. One that does
+/// not is [`ShexError::UnknownShape`] before any node is checked.
+///
+/// Neither specification defines this case. ShEx 2.1 §5.7's *Shape Expression
+/// Reference Requirement* — "A shapeExprRef MUST appear in the schema's shapes
+/// map (or an imported schema's map)" — binds a reference written INSIDE a
+/// schema, and [`crate::check_structure`] is what enforces it; `satisfies` is
+/// defined only where "se2 is the shape expression having se as id", so with no
+/// such expression the relation is undefined rather than false. The ShapeMap
+/// specification says a `shapeLabel` is "ShEx shapeExprLabel or the string START"
+/// and is silent on labels the schema lacks, and its `status` vocabulary is
+/// `conformant`/`nonconformant` with no third value meaning "not evaluated".
+///
+/// So answering `nonconformant` would spend the one word the format has for a
+/// finding about the DATA on a mistake the data had no part in: it reads as "this
+/// node fails that shape" when the truth is "there is no such shape". The
+/// repository's no-optionality/hard-fail doctrine decides an undefined case, and
+/// it decides this one as a caller error.
+///
 /// # Errors
 ///
-/// Returns an error only when `map_src` fails to parse (see
-/// [`parse_shape_map`]); a per-node validation failure is reported as a
+/// Returns an error when `map_src` fails to parse (see [`parse_shape_map`]) or
+/// names a shape the schema does not declare. A per-node validation failure is
+/// reported as a
 /// [`ConformanceStatus::Nonconformant`](crate::validate::ConformanceStatus)
 /// entry, not an `Err`.
 pub fn validate_shape_map(
@@ -166,8 +190,33 @@ pub fn validate_shape_map(
     options: &ValidationOptions<'_>,
 ) -> Result<ResultShapeMap> {
     let map = parse_shape_map(map_src, base)?;
+    refuse_undeclared_shapes(schema, &map)?;
     let resolved = resolve_shape_map(&map, data);
     Ok(validate_with(schema, data, &resolved, options))
+}
+
+/// Refuse a shape map naming a shape `schema` does not declare.
+///
+/// Checked BEFORE the node selectors are expanded, so the refusal does not
+/// depend on whether the data happened to select any node: a map that selects
+/// nothing and a map that selects a thousand nodes are the same mistake, and an
+/// empty result shape map would hide it entirely.
+///
+/// The first offending association is named, in the ShapeMap grammar's own
+/// spelling, rather than a count — the operator has to fix one label at a time.
+fn refuse_undeclared_shapes(schema: &Schema, map: &ShapeMap) -> Result<()> {
+    for assoc in &map.0 {
+        let declared = match &assoc.shape {
+            ShapeSelector::Start => schema.start.is_some(),
+            ShapeSelector::Label(label) => schema.shapes.iter().any(|decl| &decl.id == label),
+        };
+        if !declared {
+            return Err(ShexError::unknown_shape(
+                crate::validate::shape_term_string(&assoc.shape),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Which triple position `FOCUS` occupies.
