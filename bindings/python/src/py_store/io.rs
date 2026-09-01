@@ -19,8 +19,8 @@ use pyo3::types::{PyBytes, PyString};
 use super::query::PyQueryTriples;
 use super::term::PyQuad;
 use crate::{
-    NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph, flat_dataset_from_quads,
-    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
+    NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, flat_dataset_from_quads,
+    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset_to_format,
 };
 
 // ── RDF serialization format enum ───────────────────────────────────────────────
@@ -70,18 +70,27 @@ impl PyRdfFormat {
 ///
 /// Unlike `Store.load`, blank-node labels are preserved verbatim (no renaming),
 /// so canonicalization over the parsed quads is meaningful.
+///
+/// `base` is the document base relative IRI references resolve against, the same
+/// parameter `Store.load` carries and the same one the WebAssembly and C surfaces
+/// take. It is genuinely optional but never silently defaulted: PurRDF is handed
+/// bytes and has no retrieval IRI, so omitting it means "no base in scope" and a
+/// relative reference then hard-fails with `iri-relative-no-base` rather than being
+/// resolved against a fabricated one. A document may still establish its own base
+/// (Turtle `@base`, `xml:base`, JSON-LD `@context.@base`), which wins over this one.
 #[pyfunction]
-#[pyo3(signature = (input, format))]
+#[pyo3(signature = (input, format, *, base=None))]
 pub(crate) fn parse(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
     format: PyRdfFormat,
+    base: Option<String>,
 ) -> PyResult<Vec<Py<PyQuad>>> {
     let data = read_input(Some(input), None)?;
     // The native parse runs detached (GIL released); the Quad objects are
     // built after reacquiring.
     let quads = py
-        .detach(|| parse_quads(&data, format.to_native(), None))
+        .detach(move || parse_quads(&data, format.to_native(), base.as_deref()))
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))?;
     quads
         .into_iter()
@@ -93,19 +102,27 @@ pub(crate) fn parse(
 /// `output` (a file-like with `.write`) is given the bytes are written to it and
 /// `None` is returned; when `output` is omitted the serialized `bytes` are
 /// returned directly.
+///
+/// `base` is the document base the output is written under — the egress mirror of
+/// [`parse`]'s. A format that can express a base (Turtle, TriG, JSON-LD, YAML-LD)
+/// writes it and relativizes its IRIs against it; one that cannot (N-Triples,
+/// N-Quads, TriX, HexTuples) emits absolute IRIs, which is the only spelling those
+/// grammars admit. Either way a base that is not an absolute IRI is a hard failure,
+/// never silently ignored.
 #[pyfunction]
-#[pyo3(signature = (input, output=None, format=None))]
+#[pyo3(signature = (input, output=None, format=None, *, base=None))]
 pub(crate) fn serialize(
     py: Python<'_>,
     input: &PyQueryTriples,
     output: Option<&Bound<'_, PyAny>>,
     format: Option<PyRdfFormat>,
+    base: Option<String>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = format.ok_or_else(|| PyValueError::new_err("serialize: format is required"))?;
     // The native serialization runs detached (GIL released).
     let triples = &input.triples;
     let bytes = py
-        .detach(|| serialize_triples(triples, format.to_native()))
+        .detach(move || serialize_triples(triples, format.to_native(), base.as_deref()))
         .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
     match output {
         Some(output) => {
@@ -133,19 +150,37 @@ pub(crate) fn parse_quads(
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 
+/// Serialize triples through the native codec under an optional document `base`.
+///
+/// `base` is the egress mirror of [`parse_quads`]'s: a syntax that can express a base
+/// writes it and relativizes against it, one that cannot emits absolute IRIs, and a
+/// base that is not an absolute IRI is a hard failure on either. The decision is the
+/// core format registry's, never respelled here.
+///
+/// The selection is `SerializeGraph::Dataset` — which
+/// [`serialize_dataset_to_format`] applies — rather than the `DefaultGraph` this used
+/// to name, and the two are the SAME output for this input: every triple is built
+/// below as a default-graph quad, so there is no named-graph row for the dataset
+/// selection to keep. Nor is there a statement layer to drop: the IR is built verbatim
+/// (RDF 1.2 triple-term objects stay triple-term objects, no `rdf:reifies` fold), so
+/// the reifier and annotation tables are empty and star-incapable targets report zero
+/// dropped rows. One entry point carries the base rather than a second `…_with_base`
+/// overload beside it, which is how a call site ends up silently not passing one.
 pub(crate) fn serialize_triples(
     triples: &[RdfTriple],
     format: NativeRdfFormat,
+    base: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     // Build the IR verbatim — every triple is a default-graph quad, RDF 1.2
     // triple-term objects preserved as triple-term objects (no statement-layer fold)
-    // — then serialize the default graph through the native codec.
+    // — then serialize through the native codec.
     let quads: Vec<RdfQuad> = triples
         .iter()
         .map(|t| RdfQuad::new(t.subject.clone(), t.predicate.clone(), t.object.clone()))
         .collect();
     let dataset = flat_dataset_from_quads(&quads)?;
-    serialize_dataset(&dataset, format.media_type(), SerializeGraph::DefaultGraph)
+    serialize_dataset_to_format(&dataset, format, base)
+        .map(|outcome| outcome.bytes)
         .map_err(|e| e.to_string())
 }
 
@@ -268,8 +303,12 @@ mod tests {
             "https://example.org/p",
             RdfTerm::iri("https://example.org/o"),
         );
-        let bytes =
-            serialize_triples(std::slice::from_ref(&triple), NativeRdfFormat::NTriples).unwrap();
+        let bytes = serialize_triples(
+            std::slice::from_ref(&triple),
+            NativeRdfFormat::NTriples,
+            None,
+        )
+        .unwrap();
         let reparsed = parse_quads(&bytes, NativeRdfFormat::NTriples, None).unwrap();
         assert_eq!(reparsed.len(), 1);
         assert_eq!(reparsed[0].subject.to_string(), "<https://example.org/s>");
@@ -282,9 +321,90 @@ mod tests {
             "https://example.org/p",
             RdfTerm::literal(RdfLiteral::simple("hi")),
         );
-        let bytes =
-            serialize_triples(std::slice::from_ref(&triple), NativeRdfFormat::NTriples).unwrap();
+        let bytes = serialize_triples(
+            std::slice::from_ref(&triple),
+            NativeRdfFormat::NTriples,
+            None,
+        )
+        .unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("\"hi\""));
+    }
+
+    #[test]
+    fn serialize_triples_base_is_honored_per_the_format_registry() {
+        // A triple whose IRIs sit under the base: Turtle can express a base, so it
+        // declares one and relativizes; N-Triples cannot, so it answers with absolute
+        // IRIs rather than erroring. Same parameter, two grammars, one registry.
+        let triple = RdfTriple::new(
+            RdfTerm::iri("https://example.org/base/s"),
+            "https://example.org/base/p",
+            RdfTerm::iri("https://example.org/base/o"),
+        );
+        let base = Some("https://example.org/base/");
+
+        let turtle =
+            serialize_triples(std::slice::from_ref(&triple), NativeRdfFormat::Turtle, base)
+                .expect("turtle under a base");
+        let turtle = String::from_utf8(turtle).expect("utf-8");
+        assert!(
+            turtle.contains("@base <https://example.org/base/> ."),
+            "Turtle must declare the base, got: {turtle}"
+        );
+
+        let nt = serialize_triples(
+            std::slice::from_ref(&triple),
+            NativeRdfFormat::NTriples,
+            base,
+        )
+        .expect("n-triples under a base");
+        let nt = String::from_utf8(nt).expect("utf-8");
+        assert!(
+            nt.contains("<https://example.org/base/s>"),
+            "N-Triples must stay absolute under a base, got: {nt}"
+        );
+    }
+
+    #[test]
+    fn serialize_triples_without_a_base_is_unchanged_by_the_dataset_selection() {
+        // This core moved from `SerializeGraph::DefaultGraph` to the `Dataset`
+        // selection `serialize_dataset_to_format` applies, so that it could carry a
+        // base at all. The two must agree byte-for-byte on this input: every triple is
+        // a default-graph quad and the verbatim IR build leaves the RDF 1.2 statement
+        // layer empty, so neither the graph filter nor the star-layer drop can differ.
+        let triple = RdfTriple::new(
+            RdfTerm::iri("https://example.org/s"),
+            "https://example.org/p",
+            RdfTerm::literal(RdfLiteral::simple("v")),
+        );
+        for format in [
+            NativeRdfFormat::Turtle,
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::TriG,
+            NativeRdfFormat::TriX,
+            NativeRdfFormat::HexTuples,
+            NativeRdfFormat::JsonLd,
+            NativeRdfFormat::YamlLd,
+        ] {
+            let quads = vec![RdfQuad::new(
+                triple.subject.clone(),
+                triple.predicate.clone(),
+                triple.object.clone(),
+            )];
+            let dataset = flat_dataset_from_quads(&quads).expect("freeze");
+            let baseline = crate::serialize_dataset(
+                &dataset,
+                format.media_type(),
+                crate::SerializeGraph::DefaultGraph,
+            )
+            .expect("baseline serialize");
+            let current = serialize_triples(std::slice::from_ref(&triple), format, None)
+                .expect("current serialize");
+            assert_eq!(
+                current, baseline,
+                "{format:?} must be byte-identical to the previous default-graph selection"
+            );
+        }
     }
 
     #[test]

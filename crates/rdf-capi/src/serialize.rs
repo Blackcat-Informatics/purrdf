@@ -82,11 +82,38 @@ pub unsafe extern "C" fn purrdf_jsonld_context_free(context: *mut PurrdfJsonLdCo
 /// reusable compiled context. `yaml_schema_url` may be null and overrides the
 /// options document for YAML-LD when supplied.
 ///
+/// # `base_iri` — the EGRESS base, in the same slot and with the same contract it has on
+/// `purrdf_serialize`
+///
+/// `base_iri` is the document base the output is *written under*, sits immediately after
+/// `media_type` exactly as it does on `purrdf_serialize`, and may be null. It is not
+/// advisory and it is not discarded:
+///
+/// - **JSON-LD and YAML-LD express a base, so they emit it and relativize against it.**
+///   Both carry `emits_base` in the format registry: serializing under
+///   `"http://example.org/dir/"` writes `"@base": "http://example.org/dir/"` into the
+///   emitted `@context` (`'@base': …` for YAML-LD) and spells
+///   `http://example.org/dir/a` as `a`. A caller context composes with it rather than
+///   being dropped — the base joins as a later context member, which is JSON-LD 1.1's own
+///   composition.
+/// - **A context that already declares `@base` keeps it.** The document's own base wins
+///   over the caller-supplied one, matching the precedence the parse leg applies to an
+///   in-document `@context.@base`.
+/// - **A malformed base is a hard failure.** A `base_iri` that is not an absolute IRI
+///   returns `PURRDF_STATUS_SERIALIZE_ERROR` carrying the shared `iri-*` diagnostic code,
+///   rather than being absorbed into plausible-looking output.
+/// - **Null means absolute output**, not "guess a base": PurRDF never invents a retrieval
+///   IRI a C host did not supply.
+///
+/// This parameter exists so a C host is not the one surface that can express an egress
+/// base for Turtle but not for the JSON-LD family. There is no base-less variant of this
+/// entry point.
+///
 /// # Safety
 /// `dataset` and `media_type` must be live/non-null. If `options_json` is not
 /// null it points to `options_len` readable bytes and `context` must be null; if
 /// `options_json` is null, `options_len` must be zero and `context` must be live.
-/// Output pointers must be writable.
+/// `base_iri` must be null or a NUL-terminated C string. Output pointers must be writable.
 #[unsafe(no_mangle)]
 #[allow(
     clippy::too_many_arguments,
@@ -95,6 +122,7 @@ pub unsafe extern "C" fn purrdf_jsonld_context_free(context: *mut PurrdfJsonLdCo
 pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,
+    base_iri: *const c_char,
     options_json: *const u8,
     options_len: usize,
     context: *const PurrdfJsonLdContext,
@@ -130,13 +158,14 @@ pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
                 })?;
             }
             let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
             let format = classify(media).map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
             })?;
             let outcome = serialize_dataset_to_format_with_jsonld_options(
                 PurrdfDataset::dataset(dataset),
                 format,
-                None,
+                base_iri,
                 &options,
             )
             .map_err(|diagnostic| {

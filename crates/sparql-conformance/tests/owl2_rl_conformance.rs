@@ -135,16 +135,13 @@ fn no_vendored_document_needs_the_harness_base() {
     ];
 
     /// Whether `value` carries a scheme, i.e. is an absolute IRI.
+    ///
+    /// Decided by the workspace's one IRI layer rather than by a local retyping
+    /// of the RFC 3986 §3.1 scheme production — a second copy of that grammar is
+    /// free to drift from the one the parsers under test actually apply, which
+    /// would make this sweep agree with nothing.
     fn is_absolute(value: &str) -> bool {
-        let Some(colon) = value.find(':') else {
-            return false;
-        };
-        let (scheme, _) = value.split_at(colon);
-        !scheme.is_empty()
-            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        purrdf::iri::parse(value).is_ok_and(|iri| iri.has_scheme())
     }
 
     // EVERY vendored document, not the case documents alone. Sweeping `[premise, target]`

@@ -734,15 +734,30 @@ fn malformed_import_pairs_are_usage_errors() {
     );
 }
 
-/// `--base` resolves relative IRIs in the data graph, the ShExC schema and the shape map at
-/// once, and the unbased run is the negative control that keeps the positive honest.
+// ── Three documents, three bases ───────────────────────────────────────────────
+//
+// `shex` reads a data graph, a schema and a shape map, and a base IRI belongs to ONE
+// document. `--base` names the data graph's (and the shape map's, which is argv text
+// with no retrieval IRI at all); the schema is independent and resolves against its
+// own `file://` retrieval IRI — the identical rule `validate` states for its shapes
+// graph. These pin that the three no longer share one base by accident.
+
+/// `--base` resolves relative IRIs in the data graph and the shape map at once, and the
+/// unbased run is the negative control that keeps the positive honest.
+///
+/// The schema declares its own `BASE`, which RFC-3986 §5.1.1 puts above the retrieval IRI
+/// — that is what makes a schema self-contained, and it is the only way all three documents
+/// can agree on one namespace now that `--base` no longer reaches the schema.
 #[test]
 fn base_resolves_relative_iris_everywhere_it_applies() {
     let dir = tempfile::tempdir().expect("tempdir");
     let schema = write_file(
         dir.path(),
         "relative.shex",
-        "<UserShape> { <age> <http://www.w3.org/2001/XMLSchema#integer> }\n",
+        concat!(
+            "BASE <http://example.org/>\n",
+            "<UserShape> { <age> <http://www.w3.org/2001/XMLSchema#integer> }\n",
+        ),
     );
     // Turtle rather than N-Triples: N-Triples has no relative-IRI syntax at all, so `--base`
     // would have nothing to resolve there.
@@ -812,6 +827,198 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
         !stdout(&unbased).contains("\"node\""),
         "no conformance verdict may be reported over unresolved terms:\n{}",
         stdout(&unbased)
+    );
+}
+
+/// The `file://` IRI of a path in `dir`, as the CLI derives it (RFC-8089, canonicalized).
+fn file_iri(dir: &Path, name: &str) -> String {
+    let canonical = std::fs::canonicalize(dir).expect("the temp dir canonicalizes");
+    format!(
+        "file://{}/{name}",
+        canonical.to_str().expect("temp path is valid UTF-8")
+    )
+}
+
+/// A schema FILE resolves its relative IRIs against its own retrieval IRI, with no `--base`
+/// anywhere on the command line.
+///
+/// This is the reproduction. `shex` used to hand the DATA graph's `--base` to the schema and
+/// call `source::effective_base` for neither, so this exact command — a self-contained schema
+/// and data graph sitting beside each other — hard-failed with `iri-relative-no-base` even
+/// though the CLI was holding both documents' retrieval IRIs the whole time.
+#[test]
+fn a_schema_file_resolves_relative_iris_against_its_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "relative.shex", "<UserShape> { <age> . }\n");
+    let data = write_file(dir.path(), "relative.ttl", "<alice> <age> \"nope\" .\n");
+    let map = format!(
+        "<{}>@<{}>",
+        file_iri(dir.path(), "alice"),
+        file_iri(dir.path(), "UserShape")
+    );
+
+    let out = run(&["shex", "--schema", &schema, "--data", &data, &map]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"status\":\"conformant\""),
+        "the schema and the data resolved into the same directory namespace:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains(&file_iri(dir.path(), "UserShape")),
+        "the shape is named by its RESOLVED IRI:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stdout(&out).contains("<UserShape>"),
+        "a bare relative reference must never reach the result map:\n{}",
+        stdout(&out)
+    );
+}
+
+/// The DATA graph's `--base` must NOT re-home the schema's relative IRIs.
+///
+/// `--base` names the base of the data graph, and the schema is an independent document — the
+/// rule `validate` already states for its shapes graph. `shex` broke it: one `--base` reached
+/// all three documents at once, so supplying one to resolve `<alice>` in the data silently
+/// moved every shape in the schema onto the data document's namespace.
+#[test]
+fn a_data_graph_base_does_not_leak_into_the_schema() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "relative.shex", "<UserShape> { <age> . }\n");
+    let relative_data = "<alice> <age> \"nope\" .\n";
+    let by_retrieval_iri = format!(
+        "<http://example.org/alice>@<{}>",
+        file_iri(dir.path(), "UserShape")
+    );
+
+    // The schema kept its own namespace, so the shape is still reachable under the file://
+    // IRI — and the constraint it carries is `file://…/age`, which the re-homed data does not
+    // have, so the node is decided NONCONFORMANT rather than silently matching.
+    let out = pipe(
+        &[
+            "shex",
+            "--schema",
+            &schema,
+            "--data",
+            "-",
+            "--from",
+            "turtle",
+            "--base",
+            "http://example.org/",
+            &by_retrieval_iri,
+        ],
+        relative_data,
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&file_iri(dir.path(), "UserShape")),
+        "the shape keeps the schema document's namespace:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("\"status\":\"nonconformant\""),
+        "the schema's `file://…/age` constraint is not the data's `http://example.org/age`:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stdout(&out).contains("\"shape\":\"<http://example.org/UserShape>\""),
+        "--base must not move the schema's shapes onto the data document's base:\n{}",
+        stdout(&out)
+    );
+}
+
+/// A ShExJ schema file gets the same retrieval base a ShExC one does.
+///
+/// ShExJ is a JSON-LD dialect, so its IRI-valued members are document-relative too; a base
+/// that reached only one of the two syntaxes would make the same schema mean two things.
+#[test]
+fn a_shexj_schema_file_resolves_against_its_retrieval_iri_too() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "relative.shexj",
+        concat!(
+            r#"{"type":"Schema","shapes":[{"type":"Shape","id":"UserShape","#,
+            r#""expression":{"type":"TripleConstraint","predicate":"age"}}]}"#,
+        ),
+    );
+    let data = write_file(dir.path(), "relative.ttl", "<alice> <age> \"nope\" .\n");
+    let map = format!(
+        "<{}>@<{}>",
+        file_iri(dir.path(), "alice"),
+        file_iri(dir.path(), "UserShape")
+    );
+
+    let out = run(&["shex", "--schema", &schema, "--data", &data, &map]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("\"status\":\"conformant\""),
+        "the ShExJ document's relative members resolved:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains(&file_iri(dir.path(), "UserShape")),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// A schema on STDIN has no retrieval IRI, so a relative reference in it is refused — and
+/// `--base` cannot rescue it, because `--base` is the data graph's.
+///
+/// The negative control that matters most: with no base derivable, an unresolved shape label
+/// and predicate would turn every constraint in the schema into a vacuous one.
+#[test]
+fn a_schema_on_stdin_with_a_relative_iri_is_refused_not_vacuously_decided() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    for extra in [Vec::new(), vec!["--base", "http://example.org/"]] {
+        let mut args = vec!["shex", "--schema", "-", "--schema-from", "shexc"];
+        args.extend_from_slice(&["--data", &data]);
+        args.extend_from_slice(&extra);
+        args.push(ALICE);
+        let out = pipe(&args, "<UserShape> { <age> . }\n");
+
+        assert_eq!(
+            code(&out),
+            1,
+            "{extra:?}: a schema that cannot resolve must fail: {}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("iri-relative-no-base"),
+            "{extra:?}: the refusal carries the actionable code: {}",
+            stderr(&out)
+        );
+        assert!(
+            stdout(&out).is_empty(),
+            "{extra:?}: no verdict is invented:\n{}",
+            stdout(&out)
+        );
+    }
+
+    // A `BASE` directive makes the piped schema self-contained, exactly as an `@base` does
+    // for a shapes graph on stdin.
+    let based = pipe(
+        &[
+            "shex",
+            "--schema",
+            "-",
+            "--schema-from",
+            "shexc",
+            "--data",
+            &data,
+            "<http://example.org/alice>@<http://example.org/UserShape>",
+        ],
+        "BASE <http://example.org/>\n<UserShape> { <age> . }\n",
+    );
+    assert_eq!(code(&based), 0, "{}", stderr(&based));
+    assert!(
+        stdout(&based).contains("\"status\":\"conformant\""),
+        "{}",
+        stdout(&based)
     );
 }
 
