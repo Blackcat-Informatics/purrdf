@@ -124,7 +124,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 18 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 19 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -149,7 +149,7 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh

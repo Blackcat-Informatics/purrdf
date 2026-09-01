@@ -177,6 +177,13 @@ pub mod datalog {
     pub use purrdf_datalog::*;
 }
 
+/// Deterministic full-text search over RDF 1.2 literals ([`purrdf_text`]): an
+/// in-memory inverted index, exact fixed-point BM25 ranking, and the relations a
+/// caller registers on [`sparql`]'s property-function seam under its own IRIs.
+pub mod text {
+    pub use purrdf_text::*;
+}
+
 /// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
 /// shapes+data pair to a source-traced, byte-deterministic SARIF log.
 pub mod validate {

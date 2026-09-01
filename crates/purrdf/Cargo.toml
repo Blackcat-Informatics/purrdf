@@ -47,4 +47,9 @@ purrdf-entail = { workspace = true }
 # edge a consumer could reach those values but never name their types from the
 # umbrella alone, which is exactly the reach-into-a-sub-crate this crate forbids.
 purrdf-datalog = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants ranked full-text retrieval registers this crate's relations against the
+# evaluator's property-function seam, and must be able to name `TextIndex`,
+# `TextIndexConfig` and `Scored` while depending on `purrdf` alone.
+purrdf-text = { workspace = true }
 purrdf-validate = { workspace = true }

@@ -49,9 +49,16 @@ unicode-normalization.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
+# The report-only profiling harness in `benches/`. Never a gate: no measurement
+# here asserts a timing, and behaviour is fixed by the test suite instead.
+criterion.workspace = true
 # Colored line-diffs on assert_eq! failure (repo convention).
 pretty_assertions.workspace = true
 # Property tests: encoding injectivity, and the fixed-point arithmetic laws.
 proptest.workspace = true
 # Solution-sequence shapes for the ranked-row tests.
 purrdf-sparql-results.workspace = true
+
+[[bench]]
+name = "search"
+harness = false
