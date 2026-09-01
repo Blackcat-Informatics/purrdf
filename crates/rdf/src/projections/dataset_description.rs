@@ -651,19 +651,33 @@ pub struct RdfDescriptionProjection {
 
 /// Package an already-materialized RDF 1.2 description graph in any registered syntax.
 ///
+/// `document_base_iri` is the IRI the emitted document is published at. A syntax whose
+/// registry row sets `emits_base` (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) declares it
+/// and relativizes against it; a syntax that cannot express one emits absolute IRIs, which
+/// is decided once by the registry rather than here. `None` means the caller named no
+/// publication IRI, so no base declaration is emitted — never a base this layer invented.
+///
 /// # Errors
 ///
 /// Returns a typed configuration, integrity, codec, package, or resource-limit error
 /// when the artifact stem is unsafe, the dataset contains named graphs, the selected
-/// syntax would lower RDF 1.2 content, serialization fails, or package bounds are
-/// exceeded.
+/// syntax would lower RDF 1.2 content, the base is not an absolute IRI, serialization
+/// fails, or package bounds are exceeded.
 pub fn serialize_rdf_description(
     dataset: Arc<RdfDataset>,
     format: NativeRdfFormat,
     artifact_stem: &str,
+    document_base_iri: Option<&str>,
     limits: ProjectionLimits,
 ) -> Result<RdfDescriptionProjection, ProjectionError> {
-    serialize_description(dataset, LossLedger::new(), format, artifact_stem, limits)
+    serialize_description(
+        dataset,
+        LossLedger::new(),
+        format,
+        artifact_stem,
+        document_base_iri,
+        limits,
+    )
 }
 
 /// Serialize a default-graph RDF description without lowering any RDF 1.2 content.
@@ -671,11 +685,17 @@ pub fn serialize_rdf_description(
 /// The description engines deliberately emit one default graph, so every registered
 /// syntax carries the same graph. Syntaxes unable to carry a produced RDF 1.2
 /// statement row or directional literal fail instead of silently lowering it.
+///
+/// `document_base_iri` is threaded straight into the codec, which is the single place the
+/// egress base decision is taken (validate always, apply where the registry says the
+/// syntax can write a base directive). This projection lane deliberately does not
+/// re-decide either half.
 pub(crate) fn serialize_description(
     dataset: Arc<RdfDataset>,
     loss_ledger: LossLedger,
     format: NativeRdfFormat,
     artifact_stem: &str,
+    document_base_iri: Option<&str>,
     limits: ProjectionLimits,
 ) -> Result<RdfDescriptionProjection, ProjectionError> {
     validate_artifact_stem(artifact_stem)?;
@@ -685,8 +705,8 @@ pub(crate) fn serialize_description(
             "an RDF dataset description must contain only the default graph",
         ));
     }
-    let serialized =
-        serialize_dataset_to_format(dataset.as_ref(), format, None).map_err(|error| {
+    let serialized = serialize_dataset_to_format(dataset.as_ref(), format, document_base_iri)
+        .map_err(|error| {
             ProjectionError::integrity(format!(
                 "native {} serialization of RDF dataset description failed: {error}",
                 format.id()
@@ -781,6 +801,7 @@ mod tests {
                 LossLedger::new(),
                 format,
                 "description",
+                None,
                 limits(),
             )
             .expect("serialize description");
@@ -789,6 +810,7 @@ mod tests {
                 LossLedger::new(),
                 format,
                 "description",
+                None,
                 limits(),
             )
             .expect("serialize description again");
@@ -800,6 +822,87 @@ mod tests {
             assert_eq!(
                 first.package.to_ustar().expect("first archive"),
                 second.package.to_ustar().expect("second archive")
+            );
+        }
+    }
+
+    /// A projection that emits RDF text can DECLARE its own document base, and the
+    /// declaration is attributable to the argument: the same graph, the same syntax, and
+    /// the same everything else with `None` emits no base at all.
+    ///
+    /// Whether a base is declared is the format registry's `emits_base` decision, so the
+    /// assertion is made over every registered syntax and split on that column rather than
+    /// on a hand-kept list of syntaxes.
+    #[test]
+    fn a_description_declares_the_document_base_it_was_given() {
+        const BASE: &str = "https://example.org/publications/description.ttl";
+
+        for format in NativeRdfFormat::all() {
+            let based = serialize_description(
+                default_graph(),
+                LossLedger::new(),
+                format,
+                "description",
+                Some(BASE),
+                limits(),
+            )
+            .expect("serialize with a base");
+            let unbased = serialize_description(
+                default_graph(),
+                LossLedger::new(),
+                format,
+                "description",
+                None,
+                limits(),
+            )
+            .expect("serialize without a base");
+
+            let based_bytes = based.package.get(&based.artifact_path).expect("artifact");
+            let unbased_bytes = unbased
+                .package
+                .get(&unbased.artifact_path)
+                .expect("artifact");
+            let based_text = String::from_utf8_lossy(based_bytes);
+            let unbased_text = String::from_utf8_lossy(unbased_bytes);
+
+            assert!(
+                !unbased_text.contains(BASE),
+                "{format:?} must not invent a base that was never supplied:\n{unbased_text}"
+            );
+            if format.emits_base() {
+                assert!(
+                    based_text.contains(BASE),
+                    "{format:?} sets emits_base, so it must declare the supplied base:\n{based_text}"
+                );
+                assert_ne!(
+                    based_bytes, unbased_bytes,
+                    "{format:?} must emit different bytes with and without a base"
+                );
+            } else {
+                assert_eq!(
+                    based_bytes, unbased_bytes,
+                    "{format:?} cannot express a base, so the bytes must be identical"
+                );
+            }
+        }
+    }
+
+    /// A base that is not an absolute IRI is refused, whatever the target syntax — the
+    /// caller is told their base is wrong rather than having it silently absorbed.
+    #[test]
+    fn a_non_absolute_document_base_is_refused() {
+        for format in NativeRdfFormat::all() {
+            assert!(
+                serialize_description(
+                    default_graph(),
+                    LossLedger::new(),
+                    format,
+                    "description",
+                    Some("/not/absolute"),
+                    limits(),
+                )
+                .is_err(),
+                "{format:?} must refuse a relative document base"
             );
         }
     }
@@ -819,6 +922,7 @@ mod tests {
                 LossLedger::new(),
                 NativeRdfFormat::TriG,
                 "description",
+                None,
                 limits(),
             )
             .is_err()
@@ -829,6 +933,7 @@ mod tests {
                 LossLedger::new(),
                 NativeRdfFormat::Turtle,
                 "../unsafe",
+                None,
                 limits(),
             )
             .is_err()
@@ -853,6 +958,7 @@ mod tests {
                 Arc::clone(&directional),
                 NativeRdfFormat::TriX,
                 "directional",
+                None,
                 limits(),
             )
             .is_err()
@@ -862,6 +968,7 @@ mod tests {
                 directional,
                 NativeRdfFormat::Turtle,
                 "directional",
+                None,
                 limits(),
             )
             .is_ok()
@@ -881,13 +988,20 @@ mod tests {
                 Arc::clone(&statement),
                 NativeRdfFormat::RdfXml,
                 "statement",
+                None,
                 limits(),
             )
             .is_err()
         );
         assert!(
-            serialize_rdf_description(statement, NativeRdfFormat::Turtle, "statement", limits(),)
-                .is_ok()
+            serialize_rdf_description(
+                statement,
+                NativeRdfFormat::Turtle,
+                "statement",
+                None,
+                limits()
+            )
+            .is_ok()
         );
     }
 
@@ -908,6 +1022,7 @@ mod tests {
             dataset,
             NativeRdfFormat::Turtle,
             "description",
+            None,
             shallow_limits,
         )
         .expect_err("term-depth limit");

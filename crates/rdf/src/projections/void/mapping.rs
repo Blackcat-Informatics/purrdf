@@ -59,6 +59,7 @@ pub fn project_void<D: DatasetView>(
         LossLedger::new(),
         config.format(),
         "void",
+        config.document_base_iri(),
         config.limits(),
     )
 }

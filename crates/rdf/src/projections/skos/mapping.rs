@@ -255,12 +255,19 @@ impl<'a> Projector<'a> {
         self.enforce_record_budget()?;
 
         let dataset = self.freeze_output()?;
-        let serialized = serialize_dataset_to_format(&*dataset, NativeRdfFormat::Turtle, None)
-            .map_err(|error| {
-                ProjectionError::integrity(format!(
-                    "native Turtle serialization of SKOS view failed: {error}"
-                ))
-            })?;
+        // Turtle's registry row sets `emits_base`, so a configured document base is
+        // DECLARED here and the emitted IRIs relativize against it. `None` means the
+        // caller named no publication IRI, not that this seam threw one away.
+        let serialized = serialize_dataset_to_format(
+            &*dataset,
+            NativeRdfFormat::Turtle,
+            self.config.document_base_iri(),
+        )
+        .map_err(|error| {
+            ProjectionError::integrity(format!(
+                "native Turtle serialization of SKOS view failed: {error}"
+            ))
+        })?;
         if serialized.statement_rows_dropped != 0 || serialized.directional_literals_dropped != 0 {
             return Err(ProjectionError::integrity(
                 "native Turtle serialization unexpectedly dropped SKOS dataset content",
@@ -1036,6 +1043,54 @@ mod tests {
             max_records,
         )
         .expect("SKOS config")
+    }
+
+    /// A SKOS projection emits Turtle, which CAN express a base, so a configured document
+    /// base is declared and the emitted IRIs relativize against it. The no-base control
+    /// alongside makes the declaration attributable to the argument rather than to
+    /// anything else in the fixture.
+    #[test]
+    fn the_turtle_declares_the_configured_document_base() {
+        let dataset = fixture(false);
+
+        let unbased = project_skos(&*dataset, &config(SkosGraphSelection::DefaultGraph, 1_000))
+            .expect("SKOS projection without a base");
+        let unbased_turtle = String::from_utf8(unbased.turtle).expect("UTF-8 Turtle");
+        assert!(
+            !unbased_turtle.contains("@base"),
+            "no base was configured, so none may be declared:\n{unbased_turtle}"
+        );
+        assert!(
+            unbased_turtle.contains(&format!("<{DATA}c1>")),
+            "without a base the concept IRIs are absolute:\n{unbased_turtle}"
+        );
+
+        let based_config = config(SkosGraphSelection::DefaultGraph, 1_000)
+            .with_document_base_iri(Some(format!("{DATA}scheme.ttl")))
+            .expect("an absolute document base is accepted");
+        let based = project_skos(&*dataset, &based_config).expect("SKOS projection with a base");
+        let based_turtle = String::from_utf8(based.turtle).expect("UTF-8 Turtle");
+        assert!(
+            based_turtle.contains(&format!("@base <{DATA}scheme.ttl>")),
+            "the configured base must be declared:\n{based_turtle}"
+        );
+        assert!(
+            based_turtle.contains("<c1>"),
+            "IRIs under the base must relativize against it:\n{based_turtle}"
+        );
+
+        // Same graph either way: the base changes the SPELLING, never the denotation.
+        assert!(datasets_isomorphic(&unbased.dataset, &based.dataset));
+    }
+
+    /// A document base that is not an absolute IRI is refused at configuration time.
+    #[test]
+    fn a_non_absolute_document_base_is_refused() {
+        assert!(
+            config(SkosGraphSelection::DefaultGraph, 1_000)
+                .with_document_base_iri(Some("scheme.ttl".to_owned()))
+                .is_err()
+        );
     }
 
     fn push_iri_quad(
