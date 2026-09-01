@@ -107,6 +107,23 @@
 //! `--schema -` keeps the hard error: a piped schema has no retrieval IRI, so a relative
 //! reference in it is the RFC-3986 §5.1.4 failure naming `BASE`, never a vacuous constraint.
 //!
+//! ## `--base` is never inert here, so it is never refused
+//!
+//! Every other subcommand refuses a `--base` no leg of the run can spend
+//! ([`crate::format::refuse_unconsumable_base`], decided off the format registry's
+//! `admits_relative_iri` / `emits_base` columns). `shex` does not, because its base has a
+//! consumer no format row can name and that consumer is always present: `MAP` is a REQUIRED
+//! argument, it is command-line text with no retrieval IRI, and the ShapeMap grammar admits
+//! relative IRI references (`<alice>@<UserShape>`). So a base handed to this command always
+//! has somewhere to be spent, whatever `--data`'s syntax is.
+//!
+//! That includes a **pack or GTS** data graph. A container stores fully-resolved terms and
+//! cannot use a base, but the shape map still can — the same one-live-leg reasoning that
+//! keeps `convert --base X --to ntriples` working from a relative-admitting source. This lane
+//! used to refuse that pairing on the data source's syntax alone, which rejected the entirely
+//! legitimate "verified pack plus a relative shape map" and was justified by a base reaching
+//! the SCHEMA — a leg that no longer exists now that the schema carries its own retrieval IRI.
+//!
 //! # No ledger, and nothing transcoded
 //!
 //! The data graph is read through the pipeline's own format resolution straight into the
@@ -160,7 +177,8 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     refuse_two_stdins(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
-    format::refuse_base_with_container(data_format, options.base, "the --data source")?;
+    // No `--base` refusal here, unlike every other subcommand: see the module documentation
+    // for why this run's base can never be inert.
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
     let schema_base = schema_base(options.schema)?;
