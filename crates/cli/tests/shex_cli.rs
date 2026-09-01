@@ -601,6 +601,71 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
     );
 }
 
+/// A prefixed name in the `MAP` is refused with the GRAMMAR's reason, not a bare syntax error.
+///
+/// `ex:UserShape` is a natural thing to try, because the operator just wrote `PREFIX ex:` in
+/// the schema this very command loaded. It is nonetheless not ShapeMap: the grammar's `iri`
+/// production is `IRIREF` only — the specification's source carries the `| prefixedName`
+/// alternative commented out — and the one paragraph that mentions prefixes calls resolving
+/// shape references against the schema's prefixes "common practice" that "this specification
+/// does not specify". So the answer is a refusal that says all of that and names the remedy,
+/// rather than leaving the operator to guess at "syntax error".
+#[test]
+fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    // The schema really does declare `ex:`, so this is the tempting invocation.
+    assert!(SCHEMA.contains("PREFIX ex: <http://example.org/>"));
+    let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "ex:alice@ex:UserShape",
+    ]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let why = stderr(&out);
+    assert!(
+        why.contains("`ex:alice` is a prefixed name"),
+        "the refusal quotes what it rejected: {why}"
+    );
+    assert!(
+        why.contains("IRIREF only"),
+        "and names the grammar production: {why}"
+    );
+    assert!(
+        why.contains("does not") && why.contains("specify"),
+        "and says the spec declined to define the prefix map: {why}"
+    );
+    assert!(
+        why.contains("Write the IRI in full"),
+        "and names the remedy: {why}"
+    );
+    assert!(stdout(&out).is_empty(), "no verdict is invented");
+
+    // The remedy actually works, in both halves of the association.
+    let full = run(&["shex", "--schema", &schema, "--data", &data, ALICE]);
+    assert_eq!(code(&full), 0, "{}", stderr(&full));
+    assert!(stderr(&full).contains("shex nonconformant 1\n"));
+
+    // And so does the relative form the message offers, against `--base`.
+    let relative = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "--base",
+        "http://example.org/",
+        "<alice>@<UserShape>",
+    ]);
+    assert_eq!(code(&relative), 0, "{}", stderr(&relative));
+    assert!(stderr(&relative).contains("shex nonconformant 1\n"));
+}
+
 /// A schema that violates the ShEx 2.1 §5.7 structural requirements is refused, naming the
 /// section, rather than validated against a dangling reference.
 #[test]

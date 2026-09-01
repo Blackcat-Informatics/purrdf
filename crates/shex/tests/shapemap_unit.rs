@@ -244,6 +244,152 @@ fn resolve_then_validate() {
     );
 }
 
+// ── Prefixed names ─────────────────────────────────────────────────────────────
+//
+// The ShapeMap grammar's `[136s] iri` production is IRIREF alone — the
+// `| prefixedName` alternative is commented out in the specification's source, as
+// are `shapeSpec`'s ATPNAME arms — and the one paragraph mentioning prefixes says
+// resolving shape references against the schema's context is "common practice"
+// that "this specification does not specify". So `ex:S1` is refused, and the
+// refusal has to say WHY rather than leave a user guessing at a syntax error.
+
+/// Every IRI position names the real reason for rejecting a prefixed name.
+#[test]
+fn a_prefixed_name_is_refused_with_the_grammar_reason_in_every_iri_position() {
+    for map_src in [
+        // shape label
+        "<http://a.example/s1>@ex:S1",
+        // node
+        "ex:alice@<http://a.example/S>",
+        // predicate, in both triple-pattern directions
+        "{FOCUS ex:p _}@<http://a.example/S>",
+        "{_ ex:p FOCUS}@<http://a.example/S>",
+        // datatype of a literal node
+        r#""7"^^xsd:integer@<http://a.example/S>"#,
+    ] {
+        let err = parse_shape_map(map_src, Some("http://a.example/"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("is a prefixed name") && err.contains("IRIREF only"),
+            "`{map_src}` must name the grammar reason: {err}"
+        );
+        assert!(
+            err.contains("does not") && err.contains("specify"),
+            "`{map_src}` must say the spec declined to define the prefix map: {err}"
+        );
+        assert!(
+            err.contains("Write the IRI in full"),
+            "`{map_src}` must name the remedy: {err}"
+        );
+    }
+}
+
+/// A literal's `^^` datatype is an IRI position like any other.
+///
+/// It was the one caller that did not pre-check the opening `<`, so `parse_iri` read the
+/// datatype's first character as the bracket and ran to end-of-input: `"7"^^xsd:integer`
+/// reported `unterminated IRI`, blaming the wrong thing entirely. The bracket check now
+/// lives in `parse_iri`, so a non-IRI datatype is diagnosed where it goes wrong.
+#[test]
+fn a_literal_datatype_is_diagnosed_as_an_iri_position() {
+    let prefixed = parse_shape_map(r#""7"^^xsd:integer@<http://a.example/S>"#, None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        prefixed.contains("`xsd:integer` is a prefixed name"),
+        "the datatype's real defect is named: {prefixed}"
+    );
+    assert!(
+        !prefixed.contains("unterminated"),
+        "and it is no longer blamed on a runaway bracket scan: {prefixed}"
+    );
+
+    let bare = parse_shape_map(r#""7"^^integer@<http://a.example/S>"#, None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        bare.contains("expected an IRI in angle brackets"),
+        "a bare datatype token names the IRI position too: {bare}"
+    );
+
+    // The admitted form is unchanged.
+    let ok = parse_shape_map(
+        r#""7"^^<http://www.w3.org/2001/XMLSchema#integer>@<http://a.example/S>"#,
+        None,
+    )
+    .expect("an angle-bracketed datatype parses");
+    assert_eq!(
+        ok.0[0].node,
+        NodeSelector::Node(TermValue::typed_literal(
+            "7",
+            "http://www.w3.org/2001/XMLSchema#integer"
+        ))
+    );
+}
+
+/// The refusal quotes the prefixed name it rejected, including the empty-prefix
+/// form (`PNAME_NS ::= PN_PREFIX? ':'`) and a bare namespace.
+#[test]
+fn the_refusal_quotes_the_offending_prefixed_name() {
+    for (map_src, quoted) in [
+        ("<http://a.example/s1>@ex:S1", "`ex:S1`"),
+        ("<http://a.example/s1>@:S1", "`:S1`"),
+        ("<http://a.example/s1>@ex:", "`ex:`"),
+    ] {
+        let err = parse_shape_map(map_src, None).unwrap_err().to_string();
+        assert!(err.contains(quoted), "`{map_src}`: {err}");
+    }
+}
+
+/// A prefixed name whose prefix spells a keyword is a prefixed name, not the
+/// keyword followed by junk — which is why the check runs BEFORE `START` and `a`.
+#[test]
+fn a_keyword_shaped_prefix_is_read_as_a_prefixed_name() {
+    for map_src in [
+        "<http://a.example/s1>@START:S",
+        "{FOCUS a:p _}@<http://a.example/S>",
+    ] {
+        let err = parse_shape_map(map_src, None).unwrap_err().to_string();
+        assert!(
+            err.contains("is a prefixed name"),
+            "`{map_src}` must not be read as the keyword plus trailing input: {err}"
+        );
+    }
+}
+
+/// The forms the grammar DOES admit keep working, unchanged — the detector must
+/// not swallow `_:label`, `START`, `a`, or an angle-bracketed IRI.
+#[test]
+fn the_admitted_forms_are_untouched_by_the_prefixed_name_check() {
+    let start = parse_shape_map("<http://a.example/s1>@START", None).expect("START still parses");
+    assert_eq!(start.0[0].shape, ShapeSelector::Start);
+
+    // `_:label` is BLANK_NODE_LABEL, not a prefixed name, in every term position.
+    let blank = parse_shape_map("_:b1@<http://a.example/S>", None).expect("a blank node parses");
+    assert_eq!(blank.0[0].node, NodeSelector::Node(TermValue::blank("b1")));
+    let anchored = parse_shape_map(&format!("{{_:b1 <{P1}> FOCUS}}@<http://a.example/S>"), None)
+        .expect("a blank-node subject anchor parses");
+    assert!(matches!(
+        anchored.0[0].node,
+        NodeSelector::ObjectOf {
+            subject: Some(TermValue::Blank { .. }),
+            ..
+        }
+    ));
+
+    // `a` is still rdf:type, and a relative IRI still resolves against the base.
+    let typed = parse_shape_map(
+        "{FOCUS a <http://a.example/C>}@<S>",
+        Some("http://a.example/"),
+    )
+    .expect("`a` and a relative shape label parse");
+    assert_eq!(
+        typed.0[0].shape,
+        ShapeSelector::Label("http://a.example/S".to_owned())
+    );
+}
+
 // ── A shape the schema does not declare ────────────────────────────────────────
 //
 // Undefined in both specifications: ShEx 2.1 §5.7's reference requirement binds a
