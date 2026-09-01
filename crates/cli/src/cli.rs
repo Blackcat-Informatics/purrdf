@@ -385,6 +385,11 @@ pub(crate) enum Command {
         /// has no witness and an unbounded depth is a stack-overflow abort. `mode=walk`
         /// enumerates every simple-prefix witness (exponential in the worst case);
         /// `mode=shortest` yields one shortest witness per reachable pair (polynomial).
+        ///
+        /// `;` is legal inside an IRI, so the separator is escapable: write `\;` for a
+        /// literal semicolon and `\\` for a literal backslash. Any other backslash escape
+        /// is refused rather than passed through, so a typo cannot become a predicate that
+        /// registers and then silently matches nothing.
         #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
         path_relation: Vec<crate::path_relation::PathRelationSpec>,
         /// The SPARQL query text.

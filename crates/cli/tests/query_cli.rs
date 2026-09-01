@@ -1883,6 +1883,103 @@ fn a_path_relation_over_an_edgeless_predicate_answers_nothing() {
     );
 }
 
+/// A predicate IRI carrying the field separator is EXPRESSIBLE, and traverses.
+///
+/// `;` is a sub-delimiter RFC 3987 permits inside an IRI, and this binary's own parser
+/// binds such a predicate without complaint — so a `--path-relation` grammar that split
+/// on every `;` refused a legal predicate outright. The refusal was also misattributed:
+/// `forward=http://example.org/p;v=1` reported an unknown key `v`, pointing the operator
+/// at a phantom typo. And the obvious workaround was worse than the refusal, because
+/// percent-encoding the semicolon names a DIFFERENT IRI that the dataset does not carry,
+/// so the spec registered and then answered zero rows with a success exit for a graph
+/// that has the edge.
+///
+/// Both halves are pinned here: the escaped spelling walks the real edges, and the
+/// percent-encoded spelling — which is a different predicate, and correctly finds
+/// nothing — is no longer the only way to write one.
+#[test]
+fn a_predicate_containing_the_field_separator_is_expressible_when_escaped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "semi.ttl",
+        "<http://example.org/a> <http://example.org/p;v=1> <http://example.org/b> .\n\
+         <http://example.org/b> <http://example.org/p;v=1> <http://example.org/c> .\n",
+    );
+
+    let escaped = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &format!(
+            "iri={WALK_IRI};forward=http://example.org/p\\;v=1;min-hops=1;max-hops=4;\
+             max-paths-per-seed=64;max-expansions=999;mode=walk"
+        ),
+        &walk_query("?len ?step"),
+    ]);
+    assert!(
+        escaped.status.success(),
+        "an escaped separator is a literal semicolon; stderr:\n{}",
+        stderr(&escaped)
+    );
+    assert_eq!(
+        stdout(&escaped),
+        "end,len,step,node\r\n\
+         http://example.org/b,1,1,http://example.org/b\r\n\
+         http://example.org/c,2,1,http://example.org/b\r\n\
+         http://example.org/c,2,2,http://example.org/c\r\n",
+        "the semicolon-bearing predicate traversed both edges"
+    );
+
+    // The UNESCAPED spelling still splits, and still refuses — it must not silently
+    // become the escaped one, or the escape would be decoration.
+    let unescaped = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &format!(
+            "iri={WALK_IRI};forward=http://example.org/p;v=1;min-hops=1;max-hops=4;\
+             max-paths-per-seed=64;max-expansions=999;mode=walk"
+        ),
+        &walk_query("?len ?step"),
+    ]);
+    assert_eq!(
+        unescaped.status.code(),
+        Some(2),
+        "an unescaped separator still splits into an unknown key; stdout:\n{}",
+        stdout(&unescaped)
+    );
+
+    // An undefined escape is refused rather than absorbed into the predicate, so a typo
+    // cannot register and then answer nothing.
+    let bad_escape = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &format!(
+            "iri={WALK_IRI};forward=http://example.org/p\\nv;min-hops=1;max-hops=4;\
+             max-paths-per-seed=64;max-expansions=999;mode=walk"
+        ),
+        &walk_query("?len ?step"),
+    ]);
+    assert_eq!(
+        bad_escape.status.code(),
+        Some(2),
+        "an undefined escape is refused; stdout:\n{}",
+        stdout(&bad_escape)
+    );
+}
+
 /// An envelope the ENGINE refuses is refused whichever lane it reaches, and the message
 /// names both the relation and the kernel's own diagnostic.
 #[test]

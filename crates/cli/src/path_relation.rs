@@ -34,6 +34,28 @@
 //! least one must appear (they are the step's ordered alternation of directed
 //! predicates); every other key appears exactly once and none of them has a default.
 //!
+//! # The separator is escapable, because it is a legal IRI character
+//!
+//! `;` is a sub-delimiter that RFC 3987 permits inside an IRI path, query or fragment,
+//! and this project's own parser binds such an IRI without complaint. A separator with no
+//! escape would therefore make a legal predicate INEXPRESSIBLE — the spec would be
+//! refused, and the obvious workaround (percent-encoding the semicolon) names a
+//! *different* IRI, one the dataset does not carry, so it would register and then answer
+//! zero rows for a graph that has the edge. A refusal that cannot be worked around
+//! honestly is a refusal of valid input, so:
+//!
+//! * `\;` is a literal semicolon and does NOT separate fields;
+//! * `\\` is a literal backslash;
+//! * any other backslash escape is a hard error naming the offending pair, so a typo
+//!   cannot be silently absorbed into a predicate that then matches nothing.
+//!
+//! ```text
+//! --path-relation 'iri=https://ex.example/pf#walk;forward=https://ex.example/p\;v=1;…'
+//! ```
+//!
+//! Nothing else in the grammar is escapable, because nothing else can legitimately
+//! contain the separator: the counts are numeric and `mode` is a closed two-value set.
+//!
 //! That is not austerity, it is the two project rules meeting. **PurRDF mints no
 //! vocabulary IRIs**, so `iri=` — the name a query spells in predicate position — is
 //! caller-supplied with no default namespace to fall back on, exactly as
@@ -120,6 +142,54 @@ const KEYS: [&str; 8] = [
     "mode",
 ];
 
+/// Split a spec on its UNESCAPED `;` separators, resolving `\;` and `\\`.
+///
+/// See the module docs for why the separator has to be escapable at all: `;` is legal
+/// inside an IRI, so a separator without an escape refuses a valid predicate and pushes
+/// the caller toward a percent-encoded spelling that names a different IRI and quietly
+/// matches nothing.
+///
+/// # Errors
+///
+/// An unknown escape (`\` followed by anything other than `;` or `\`) and a trailing
+/// lone `\`, each naming what it found. Passing an unknown escape through verbatim would
+/// fold a typo into a predicate that then answers zero rows, which is the one outcome
+/// this grammar exists to prevent.
+fn split_fields(text: &str) -> Result<Vec<String>, String> {
+    let mut fields = vec![String::new()];
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ';' => fields.push(String::new()),
+            '\\' => match chars.next() {
+                Some(escaped @ (';' | '\\')) => {
+                    let last = fields.last_mut().expect("fields is never empty");
+                    last.push(escaped);
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "--path-relation contains the unknown escape `\\{other}`; only \
+                         `\\;` (a literal semicolon) and `\\\\` (a literal backslash) \
+                         are defined"
+                    ));
+                }
+                None => {
+                    return Err(
+                        "--path-relation ends with a lone `\\`; write `\\\\` for a literal \
+                         backslash"
+                            .to_owned(),
+                    );
+                }
+            },
+            other => {
+                let last = fields.last_mut().expect("fields is never empty");
+                last.push(other);
+            }
+        }
+    }
+    Ok(fields)
+}
+
 /// Parse one `--path-relation` value, as clap's `value_parser`.
 ///
 /// # Errors
@@ -127,7 +197,8 @@ const KEYS: [&str; 8] = [
 /// A rendered message naming the offending token: an unknown key, a missing mandatory
 /// key, a duplicated key, a spec with no `forward=`/`inverse=` predicate at all, a
 /// repeated `(predicate, direction)` pair, a relative IRI in any IRI position, a
-/// non-numeric or out-of-range count, or a `mode` that is neither `walk` nor `shortest`.
+/// non-numeric or out-of-range count, a `mode` that is neither `walk` nor `shortest`, or
+/// an undefined backslash escape (see [`split_fields`]).
 pub(crate) fn parse_path_relation(text: &str) -> Result<PathRelationSpec, String> {
     let mut iri: Option<String> = None;
     let mut steps: Vec<(String, PathDirection)> = Vec::new();
@@ -137,7 +208,7 @@ pub(crate) fn parse_path_relation(text: &str) -> Result<PathRelationSpec, String
     let mut max_expansions: Option<u64> = None;
     let mut mode: Option<PathRelationMode> = None;
 
-    for field in text.split(';') {
+    for field in split_fields(text)? {
         let field = field.trim();
         if field.is_empty() {
             continue;
@@ -433,6 +504,89 @@ mod tests {
     fn an_unknown_key_names_itself() {
         let error = parse_path_relation(&minimal(";depth=3")).expect_err("unknown key");
         assert!(error.contains("`depth`"), "{error}");
+    }
+
+    /// `;` is a legal IRI sub-delimiter, so a predicate carrying one must be
+    /// EXPRESSIBLE. Without an escape this spec is refused, and the refusal misattributes
+    /// the failure to a phantom key `v` — a refusal of valid input, wearing the costume
+    /// of a typo report.
+    #[test]
+    fn an_escaped_semicolon_is_part_of_the_predicate_not_a_separator() {
+        let spec = parse_path_relation(
+            "iri=http://example.org/pf#walk;forward=http://example.org/p\\;v=1;min-hops=1;\
+             max-hops=4;max-paths-per-seed=8;max-expansions=64;mode=walk",
+        )
+        .expect("an escaped separator is a literal semicolon");
+        assert_eq!(
+            spec.steps,
+            vec![(
+                "http://example.org/p;v=1".to_owned(),
+                PathDirection::Forward
+            )],
+            "the predicate keeps its semicolon and the field did not split"
+        );
+        assert_eq!(spec.iri, "http://example.org/pf#walk");
+        assert_eq!(spec.max_expansions, 64);
+    }
+
+    /// The neighbouring VALID case, executed beside the escape: an unescaped `;` still
+    /// separates. Escaping must not swallow the separator it was added to qualify.
+    #[test]
+    fn an_unescaped_semicolon_still_separates_fields() {
+        let spec = parse_path_relation(&minimal("")).expect("the plain grammar is unchanged");
+        assert_eq!(
+            spec.steps,
+            vec![("http://example.org/p".to_owned(), PathDirection::Forward)]
+        );
+        assert_eq!(spec.min_hops, 1);
+        assert_eq!(spec.mode, PathRelationMode::Walk);
+    }
+
+    /// `\\` resolves to ONE literal backslash — and because a backslash is a disallowed
+    /// IRI character, the resulting spec is then refused by the IRI check rather than the
+    /// escape check. That is the point of the assertion: the complaint is about the
+    /// CHARACTER, which proves the unescape ran and produced a single `\`, and it proves
+    /// the escape did not consume the `q` after it.
+    ///
+    /// `\\` therefore buys totality rather than expressiveness: every backslash in a spec
+    /// has exactly one meaning, so none can be silently dropped. No legal predicate needs
+    /// it, and none ever will while IRIs forbid the character.
+    #[test]
+    fn a_doubled_backslash_resolves_to_one_backslash_which_the_iri_check_then_refuses() {
+        let error = parse_path_relation(
+            "iri=http://example.org/pf#walk;forward=http://example.org/p\\\\q;min-hops=1;\
+             max-hops=4;max-paths-per-seed=8;max-expansions=64;mode=walk",
+        )
+        .expect_err("a backslash is not a legal IRI character");
+        assert!(
+            error.contains("is not a valid IRI"),
+            "the IRI check must be what refuses it, not the escape check: {error}"
+        );
+        assert!(
+            !error.contains("unknown escape"),
+            "the escape resolved; it must not be reported as undefined: {error}"
+        );
+    }
+
+    /// An undefined escape is REFUSED, never passed through. Passing `\n` through as `n`
+    /// would fold a typo into a predicate that registers and then answers zero rows —
+    /// the silent-wrong-answer shape this grammar exists to prevent.
+    #[test]
+    fn an_unknown_escape_is_refused_rather_than_absorbed() {
+        let error = parse_path_relation(
+            "iri=http://example.org/pf#walk;forward=http://example.org/p\\nq;min-hops=1;\
+             max-hops=4;max-paths-per-seed=8;max-expansions=64;mode=walk",
+        )
+        .expect_err("an undefined escape is not silently absorbed");
+        assert!(error.contains("\\n"), "{error}");
+        assert!(error.contains("unknown escape"), "{error}");
+    }
+
+    /// A trailing lone backslash names itself rather than being dropped.
+    #[test]
+    fn a_trailing_backslash_is_refused() {
+        let error = parse_path_relation(&minimal("\\")).expect_err("a lone trailing backslash");
+        assert!(error.contains("lone `\\`"), "{error}");
     }
 
     #[test]
