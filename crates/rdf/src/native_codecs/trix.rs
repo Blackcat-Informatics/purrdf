@@ -30,6 +30,7 @@ use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
+use purrdf_core::cdt_blank::BlankBinding;
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
 /// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
@@ -205,11 +206,14 @@ fn freeze_rows(
     let mut builder = RdfDatasetBuilder::new();
     let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
     for (subject, predicate, object, graph) in rows {
-        let subject = intern_term(&mut builder, &subject);
+        let subject = intern_term(&mut builder, &subject)?;
         let is_reifies = predicate == RDF_REIFIES;
         let predicate = builder.intern_iri(&predicate);
-        let object = FoldNode::Term(intern_term(&mut builder, &object));
-        let graph = graph.map(|g| intern_term(&mut builder, &g));
+        let object = FoldNode::Term(intern_term(&mut builder, &object)?);
+        let graph = match graph {
+            Some(g) => Some(intern_term(&mut builder, &g)?),
+            None => None,
+        };
         fold_rows.push(FoldRow {
             subject,
             is_reifies,
@@ -222,15 +226,23 @@ fn freeze_rows(
     builder.freeze()
 }
 
-fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> TermId {
+/// # Errors
+/// A composite (`cdt:List` / `cdt:Map`) literal whose lexical form does not
+/// parse refuses the document; see [`purrdf_core::cdt_blank`].
+fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> Result<TermId, RdfDiagnostic> {
     match term {
-        TrixTerm::Iri(iri) => builder.intern_iri(iri),
+        TrixTerm::Iri(iri) => Ok(builder.intern_iri(iri)),
         // Text ingress: decode the `(label, scope)` encoding this codec's serializer
         // applied at egress, so a document it wrote re-parses to the very
         // `(label, scope)` pair it was written from. A TriX `<id>` is XML character
         // data, which is the alphabet the image test re-encodes against.
-        TrixTerm::Blank(label) => builder.intern_text_blank(label, LabelAlphabet::XmlText),
-        TrixTerm::Literal(literal) => builder.intern_literal(literal.clone()),
+        TrixTerm::Blank(label) => Ok(builder.intern_text_blank(label, LabelAlphabet::XmlText)),
+        // A composite literal's embedded blank labels bind through the SAME rule
+        // the `<id>` tokens above use, so both spellings of one node agree.
+        TrixTerm::Literal(literal) => Ok(builder.intern_literal_bound(
+            literal.clone(),
+            BlankBinding::Decoded(LabelAlphabet::XmlText),
+        )?),
     }
 }
 

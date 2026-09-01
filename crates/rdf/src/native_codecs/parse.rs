@@ -31,6 +31,7 @@ use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
 use purrdf_core::blank_label::LabelAlphabet;
+use purrdf_core::cdt_blank::BlankBinding;
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -363,6 +364,21 @@ pub(crate) enum BlankIngress {
     TextDecoded(LabelAlphabet),
 }
 
+impl BlankIngress {
+    /// The same rule, stated for the blank labels a composite (`cdt:List` /
+    /// `cdt:Map`) literal embeds in its lexical form.
+    ///
+    /// Bare terms and embedded labels MUST bind identically or the two spellings
+    /// of one node would fall apart, so this is a projection of the mode rather
+    /// than a second decision.
+    fn binding(self) -> BlankBinding {
+        match self {
+            Self::Opaque => BlankBinding::Ambient(BlankScope::DEFAULT),
+            Self::TextDecoded(alphabet) => BlankBinding::Decoded(alphabet),
+        }
+    }
+}
+
 fn dataset_from_ser_graph_impl(
     graph: &SerGraph,
     flatten_to_default_graph: bool,
@@ -536,12 +552,19 @@ impl SerInterner<'_> {
                 };
                 let direction =
                     parse_gts_direction(term.direction.as_deref(), term.lang.as_deref())?;
-                Ok(FoldNode::Term(builder.intern_literal(RdfLiteral {
-                    lexical_form: term.value.clone().unwrap_or_default(),
-                    datatype,
-                    language: term.lang.clone(),
-                    direction,
-                })))
+                // A composite literal's embedded blank labels bind through the
+                // SAME rule the bare `_:` tokens above use — that agreement is
+                // what makes `_:b` written as a subject and `_:b` written inside
+                // a `cdt:List` the same node.
+                Ok(FoldNode::Term(builder.intern_literal_bound(
+                    RdfLiteral {
+                        lexical_form: term.value.clone().unwrap_or_default(),
+                        datatype,
+                        language: term.lang.clone(),
+                        direction,
+                    },
+                    self.blanks.binding(),
+                )?))
             }
             SerTermKind::Triple => {
                 let reifier_id = term.reifier.ok_or_else(|| {

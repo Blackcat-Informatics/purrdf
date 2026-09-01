@@ -210,6 +210,23 @@ impl std::error::Error for CdtBlankError {
     }
 }
 
+impl From<CdtBlankError> for crate::RdfDiagnostic {
+    /// The parse diagnostic a codec reports when a document carries an
+    /// ill-formed composite literal. The whole document is refused: see the
+    /// module docs for why there is no opaque-literal fallback.
+    fn from(err: CdtBlankError) -> Self {
+        let code = match err {
+            CdtBlankError::Malformed { .. } => "cdt-literal-malformed",
+            CdtBlankError::ScannerDisagreement { .. } => "cdt-literal-scan-disagreement",
+        };
+        Self::error(code, err.to_string()).with_detail(
+            "a cdt:List / cdt:Map lexical form denotes blank nodes in the enclosing document's \
+             scope, so one that does not parse leaves that scope -- and the identity of \
+             same-labelled blank nodes outside the literal -- undefined",
+        )
+    }
+}
+
 /// Validate `lexical` as a value of `datatype` and bind every
 /// `BLANK_NODE_LABEL` it holds into `binding`.
 ///
@@ -246,6 +263,39 @@ pub fn bind_cdt_blank_labels<'a>(
         },
         TokenKind::Iri { .. } => None,
     }))
+}
+
+/// [`bind_cdt_blank_labels`] without the grammar check: bind the labels the byte
+/// scanner finds and take the lexical form as given.
+///
+/// The binding is IDENTICAL — same tokens, same spelling, same result on any
+/// well-formed input. Only the refusal is dropped, so this is total.
+///
+/// It exists for the OWNED-model bridge
+/// ([`intern_owned_term_scoped`](crate::ir::builder::RdfDatasetBuilder::intern_owned_term_scoped)),
+/// which is infallible by contract and re-materializes datasets that a document
+/// ingress already validated. Binding must still happen there — a merge assigns
+/// each source a fresh [`BlankScope`], and an embedded label left unbound would
+/// name a node the merged dataset does not have — but there is no document to
+/// refuse and no diagnostic channel to refuse it through.
+///
+/// Every path that reads a DOCUMENT uses
+/// [`intern_literal_bound`](crate::ir::builder::RdfDatasetBuilder::intern_literal_bound),
+/// which validates.
+#[must_use]
+pub fn bind_cdt_blank_labels_unchecked<'a>(
+    lexical: &'a str,
+    datatype: &str,
+    binding: BlankBinding,
+) -> Cow<'a, str> {
+    rewrite_cdt_blank_terms(
+        lexical,
+        datatype,
+        &mut |label| match binding.rebind(label) {
+            Cow::Borrowed(_) => None,
+            Cow::Owned(bound) => Some(format!("_:{bound}")),
+        },
+    )
 }
 
 /// Rewrite the blank-node AND IRI tokens of an ALREADY-BOUND composite lexical

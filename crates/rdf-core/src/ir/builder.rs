@@ -715,6 +715,16 @@ impl RdfDatasetBuilder {
     /// silently conflate two distinct nodes, so the qualified spelling is kept
     /// verbatim as the merged node's raw label — injective, which is the property
     /// standardize-apart actually needs.
+    /// # Composite literals bind here too
+    ///
+    /// A `cdt:List` / `cdt:Map` literal's embedded blank labels are bound by the
+    /// SAME rule this function applies to a bare
+    /// [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode), because a merge assigns
+    /// each source a fresh scope and an embedded label left unbound would name a
+    /// node the merged dataset does not have. Binding here is TOTAL — the owned
+    /// model is an internal bridge with no document to refuse — so a document
+    /// ingress that must reject an ill-formed composite literal uses
+    /// [`intern_owned_term_bound`](Self::intern_owned_term_bound) instead.
     pub fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
         match term {
             RdfTerm::Iri(iri) => self.intern_iri(iri),
@@ -723,12 +733,48 @@ impl RdfDatasetBuilder {
                 self.intern_blank(&label, scope)
             }
             RdfTerm::BlankNode(label) => self.intern_blank(label, scope),
-            RdfTerm::Literal(literal) => self.intern_literal(literal.clone()),
+            RdfTerm::Literal(literal) => {
+                let literal = bind_owned_literal(literal, scope);
+                self.intern_literal(literal)
+            }
             RdfTerm::Triple(triple) => {
                 let s = self.intern_owned_term_scoped(&triple.subject, scope);
                 let p = self.intern_iri(&triple.predicate);
                 let o = self.intern_owned_term_scoped(&triple.object, scope);
                 self.intern_triple(s, p, o)
+            }
+        }
+    }
+
+    /// [`intern_owned_term_scoped`](Self::intern_owned_term_scoped) for a term
+    /// read from a DOCUMENT: identical binding, but an ill-formed composite
+    /// literal is refused rather than taken as given.
+    ///
+    /// The owned-model codecs (JSON-LD / YAML-LD) and the multi-source loader
+    /// use this, so a document reaches the store through exactly the same
+    /// validation every text codec applies.
+    ///
+    /// # Errors
+    /// [`CdtBlankError`](crate::cdt_blank::CdtBlankError) when a composite
+    /// literal anywhere in `term` — including inside a quoted triple — does not
+    /// parse. The caller must refuse the whole document.
+    pub fn intern_owned_term_bound(
+        &mut self,
+        term: &RdfTerm,
+        scope: BlankScope,
+    ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
+        match term {
+            RdfTerm::Literal(literal) => {
+                self.intern_literal_bound(literal.clone(), owned_binding(scope))
+            }
+            RdfTerm::Triple(triple) => {
+                let s = self.intern_owned_term_bound(&triple.subject, scope)?;
+                let p = self.intern_iri(&triple.predicate);
+                let o = self.intern_owned_term_bound(&triple.object, scope)?;
+                Ok(self.intern_triple(s, p, o))
+            }
+            RdfTerm::Iri(_) | RdfTerm::BlankNode(_) => {
+                Ok(self.intern_owned_term_scoped(term, scope))
             }
         }
     }
@@ -1125,6 +1171,44 @@ impl RdfDatasetBuilder {
 }
 
 use crate::{RdfDiagnostic, RdfStoreCapabilities};
+
+/// The composite blank-label binding that matches how
+/// [`RdfDatasetBuilder::intern_owned_term_scoped`] binds a bare
+/// [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode) at `scope`.
+///
+/// The two MUST agree, so this states the projection once instead of restating
+/// the rule: at [`BlankScope::DEFAULT`] the owned rendering is decoded (the
+/// exact inverse of [`BlankScope::qualify_label`]); at an explicit scope the
+/// label is a standardize-apart relabeling taken verbatim into that scope.
+fn owned_binding(scope: BlankScope) -> crate::cdt_blank::BlankBinding {
+    if scope == BlankScope::DEFAULT {
+        crate::cdt_blank::BlankBinding::Decoded(LabelAlphabet::Unconstrained)
+    } else {
+        crate::cdt_blank::BlankBinding::Ambient(scope)
+    }
+}
+
+/// Bind the blank labels a composite literal from the OWNED model embeds, and
+/// return the literal ready to intern. Any other literal is returned unchanged.
+fn bind_owned_literal(literal: &RdfLiteral, scope: BlankScope) -> RdfLiteral {
+    let datatype_iri = match (&literal.language, &literal.datatype) {
+        (Some(_), _) => RDF_LANG_STRING,
+        (None, Some(dt)) => dt.as_str(),
+        (None, None) => XSD_STRING,
+    };
+    if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
+        return literal.clone();
+    }
+    let bound = crate::cdt_blank::bind_cdt_blank_labels_unchecked(
+        &literal.lexical_form,
+        datatype_iri,
+        owned_binding(scope),
+    );
+    RdfLiteral {
+        lexical_form: bound.into_owned(),
+        ..literal.clone()
+    }
+}
 
 /// Compute the dataset's capability flags ONCE at freeze, from the frozen tables.
 fn compute_capabilities(

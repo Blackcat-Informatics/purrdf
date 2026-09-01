@@ -48,6 +48,7 @@ use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
+use purrdf_core::cdt_blank::BlankBinding;
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
 /// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
@@ -830,7 +831,12 @@ fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNo
         XmlTerm::Blank(label) => Ok(FoldNode::Term(
             builder.intern_text_blank(label, LabelAlphabet::NcName),
         )),
-        XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal(literal.clone()))),
+        // A composite literal's embedded blank labels bind through the SAME rule
+        // the `rdf:nodeID` tokens above use, so both spellings of one node agree.
+        XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal_bound(
+            literal.clone(),
+            BlankBinding::Decoded(LabelAlphabet::NcName),
+        )?)),
         XmlTerm::Triple(components) => {
             let (subject, predicate, object) = components.as_ref();
             let s = intern_term(builder, subject)?;

@@ -138,6 +138,9 @@ boon = { workspace = true }
 pretty_assertions = { workspace = true }
 ciborium = { workspace = true }
 purrdf-gts = { workspace = true }
+# The SEP-0009 grammar, used by the composite blank-node scoping tests as an
+# independent oracle: the round-tripped lexical form must still parse.
+purrdf-cdt = { workspace = true }
 proptest = { workspace = true }
 # Acceleration-program baselines; light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
