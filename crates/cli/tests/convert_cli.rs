@@ -1276,11 +1276,12 @@ fn rules_without_entailment_is_refused_by_name() {
     );
 }
 
-/// `--base` resolves relative IRIs on parse and relativizes them on serialize; the
-/// native pack container stores fully-resolved terms and has no relative-IRI syntax,
-/// so `--base` combined with a pack `--from`/`--to` would otherwise be silently
-/// ignored (`source::load_dataset`'s and `sink::write_rdf`'s pack arms never read the
-/// base they are handed) — refused by name instead, on both sides.
+/// `--base` resolves relative IRIs on parse and is written as the document base — and
+/// relativized against — on serialize. The native pack container stores fully-resolved
+/// terms and has no relative-IRI syntax in either direction, so a pack `--from` paired
+/// with an N-Triples `--to` (which can express no base either) leaves the flag with no leg
+/// to spend it on: `source::load_dataset`'s and `sink::write_rdf`'s pack arms never read
+/// the base they are handed. Refused by name instead of accepted and ignored.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1319,7 +1320,8 @@ fn base_with_pack_from_is_refused_by_name() {
     );
 }
 
-/// The `--to` half of [`base_with_pack_from_is_refused_by_name`].
+/// The `--to` half of [`base_with_pack_from_is_refused_by_name`]: a pack TARGET beside an
+/// N-Triples source, so neither leg can spend the base either way round.
 #[test]
 fn base_with_pack_to_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1955,6 +1957,137 @@ fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
     assert!(
         err.contains("file:///tmp/not-an-iri"),
         "the refusal names the spelling that would have worked: {err}"
+    );
+}
+
+/// `--base` is refused by name over the WHOLE 9×9 format matrix exactly when neither leg
+/// can consume it, and honoured on every pair where one can.
+///
+/// The oracle is the format registry itself — `admits_relative_iri` on the source and
+/// `emits_base` on the target — read here through `purrdf_rdf::NativeRdfFormat`, so this
+/// test and the binary agree by construction rather than by a list kept in two places. The
+/// defect it pins: `convert --from ntriples --to ntriples --base http://example.org/` used
+/// to exit 0 having applied the base on neither leg and said nothing about it.
+#[test]
+fn base_is_refused_exactly_when_neither_leg_can_consume_it() {
+    use purrdf_rdf::NativeRdfFormat;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed_a = write_file(dir, "seedA.nq", SEED_A);
+    // One valid document per source syntax, so an ACCEPTED pair runs to completion and the
+    // exit code means "the flag was honoured" rather than "the parser gave up first".
+    for src in FORMATS {
+        let src_path = path(dir, &format!("seed.{src}"));
+        let o = run(&[
+            "convert", "--from", "nquads", "--to", src, &seed_a, &src_path,
+        ]);
+        assert!(
+            o.status.success(),
+            "rendering SEED A to {src} failed: {}",
+            stderr(&o)
+        );
+    }
+
+    for src in NativeRdfFormat::all() {
+        let src_path = path(dir, &format!("seed.{}", src.id()));
+        for dst in NativeRdfFormat::all() {
+            let out_path = path(dir, &format!("based.{}.to.{}", src.id(), dst.id()));
+            let o = run(&[
+                "convert",
+                "--from",
+                src.id(),
+                "--to",
+                dst.id(),
+                "--base",
+                "http://example.org/",
+                &src_path,
+                &out_path,
+            ]);
+            let consumable = src.admits_relative_iri() || dst.emits_base();
+            if consumable {
+                assert!(
+                    o.status.success(),
+                    "{} -> {}: a base one leg can spend must be honoured: {}",
+                    src.id(),
+                    dst.id(),
+                    stderr(&o)
+                );
+            } else {
+                assert_eq!(
+                    o.status.code(),
+                    Some(2),
+                    "{} -> {}: a base neither leg can spend must be a usage error: {}",
+                    src.id(),
+                    dst.id(),
+                    stderr(&o)
+                );
+                let err = stderr(&o);
+                assert!(
+                    err.contains("--base has no effect"),
+                    "{} -> {}: the refusal must name --base: {err}",
+                    src.id(),
+                    dst.id()
+                );
+                // The message names BOTH legs and why each cannot take it, so an operator
+                // learns which end to change rather than only that something is wrong.
+                assert!(
+                    err.contains(&format!("on the source `{src_path}`"))
+                        && err.contains("on the --to target"),
+                    "{} -> {}: the refusal must name both legs: {err}",
+                    src.id(),
+                    dst.id()
+                );
+            }
+        }
+    }
+}
+
+/// `--canonical` writes RDFC-1.0 canonical N-Quads whatever `--to` says, so its egress leg
+/// can express no base — and a source that admits no relative IRI leaves `--base` with
+/// nowhere to go on that lane either.
+#[test]
+fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedA.nq", SEED_A);
+    let out = path(dir, "out.canon");
+
+    let o = run(&[
+        "convert",
+        "--from",
+        "nquads",
+        "--canonical",
+        "--base",
+        "http://example.org/",
+        &seed,
+        &out,
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("--canonical N-Quads output"),
+        "the refusal names the leg that would have consumed it: {}",
+        stderr(&o)
+    );
+
+    // A Turtle source under `--canonical` still spends the base on the PARSE leg.
+    let ttl = write_file(dir, "rel.ttl", "<foo> a <http://example.org/test> .\n");
+    let out = path(dir, "out2.canon");
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--canonical",
+        "--base",
+        "http://example.org/",
+        &ttl,
+        &out,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read canonical output");
+    assert!(
+        text.contains("<http://example.org/foo>"),
+        "the parse leg must still resolve against --base: {text}"
     );
 }
 

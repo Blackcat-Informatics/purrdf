@@ -22,9 +22,7 @@ use pyo3::types::{PyBytes, PyString};
 
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
-use crate::{
-    NativeRdfFormat, RdfDataset, RdfLookaside, canonical_flat_nquads, dataset_from_bytes, gts_write,
-};
+use crate::{NativeRdfFormat, RdfDataset, RdfLookaside, canonical_flat_nquads, gts_write};
 
 /// A Python handle to a frozen [`RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
@@ -53,12 +51,26 @@ impl PyRdfDataset {
 #[pymethods]
 impl PyRdfDataset {
     /// Build a frozen dataset by parsing RDF `data` (bytes or str) in `format`.
+    ///
+    /// `base` is the document base relative IRI references resolve against — the same
+    /// parameter the module-level `parse` and `Store.load` carry. Omitted means "no
+    /// base in scope", so a relative reference hard-fails with `iri-relative-no-base`
+    /// rather than resolving against a base invented here; an in-document base still
+    /// wins over this one.
     #[new]
-    #[pyo3(signature = (data, format))]
-    fn new(py: Python<'_>, data: &Bound<'_, PyAny>, format: PyRdfFormat) -> PyResult<Self> {
+    #[pyo3(signature = (data, format, *, base=None))]
+    fn new(
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Self> {
         let bytes = read_bytes(data)?;
         let inner = py
-            .detach(|| dataset_from_bytes(&bytes, rdf_format(format)))
+            .detach(move || {
+                crate::parse_dataset(&bytes, rdf_format(format).media_type(), base.as_deref())
+                    .map_err(|e| format!("parse error: {e}"))
+            })
             .map_err(PyValueError::new_err)?;
         Ok(Self { inner })
     }
@@ -152,6 +164,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The constructor above threads a base through `parse_dataset` directly; these
+    // tests still pin the base-free helper's own behaviour, so it is imported here
+    // rather than kept in the module's runtime imports.
+    use crate::dataset_from_bytes;
 
     #[test]
     fn dataset_from_bytes_counts_quads() {

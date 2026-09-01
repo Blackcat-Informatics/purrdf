@@ -476,6 +476,36 @@ fn base_with_pack_from_is_refused_by_name() {
     );
 }
 
+/// `--base` with an N-TRIPLES input is refused for the same reason a pack input is: this
+/// command answers with a verdict rather than a document, so the input parse is the only leg
+/// a base could reach — and N-Triples' grammar admits no relative IRI reference, so nothing
+/// on that leg would ever resolve against it.
+#[test]
+fn base_with_a_relative_incapable_input_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "a.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://www.w3.org/2002/07/owl#Class> .\n",
+        ),
+    );
+
+    let out = run(&["consistency", "--base", "http://example.org/base/", &input]);
+    assert_eq!(code(&out), 2, "a usage error: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--base has no effect"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("the --from source"),
+        "the refusal names the leg that would have consumed it: {}",
+        stderr(&out)
+    );
+}
+
 /// `--loss-ledger` is refused rather than silently ignored: it is a GLOBAL clap flag, so
 /// without a refusal it would be accepted and do nothing, the no-op this repository
 /// refuses everywhere else.

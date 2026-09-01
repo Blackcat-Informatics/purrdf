@@ -180,6 +180,7 @@ pub(crate) fn run(
     refuse_document_flags(ledger_target, options.jsonld_options)?;
     let question = question(options)?;
     refuse_two_stdins(options, question)?;
+    refuse_unconsumable_base(options, question)?;
 
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
@@ -340,6 +341,50 @@ fn read_imports(options: &EntailsOptions<'_>) -> Result<Vec<(String, String)>, C
     Ok(resolved)
 }
 
+/// Refuse `--base` when no document this question reads can spend it.
+///
+/// `entails` answers with a verdict rather than a document, and every input crosses the
+/// boundary as N-Quads, which can express no base — so the PARSE of the RDF documents named
+/// on the command line is the only leg a base has here.
+fn refuse_unconsumable_base(
+    options: &EntailsOptions<'_>,
+    question: Question<'_>,
+) -> Result<(), CliError> {
+    if options.base.is_none() {
+        return Ok(());
+    }
+    // Every RDF DOCUMENT this question reads, and nothing else. `--pattern` is not an RDF
+    // document — it goes to the boundary's own pattern parser untranscoded — so it has no
+    // format and no base leg; a malformed `--import` spec is left to `read_imports`, whose
+    // refusal names the missing `=`.
+    let mut documents: Vec<(&str, String)> =
+        vec![(options.premise, "the --premise document".to_owned())];
+    if let Question::Conclusion { path, .. } = question {
+        documents.push((path, "the --conclusion document".to_owned()));
+    }
+    for spec in options.imports {
+        if let Some((iri, path)) = spec.split_once('=')
+            && !iri.is_empty()
+            && !path.is_empty()
+        {
+            documents.push((path, format!("the --import {iri} document")));
+        }
+    }
+
+    let mut resolved = Vec::with_capacity(documents.len());
+    for (path, role) in &documents {
+        resolved.push((format::resolve(options.from, path)?, role.as_str()));
+    }
+    let legs: Vec<format::BaseUse<'_>> = resolved
+        .iter()
+        .map(|(format, role)| format::BaseUse::parse(*format, role))
+        .collect();
+    // ONE decision over ALL the documents: a base spent resolving the premise is spent even
+    // if the conclusion's syntax admits no relative IRI, so a per-document test would refuse
+    // a base that is doing real work.
+    format::refuse_unconsumable_base(options.base, &legs)
+}
+
 /// Read `path` through the CLI's own format resolution and re-serialize it as N-Quads.
 ///
 /// This is where `--from` reaches the boundary: the resolution is `convert`'s and `reason`'s
@@ -349,7 +394,9 @@ fn read_imports(options: &EntailsOptions<'_>) -> Result<Vec<(String, String)>, C
 /// The serializer runs with NO base. `--base` is threaded into the PARSE, which is where a
 /// relative IRI can appear; N-Quads has no relative-IRI syntax at all, so handing the
 /// serializer a base could only ask it to emit something the boundary's parser would then
-/// reject.
+/// reject. Whether the base can be spent on any document's parse at all is decided once, up
+/// front, by [`refuse_unconsumable_base`] — never per document, which would refuse a base
+/// the premise is using because the conclusion cannot.
 ///
 /// A REALIZED drop is refused. N-Quads carries named graphs, the RDF 1.2 statement layer and
 /// literal base direction, so this crossing loses nothing from any of the nine syntaxes — and
@@ -361,7 +408,6 @@ fn read_as_nquads(
     options: &EntailsOptions<'_>,
 ) -> Result<String, CliError> {
     let format = format::resolve(options.from, path)?;
-    format::refuse_base_with_container(format, options.base, &format!("the {what} document"))?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
     let outcome = source::serialize_input_to_nquads(path, format, options.base)?;

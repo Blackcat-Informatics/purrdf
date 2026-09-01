@@ -773,6 +773,47 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
     );
 }
 
+/// `--base` with an N-TRIPLES data graph is refused for the reason a pack one is: the data
+/// PARSE is the only leg it has here (the shapes graph resolves against its own retrieval
+/// IRI, and the report is serialized with no base), and N-Triples' grammar admits no
+/// relative IRI reference. Naming `--format turtle`, which CAN write a base, changes
+/// nothing: `validate` never hands the report writer this base.
+#[test]
+fn base_with_a_relative_incapable_data_graph_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data = write_file(
+        dir.path(),
+        "data.nt",
+        "<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.org/Person> .\n",
+    );
+
+    for format in ["ntriples", "turtle"] {
+        let out = run(&[
+            "validate",
+            "--shapes",
+            &shapes,
+            "--format",
+            format,
+            "--base",
+            "http://example.org/",
+            &data,
+        ]);
+        assert_eq!(code(&out), 2, "--format {format}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("--base has no effect"),
+            "--format {format}: the refusal names the flag: {}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("the --from data graph"),
+            "--format {format}: the refusal names the leg: {}",
+            stderr(&out)
+        );
+    }
+}
+
 /// `--loss-ledger` is LIVE for an RDF `--format` — the results graph really does cross a
 /// serializer — and refused for `--format sarif`, which runs none.
 #[test]

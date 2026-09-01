@@ -28,6 +28,21 @@
 //! COMPRESS: a `--to` target named `out.nt.gz` would be inferred as N-Triples and then
 //! written as plain N-Triples under a name promising gzip. [`refuse_transport_target`]
 //! refuses that by name rather than emitting a file whose name lies about its bytes.
+//!
+//! ## `--base` has two legs, and is refused when neither can take it
+//!
+//! A base is spent in exactly two places, and each is a column of the format registry: on
+//! PARSE a relative IRI reference resolves against it (`admits_relative_iri`), and on
+//! SERIALIZE it is written as the output document's base directive and relativized against
+//! (`emits_base`). Both are live — Turtle, TriG, RDF/XML, JSON-LD and YAML-LD carry a base
+//! either way; N-Triples, N-Quads, TriX, HexTuples and both native containers carry it
+//! neither way.
+//!
+//! [`refuse_unconsumable_base`] is the one decision that reads those two columns, over the
+//! legs a subcommand actually has. A base ANY leg can spend is honoured (so `--base X --to
+//! ntriples` still resolves the input); a base NO leg can spend is a usage error naming
+//! each leg and why it cannot take the value, rather than a parameter accepted and never
+//! read.
 
 use std::path::Path;
 
@@ -144,32 +159,156 @@ pub(crate) fn refuse_gts_target(format: SourceFormat, role: &str) -> Result<(), 
     Ok(())
 }
 
-/// Refuse `--base` when it is paired with a CONTAINER format and would therefore have no
-/// effect.
+/// Which LEG of the pipeline a format sits on, for the `--base` consumption test.
 ///
-/// `--base` resolves a relative IRI on parse and relativizes one on serialize; neither
-/// native container carries either role (both store fully-resolved terms and have no
-/// relative-IRI syntax), so `source::run_over_input`/`load_dataset`'s and
-/// `sink::write_rdf`'s container arms never read the base they are handed. Without this
-/// check a `--base` supplied alongside a pack or GTS source, or a pack target, would be
-/// accepted by clap and silently do nothing — the same no-op shape every other
-/// inapplicable flag in this CLI is refused by name for, rather than accepted and
-/// ignored.
+/// The two are independent registry columns, not one fact spelled twice — a syntax can
+/// read a base without being able to write one — so the leg has to be named rather than
+/// inferred from the format alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BaseLeg {
+    /// INGRESS: the base a relative IRI reference in the document resolves against, read
+    /// off `NativeRdfFormat::admits_relative_iri`.
+    Parse,
+    /// EGRESS: the base the output document declares and relativizes against, read off
+    /// `NativeRdfFormat::emits_base`.
+    Serialize,
+}
+
+/// One place a `--base` COULD be consumed: a resolved format, on a leg, named by the
+/// argument the operator wrote.
 ///
-/// `role` names which side of the pipeline `format` resolved for (e.g. `"the --from
-/// source"`, `"the --to target"`, `"the --premise document"`), so the refusal names the
-/// exact flag/argument the operator wrote.
+/// `role` is that argument (e.g. `"the --from source"`, `"the --to target"`, `"the
+/// --premise document"`), so a refusal points at the exact flag rather than at "the
+/// pipeline".
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BaseUse<'a> {
+    /// The format resolved for this leg.
+    format: SourceFormat,
+    /// Which direction the format is used in here.
+    leg: BaseLeg,
+    /// The argument the operator wrote for it.
+    role: &'a str,
+}
+
+impl<'a> BaseUse<'a> {
+    /// A leg that PARSES `format`.
+    pub(crate) const fn parse(format: SourceFormat, role: &'a str) -> Self {
+        Self {
+            format,
+            leg: BaseLeg::Parse,
+            role,
+        }
+    }
+
+    /// A leg that SERIALIZES `format`.
+    pub(crate) const fn serialize(format: SourceFormat, role: &'a str) -> Self {
+        Self {
+            format,
+            leg: BaseLeg::Serialize,
+            role,
+        }
+    }
+
+    /// Whether this leg can consume a base at all.
+    ///
+    /// Decided ENTIRELY by the two format-registry columns, so a newly registered syntax
+    /// is classified by its own row rather than by a list kept here that someone would
+    /// have to remember to extend.
+    fn consumes_base(self) -> bool {
+        match self.format {
+            SourceFormat::Native(native) => match self.leg {
+                BaseLeg::Parse => native.admits_relative_iri(),
+                BaseLeg::Serialize => native.emits_base(),
+            },
+            // Both native containers store fully-resolved terms and have no relative-IRI
+            // syntax, in either direction.
+            SourceFormat::Pack | SourceFormat::Gts => false,
+        }
+    }
+
+    /// Why this leg cannot consume one, in the operator's vocabulary.
+    fn why_not(self) -> String {
+        let token = self.format.token();
+        if self.format.is_container() {
+            return format!(
+                "the native {token} container stores fully-resolved terms and has no \
+                 relative-IRI syntax to resolve or relativize against"
+            );
+        }
+        match self.leg {
+            BaseLeg::Parse => format!(
+                "{token}'s grammar admits no relative IRI reference, so nothing in the \
+                 document resolves against a base"
+            ),
+            BaseLeg::Serialize => format!(
+                "{token} can express no base directive, so nothing is written under one or \
+                 relativized against it"
+            ),
+        }
+    }
+}
+
+/// Refuse `--base` when NEITHER leg of this run can consume it.
+///
+/// `--base` resolves a relative IRI on PARSE and is written as the document base — and
+/// relativized against — on SERIALIZE. A run whose parse leg admits no relative IRI AND
+/// whose serialize leg can express no base has nowhere to spend it, so accepting one would
+/// be an accepted-and-ignored parameter on the user-facing surface: `convert --from
+/// ntriples --to ntriples --base http://example.org/` exited 0, changed nothing, and said
+/// nothing. That is the shape this pipeline refuses by name everywhere else.
+///
+/// The decision is driven entirely off the format registry's `admits_relative_iri` /
+/// `emits_base` columns (see [`BaseUse::consumes_base`]), so a format cannot slip through
+/// by being added later. `legs` is every place this subcommand could spend the base — a
+/// base consumed by ANY ONE of them is honoured, which is what keeps `--base X --to
+/// ntriples` working from a relative-admitting source.
+///
+/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text,
+/// a ShEx schema, a shape map) has a leg this list cannot name and does not call this: for
+/// those the base is never inert.
+pub(crate) fn refuse_unconsumable_base(
+    base: Option<&str>,
+    legs: &[BaseUse<'_>],
+) -> Result<(), CliError> {
+    if base.is_none() || legs.iter().copied().any(BaseUse::consumes_base) {
+        return Ok(());
+    }
+    let reasons = legs
+        .iter()
+        .map(|leg| format!("on {}, {}", leg.role, leg.why_not()))
+        .collect::<Vec<_>>()
+        .join("; and ");
+    Err(CliError::Usage(format!(
+        "--base has no effect on this run: {reasons}. Drop --base, or name a syntax that \
+         carries one ({})",
+        base_carrying_syntaxes()
+    )))
+}
+
+/// The `--from`/`--to` tokens whose syntax can carry a base on either leg, read off the
+/// format registry rather than listed here.
+fn base_carrying_syntaxes() -> String {
+    purrdf_rdf::NativeRdfFormat::all()
+        .filter(|format| format.admits_relative_iri() || format.emits_base())
+        .map(purrdf_rdf::NativeRdfFormat::id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Refuse `--base` when it is paired with a CONTAINER format.
+///
+/// The container case of [`refuse_unconsumable_base`], sharing its predicate and its
+/// message, for the one lane whose base has a consumer no [`BaseUse`] can name: `shex`
+/// resolves relative IRIs in the SCHEMA and the SHAPE MAP as well as in the data graph, so
+/// the data source's syntax alone never makes the base inert. A container source still
+/// does — it stores fully-resolved terms — and that is exactly what this refuses.
 pub(crate) fn refuse_base_with_container(
     format: SourceFormat,
     base: Option<&str>,
     role: &str,
 ) -> Result<(), CliError> {
-    if base.is_some() && format.is_container() {
-        return Err(CliError::Usage(format!(
-            "--base has no effect on {role}: the native {} container stores fully-resolved \
-             terms and has no relative-IRI syntax to resolve or relativize against",
-            format.token()
-        )));
+    if format.is_container() {
+        return refuse_unconsumable_base(base, &[BaseUse::parse(format, role)]);
     }
     Ok(())
 }
