@@ -572,6 +572,10 @@ pub(crate) enum Command {
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
         /// resolves is refused by name rather than treated as an empty document.
+        /// The IRI half must be ABSOLUTE — it is matched against the premise's
+        /// `owl:imports` objects, which are — and a relative or malformed one is
+        /// refused by name here rather than surfacing as an unresolved import
+        /// attributed to the premise's data.
         #[arg(long = "import", value_name = "IRI=FILE")]
         imports: Vec<String>,
         /// Surface the reasoning certificate: bare writes it to stderr,

@@ -34,8 +34,10 @@
 //!
 //! `owl-direct` and `rif` are each defined by an input "premise, conclusion, regime" does
 //! not carry, so the boundary refuses them naming the regime; a malformed `--import` pair
-//! is a usage error rather than a skipped import; and two documents reading stdin is
-//! refused rather than mis-read, because a process has one standard input.
+//! is a usage error rather than a skipped import; an `--import` whose ontology-IRI HALF is
+//! not an absolute IRI is blamed on the ARGUMENT rather than on the premise's `owl:imports`;
+//! and two documents reading stdin is refused rather than mis-read, because a process has one
+//! standard input.
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -848,6 +850,113 @@ fn a_malformed_import_pair_is_a_usage_error() {
         );
         assert!(stdout(&o).is_empty(), "nothing was answered");
     }
+}
+
+/// A RELATIVE `--import` ONTOLOGY IRI IS BLAMED ON THE ARGUMENT, not on the premise.
+///
+/// This is the fat-finger case. `--import foo=FILE` can match nothing — the half is compared
+/// with the premise's `owl:imports` OBJECTS, which are absolute — and what the operator used
+/// to be shown was the boundary's refusal naming the premise's own `owl:imports`, exit 1: a
+/// typo in an ARGUMENT reported as a defect in their DATA, sending them to read a document
+/// that was never wrong. It is now a usage error (exit 2) naming the flag, the pair as
+/// written and the offending half, and the premise is not mentioned as the culprit at all.
+#[test]
+fn a_relative_import_iri_blames_the_argument_not_the_premise() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "a malformed argument is a usage error: {err}"
+    );
+    assert!(
+        err.contains(&format!("--import {pair}")),
+        "the refusal names the flag and the pair as written: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `schema`"),
+        "…and the specific half that is malformed: {err}"
+    );
+    assert!(
+        err.contains("iri-relative-no-base"),
+        "…carrying the workspace's shared IRI diagnostic code: {err}"
+    );
+    // The premise is not the culprit and must not be presented as one.
+    assert!(
+        !err.contains("the premise owl:imports"),
+        "the operator must not be sent to read their data: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+
+    // The ABSOLUTE spelling of the same pair is unchanged by any of this.
+    let absolute = format!("http://example.org/schema={schema}");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &absolute,
+    ]);
+    assert!(o.status.success(), "entails --import: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// A MALFORMED `--import` ONTOLOGY IRI names the half and the shared code.
+///
+/// A half that is not a relative reference but simply not an IRI gets the specific
+/// `purrdf_iri` code for what is wrong with it, still against the argument.
+#[test]
+fn a_malformed_import_iri_names_the_half_and_the_shared_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("ht tp://example.org/schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("--import") && err.contains("iri-bad-scheme"),
+        "the refusal names the flag and the shared code: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `ht tp://example.org/schema`"),
+        "…and the offending half verbatim: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
 }
 
 /// TWO DOCUMENTS READING STDIN IS REFUSED, never mis-read as one.
