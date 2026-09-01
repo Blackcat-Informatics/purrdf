@@ -116,18 +116,24 @@
 //! A host that caches snapshots deliberately — because rebuilding one per query is real
 //! work — asserts the pairing instead of assuming it, and it asserts it by CALLING
 //! something. [`PathGraph::assert_matches`] is that call: hand it the dataset about to be
-//! queried and it returns `Ok(())` or a diagnostic naming both sides. A mitigation that
-//! exists only as a paragraph telling a host to compare a value is a swallowed error with
-//! extra steps, so this one is executable, and the doctest below runs it.
+//! queried and the graph selector to read it under, and it returns `Ok(())` or a
+//! diagnostic naming both sides. A mitigation that exists only as a paragraph telling a
+//! host to compare a value is a swallowed error with extra steps, so this one is
+//! executable, and the doctest below runs it.
 //!
-//! What it compares is [`PathGraph::snapshot_fingerprint`]: the source view's
-//! [`DatasetView::stats_fingerprint`] and [`DatasetView::term_count`], recorded at
-//! snapshot time alongside the snapshot's own node and edge counts. Every component is a
-//! COUNT, so state its reach honestly: a mismatch is PROOF the pairing is wrong, while a
-//! match is only EVIDENCE that it is right. Two datasets of the same cardinality compare
-//! equal however differently they are wired, and the check will accept the wrong one.
-//! That limit is pinned by a test rather than hoped about. It is still the difference
-//! between an error the host sees and an answer the host believes.
+//! **A match is proof, not evidence.** It re-reads the step over the presented dataset and
+//! compares [`PathSnapshotFingerprint::content_digest`] — a full, untruncated SHA-256
+//! folded from [`TermValue::canonical_bytes`], the injective encoding, over the whole
+//! canonical edge set. Two snapshots share that value if and only if they record the same
+//! edges. The counts alongside it are informational and decide nothing: they belong partly
+//! to the dataset rather than to the subgraph, and
+//! [`DatasetView::stats_fingerprint`]'s trait DEFAULT is a constant `0`, so a check resting
+//! on it would compare nothing at all against a backend that never overrode it.
+//!
+//! The scope is the edge set, and that is the right scope rather than a compromise: the
+//! edge set is the entire part of a dataset these relations ever read. A dataset that grew
+//! a thousand quads under predicates the step does not name still yields the same walks,
+//! and the check says so instead of refusing a snapshot that is genuinely still valid.
 //!
 //! # Wiring one up
 //!
@@ -169,8 +175,10 @@
 //!
 //! // 4. The pairing precondition, as a call rather than a promise. A host that rebuilds
 //! //    per dataset (as this example does) cannot get it wrong; a host that CACHES
-//! //    snapshots runs exactly this line before evaluating against one.
-//! graph.assert_matches(&*dataset)?;
+//! //    snapshots runs exactly this line before evaluating against one. The selector is
+//! //    passed rather than remembered: it is parameterised by dataset-local ids, so it
+//! //    cannot be carried across datasets. Pass the one the snapshot was taken under.
+//! graph.assert_matches(&*dataset, GraphMatch::Default)?;
 //!
 //! // 5. Register the relation under the caller's IRI.
 //! let mut registry = PropertyFunctionRegistry::new();
@@ -354,6 +362,16 @@ use crate::user_fn::Volatility;
 /// here only to decide whether a step alternative can draw edges from the reifier
 /// side-table at all, since every row of that table carries exactly this predicate.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
+/// The domain-separation prefix a snapshot's edge-set digest is taken under.
+///
+/// A DIFFERENT domain from [`PATH_ID_DOMAIN_V1`], deliberately and permanently. The two
+/// digests answer different questions over overlapping terms — "which walk is this" versus
+/// "which edge set is this" — and a shared domain would let a value minted for one be
+/// offered as an answer to the other. The `-v1` suffix is what makes the layout revisable:
+/// a future change takes a new domain, so old and new values are unequal by construction
+/// rather than silently interchangeable.
+const PATH_SNAPSHOT_DOMAIN_V1: &[u8] = b"path-snapshot-edge-set-v1";
 
 // ---------------------------------------------------------------------------
 // The step definition
@@ -595,19 +613,39 @@ impl PathLimits {
 /// enough of its provenance to be checked: a host that caches a `PathGraph` across
 /// dataset revisions can compare this value and rebuild when it moves.
 ///
-/// It is a *discriminator*, not a content digest — [`DatasetView::stats_fingerprint`] is
-/// itself documented as a cache discriminator — so equality is evidence of sameness, not
-/// proof of it.
+/// # The counts discriminate; the digest decides
+///
+/// Four of these five fields are COUNTS, and counts are a cache discriminator rather than
+/// an identity: two datasets of the same size compare equal however differently they are
+/// wired. [`DatasetView::stats_fingerprint`] is weaker still — the trait's DEFAULT
+/// implementation returns a constant `0`, so against any backend that does not override it
+/// that field discriminates nothing at all.
+///
+/// [`content_digest`](Self::content_digest) is the field that carries identity: a full,
+/// untruncated SHA-256 over the snapshot's whole edge set. Comparing it is proof, and
+/// [`PathGraph::assert_matches`] is what compares it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PathSnapshotFingerprint {
     /// The source view's [`DatasetView::stats_fingerprint`] at snapshot time.
+    ///
+    /// Informational only. See the type docs: the trait default is a constant `0`, so this
+    /// field is worth exactly what the backend chose to make it worth, and nothing in this
+    /// module decides anything on it.
     pub stats_fingerprint: u64,
-    /// The source view's [`DatasetView::term_count`] at snapshot time.
+    /// The source view's [`DatasetView::term_count`] at snapshot time. Informational.
     pub term_count: usize,
     /// The number of distinct nodes participating in at least one edge.
     pub node_count: usize,
     /// The number of edges recorded across every adjacency list.
     pub edge_count: usize,
+    /// A full, untruncated SHA-256 over the snapshot's canonical edge set.
+    ///
+    /// Domain-separated under this module's own `path-snapshot-edge-set-v1` tag and folded from
+    /// [`TermValue::canonical_bytes`], the injective encoding — so two snapshots share
+    /// this value if and only if they record the same edges, whatever dataset, step
+    /// spelling or intern order produced them. It covers the edge set and nothing else,
+    /// which is exactly the part of a dataset these relations ever read.
+    pub content_digest: [u8; 32],
 }
 
 /// One directed edge of the snapshot multigraph.
@@ -690,6 +728,15 @@ pub struct PathGraph {
     /// an invocation-local rebuild would recompute an O(V + E) structure on every one of
     /// those rows.
     reverse: OnceLock<Vec<Vec<u32>>>,
+    /// The step this snapshot was taken with, retained so [`PathGraph::assert_matches`]
+    /// can re-walk it over a presented dataset.
+    ///
+    /// A [`PathStep`] is [`TermValue`]-based and therefore dataset-INDEPENDENT, so keeping
+    /// it costs no coupling. The graph selector is the opposite — `GraphMatch<D::Id>` is
+    /// parameterised by dataset-local ids, so retaining one would bind this snapshot to a
+    /// particular dataset's intern order, which is the same reason it is excluded from the
+    /// walk identifier. That is why `assert_matches` takes the selector as an argument.
+    step: PathStep,
     fingerprint: PathSnapshotFingerprint,
     shape: GraphShape,
 }
@@ -776,59 +823,11 @@ impl PathGraph {
         step: &PathStep,
         graph: GraphMatch<D::Id>,
     ) -> Result<Self, EvalError> {
-        // (from, to, statement) in discovery order; re-indexed below, so this order never
-        // reaches an emitted row.
-        let mut raw: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
-        for (predicate, direction) in &step.alternatives {
-            // A predicate the dataset never interned names no statement in it, so this
-            // alternative contributes no edges — indistinguishable, in the snapshot, from
-            // an interned predicate with no in-scope quad. See the type-level note above
-            // for why the two must not be told apart here.
-            let Some(predicate_id) = dataset.term_id_by_value(predicate) else {
-                continue;
-            };
-            // One recording rule for both layers: whichever table a `(subject, object)`
-            // pair came out of, the statement is the asserted triple and the direction
-            // decides which end the hop arrives at.
-            let mut record = |subject: TermValue, object: TermValue| {
-                let statement = TermValue::Triple {
-                    s: Box::new(subject.clone()),
-                    p: Box::new(predicate.clone()),
-                    o: Box::new(object.clone()),
-                };
-                let (from, to) = match direction {
-                    PathDirection::Forward => (subject, object),
-                    PathDirection::Inverse => (object, subject),
-                };
-                raw.push((from, to, statement));
-            };
-            for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
-                record(
-                    crate::scratch::term_id_to_value(dataset, quad.s),
-                    crate::scratch::term_id_to_value(dataset, quad.o),
-                );
-            }
-            // The statement layer, under the same probe. The reifier table is worth
-            // touching only when this alternative's predicate IS `rdf:reifies`, since
-            // every reifier row carries exactly that predicate; the annotation table is
-            // always narrowed by the predicate residually.
-            statement_layer::visit_quads(
-                dataset,
-                StatementProbe {
-                    s: None,
-                    p: Some(predicate_id),
-                    o: None,
-                    graph,
-                    scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
-                },
-                |quad| {
-                    record(
-                        crate::scratch::term_id_to_value(dataset, quad.s),
-                        crate::scratch::term_id_to_value(dataset, quad.o),
-                    );
-                },
-            );
-        }
+        // The canonical edge set, and the digest that identifies it. Both come from the
+        // one walk [`Self::assert_matches`] re-runs, so a snapshot and a later check of
+        // that snapshot can never disagree about what "the edges" were.
+        let raw = canonical_edges(dataset, step, graph);
+        let content_digest = edge_set_digest(&raw);
 
         let mut nodes: Vec<TermValue> = Vec::with_capacity(raw.len() * 2);
         let mut statements: Vec<TermValue> = Vec::with_capacity(raw.len());
@@ -888,11 +887,13 @@ impl PathGraph {
         let max_in_degree = in_degree.into_iter().max().unwrap_or(0);
 
         Ok(Self {
+            step: step.clone(),
             fingerprint: PathSnapshotFingerprint {
                 stats_fingerprint: dataset.stats_fingerprint(),
                 term_count: dataset.term_count(),
                 node_count: nodes.len(),
                 edge_count,
+                content_digest,
             },
             shape: GraphShape {
                 node_count: nodes.len() as u64,
@@ -925,7 +926,8 @@ impl PathGraph {
         self.fingerprint
     }
 
-    /// Fail unless `dataset` still looks like the one this snapshot was built from.
+    /// Fail unless `dataset`, read under this snapshot's own step and the graph selector
+    /// `graph`, carries EXACTLY the edges this snapshot recorded.
     ///
     /// # Why this is a method and not a paragraph
     ///
@@ -934,44 +936,69 @@ impl PathGraph {
     /// dataset *A* and evaluated against dataset *B* answers about *A*'s edges, silently.
     /// A documented failure mode whose only mitigation is "the host should compare a
     /// fingerprint" is a swallowed error with extra steps: it puts the check in prose,
-    /// where nothing runs it. This is the same comparison, as one call that either returns
-    /// `Ok(())` or hands back a diagnostic naming both sides.
+    /// where nothing runs it. This is the check as a call that either returns `Ok(())` or
+    /// hands back a diagnostic naming both sides.
     ///
     /// Call it where the pairing is asserted — immediately before evaluating against a
     /// cached snapshot — not in the traversal, which has no dataset to check against.
     ///
-    /// # What passing does and does not prove
+    /// # A match is PROOF, for the thing that can go wrong
     ///
-    /// [`PathSnapshotFingerprint`] is a DISCRIMINATOR: every component of it is a count.
-    /// So a mismatch is proof the pairing is wrong, and a match is only evidence that it
-    /// is right — two datasets of the same cardinality compare equal however differently
-    /// they are wired, and this method will accept the wrong one. That is the honest reach
-    /// of a cheap check, it is pinned by a test that asserts exactly that limit, and it is
-    /// still the difference between an error a host sees and an answer a host believes.
+    /// The exposure is not "is this the same dataset". It is "are the edges I will answer
+    /// about the edges this dataset carries", because the edge set is the ENTIRE part of a
+    /// dataset these relations ever read. So this re-walks the step over `dataset` and
+    /// compares [`PathSnapshotFingerprint::content_digest`], a full untruncated SHA-256
+    /// folded from [`TermValue::canonical_bytes`] — the injective encoding — over the whole
+    /// canonical edge set. Equal digests are therefore proof of an equal edge set, not
+    /// evidence of a similar one.
+    ///
+    /// The counts are deliberately NOT consulted. Two of them belong to the dataset rather
+    /// than to the snapshot's subgraph, so comparing them would reject a dataset that grew
+    /// a thousand quads under predicates this step never reads and whose walks are
+    /// therefore unchanged — a needlessly strict check that refuses a legitimately reusable
+    /// snapshot is its own defect, not a safer one. And
+    /// [`DatasetView::stats_fingerprint`] could not carry the decision even if that were
+    /// wanted: the trait's DEFAULT implementation returns a constant `0`, so against any
+    /// backend that does not override it, comparing it compares nothing.
+    ///
+    /// What it still does not cover, stated plainly: anything outside the step's
+    /// predicates, and the graph selector, which the caller supplies here precisely because
+    /// a `GraphMatch<D::Id>` cannot be retained across datasets. Passing the wrong selector
+    /// asks a different question and gets a truthful answer to it.
+    ///
+    /// # Cost
+    ///
+    /// One pass over the step's predicates — the same read `from_dataset` does, without
+    /// building the adjacency, the per-edge fold bytes or the reverse index. A host that
+    /// caches snapshots to avoid rebuilding pays materially less than the rebuild it is
+    /// avoiding, and it pays it to replace a silent wrong answer with an error.
     ///
     /// # Errors
     ///
-    /// [`EvalError::Data`] when the observed dataset's
-    /// [`DatasetView::stats_fingerprint`] or [`DatasetView::term_count`] differs from the
-    /// snapshot's record of them. The message names both, because "these do not match" is
+    /// [`EvalError::Data`] when the recomputed edge-set digest differs from the snapshot's.
+    /// The message names both digests and both edge counts, because "these do not match" is
     /// not actionable and "expected X, observed Y" is.
-    pub fn assert_matches<D: DatasetView>(&self, dataset: &D) -> Result<(), EvalError> {
-        let observed_fingerprint = dataset.stats_fingerprint();
-        let observed_terms = dataset.term_count();
-        if observed_fingerprint == self.fingerprint.stats_fingerprint
-            && observed_terms == self.fingerprint.term_count
-        {
+    pub fn assert_matches<D: DatasetView>(
+        &self,
+        dataset: &D,
+        graph: GraphMatch<D::Id>,
+    ) -> Result<(), EvalError> {
+        let observed_edges = canonical_edges(dataset, &self.step, graph);
+        let observed_digest = edge_set_digest(&observed_edges);
+        if observed_digest == self.fingerprint.content_digest {
             return Ok(());
         }
         Err(EvalError::data(format!(
-            "this path snapshot was built from a different dataset than the one being \
-             queried: it recorded stats_fingerprint {} over {} terms, and the dataset \
-             presented reports stats_fingerprint {observed_fingerprint} over \
-             {observed_terms} terms. The property-function seam hands a relation no \
-             dataset at evaluation time, so an unnoticed mismatch is answered silently \
-             about the snapshot's edges; rebuild the snapshot from the dataset being \
-             queried",
-            self.fingerprint.stats_fingerprint, self.fingerprint.term_count,
+            "this path snapshot records a different edge set than the dataset presented \
+             carries under the same step: the snapshot digests to {} over {} edge(s), and \
+             the dataset digests to {} over {} edge(s). The property-function seam hands a \
+             relation no dataset at evaluation time, so an unnoticed mismatch is answered \
+             silently about the snapshot's edges; rebuild the snapshot from the dataset \
+             being queried",
+            render_hex(&self.fingerprint.content_digest),
+            self.fingerprint.edge_count,
+            render_hex(&observed_digest),
+            observed_edges.len(),
         )))
     }
 
@@ -1058,6 +1085,124 @@ impl PathGraph {
     }
 }
 
+/// Read `step`'s edges over `dataset`, scoped to `graph`, as a CANONICAL
+/// `(from, to, statement)` list: sorted by [`TermValue`] `Ord` and deduplicated.
+///
+/// This is the single walk of the data both [`PathGraph::from_dataset`] and
+/// [`PathGraph::assert_matches`] run. It has to be one function rather than two that agree
+/// today, because the whole value of the pairing check is that the bytes it compares were
+/// produced the same way the bytes it compares them against were.
+///
+/// The canonical ordering is what makes the derived digest a function of the EDGE SET
+/// rather than of the order the backend happened to yield rows in, or of the order the
+/// caller happened to list the step's alternatives in.
+fn canonical_edges<D: DatasetView>(
+    dataset: &D,
+    step: &PathStep,
+    graph: GraphMatch<D::Id>,
+) -> Vec<(TermValue, TermValue, TermValue)> {
+    let mut raw: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
+    for (predicate, direction) in &step.alternatives {
+        // A predicate the dataset never interned names no statement in it, so this
+        // alternative contributes no edges — indistinguishable, in the snapshot, from an
+        // interned predicate with no in-scope quad. See `from_dataset`'s docs for why the
+        // two must not be told apart here.
+        let Some(predicate_id) = dataset.term_id_by_value(predicate) else {
+            continue;
+        };
+        // One recording rule for both layers: whichever table a `(subject, object)` pair
+        // came out of, the statement is the asserted triple and the direction decides
+        // which end the hop arrives at.
+        let mut record = |subject: TermValue, object: TermValue| {
+            let statement = TermValue::Triple {
+                s: Box::new(subject.clone()),
+                p: Box::new(predicate.clone()),
+                o: Box::new(object.clone()),
+            };
+            let (from, to) = match direction {
+                PathDirection::Forward => (subject, object),
+                PathDirection::Inverse => (object, subject),
+            };
+            raw.push((from, to, statement));
+        };
+        for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
+            record(
+                crate::scratch::term_id_to_value(dataset, quad.s),
+                crate::scratch::term_id_to_value(dataset, quad.o),
+            );
+        }
+        // The statement layer, under the same probe. The reifier table is worth touching
+        // only when this alternative's predicate IS `rdf:reifies`, since every reifier row
+        // carries exactly that predicate; the annotation table is always narrowed by the
+        // predicate residually.
+        statement_layer::visit_quads(
+            dataset,
+            StatementProbe {
+                s: None,
+                p: Some(predicate_id),
+                o: None,
+                graph,
+                scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
+            },
+            |quad| {
+                record(
+                    crate::scratch::term_id_to_value(dataset, quad.s),
+                    crate::scratch::term_id_to_value(dataset, quad.o),
+                );
+            },
+        );
+    }
+    raw.sort_unstable();
+    // Two alternatives can name the same statement in the same direction only by naming
+    // the same predicate twice, which `PathStep::new` refuses — but the adjacency build
+    // deduplicates anyway, so the digest must see the same collapsed set the graph does.
+    raw.dedup();
+    raw
+}
+
+/// The full, untruncated SHA-256 identifying a canonical edge set.
+///
+/// ```text
+/// PATH_SNAPSHOT_DOMAIN_V1 || u64_le(edge_count) || ( cb(from) || cb(to) || cb(stmt) )*
+/// ```
+///
+/// where `cb` is [`TermValue::canonical_bytes`]. Injectivity carries straight through: `cb`
+/// is injective and self-delimiting, so the concatenation parses back to exactly one edge
+/// list, the count is absorbed at fixed width so no edge set's encoding is a prefix of a
+/// longer one's, and the domain tag keeps the value from ever equalling one minted for a
+/// different question.
+///
+/// The per-edge [`Edge::fold_bytes`] precomputed for `?pathId` are deliberately NOT reused
+/// here. They are `cb(statement) || cb(target)` — they carry no `from`, so an edge set and
+/// a re-pointed one could share them — and they belong to a different domain. Aliasing two
+/// domains onto one byte string is precisely what domain separation exists to prevent.
+///
+/// It is not truncated, for the same reason `?pathId` is not: a collision here is not a
+/// slowdown, it is a mispaired snapshot certified as correct.
+fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
+    let mut state = Sha256::new();
+    state.update(PATH_SNAPSHOT_DOMAIN_V1);
+    state.update((edges.len() as u64).to_le_bytes());
+    let mut bytes = Vec::new();
+    for (from, to, statement) in edges {
+        bytes.clear();
+        from.canonical_bytes(&mut bytes);
+        to.canonical_bytes(&mut bytes);
+        statement.canonical_bytes(&mut bytes);
+        state.update(&bytes);
+    }
+    state.finalize().into()
+}
+
+/// Render bytes as lowercase hex, the one spelling this module renders a digest in.
+fn render_hex(bytes: &[u8]) -> String {
+    let mut rendered = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(rendered, "{byte:02x}").expect("formatting into a String cannot fail");
+    }
+    rendered
+}
+
 /// The dense index of `value` within an already-sorted, deduplicated table it is known to
 /// belong to.
 fn dense_index(table: &[TermValue], value: &TermValue) -> u32 {
@@ -1105,12 +1250,7 @@ fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
 /// answer. All 32 bytes are rendered, as 64 lowercase hex characters.
 fn finish_digest(mut state: Sha256, hop_count: u64) -> String {
     state.update(hop_count.to_le_bytes());
-    let digest = state.finalize();
-    let mut rendered = String::with_capacity(64);
-    for byte in digest {
-        write!(rendered, "{byte:02x}").expect("formatting into a String cannot fail");
-    }
-    rendered
+    render_hex(&state.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -2753,27 +2893,122 @@ mod tests {
     fn the_pairing_precondition_is_callable_and_refuses_the_wrong_dataset() {
         let (data, graph) = chain();
         graph
-            .assert_matches(&*data)
+            .assert_matches(&*data, GraphMatch::Default)
             .expect("the dataset the snapshot was built from");
 
         // The wrong-answer channel, closed: a snapshot of A presented with B. Without this
         // call the query would answer, completely and undiagnosed, about A's edges.
         let other = dataset(&[("a", "p", "b")]);
         let error = graph
-            .assert_matches(&*other)
+            .assert_matches(&*other, GraphMatch::Default)
             .expect_err("a snapshot of a different dataset must not pass silently");
         assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
         let text = error.to_string();
         // Both sides, because "these do not match" is not actionable.
         assert!(
-            text.contains(&data.stats_fingerprint().to_string()),
-            "the snapshot's own fingerprint must be named: {text}"
+            text.contains(&render_hex(&graph.snapshot_fingerprint().content_digest)),
+            "the snapshot's own digest must be named: {text}"
         );
+        let other_graph = snapshot(&other, &[("p", PathDirection::Forward)]);
         assert!(
-            text.contains(&other.stats_fingerprint().to_string()),
-            "the presented dataset's fingerprint must be named: {text}"
+            text.contains(&render_hex(
+                &other_graph.snapshot_fingerprint().content_digest
+            )),
+            "the presented dataset's digest must be named: {text}"
         );
         assert!(text.contains("rebuild the snapshot"), "{text}");
+    }
+
+    #[test]
+    fn the_pairing_check_is_proof_and_not_merely_a_size_comparison() {
+        // What a count-based check could NOT see. Each dataset below has the same node
+        // count, edge count and term count as the chain — four nodes, three edges, five
+        // terms — and two of them produce an identical `stats_fingerprint`, which is a hash
+        // of exactly those counts. A digest over the edge set tells all of them apart,
+        // because that is what identity means here.
+        let (chain_data, graph) = chain();
+        let base = graph.snapshot_fingerprint();
+        for (label, triples) in [
+            (
+                "the same terms, re-pointed",
+                &[("a", "p", "b"), ("a", "p", "c"), ("a", "p", "d")],
+            ),
+            (
+                "the same shape, one term renamed",
+                &[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "z")],
+            ),
+            (
+                "the same edges, reversed",
+                &[("b", "p", "a"), ("c", "p", "b"), ("d", "p", "c")],
+            ),
+        ] {
+            let other = dataset(triples);
+            let other_print =
+                snapshot(&other, &[("p", PathDirection::Forward)]).snapshot_fingerprint();
+            assert_eq!(
+                (base.node_count, base.edge_count, base.term_count),
+                (
+                    other_print.node_count,
+                    other_print.edge_count,
+                    other_print.term_count
+                ),
+                "{label}: the counts are equal, which is the whole point of this case"
+            );
+            assert_ne!(
+                base.content_digest, other_print.content_digest,
+                "{label}: the edge sets differ, so the digests must"
+            );
+            let error = graph
+                .assert_matches(&other, GraphMatch::Default)
+                .expect_err("a different edge set must be refused");
+            assert!(matches!(error, EvalError::Data(_)), "{label}: {error:?}");
+        }
+
+        // ...and the mirror hazard, which is a defect in its own right: a check that
+        // refuses a snapshot that is still legitimately usable. This dataset carries a
+        // thousand-fold change under predicates the step never names, so its term count and
+        // `stats_fingerprint` both move — and its `ex:p` edges, which are the only thing
+        // these relations read, are untouched. The snapshot is still valid and the check
+        // must say so.
+        let mut wider: Vec<(&str, &str, &str)> =
+            vec![("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")];
+        for extra in [("x", "q", "y"), ("y", "q", "z"), ("z", "q", "x")] {
+            wider.push(extra);
+        }
+        let wider = dataset(&wider);
+        assert_ne!(
+            chain_data.term_count(),
+            wider.term_count(),
+            "the fixture must actually differ outside the step, or this proves nothing"
+        );
+        assert_ne!(chain_data.stats_fingerprint(), wider.stats_fingerprint());
+        graph
+            .assert_matches(&wider, GraphMatch::Default)
+            .expect("a change outside the step's predicates leaves the walks identical");
+    }
+
+    #[test]
+    fn the_snapshot_digest_is_domain_separated_from_the_walk_identifier() {
+        // The two digests answer different questions over overlapping terms, so they take
+        // different domains and can never be cross-substituted. A single-edge snapshot and
+        // the single one-hop walk across it are the tightest case: same statement, same
+        // nodes, same encoding primitive.
+        let data = dataset(&[("a", "p", "b")]);
+        let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
+        let snapshot_digest = render_hex(&graph.snapshot_fingerprint().content_digest);
+
+        let relation = PathWitnessRelation::new(Arc::clone(&graph), limits(1, 1));
+        let rows = drained(&relation, &free());
+        assert_eq!(rows.len(), 1, "one edge, one walk, one row");
+        let TermValue::Literal { lexical_form, .. } = &rows[0][POS_PATH_ID] else {
+            panic!("?pathId is a literal");
+        };
+        assert_eq!(lexical_form.len(), snapshot_digest.len());
+        assert_ne!(
+            *lexical_form, snapshot_digest,
+            "a walk identifier and a snapshot digest must never collide"
+        );
+        assert_ne!(PATH_ID_DOMAIN_V1, PATH_SNAPSHOT_DOMAIN_V1);
     }
 
     #[test]
@@ -2821,14 +3056,9 @@ mod tests {
             "a snapshot of a different step over the same data is a different snapshot"
         );
 
-        // ...and the LIMIT, pinned as deliberately as the power, because a mitigation
-        // whose reach is unstated is a mitigation a host will over-trust. EVERY component
-        // here is a count — `stats_fingerprint` hashes the source's quad and term counts,
-        // and the other three are cardinalities — so two datasets of the same size compare
-        // EQUAL however differently they are wired. A renamed term and a completely
-        // re-pointed topology are both invisible. That is what "a discriminator, not a
-        // content digest" costs, it is exactly why equality is evidence and never proof,
-        // and it is the honest boundary of what pairing check can promise.
+        // The cases a COUNT-based fingerprint could not see, which the digest field now
+        // separates. Each of these was previously equal to the base — that was the defect,
+        // and this loop is the inverted form of the test that used to pin it as a limit.
         for (label, triples) in [
             (
                 "a renamed term",
@@ -2840,11 +3070,28 @@ mod tests {
             ),
         ] {
             let same_size = dataset(triples);
+            let other =
+                snapshot(&same_size, &[("p", PathDirection::Forward)]).snapshot_fingerprint();
             assert_eq!(
-                base_print,
-                snapshot(&same_size, &[("p", PathDirection::Forward)]).snapshot_fingerprint(),
-                "{label} of the same cardinality is invisible to a size discriminator; a \
-                 host that needs proof of sameness must not read one"
+                (
+                    base_print.stats_fingerprint,
+                    base_print.term_count,
+                    base_print.node_count,
+                    base_print.edge_count
+                ),
+                (
+                    other.stats_fingerprint,
+                    other.term_count,
+                    other.node_count,
+                    other.edge_count
+                ),
+                "{label}: every COUNT is equal here, which is why counts alone could never \
+                 have decided this"
+            );
+            assert_ne!(
+                base_print, other,
+                "{label}: the edge sets differ, so the fingerprints must — this is the \
+                 content digest earning its place in the struct"
             );
         }
     }
