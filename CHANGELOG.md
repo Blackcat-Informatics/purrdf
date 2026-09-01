@@ -266,6 +266,35 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **sparql-eval:** Add path-WITNESS property functions, which answer the derivation question the
+  core grammar's property paths cannot: `?s ex:p+ ?o` reports that some route exists and binds only
+  the endpoint pair, while a call to `?start <caller-iri> ( ?end ?pathId ?len ?step ?node ?edge )`
+  binds the route itself — one row per hop, with `?edge` the traversed STATEMENT as a first-class
+  RDF 1.2 term that joins straight back into the dataset by an ordinary basic graph pattern.
+  `GROUP BY ?pathId` with `ORDER BY ?step` reassembles a whole walk inside the query language, so a
+  caller can weight, filter, or re-join a route without host code and without a list term. Two
+  relations, not one with a mode flag, because the planner reads cardinality off the registration:
+  `PathWitnessRelation` enumerates every simple-prefix walk (exponential in the worst case) and
+  `ShortestPathWitnessRelation` yields one shortest witness per reachable pair (polynomial).
+  Enumeration terminates structurally on cyclic input, and its endpoint projection equals `p+`.
+- **cli:** Add `purrdf query --path-relation` and `purrdf update --path-relation`, the binary's
+  first property-function registration surface — before it, `QueryOptions::property_functions`
+  stayed empty on every call. Repeatable; the value is semicolon-separated `key=value` pairs
+  (`iri`, repeatable `forward`/`inverse`, `min-hops`, `max-hops`, `max-paths-per-seed`,
+  `max-expansions`, `mode=walk|shortest`). Every key is mandatory and none has a default: PurRDF
+  mints no vocabulary IRIs, so the relation IRI is caller-supplied with no default namespace, and
+  a traversal envelope the binary invented would be a limit the operator never read. Each
+  malformed spelling names the offending token. The flag reaches the ungoverned, governed,
+  `--explain`, and `--entailment` lanes of `query` and the `WHERE` clause of `update`; the
+  `--explain` receipt's `relations` block now names what was registered.
+- **python:** Add the `path_relations` keyword beside `relations` / `relations_from_graph` on
+  every `Store` and `MutableDataset` query and update entry, registering a path-witness relation
+  over the store's own edges as `{iri: (steps, min_hops, max_hops, max_paths_per_seed,
+  max_expansions_per_invocation, mode)}`. It crosses the boundary as pure data — a specification
+  of which directed predicates a hop may follow, never a Python callable — so the evaluation still
+  runs with the GIL released. Every envelope field is mandatory; an unknown direction or mode
+  string, an empty or duplicated step alternation, a non-IRI predicate, and an unbuildable
+  envelope each raise `ValueError` carrying the engine's own diagnostic.
 - **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
   timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
   arithmetic with month-end clamping, instant subtraction, and duration add/subtract/

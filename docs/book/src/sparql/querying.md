@@ -976,16 +976,128 @@ a lossy re-derivation from a finished answer — so a large single group folds
 in parallel chunks (see `crate::modifier::eval_custom_aggregate`) with a
 result byte-identical to the sequential fold.
 
+## Path witnesses: binding the derivation, not the endpoints
+
+The core grammar's property paths answer a **reachability** question. `?s ex:p+
+?o` says that some sequence of `ex:p` edges leads from `?s` to `?o`, and the
+answer is the endpoint pair; *which* edges is not expressible, so a query that
+needs to explain, weight, filter, or re-join the route has nowhere to look.
+
+A **path-witness** property function answers the derivation question instead. A
+call reads
+
+```text
+?start <caller-iri> ( ?end ?pathId ?len ?step ?node ?edge )
+```
+
+and emits **one row per hop**. For a walk of `k` hops, row `i` binds `?len = k`,
+`?step = i`, `?node` to the node that hop arrived at, and `?edge` to the
+**statement** it traversed — a first-class RDF 1.2 triple term in asserted
+orientation, so it joins straight back into the dataset by an ordinary basic
+graph pattern. `?step` and `?len` are `xsd:integer` literals precisely so
+`ORDER BY ?step` orders numerically rather than putting `"10"` before `"2"`.
+
+There is no default relation IRI and no default traversal envelope. PurRDF mints
+no vocabulary IRIs, so the name a query spells in predicate position is
+caller-supplied; and a zero-hop path has no witness while an unbounded depth is a
+stack-overflow abort, so the minimum and maximum hop counts and the two resource
+guards are stated every time rather than invented by the library.
+
+Two relation TYPES, not one with a mode switch: `PathWitnessRelation` enumerates
+every simple-prefix walk (exponential in the worst case) and
+`ShortestPathWitnessRelation` yields one shortest witness per reachable pair
+(polynomial). The planner reads cardinality off the registration, so which of the
+two answers an IRI is a property of the registration and not of a runtime value
+the planner cannot see.
+
+### A worked example
+
+Over a three-edge chain `ex:a → ex:b → ex:c → ex:d`:
+
+```sh
+purrdf query --data chain.ttl --results-format csv \
+  --path-relation 'iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=1;max-hops=4;max-paths-per-seed=1024;max-expansions=100000;mode=walk' \
+  'SELECT ?end ?len ?step ?node
+   WHERE { <http://example.org/a> <http://example.org/pf#walk>
+           ( ?end ?pathId ?len ?step ?node ?edge ) }
+   ORDER BY ?len ?step'
+```
+
+```text
+end,len,step,node
+http://example.org/b,1,1,http://example.org/b
+http://example.org/c,2,1,http://example.org/b
+http://example.org/c,2,2,http://example.org/c
+http://example.org/d,3,1,http://example.org/b
+http://example.org/d,3,2,http://example.org/c
+http://example.org/d,3,3,http://example.org/d
+```
+
+`GROUP BY ?pathId` is how the hop rows become walks again. The identifier is
+constant across one walk's rows and distinct between walks, so each group IS one
+walk; `?start`, `?end` and `?len` are constant within a group, so grouping by
+them alongside is free and lets them be projected:
+
+```sh
+purrdf query --data chain.ttl --results-format csv \
+  --path-relation 'iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=1;max-hops=4;max-paths-per-seed=1024;max-expansions=100000;mode=walk' \
+  'SELECT ?end ?len (GROUP_CONCAT(?node; separator="->") AS ?route)
+   WHERE { <http://example.org/a> <http://example.org/pf#walk>
+           ( ?end ?pathId ?len ?step ?node ?edge ) }
+   GROUP BY ?pathId ?end ?len ORDER BY ?len'
+```
+
+```text
+end,len,route
+http://example.org/b,1,http://example.org/b
+http://example.org/c,2,http://example.org/b->http://example.org/c
+http://example.org/d,3,http://example.org/b->http://example.org/c->http://example.org/d
+```
+
+Swap `?node` for `?edge` and the same grouping reconstructs the STATEMENT
+sequence, which is where an aggregate over a walk belongs: a `SUM` of a per-hop
+weight joined in through `?edge`, a `MIN` of a per-hop confidence, a `HAVING`
+that keeps only routes whose every hop is annotated. None of that is reachable
+from a relation that returned endpoints, and none of it needed a list term.
+
+The same registration from Python:
+
+```python
+store.query(
+    "SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> "
+    "<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } "
+    "ORDER BY ?len ?step",
+    path_relations={
+        "http://example.org/pf#walk": (
+            [(purrdf.NamedNode("http://example.org/p"), "forward")],
+            1, 4, 1024, 100000, "walk",
+        )
+    },
+)
+```
+
 ## Reaching extensions from other hosts
 
-The property-function registry, the SHACL-AF function registry, and the
-GENERAL custom-aggregate registry are all **Rust-closure seams**: a registered
-relation, function, or aggregate is arbitrary host Rust (`init`/`step`/
-`combine`/`finish` closures for an aggregate), so registering one is a
-Rust-host-only operation. It genuinely cannot cross a Python, WebAssembly, or C
-boundary as a string or any other FFI-shaped value — there is no callback
+The SHACL-AF function registry and the GENERAL custom-aggregate registry are
+**Rust-closure seams**: a registered function or aggregate is arbitrary host Rust
+(`init`/`step`/`combine`/`finish` closures for an aggregate), so registering one
+is a Rust-host-only operation. It genuinely cannot cross a Python, WebAssembly,
+or C boundary as a string or any other FFI-shaped value — there is no callback
 protocol this project is willing to invent for it, and none of the four host
 surfaces below expose it.
+
+The property-function registry is a closure seam in the same sense — a
+`PropertyFunction` is an arbitrary host implementation — but its DATA-SHAPED
+members are not, and those do cross. A frozen table of terms, a table read out of
+the store's own dataset as an `rdf:List` of `rdf:List`s, and a path-witness
+traversal are each fully described by owned data, so each is registrable from
+Python (`relations`, `relations_from_graph`, `path_relations` on every `Store` /
+`MutableDataset` query and update entry) and a path relation is registrable from
+the CLI (`purrdf query --path-relation`, `purrdf update --path-relation`). None
+of them is a callback: nothing the engine invokes while the GIL is released can
+re-enter the interpreter, which is exactly why they are the members that cross.
+The WebAssembly and C-ABI surfaces expose no property-function registration at
+all.
 
 PurRDF's first-party **statistical set** is different, precisely because it is
 NOT an arbitrary closure: `AggregateRegistry::register_statistical_aggregates`
