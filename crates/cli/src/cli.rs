@@ -102,19 +102,74 @@ use crate::source::TransportPolicy;
 fn parse_base_iri(raw: &str) -> Result<String, String> {
     match purrdf_iri::BaseIri::parse(raw) {
         Ok(base) => Ok(base.as_str().to_owned()),
-        Err(error) => {
-            // A path-shaped argument is the likely intent, so name the spelling that
-            // would have worked rather than only restating the rule.
-            let hint = if raw.starts_with('/') || raw.starts_with('.') {
-                format!(" did you mean `file://{}`?", raw.trim_start_matches('.'))
-            } else {
-                String::new()
-            };
-            Err(format!(
-                "a base IRI must be absolute (with a scheme): {error}.{hint}"
-            ))
-        }
+        Err(error) => Err(format!(
+            "a base IRI must be absolute (with a scheme): {error}.{}",
+            path_shaped_hint(raw)
+        )),
     }
+}
+
+/// The `did you mean …?` half of a rejected `--base`, for a value shaped like a filesystem
+/// path.
+///
+/// The suggestion is DERIVED, never spliced. The previous version built it by trimming the
+/// leading dots off the argument and prefixing `file://`, which named a directory the
+/// operator did not write: `./vocab/` suggested `file:///vocab/`, and `../vocab/` suggested
+/// the same thing, because `trim_start_matches` strips every leading dot. A diagnostic that
+/// confidently names the wrong fix is worse than one that names none, so a dot-relative
+/// value is RESOLVED through the same [`crate::source::retrieval_base_iri`] the pipeline
+/// derives a retrieval IRI with, and a value that does not resolve gets the rule and no
+/// path-specific suggestion at all.
+fn path_shaped_hint(raw: &str) -> String {
+    match path_shaped_base(raw) {
+        Some(iri) => format!(" did you mean `{iri}`?"),
+        // A relative path is not a base IRI and, unresolved, there is no honest absolute
+        // spelling to offer for it — so state the rule and stop.
+        None if is_relative_path(raw) => {
+            " a relative filesystem path is not a base IRI, and this one does not resolve \
+             against the working directory: pass an absolute `file://` IRI."
+                .to_owned()
+        }
+        None => String::new(),
+    }
+}
+
+/// The absolute `file://` IRI a path-shaped `--base` value denotes, or `None` when the value
+/// is not path-shaped or cannot be resolved.
+fn path_shaped_base(raw: &str) -> Option<String> {
+    if is_relative_path(raw) {
+        let mut iri = crate::source::retrieval_base_iri(raw).ok()?;
+        // A DIRECTORY base ends in `/`. RFC-3986 §5.2.4 resolution replaces a base's last
+        // segment, so `file:///x/vocab` and `file:///x/vocab/` are different bases and only
+        // the second is the directory the operator named.
+        if !iri.ends_with('/') && std::path::Path::new(raw).is_dir() {
+            iri.push('/');
+        }
+        return Some(iri);
+    }
+    is_absolute_path(raw).then(|| crate::source::file_iri_for_absolute_path(raw))
+}
+
+/// Whether `raw` is a DOT-RELATIVE filesystem path — one whose meaning depends on the
+/// working directory, so nothing but the filesystem can say which IRI it denotes.
+fn is_relative_path(raw: &str) -> bool {
+    raw.starts_with('.')
+}
+
+/// Whether `raw` is an ABSOLUTE filesystem path in this platform's spelling: a POSIX
+/// `/path`, a Windows UNC `\\host\share`, or a Windows drive path `C:\dir` / `C:/dir`.
+///
+/// An absolute path needs no filesystem lookup to name its IRI, which is what lets the
+/// suggestion stand for a path that does not exist yet.
+fn is_absolute_path(raw: &str) -> bool {
+    if raw.starts_with('/') || raw.starts_with(r"\\") {
+        return true;
+    }
+    let mut chars = raw.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
+    )
 }
 
 /// The `purrdf` command-line interface.
