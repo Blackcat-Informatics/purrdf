@@ -45,12 +45,13 @@ const START_SELECTOR: &str = "START";
 
 // ── pure-Rust cores (unit-tested without a Python interpreter) ───────────────────
 
-/// Parse `schema` under `format` (`"shexc"` or `"shexj"`); `base` resolves
-/// relative IRIs in a ShExC document (ShExJ is always absolute).
+/// Parse `schema` under `format` (`"shexc"` or `"shexj"`); `base` resolves the
+/// relative IRIs of EITHER syntax — ShExJ is a JSON-LD dialect whose IRI-valued
+/// members are document-relative just as ShExC's IRIREFs are.
 fn parse_schema(schema: &str, format: &str, base: Option<&str>) -> Result<Schema, String> {
     match format {
         "shexc" => parse_shexc(schema, base).map_err(|e| e.to_string()),
-        "shexj" => parse_shexj(schema).map_err(|e| e.to_string()),
+        "shexj" => parse_shexj(schema, base).map_err(|e| e.to_string()),
         other => Err(format!(
             "unknown schema format `{other}` (expected \"shexc\" or \"shexj\")"
         )),
