@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The group the badly-named aggregator in `../manifest.ttl` pulls in. It is a
+# perfectly ordinary group manifest; the defect is the parent's file name, not
+# anything here.
+@prefix : <manifest#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:entries ( :group-case-01 ) .
+
+:group-case-01 a mf:PositiveSyntaxTest ;
+    mf:name "group-case-01" ;
+    mf:action <group-case-01.rq> .

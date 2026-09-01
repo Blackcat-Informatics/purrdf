@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# An aggregator that is ITSELF named `manifest.ttl`. This is the double-count
+# shape: the datatest root glob in
+# `crates/sparql-conformance/tests/sparql_conformance.rs` is
+# `.*/manifest\.ttl$`, so it would discover this file AND the `manifest.ttl`
+# files it includes — and every included case would run twice, once directly and
+# once through here, silently doubling the pass tally.
+#
+# `manifest::load` refuses it by name. An aggregator must be named something the
+# leaf glob does not match, as the vendored SEP-0009 corpus's `manifest-all.ttl`
+# is, which makes group discovery and aggregation disjoint by construction rather
+# than by accident of one file's name.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:include ( <group/manifest.ttl> ) .

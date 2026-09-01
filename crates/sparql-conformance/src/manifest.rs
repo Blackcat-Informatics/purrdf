@@ -8,6 +8,12 @@
 //! its `mf:entries` list of test cases. File references in the manifest are
 //! relative IRIs; they are parsed against a sentinel base and mapped back to
 //! local paths under the manifest's directory.
+//!
+//! The DAWG manifest vocabulary also defines `mf:include`, an RDF collection of
+//! further manifests an *aggregator* manifest pulls in. [`load`] follows it: see
+//! [`load`]'s own documentation for the cycle, depth, fan-out and
+//! aggregator-discovery rules, all of which are hard errors rather than
+//! truncations.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -165,12 +171,211 @@ pub struct SparqlTestCase {
     pub expected: ExpectedResult,
 }
 
-/// Load and parse all cases declared by `manifest_path`.
+/// The greatest `mf:include` nesting depth [`load`] will follow.
+///
+/// Justified by what aggregation the published corpora actually use: the DAWG
+/// SPARQL manifests and the SEP-0009 CDT corpus both nest exactly ONE level (a
+/// root aggregator over per-group manifests), and the deepest plausible shape —
+/// spec-version → chapter → section → group → sub-group — is five. Eight leaves
+/// that ample headroom while still bounding a pathological chain that the cycle
+/// check cannot catch, because a long non-repeating chain of manifests is not a
+/// cycle. Exceeding it is a hard error naming the bound and the chain, never a
+/// truncation: a silently-truncated include tree runs fewer cases and reports
+/// success, which is the exact failure this whole loader exists to refuse.
+const MAX_INCLUDE_DEPTH: usize = 8;
+
+/// The greatest number of manifests one `load` closure will visit.
+///
+/// The cycle check refuses a manifest that includes itself and the duplicate
+/// check refuses one reached twice, so the remaining unbounded shape is FAN-OUT:
+/// a tree of distinct manifests wide enough to exhaust memory or time. The whole
+/// workspace carries well under a hundred manifests across every corpus, so 512
+/// is roughly a five-fold headroom over the largest thing this repository could
+/// legitimately grow into, and still small enough that hitting it means the
+/// include graph is wrong rather than large.
+const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
+
+/// Load and parse every case declared by `manifest_path` **and by the transitive
+/// closure of its `mf:include` collection**.
+///
+/// # Manifest roles: aggregator versus group
+///
+/// The DAWG vocabulary lets one manifest declare `mf:entries` (a *group* — the
+/// test cases themselves), `mf:include` (an *aggregator* — a collection of
+/// further manifests), or both. This loader accepts all three shapes, with one
+/// rule that keeps discovery and aggregation from colliding:
+///
+/// > **A manifest whose file name is `manifest.ttl` may not declare `mf:include`.**
+///
+/// The datatest harness in `tests/sparql_conformance.rs` discovers cases with the
+/// glob `.*/manifest\.ttl$`. If an aggregator were itself named `manifest.ttl`
+/// while its children were too, the glob would discover BOTH, and every child's
+/// cases would run twice — once directly and once through the aggregator —
+/// silently doubling the pass tally. Naming aggregators something the leaf glob
+/// does not match (`manifest-all.ttl`, as the SEP-0009 corpus does) makes the two
+/// roles disjoint by construction: the glob discovers group manifests only, and
+/// an aggregator is only ever loaded because a `[[test]]` target names it. This
+/// used to hold by accident of one file's name; it is now enforced, so a future
+/// corpus cannot reintroduce the double count.
+///
+/// # Hard failures (never silent truncation)
+///
+/// * A manifest declaring NEITHER `mf:entries` NOR `mf:include` — it advertises
+///   nothing and would load zero cases while reporting success.
+/// * A manifest declaring an EMPTY `mf:entries ()` or `mf:include ()` collection.
+///   These are diagnosed separately from the case above because an empty
+///   `rdf:List` is `rdf:nil`, which has no `rdf:first`, so the collection walks
+///   cannot tell "empty" from "absent" — and they are different mistakes.
+/// * A closure whose transitive case count is ZERO. Given the three checks above
+///   this is unreachable — every leaf either declares a non-empty `mf:entries`
+///   (and the declared-vs-loaded check then forces at least one case) or is
+///   refused — so it is a belt-and-braces assertion in the same spirit as the
+///   executed-count check inside `load_one`: it survives a future refactor that
+///   changes how a manifest can contribute cases.
+/// * An include cycle, direct or transitive — the error names the whole chain.
+/// * The same manifest reached twice in one closure (a diamond, not a cycle) —
+///   its cases would be counted twice.
+/// * Nesting deeper than [`MAX_INCLUDE_DEPTH`] or wider than
+///   [`MAX_MANIFESTS_PER_CLOSURE`].
+/// * Two manifests in one closure minting the same test-case IRI — the ledger in
+///   [`crate::xfail`] could not tell them apart.
+/// * Every per-manifest guarantee below (the declared-vs-loaded completeness
+///   check) applied to each included manifest exactly as to the root, because
+///   each is loaded through this same function.
 ///
 /// # Errors
 ///
-/// Returns a message on a read/parse failure or a malformed manifest.
+/// Returns a message on a read/parse failure, a malformed manifest, or any of the
+/// hard failures above.
 pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
+    let mut walk = IncludeWalk::default();
+    let cases = walk.load(manifest_path, 0)?;
+    if cases.is_empty() {
+        return Err(format!(
+            "{}: the transitive mf:include/mf:entries closure yields ZERO test cases. A \
+             manifest that declares tests and runs none reports success while measuring \
+             nothing, so it is refused rather than counted green",
+            manifest_path.display()
+        ));
+    }
+    Ok(cases)
+}
+
+/// The state one [`load`] closure carries while following `mf:include`.
+#[derive(Default)]
+struct IncludeWalk {
+    /// Canonical paths of the manifests currently being loaded, outermost first.
+    /// A child already on this stack is a CYCLE, and the stack IS the chain the
+    /// error names.
+    stack: Vec<PathBuf>,
+    /// Canonical paths of every manifest this closure has finished (or started).
+    /// A repeat that is not on `stack` is a diamond: reached twice by two
+    /// different parents, which would count its cases twice.
+    visited: Vec<PathBuf>,
+    /// Every case IRI minted so far, mapped to the manifest that minted it, so a
+    /// cross-manifest collision names both sides.
+    minted: BTreeMap<String, PathBuf>,
+}
+
+impl IncludeWalk {
+    /// Load `manifest_path` and everything it includes, at nesting `depth`.
+    fn load(&mut self, manifest_path: &Path, depth: usize) -> Result<Vec<SparqlTestCase>, String> {
+        let canonical = manifest_path
+            .canonicalize()
+            .map_err(|e| format!("resolve manifest path {}: {e}", manifest_path.display()))?;
+
+        if let Some(at) = self.stack.iter().position(|p| *p == canonical) {
+            let mut chain: Vec<String> = self.stack[at..]
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            chain.push(canonical.display().to_string());
+            return Err(format!(
+                "mf:include cycle: {}. A manifest that includes itself, directly or \
+                 transitively, has no finite closure; the cycle is refused rather than \
+                 followed or quietly cut short",
+                chain.join(" -> ")
+            ));
+        }
+        if self.visited.contains(&canonical) {
+            return Err(format!(
+                "{} is reached twice in one mf:include closure (by two different parents, \
+                 not a cycle). Loading it twice would count every one of its cases twice, \
+                 inflating the pass tally; declare it in exactly one aggregator",
+                canonical.display()
+            ));
+        }
+        if depth > MAX_INCLUDE_DEPTH {
+            return Err(format!(
+                "{}: mf:include nesting exceeds the {MAX_INCLUDE_DEPTH}-level bound (chain: \
+                 {}). The bound is refused, not truncated",
+                canonical.display(),
+                self.stack
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ));
+        }
+        if self.visited.len() >= MAX_MANIFESTS_PER_CLOSURE {
+            return Err(format!(
+                "{}: this mf:include closure would visit more than \
+                 {MAX_MANIFESTS_PER_CLOSURE} manifests. The bound is refused, not truncated",
+                canonical.display()
+            ));
+        }
+
+        self.visited.push(canonical.clone());
+        self.stack.push(canonical.clone());
+        let result = self.load_within(&canonical, depth);
+        self.stack.pop();
+        result
+    }
+
+    /// The body of [`Self::load`], run with `canonical` already on the stack so an
+    /// early return still unwinds it.
+    fn load_within(
+        &mut self,
+        canonical: &Path,
+        depth: usize,
+    ) -> Result<Vec<SparqlTestCase>, String> {
+        let Loaded {
+            mut cases,
+            includes,
+        } = load_one(canonical)?;
+        for case in &cases {
+            if let Some(previous) = self.minted.get(&case.iri) {
+                return Err(format!(
+                    "case IRI {} is minted by BOTH {} and {}. The expected-failure ledger in \
+                     crates/sparql-conformance/src/xfail.rs matches on the case IRI and is \
+                     global, so one entry would silently govern two different tests",
+                    case.iri,
+                    previous.display(),
+                    canonical.display()
+                ));
+            }
+            self.minted
+                .insert(case.iri.clone(), canonical.to_path_buf());
+        }
+        for child in includes {
+            cases.extend(self.load(&child, depth + 1)?);
+        }
+        Ok(cases)
+    }
+}
+
+/// What one manifest FILE declares: its own cases plus the manifests it includes.
+struct Loaded {
+    /// The cases from this manifest's own `mf:entries`.
+    cases: Vec<SparqlTestCase>,
+    /// Local paths of the manifests in this manifest's `mf:include` collection,
+    /// sorted so the closure is deterministic (a SPARQL solution sequence has no
+    /// guaranteed order, and case identity does not depend on load order).
+    includes: Vec<PathBuf>,
+}
+
+/// Load exactly ONE manifest file — no `mf:include` recursion.
+fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
     let resolver = BaseResolver::new(manifest_path)?;
     let bytes = std::fs::read(manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
@@ -326,7 +531,112 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         ));
     }
 
-    Ok(cases)
+    let includes = load_includes(&dataset, manifest_path, &resolver)?;
+
+    // An EMPTY `rdf:List` is `rdf:nil`, which carries no `rdf:first`, so the
+    // `rdf:rest*/rdf:first` walk above cannot tell `mf:entries ()` from no
+    // `mf:entries` at all. Both are refused, but with different diagnoses, because
+    // they are different authoring mistakes: one manifest forgot to declare its
+    // group, the other declared an empty one.
+    let has_entries = declares_property(&dataset, "entries")?;
+    if has_entries && declared.is_empty() {
+        return Err(format!(
+            "{}: declares an EMPTY mf:entries list. A group that names no test measures \
+             nothing while still presenting as a loaded manifest; if the group is gone, \
+             remove the manifest rather than emptying it",
+            manifest_path.display()
+        ));
+    }
+    if !has_entries && includes.is_empty() {
+        return Err(format!(
+            "{}: declares NEITHER mf:entries NOR mf:include, so it advertises a manifest and \
+             contributes no test case. Such a manifest loads clean and reports success while \
+             measuring nothing; it is refused rather than counted green",
+            manifest_path.display()
+        ));
+    }
+
+    Ok(Loaded { cases, includes })
+}
+
+/// Whether any subject in the manifest carries the `mf:` property `local` at all.
+///
+/// Needed because the `rdf:rest*/rdf:first` collection walks cannot distinguish an
+/// EMPTY collection (`()` is `rdf:nil`, which has no `rdf:first`) from an absent
+/// property — and those two must be diagnosed differently.
+fn declares_property(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    local: &str,
+) -> Result<bool, String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         SELECT ?list WHERE {{ ?mani mf:{local} ?list }}"
+    );
+    Ok(!query_rows(dataset, &query)?.is_empty())
+}
+
+/// Resolve this manifest's `mf:include` collection to local manifest paths.
+///
+/// Also enforces the aggregator-naming rule documented on [`load`]: a file named
+/// `manifest.ttl` is what the datatest root glob discovers, so it may not itself
+/// aggregate — otherwise its children (also `manifest.ttl`) would be run twice.
+fn load_includes(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    manifest_path: &Path,
+    resolver: &BaseResolver,
+) -> Result<Vec<PathBuf>, String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?inc WHERE {{\n\
+         ?mani mf:include/rdf:rest*/rdf:first ?inc .\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+    if rows.is_empty() {
+        // Same `rdf:nil` blind spot as `mf:entries` (see `declares_property`): an
+        // empty `mf:include ()` walks to nothing and must not be read as "this is
+        // not an aggregator".
+        if declares_property(dataset, "include")? {
+            return Err(format!(
+                "{}: declares an EMPTY mf:include list. An aggregator that aggregates nothing \
+                 contributes no case while still presenting as a loaded manifest",
+                manifest_path.display()
+            ));
+        }
+        return Ok(Vec::new());
+    }
+
+    if manifest_path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
+        return Err(format!(
+            "{}: a manifest named 'manifest.ttl' may not declare mf:include. The datatest root \
+             glob in crates/sparql-conformance/tests/sparql_conformance.rs discovers every \
+             '*/manifest.ttl', so an aggregator with that name would be discovered ALONGSIDE the \
+             'manifest.ttl' files it includes and every one of their cases would run twice, \
+             silently doubling the pass tally. Name an aggregator something the leaf glob does \
+             not match (the vendored SEP-0009 corpus uses 'manifest-all.ttl')",
+            manifest_path.display()
+        ));
+    }
+
+    let mut includes: Vec<PathBuf> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let iri = iri_of(row, "inc").ok_or_else(|| {
+            format!(
+                "{}: an mf:include member is not an IRI; an included manifest must be named by \
+                 the IRI of its file",
+                manifest_path.display()
+            )
+        })?;
+        includes.push(resolver.path(&iri)?);
+    }
+    // A SPARQL solution sequence has no guaranteed order and this SELECT is not
+    // DISTINCT, so sort for determinism. A genuine repeat is NOT collapsed: unlike a
+    // repeated `mf:entries` member (which denotes one test), a repeated include
+    // denotes the same manifest's whole case set twice, and the walk refuses it by
+    // name rather than quietly loading it once.
+    includes.sort();
+    Ok(includes)
 }
 
 /// Every `mf:entries` list member's test IRI, with NO further requirement beyond

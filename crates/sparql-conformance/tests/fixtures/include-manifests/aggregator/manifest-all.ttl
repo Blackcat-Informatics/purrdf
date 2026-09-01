@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The POSITIVE control for `mf:include`: a pure aggregator, exactly the shape the
+# vendored SEP-0009 corpus uses in `vectors/sparql-cdt/manifest-all.ttl` — zero
+# `mf:entries`, one `mf:include` collection of group manifests. Loading it must
+# yield the union of its children's cases; before `mf:include` was implemented it
+# yielded ZERO cases and reported success, which is the silent green this fixture
+# exists to keep closed.
+#
+# Named `manifest-all.ttl`, not `manifest.ttl`: the datatest root glob in
+# `crates/sparql-conformance/tests/sparql_conformance.rs` discovers every
+# `*/manifest.ttl`, so an aggregator with that name would be discovered alongside
+# the children it includes and every child case would run twice. `manifest::load`
+# refuses that shape by name (see `include-named-manifest/` below this directory).
+#
+# The whole tree lives under `tests/fixtures/`, never under `suite/`, so nothing
+# here is ever picked up as a live conformance case.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:include (
+        <alpha/manifest.ttl>
+        <beta/manifest.ttl>
+    ) .

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A DIAMOND, not a cycle: this aggregator includes `left/manifest-left.ttl` and
+# `right/manifest-right.ttl`, and both include the same `shared/manifest.ttl`. The
+# walk terminates, so a cycle check alone would let it through — and every case in
+# `shared/` would then be loaded twice and counted twice, inflating the pass
+# tally exactly as a doubly-discovered aggregator would.
+#
+# `manifest::load` refuses a manifest reached twice in one closure by name.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:include (
+        <left/manifest-left.ttl>
+        <right/manifest-right.ttl>
+    ) .
