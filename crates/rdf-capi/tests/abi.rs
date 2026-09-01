@@ -163,7 +163,11 @@ fn abi_version_is_the_current_minor() {
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
     assert_eq!(version.patch, PURRDF_ABI_PATCH);
-    assert_eq!((version.major, version.minor, version.patch), (0, 6, 0));
+    // `0.7.0`: the mid-list `shapes_base_iri` parameter on the two SHACL entry
+    // points is an incompatible change, and pre-1.0 those ride the MINOR
+    // component (`docs/book/src/project/releases.md`, "Pre-1.0 semver policy").
+    // `tests/abi_signatures.rs` holds the prototype list this triple describes.
+    assert_eq!((version.major, version.minor, version.patch), (0, 7, 0));
 }
 
 #[test]
