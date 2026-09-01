@@ -15,11 +15,20 @@
 //!
 //! There are dozens of such fields across sixteen profiles, and the failure mode that matters
 //! is a field that was FORGOTTEN — which a hand-written list, written by the same person who
-//! forgot it, would forget too. So this walks each shipped configuration fixture, finds every
-//! string leaf that is currently a valid absolute IRI, and drives each one through three
+//! forgot it, would forget too. So this walks each profile's configuration document, finds
+//! every string leaf that is currently a valid absolute IRI, and drives each one through three
 //! states: the pristine value (accepted), a relative one, and a malformed one (both refused).
-//! A new IRI-valued field added to any profile is covered the moment the fixture carries it,
-//! with no edit here.
+//! A new IRI-valued field added to any profile is covered the moment its configuration carries
+//! it, with no edit here.
+//!
+//! ## The sweep is TOTAL over the profile list, by construction
+//!
+//! [`config_for`] is an exhaustive `match` over [`ProjectionProfile`], so a seventeenth profile
+//! does not compile until it is given a configuration to sweep. That matters because nine of
+//! the sixteen have a shipped JSON fixture and seven do not — the seven were silently
+//! unswept while the header above claimed sixteen. Those seven are built here through the same
+//! public constructors a caller uses and serialized with `ProjectionConfig::to_json`, so what
+//! is swept is the real deserialization path in both cases.
 //!
 //! ## The two string leaves that are deliberately NOT IRI-valued
 //!
@@ -33,43 +42,262 @@
 //!   JSON. Its members are keywords and term definitions, not all of which are IRIs. The
 //!   table that actually mints IRIs — `context.definitions` — is gated, one value at a time.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
-use purrdf_rdf::ProjectionConfig;
+use purrdf_rdf::{
+    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LpgConfig, LpgExecutionLimits, LpgScope,
+    OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles,
+    ProjectionConfig, ProjectionLimits, ProjectionProfile, SkosClassRoles, SkosConfig,
+    SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles,
+    SkosTargetRoles,
+};
 
-/// Every shipped projection configuration fixture, by the profile it configures.
-const CONFIGS: &[(&str, &str)] = &[
+/// The vocabulary prefixes the constructed configurations name. Test-fixture IRIs only —
+/// PurRDF mints no vocabulary of its own, so every one of these is caller-supplied here
+/// exactly as it would be by a real caller.
+const EX: &str = "https://example.org/";
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+const OWL: &str = "http://www.w3.org/2002/07/owl#";
+const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
+const SKOS: &str = "http://www.w3.org/2004/02/skos/core#";
+
+/// The nine profiles whose configuration ships as a JSON fixture.
+///
+/// These are swept as the exact bytes the repository commits, so the sweep sees what a real
+/// `purrdf project --config` invocation would read rather than a re-serialization of it.
+const FIXTURES: &[(ProjectionProfile, &str)] = &[
     (
-        "void",
+        ProjectionProfile::Void,
         include_str!("fixtures/dataset-description/void.json"),
     ),
     (
-        "dcat-rdf",
+        ProjectionProfile::DcatRdf,
         include_str!("fixtures/dataset-description/dcat-rdf.json"),
     ),
-    ("csvw-terms", include_str!("fixtures/csvw-terms.json")),
-    ("okf-terms", include_str!("fixtures/okf-terms.json")),
     (
-        "croissant-1.1",
+        ProjectionProfile::CsvwTerms,
+        include_str!("fixtures/csvw-terms.json"),
+    ),
+    (
+        ProjectionProfile::OkfTerms,
+        include_str!("fixtures/okf-terms.json"),
+    ),
+    (
+        ProjectionProfile::Croissant11,
         include_str!("fixtures/research-objects/carrier/croissant-1.1.json"),
     ),
     (
-        "datacite-4.6",
+        ProjectionProfile::DataCite46,
         include_str!("fixtures/research-objects/carrier/datacite-4.6.json"),
     ),
     (
-        "dcat-3",
+        ProjectionProfile::Dcat3,
         include_str!("fixtures/research-objects/carrier/dcat-3.json"),
     ),
     (
-        "frictionless-data-package-1",
+        ProjectionProfile::FrictionlessDataPackage1,
         include_str!("fixtures/research-objects/carrier/frictionless-data-package-1.json"),
     ),
     (
-        "ro-crate-1.3",
+        ProjectionProfile::RoCrate13,
         include_str!("fixtures/research-objects/carrier/ro-crate-1.3.json"),
     ),
 ];
+
+/// The configuration DOCUMENT for `profile`, as the JSON bytes the deserializer reads.
+///
+/// EXHAUSTIVE over [`ProjectionProfile`] on purpose: a seventeenth profile fails to compile
+/// here rather than joining the sweep silently unswept, which is precisely how the seven
+/// constructed profiles below came to be omitted while this file claimed sixteen.
+fn config_for(profile: ProjectionProfile) -> Vec<u8> {
+    if let Some((_, text)) = FIXTURES.iter().find(|(named, _)| *named == profile) {
+        return text.as_bytes().to_vec();
+    }
+    let config = match profile {
+        ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(lpg_config()),
+        ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(lpg_config()),
+        ProjectionProfile::OpenCypher => ProjectionConfig::OpenCypher(lpg_config()),
+        ProjectionProfile::Graphml => ProjectionConfig::Graphml(lpg_config()),
+        ProjectionProfile::CsvwExact => ProjectionConfig::CsvwExact(csvw_config()),
+        ProjectionProfile::OboGraphs => ProjectionConfig::OboGraphs(Box::new(obo_config())),
+        ProjectionProfile::Skos => ProjectionConfig::Skos(Box::new(skos_config())),
+        // Every remaining profile is covered by a shipped fixture, returned above. The arm is
+        // written out rather than a wildcard so adding a profile is a compile error here.
+        ProjectionProfile::CsvwTerms
+        | ProjectionProfile::OkfTerms
+        | ProjectionProfile::Croissant11
+        | ProjectionProfile::RoCrate13
+        | ProjectionProfile::DataCite46
+        | ProjectionProfile::Dcat3
+        | ProjectionProfile::DcatRdf
+        | ProjectionProfile::Void
+        | ProjectionProfile::FrictionlessDataPackage1 => {
+            unreachable!("{profile} is a fixture profile and was returned above")
+        }
+    };
+    config.to_json().expect("serialize the constructed config")
+}
+
+fn limits() -> ProjectionLimits {
+    ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
+}
+
+fn lpg_config() -> LpgConfig {
+    LpgConfig::new(
+        format!("{EX}type"),
+        LpgScope::all(),
+        limits(),
+        LpgExecutionLimits::new(100_000, 100_000, 100_000, 100_000).expect("execution limits"),
+    )
+    .expect("LPG config")
+}
+
+fn csvw_config() -> CsvwConfig {
+    CsvwConfig::new(
+        format!("{EX}csvw-metadata"),
+        CsvwContext::new(format!("{EX}csvw-context"), BTreeMap::default()).expect("CSVW context"),
+        format!("{EX}csvw-group"),
+        CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
+        CsvwMode::Standard,
+        limits(),
+        20_000,
+    )
+    .expect("CSVW config")
+}
+
+fn obo_config() -> OboGraphsConfig {
+    let rdf = OboRdfRoles::new(
+        format!("{RDF}type"),
+        format!("{RDF}reifies"),
+        format!("{RDF}first"),
+        format!("{RDF}rest"),
+        format!("{RDF}nil"),
+        format!("{XSD}string"),
+        format!("{XSD}boolean"),
+    )
+    .expect("OBO RDF roles");
+    let owl = OboOwlRoles::new(
+        format!("{RDFS}label"),
+        format!("{RDFS}comment"),
+        format!("{RDFS}subClassOf"),
+        format!("{RDFS}subPropertyOf"),
+        format!("{RDFS}domain"),
+        format!("{RDFS}range"),
+        format!("{OWL}Ontology"),
+        format!("{OWL}Class"),
+        format!("{OWL}NamedIndividual"),
+        format!("{OWL}ObjectProperty"),
+        format!("{OWL}AnnotationProperty"),
+        format!("{OWL}DatatypeProperty"),
+        format!("{OWL}equivalentClass"),
+        format!("{OWL}intersectionOf"),
+        format!("{OWL}Restriction"),
+        format!("{OWL}onProperty"),
+        format!("{OWL}someValuesFrom"),
+        format!("{OWL}allValuesFrom"),
+        format!("{OWL}propertyChainAxiom"),
+        format!("{OWL}deprecated"),
+    )
+    .expect("OBO OWL roles");
+    let metadata = OboMetadataRoles::new(
+        format!("{EX}definition"),
+        format!("{OBO}hasExactSynonym"),
+        format!("{OBO}hasBroadSynonym"),
+        format!("{OBO}hasNarrowSynonym"),
+        format!("{OBO}hasRelatedSynonym"),
+        format!("{OBO}hasSynonymType"),
+        format!("{OBO}hasDbXref"),
+        format!("{OBO}inSubset"),
+        format!("{OWL}versionInfo"),
+    )
+    .expect("OBO metadata roles");
+    OboGraphsConfig::new(
+        format!("{EX}ontology"),
+        OboGraphsVocabulary::new(rdf, owl, metadata).expect("OBO vocabulary"),
+        limits(),
+        20_000,
+    )
+    .expect("OBO config")
+}
+
+fn skos_class_roles() -> SkosClassRoles {
+    SkosClassRoles::new(
+        format!("{RDF}type"),
+        format!("{SKOS}Concept"),
+        format!("{SKOS}ConceptScheme"),
+    )
+    .expect("SKOS classes")
+}
+
+fn skos_label_roles() -> SkosLabelRoles {
+    SkosLabelRoles::new(
+        format!("{SKOS}prefLabel"),
+        format!("{SKOS}altLabel"),
+        format!("{SKOS}hiddenLabel"),
+        format!("{SKOS}notation"),
+    )
+    .expect("SKOS labels")
+}
+
+fn skos_documentation_roles() -> SkosDocumentationRoles {
+    SkosDocumentationRoles::new(
+        format!("{SKOS}note"),
+        format!("{SKOS}changeNote"),
+        format!("{SKOS}definition"),
+        format!("{SKOS}editorialNote"),
+        format!("{SKOS}example"),
+        format!("{SKOS}historyNote"),
+        format!("{SKOS}scopeNote"),
+    )
+    .expect("SKOS documentation")
+}
+
+fn skos_relation_roles() -> SkosRelationRoles {
+    SkosRelationRoles::new(
+        format!("{SKOS}broader"),
+        format!("{SKOS}narrower"),
+        format!("{SKOS}related"),
+        format!("{SKOS}closeMatch"),
+        format!("{SKOS}exactMatch"),
+        format!("{SKOS}broadMatch"),
+        format!("{SKOS}narrowMatch"),
+        format!("{SKOS}relatedMatch"),
+        format!("{SKOS}inScheme"),
+        format!("{SKOS}hasTopConcept"),
+        format!("{SKOS}topConceptOf"),
+    )
+    .expect("SKOS relations")
+}
+
+fn skos_config() -> SkosConfig {
+    let roles = || {
+        (
+            skos_class_roles(),
+            skos_label_roles(),
+            skos_documentation_roles(),
+            skos_relation_roles(),
+        )
+    };
+    let (classes, labels, documentation, relations) = roles();
+    let source =
+        SkosSourceRoles::new(classes, labels, documentation, relations).expect("SKOS source roles");
+    let (classes, labels, documentation, relations) = roles();
+    let target =
+        SkosTargetRoles::new(classes, labels, documentation, relations).expect("SKOS target roles");
+    SkosConfig::new(
+        source,
+        target,
+        format!("{EX}scheme"),
+        SkosGraphSelection::DefaultGraph,
+        limits(),
+        20_000,
+    )
+    .expect("SKOS config")
+}
 
 /// A relative IRI reference, shaped so that it satisfies every non-IRI rule a field also has
 /// (several bases must end in `/` or `#`). Only its lack of a scheme may be what refuses it.
@@ -138,30 +366,60 @@ fn refusal(document: &Value) -> Option<String> {
         .map(|error| error.to_string())
 }
 
-/// EVERY absolute-IRI-valued leaf of EVERY shipped configuration fixture is gated.
+/// EVERY profile the carrier declares, and every absolute-IRI-valued leaf of its
+/// configuration document, is gated.
 ///
 /// Three states per field: pristine (accepted), relative (refused), malformed (refused). And
-/// a refusal that says "must be an absolute IRI" must carry the workspace's shared
-/// `purrdf_iri` diagnostic code — the check that keeps the projection layer from growing a
-/// private spelling of what it already shares with every codec, the CLI and the bindings.
+/// a refusal must carry the workspace's shared `purrdf_iri` diagnostic code — the check that
+/// keeps the projection layer from growing a private spelling of what it already shares with
+/// every codec, the CLI and the bindings.
+///
+/// The per-profile leaf counts are pinned EXACTLY rather than as a floor. A floor is
+/// satisfied by a configuration that lost a field, which is the direction that matters here:
+/// a gate silently stops covering what it no longer sees. Moving a count is a one-line,
+/// deliberate edit; discovering months later that a profile quietly shed its IRI fields is
+/// not.
 #[test]
 fn every_iri_valued_configuration_field_is_gated_by_the_shared_layer() {
-    let mut swept = 0usize;
-    for (profile, text) in CONFIGS {
-        let pristine: Value = serde_json::from_str(text).expect("the fixture is JSON");
+    // Exact, per profile. `ProjectionProfile::ALL` is the same closed list `config_for`
+    // matches on, so a profile cannot be present in one and absent from the other.
+    let expected: &[(ProjectionProfile, usize)] = &[
+        (ProjectionProfile::LpgCsv, 1),
+        (ProjectionProfile::Neo4jCsv, 1),
+        (ProjectionProfile::OpenCypher, 1),
+        (ProjectionProfile::Graphml, 1),
+        (ProjectionProfile::CsvwExact, 7),
+        (ProjectionProfile::CsvwTerms, 13),
+        (ProjectionProfile::OkfTerms, 17),
+        (ProjectionProfile::OboGraphs, 37),
+        (ProjectionProfile::Skos, 51),
+        (ProjectionProfile::Croissant11, 92),
+        (ProjectionProfile::RoCrate13, 95),
+        (ProjectionProfile::DataCite46, 58),
+        (ProjectionProfile::Dcat3, 95),
+        // ZERO, and correctly so: `dcat-rdf`'s only IRIs live inside its CONSTRUCT query
+        // text, which is a query rather than an IRI field. Its own IRI field,
+        // `document_base_iri`, is covered by the second test in this file — which is why the
+        // zero is pinned here rather than treated as a profile nothing checks.
+        (ProjectionProfile::DcatRdf, 0),
+        (ProjectionProfile::Void, 41),
+        (ProjectionProfile::FrictionlessDataPackage1, 54),
+    ];
+
+    let mut observed: Vec<(ProjectionProfile, usize)> = Vec::new();
+    for profile in ProjectionProfile::ALL {
+        let bytes = config_for(*profile);
+        let pristine: Value = serde_json::from_slice(&bytes).expect("the configuration is JSON");
         assert!(
             refusal(&pristine).is_none(),
-            "{profile}: the shipped fixture must parse as-is"
+            "{profile}: the configuration must parse as-is"
         );
 
-        // A profile may legitimately contribute no leaf: the `dcat-rdf` fixture's only IRIs
-        // live INSIDE its CONSTRUCT query text, which is a query rather than an IRI field.
-        // Its own IRI field, `document_base_iri`, is covered by the test below.
         let mut leaves = Vec::new();
         absolute_iri_leaves(&pristine, &mut Vec::new(), &mut leaves);
+        observed.push((*profile, leaves.len()));
 
         for leaf in &leaves {
-            swept += 1;
             for bad in [RELATIVE, MALFORMED] {
                 let mut mutated = pristine.clone();
                 set(&mut mutated, leaf, bad);
@@ -172,22 +430,24 @@ fn every_iri_valued_configuration_field_is_gated_by_the_shared_layer() {
                         leaf.join(".")
                     )
                 });
-                if error.contains("must be an absolute IRI") {
-                    assert!(
-                        error.contains("iri-"),
-                        "{profile}: `{}` refuses with a private spelling rather than the \
-                         shared purrdf_iri code: {error}",
-                        leaf.join(".")
-                    );
-                }
+                // Unconditional. Gating the code check on the refusal's own wording made it
+                // vacuous for exactly the refusals that had grown a private spelling — the
+                // ones it existed to catch.
+                assert!(
+                    error.contains("iri-"),
+                    "{profile}: `{}` refuses {bad:?} with a private spelling rather than the \
+                     shared purrdf_iri code: {error}",
+                    leaf.join(".")
+                );
             }
         }
     }
-    // A floor rather than an exact count: the sweep is meant to grow with the fixtures, and
-    // a fixture that lost every IRI would otherwise pass vacuously.
-    assert!(
-        swept > 100,
-        "only {swept} IRI-valued configuration fields were swept"
+
+    assert_eq!(
+        observed, expected,
+        "the per-profile IRI-field census moved. Every profile above is swept for every \
+         absolute-IRI-valued leaf its configuration carries; if a field was added or removed \
+         on purpose, update the count in the same edit"
     );
 }
 
