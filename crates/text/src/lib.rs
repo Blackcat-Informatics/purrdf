@@ -58,6 +58,7 @@ mod analysis;
 mod error;
 mod fixed;
 mod index;
+mod relation;
 mod score;
 mod term_bytes;
 
@@ -67,6 +68,7 @@ pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, TextIndex, TextIndexConfig,
 };
+pub use relation::{TermOccurrenceRelation, TextSearchRelation, verify_binding};
 pub use score::{
     B, Constraint, K1, PartitionFilter, Scored, TermContribution, explain, rank_partition, select,
 };

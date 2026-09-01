@@ -1166,6 +1166,25 @@ fn build_terms(
 // Digests
 // ---------------------------------------------------------------------------
 
+/// The source digest `dataset` yields under `config` — the value
+/// [`TextIndex::source_fingerprint`] holds for an index built from that pairing.
+///
+/// Exposed to the crate so [`crate::verify_binding`] can ask "is this the data
+/// under that index?" without building a second index: the digest is over the
+/// rows alone, so it needs the walk but not the analysis.
+///
+/// # Errors
+///
+/// Whatever the walk raises — [`TextError::Data`] for a configured predicate or
+/// named graph the dataset does not carry, or for a term the encoder cannot
+/// represent.
+pub(crate) fn source_digest<D: DatasetView>(
+    dataset: &D,
+    config: &TextIndexConfig,
+) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
+    digest_rows(&collect_rows(dataset, config)?)
+}
+
 /// Digest the source rows: what the index actually walked, and nothing else.
 fn digest_rows(rows: &[SourceRow]) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
     let mut digest = Digest::new(SOURCE_DIGEST_DOMAIN);
