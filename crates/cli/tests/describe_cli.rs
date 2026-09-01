@@ -570,8 +570,13 @@ fn base_resolves_relative_iris_while_parsing() {
     );
 }
 
-/// `--base` with a pack source or a pack target is refused by name, exactly as for
-/// `convert`/`reason`.
+/// `--base` is refused when NEITHER leg can spend it, and honoured when either one can.
+///
+/// A pack SOURCE leaves nothing to resolve — a pack stores fully-resolved terms — and an
+/// N-Triples source cannot resolve one either, so with a pack target (which can express no
+/// base) both are refused by name. But a Turtle source with a pack target is NOT refused:
+/// the parse leg spends the base, and refusing there would reject a flag that is doing real
+/// work. That asymmetry is the whole point of deciding on both legs rather than one.
 #[test]
 fn base_with_a_pack_end_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -608,7 +613,28 @@ fn base_with_a_pack_end_is_refused_by_name() {
         .to_str()
         .expect("temp path")
         .to_owned();
+    // A pack TARGET with a source whose grammar admits no relative IRI: neither leg can
+    // spend the base, so it is refused by name rather than accepted and never read.
+    let ntriples = write_file(
+        dir.path(),
+        "data.nt",
+        "<http://example.org/alice> <http://example.org/p> <http://example.org/bob> .\n",
+    );
     let to_pack = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/alice",
+        "--base",
+        "http://example.org/",
+        &ntriples,
+        &out_pack,
+    ]);
+    assert_eq!(code(&to_pack), 2, "{}", stderr(&to_pack));
+    assert!(stderr(&to_pack).contains("--base"), "{}", stderr(&to_pack));
+
+    // The same pack target with a TURTLE source is honoured: the parse leg spends the base,
+    // and a refusal there would reject a flag that is resolving the document's own IRIs.
+    let turtle_to_pack = run(&[
         "describe",
         "--iri",
         "http://example.org/alice",
@@ -617,8 +643,12 @@ fn base_with_a_pack_end_is_refused_by_name() {
         &data,
         &out_pack,
     ]);
-    assert_eq!(code(&to_pack), 2, "{}", stderr(&to_pack));
-    assert!(stderr(&to_pack).contains("--base"), "{}", stderr(&to_pack));
+    assert_eq!(
+        code(&turtle_to_pack),
+        0,
+        "a base the parse leg spends must not be refused: {}",
+        stderr(&turtle_to_pack)
+    );
 }
 
 /// A description can be written into the lossless pack container and read back.

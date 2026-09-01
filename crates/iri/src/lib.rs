@@ -113,7 +113,7 @@ mod parse;
 pub mod pos;
 mod resolve;
 
-pub use base::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
+pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};
 pub use error::{IriError, Result};
 pub use parse::{Iri, parse, parse_uri};

@@ -15,7 +15,7 @@
 //! examples), base `http://a/b/c/d;p?q`. See `tests/PROVENANCE.md`.
 
 use pretty_assertions::assert_eq;
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, parse};
+use purrdf_iri::{BaseInScope, BaseIri, BaseOrigin, BaseScope, IriError, parse};
 
 const BASE: &str = "http://a/b/c/d;p?q";
 
@@ -321,7 +321,7 @@ fn absolute_only_grammar_rejects_relative_references_with_and_without_a_base() {
                 .resolve_absolute_only(reference)
                 .expect_err("grammar admits only absolute IRIs");
             assert!(
-                matches!(&err, IriError::NotAbsoluteByGrammar { reference: r } if r == reference),
+                matches!(&err, IriError::NotAbsoluteByGrammar { reference: r, .. } if r == reference),
                 "ref = {reference:?} in {label} scope produced {err:?}"
             );
             assert_eq!(err.diagnostic_code(), "iri-not-absolute-by-grammar");
@@ -336,6 +336,102 @@ fn absolute_only_grammar_rejects_relative_references_with_and_without_a_base() {
                 .expect("absolute IRI is admitted")
                 .as_str(),
             "http://example.org/x"
+        );
+    }
+}
+
+/// The base in force, and where it came from, must appear in the rendered message.
+///
+/// Every consumer in the workspace prints `{err}` and nothing else, so provenance
+/// that lives only in a `BaseOrigin` accessor reaches no user — which is what made
+/// nine production sites construct one that nothing ever read. These assertions are
+/// on `format!("{err}")` for exactly that reason: they fail if the delivery is
+/// removed, not merely if the field is.
+#[test]
+fn the_base_in_force_and_its_provenance_are_rendered_in_the_diagnostic() {
+    // A caller-supplied base — the `--base` case, where a user needs to be told the
+    // base is in scope and simply never applied by this syntax.
+    let caller = rooted_scope();
+    let err = caller
+        .resolve_absolute_only("foo")
+        .expect_err("grammar admits only absolute IRIs");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("the caller-supplied base"),
+        "message names no provenance: {rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("<{BASE}>")),
+        "message names no base: {rendered}"
+    );
+    assert!(
+        rendered.contains("never applied here"),
+        "message does not say the base is not applied: {rendered}"
+    );
+    assert_eq!(
+        BaseInScope::of(&caller),
+        BaseInScope::InForce {
+            iri: BASE.to_owned(),
+            origin: BaseOrigin::Caller,
+        }
+    );
+
+    // A base established by a directive names the directive's line and column.
+    let mut directive = BaseScope::empty();
+    directive
+        .rebind(
+            "http://example.org/dir/",
+            BaseOrigin::Directive { line: 3, column: 1 },
+        )
+        .expect("absolute directive roots the scope");
+    let rendered = format!(
+        "{}",
+        directive
+            .resolve_absolute_only("foo")
+            .expect_err("grammar admits only absolute IRIs")
+    );
+    assert!(
+        rendered.contains("the `@base` at line 3 column 1"),
+        "message names no directive position: {rendered}"
+    );
+    assert!(
+        rendered.contains("<http://example.org/dir/>"),
+        "message names no base: {rendered}"
+    );
+
+    // A base inherited from an enclosing lexical scope says so.
+    let mut enclosing = rooted_scope();
+    enclosing.push(
+        BaseIri::parse("http://example.org/inner/").expect("base parses"),
+        BaseOrigin::Enclosing,
+    );
+    let rendered = format!(
+        "{}",
+        enclosing
+            .resolve_absolute_only("foo")
+            .expect_err("grammar admits only absolute IRIs")
+    );
+    assert!(
+        rendered.contains("the enclosing scope's base"),
+        "message names no provenance: {rendered}"
+    );
+
+    // With nothing in scope, the diagnostic says exactly that — RFC-3986 §5.1.4 —
+    // in both grammar families, with one wording.
+    let empty = BaseScope::empty();
+    assert_eq!(BaseInScope::of(&empty), BaseInScope::Absent);
+    for rendered in [
+        format!("{}", empty.resolve("foo").expect_err("needs a base")),
+        format!(
+            "{}",
+            empty
+                .resolve_absolute_only("foo")
+                .expect_err("grammar admits only absolute IRIs")
+        ),
+    ] {
+        assert!(
+            rendered.contains("no base IRI is in scope"),
+            "message does not state the absent base: {rendered}"
         );
     }
 }

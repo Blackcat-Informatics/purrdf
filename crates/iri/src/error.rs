@@ -10,6 +10,8 @@
 
 use core::fmt;
 
+use crate::base::BaseInScope;
+
 /// The remedy for [`IriError::NoBase`].
 ///
 /// Each `REMEDY_*` constant is the **single owner** of its wording: both
@@ -77,9 +79,17 @@ pub enum IriError {
     ///
     /// Unlike [`NoBase`](Self::NoBase), this is **not** fixable by supplying a base:
     /// the document is invalid for its own grammar, and a base is never applied.
+    ///
+    /// It carries the base that WAS in force precisely because that is the confusing
+    /// case: a user who passed `--base` and still sees this needs to be told that a
+    /// base is in scope and that this syntax never applies it, rather than being left
+    /// to conclude the base was ignored by accident.
     NotAbsoluteByGrammar {
         /// The relative reference the grammar does not admit.
         reference: String,
+        /// The base in force when the grammar rejected the reference, with its
+        /// provenance — rendered by [`Display`](fmt::Display).
+        base: BaseInScope,
     },
 }
 
@@ -117,14 +127,18 @@ impl IriError {
     /// # Examples
     ///
     /// ```rust
-    /// use purrdf_iri::IriError;
+    /// use purrdf_iri::{BaseInScope, IriError};
     ///
     /// assert_eq!(
     ///     IriError::NoBase { reference: "foo".to_owned() }.diagnostic_code(),
     ///     "iri-relative-no-base"
     /// );
     /// assert_eq!(
-    ///     IriError::NotAbsoluteByGrammar { reference: "foo".to_owned() }.diagnostic_code(),
+    ///     IriError::NotAbsoluteByGrammar {
+    ///         reference: "foo".to_owned(),
+    ///         base: BaseInScope::Absent,
+    ///     }
+    ///     .diagnostic_code(),
     ///     "iri-not-absolute-by-grammar"
     /// );
     /// ```
@@ -188,17 +202,28 @@ impl IriError {
             Self::NonAbsoluteBase(b) => {
                 write!(f, "base IRI is not absolute (no scheme): {b:?}")
             }
-            Self::NoBase { reference } => {
+            // `NoBase` IS the empty-stack condition and is raised nowhere else, so the
+            // base situation is carried by the variant itself rather than by a field
+            // that could only ever hold one value. It still renders through the same
+            // `BaseInScope` display as its sibling below, so the two cannot come to
+            // word the same fact differently.
+            Self::NoBase { reference } => write!(
+                f,
+                "relative IRI reference {reference:?} cannot be resolved: {}",
+                BaseInScope::Absent
+            ),
+            Self::NotAbsoluteByGrammar { reference, base } => {
                 write!(
                     f,
-                    "relative IRI reference {reference:?} has no base IRI in scope"
-                )
-            }
-            Self::NotAbsoluteByGrammar { reference } => {
-                write!(
-                    f,
-                    "relative IRI reference {reference:?} is not permitted by this syntax"
-                )
+                    "relative IRI reference {reference:?} is not permitted by this syntax ({base}"
+                )?;
+                // Naming the base in force is only half the answer; the other half is
+                // that it was deliberately not applied, which is the whole reason a
+                // caller who passed `--base` is looking at this message.
+                if matches!(base, BaseInScope::InForce { .. }) {
+                    f.write_str(" but is never applied here")?;
+                }
+                f.write_str(")")
             }
         }
     }
@@ -267,6 +292,7 @@ mod tests {
             },
             IriError::NotAbsoluteByGrammar {
                 reference: "foo".to_owned(),
+                base: BaseInScope::Absent,
             },
         ];
         let mut seen = 0usize;
@@ -317,6 +343,7 @@ mod tests {
         };
         let by_grammar = IriError::NotAbsoluteByGrammar {
             reference: "foo".to_owned(),
+            base: BaseInScope::Absent,
         };
         assert_eq!(no_base.diagnostic_code(), "iri-relative-no-base");
         assert_eq!(by_grammar.diagnostic_code(), "iri-not-absolute-by-grammar");
