@@ -81,6 +81,7 @@ pub mod agg_fn;
 mod basic_profile;
 mod bgp;
 mod binop;
+mod cdt_fn;
 mod clock;
 mod construct;
 mod contain;

@@ -207,6 +207,23 @@ pub enum EvalError {
     /// configuration parameter is rejected at the setter rather than left to
     /// surface later as a silently rewritten label at egress.
     Config(String),
+
+    /// A SEP-0009 composite-datatype function was asked to mint a `cdt:List` /
+    /// `cdt:Map` value that crosses one of `purrdf-cdt`'s three resource bounds
+    /// (`MAX_NESTING_DEPTH`, `MAX_ELEMENTS`, `MAX_LEXICAL_BYTES`). Carries the
+    /// bound's own diagnostic.
+    ///
+    /// Its own variant, and a HARD failure rather than an expression error,
+    /// because the two are observably different and only one of them is safe:
+    /// `cdt:put(?m, ?k, ?m)` roughly doubles a map's size on every application, so
+    /// a query of a couple of dozen lines can ask for a value no host can hold.
+    /// Answering "unbound" would let that query quietly change a result set — a
+    /// `FILTER(!BOUND(?x))` would then be satisfied *by the refusal* — instead of
+    /// being refused, so the refusal is propagated all the way out. This is
+    /// [`purrdf_cdt::CdtOutcome::Bound`] reaching the query boundary, and it is
+    /// distinct from [`EvalError::Data`]: nothing is malformed, the value is
+    /// simply too large to exist.
+    CompositeBound(String),
 }
 
 impl EvalError {
@@ -248,7 +265,8 @@ impl EvalError {
             | Self::Data(_)
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
-            | Self::Config(_) => None,
+            | Self::Config(_)
+            | Self::CompositeBound(_) => None,
         }
     }
 
@@ -275,6 +293,12 @@ impl EvalError {
     /// Construct an [`EvalError::Config`] from any displayable message.
     pub fn config(what: impl Into<String>) -> Self {
         Self::Config(what.into())
+    }
+
+    /// Construct an [`EvalError::CompositeBound`] from a `purrdf-cdt` bound
+    /// diagnostic.
+    pub(crate) fn composite_bound(what: impl Into<String>) -> Self {
+        Self::CompositeBound(what.into())
     }
 
     /// Construct an [`EvalError::ExistsScopeCollision`] naming the colliding
@@ -306,6 +330,10 @@ impl core::fmt::Display for EvalError {
             ),
             Self::Function(msg) => write!(f, "host function error: {msg}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
+            Self::CompositeBound(msg) => write!(
+                f,
+                "the composite value this query asked for exceeds a SEP-0009 resource bound: {msg}"
+            ),
         }
     }
 }

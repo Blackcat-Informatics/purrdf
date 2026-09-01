@@ -37,6 +37,11 @@ name = "purrdf_sparql_eval"
 purrdf-core = { workspace = true }
 # The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
 purrdf-sparql-algebra = { workspace = true }
+# The SEP-0009 composite value space (`cdt:List` / `cdt:Map`): the lexical
+# scanner, the canonical form, the fifteen spec functions, and the two comparison
+# relations. `crate::cdt_fn` is the bridge between it and the evaluator's terms;
+# the crate itself is a closed leaf that must not know about `purrdf-core`.
+purrdf-cdt = { workspace = true }
 # The XSD value space for FILTER/BIND/ORDER: value-space equality/ordering
 # (value_cmp/value_eq), effective boolean value, and the numeric tower.
 purrdf-xsd = { workspace = true }

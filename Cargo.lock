@@ -1567,6 +1567,7 @@ dependencies = [
  "md-5",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-iri",
  "purrdf-sparql-algebra",
