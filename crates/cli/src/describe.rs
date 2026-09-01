@@ -44,12 +44,40 @@
 //! for a text source, or a verified `PackView` for a pack, with no `dataset_from_view` rebuild
 //! in between. The extracted subgraph is always a fresh, frozen `RdfDataset`.
 //!
-//! # An absent subject is an empty description, not an error
+//! # `--iri` resolves against the base, and a relative one is refused rather than dropped
+//!
+//! `--iri` is command-line text with no retrieval IRI of its own — the same shape as a ShEx
+//! shape map — and it is compared against the graph's terms, which are ABSOLUTE by the time
+//! the parser is done with them. So a relative `--iri` matched nothing, and
+//! [`Describer::describe_iris`] drops a term the dataset does not contain: `purrdf describe
+//! --iri alice --base http://example.org/dir/ rel.ttl` exited 0 with an empty document and
+//! said nothing, while `--iri http://example.org/dir/alice` described it. A required
+//! argument silently denoting nothing is exactly the shape this pipeline refuses.
+//!
+//! [`resolve_subjects`] therefore resolves every `--iri` through the base in force —
+//! [`source::effective_base`], the same answer the DATA GRAPH parses under, so `--iri alice`
+//! denotes what `<alice>` written inside the document would denote. An ABSOLUTE `--iri` is
+//! carried lexical-verbatim (`BaseScope::resolve`'s own contract), so nothing about an
+//! already-absolute invocation changes.
+//!
+//! A relative `--iri` with NO base in scope is a hard failure carrying the shared
+//! `iri-relative-no-base` code. It is a usage error (exit 2) rather than a runtime one:
+//! nothing is wrong with the data, the request itself does not denote a resource, and it is
+//! decided before a single byte of the source is read.
+//!
+//! # An ABSENT subject is still an empty description, and that is not the same thing
 //!
 //! Describing an IRI the source does not mention yields an empty subgraph, which is the
 //! library's own semantics: a term may legitimately carry no asserted or incoming triples, and
 //! "nothing describes it" is a true answer rather than a failed run. The exit code stays 0 and
 //! the sink writes an empty document in the requested syntax.
+//!
+//! The two cases are deliberately NOT conflated. An absolute `--iri` absent from the graph is
+//! a well-formed question with an empty answer — the SCBD of a resource with no asserted or
+//! incoming triples IS empty, and refusing it would break the composable "describe each of
+//! these IRIs" use and contradict `DESCRIBE`'s own semantics. A RELATIVE `--iri` is not a
+//! question at all until it is resolved: it denotes no resource, so there is nothing for an
+//! empty answer to be about.
 //!
 //! # No `--report`
 //!
@@ -61,7 +89,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset, describe::Describer};
-use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::CliError;
@@ -93,7 +122,9 @@ pub(crate) struct DescribeOptions<'a> {
 /// is not object-safe, so the operation has to be generic over the view type to run over both
 /// a parsed `RdfDataset` and a zero-copy `PackView`.
 struct DescribeOp<'a> {
-    /// The subjects whose union description is extracted.
+    /// The subjects whose union description is extracted, already RESOLVED against the base
+    /// in force — a relative selector never reaches the extractor, where it could only fail
+    /// to match.
     iris: &'a [String],
 }
 
@@ -114,22 +145,25 @@ pub(crate) fn run(
     // unresolvable OUT fails fast rather than after the description has been extracted.
     let source_format = format::resolve(options.from, options.input)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
-    // `--base` has two legs here — the source parse and the description's serialization —
-    // and is refused only when NEITHER can spend it.
-    format::refuse_unconsumable_base(
-        options.base,
-        &[
-            format::BaseUse::parse(source_format, "the --from source"),
-            format::BaseUse::serialize(target_format, "the --to target"),
-        ],
-    )?;
+    // No `--base` refusal here, unlike `convert`/`reason`. This command has a leg no format
+    // row can describe: `--iri` is command-line text and resolves against the base, exactly
+    // as a ShEx shape map does. So a base handed to `describe` always has a live consumer —
+    // `--iri` is REQUIRED, and every value passes through `resolve_subjects` — whatever the
+    // `--from`/`--to` rows say about their own two legs. Refusing on those rows alone would
+    // reject `--from ntriples --base http://example.org/ --iri alice`, whose base is doing
+    // the one job that makes the selector denote anything.
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
+
+    // Resolve the subjects BEFORE opening the source: a relative selector with no base is a
+    // malformed request, and it should fail against the command line rather than after the
+    // document has been read.
+    let iris = resolve_subjects(options, source_format)?;
 
     let description = source::run_over_input(
         options.input,
         source_format,
         options.base,
-        DescribeOp { iris: options.iris },
+        DescribeOp { iris: &iris },
     )?;
 
     let ledger = sink::write_rdf(
@@ -141,4 +175,78 @@ pub(crate) fn run(
         options.jsonld_options,
     )?;
     ledger::surface(ledger_target, &ledger)
+}
+
+/// Resolve every `--iri` against the base in force.
+///
+/// An ABSOLUTE selector is carried lexical-verbatim — [`BaseScope::resolve`]'s own contract,
+/// and the reason an already-absolute invocation is byte-for-byte what it always was. A
+/// RELATIVE one resolves, so `--iri alice` denotes what `<alice>` written inside the data
+/// graph denotes. A relative one with nothing in scope is refused.
+fn resolve_subjects(
+    options: &DescribeOptions<'_>,
+    source_format: SourceFormat,
+) -> Result<Vec<String>, CliError> {
+    let base = subject_base(options, source_format)?;
+    let scope = match base {
+        Some(base) => BaseScope::rooted(
+            // `--base` already passed `cli::parse_base_iri` at the argument boundary and a
+            // derived retrieval IRI is parsed by its own derivation, so a failure here is
+            // not reachable from the command line; it is still reported rather than
+            // unwrapped, because an unreachable panic in a CLI is a crash report.
+            BaseIri::parse(&base).map_err(|error| {
+                CliError::Usage(format!(
+                    "the base `{base}` is not a usable base IRI: {error}"
+                ))
+            })?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
+
+    options
+        .iris
+        .iter()
+        .map(|raw| {
+            scope
+                .resolve(raw)
+                .map(|iri| iri.as_str().to_owned())
+                .map_err(|error| subject_refusal(raw, &error))
+        })
+        .collect()
+}
+
+/// The base `--iri` resolves against: the one the DATA GRAPH itself parses under.
+///
+/// Sharing [`source::effective_base`] is the point — a selector that resolved against a
+/// different base from the document would name a resource the document cannot contain, which
+/// is the silent no-match this whole path exists to delete. A CONTAINER source has no
+/// retrieval IRI to derive and stores fully-resolved terms, so only an explicit `--base` can
+/// resolve a relative selector against one.
+fn subject_base(
+    options: &DescribeOptions<'_>,
+    source_format: SourceFormat,
+) -> Result<Option<String>, CliError> {
+    match source_format {
+        SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
+        SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
+    }
+}
+
+/// The refusal for an `--iri` that does not denote a resource.
+///
+/// It carries the shared [`purrdf_iri::IriError::diagnostic_code`] so it groups with every
+/// other IRI failure in this toolkit, but it does NOT carry the library's remedy: that one
+/// names `@base` and `xml:base`, which are document directives, and `--iri` is not in a
+/// document. Naming a fix the operator cannot apply is worse than naming none.
+fn subject_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
+    let code = error.diagnostic_code();
+    if code == "iri-relative-no-base" {
+        return CliError::Usage(format!(
+            "--iri `{raw}`: {code}: a relative IRI reference has no base in scope, so it \
+             denotes no resource to describe. Pass --base <IRI> — `--iri` resolves against it \
+             exactly as the data graph does — or write the resource in absolute form"
+        ));
+    }
+    CliError::Usage(format!("--iri `{raw}`: {code}: {error}"))
 }
