@@ -714,8 +714,8 @@ impl PathGraph {
     ///
     /// Reifiers and statement annotations do NOT live in the quad table, so the scan above
     /// cannot see them. Each alternative therefore ALSO drives the same probe through
-    /// [`crate::statement_layer`], which yields the two side-tables as the virtual triples
-    /// they denote — `(reifier, rdf:reifies, <<triple>>)` and
+    /// this crate's shared `statement_layer` walk, which yields the two side-tables as the
+    /// virtual triples they denote — `(reifier, rdf:reifies, <<triple>>)` and
     /// `(reifier, annotationPredicate, annotationObject)` — under the same graph scope and
     /// the same predicate equality. The two layers are disjoint, so the rows are strictly
     /// additive and no edge is recorded twice.
@@ -1506,6 +1506,35 @@ fn row_bound(
 /// wants a polynomial answer wants [`ShortestPathWitnessRelation`], which is a different
 /// question with a different answer, registered under a different IRI.
 ///
+/// ## What the declared bound is, and where it is exact
+///
+/// [`PropertyFunction::rows_per_invocation`] here is `row_bound` over the snapshot's
+/// shape — see its docs for the derivation, and for why an over-declaration is an
+/// over-REFUSAL rather than a merely worse plan. Per mode:
+///
+/// * **`?start` bound** — the bound is the rows the single MAXIMAL seed could contribute.
+///   It is EXACT whenever the pinned seed is that maximal one, which on a uniformly
+///   branching graph (a chain seeded at its head, any seed of a cycle) is every seed.
+/// * **`?start` free** — `node_count` times the above. The gap to the truth is exactly the
+///   seeds that realise less than the maximum, which a bound derived from a MODE cannot
+///   see, because a mode names no seed.
+/// * **`?end` bound** — narrowed: the final hop must be one of the at most `max_in_degree`
+///   edges arriving at the endpoint, so the branching term loses a factor.
+/// * **`?step` bound** — every walk contributes at most its single row at that ordinal,
+///   so the per-walk factor is one instead of `max_hops`. Exact when every candidate walk
+///   is long enough to have that ordinal.
+/// * **`?len` bound** — deliberately NOT narrowed. A bound `?len` pins the walk length
+///   exactly, but `rows_per_invocation` is handed a binding pattern and never a value, so
+///   the length it would narrow to is unknown here. This is the loosest mode, and it is
+///   loose for a stated reason rather than an unexamined one.
+/// * **`?pathId` bound** — at most one walk survives an injective identifier, so at most
+///   `max_hops` rows (or one, under a bound `?step`).
+///
+/// `the_row_bound_is_pinned_against_what_is_emitted` and
+/// `the_row_bound_stays_tight_on_a_dense_graph` are the executable form of that table:
+/// they pin the declared number AND the emitted number, side by side, for every mode over
+/// four fixtures including a complete digraph.
+///
 /// # Guards
 ///
 /// [`PathLimits::max_paths_per_seed`] and
@@ -1785,6 +1814,15 @@ impl PfCursor for PathWitnessCursor {
 /// 2. Within a seed, witnesses in breadth-first DISCOVERY order — non-decreasing by
 ///    `?len`, and within one length in the order the search reached them.
 /// 3. Within a walk, rows ascend by `?step`.
+///
+/// # Cardinality, and the declared bound
+///
+/// Polynomial: at most one witness per `(seed, end)` pair, so at most `node_count²` walks
+/// over the whole snapshot. That cap is what this relation contributes to `row_bound` on
+/// top of the structural one — `node_count` walks per seed, or ONE under a bound `?end` —
+/// and it is why this relation prices strictly cheaper than [`PathWitnessRelation`] over
+/// the same graph, which is the whole planner-visible difference between the two IRIs. The
+/// per-mode exactness notes on [`PathWitnessRelation`] apply here unchanged.
 ///
 /// # The seed can be its own endpoint
 ///
@@ -2650,11 +2688,41 @@ mod tests {
         ]
     }
 
-    fn assert_bound_is_honest(relation: &dyn PropertyFunction, fixture: &str) {
+    /// The complete digraph on four nodes, traversed in BOTH directions: the adversarial
+    /// shape for walk counting.
+    ///
+    /// Six statements over `ex:p`, each read forward AND inverse, so every node has
+    /// out-degree three and in-degree three and every ordered pair is one hop apart. A
+    /// chain is far too sparse to catch an over-declaration — its branching factor is one,
+    /// so almost any bound looks tight on it — whereas here the walk count grows with the
+    /// depth envelope exactly as the relation's documented exponential cardinality says it
+    /// should.
+    fn dense() -> (Arc<RdfDataset>, Arc<PathGraph>) {
+        // Named `a`..`d` so the sweep's bound-`?start` mode (which pins `ex:a`) addresses
+        // a real seed here as it does on the sparse fixtures.
+        let names = ["a", "b", "c", "d"];
+        let mut triples: Vec<(&str, &str, &str)> = Vec::new();
+        for (index, from) in names.iter().enumerate() {
+            for to in &names[index + 1..] {
+                triples.push((from, "p", to));
+            }
+        }
+        let data = dataset(&triples);
+        let graph = snapshot(
+            &data,
+            &[("p", PathDirection::Forward), ("p", PathDirection::Inverse)],
+        );
+        (data, graph)
+    }
+
+    /// `(mode label, declared bound, rows actually emitted)` for one relation, in sweep
+    /// order, with the universal honesty property checked on the way past.
+    fn bound_report(relation: &dyn PropertyFunction) -> Vec<(&'static str, u64, u64)> {
         let sample = drained(relation, &free()).first().map_or_else(
             || TermValue::simple_literal("none"),
             |row| row[POS_PATH_ID].clone(),
         );
+        let mut report = Vec::new();
         for (label, bound) in sweep_modes(&sample) {
             let refs: Vec<Option<&TermValue>> = bound.iter().map(Option::as_ref).collect();
             let (subject, object) = refs.split_at(1);
@@ -2663,42 +2731,194 @@ mod tests {
             let emitted = drained(relation, &bound).len() as u64;
             assert!(
                 emitted <= declared,
-                "{fixture}/{label}: emitted {emitted} rows against a declared bound of {declared}"
+                "{label}: emitted {emitted} rows against a declared bound of {declared}"
             );
+            report.push((label, declared, emitted));
         }
+        report
     }
 
+    /// The declared bound, pinned against what is actually emitted, mode by mode.
+    ///
+    /// A bare `emitted <= declared` proves nothing: it was satisfied by a bound with four
+    /// thousand times the necessary headroom, and that headroom was an over-refusal
+    /// (see [`row_bound`]'s docs — the declared number is what admission control compares).
+    /// So both numbers are pinned here, and the table IS the tightness claim: any change
+    /// that loosens the bound moves a number a reader can see.
+    ///
+    /// Where the two numbers are EQUAL the bound is exact, and that is not a coincidence
+    /// of the fixture — it is what a uniform branching factor buys. On the chain seeded at
+    /// its head, and on the cycle from every seed, every seed realises the structural
+    /// maximum, so the sum over accepted lengths is the answer rather than a bound on it.
+    /// Where they differ, the gap is entirely the seeds that realise LESS than the maximum
+    /// (a chain's later nodes have shorter walks ahead of them) — which `rows_per_invocation`
+    /// cannot see, because it is handed a mode and not a seed.
     #[test]
-    fn the_row_bound_is_an_upper_bound_on_every_mode() {
+    fn the_row_bound_is_pinned_against_what_is_emitted() {
         let (_data, chain_graph) = chain();
-        assert_bound_is_honest(
-            &PathWitnessRelation::new(Arc::clone(&chain_graph), limits(1, 3)),
-            "chain",
+        assert_eq!(
+            bound_report(&PathWitnessRelation::new(
+                Arc::clone(&chain_graph),
+                limits(1, 3)
+            )),
+            vec![
+                // 4 seeds × the 6 rows the best seed contributes; only ex:a realises it.
+                ("all free", 24, 10),
+                // Seeded at ex:a, which IS the maximal seed: exact.
+                ("bound start", 6, 6),
+                ("bound len", 24, 4),
+                // One row per walk: 4 seeds × 3 walk lengths, against 6 real walks.
+                ("bound step", 12, 6),
+                // At most one walk survives, at most `max_hops` rows of it.
+                ("bound pathId", 3, 1),
+            ],
+            "chain/exhaustive"
         );
-        assert_bound_is_honest(
-            &ShortestPathWitnessRelation::new(chain_graph, limits(1, 3)),
-            "chain/shortest",
+        assert_eq!(
+            bound_report(&ShortestPathWitnessRelation::new(chain_graph, limits(1, 3))),
+            vec![
+                ("all free", 24, 10),
+                ("bound start", 6, 6),
+                ("bound len", 24, 4),
+                ("bound step", 12, 6),
+                ("bound pathId", 3, 1),
+            ],
+            "chain/shortest"
         );
 
         let (_data, cycle_graph) = cycle();
-        assert_bound_is_honest(
-            &PathWitnessRelation::new(Arc::clone(&cycle_graph), limits(1, 8)),
-            "cycle",
+        assert_eq!(
+            bound_report(&PathWitnessRelation::new(
+                Arc::clone(&cycle_graph),
+                limits(1, 8)
+            )),
+            vec![
+                // Exact: three edges cap the walk length at three however high `max_hops`
+                // is set, and every seed of a cycle realises the same three walks.
+                ("all free", 18, 18),
+                ("bound start", 6, 6),
+                ("bound len", 18, 6),
+                ("bound step", 9, 9),
+                ("bound pathId", 8, 1),
+            ],
+            "cycle/exhaustive"
         );
-        assert_bound_is_honest(
-            &ShortestPathWitnessRelation::new(cycle_graph, limits(1, 8)),
-            "cycle/shortest",
+        assert_eq!(
+            bound_report(&ShortestPathWitnessRelation::new(cycle_graph, limits(1, 8))),
+            vec![
+                ("all free", 18, 18),
+                ("bound start", 6, 6),
+                ("bound len", 18, 6),
+                ("bound step", 9, 9),
+                ("bound pathId", 8, 1),
+            ],
+            "cycle/shortest"
         );
 
         let (_data, quoted_graph, _quoted) = triple_term_graph();
-        assert_bound_is_honest(
-            &PathWitnessRelation::new(Arc::clone(&quoted_graph), limits(1, 2)),
-            "triple term",
+        assert_eq!(
+            bound_report(&PathWitnessRelation::new(
+                Arc::clone(&quoted_graph),
+                limits(1, 2)
+            )),
+            vec![
+                ("all free", 9, 4),
+                ("bound start", 3, 3),
+                ("bound len", 9, 2),
+                ("bound step", 6, 3),
+                ("bound pathId", 2, 1),
+            ],
+            "triple term/exhaustive"
         );
-        assert_bound_is_honest(
-            &ShortestPathWitnessRelation::new(quoted_graph, limits(1, 2)),
-            "triple term/shortest",
+        assert_eq!(
+            bound_report(&ShortestPathWitnessRelation::new(
+                quoted_graph,
+                limits(1, 2)
+            )),
+            vec![
+                ("all free", 9, 4),
+                ("bound start", 3, 3),
+                ("bound len", 9, 2),
+                ("bound step", 6, 3),
+                ("bound pathId", 2, 1),
+            ],
+            "triple term/shortest"
         );
+    }
+
+    /// The same pinning over the adversarial dense fixture, where a loose bound has room
+    /// to hide.
+    ///
+    /// The exhaustive relation's declaration grows with `d_out^k`, which is the real
+    /// growth rate of the answer here — the point of the fixture is that the ratio stays
+    /// a small constant instead of widening, which is what a guard-derived bound did.
+    /// The shortest relation's own per-endpoint cap dominates, and its declaration is
+    /// dramatically tighter as a result: that difference between the two relations is the
+    /// planner-visible fact the two IRIs exist to express.
+    #[test]
+    fn the_row_bound_stays_tight_on_a_dense_graph() {
+        let (_data, graph) = dense();
+        assert_eq!(graph.node_count(), 4);
+        assert_eq!(graph.edge_count(), 12, "six statements, read both ways");
+
+        assert_eq!(
+            bound_report(&PathWitnessRelation::new(Arc::clone(&graph), limits(1, 4))),
+            vec![
+                // A constant factor of roughly three, on the shape where the answer
+                // itself grows as `3^k`. The guard-derived bound declared 49,152 here.
+                ("all free", 1704, 588),
+                ("bound start", 426, 147),
+                // The widest ratio, and for a stated reason: a bound `?len` pins the walk
+                // length exactly, but `rows_per_invocation` is handed a MODE and never the
+                // value, so it cannot narrow to that one length.
+                ("bound len", 1704, 72),
+                ("bound step", 480, 192),
+                ("bound pathId", 4, 1),
+            ],
+            "dense/exhaustive"
+        );
+        assert_eq!(
+            bound_report(&ShortestPathWitnessRelation::new(graph, limits(1, 4))),
+            vec![
+                // One witness per endpoint: four walks per seed at most, not `3^k`. The
+                // exhaustive relation declares 1704 for the same graph and the same mode.
+                ("all free", 64, 20),
+                ("bound start", 16, 5),
+                ("bound len", 64, 8),
+                // Exact: every witness is one hop here, so every one of them has a row at
+                // step 1 and no other.
+                ("bound step", 16, 16),
+                ("bound pathId", 4, 1),
+            ],
+            "dense/shortest"
+        );
+    }
+
+    /// The free-start case for the shortest relation specifically, which the exhaustive
+    /// sweep above covers only incidentally.
+    ///
+    /// With no seed pinned the relation searches from EVERY node, so its declaration is
+    /// `node_count` seeds × `node_count` endpoints × `max_hops` rows — the polynomial its
+    /// type docs promise, and the reason a planner can tell the two relations apart
+    /// without running either.
+    #[test]
+    fn the_shortest_relation_declares_a_polynomial_free_start_bound() {
+        let (_data, graph) = dense();
+        let shortest = ShortestPathWitnessRelation::new(Arc::clone(&graph), limits(1, 4));
+        let exhaustive = PathWitnessRelation::new(graph, limits(1, 4));
+        let all_free = BindingPattern::from_code("fffffff");
+
+        let shortest_bound = shortest.rows_per_invocation(all_free);
+        let exhaustive_bound = exhaustive.rows_per_invocation(all_free);
+        assert_eq!(shortest_bound, 64, "4 seeds × 4 endpoints × 4 rows, capped");
+        assert!(
+            shortest_bound < exhaustive_bound,
+            "the polynomial relation must price CHEAPER than the exponential one, or the \
+             planner has no reason to prefer it: {shortest_bound} vs {exhaustive_bound}"
+        );
+        // Twenty rows against a declared sixty-four; the exhaustive relation emits 588
+        // over the same graph, and declares 1704.
+        assert_eq!(drained(&shortest, &free()).len(), 20);
     }
 
     #[test]
