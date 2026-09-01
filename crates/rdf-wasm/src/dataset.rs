@@ -15,7 +15,7 @@ use purrdf::ir::MutableDataset;
 use purrdf::{
     JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue,
     canonical_flat_nquads, datasets_isomorphic, parse_dataset, serialize_dataset,
-    serialize_dataset_with_jsonld_options,
+    serialize_dataset_to_format, serialize_dataset_with_jsonld_options,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -26,7 +26,7 @@ use purrdf::viz::{
     project_dataset, project_dataset_export, render_dataset_svg,
 };
 
-use crate::codec::resolve_media_type;
+use crate::codec::{resolve_format, resolve_media_type};
 use crate::convert::{quad_to_quad_values, quad_values_to_quad, rdf_term_to_term_value};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
@@ -224,9 +224,23 @@ impl Dataset {
     /// (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media types — all resolved
     /// through the one core registry.
     ///
-    /// Object-position quoted-triple terms (RDF-1.2 triple terms) are preserved
-    /// through N-Quads, JSON-LD, and YAML-LD; the other text syntaxes (Turtle,
-    /// N-Triples, TriG, RDF/XML) flatten them.
+    /// This is the WRITER-NATIVE lane: it emits everything the target's writer has a
+    /// surface for, and REFUSES what it does not. Object-position quoted-triple terms
+    /// and the RDF-1.2 statement layer therefore survive Turtle, N-Triples, N-Quads
+    /// and TriG (as `<<( … )>>`), RDF/XML (as `rdf:parseType="Triple"`), and JSON-LD /
+    /// YAML-LD (as `@triple`); TriX and HexTuples, which have no triple-term surface at
+    /// all, throw rather than drop the layer silently, because this lane has no count
+    /// to report a drop through.
+    ///
+    /// Named graphs are the one thing it does drop without saying so: a single-graph
+    /// target (Turtle, N-Triples, RDF/XML) emits the default graph alone.
+    ///
+    /// [`serialize_with_loss`](Self::serialize_with_loss) is the TRANSCODE lane
+    /// instead: it applies the declared format contract, projecting the statement layer
+    /// to base quads for every format the loss matrix calls star-incapable (RDF/XML,
+    /// TriX, HexTuples) and COUNTING what it projected, so it never throws for a layer
+    /// it cannot carry. For a star-capable target the two lanes are byte-identical; for
+    /// those three they are not, and the difference is exactly the counted loss.
     #[wasm_bindgen(js_name = serialize)]
     pub fn serialize(&self, format: &str) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
@@ -235,6 +249,41 @@ impl Dataset {
             .map_err(|e| diag_to_err(&e))?;
         String::from_utf8(bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
+    }
+
+    /// `serializeWithLoss(format)` → the document the declared transcode contract
+    /// produces for `format`, plus the WHOLE realized loss of producing it.
+    ///
+    /// Byte-identical to [`serialize`](Self::serialize) for every star-capable target
+    /// (Turtle, N-Triples, N-Quads, TriG, JSON-LD, YAML-LD). For the three the loss
+    /// matrix calls star-incapable it deliberately differs: this lane projects the
+    /// RDF-1.2 statement layer to base quads and counts it, where `serialize` writes
+    /// the layer natively (RDF/XML) or throws for want of a surface (TriX, HexTuples).
+    ///
+    /// The transcode lane cannot refuse the way the CONSTRUCT lane does — a caller
+    /// asking a TriG document for N-Triples wants its default graph, and that is a
+    /// legitimate request — so the only honest alternative to refusing is COUNTING. The
+    /// counts partition the loss by cause, so their sum is the total and no row is
+    /// charged twice; reading one alone cannot distinguish "nothing was lost" from "the
+    /// loss was charged to a cause I am not reading".
+    ///
+    /// This is the JS twin of the C ABI's `purrdf_serialize` count out-params and of
+    /// Python's `Store.dump_with_loss`, so the same serialization reports the same
+    /// three numbers on every host.
+    #[wasm_bindgen(js_name = serializeWithLoss)]
+    pub fn serialize_with_loss(&self, format: &str) -> Result<SerializeLoss, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
+        let outcome =
+            serialize_dataset_to_format(&frozen, fmt, None).map_err(|e| diag_to_err(&e))?;
+        let text = String::from_utf8(outcome.bytes)
+            .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))?;
+        Ok(SerializeLoss {
+            text,
+            statement_rows_dropped: outcome.statement_rows_dropped,
+            directional_literals_dropped: outcome.directional_literals_dropped,
+            named_graph_rows_dropped: outcome.named_graph_rows_dropped,
+        })
     }
 
     /// Serialize JSON-LD/YAML-LD using the shared versioned options decoder.
@@ -402,6 +451,67 @@ impl Dataset {
             out.insert(qv.clone());
         }
         Ok(Self { inner: out })
+    }
+}
+
+/// One serialized document plus the realized loss of producing it, partitioned by
+/// CAUSE — the return of [`Dataset::serialize_with_loss`].
+///
+/// Three counts rather than one flag because the causes are independent: a
+/// star-capable single-graph target (Turtle, N-Triples) loses named graphs and no
+/// statement rows; a dataset-capable star-incapable one (TriX, HexTuples) loses
+/// statement rows and no named graphs, and also every base direction; RDF/XML loses
+/// statement rows AND named graphs while carrying direction. A single "lossy" boolean
+/// would answer none of the questions a caller actually has.
+///
+/// Every count is REALIZED — what this document actually discarded — not the static
+/// pair contract of `lossMatrixJson`, which says what a format PAIR can lose in
+/// principle.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct SerializeLoss {
+    text: String,
+    statement_rows_dropped: usize,
+    directional_literals_dropped: usize,
+    named_graph_rows_dropped: usize,
+}
+
+#[wasm_bindgen]
+impl SerializeLoss {
+    /// The serialized document. Identical to what `serialize(format)` returns for a
+    /// star-capable target; for RDF/XML, TriX and HexTuples it is the contract's
+    /// projected document instead — the statement layer reduced to base quads and
+    /// charged to [`statement_rows_dropped`](Self::statement_rows_dropped).
+    #[wasm_bindgen(getter)]
+    pub fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// RDF-1.2 statement-layer rows (reifier bindings + annotation triples) dropped
+    /// because the target cannot represent quoted triples. `0` for star-capable
+    /// formats. Rows dropped because they were scoped to a named graph are counted by
+    /// [`named_graph_rows_dropped`](Self::named_graph_rows_dropped) instead, never
+    /// here and never twice.
+    #[wasm_bindgen(getter, js_name = statementRowsDropped)]
+    pub fn statement_rows_dropped(&self) -> usize {
+        self.statement_rows_dropped
+    }
+
+    /// Object literals whose RDF-1.2 base direction the target has no surface for
+    /// (TriX / HexTuples keep the language tag but cannot carry the direction). `0`
+    /// for every direction-capable format.
+    #[wasm_bindgen(getter, js_name = directionalLiteralsDropped)]
+    pub fn directional_literals_dropped(&self) -> usize {
+        self.directional_literals_dropped
+    }
+
+    /// Rows the single-graph flattening dropped because the target has no named-graph
+    /// construct: base quads asserted in a named graph plus the statement-layer rows
+    /// scoped to one. `0` for every dataset-capable format. The rows are DROPPED, not
+    /// folded into the default graph.
+    #[wasm_bindgen(getter, js_name = namedGraphRowsDropped)]
+    pub fn named_graph_rows_dropped(&self) -> usize {
+        self.named_graph_rows_dropped
     }
 }
 
@@ -657,6 +767,112 @@ mod tests {
         // Re-parsing the output yields the same single quad.
         let reparsed = Dataset::parse(&out, "ntriples", None).unwrap();
         assert_eq!(reparsed.size(), 1);
+    }
+
+    /// The transcode lane COUNTS what it drops instead of dropping it silently.
+    ///
+    /// `serialize` cannot refuse the way the CONSTRUCT lane does — asking a TriG
+    /// document for N-Triples is a legitimate "give me the default graph" — so the loss
+    /// has to be readable, and it has to be readable per CAUSE: N-Triples is
+    /// star-capable, so the statement count says zero while the flattening discards
+    /// every named graph it was handed.
+    #[test]
+    fn serialize_with_loss_reports_each_cause_separately() {
+        const MIXED: &str = concat!(
+            "<https://e/s1> <https://e/p> <https://e/o1> .\n",
+            "<https://e/s2> <https://e/p> <https://e/o2> <https://e/g1> .\n",
+            "<https://e/s3> <https://e/p> <https://e/o3> <https://e/g2> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s1> <https://e/p> <https://e/o1> )>> <https://e/g1> .\n",
+        );
+        let ds = Dataset::parse(MIXED, "nquads", None)
+            .unwrap_or_else(|_| unreachable!("N-Quads parses"));
+
+        let lossy = ds
+            .serialize_with_loss("ntriples")
+            .unwrap_or_else(|_| unreachable!("N-Triples serializes"));
+        // Star-capable, so the statement-layer count is silent about the graph scoping…
+        assert_eq!(lossy.statement_rows_dropped(), 0);
+        assert_eq!(lossy.directional_literals_dropped(), 0);
+        // …and the named-graph count is the one that reports the three vanished rows.
+        assert_eq!(lossy.named_graph_rows_dropped(), 3);
+        assert!(!lossy.text().contains("https://e/g1"));
+        // The bytes are exactly what the plain entry point produces.
+        assert_eq!(
+            lossy.text(),
+            ds.serialize("ntriples")
+                .unwrap_or_else(|_| unreachable!("N-Triples serializes"))
+        );
+
+        // A dataset-capable target loses nothing, and says so on every count.
+        let lossless = ds
+            .serialize_with_loss("nquads")
+            .unwrap_or_else(|_| unreachable!("N-Quads serializes"));
+        assert_eq!(lossless.statement_rows_dropped(), 0);
+        assert_eq!(lossless.directional_literals_dropped(), 0);
+        assert_eq!(lossless.named_graph_rows_dropped(), 0);
+    }
+
+    /// The two serialization lanes DIVERGE for a star-incapable target, and the docs
+    /// on both of them say exactly how.
+    ///
+    /// `serialize` is writer-native and `serialize_with_loss` applies the declared
+    /// transcode contract; for a star-capable target those coincide, and the existing
+    /// N-Triples assertion above pins that. They do NOT coincide for the three formats
+    /// the loss matrix calls star-incapable, and the prose claimed they did until this
+    /// test was written — a claim that also shipped to TypeScript. So each of the three
+    /// is exercised on BOTH lanes here: RDF/XML writes the statement layer natively
+    /// through `rdf:parseType="Triple"` while the contract projects it away, and TriX /
+    /// HexTuples have no triple-term surface at all, so the writer-native lane REFUSES
+    /// where the counting lane projects.
+    #[test]
+    fn the_two_serialization_lanes_diverge_exactly_where_the_docs_say_they_do() {
+        const WITH_LAYER: &str = concat!(
+            "<https://e/s> <https://e/p> <https://e/o> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+        );
+        let ds = Dataset::parse(WITH_LAYER, "nquads", None)
+            .unwrap_or_else(|_| unreachable!("N-Quads parses"));
+
+        // Star-capable: one document, both lanes, the triple term intact and no loss.
+        for format in ["turtle", "ntriples", "nquads", "trig"] {
+            let plain = ds
+                .serialize(format)
+                .unwrap_or_else(|_| unreachable!("{format} serializes"));
+            let counted = ds
+                .serialize_with_loss(format)
+                .unwrap_or_else(|_| unreachable!("{format} serializes"));
+            assert!(plain.contains("<<("), "{format} must keep the triple term");
+            assert_eq!(counted.text(), plain, "{format} lanes must agree");
+            assert_eq!(counted.statement_rows_dropped(), 0, "{format}");
+        }
+
+        // RDF/XML: the writer HAS a surface for the layer, so the native lane emits it
+        // and the contract lane — which the loss matrix declares star-incapable —
+        // projects it away and charges the row. The two documents differ.
+        let xml_plain = ds
+            .serialize("rdfxml")
+            .unwrap_or_else(|_| unreachable!("RDF/XML serializes"));
+        let xml_counted = ds
+            .serialize_with_loss("rdfxml")
+            .unwrap_or_else(|_| unreachable!("RDF/XML serializes"));
+        assert!(xml_plain.contains("rdf:parseType=\"Triple\""));
+        assert!(!xml_counted.text().contains("rdf:parseType=\"Triple\""));
+        assert_ne!(xml_counted.text(), xml_plain);
+        assert_eq!(xml_counted.statement_rows_dropped(), 1);
+
+        // TriX / HexTuples have no triple-term surface anywhere, so the counting lane
+        // projects the layer and charges it. The writer-native lane REFUSES them
+        // instead, which cannot be asserted here — constructing the `JsError` calls a
+        // wasm-bindgen import that panics off-target — so that half is pinned on real
+        // wasm in `js/tests/roundtrip.test.mjs`.
+        for format in ["trix", "hextuples"] {
+            let counted = ds
+                .serialize_with_loss(format)
+                .unwrap_or_else(|_| unreachable!("{format} projects"));
+            assert_eq!(counted.statement_rows_dropped(), 1, "{format}");
+        }
     }
 
     #[test]

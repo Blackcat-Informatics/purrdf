@@ -126,8 +126,8 @@ fn admit_query(query: &Query) -> Result<(), EvalError> {
         Query::Construct {
             template, pattern, ..
         } => {
-            for t in template {
-                check_triple_pattern(t)?;
+            for q in template {
+                check_quad_pattern(q)?;
             }
             check_pattern(pattern)
         }

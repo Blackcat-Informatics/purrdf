@@ -56,10 +56,14 @@ const reparsed = Dataset.parse(nq, "nquads");
   `typedLiteral`, `directionalLiteral`, `variable`, `defaultGraph`, `quad`,
   `quotedTriple`, `fromTerm`, `fromQuad`.
 - **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
-  `serialize(format)`, `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
+  `serialize(format)`, `serializeWithLoss(format)`,
+  `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
   (`for (const quad of dataset)`). Formats, for both `parse` and `serialize`:
   `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, `jsonld`, `yamlld` (or their
-  media types).
+  media types). `serializeWithLoss` returns the same document plus the realized loss
+  of producing it — the statement-layer rows, base directions, and named-graph rows
+  the target could not carry — the JS twin of the C ABI's `purrdf_serialize` count
+  out-params.
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).

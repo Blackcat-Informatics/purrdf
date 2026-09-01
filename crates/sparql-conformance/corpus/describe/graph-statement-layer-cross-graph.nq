@@ -1,0 +1,7 @@
+# The base quad is in <g2>; the reifier declared ABOUT it, and the annotation on that
+# declaration, are in <g3>. Selection is graph-blind, which is what reaches the <g3>
+# declaration from a closure seeded in <g2>; emission is graph-faithful, which is what
+# keeps it in <g3> instead of moving it beside the triple it reifies.
+<http://example.org/p> <http://example.org/mentions> <http://example.org/q> <http://example.org/g2> .
+<http://example.org/r2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/p> <http://example.org/mentions> <http://example.org/q> )>> <http://example.org/g3> .
+<http://example.org/r2> <http://example.org/source> <http://example.org/ledger> <http://example.org/g3> .

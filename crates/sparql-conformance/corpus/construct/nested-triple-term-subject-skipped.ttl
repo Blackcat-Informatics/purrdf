@@ -1,0 +1,10 @@
+@prefix : <http://example.org/> .
+# The template's SECOND triple puts `?t` — bound to a triple term — into the
+# subject of a triple term NESTED in the object, which RDF 1.2 admits no more
+# than it admits an asserted triple-term subject: a triple term nests only in
+# the OBJECT of another triple term. §16.2 skips that instantiation instead of
+# erroring, and emitting it instead would produce a document PurRDF's own
+# readers refuse. The first triple is the control: it consumes the same row, so
+# an empty result would mean the WHERE matched nothing rather than that the
+# skip fired.
+:r1 :reifies <<( :a :knows :b )>> .

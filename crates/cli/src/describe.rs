@@ -51,6 +51,19 @@
 //! "nothing describes it" is a true answer rather than a failed run. The exit code stays 0 and
 //! the sink writes an empty document in the requested syntax.
 //!
+//! # A description carries graphs, so a single-graph target is refused
+//!
+//! An SCBD is graph-faithful at every layer: a base quad, a reifier declaration and an
+//! annotation each come back in the graph the source asserted them in. Turtle, N-Triples
+//! and RDF/XML have no named-graph construct and the single-graph serializers DROP every
+//! graph-scoped row rather than folding it into the default graph, so describing a
+//! resource whose description lives in named graphs into one of those syntaxes wrote a
+//! well-formed document missing exactly what was asked for — in the whole-named-graph
+//! case, ZERO statements and exit 0. This verb therefore refuses (exit 2) exactly as the
+//! `query` lane does for the same `DESCRIBE`, through the same shared refusal sentence:
+//! two spellings of one operation must not give two answers. A description carrying only
+//! default-graph statements serializes exactly as before.
+//!
 //! # No `--report`
 //!
 //! Nothing here infers. An SCBD is a bounded walk over asserted quads and the statement layer;
@@ -60,8 +73,9 @@
 
 use std::sync::Arc;
 
+use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{DatasetView, RdfDataset, describe::Describer};
-use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::CliError;
@@ -105,6 +119,56 @@ impl ViewOp for DescribeOp<'_> {
     }
 }
 
+/// The closing imperative of this verb's named-graph refusal: the quad-capable `--to`
+/// targets, in [`CliRdfFormat`](crate::cli::CliRdfFormat) declaration order.
+///
+/// The rest of the sentence is `purrdf_core::named_graph::named_graph_refusal`, shared
+/// verbatim with the `query` lane and with the Python and wasm hosts; only the remedy is
+/// per-surface, because "`--to`" is a spelling this verb has and they do not. The pack
+/// container is listed too: it is a lossless RDF-1.2 dataset carrier, so it is a real
+/// answer to "where can this description go", which `--results-format` has no member for.
+const QUAD_CAPABLE_REMEDY: &str =
+    "Re-run with a quad-capable --to target (trig/nquads/trix/hextuples/jsonld/yamlld/pack)";
+
+/// Refuse to serialize a description that carries named graphs to a single-graph RDF
+/// syntax, naming the graphs, the format, and what to use instead.
+///
+/// This is the `query` lane's refusal reached from the other spelling of the same
+/// operation. `purrdf query --results-format turtle 'DESCRIBE <x>'` refuses; before this,
+/// `purrdf describe --iri x --to turtle` serialized the default-graph half and exited 0 —
+/// and when the whole description was graph-scoped, wrote nothing at all and still exited
+/// 0. One `Describer`, one authority, so one answer.
+///
+/// It is a REFUSAL rather than a ledgered loss for the reason the `query` lane gives:
+/// which resource to describe is the most explicit thing in the request, and a partial
+/// description reported as a complete one is worse than no description. That is not in
+/// tension with `convert`, which ledgers instead: there the caller named a source document
+/// and a target syntax and asked for exactly that transcode, so the pair contract is the
+/// answer. Here they asked for a resource.
+///
+/// [`SourceFormat::Pack`] carries a full RDF-1.2 dataset, and [`SourceFormat::Gts`] is
+/// refused by name at format-resolution time, so only the native syntaxes are tested.
+fn refuse_uncarriable_named_graphs<D: DatasetView>(
+    description: &D,
+    target: SourceFormat,
+) -> Result<(), CliError> {
+    let SourceFormat::Native(format) = target else {
+        return Ok(());
+    };
+    if format.supports_datasets() {
+        return Ok(());
+    }
+    let names = distinct_graph_names(description);
+    if names.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::Usage(named_graph_refusal(
+        &names,
+        format.id(),
+        QUAD_CAPABLE_REMEDY,
+    )))
+}
+
 /// Run the `describe` subcommand.
 pub(crate) fn run(
     options: &DescribeOptions<'_>,
@@ -124,6 +188,7 @@ pub(crate) fn run(
         options.base,
         DescribeOp { iris: options.iris },
     )?;
+    refuse_uncarriable_named_graphs(&*description, target_format)?;
 
     let ledger = sink::write_rdf(
         &*description,

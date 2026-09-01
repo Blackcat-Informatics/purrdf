@@ -129,10 +129,40 @@ pub enum Query {
         /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
         version: Option<SparqlVersion>,
     },
-    /// `CONSTRUCT` query. `template` is the output triple template.
+    /// `CONSTRUCT` query. `template` is the output **quad** template.
     Construct {
-        /// The `CONSTRUCT { ... }` triple template.
-        template: Vec<TriplePattern>,
+        /// The `CONSTRUCT { ... }` template, as a sequence of quad patterns:
+        /// one statement pattern each, carrying the graph it is instantiated
+        /// into.
+        ///
+        /// # The graph slot
+        ///
+        /// [`QuadPattern::graph`] is `None` for the SPARQL 1.1 §16.2 form — the
+        /// statement lands in the **default graph** of the returned dataset, so
+        /// a template whose every slot is `None` emits byte-identically to a
+        /// pre-quad-template `CONSTRUCT`. `Some(g)` names the graph the
+        /// instantiated statement is tagged with, making the result a *dataset*
+        /// rather than a graph; `g` may be an IRI or a **variable**.
+        ///
+        /// Nothing else about instantiation changes: the per-row blank-node
+        /// freshness rule, the unbound-variable skip and the ill-formed-triple
+        /// skip all run exactly as they do for the triple form. A graph
+        /// variable joins that same skip rule — an unbound graph variable, or
+        /// one bound to a non-IRI (a literal, a blank node or a triple term),
+        /// **skips** the statement rather than raising or silently retargeting
+        /// it at the default graph.
+        ///
+        /// # Surface syntax
+        ///
+        /// Two spellings reach this one shape. `GRAPH VarOrIri { ... }` blocks
+        /// **inside** the template scope the statements they enclose, may be
+        /// repeated, and may be mixed with unscoped (default-graph) statements
+        /// in the same template — the quad-producing `CONSTRUCT` that Jena and
+        /// Stardog ship. `CONSTRUCT GRAPH VarOrIri { ... }` is the
+        /// whole-template shorthand: the named graph becomes the default for
+        /// every template slot that does not name one itself, so an inner
+        /// `GRAPH` block still wins over it.
+        template: Vec<QuadPattern>,
         /// The `WHERE` algebra.
         pattern: GraphPattern,
         /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
@@ -1158,6 +1188,30 @@ pub enum Function {
     Sha256,
     Sha384,
     Sha512,
+    /// `SHA3-224(string)` — SEP-0008 SHA-3 (FIPS 202 Keccak) built-in.
+    ///
+    /// The four SHA-3 names are the only built-in keywords in the language that
+    /// contain a `-`. That is not a problem for this parser: the lexer's
+    /// `PN_PREFIX` scan admits `-` as a `PN_CHARS` character, so `SHA3-224`
+    /// arrives as ONE [`Token::Word`](crate::lexer::Token::Word) and dispatches
+    /// through the same `NAME(...)` table every other built-in uses. A SPACED
+    /// `SHA3 - 224` is a different token sequence entirely (`Word`, `Minus`,
+    /// `Integer`) and is NOT this call — see the parser's
+    /// `sha3_hyphen_is_one_token_not_a_subtraction` test.
+    ///
+    /// SEP-0008's own text spells the four functions with an UNDERSCORE
+    /// (`sha3_224`), so the parser accepts `SHA3_224` as an alias for the same
+    /// variant. The alias is an INPUT spelling only: this enum has one variant
+    /// per digest size and the serializer has one arm per variant, so emitted
+    /// text always carries the canonical hyphenated name and stays
+    /// byte-deterministic regardless of which spelling was parsed.
+    Sha3_224,
+    /// `SHA3-256(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_256,
+    /// `SHA3-384(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_384,
+    /// `SHA3-512(string)` — SEP-0008 SHA-3 built-in (see [`Function::Sha3_224`]).
+    Sha3_512,
     StrLang,
     StrDt,
     IsIri,

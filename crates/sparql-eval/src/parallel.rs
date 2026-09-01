@@ -552,6 +552,10 @@ pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
         | Function::Sha256
         | Function::Sha384
         | Function::Sha512
+        | Function::Sha3_224
+        | Function::Sha3_256
+        | Function::Sha3_384
+        | Function::Sha3_512
         | Function::StrLang
         | Function::StrDt
         | Function::IsIri

@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Clause 4 of the symmetric CBD crossed with GRAPH SCOPE. `statements.ttl` is
+# default-graph-only, so no case reading it can observe where a described
+# statement LANDS — only that it was selected. This fixture is TriG for exactly
+# that reason: every row it carries is asserted in a named graph, so an
+# expectation written as N-Quads pins the graph of each reifier declaration and
+# each annotation, not merely its presence.
+#
+# The rule these cases pin: a reifier DECLARATION is selected by its reified
+# triple's subject-or-object membership in the closure and by nothing else —
+# graph membership takes no part in the selection — and is then re-emitted into
+# the graph that declared it. An annotation rides with the declaration it
+# annotates, so it is harvested per `(reifier, graph)`.
+@prefix :    <http://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+# Same-graph: the base quad, the reifier declaration and both annotations were
+# all asserted in :g1, and describing :a must keep all four rows there.
+GRAPH :g1 {
+  :a :knows :b ~:r1 {| :certainty "high" ; :recordedBy :editor |} .
+}
+
+# Cross-graph: :g2 asserts the base quad, and :g3 — a DIFFERENT graph — declares
+# a reifier about it and annotates that declaration. Graph-blind selection is
+# what reaches the declaration at all; graph-faithful emission is what keeps it
+# in :g3 rather than folding it beside the triple it reifies.
+GRAPH :g2 {
+  :p :mentions :q .
+}
+
+GRAPH :g3 {
+  :r2 rdf:reifies <<( :p :mentions :q )>> .
+  :r2 :source :ledger .
+}
+
+# Per-declaration annotation scope: ONE reifier id, :rs, declared in :g4 about a
+# triple of :c and in :g5 about a triple of :m, each annotated with the SAME
+# predicate in its own graph. Describing :c reaches only the :g4 declaration, so
+# only the :g4 annotation may ride along — harvesting a reifier's rows across
+# graphs would emit the :g5 annotation into a graph this description never
+# declared :rs in.
+GRAPH :g4 {
+  :c :worksAt :acme ~:rs {| :since "2020" |} .
+}
+
+GRAPH :g5 {
+  :m :knows :n ~:rs {| :since "1999" |} .
+}

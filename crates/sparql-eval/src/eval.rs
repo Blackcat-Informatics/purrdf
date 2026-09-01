@@ -2649,6 +2649,49 @@ impl AdmittedRequest<'_> {
 /// `1.2-basic` request that stays inside the profile evaluates exactly as a
 /// `1.2` one would, and one that does not is refused here, before any work is
 /// spent.
+///
+/// # Why a declared `VERSION` does not subtract this engine's extensions
+///
+/// A declared version selects **semantics**, not a feature whitelist. This
+/// engine ships documented first-party extensions that SPARQL 1.2 does not
+/// define — most visibly the quad-producing `CONSTRUCT` template
+/// (`CONSTRUCT GRAPH VarOrIri …` and `GRAPH … { … }` blocks inside a template;
+/// see [`purrdf_sparql_algebra::Query::Construct`]) — and a request that
+/// declares `VERSION "1.2"` and then uses one is **admitted**, deliberately.
+/// Three reasons, in descending force:
+///
+/// 1. **Refusing here would invert the specification's own conformance chain.**
+///    §4.3.1 states that a query conforming to `"1.2-basic"` also conforms to
+///    `"1.2"`, so the language `"1.2"` admits must be a *superset* of the one
+///    `"1.2-basic"` admits. [`crate::basic_profile`] gates exactly the
+///    triple-term feature area the §4.3.1 table's "Syntax" column names, and
+///    nothing else, so a quad template is admitted under `"1.2-basic"`.
+///    Refusing it under `"1.2"` would make the narrower profile accept a query
+///    the wider one rejects — an incoherence no author could reason about. The
+///    only coherent way to refuse would be to gate the extension under
+///    `"1.2-basic"` too, which would mean inventing a restriction the profile's
+///    quoted spec text does not state.
+/// 2. **The declaration would otherwise become a semantic switch.** Every
+///    version label this engine recognizes evaluates the same algebra on the
+///    same engine; an undeclared-version request already admits the extension.
+///    If the *presence* of a `VERSION "1.2"` line subtracted capability, the
+///    same query text would mean two different things depending on a line whose
+///    specified job is to name semantics — per-request optionality of exactly
+///    the kind this project forbids. One engine, one behavior.
+/// 3. **The extension is conservative.** A quad template with no graph slot
+///    filled is byte-identically the SPARQL 1.1 §16.2 template, so no
+///    spec-conformant query's meaning is changed by the extension existing. It
+///    adds a spelling; it redefines nothing.
+///
+/// The fail-fast boundary this function *does* enforce is the one that protects
+/// meaning rather than vocabulary: an **unrecognized** label names semantics
+/// this engine cannot honor, so it is refused outright rather than evaluated
+/// under a guess. That is the hard failure; refusing a first-party spelling
+/// whose semantics are known and additive is not.
+///
+/// This admission is pinned by
+/// `tests::declared_version_12_admits_the_quad_construct_extension`, so a later
+/// change that starts refusing it fails a test instead of passing silently.
 pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalError> {
     match request.version() {
         Some(SparqlVersion::Other(raw)) => {
@@ -2657,6 +2700,10 @@ pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalErro
             )));
         }
         Some(SparqlVersion::V12Basic) => crate::basic_profile::admit(request)?,
+        // The full profile and the undeclared case are admitted unconditionally,
+        // extensions included — a decision, not an oversight; see this
+        // function's docs for why refusing here would invert §4.3.1's
+        // conformance chain.
         Some(SparqlVersion::V12) | None => {}
     }
     Ok(())
@@ -3003,6 +3050,63 @@ mod tests {
             matches!(outcome, Outcome::Solutions(seq) if seq.is_empty()),
             "empty dataset yields no solutions"
         );
+    }
+
+    /// A declared `VERSION` never subtracts this engine's first-party
+    /// extensions — see [`admit_version`]'s "Why a declared `VERSION` does not
+    /// subtract this engine's extensions" for the reasoning this test pins.
+    ///
+    /// The quad-producing `CONSTRUCT` template is the load-bearing example: it
+    /// is a documented PurRDF extension that SPARQL 1.2 does not define, and
+    /// the same query must evaluate identically whether it declares `"1.2"`,
+    /// declares `"1.2-basic"`, or declares nothing. Asserting all three in ONE
+    /// test is the point: the specification's §4.3.1 conformance chain makes
+    /// `"1.2"` a superset of `"1.2-basic"`, so a future gate that refused the
+    /// extension under `"1.2"` while [`crate::basic_profile`] kept admitting it
+    /// would invert that chain — and would fail here rather than ship.
+    #[test]
+    fn declared_version_12_admits_the_quad_construct_extension() {
+        use purrdf_core::TermRef;
+        use purrdf_sparql_algebra::SparqlParser;
+
+        const TARGET: &str = "http://example.org/out";
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("freeze");
+
+        // Every version label this engine recognizes, plus the undeclared case.
+        for prologue in ["VERSION \"1.2\"\n", "VERSION \"1.2-basic\"\n", ""] {
+            let query = SparqlParser::new()
+                .parse_query(&format!(
+                    "{prologue}CONSTRUCT GRAPH <{TARGET}> {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o }}"
+                ))
+                .unwrap_or_else(|e| panic!("{prologue:?} must parse: {e}"));
+            let mut ctx = EvalCtx::new(&ds);
+            let outcome = evaluate_query(&query, &mut ctx).unwrap_or_else(|e| {
+                panic!(
+                    "a declared VERSION must not refuse the quad-producing CONSTRUCT \
+                     ({prologue:?}): {e}"
+                )
+            });
+            let Outcome::Graph(out) = outcome else {
+                panic!("CONSTRUCT yields a graph result");
+            };
+            // Admitted AND evaluated with its extension semantics intact: the one
+            // statement lands in the named graph, not silently in the default one.
+            assert_eq!(out.quad_count(), 1, "{prologue:?}");
+            let quad = out.quads().next().expect("the one instantiated statement");
+            let graph = quad
+                .g
+                .unwrap_or_else(|| panic!("{prologue:?}: emitted a default-graph triple"));
+            assert!(
+                matches!(out.resolve(graph), TermRef::Iri(iri) if iri == TARGET),
+                "{prologue:?}: the statement landed in the wrong graph"
+            );
+        }
     }
 
     #[test]

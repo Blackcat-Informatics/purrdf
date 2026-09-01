@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The default-graph fixture every CONSTRUCT case reads.
+@prefix : <http://example.org/> .
+
+:a :knows :b , :c .
+:b :name "Bee" .

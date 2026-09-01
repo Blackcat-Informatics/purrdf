@@ -13,10 +13,14 @@
 //!    `segment_index`.
 //! 2. **Event-order independence.** `writer::Writer::deterministic` emits frames
 //!    in the order `terms → quads → reifies → annot`. A quoted-triple `Term`
-//!    therefore arrives (in the `terms` frame) carrying only its `reifier` id —
-//!    the `reifies` frame that binds that reifier to the triple's `(s, p, o)`
-//!    arrives **later**. A single-pass fold that resolves a triple term the
-//!    instant its `term` event fires cannot succeed.
+//!    written in the older indirect spelling therefore arrives (in the `terms`
+//!    frame) carrying only its `reifier` id — the `reifies` frame that binds
+//!    that reifier to the triple's `(s, p, o)` arrives **later**. A single-pass
+//!    fold that resolves such a term the instant its `term` event fires cannot
+//!    succeed. (A self-describing triple term, which states its own components
+//!    in `Term::triple`, has no such dependency; its components are still
+//!    resolved through the same buffered pass because they are ordinary term
+//!    ids.)
 //!
 //! [`SegmentResolver`] owns that hazard-handling once, generic over an emit
 //! target ([`ResolvedSink`]). It buffers each segment's raw term / quad /
@@ -174,7 +178,8 @@ pub trait ResolvedSink {
     /// resolving nested quoted triples.
     fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a quoted-triple term that carries no reifier id.
+    /// Build the error for a quoted-triple term that states neither its own
+    /// `(s, p, o)` nor a reifier id to resolve them through.
     fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> Self::Error;
 
     /// Build the error for a triple term whose reifier no `reifies` event ever
@@ -516,12 +521,30 @@ impl<S: ResolvedSink> SegmentResolver<S> {
                     term.direction,
                 )?
             }
+            // A self-describing quoted triple (wire `tt`) carries its own
+            // components, so it needs no reifier at all; only a term written in
+            // the legacy indirect spelling has to go through a reifier id — and
+            // that id may now bind several triples, in which case its FIRST
+            // binding is the one such a term can mean (the reader flags the
+            // ambiguity as `ConflictingReifier`).
             TermKind::Triple => {
-                let Some(reifier_gts_id) = term.reifier else {
-                    return Err(self.sink.err_unbound_triple(segment_index, gts_id));
+                let components = match (term.triple, term.reifier) {
+                    (Some((s, p, o)), _) => {
+                        let s =
+                            self.resolve_term(segment_index, s, "reified subject", depth + 1)?;
+                        let p =
+                            self.resolve_term(segment_index, p, "reified predicate", depth + 1)?;
+                        let o = self.resolve_term(segment_index, o, "reified object", depth + 1)?;
+                        (s, p, o)
+                    }
+                    (None, Some(reifier_gts_id)) => {
+                        self.resolve_triple_components(segment_index, reifier_gts_id, depth + 1)?
+                    }
+                    (None, None) => {
+                        return Err(self.sink.err_unbound_triple(segment_index, gts_id));
+                    }
                 };
-                let (s, p, o) =
-                    self.resolve_triple_components(segment_index, reifier_gts_id, depth + 1)?;
+                let (s, p, o) = components;
                 self.sink.intern_triple(segment_index, gts_id, s, p, o)?
             }
         };
@@ -600,8 +623,15 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // and stash the row (with its named graph) so the reifier resource binds
         // the resolved triple at segment close.
         let (reifier_id, triple, graph) = reifier;
+        // One reifier id may bind several triples (`rdf:reifies` is not
+        // functional). Every row is stashed below and pushed as its own
+        // statement-layer binding; this memo only serves the LEGACY indirect
+        // triple-term spelling, which can name a single triple — so it keeps
+        // the FIRST binding, exactly as `Graph::reifier` does on the folded
+        // path.
         self.reifier_bindings
-            .insert((segment_index, reifier_id), triple);
+            .entry((segment_index, reifier_id))
+            .or_insert(triple);
         self.raw_reifiers
             .push((segment_index, reifier_id, triple, graph));
     }

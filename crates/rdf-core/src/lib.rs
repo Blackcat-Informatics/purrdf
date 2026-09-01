@@ -83,6 +83,9 @@ pub mod loss;
 /// The owned RDF 1.2 value model: terms, literals (including base-direction
 /// literals), triples, quads, reifiers, and statement annotations.
 pub mod model;
+// The one named-graph refusal vocabulary the CLI, Python and wasm hosts share when a
+// graph-carrying result meets a single-graph RDF syntax.
+pub mod named_graph;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
@@ -162,6 +165,7 @@ pub use model::{
     RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,
     RdfTriple,
 };
+pub use named_graph::{NAMED_GRAPH_SAMPLE_LIMIT, distinct_graph_names, named_graph_refusal};
 pub use provenance::{
     ArtifactId, ArtifactInterner, AssertionOccurrence, Attribution, AttributionRole,
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
@@ -176,7 +180,8 @@ pub use sssom::{
 pub use store::RdfStoreCapabilities;
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
-    write_dataset_annotation, write_dataset_quad, write_dataset_reifier, write_dataset_term,
+    write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
+    write_dataset_quad, write_dataset_reifier, write_dataset_reifier_nquad, write_dataset_term,
 };
 pub use turtle_render::render as render_canonical_turtle;
 

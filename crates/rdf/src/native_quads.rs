@@ -97,23 +97,34 @@ pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> 
 /// consumers that fold over [`RdfQuad`]. Base quads first, then the re-materialized
 /// `rdf:reifies` reifier rows and the annotation rows. The IR fold + this un-fold are
 /// exact inverses.
+///
+/// Exact inverses **including the graph slot**: the statement layer is keyed per graph
+/// ([`RdfReifier::graph`](crate::RdfReifier::graph) /
+/// [`RdfAnnotation::graph`](crate::RdfAnnotation::graph)), so a reifier declaration or
+/// annotation asserted inside a `GRAPH g { … }` block — or written there by a
+/// quad-template `CONSTRUCT` — is re-materialized into `g`, not into the default graph.
+/// Dropping it here would have re-folded the row into the wrong graph and silently
+/// unscoped every graph-scoped `rdf:reifies` edge on the flat quad surface.
 #[must_use]
 pub fn flat_rdf_quads_from_dataset(dataset: &RdfDataset) -> Vec<RdfQuad> {
     let mut quads: Vec<RdfQuad> = dataset.owned_quads().collect();
     for reifier in dataset.owned_reifiers() {
-        let statement = RdfTerm::triple(reifier.statement.clone());
-        quads.push(RdfQuad::new(
-            reifier.reifier.clone(),
-            RDF_REIFIES,
-            statement,
-        ));
+        quads.push(RdfQuad {
+            subject: reifier.reifier,
+            predicate: RDF_REIFIES.to_owned(),
+            object: RdfTerm::triple(reifier.statement),
+            graph_name: reifier.graph,
+            location: None,
+        });
     }
     for annotation in dataset.owned_annotations() {
-        quads.push(RdfQuad::new(
-            annotation.reifier.clone(),
-            annotation.predicate.clone(),
-            annotation.object.clone(),
-        ));
+        quads.push(RdfQuad {
+            subject: annotation.reifier,
+            predicate: annotation.predicate,
+            object: annotation.object,
+            graph_name: annotation.graph,
+            location: None,
+        });
     }
     quads
 }
@@ -216,6 +227,51 @@ mod tests {
         assert_eq!(ds.quad_count(), 2);
         let flat = flat_rdf_quads_from_dataset(&ds);
         assert_eq!(flat.len(), 2);
+    }
+
+    /// The fold/un-fold pair is an exact inverse INCLUDING the graph slot of the
+    /// RDF 1.2 statement layer.
+    ///
+    /// The statement layer is keyed per graph, so a `rdf:reifies` edge and its
+    /// annotation asserted inside `GRAPH g` must come back scoped to `g`. Returning
+    /// them unscoped silently moved them to the default graph, and re-freezing that
+    /// stream folded them into the WRONG graph — a graph-name loss with no diagnostic,
+    /// on every surface that reads the flat quad stream (the Python `parse` and
+    /// CONSTRUCT egress among them).
+    #[test]
+    fn statement_layer_keeps_its_graph_through_the_flat_roundtrip() {
+        let statement = crate::RdfTriple::new(
+            RdfTerm::iri("https://e/s"),
+            "https://e/p",
+            RdfTerm::iri("https://e/o"),
+        );
+        let graph = RdfTerm::iri("https://e/g");
+        let quads = vec![
+            RdfQuad {
+                subject: RdfTerm::iri("https://e/r"),
+                predicate: RDF_REIFIES.to_owned(),
+                object: RdfTerm::triple(statement),
+                graph_name: Some(graph.clone()),
+                location: None,
+            },
+            RdfQuad {
+                subject: RdfTerm::iri("https://e/r"),
+                predicate: "https://e/certainty".to_owned(),
+                object: RdfTerm::literal(crate::RdfLiteral::simple("0.9")),
+                graph_name: Some(graph.clone()),
+                location: None,
+            },
+        ];
+        let ds = dataset_from_quads(&quads).expect("freeze");
+        // Folded away from the base quads into the two side tables, both graph-keyed.
+        assert_eq!(ds.quad_count(), 0);
+        let flat = flat_rdf_quads_from_dataset(&ds);
+        assert_eq!(flat.len(), 2);
+        assert!(
+            flat.iter()
+                .all(|quad| quad.graph_name.as_ref() == Some(&graph)),
+            "the un-fold must return both statement-layer rows to `g`, got {flat:?}"
+        );
     }
 
     /// Native flat-canonical determinism + shape gate: over an input that

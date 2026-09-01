@@ -41,7 +41,7 @@ committed block is stale).
 | SHACL | W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus |
 | ShEx 2.1 | shexTest v2.1.0 (validation, schemas, negative syntax/structure) |
 | Entailment | the W3C SPARQL entailment-regime cases (via the SPARQL harness), the vendored W3C OWL 2 suite (DL consistency, ledgered), and W3C's own OWL 2 RL entailment tests (the independent oracle for the rule table, ledgered) |
-| GTS | frozen cross-language vectors, byte-exact |
+| GTS | frozen cross-language vectors — 38 of the 39 fold byte-exactly into their committed expectation, with the 39th a ledgered divergence from an upstream expectation this reader contradicts |
 | rdflib drop-in | rdflib 7.6's own vendored tests + first-party parity |
 
 At the time of writing every suite is green — for example 1,105/1,105

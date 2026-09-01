@@ -90,13 +90,14 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
 }
 
 /// Validate every interned triple term: in-range components, IRI predicate,
-/// non-literal subject, and global acyclicity (C0.3) bounded by depth.
+/// IRI-or-blank subject, and global acyclicity (C0.3) bounded by depth.
 fn validate_triple_terms(
     builder: &RdfDatasetBuilder,
     term_count: usize,
 ) -> Result<(), RdfDiagnostic> {
-    // First pass: per-triple positional + id-range checks. A triple term cannot have
-    // a literal subject nor a non-IRI predicate, exactly like an asserted statement.
+    // First pass: per-triple positional + id-range checks. A triple term's subject is
+    // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
+    // statement; only the OBJECT may nest another triple term.
     for raw in 0..term_count {
         let id = TermId::from_index(raw as u32);
         if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
@@ -197,8 +198,8 @@ fn check_id_in_range(
 /// triple as its subject (only an IRI/blank can be asserted about). This is also the
 /// downstream contract: the owned-model / oxigraph conversions assume an asserted
 /// subject is IRI/blank, so admitting a triple term here would let it reach an
-/// `unreachable!` panic. (A triple term nested as the SUBJECT *inside* another quoted
-/// triple is a different, legal position — see [`require_triple_component_subject`].)
+/// `unreachable!` panic. (The subject position *inside* a quoted triple carries the
+/// same rule — see [`require_triple_component_subject`].)
 fn require_asserted_subject(
     builder: &RdfDatasetBuilder,
     id: TermId,
@@ -221,22 +222,35 @@ fn require_asserted_subject(
     }
 }
 
-/// The subject position WITHIN a quoted triple term MUST NOT be a literal, but MAY be
-/// a nested triple term (RDF-star admits `<< <<s p o>> p2 o2 >>`). Reject only the
-/// literal case; nested triple subjects are legal and the downstream conversions
-/// handle them recursively.
+/// The subject position WITHIN a quoted triple term MUST be an IRI or a blank node —
+/// the SAME rule as an asserted subject. RDF 1.2's term model admits a triple term in
+/// exactly one nested position, the OBJECT of another triple term; the legacy
+/// RDF-star spelling `<< <<s p o>> p2 o2 >>` is not RDF 1.2 and is refused here.
+///
+/// This is the term model a PurRDF *reader* accepts, so the freeze gate and the
+/// codecs agree: `purrdf-rdf`'s N-Triples/N-Quads statement validator rejects a
+/// nested triple-term subject, so admitting one here would let the writers emit a
+/// document the readers refuse.
 fn require_triple_component_subject(
     builder: &RdfDatasetBuilder,
     id: TermId,
     ctx: impl FnOnce() -> String,
 ) -> Result<(), RdfDiagnostic> {
-    if matches!(builder.term(id), InternedTerm::Literal(_)) {
-        return Err(diag(
+    match builder.term(id) {
+        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
+        InternedTerm::Literal(_) => Err(diag(
             "rdf-ir-literal-subject",
             format!("{} must not be a literal", ctx()),
-        ));
+        )),
+        InternedTerm::Triple { .. } => Err(diag(
+            "rdf-ir-triple-subject",
+            format!(
+                "{} must be an IRI or blank node; RDF 1.2 nests a triple term only in \
+                 the OBJECT of another triple term",
+                ctx()
+            ),
+        )),
     }
-    Ok(())
 }
 
 /// A predicate MUST be an IRI.

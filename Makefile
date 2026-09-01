@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -46,18 +46,23 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-brand-casing.py
+	python3 scripts/check-spec-attribution.py --self-test
 	python3 scripts/check-versions.py
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
+	python3 scripts/conformance-matrix.py --self-test
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
 
-check-issue-refs: ## Reject #NNN issue-reference tokens in comments and docs.
+check-issue-refs: ## Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
 	python3 scripts/check-issue-refs.py
 
 check-brand-casing: ## Reject bare lowercase 'purrdf' in prose (project is PurRDF in prose).
 	python3 scripts/check-brand-casing.py
+
+check-spec-attribution: ## Reject attributing a first-party extension (the quad template) to a SPARQL spec.
+	python3 scripts/check-spec-attribution.py --self-test
 
 changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
 	@command -v git-cliff >/dev/null 2>&1 || { \

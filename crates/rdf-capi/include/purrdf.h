@@ -27,9 +27,16 @@
 #define PURRDF_ABI_MAJOR 0
 
 /**
- * ABI minor version.
+ * ABI minor version. It TRACKS THE EXPORTED SIGNATURES: every change to the
+ * parameter list, the return contract, or the documented behaviour of an exported
+ * symbol bumps it, including a purely additive out-param — additive in source is
+ * still a recompile for every C consumer, and a library whose minor is below the
+ * header's cannot honour the call the header describes. It is the number a consumer
+ * linking against an unknown build reads back from `purrdf_abi_version` to decide
+ * whether the header it compiled against and the library it loaded agree, so it must
+ * never stand still across a signature change.
  */
-#define PURRDF_ABI_MINOR 6
+#define PURRDF_ABI_MINOR 7
 
 /**
  * ABI patch version.
@@ -2017,8 +2024,46 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
 /**
  * Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
  * Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
- * CONSTRUCT/DESCRIBE graph is rendered as N-Triples inside a documented
+ * CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
  * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
+ *
+ * The envelope carries EVERYTHING the result holds: the base quads, the RDF 1.2
+ * statement layer (reifier declarations and annotations), and every row's named
+ * graph. A `CONSTRUCT { GRAPH <g> { … } }` or a `DESCRIBE` over a TriG dataset is
+ * therefore readable through this entry point without loss, and needs no loss
+ * out-param, because nothing is dropped. A default-graph-only result is
+ * byte-identical to the N-Triples this member used to hold: an N-Quads line with
+ * no graph term IS the N-Triples line.
+ *
+ * This is deliberately the WIDENING answer rather than the refusal
+ * `purrdf_core::named_graph` supplies on the QUERY lane — the CLI's `query` and
+ * `describe`, the wasm query surface, and Python's query results. Those three
+ * refuse because their caller asked a QUESTION whose own text names the graph
+ * (`CONSTRUCT { GRAPH <g> { … } }`) and then named a single-graph RDF syntax
+ * (`turtle`, `RdfFormat.TURTLE`) to receive the answer in: the two halves of one
+ * request contradict, and answering in a syntax that cannot hold the answer would
+ * report a partial answer as a complete one. Here the caller names no RDF syntax at
+ * all: `{"graph": …}` is PurRDF's own envelope member, not a W3C SPARQL-Results
+ * member and not a selectable format. With no request to contradict, MAXIMAL
+ * UTILITY makes carrying the graph strictly better than refusing — and refusing
+ * would leave this ABI with no JSON path at all for a quad-template CONSTRUCT.
+ *
+ * `purrdf_serialize` does NOT refuse, and is not a counter-example to any of that:
+ * it is the TRANSCODE lane, where the caller hands over a dataset and a target
+ * syntax and nothing in the request contradicts anything else in it. It FLATTENS —
+ * every graph-scoped row is DROPPED, never folded into the default graph — and
+ * charges the whole of that loss to `out_named_graph_rows_dropped`, the same
+ * number the CLI's `convert` records as a `named-graph-rows-dropped` ledger entry,
+ * wasm's `serializeWithLoss` returns as `namedGraphRowsDropped`, and Python's
+ * `dump_with_loss` returns as `named_graph_rows_dropped`. No host refuses on that
+ * lane. Two consequences a C caller must plan for: the count out-param is
+ * independently nullable, so passing null DECLINES a report this call computes
+ * either way; and a dataset whose rows are ALL graph-scoped flattens to a
+ * well-formed EMPTY document with status `Ok`, which is the correct rendering of an
+ * empty default graph and not an error. Use `purrdf_query` + `purrdf_serialize`
+ * when a specific RDF media type is required, and READ
+ * `out_named_graph_rows_dropped` when you do: it is the only place that lane says
+ * what the media type could not hold.
  *
  * `provenance_prefix`/`provenance_iri` (both nullable, both-or-neither) anchor the
  * additive `purrdf` provenance extension on a SELECT/ASK emission under that
@@ -2237,20 +2282,63 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
 /**
  * Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,
  * `"application/n-quads"`). `base_iri` may be null. The output bytes go to
- * `*out_buffer` (free with `purrdf_buffer_free`). When `out_statement_rows_dropped`
- * is non-null it receives the number of RDF-1.2 statement-layer rows dropped
- * because the target format cannot represent quoted triples (`0` for
- * star-capable formats) — so the caller can detect lossy projection.
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * The three count out-params are the WHOLE realized loss of this call, partitioned by
+ * CAUSE so their sum is the total and no row is charged twice. Each is independently
+ * nullable: pass null for a count you do not want, exactly as before.
+ *
+ * * `out_statement_rows_dropped` — RDF-1.2 statement-layer rows (reifier bindings +
+ *   annotation triples) dropped because the target format cannot represent quoted
+ *   triples (`0` for star-capable formats).
+ * * `out_directional_literals_dropped` — object literals whose RDF-1.2 base direction
+ *   the target has no surface for (TriX / HexTuples keep the language tag but cannot
+ *   carry `--ltr` / `--rtl`); `0` for every direction-capable format.
+ * * `out_named_graph_rows_dropped` — rows the single-graph flattening dropped because
+ *   the target has no named-graph construct: base quads asserted in a named graph plus
+ *   the statement-layer rows scoped to one. `0` for every dataset-capable format
+ *   (TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD). The rows are DROPPED, not
+ *   folded into the default graph.
+ *
+ * Why all three rather than the statement count alone: the counts partition the loss,
+ * so a caller reading only one of them cannot tell "nothing was lost" from "the loss
+ * was charged to a cause I am not reading". A star-capable single-graph target
+ * (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
+ * named graph it was handed, and a direction-carrying star-incapable target reports
+ * nothing about a dropped base direction — each silent unless its own count is read.
+ *
+ * # This lane FLATTENS and COUNTS; it never refuses
+ *
+ * `purrdf_core::named_graph`'s refusal belongs to the QUERY lane (the CLI's `query`
+ * and `describe`, the wasm query surface, Python's query results), where the caller's
+ * own query text names a graph and the caller then names a single-graph syntax to
+ * receive it in — two halves of one request that contradict. A transcode names only a
+ * dataset and a target syntax, so there is nothing to contradict: "this dataset's
+ * default graph, as Turtle" is a legitimate request, and no host's transcode lane
+ * refuses it
+ * (`purrdf convert --to turtle` writes it and records a `named-graph-rows-dropped`
+ * ledger entry; wasm's `serializeWithLoss` and Python's `dump_with_loss` return the
+ * same three numbers this call writes).
+ *
+ * The degenerate case follows and is NOT an error: a dataset whose every row is
+ * graph-scoped serializes to a single-graph syntax as a well-formed EMPTY document
+ * with status `Ok`, the whole of the loss in `out_named_graph_rows_dropped`. That is
+ * the correct rendering of an empty default graph. Passing null for a count declines a
+ * report this call computes either way — it does not suppress one — so a caller that
+ * passes null for all three has asked for the document alone and gets exactly that,
+ * empty included. Read `out_named_graph_rows_dropped` if the difference matters.
  *
  * # Safety
  * `dataset` must be a live handle; the `c_char` pointers must be null or
- * NUL-terminated; the out-params must be writable.
+ * NUL-terminated; the out-params must be null or writable.
  */
 int32_t purrdf_serialize(const PurrdfDataset *dataset,
                          const char *media_type,
                          const char *base_iri,
                          PurrdfBuffer **out_buffer,
                          size_t *out_statement_rows_dropped,
+                         size_t *out_directional_literals_dropped,
+                         size_t *out_named_graph_rows_dropped,
                          PurrdfError **out_error);
 
 /**
@@ -2270,6 +2358,10 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
  * materialized dataset (base graph plus every inferred triple) as canonical
  * N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * Nothing is dropped on the way out: the underlying writer is the graph-carrying
+ * canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+ * are single-graph syntaxes, not because a graph slot was discarded.
  *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;

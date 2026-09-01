@@ -38,6 +38,7 @@ fn iri_term(value: String) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -49,6 +50,7 @@ fn literal_term(value: String) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -60,6 +62,7 @@ fn blank_term(label: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 

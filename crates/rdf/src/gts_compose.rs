@@ -167,17 +167,19 @@ impl SnapshotBuilder {
         id
     }
 
-    /// Bind a reifier first-wins, erroring on a conflicting rebind (the producer's
-    /// strict contract — the native statement-layer ingestion in [`Self::add_dataset`]).
-    fn bind_reifier(&mut self, rid: usize, spo: (usize, usize, usize)) -> Result<(), String> {
-        if let Some((_, existing)) = self.reifies.iter().find(|(r, _)| *r == rid) {
-            if *existing != spo {
-                return Err(format!("conflicting reifier rebind for term id {rid}"));
-            }
-            return Ok(());
+    /// Record a reifier binding, idempotent on an identical rebind.
+    ///
+    /// `rdf:reifies` is NOT a functional property, so one reifier id may bind
+    /// several distinct triples; refusing the second binding would refuse
+    /// ordinary RDF 1.2. Every binding is emitted as its own `reifies` row.
+    fn bind_reifier(&mut self, rid: usize, spo: (usize, usize, usize)) {
+        if !self
+            .reifies
+            .iter()
+            .any(|&(r, existing)| r == rid && existing == spo)
+        {
+            self.reifies.push((rid, spo));
         }
-        self.reifies.push((rid, spo));
-        Ok(())
     }
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) carrier DIRECTLY — interning
@@ -242,7 +244,7 @@ impl SnapshotBuilder {
                 scope,
                 "reified object",
             )?;
-            self.bind_reifier(rid, (qs, qp, qo))?;
+            self.bind_reifier(rid, (qs, qp, qo));
         }
         for annot in dataset.owned_annotations() {
             let rid =
@@ -329,6 +331,7 @@ impl SnapshotBuilder {
                     lang: row.lang.clone(),
                     direction: None,
                     reifier: None,
+                    triple: None,
                 }
             })
             .collect();
@@ -346,14 +349,17 @@ impl SnapshotBuilder {
             .map(|(_, s, p, o, g)| (s, p, o, g))
             .collect();
 
-        // Reifies: remap, sort by reifier id (the Python dict is built in
-        // remapped-id-sorted order; CBOR canonical re-sorts map keys anyway).
+        // Reifies: remap, then sort by the WHOLE row. One reifier id may carry
+        // several bindings (`rdf:reifies` is not functional), so sorting by the
+        // reifier id alone would leave their order to the ingestion order —
+        // and the emitted bytes must be a pure function of the content.
         let mut reifies: Vec<(usize, (usize, usize, usize))> = self
             .reifies
             .iter()
             .map(|&(rid, (s, p, o))| (remap[rid], (remap[s], remap[p], remap[o])))
             .collect();
-        reifies.sort_by_key(|(rid, _)| *rid);
+        reifies.sort_unstable();
+        reifies.dedup();
 
         // Annot: remap, dedup, sort.
         let mut annot_set: std::collections::BTreeSet<(usize, usize, usize)> =
@@ -859,14 +865,11 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_reifier_rebind_is_rejected() {
-        // FINDING: two DIFFERENT `rdf:reifies` triple terms for one reifier
-        // subject is HARD-rejected, never silently last-write-win.
-        // The native `parse_dataset` folds the statement layer during parse and detects
-        // the conflicting rebind there ("conflicting rdf:reifies binding"), before the
-        // bytes ever reach `SnapshotBuilder::add_dataset`. The conflict is surfaced, not
-        // dropped.
-        let err = parse_dataset(
+    fn one_reifier_may_bind_several_triples() {
+        // `rdf:reifies` is not a functional property, so two DIFFERENT triple
+        // terms for one reifier subject are both assertable. Neither the parse
+        // nor the snapshot producer may refuse or collapse them.
+        let ds = parse_dataset(
             concat!(
                 "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
                 "<<( <https://e/s> <https://e/p> <https://e/o1> )>> .\n",
@@ -877,11 +880,19 @@ mod tests {
             "application/n-triples",
             None,
         )
-        .expect_err("conflicting rdf:reifies must hard-fail at parse");
-        assert!(
-            err.to_string().contains("conflicting rdf:reifies binding"),
-            "{err}"
-        );
+        .expect("two bindings of one reifier are ordinary RDF 1.2");
+        assert_eq!(ds.owned_reifiers().count(), 2);
+
+        let mut b = SnapshotBuilder::default();
+        b.add_dataset(&ds).expect("ingest");
+        let (_terms, _quads, reifies, _annot) = b.canonical_tables();
+        assert_eq!(reifies.len(), 2, "both bindings reach the snapshot frame");
+
+        // And the emitted row order is a pure function of the content: the same
+        // dataset always yields the same table.
+        let mut again = SnapshotBuilder::default();
+        again.add_dataset(&ds).expect("ingest");
+        assert_eq!(again.canonical_tables().2, reifies);
     }
 
     #[test]
