@@ -26,7 +26,7 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph,
     PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, ShortestPathWitnessRelation,
+    QueryOptions, ResourceDimension, ShortestPathWitnessRelation, TrippedGovernor,
 };
 
 // ---------------------------------------------------------------------------
@@ -520,6 +520,24 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 /// reference case: same path pattern, same fixture graph, equivalent binding semantics.
 /// The expected tuples below are that observed Virtuoso output, transcribed; they were
 /// never read back from this crate's output.
+///
+/// # How to re-run the reference, so this is checkable rather than trusted
+///
+/// A transcription nobody can reproduce is a magic constant with a citation, so the exact
+/// recipe is recorded here. `openlink/virtuoso-opensource-7` is the vendor's own image and
+/// reports `Version 07.20.3243`, the version named above:
+///
+/// ```text
+/// docker run -d --name virtuoso -e DBA_PASSWORD=dba openlink/virtuoso-opensource-7
+/// docker exec -i virtuoso isql 1111 dba dba
+/// ```
+///
+/// then paste the §9.32 SQL block and the §16.2.11 SPARQL query above (the `INSERT DATA`
+/// spelling the fixture graph out in full IRIs). The SQL query returns the eight-row table
+/// quoted above, in that order; the SPARQL query at `t_min(1)` returns the four rows quoted
+/// above, and at `t_min(0)` the eight-row form including the identity row on path 0. All
+/// four runs were re-executed against that image on 2026-09-01 and matched what is written
+/// here row for row, `path_id` values included.
 #[test]
 fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
     // `insert into knows values (1, 2); (1, 3); (2, 4);`
@@ -1499,7 +1517,9 @@ fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step(
 }
 
 // ---------------------------------------------------------------------------
-// A23 — the declared row bound is what admission control refuses against
+// A23 — the declared row bound is what admission control refuses against.
+//       Two tests, deliberately: the bound is bracketed from both sides, because a
+//       loosened refusal proves nothing unless the refusal is also shown to still fire.
 // ---------------------------------------------------------------------------
 
 /// A four-node chain is not refused by an intermediate-cell ceiling twenty times its
@@ -1558,6 +1578,80 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
     assert_eq!(rows.len(), 6, "a→b, a→b→c and a→b→c→d, hop by hop");
 }
 
+/// The same query, the same graph, a ceiling BELOW its true cost — still refused.
+///
+/// [`a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost`] loosened a
+/// bound, and a loosened bound has a mirror failure mode that test cannot see: a bound
+/// driven to zero, or an admission check quietly bypassed on this seam, would satisfy it
+/// just as well as a correct one. A refusal is a claim too, so it gets executed rather
+/// than assumed.
+///
+/// This is deliberately the NEIGHBOURING case and not a different scenario: identical
+/// fixture, identical query, identical registry and envelope. The only thing that moves is
+/// the caller's ceiling, from a thousand cells down to ten. Six rows over seven columns is
+/// forty-two cells, so ten cells cannot buy this answer and the query must be refused —
+/// unevaluated, at admission, on `IntermediateCells`. Together the two tests bracket the
+/// bound from both sides: A23 says it is not so large that it withholds a legitimate
+/// answer, and this one says it is not so small that it stops withholding anything.
+#[test]
+fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
+    let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
+    let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
+    let registry = walk_registry(graph, limits(1, 3));
+
+    let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
+                   ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
+                   } ORDER BY ?len ?step");
+    let outcome = engine()
+        .query_governed(
+            &data,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                property_functions: &registry,
+                ..QueryOptions::EMPTY
+            },
+            &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
+        )
+        .expect("a refusal is an outcome, not an error");
+
+    let GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
+        panic!(
+            "forty-two cells of answer cannot be bought with a ten-cell ceiling; a \
+             completion here would mean the declared bound had collapsed or admission \
+             never consulted it: {outcome:?}"
+        );
+    };
+    // Refused, not Budget: nothing ran, so the number reported is an estimate rather than
+    // a measurement, and the two variants are kept apart for exactly that reason.
+    let TrippedGovernor::Refused {
+        dimension,
+        limit,
+        estimate,
+    } = exhausted.tripped
+    else {
+        panic!(
+            "admission refuses before evaluation: {:?}",
+            exhausted.tripped
+        );
+    };
+    assert_eq!(dimension, ResourceDimension::IntermediateCells);
+    assert_eq!(limit, 10);
+    // Pinned exactly, not merely `> limit`. Seeded at `ex:a` the declared bound is six
+    // rows (the chain's maximal seed, where `row_bound` is exact — see
+    // `the_row_bound_is_pinned_against_what_is_emitted`), and the call's arity is seven,
+    // so the estimate is 42 cells: EXACTLY the query's true cost. That equality is the
+    // tightness claim this pair exists to make. The pre-fix bound put 86,016 here.
+    assert_eq!(
+        estimate, 42,
+        "the refusal must be justified by an honest estimate, and here the estimate is the \
+         true cost rather than a multiple of it"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A24 — the shortest-witness relation, through the query surface and against
 //       an observed `T_SHORTEST_ONLY` run
@@ -1606,7 +1700,10 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
 /// `?start`, `?o` is `?end`, `?link` is `?node`, `?path` is read only through the
 /// partition it induces) those three rows are the vector asserted below, transcribed. The
 /// harness does NOT run Virtuoso; what is pinned is a transcription of the named version's
-/// output.
+/// output. Re-run it the way
+/// [`a2_the_projection_matches_the_virtuoso_transitivity_reference`] documents — this query
+/// was re-executed against `openlink/virtuoso-opensource-7` on 2026-09-01 and returned
+/// exactly these three rows, `path_id` values included.
 #[test]
 fn a24_the_shortest_witness_relation_matches_the_virtuoso_shortest_only_reference() {
     // `?o` is unique per row above, so one witness per endpoint is also one row per
