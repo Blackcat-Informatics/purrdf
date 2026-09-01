@@ -26,6 +26,11 @@ use crate::ast::{
     Variable,
 };
 
+/// The closed SEP-0009 function registry and its argument-count signatures,
+/// re-exported so a consumer that matches on [`Function::Cdt`] can name
+/// [`CdtCall::fn_kind`]'s type without taking its own `purrdf-cdt` dependency.
+pub use purrdf_cdt::{CdtArity, CdtFn};
+
 /// The SPARQL version an in-prologue `VERSION "<string>"` declaration named
 /// (SPARQL 1.2 Query specification §4.4 / grammar production `Version`).
 ///
@@ -1187,6 +1192,10 @@ pub enum Function {
     /// namespace — there is no default namespace). Carries the original call IRI
     /// so serialization round-trips exactly. See [`PurrdfCall`] and [`PurrdfFn`].
     Purrdf(PurrdfCall),
+    /// A SEP-0009 composite-datatype function call (`cdt:List`, `cdt:get`,
+    /// `cdt:merge`, …), recognized at parse time by EXACT IRI match against the
+    /// closed [`purrdf_cdt::CdtFn`] registry. See [`CdtCall`].
+    Cdt(CdtCall),
     /// A custom function identified by an arbitrary IRI outside every configured
     /// extension-function namespace.
     Custom(NamedNode),
@@ -1211,6 +1220,50 @@ pub struct PurrdfCall {
 impl PurrdfCall {
     /// The extension-function local-name (the suffix after the configured
     /// namespace) — the same as [`PurrdfFn::local_name`] on [`Self::fn_kind`].
+    #[must_use]
+    pub const fn local_name(&self) -> &'static str {
+        self.fn_kind.local_name()
+    }
+}
+
+/// A **SEP-0009 composite-datatype** function call resolved at parse time: the
+/// closed [`purrdf_cdt::CdtFn`] kind plus the ORIGINAL IRI the call was parsed
+/// from.
+///
+/// # This is recognition, not minting
+///
+/// The fifteen `cdt:` function IRIs are defined by SEP-0009 exactly as the `xsd:`
+/// IRIs are defined by XML Schema: they are third-party, spec-fixed strings this
+/// crate *reads*, not vocabulary PurRDF coins. Recognizing one is the same act as
+/// recognizing `xsd:integer` in datatype position.
+///
+/// # …and, unlike [`PurrdfCall`], the namespace is NOT caller configuration
+///
+/// [`PurrdfFn`] is spelled under whatever namespace a deployment configures,
+/// because those functions are PurRDF's own extension surface and PurRDF owns no
+/// namespace to put them in. SEP-0009's are the opposite: the spec fixes both the
+/// namespace and the local names, so making them configurable would produce an
+/// implementation that fails the spec's own conformance corpus while claiming to
+/// implement it. Recognition is therefore unconditional and by EXACT IRI match
+/// ([`purrdf_cdt::CdtFn::from_iri`]), with no [`crate::parser::ParserOptions`]
+/// seam of any kind.
+///
+/// The original IRI is retained all the same, for the same reason
+/// [`PurrdfCall::iri`] is: serialization re-emits exactly what the query author
+/// wrote, byte for byte, so a round trip through the serializer is the identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CdtCall {
+    /// The closed SEP-0009 function this call dispatches to.
+    pub fn_kind: CdtFn,
+    /// The full original IRI the call was parsed from. Always equal to
+    /// [`purrdf_cdt::CdtFn::iri`] on [`Self::fn_kind`] (recognition is by exact
+    /// match), and carried explicitly so serialization never has to reconstruct it.
+    pub iri: String,
+}
+
+impl CdtCall {
+    /// The function's local name under the `cdt:` prefix — the same as
+    /// [`purrdf_cdt::CdtFn::local_name`] on [`Self::fn_kind`].
     #[must_use]
     pub const fn local_name(&self) -> &'static str {
         self.fn_kind.local_name()

@@ -1532,6 +1532,7 @@ dependencies = [
  "memchr",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-iri",
  "purrdf-xsd",
  "regex",

@@ -3669,12 +3669,52 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// Human-readable spelling of a SEP-0009 signature, for
+    /// [`ParseError::CdtArity`].
+    fn describe_cdt_arity(arity: crate::algebra::CdtArity) -> String {
+        use crate::algebra::CdtArity;
+        match arity {
+            CdtArity::Fixed(1) => "exactly 1 argument".to_owned(),
+            CdtArity::Fixed(n) => format!("exactly {n} arguments"),
+            CdtArity::Range { min, max } => format!("{min} to {max} arguments"),
+            CdtArity::AtLeast(0) => "any number of arguments".to_owned(),
+            CdtArity::AtLeast(min) => format!("at least {min} arguments"),
+            CdtArity::Pairs => "an even number of arguments (key/value pairs)".to_owned(),
+        }
+    }
+
     fn parse_iri_or_function(
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
         let node = self.expect_iri_node()?;
         if self.at(&Token::LParen) {
+            // A SEP-0009 composite-datatype function, by EXACT IRI match against the
+            // closed `CdtFn` registry. Checked FIRST and UNCONDITIONALLY: the spec
+            // fixes both the namespace and the local names, so there is no
+            // `ParserOptions` seam here and a configured extension namespace can
+            // never shadow one of these. Recognizing a spec-defined third-party IRI
+            // is not minting it — see `CdtCall`'s own docs.
+            if let Some(fn_kind) = crate::algebra::CdtFn::from_iri(node.as_str()) {
+                let at = self.span();
+                let iri = node.as_str().to_owned();
+                let args = self.parse_arg_list(aggs)?;
+                // SPARQL has no overloading on argument count, so a wrong-arity call
+                // can never evaluate to anything and is refused here rather than
+                // silently becoming an expression error at runtime.
+                if !fn_kind.arity().admits(args.len()) {
+                    return Err(ParseError::CdtArity {
+                        iri,
+                        expected: Self::describe_cdt_arity(fn_kind.arity()),
+                        found: args.len(),
+                        at,
+                    });
+                }
+                return Ok(Expression::FunctionCall(
+                    Function::Cdt(crate::algebra::CdtCall { fn_kind, iri }),
+                    args,
+                ));
+            }
             // An IRI in call position under ANY configured extension-function namespace
             // (default: NONE — the namespace set is caller configuration supplied via
             // ParserOptions, e.g. the gmeow namespace) dispatches to the CLOSED
@@ -8122,6 +8162,239 @@ mod tests {
             | GraphPattern::OrderBy { inner, .. } => find_held_in(inner),
             _ => None,
         }
+    }
+
+    // ── SEP-0009 composite-datatype functions (spec-fixed; ALWAYS on) ─────────
+
+    /// The SEP-0009 namespace, as the spec defines it. Third-party and fixed —
+    /// this crate reads it, exactly as it reads the `xsd:` namespace.
+    const CDT_NS: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/";
+
+    /// A prologue binding `cdt:` to the SEP-0009 namespace.
+    fn cdt_prologue() -> String {
+        format!("PREFIX cdt: <{CDT_NS}>\n")
+    }
+
+    #[test]
+    fn every_cdt_function_is_recognized_in_call_position() {
+        // The registry is closed and the parser must recognize ALL of it, so this
+        // enumerates `CDT_FUNCTIONS` rather than transcribing a list that can drift.
+        for fn_kind in purrdf_cdt::CDT_FUNCTIONS {
+            // The smallest admissible call for this signature.
+            let argc = match fn_kind.arity() {
+                crate::algebra::CdtArity::Fixed(n) => n,
+                crate::algebra::CdtArity::Range { min, .. }
+                | crate::algebra::CdtArity::AtLeast(min) => min,
+                crate::algebra::CdtArity::Pairs => 2,
+            };
+            let args = vec!["1"; argc].join(", ");
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:{}({args}) AS ?x) }}",
+                cdt_prologue(),
+                fn_kind.local_name()
+            );
+            let Expression::FunctionCall(func, parsed) = bound_expr(&q) else {
+                panic!("expected a FunctionCall for cdt:{}", fn_kind.local_name());
+            };
+            assert_eq!(
+                func,
+                Function::Cdt(crate::algebra::CdtCall {
+                    fn_kind,
+                    iri: fn_kind.iri().to_owned(),
+                })
+            );
+            assert_eq!(parsed.len(), argc);
+        }
+    }
+
+    #[test]
+    fn cdt_recognition_needs_no_parser_options() {
+        // SEP-0009 fixes the namespace, so recognition is unconditional: the DEFAULT
+        // options (no configured extension namespace at all) still dispatch.
+        assert!(ParserOptions::default().extension_fn_namespaces.is_empty());
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:size(\"[]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::FunctionCall(func, _) = bound_expr(&q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert!(matches!(func, Function::Cdt(_)), "got {func:?}");
+    }
+
+    #[test]
+    fn a_configured_extension_namespace_cannot_shadow_a_cdt_function() {
+        // Configuring the SEP-0009 namespace as an extension-function namespace must
+        // NOT reroute `cdt:get` into the `PurrdfFn` seam (where its local name is
+        // unknown and would hard-fail): the CDT check runs first, unconditionally.
+        let options = ParserOptions {
+            extension_fn_namespaces: vec![CDT_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
+        };
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:get(\"[1]\"^^cdt:List, 1) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::FunctionCall(func, _) = bound_expr_with(&q, &options) else {
+            panic!("expected a FunctionCall");
+        };
+        assert!(
+            matches!(&func, Function::Cdt(call) if call.fn_kind == purrdf_cdt::CdtFn::Get),
+            "got {func:?}"
+        );
+    }
+
+    #[test]
+    fn cdt_iri_outside_call_position_is_a_plain_named_node() {
+        // `cdt:List` is also the DATATYPE IRI. Outside call position it is an
+        // ordinary term, never a function.
+        let q = format!("{}SELECT ?x WHERE {{ ?x a cdt:List }}", cdt_prologue());
+        let GraphPattern::Bgp { patterns } =
+            unproject(select_pattern_with(&q, &ParserOptions::default()))
+        else {
+            panic!("expected BGP");
+        };
+        let TermPattern::NamedNode(n) = &patterns[0].object else {
+            panic!("expected a NamedNode object");
+        };
+        assert_eq!(n.as_str(), format!("{CDT_NS}List"));
+    }
+
+    #[test]
+    fn a_wrong_arity_cdt_call_is_a_typed_parse_error() {
+        // SPARQL has no overloading on argument count, so this is a STATIC error.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:head(\"[1]\"^^cdt:List, 2) AS ?x) }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(&err, ParseError::CdtArity { iri, found: 2, .. } if iri == &format!("{CDT_NS}head")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_odd_argument_count_to_the_map_constructor_is_a_parse_error() {
+        // `cdt:Map` takes key/value PAIRS; an odd count would silently drop the
+        // trailing key, so it is refused outright.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:Map(1, 2, 3) AS ?x) }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(&err, ParseError::CdtArity { found: 3, .. }),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("even number"), "got {err}");
+        // An even count is admitted, including zero.
+        for args in ["", "1, 2", "1, 2, 3, 4"] {
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:Map({args}) AS ?x) }}",
+                cdt_prologue()
+            );
+            assert!(
+                SparqlParser::new().parse_query(&q).is_ok(),
+                "cdt:Map({args})"
+            );
+        }
+    }
+
+    #[test]
+    fn cdt_subseq_admits_two_or_three_arguments_and_nothing_else() {
+        let call = |args: &str| {
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:subseq({args}) AS ?x) }}",
+                cdt_prologue()
+            );
+            SparqlParser::new().parse_query(&q)
+        };
+        assert!(call("\"[1]\"^^cdt:List, 1").is_ok());
+        assert!(call("\"[1]\"^^cdt:List, 1, 1").is_ok());
+        assert!(matches!(
+            call("\"[1]\"^^cdt:List").unwrap_err(),
+            ParseError::CdtArity { found: 1, .. }
+        ));
+        assert!(matches!(
+            call("\"[1]\"^^cdt:List, 1, 1, 1").unwrap_err(),
+            ParseError::CdtArity { found: 4, .. }
+        ));
+    }
+
+    #[test]
+    fn a_cdt_call_serializes_to_its_original_iri_and_round_trips() {
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:concat(\"[1]\"^^cdt:List, \"[2]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let pattern = select_pattern_with(&q, &ParserOptions::default());
+        let text = crate::serialize::pattern_to_select_query(&pattern);
+        assert!(
+            text.contains(&format!("<{CDT_NS}concat>")),
+            "serialization must emit the spec IRI verbatim; text = {text}"
+        );
+        // A re-parse of the serialized text reproduces the SAME algebra, byte for
+        // byte — the round trip is the identity on this node.
+        let reparsed = select_pattern_with(&text, &ParserOptions::default());
+        assert_eq!(
+            crate::serialize::pattern_to_select_query(&reparsed),
+            text,
+            "re-serializing the re-parse must be a fixpoint"
+        );
+    }
+
+    #[test]
+    fn an_ill_formed_cdt_literal_parses_and_is_left_to_evaluation() {
+        // `list-functions/list-less-than-error-03.rq` writes `"1"^^cdt:List` — the
+        // manifest calls it an "ill-formed literal" — and requires the COMPARISON to
+        // raise a SPARQL error (an unbound `BIND`), not the query to fail to parse.
+        // A datatype IRI does not constrain what the parser accepts in a literal, for
+        // `cdt:List` any more than for `xsd:integer`; ill-typedness is an evaluation-
+        // time property of the term. So this must parse, and the lexical form must
+        // survive byte-for-byte.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND((\"1\"^^cdt:List < \"[2]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::Less(left, _) = bound_expr(&q) else {
+            panic!("expected a `<` comparison");
+        };
+        let Expression::Literal(literal) = *left else {
+            panic!("expected a literal operand");
+        };
+        assert_eq!(literal.value(), "1");
+        assert_eq!(literal.datatype().as_str(), format!("{CDT_NS}List"));
+        // The same holds for a wholly unparseable form, and for `cdt:Map`.
+        for lexical in ["[1,", "not a list at all"] {
+            let q = format!(
+                "{}ASK {{ FILTER(\"{lexical}\"^^cdt:Map = \"{{}}\"^^cdt:Map) }}",
+                cdt_prologue()
+            );
+            assert!(
+                SparqlParser::new().parse_query(&q).is_ok(),
+                "an ill-formed cdt:Map literal must still parse: {lexical}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_well_formed_cdt_literal_keeps_its_lexical_form_verbatim() {
+        // `list-functions/sameterm-04.rq` requires `cdt:List(1,2,3)` NOT to be
+        // `sameTerm` with `"[  1 ,  2  ,   3   ]"^^cdt:List`, which is only possible
+        // if the parser leaves an authored lexical form alone. No canonicalization
+        // happens here — the byte-fidelity rule for literals is not suspended for
+        // a datatype PurRDF happens to model.
+        let spelling = "[  1 ,  2  ,   3   ]";
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(\"{spelling}\"^^cdt:List AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::Literal(literal) = bound_expr(&q) else {
+            panic!("expected a literal");
+        };
+        assert_eq!(literal.value(), spelling);
     }
 
     // ── property-function seam (caller-configured; OFF by default) ────────────

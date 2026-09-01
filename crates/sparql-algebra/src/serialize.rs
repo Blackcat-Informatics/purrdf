@@ -1271,6 +1271,14 @@ fn fmt_function_name(s: &mut String, f: &Function) {
             let _ = write!(s, "<{}>", call.iri);
             return;
         }
+        Function::Cdt(call) => {
+            // The ORIGINAL IRI the call was parsed from. SEP-0009 fixes it, so this
+            // is also `call.fn_kind.iri()` — writing the recorded string rather than
+            // re-deriving it keeps the "emit exactly what was read" rule uniform
+            // across both IRI-named function seams.
+            let _ = write!(s, "<{}>", call.iri);
+            return;
+        }
         Function::Custom(n) => {
             let _ = write!(s, "<{}>", n.as_str());
             return;
