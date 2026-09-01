@@ -299,6 +299,88 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
     assert!(turtle.contains("https://example.org/s"));
 }
 
+/// `lift --base` is a SERIALIZER base, and the help now says exactly that — so the claim is
+/// backed by an executable check rather than by prose.
+///
+/// `lift` reads a USTAR carrier archive and never parses RDF, so nothing about a parse leg,
+/// a derived `file://` retrieval IRI, or a stdin relative-IRI error was ever true of it. What
+/// IS true is the leg the flag actually feeds: the base directive the output syntax writes,
+/// and the relativization against it.
+#[test]
+fn lift_base_is_written_as_the_output_documents_base_and_relativizes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("input.ttl"), TURTLE);
+    let config = write(&dir.path().join("config.json"), lpg_config());
+    let archive = dir.path().join("carrier.tar");
+    let archive_path = archive.to_str().expect("archive path");
+
+    let projected = run(&[
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        &input,
+        archive_path,
+    ]);
+    assert!(
+        projected.status.success(),
+        "seeding the carrier archive must succeed: {}",
+        String::from_utf8_lossy(&projected.stderr)
+    );
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--to",
+        "turtle",
+        "--base",
+        "https://example.org/",
+        archive_path,
+        "-",
+    ]);
+    assert!(
+        lifted.status.success(),
+        "lift --base failed: {}",
+        String::from_utf8_lossy(&lifted.stderr)
+    );
+    let turtle = String::from_utf8(lifted.stdout).expect("Turtle");
+    assert!(
+        turtle.contains("@base <https://example.org/> ."),
+        "--base must be written as the output document's base:\n{turtle}"
+    );
+    assert!(
+        !turtle.contains("<https://example.org/s>"),
+        "a term under the base must be relativized rather than left absolute:\n{turtle}"
+    );
+
+    // The negative control: without `--base` there is no base directive at all — the flag
+    // is what puts one there, so the assertion above is about the flag and not the syntax.
+    let plain = run(&[
+        "lift",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--to",
+        "turtle",
+        archive_path,
+        "-",
+    ]);
+    assert!(
+        plain.status.success(),
+        "lift failed: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&plain.stdout).contains("@base"),
+        "no base is invented for a lift that names none"
+    );
+}
+
 #[test]
 fn configured_jsonld_options_reach_lift_and_are_rejected_by_project() {
     let dir = tempfile::tempdir().expect("tempdir");
