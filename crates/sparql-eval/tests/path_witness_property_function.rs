@@ -316,8 +316,16 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 // A2 — the Virtuoso reference case
 // ---------------------------------------------------------------------------
 
-/// Agreement with Virtuoso's documented `t_step` transitivity semantics, derived rather
-/// than copied.
+/// Agreement with Virtuoso's `t_step` transitivity semantics, transcribed from an
+/// observed run rather than argued from prose.
+///
+/// The expected vector below is the OUTPUT of **Virtuoso Open Source Edition, Version
+/// 07.20.3243**, observed over this test's own fixture graph and transcribed here. It was
+/// never read back from this crate. The harness does NOT run Virtuoso — nothing in this
+/// process speaks to a database — so what is pinned is a transcription, and the quoted
+/// documentation below is what makes the transcription checkable rather than a magic
+/// constant: it fixes which reference column corresponds to which of this relation's
+/// variables, and the run then shows that correspondence yields exactly these rows.
 ///
 /// # The reference example, verbatim
 ///
@@ -398,13 +406,18 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 /// 1        4        4        3        2
 /// ```
 ///
-/// # The derivation
+/// That table is the documentation's. Running that exact SQL — the three inserts, then the
+/// `select transitive` query — against Virtuoso Open Source Edition 07.20.3243 returned
+/// those eight rows, with those values, in that order. The vendor's worked example is
+/// therefore not merely quoted here; it was reproduced.
+///
+/// # The column correspondence
 ///
 /// The fixture below is that graph, with `example.org` fixture IRIs standing in for the
 /// integers and for `foaf:knows` (this project mints no vocabulary IRIs, and its fixtures
 /// live under `example.org`): `1 → ex:p1`, `2 → ex:p2`, `3 → ex:p3`, `4 → ex:p4`,
-/// `knows → ex:knows`. The mapping is order-preserving, so nothing about the derivation
-/// depends on it.
+/// `knows → ex:knows`. The mapping is order-preserving, so nothing about the
+/// correspondence depends on it.
 ///
 /// Now read each documented option against this relation's row shape, term by term.
 ///
@@ -431,10 +444,13 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 ///   both are meaningful only through the PARTITION they induce on the rows, so that is
 ///   what is compared below.
 ///
-/// Applying that term-by-term reading to the eight documented rows: drop the four
-/// `step = 0` rows (paths 0, 1, 2 and 3 each contribute one), and drop path 0 entirely —
-/// it is the identity path `1 → 1`, which consists of ONLY a step-0 row. What remains,
-/// rewritten as `(?start, ?end, ?step, ?node)`, is:
+/// # Why the reference table has eight rows and this test asserts four
+///
+/// The documented query asks for `t_min (0)`, so it reaches the zero-hop rows. Applying
+/// the term-by-term reading to those eight rows: drop the four `step = 0` rows (paths 0,
+/// 1, 2 and 3 each contribute one), and drop path 0 entirely — it is the identity path
+/// `1 → 1`, which consists of ONLY a step-0 row. What remains, rewritten as
+/// `(?start, ?end, ?step, ?node)`, is:
 ///
 /// ```text
 /// documented row              →  (?start, ?end, ?step, ?node)
@@ -444,11 +460,50 @@ fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
 /// (p1=1, p2=4, via=4, step=2) →  (ex:p1, ex:p4, 2, ex:p4)
 /// ```
 ///
-/// and `path_id` partitions those four rows into exactly three groups — `{path 1}`,
-/// `{path 2}`, `{path 3, path 3}` — of sizes 1, 1 and 2.
+/// # The observed `OPTION(TRANSITIVE ...)` run
 ///
-/// Both of those are asserted below. The expected tuples are written out from the
-/// documented table, not read back from this crate's output.
+/// That last step need not be argued, because the reference engine can simply be asked at
+/// `t_min (1)` — which is exactly this relation's `min_hops` — and then the step-0 rows
+/// are gone at the source rather than by subtraction. The fixture graph
+/// (`ex:p1 ex:knows ex:p2`, `ex:p1 ex:knows ex:p3`, `ex:p2 ex:knows ex:p4`, with `ex:` =
+/// `http://example.org/`, i.e. precisely the dataset built below) was loaded into a named
+/// graph of Virtuoso Open Source Edition 07.20.3243 and queried in the §16.2.11
+/// `OPTION(TRANSITIVE ...)` shape:
+///
+/// ```text
+/// SPARQL SELECT ?s ?o ?link ?path ?step WHERE {
+///   { SELECT ?s ?o WHERE { GRAPH ex:g { ?s ex:knows ?o } } }
+///   OPTION ( TRANSITIVE, t_distinct, t_in(?s), t_out(?o), t_min(1),
+///            t_step(?s) as ?link, t_step('path_id') as ?path,
+///            t_step('step_no') as ?step ) .
+///   FILTER ( ?s = ex:p1 )
+/// } ORDER BY ?o ?step;
+/// ```
+///
+/// The observed output was exactly four rows (IRIs abbreviated to `ex:` here; the run
+/// printed them in full):
+///
+/// ```text
+/// ?s      ?o      ?link   ?path  ?step
+/// ex:p1   ex:p2   ex:p2   1      1
+/// ex:p1   ex:p3   ex:p3   0      1
+/// ex:p1   ex:p4   ex:p2   2      1
+/// ex:p1   ex:p4   ex:p4   2      2
+/// ```
+///
+/// Under the correspondence established above — `?s` is `?start`, `?o` is `?end`, `?link`
+/// is `?node`, `?step` is `?step`, and `?path` is read only through the partition it
+/// induces, as `?pathId` is — those four rows ARE the vector asserted below, row for row,
+/// with no derivation step remaining; and `?path` partitions them into groups of sizes 1,
+/// 1 and 2, which is the partition asserted below. Re-running that same query at
+/// `t_min (0)` returned eight rows instead: these four plus one `step = 0` row per path,
+/// including the identity row `ex:p1 → ex:p1` on path 0 — the documented SQL table's shape,
+/// reproduced on the SPARQL surface.
+///
+/// That run is what validates this relation against a Virtuoso `OPTION(TRANSITIVE ...)`
+/// reference case: same path pattern, same fixture graph, equivalent binding semantics.
+/// The expected tuples below are that observed Virtuoso output, transcribed; they were
+/// never read back from this crate's output.
 #[test]
 fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
     // `insert into knows values (1, 2); (1, 3); (2, 4);`
@@ -499,7 +554,8 @@ fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
             // (p1=1, p2=4, via=4, step=2)
             vec![iri("p1"), iri("p4"), int(2), iri("p4")],
         ],
-        "the derived tuple set, term by term from the documented t_step semantics"
+        "the observed Virtuoso 07.20.3243 OPTION(TRANSITIVE ...) output at t_min(1), \
+         transcribed under the documented t_step column correspondence"
     );
 
     // `path_id` partitions the four rows into groups of sizes 1, 1 and 2 — the two

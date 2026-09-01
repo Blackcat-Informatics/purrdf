@@ -221,6 +221,33 @@
 //!   deliberately incomplete for interior-revisiting derivations, which are unbounded in
 //!   number on any cyclic graph and so have no finite witness enumeration at all.
 //!
+//! ## What the reference engine does here, observed
+//!
+//! Virtuoso's `OPTION(TRANSITIVE ...)` is the closest production analogue of this
+//! surface, so it was RUN rather than reasoned about. Against **Virtuoso Open Source
+//! Edition, Version 07.20.3243**, over the 3-cycle
+//! `ex:a ex:p ex:b . ex:b ex:p ex:c . ex:c ex:p ex:a .`, the query
+//! `OPTION ( TRANSITIVE, t_distinct, t_in(?s), t_out(?o), t_min(1), t_step(?s) as ?link,
+//! t_step('path_id') as ?path, t_step('step_no') as ?step )` seeded at `ex:a` returned
+//! three rows, and `ex:a` never appeared among the outputs: the cycle-closing walk
+//! `a → b → c → a` was NOT produced. The SAME query with `t_distinct` removed did not
+//! terminate — still running with no output after 120 seconds, and killed.
+//!
+//! Both observations are why the rule above is written the way it is, and neither is a
+//! guess about the other engine.
+//!
+//! * The omitted cycle-closing walk is not an economy, it is a wrong answer to
+//!   `ex:a ex:p+ ?end`: `p+` binds `?end = ex:a` precisely because `ex:a` lies on a cycle.
+//!   Admitting the repeat in the FINAL position — and only there — is what keeps this
+//!   relation's endpoint projection EQUAL to `p+` rather than a subset of it. On this
+//!   input the relation is therefore strictly more complete than the reference, and the
+//!   divergence is deliberate; test A16 pins it.
+//! * Termination here is a property of the walk rule, not of an option the caller has to
+//!   remember to pass. There is no query against this relation that diverges on cyclic
+//!   input, because the simple-prefix bound is structural: the proper prefix is simple, so
+//!   its length is bounded by the node count regardless of what any caller asks for. That
+//!   is the concrete limitation this work refuses to inherit.
+//!
 //! # Two relations, not one relation with a mode switch
 //!
 //! [`PathWitnessRelation`] enumerates EVERY simple-prefix walk. That is the complete
