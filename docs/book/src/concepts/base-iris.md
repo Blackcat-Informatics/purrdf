@@ -85,6 +85,47 @@ anyway would apply RFC 3986 §5.2.4 dot-segment removal, which is §6.2.2.3
 *syntax-based normalization*, forbidden by RDF Concepts §3.2. Identical document
 bytes must denote one graph with one canonical digest.
 
+## Beyond documents: the IR boundary
+
+Everything above is about *reading a document*, but a document is not the only
+way a term reaches the store. You can also build a dataset directly — from
+Python quad objects, from a GTS container, by reopening a `.pack` file, with
+SPARQL `INSERT DATA`, or through a projection — and none of those pass a parser
+that could resolve a base for you.
+
+The absoluteness rule therefore does not live in the codecs. It lives at the
+**interned term table** every one of those paths necessarily arrives at, so a
+relative IRI is not merely rejected on the way in: it is unrepresentable. A
+frozen dataset carrying one cannot be constructed, and the refusal reports the
+same `iri-relative-no-base` code a parser would.
+
+There is no base in scope at that boundary and there cannot be: a frozen dataset
+is a set of *resolved* identities, with no document and no `@base` alongside it
+to resolve against later. So a relative reference there is not a term awaiting
+resolution — it is a term whose identity is unknowable. Resolve it against
+whatever base your application means *before* it becomes a term.
+
+### When you see the error
+
+A mutable, still-being-built dataset — a `RdfDatasetBuilder`, or the copy-on-write
+overlay a `Store` mutates — is a working area, not the IR. Adding a quad to one
+is accepted as written; the refusal comes at the moment that work becomes a
+dataset, which is where the invariant lives:
+
+* freezing a builder, or a `Store`'s pending edits;
+* serializing, canonicalizing, or digesting the result;
+* reopening a `.pack` file — pack bytes may have been written by another engine,
+  an older version, or corrupted on disk, so they are checked as they decode.
+
+So a relative IRI added programmatically does not vanish quietly and does not
+reach an output file either: it stops the operation that would have published it,
+naming `iri-relative-no-base` and quoting the offending IRI.
+
+### One exception you may rely on
+
+Blank node labels and literal lexical forms are arbitrary strings and are not
+touched by any of this. Only IRIs are IRIs.
+
 ## The diagnostic codes
 
 These codes are stable and machine-readable. Every codec, the CLI, the C ABI,
