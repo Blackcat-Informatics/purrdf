@@ -226,8 +226,58 @@ pub struct UnicodeVersions {
 /// Unicode release, because they are separate crates on separate schedules.
 /// That is precisely why all four are reported rather than one summary number.
 ///
-/// Version numbers pin the tables' *vintage*, not their *contents*: a
-/// dependency could ship a corrected mapping without moving its version. The
+/// # The skew that is actually present, and its measured extent
+///
+/// As linked today the tables are **not** level:
+///
+/// | table | crate | version |
+/// |---|---|---|
+/// | `core` | `std` (`char::UNICODE_VERSION`) | 17.0.0 |
+/// | `normalization` | `unicode-normalization` | 17.0.0 |
+/// | `segmentation` | `unicode-segmentation` | 17.0.0 |
+/// | **`case_folding`** | **`caseless`** | **16.0.0** |
+///
+/// The fold table trails the other three by one Unicode release, and it cannot
+/// be levelled by upgrading: `caseless` 0.2.2 is the newest version published,
+/// its `CaseFolding.txt` tables are at 16.0.0, and it is the only crate in this
+/// workspace that implements the full (`C` + `F`) case fold the compatibility
+/// caseless form is defined in terms of. Substituting `str::to_lowercase` is
+/// not an option for the reason this module opens with — lowercasing is not
+/// folding, and `STRASSE`/`Straße` would stop matching. So the skew is
+/// **carried deliberately**, and the job here is to state exactly what it costs
+/// rather than to leave it as an unquantified caveat.
+///
+/// The cost is measurable and is measured, by
+/// `the_case_folding_skew_is_confined_to_where_it_is_measured` in this crate's
+/// test suite. The characters on which the 16.0.0 fold table disagrees with the
+/// 17.0.0 case-mapping tables — that is, every `c` for which `fold(c)`,
+/// `fold(lowercase(c))` and `fold(uppercase(c))` are not all the same string —
+/// are exactly these 57 code points and no others:
+///
+/// * `U+0131` LATIN SMALL LETTER DOTLESS I. **Not** a skew: Unicode excludes it
+///   from the default fold on purpose (its case mappings are the Turkic `T`
+///   status, which `C` + `F` folding does not apply), so every version of every
+///   conforming fold table behaves this way.
+/// * `U+A7CE..=U+A7CF` and `U+A7D2..=U+A7D5` — six Latin Extended-D letters.
+/// * `U+16EA0..=U+16EB8` and `U+16EBB..=U+16ED3` — fifty Beria Erfe letters.
+///
+/// The 56 real ones are all characters whose *cased partner* the 17.0.0 tables
+/// know about and the 16.0.0 fold table does not. An uppercase one of them
+/// therefore indexes and queries as itself rather than folding, so it matches
+/// its own spelling and not its lowercase partner. Nothing else is affected:
+/// the test asserts that every ASCII, Latin-1, Latin Extended-A, Greek,
+/// Cyrillic, Hebrew, Arabic, Hiragana, Katakana, Han and Hangul code point
+/// folds consistently, which is to say that no corpus written before Unicode
+/// 17.0 existed can contain a character this skew touches.
+///
+/// When `caseless` does ship 17.0.0 tables, that test fails — deliberately.
+/// Raising the fold table changes which literals produce which terms, which
+/// changes the term dictionary and both fingerprints, so it is a change that
+/// has to be seen and its goldens re-derived rather than absorbed silently.
+///
+/// # Versions pin vintage, not contents
+///
+/// A dependency could ship a corrected mapping without moving its version. The
 /// golden token-vector test in this crate's test suite is what catches that —
 /// it asserts exact token vectors across a spread of scripts, so a changed
 /// mapping fails a test rather than rewriting the term dictionary in silence.
@@ -605,6 +655,118 @@ mod tests {
                     analyzer.analysis_form(left) == analyzer.analysis_form(right),
                     caseless::compatibility_caseless_match_str(left, right),
                     "the form and the predicate disagreed on {left:?} vs {right:?}"
+                );
+            }
+        }
+    }
+
+    /// The extent of the case-folding table's one-release lag, measured rather than
+    /// asserted — and confined to characters no pre-Unicode-17.0 corpus can hold.
+    ///
+    /// `caseless` ships `CaseFolding.txt` at 16.0.0 while the other three tables are
+    /// at 17.0.0, and it cannot be levelled: 0.2.2 is the newest version published
+    /// and it is the only full (`C` + `F`) fold in this workspace. So the skew is
+    /// carried, and this is what carrying it costs.
+    ///
+    /// A character is affected exactly when the fold stops being a case invariant on
+    /// it — when `fold(c)`, `fold(lowercase(c))` and `fold(uppercase(c))` are not all
+    /// the same string. Scanning the whole code space finds 57 such characters and no
+    /// others. One of them, `U+0131`, is not a skew at all: Unicode excludes the
+    /// dotless i from the default fold on purpose. The remaining 56 are six Latin
+    /// Extended-D letters and fifty Beria Erfe letters, all of them characters whose
+    /// cased partner the 17.0.0 tables know and the 16.0.0 fold table does not.
+    ///
+    /// The scan is exhaustive and the answer is pinned as a set, so this fails the
+    /// day `caseless` ships 17.0.0 tables — which is the point. Raising the fold
+    /// table rewrites the term dictionary, and that must be a visible change with
+    /// re-derived goldens rather than a silent one.
+    #[test]
+    fn the_case_folding_skew_is_confined_to_where_it_is_measured() {
+        /// The contiguous runs of affected code points, as measured.
+        const AFFECTED: [(u32, u32); 5] = [
+            // Unicode's own deliberate exclusion: the Turkic dotless i has `T`
+            // status case mappings, which `C` + `F` folding does not apply. Every
+            // conforming fold table of every version behaves this way.
+            (0x0131, 0x0131),
+            // Latin Extended-D letters whose cased partner postdates the fold table.
+            (0xA7CE, 0xA7CF),
+            (0xA7D2, 0xA7D5),
+            // Beria Erfe — a bicameral script the fold table does not yet carry.
+            (0x16EA0, 0x16EB8),
+            (0x16EBB, 0x16ED3),
+        ];
+
+        let fold = |text: &str| -> String {
+            use caseless::Caseless as _;
+            text.chars().default_case_fold().collect()
+        };
+
+        let mut measured: Vec<u32> = Vec::new();
+        for code_point in 0..=0x0010_FFFF_u32 {
+            let Some(c) = char::from_u32(code_point) else {
+                continue;
+            };
+            let itself = c.to_string();
+            let lowered: String = c.to_lowercase().collect();
+            let raised: String = c.to_uppercase().collect();
+            let folded = fold(&itself);
+            if folded != fold(&lowered) || folded != fold(&raised) {
+                measured.push(code_point);
+            }
+        }
+
+        let expected: Vec<u32> = AFFECTED
+            .iter()
+            .flat_map(|&(low, high)| low..=high)
+            .collect();
+        assert_eq!(
+            measured.len(),
+            57,
+            "the measured skew is 57 code points; got {}",
+            measured.len()
+        );
+        assert_eq!(
+            measured, expected,
+            "the case-folding table's disagreement with the case-mapping tables moved. If `caseless` \
+             has shipped Unicode 17.0.0 tables this set should shrink to just U+0131 — re-derive this \
+             crate's golden token vectors and fingerprints, then narrow this pin. If it grew instead, \
+             a table moved underneath the crate and the term dictionary moved with it."
+        );
+
+        // And the guarantee that makes the skew survivable: every script a corpus
+        // written before Unicode 17.0 could possibly hold folds consistently.
+        for (script, low, high) in [
+            ("ASCII", 0x0000_u32, 0x007F_u32),
+            ("Latin-1 Supplement", 0x0080, 0x00FF),
+            ("Latin Extended-A", 0x0100, 0x017F),
+            ("Greek and Coptic", 0x0370, 0x03FF),
+            ("Cyrillic", 0x0400, 0x04FF),
+            ("Hebrew", 0x0590, 0x05FF),
+            ("Arabic", 0x0600, 0x06FF),
+            ("Hiragana", 0x3040, 0x309F),
+            ("Katakana", 0x30A0, 0x30FF),
+            ("CJK Unified Ideographs", 0x4E00, 0x9FFF),
+            ("Hangul Syllables", 0xAC00, 0xD7A3),
+        ] {
+            for code_point in low..=high {
+                let Some(c) = char::from_u32(code_point) else {
+                    continue;
+                };
+                // U+0131 sits inside Latin Extended-A and is Unicode's own
+                // exclusion rather than a table lag, so it is named rather than
+                // quietly skipped.
+                if code_point == 0x0131 {
+                    continue;
+                }
+                let itself = c.to_string();
+                let lowered: String = c.to_lowercase().collect();
+                let raised: String = c.to_uppercase().collect();
+                let folded = fold(&itself);
+                assert_eq!(
+                    (folded.clone(), folded),
+                    (fold(&lowered), fold(&raised)),
+                    "the fold is not a case invariant on U+{code_point:04X} in {script}, so the table \
+                     skew has reached a script real corpora already contain"
                 );
             }
         }

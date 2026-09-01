@@ -587,6 +587,24 @@ fn a_non_iri_predicate_is_a_config_error() {
     )
     .expect_err("a literal cannot be a predicate");
     assert!(matches!(error, TextError::Config(_)), "got {error:?}");
+
+    // The neighbouring valid case, executed rather than assumed: the same
+    // refusal must not be firing on an IRI. A refusal that is never checked
+    // against the input it is supposed to admit looks identical to one that
+    // rejects everything.
+    TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
+        .expect("an IRI predicate is exactly what this configuration takes");
+
+    // Including IRIs whose spelling is unusual — a refusal keyed on shape
+    // rather than on term kind would reject these.
+    for iri in [
+        "urn:example:note",
+        "https://example.org/a#b",
+        "tag:x,2026:y",
+    ] {
+        TextIndexConfig::new(vec![TermValue::iri(iri)], GraphSelector::Any)
+            .unwrap_or_else(|error| panic!("{iri} is an IRI and must be accepted: {error}"));
+    }
 }
 
 /// PurRDF mints no vocabulary, so there is no default predicate set to fall
@@ -612,6 +630,17 @@ fn a_duplicate_predicate_is_a_config_error() {
     )
     .expect_err("a repeated predicate is refused");
     assert!(matches!(error, TextError::Config(_)), "got {error:?}");
+
+    // The neighbouring valid case: the same two predicates WITHOUT the repeat.
+    // The duplicate check compares adjacent entries of a sorted list, so an
+    // off-by-one in it would reject every list of two distinct predicates —
+    // and the refusal above would still pass.
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE), TermValue::iri(LABEL)],
+        GraphSelector::Any,
+    )
+    .expect("two distinct predicates are a valid configuration");
+    assert_eq!(config.predicates().len(), 2);
 }
 
 /// A configured predicate the dataset does not carry is a hard `Data` error.
@@ -644,6 +673,15 @@ fn a_predicate_absent_from_the_dataset() {
         message.contains(LABEL),
         "the diagnostic must name the missing predicate: {message}"
     );
+
+    // The neighbouring valid case, against the SAME dataset: a configuration
+    // naming only the predicate that is present must build. The refusal is a
+    // presence check on every configured predicate, so one that fired on a
+    // present predicate would empty every index in the workspace while this
+    // test still passed.
+    let index = TextIndex::from_dataset(&*dataset, &config(&[NOTE]))
+        .expect("ex:note IS in the dataset, so this configuration must build");
+    assert_eq!(index.document_count(), 1);
 }
 
 /// A predicate may legitimately carry both literals and IRIs. A non-literal
@@ -704,4 +742,35 @@ fn a_named_graph_selector_restricts_the_walk() {
     let partition = PartitionKey::new(Some(TermValue::iri(GRAPH)), None);
     assert_eq!(named.document_frequency(&partition, "inside"), 1);
     assert_eq!(named.document_frequency(&partition, "outside"), 0);
+
+    // A named graph the dataset does not carry is refused for the same reason
+    // an absent predicate is: the selector is the caller's assertion about what
+    // the data holds. The valid neighbour is the case just above, which names a
+    // graph that IS present and built — so the refusal is shown to discriminate
+    // rather than to reject every named selector.
+    let error = TextIndex::from_dataset(
+        &*dataset,
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Named(TermValue::iri("https://example.org/absent")),
+        )
+        .expect("a named-graph configuration is well formed"),
+    )
+    .expect_err("the dataset carries no such graph");
+    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+
+    // And the default graph is still selectable, which is the third neighbour a
+    // graph-presence check could wrongly reject: the default graph is named by
+    // no term at all.
+    let default = TextIndex::from_dataset(
+        &*dataset,
+        &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Default)
+            .expect("a default-graph configuration is well formed"),
+    )
+    .expect("the default graph needs no term to be present");
+    assert_eq!(default.document_count(), 1);
+    assert_eq!(
+        default.document_frequency(&PartitionKey::new(None, None), "outside"),
+        1
+    );
 }

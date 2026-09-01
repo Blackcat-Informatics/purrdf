@@ -70,6 +70,8 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
+use std::cmp::Ordering;
+
 use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
@@ -376,6 +378,15 @@ pub struct TextIndex {
     unicode: UnicodeVersions,
     /// Documents in id order — that is, sorted by `(graph, subject, language)`.
     documents: Vec<Document>,
+    /// Document ids sorted by `(subject, id)` — the side index a subject lookup
+    /// binary-searches.
+    ///
+    /// Derived from [`Self::documents`] and therefore **not** part of either
+    /// fingerprint: it holds no information the document table does not, and
+    /// digesting it would only make the digest depend on an implementation
+    /// detail. It exists because the document table is sorted with the *graph*
+    /// first, so the documents sharing one subject are not contiguous in it.
+    subject_order: Vec<u32>,
     /// Partitions sorted by [`PartitionKey`], with their statistics.
     partitions: Vec<(PartitionKey, PartitionStats)>,
     /// The term dictionary, sorted by term text.
@@ -496,6 +507,53 @@ impl TextIndex {
     /// The document `id` names, or `None` if there is no such document.
     pub fn document(&self, id: u32) -> Option<&Document> {
         self.documents.get(id as usize)
+    }
+
+    /// Every document id whose subject is `subject`, ascending.
+    ///
+    /// A subject is not a document: `(graph, subject, language)` is, so one
+    /// subject carrying `"the cat"@en` and `"le chat"@fr` in two named graphs is
+    /// four documents. This is the lookup that turns the one into the other, in
+    /// `O(log n)` rather than by scanning the document table.
+    ///
+    /// Empty for a subject the index holds no text for, which is the true answer
+    /// rather than a failure: a query may legitimately name a subject that has
+    /// no indexed literals.
+    pub fn documents_with_subject(&self, subject: &TermValue) -> &[u32] {
+        let compare = |id: &u32| self.documents[*id as usize].subject.cmp(subject);
+        let start = self
+            .subject_order
+            .partition_point(|id| compare(id) == Ordering::Less);
+        let end = self
+            .subject_order
+            .partition_point(|id| compare(id) != Ordering::Greater);
+        self.subject_order
+            .get(start..end)
+            .expect("partition_point yields in-range, ordered offsets")
+    }
+
+    /// The partitions holding a document whose subject is `subject`, ascending
+    /// and distinct.
+    ///
+    /// This is what makes a bound document position a **partition** restriction
+    /// rather than a per-row filter. A query that names a document is answered
+    /// by ranking the one, two or three partitions that subject actually appears
+    /// in instead of every partition the index holds — and because ranks are
+    /// per-partition, dropping the rest cannot change the rank of any row that
+    /// survives.
+    ///
+    /// Empty for a subject the index holds no text for, which admits no
+    /// partition and so retrieves nothing — the same answer a per-row filter
+    /// would have reached, arrived at without ranking anything.
+    pub fn partitions_holding_subject(&self, subject: &TermValue) -> Vec<PartitionKey> {
+        let mut keys: Vec<PartitionKey> = self
+            .documents_with_subject(subject)
+            .iter()
+            .filter_map(|&id| self.partition_key_of(id).cloned())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     /// The partition the document `id` names belongs to.
@@ -646,11 +704,13 @@ impl TextIndex {
             })
             .collect();
         let terms = build_terms(documents, dictionary, &table);
+        let subject_order = build_subject_order(&table);
 
         let mut index = Self {
             config,
             unicode: unicode_versions(),
             documents: table,
+            subject_order,
             partitions,
             terms,
             fingerprint: [0; FINGERPRINT_BYTES],
@@ -721,6 +781,25 @@ impl TextIndex {
 
         Ok(digest.finish())
     }
+}
+
+/// Document ids sorted by `(subject, id)`.
+///
+/// Sorted rather than hashed, and by a total order the document table already
+/// carries, so the side index is a pure function of the document table exactly
+/// as the document table is a pure function of the content. The `id` tiebreak
+/// keeps a subject's run ascending, so a lookup's result is ascending too.
+fn build_subject_order(table: &[Document]) -> Vec<u32> {
+    let mut order: Vec<u32> = (0..table.len())
+        .map(|id| u32::try_from(id).expect("the caller has already bounded the id space"))
+        .collect();
+    order.sort_by(|&left, &right| {
+        table[left as usize]
+            .subject
+            .cmp(&table[right as usize].subject)
+            .then_with(|| left.cmp(&right))
+    });
+    order
 }
 
 /// `entry`'s postings that belong to `partition`; empty when it holds none.

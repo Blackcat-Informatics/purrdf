@@ -56,7 +56,7 @@
 //! `debug_assert` and a real [`TextError::Domain`] guard, so a later change to the
 //! index cannot quietly reintroduce a division by zero.
 //!
-//! # `?rank` is per partition, and that is a correctness decision
+//! # Every rank is per partition, and that is a correctness decision
 //!
 //! Corpus statistics are computed per `(graph, language)` partition
 //! ([`PartitionKey`]), so a score is a number *relative to one corpus*. A rank
@@ -66,7 +66,7 @@
 //! cross-corpus BM25 fallacy. The two numbers do not denote the same quantity,
 //! and ordering them produces an arrangement rather than a ranking.
 //!
-//! So [`Scored::rank`] is the 1-based position of a document **within its own
+//! So [`Scored::partition_rank`] is the 1-based position of a document **within its own
 //! partition**, and every comparison this module makes stays inside one
 //! partition. A query that wants a single ranked list binds `?lang` (and `?graph`
 //! where relevant), or runs against a single-partition index, which is the common
@@ -185,10 +185,17 @@ pub struct Scored {
     pub score: Fixed,
     /// The 1-based position of this document **within its own partition**.
     ///
-    /// Never a global position. See this module's documentation for why a rank
-    /// spanning partitions would order numbers that do not denote the same
-    /// quantity.
-    pub rank: u32,
+    /// Never a global position, and named so that it cannot be read as one. A
+    /// field called `rank` beside a field called `score` invites exactly the
+    /// wrong reading — that sorting two rows by it is meaningful whatever
+    /// partitions they came from — and the name is the only place that reading
+    /// can be headed off, because a `1` from one partition and a `1` from
+    /// another are both perfectly ordinary values and nothing downstream can
+    /// tell they were computed against different corpora.
+    ///
+    /// See this module's documentation for why a rank spanning partitions would
+    /// order numbers that do not denote the same quantity.
+    pub partition_rank: u32,
     /// How many **distinct** needle terms occur in this document.
     ///
     /// This exists so that conjunctive retrieval is expressible in the query
@@ -258,6 +265,17 @@ pub struct PartitionFilter {
     graph: Constraint<TermValue>,
     /// The language dimension.
     language: Constraint<String>,
+    /// An explicit allow-list of partition keys, sorted and distinct, or `None`
+    /// for no such restriction.
+    ///
+    /// The two dimensions above are a *product*, and some restrictions are not
+    /// products. "The partitions this subject appears in" is the one that
+    /// matters here: a subject may hold English text in one graph and French in
+    /// another without holding French in the first, which no `(graph, language)`
+    /// pair can express without also admitting a partition the subject is
+    /// absent from. Ranking that extra partition would be work whose every row
+    /// is then discarded.
+    keys: Option<Vec<PartitionKey>>,
 }
 
 impl PartitionFilter {
@@ -291,6 +309,31 @@ impl PartitionFilter {
         &self.language
     }
 
+    /// This filter restricted to `keys` as well, on top of whatever it already
+    /// constrains.
+    ///
+    /// The list is sorted and deduplicated here, so [`Self::matches`] decides
+    /// membership by binary search and the filter's own identity does not depend
+    /// on the order a caller happened to collect the keys in.
+    ///
+    /// An **empty** list admits nothing, and that is the intended reading rather
+    /// than a degenerate one: "the partitions holding this subject", for a
+    /// subject the index holds no text for, is genuinely empty, and the honest
+    /// answer is to rank nothing rather than to rank everything and discard it.
+    #[must_use]
+    pub fn restricted_to(mut self, keys: Vec<PartitionKey>) -> Self {
+        let mut keys = keys;
+        keys.sort();
+        keys.dedup();
+        self.keys = Some(keys);
+        self
+    }
+
+    /// The explicit allow-list, or `None` when the filter carries none.
+    pub fn keys(&self) -> Option<&[PartitionKey]> {
+        self.keys.as_deref()
+    }
+
     /// Whether `key` names a partition this filter admits.
     pub fn matches(&self, key: &PartitionKey) -> bool {
         let graph = match &self.graph {
@@ -303,7 +346,11 @@ impl PartitionFilter {
             Constraint::Absent => key.language().is_none(),
             Constraint::Exactly(tag) => key.language() == Some(tag.as_str()),
         };
-        graph && language
+        let listed = self
+            .keys
+            .as_ref()
+            .is_none_or(|keys| keys.binary_search(key).is_ok());
+        graph && language && listed
     }
 }
 
@@ -322,7 +369,8 @@ impl PartitionFilter {
 /// partition is ranked through a binary heap of `k` entries and the tail is never
 /// sorted. The rows returned are identical either way.
 ///
-/// Rows come back in rank order, `rank` running from `1`.
+/// Rows come back in rank order, [`Scored::partition_rank`] running from `1` —
+/// and `1` here means first *in this partition*, not first in the index.
 ///
 /// [`Analyzer`]: crate::Analyzer
 pub fn rank_partition(
@@ -339,26 +387,27 @@ pub fn rank_partition(
 }
 
 /// Rank every partition `filter` admits, and emit the rows in
-/// `(partition key ASC, rank ASC)` order.
+/// `(partition key ASC, per-partition rank ASC)` order.
 ///
 /// * `filter` is applied **before** ranking, which is sound because ranks are
 ///   per-partition.
 /// * `ceiling` is the number of rows to emit — a `LIMIT` over the emission order
 ///   above. It bounds each partition's heap too, because a row at output position
-///   `i` has rank at most `i + 1`, so nothing beyond rank `ceiling` in any
-///   partition can reach the output.
-/// * `rank` restricts the emission to that one 1-based per-partition position, so
-///   it yields at most one row per admitted partition. It is what a bound `?rank`
-///   compiles to, and it bounds each heap at `rank` entries. A `rank` of `0`, or
-///   one past the end of every partition, yields nothing: ranks are 1-based, so
-///   `0` names no row, and asking for a row a partition does not have is a
-///   question with an honest empty answer rather than an error.
+///   `i` has [`Scored::partition_rank`] at most `i + 1`, so nothing beyond rank
+///   `ceiling` in any partition can reach the output.
+/// * `partition_rank` restricts the emission to that one 1-based **per-partition**
+///   position, so it yields at most one row per admitted partition — not one row
+///   overall. It is what a bound rank position compiles to, and it bounds each
+///   heap at that many entries. A `partition_rank` of `0`, or one past the end of
+///   every partition, yields nothing: ranks are 1-based, so `0` names no row, and
+///   asking for a row a partition does not have is a question with an honest empty
+///   answer rather than an error.
 pub fn select(
     index: &TextIndex,
     needle: &[String],
     filter: &PartitionFilter,
     ceiling: Option<u64>,
-    rank: Option<u32>,
+    partition_rank: Option<u32>,
 ) -> Result<Vec<Scored>, TextError> {
     let terms = distinct_terms(needle)?;
     if terms.is_empty() {
@@ -367,7 +416,7 @@ pub fn select(
 
     // A bound rank needs the heap deep enough to know that rank; otherwise the
     // ceiling is the only thing bounding it.
-    let limit = rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
+    let limit = partition_rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
     let emitted = ceiling.map_or(usize::MAX, |k| usize::try_from(k).unwrap_or(usize::MAX));
 
     let mut rows: Vec<Scored> = Vec::new();
@@ -379,8 +428,8 @@ pub fn select(
             continue;
         }
         let mut partition_rows = rank_terms(index, key, &terms, limit)?;
-        if let Some(wanted) = rank {
-            partition_rows.retain(|row| row.rank == wanted);
+        if let Some(wanted) = partition_rank {
+            partition_rows.retain(|row| row.partition_rank == wanted);
         }
         rows.append(&mut partition_rows);
     }
@@ -608,13 +657,13 @@ fn rank_terms(
 
     let mut rows = Vec::with_capacity(ordered.len());
     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
-        let rank = u32::try_from(position + 1).map_err(|_| {
+        let partition_rank = u32::try_from(position + 1).map_err(|_| {
             TextError::overflow("a partition holds more ranked rows than a u32 can number")
         })?;
         rows.push(Scored {
             document: candidate.document,
             score: candidate.score,
-            rank,
+            partition_rank,
             matched: candidate.matched,
         });
     }

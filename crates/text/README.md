@@ -60,6 +60,11 @@ partitions would order numbers computed against different corpora. Rows are
 emitted in `(partition key ASC, rank ASC)` order, and a query wanting one ranked
 list binds `?lang` and `?graph` or uses a single-partition index.
 
+The Rust field is named `Scored::partition_rank` for that reason: nothing about
+the *value* records which corpus produced it, so an answer over a three-language
+index carries three rows of rank 1 and `LIMIT 10` over it is the first ten of an
+interleaving rather than the ten best documents.
+
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
 assigned only after sorting on `(graph, subject, language)`, so ascending id is
 ascending canonical order and the tie-break is reproducible across independently

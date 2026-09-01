@@ -158,11 +158,11 @@ fn bm25_matches_a_hand_computed_golden() {
 
     assert_eq!(rows.len(), 2, "only two documents hold a needle term");
     assert_eq!(rows[0].document, 0);
-    assert_eq!(rows[0].rank, 1);
+    assert_eq!(rows[0].partition_rank, 1);
     assert_eq!(rows[0].matched, 2);
     assert_eq!(rows[0].score.to_decimal_lexical(), "1.646224553827");
     assert_eq!(rows[1].document, 1);
-    assert_eq!(rows[1].rank, 2);
+    assert_eq!(rows[1].partition_rank, 2);
     assert_eq!(rows[1].matched, 2);
     assert_eq!(rows[1].score.to_decimal_lexical(), "1.386294361118");
 }
@@ -219,11 +219,11 @@ fn equal_scores_are_broken_by_document_id_deterministically() {
         );
         assert_eq!(rows[0].score.to_decimal_lexical(), "0.182321556793");
         assert_eq!(
-            (rows[0].document, rows[0].rank),
+            (rows[0].document, rows[0].partition_rank),
             (0, 1),
             "the lower document id must rank first"
         );
-        assert_eq!((rows[1].document, rows[1].rank), (1, 2));
+        assert_eq!((rows[1].document, rows[1].partition_rank), (1, 2));
         assert_eq!(
             index.document(0).expect("document 0 exists").subject(),
             &TermValue::iri(subjects[0]),
@@ -269,7 +269,7 @@ fn order_by_score_and_order_by_rank_can_disagree_under_rounding() {
         "an exact tie reports one score for two rows"
     );
     assert_ne!(
-        rows[0].rank, rows[1].rank,
+        rows[0].partition_rank, rows[1].partition_rank,
         "but the ranks are still distinct"
     );
 
@@ -284,7 +284,11 @@ fn order_by_score_and_order_by_rank_can_disagree_under_rounding() {
         rendered(rows[1].score, 0),
         "and a consumer keeping no fractional digits cannot tell them apart"
     );
-    assert_eq!((rows[0].rank, rows[1].rank), (1, 2), "the rank still can");
+    assert_eq!(
+        (rows[0].partition_rank, rows[1].partition_rank),
+        (1, 2),
+        "the rank still can"
+    );
 }
 
 // ── partitions ───────────────────────────────────────────────────────────────
@@ -304,12 +308,14 @@ fn rank_is_per_partition_not_global() {
     let rows = select(&index, &needle("alpha"), &everything(), None, None).expect("scores");
     assert_eq!(rows.len(), 4);
     assert_eq!(
-        rows.iter().filter(|row| row.rank == 1).count(),
+        rows.iter().filter(|row| row.partition_rank == 1).count(),
         2,
         "each partition must have exactly one rank-one row"
     );
     assert_eq!(
-        rows.iter().map(|row| row.rank).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|row| row.partition_rank)
+            .collect::<Vec<_>>(),
         vec![1, 2, 1, 2],
         "emission is (partition key ASC, rank ASC), so the ranks restart"
     );
@@ -348,7 +354,10 @@ fn a_partition_filter_selects_without_changing_any_rank() {
         .collect();
     assert_eq!(english_rows, expected);
     assert_eq!(
-        english_rows.iter().map(|row| row.rank).collect::<Vec<_>>(),
+        english_rows
+            .iter()
+            .map(|row| row.partition_rank)
+            .collect::<Vec<_>>(),
         vec![1, 2],
         "the surviving partition still ranks from one"
     );
@@ -486,13 +495,13 @@ fn a_bound_rank_selects_that_rank() {
     let first = select(&index, &query, &everything(), None, Some(1)).expect("scores");
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].document, 0);
-    assert_eq!(first[0].rank, 1);
+    assert_eq!(first[0].partition_rank, 1);
     assert_eq!(first[0].score.to_decimal_lexical(), "1.646224553827");
 
     let second = select(&index, &query, &everything(), None, Some(2)).expect("scores");
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].document, 1);
-    assert_eq!(second[0].rank, 2);
+    assert_eq!(second[0].partition_rank, 2);
     assert_eq!(second[0].score.to_decimal_lexical(), "1.386294361118");
 }
 
@@ -693,7 +702,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
         .map(|row| {
             (
                 row.document,
-                row.rank,
+                row.partition_rank,
                 row.matched,
                 row.score.to_decimal_lexical(),
             )
@@ -708,7 +717,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
             .map(|row| {
                 (
                     row.document,
-                    row.rank,
+                    row.partition_rank,
                     row.matched,
                     row.score.to_decimal_lexical(),
                 )

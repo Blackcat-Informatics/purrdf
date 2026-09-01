@@ -94,6 +94,26 @@ Restricting to partitions *before* ranking is sound precisely because ranks are
 per-partition: dropping whole partitions cannot change the rank of any surviving
 row, because no surviving row was ever compared against a dropped one.
 
+That soundness is also what makes the restriction a **performance** mechanism
+and not merely a filter. A bound language names its partitions directly; a bound
+document names its subject's partitions through
+`TextIndex::partitions_holding_subject`, because `(graph, subject, language)` is
+a document's key and a subject therefore occupies at most one document per
+partition. Both are applied before ranking. Without them, an evaluator driving
+the relation once per left row — which is what a bound document position means —
+ranks the whole index per row and then discards all but that row's share of it.
+
+### The name says per-partition, because the value cannot
+
+The Rust surface calls this field `Scored::partition_rank` rather than `rank`.
+The name is the only place the distinction can be carried: a `1` from the
+English partition and a `1` from the French one are both ordinary integers, and
+nothing downstream — not the row, not the `xsd:integer` cell, not a comparison
+between them — records that they were computed against different corpora. A
+SPARQL answer over a three-language index therefore contains **three** rows of
+rank 1, and `LIMIT 10` over it is the first ten of that interleaving rather than
+the ten best documents. Binding the language is what makes it one list.
+
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
 assigned only after every document has been sorted by `(graph, subject,
 language)`, so ascending id *is* ascending canonical term order — the tie-break
@@ -319,14 +339,19 @@ SELECT ?doc WHERE {
 }
 ```
 
-Proximity within a window is the same shape with a different filter:
+Proximity within a window is the same shape with a different filter — written
+out in full, because a shipped example a reader cannot run is not an example:
 
 ```sparql
-FILTER(ABS(?p2 - ?p1) <= 3)
+SELECT ?doc WHERE {
+  ?doc <https://example.org/pf#occurs> ( "quick" ?l ?p1 ) .
+  ?doc <https://example.org/pf#occurs> ( "brown" ?l ?p2 ) .
+  FILTER(ABS(?p2 - ?p1) <= 3)
+}
 ```
 
 and the two relations compose, so a phrase constraint can be intersected with a
-ranked search and still order by `?rank`.
+ranked search and still order by the per-partition rank.
 
 The predicate IRIs above are fixtures. Neither relation names an IRI of its own;
 the predicate a query calls each by is supplied by the caller at registration,

@@ -150,7 +150,51 @@ fn language_constraint(
     }
 }
 
+/// An `xsd:integer` lexical form split into its sign and its digits, or `None`
+/// if it is not one.
+///
+/// The production is `[+-]? [0-9]+` — XSD's own, with no whitespace, no
+/// exponent and no radix point. Leading zeros and a leading `+` are both
+/// permitted (`"+007"` and `"7"` denote the same integer), so they are stripped
+/// here rather than refused.
+///
+/// This exists because the value space of `xsd:integer` is **unbounded** while
+/// every Rust integer type is not, and conflating the two is how a validator
+/// starts refusing values that are perfectly valid. Deciding well-formedness
+/// from the lexical form itself keeps that judgement independent of whatever
+/// width the code happens to parse into.
+fn xsd_integer_parts(lexical_form: &str) -> Option<(bool, &str)> {
+    let (negative, digits) = match lexical_form.as_bytes().first() {
+        Some(b'-') => (true, &lexical_form[1..]),
+        Some(b'+') => (false, &lexical_form[1..]),
+        _ => (false, lexical_form),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // Leading zeros are lexical noise, not magnitude.
+    let trimmed = digits.trim_start_matches('0');
+    Some((negative, trimmed))
+}
+
 /// The rank a bound `?rank` at [`SEARCH_RANK`] compiles to.
+///
+/// # The three answers, and why a large rank is not an error
+///
+/// `xsd:integer` has an **unbounded** value space. A rank of `10^40` is
+/// therefore a perfectly well-formed `xsd:integer` — it is simply larger than
+/// any position an index numbers, which is exactly the
+/// [`RankBound::BeyondTheIndex`] case the relation already answers emptily for
+/// `4294967296`. Deciding this by whether the lexical form fits an `i128` would
+/// make the boundary between "empty answer" and "aborted query" an artefact of
+/// the width this function happens to parse into: `2^127 - 1` would be an empty
+/// answer and `2^127` a hard error, with nothing about `xsd:integer` to justify
+/// the difference. So magnitude is read from the digits, and only a lexical form
+/// that is not an `xsd:integer` at all is refused as malformed.
+///
+/// A negative rank stays a refusal at every magnitude. It is not a row the index
+/// might have and does not: 1-based positions have no negative region, so the
+/// request is outside the domain rather than empty within it.
 fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
     let TermValue::Literal {
         lexical_form,
@@ -169,21 +213,26 @@ fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
              relation emits an xsd:integer there, so only an xsd:integer can name a rank"
         )));
     }
-    let Ok(parsed) = lexical_form.parse::<i128>() else {
+    let Some((negative, digits)) = xsd_integer_parts(lexical_form) else {
         return Err(EvalError::function(format!(
             "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
-             the value space of xsd:integer"
+             the lexical space of xsd:integer (an optional sign followed by one or more digits)"
         )));
     };
-    if parsed < 1 {
+    // `digits` has had its leading zeros stripped, so it is empty exactly when
+    // the value is zero — whatever sign was written in front of it.
+    if digits.is_empty() || negative {
         return Err(EvalError::function(format!(
-            "the rank at position {SEARCH_RANK} is {parsed}; ranks are 1-based, so zero and every \
-             negative value are outside the domain rather than an empty answer within it"
+            "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
+             every negative value are outside the domain rather than an empty answer within it"
         )));
     }
-    // A rank past the end of every partition is a different thing: it is a
-    // question the index simply answers with nothing.
-    Ok(u32::try_from(parsed).map_or(RankBound::BeyondTheIndex, RankBound::At))
+    // Strictly positive from here, so the only question left is whether it names
+    // a position an index can number. One that does not is a question the index
+    // answers with nothing rather than a request it refuses.
+    Ok(digits
+        .parse::<u32>()
+        .map_or(RankBound::BeyondTheIndex, RankBound::At))
 }
 
 /// The analyzed needle — the terms the index's own pipeline produces for `text`.
@@ -367,6 +416,34 @@ impl SearchBounds {
 /// | 4 | `?lang` | the document's language tag | `xsd:string` |
 /// | 5 | `?matched` | how many distinct needle terms the document holds | `xsd:integer` |
 ///
+/// # Position 3 is a per-partition rank, and nothing about the value says so
+///
+/// The Rust type names it [`Scored::partition_rank`](crate::Scored) precisely so
+/// it cannot be read as a global position. A SPARQL row cannot carry that name —
+/// the caller writes the variable — so it is stated here instead, and it is the
+/// one thing about this relation worth reading twice.
+///
+/// A partition is a `(graph, language)` pair, and corpus statistics are computed
+/// inside one. A `1` from the English partition and a `1` from the French one are
+/// both first-in-their-corpus, and **an answer over a multi-partition index
+/// therefore contains one row of rank 1 per partition.** `LIMIT 10` after
+/// `ORDER BY ?rank` over a three-language index is not the ten best documents; it
+/// is the first ten of a sequence that opens with three rank-1 rows.
+///
+/// What makes a single ranked list is naming the partition:
+///
+/// ```text
+/// ?doc <ex:search> ( "needle" ?score ?rank "en" ?matched ) .
+/// ```
+///
+/// or an index whose configuration already spans one
+/// ([`GraphSelector::Named`](crate::GraphSelector::Named) or
+/// [`GraphSelector::Default`](crate::GraphSelector::Default) over a corpus in one
+/// language), which is the common case. Ranking across partitions is not offered
+/// because the numbers being ordered would have been computed against different
+/// corpora — see [`crate::rank_partition`]'s module documentation for why that is
+/// an arrangement rather than a ranking.
+///
 /// # `?lang` uses the empty string for an untagged document
 ///
 /// A fixed-width row needs a term in every position, and an untagged document
@@ -539,7 +616,36 @@ impl PropertyFunction for TextSearchRelation {
             Some(value) => language_constraint(value, SEARCH_LANG)?,
             None => Constraint::Any,
         };
-        let filter = PartitionFilter::unconstrained().with_language(language);
+        let mut filter = PartitionFilter::unconstrained().with_language(language);
+
+        // A bound `?doc` is pushed down to the partitions that subject actually
+        // appears in, which is what keeps a bound-document call from being a
+        // whole-index ranking.
+        //
+        // The engine drives a property function once per left row, so a pattern
+        // like `?doc ex:label ?l . ?doc <ex:search> ( "cat" … )` opens this
+        // relation once for every candidate document. Without the pushdown each
+        // of those invocations ranks EVERY partition in full — `?doc` is a
+        // post-rank position, so the ceiling is withheld (see below) and nothing
+        // else narrows the work — and then the cursor discards all but the one
+        // row whose subject matches. That is `O(left rows × whole index)`, and
+        // the discarded fraction grows with the corpus.
+        //
+        // A subject is one of `(graph, subject, language)`, so it occupies at
+        // most one document per partition and usually appears in one or two
+        // partitions out of however many the index holds. Restricting to exactly
+        // those turns the per-invocation cost into `O(that subject's partitions)`
+        // and removes the whole-index term from the product.
+        //
+        // It is sound for the same reason the language pushdown is: ranks are
+        // per-partition, so dropping whole partitions cannot change the rank of
+        // any row that survives, and every row dropped here is one the cursor's
+        // equality filter on position 0 would have dropped anyway. A subject the
+        // index holds no text for admits no partition at all, which is the
+        // correct empty answer reached without ranking anything.
+        if let Some(subject) = args.get(SEARCH_DOC) {
+            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
+        }
 
         // The ceiling handling, and why it is not simply passed through.
         //
@@ -631,7 +737,7 @@ impl SearchCursor {
             document.subject().clone(),
             self.needle.clone(),
             TermValue::typed_literal(scored.score.to_decimal_lexical(), XSD_DECIMAL),
-            integer_term(scored.rank),
+            integer_term(scored.partition_rank),
             language_term(document.language()),
             integer_term(scored.matched),
         ])
@@ -927,7 +1033,17 @@ impl PropertyFunction for TermOccurrenceRelation {
             Some(value) => language_constraint(value, OCCURRENCE_LANG)?,
             None => Constraint::Any,
         };
-        let filter = PartitionFilter::unconstrained().with_language(language);
+        let mut filter = PartitionFilter::unconstrained().with_language(language);
+
+        // The same document pushdown the search relation does, for the same
+        // reason and with a smaller saving: this cursor is already lazy per
+        // partition, so a bound `?doc` without it walks each partition's posting
+        // list for the term and discards every row but that subject's. Naming
+        // the subject's own partitions skips those lists rather than reading
+        // them.
+        if let Some(subject) = args.get(OCCURRENCE_DOC) {
+            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
+        }
 
         let mut analyzed = analyze(text);
         if analyzed.len() > 1 {
@@ -1229,6 +1345,30 @@ mod tests {
         ]))
     }
 
+    /// A subject that carries text in **three** partitions, plus two subjects
+    /// that carry text in one each.
+    ///
+    /// Every other fixture here gives each subject exactly one document, which
+    /// makes a bound-document invocation trivially a one-row answer and leaves
+    /// the interesting case — the one the `?doc`-only row bound is *stated in
+    /// terms of* — never exercised. `ex:a` here holds English, French and
+    /// untagged text, so binding it emits one row per partition and the declared
+    /// bound is attained rather than merely respected.
+    ///
+    /// It is also the fixture that keeps the bound-document partition pushdown
+    /// honest: a pushdown that restricted to one of `ex:a`'s partitions instead
+    /// of all three would drop two rows, and every remaining row would still
+    /// look perfectly correct.
+    fn spread_subject() -> Arc<TextIndex> {
+        Arc::new(index_of(&[
+            ("a", "alpha beta", Some("en")),
+            ("a", "alpha gamma", Some("fr")),
+            ("a", "alpha delta", None),
+            ("b", "alpha epsilon", Some("en")),
+            ("c", "alpha zeta", None),
+        ]))
+    }
+
     /// Three documents over two partitions, with `alpha` occurring twice in two
     /// of them so a position sweep has more than one row per document.
     fn occurrences() -> Arc<TextIndex> {
@@ -1472,7 +1612,18 @@ mod tests {
     #[test]
     fn a_rank_of_zero_is_an_error() {
         let relation = TextSearchRelation::new(golden());
-        for lexical in ["0", "-1", "-99"] {
+        // Zero written every way `xsd:integer`'s lexical space permits, and a
+        // negative at every magnitude — including one far past `i128`, which
+        // must stay a domain error rather than becoming an empty answer.
+        for lexical in [
+            "0",
+            "-0",
+            "+0",
+            "000",
+            "-1",
+            "-99",
+            "-10000000000000000000000000000000000000000000",
+        ] {
             let mut bound = search_args("alpha");
             bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
             let error = invoke(&relation, &bound, None).expect_err("ranks start at one");
@@ -1486,6 +1637,93 @@ mod tests {
             bound[3] = Some(value);
             let error = invoke(&relation, &bound, None).expect_err("only an xsd:integer is a rank");
             assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
+
+        // So is a lexical form outside `xsd:integer`'s lexical space even when
+        // the datatype claims otherwise.
+        for lexical in ["", "+", "-", " 1", "1 ", "1.0", "1e3", "0x10", "one", "١"] {
+            let mut bound = search_args("alpha");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            let error = invoke(&relation, &bound, None).expect_err(&format!(
+                "{lexical:?} is not in xsd:integer's lexical space and must be refused"
+            ));
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                error.to_string().contains("lexical space"),
+                "a malformed lexical form must be named as one: {error}"
+            );
+        }
+    }
+
+    /// The neighbouring case the refusal above must NOT swallow: a rank that is
+    /// a perfectly well-formed `xsd:integer` and merely enormous.
+    ///
+    /// `xsd:integer`'s value space is unbounded, so `10^44` is as valid a rank
+    /// as `4294967296` — it simply names a position no index numbers, which the
+    /// relation already answers emptily. Deciding this by whether the lexical
+    /// form fits an `i128` put the boundary between "empty answer" and "aborted
+    /// query" at `2^127`, a number with nothing to do with `xsd:integer`, and
+    /// aborted a whole SPARQL evaluation over a value that should have
+    /// contributed no rows.
+    ///
+    /// Leading zeros and a leading `+` are lexical noise in the same production,
+    /// so they are exercised here too: `"+002"` denotes the same rank as `"2"`
+    /// and must return the same row rather than being refused as malformed.
+    #[test]
+    fn a_huge_but_well_formed_rank_is_empty_not_an_error() {
+        let relation = TextSearchRelation::new(golden());
+        for lexical in [
+            // One past `i128::MAX`, where the old parse gave up.
+            "170141183460469231731687303715884105728",
+            "99999999999999999999999999999999999999999999",
+            "+99999999999999999999999999999999999999999999",
+            // Leading zeros do not change the magnitude, so a padded rank that
+            // is past the end is past the end.
+            "0000000000000000000000004294967296",
+        ] {
+            let mut bound = search_args("alpha beta");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            assert!(
+                invoke(&relation, &bound, None)
+                    .unwrap_or_else(|error| panic!(
+                        "rank {lexical} is a valid xsd:integer and must not fail: {error}"
+                    ))
+                    .is_empty(),
+                "rank {lexical} is past the end of the only partition"
+            );
+        }
+
+        // The neighbouring in-range rank still selects its row, in the canonical
+        // lexical form the relation emits.
+        let mut bound = search_args("alpha beta");
+        bound[3] = Some(integer(2));
+        let expected = invoke(&relation, &bound, None).expect("rank two exists");
+        assert_eq!(expected.len(), 1, "the fixture must have a rank-two row");
+
+        // A NON-canonical spelling of the same in-range rank yields nothing, and
+        // that is correct rather than an over-refusal. The row this relation
+        // emits carries the canonical `"2"^^xsd:integer` at position 3, and the
+        // seam joins a bound position by RDF **term** identity — the same
+        // comparison a basic graph pattern makes — so `"+2"^^xsd:integer` and
+        // `"002"^^xsd:integer` are different terms and match no emitted row. The
+        // alternative would be for the relation to emit a row whose `?rank` cell
+        // is not the value the caller bound, which is a fabricated binding.
+        //
+        // What the lexical tolerance in `xsd_integer_parts` buys is the
+        // classification above it: `"+0"` and `"000"` reach the 1-based domain
+        // error rather than the malformed one, and a huge padded value reaches
+        // the empty answer rather than an abort.
+        for lexical in ["+2", "002", "+0000002"] {
+            let mut bound = search_args("alpha beta");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            assert!(
+                invoke(&relation, &bound, None)
+                    .unwrap_or_else(|error| panic!(
+                        "rank {lexical:?} is a valid xsd:integer and must not fail: {error}"
+                    ))
+                    .is_empty(),
+                "{lexical:?} is not the term this relation emits at position 3, so it joins nothing"
+            );
         }
     }
 
@@ -1725,6 +1963,128 @@ mod tests {
         assert_eq!(declared("bbbb"), 1, "all three: one graph, one occurrence");
     }
 
+    /// The bound-document partition pushdown must be a work reduction and
+    /// nothing else: the rows it produces are exactly the rows the unrestricted
+    /// walk produced, filtered on the bound subject.
+    ///
+    /// This is the test the pushdown could quietly fail. Restricting to the
+    /// partitions a subject appears in is only correct if *every* such partition
+    /// is named; naming one of `ex:a`'s three would return a plausible,
+    /// correctly-ranked, correctly-scored one-row answer that is missing two
+    /// rows, and nothing in the row values would say so. So the answer is
+    /// compared against the whole unbound answer filtered by hand — the
+    /// definition of what the bound call means — rather than against a
+    /// hand-written expectation that could be written to match the bug.
+    #[test]
+    fn a_bound_document_pushdown_loses_no_row() {
+        let index = spread_subject();
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        let full = invoke(&search, &search_args("alpha"), None).expect("a bound needle");
+        assert_eq!(full.len(), 5, "every document holds `alpha`");
+
+        for subject in ["a", "b", "c"] {
+            let mut bound = search_args("alpha");
+            bound[0] = Some(iri(subject));
+            let expected: Vec<PfRow> = full
+                .iter()
+                .filter(|row| row[0] == iri(subject))
+                .cloned()
+                .collect();
+            assert_eq!(
+                invoke(&search, &bound, None).expect("a bound needle"),
+                expected,
+                "binding ?doc to ex:{subject} must yield exactly its rows of the unbound answer"
+            );
+        }
+        // ex:a is the whole point: three partitions, three rows.
+        assert_eq!(
+            full.iter().filter(|row| row[0] == iri("a")).count(),
+            3,
+            "the fixture must put one subject in three partitions, or this proves nothing"
+        );
+
+        // A subject the index holds no text for admits no partition, which is an
+        // empty answer rather than a refusal or an unfiltered one.
+        let mut bound = search_args("alpha");
+        bound[0] = Some(iri("nowhere"));
+        assert!(
+            invoke(&search, &bound, None)
+                .expect("an absent subject is a well-formed request")
+                .is_empty()
+        );
+
+        // The occurrence relation pushes the same restriction down, so it gets
+        // the same treatment.
+        let occurrence = TermOccurrenceRelation::new(index);
+        let full = invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term");
+        for subject in ["a", "b", "c"] {
+            let mut bound = occurrence_args("alpha");
+            bound[0] = Some(iri(subject));
+            let expected: Vec<PfRow> = full
+                .iter()
+                .filter(|row| row[0] == iri(subject))
+                .cloned()
+                .collect();
+            assert_eq!(
+                invoke(&occurrence, &bound, None).expect("a bound term"),
+                expected
+            );
+        }
+        let mut bound = occurrence_args("alpha");
+        bound[0] = Some(iri("nowhere"));
+        assert!(
+            invoke(&occurrence, &bound, None)
+                .expect("an absent subject is a well-formed request")
+                .is_empty()
+        );
+    }
+
+    /// The `?doc`-only row bound, attained rather than merely respected.
+    ///
+    /// `the_search_row_bound_table_is_the_documented_one` pins the number the
+    /// table declares, and the sweep proves no invocation exceeds it — but over
+    /// `mixed()`, where every subject sits in exactly one partition, no
+    /// invocation gets anywhere near it either. A declared bound of three that
+    /// nothing can reach is indistinguishable from a declared bound of three
+    /// hundred, so the claim is checked here against a fixture where a subject
+    /// really does span every partition.
+    #[test]
+    fn the_bound_document_row_bound_is_attained_not_merely_respected() {
+        let index = spread_subject();
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        let declared = search.rows_per_invocation(BindingPattern::from_code("bbffff"));
+        assert_eq!(
+            declared, 3,
+            "three partitions, and a subject occupies at most one document in each"
+        );
+
+        let mut bound = search_args("alpha");
+        bound[0] = Some(iri("a"));
+        assert_eq!(
+            invoke(&search, &bound, None).expect("a bound needle").len() as u64,
+            declared,
+            "a subject spanning every partition must attain the declared bound exactly"
+        );
+
+        // The same for the occurrence relation, whose `?doc` bound is
+        // partitions × the per-document maximum. `alpha` occurs once per
+        // document here, so three partitions attain three.
+        let occurrence = TermOccurrenceRelation::new(index);
+        let declared = occurrence.rows_per_invocation(BindingPattern::from_code("bbff"));
+        assert_eq!(
+            declared, 3,
+            "three partitions × one occurrence per document"
+        );
+        let mut bound = occurrence_args("alpha");
+        bound[0] = Some(iri("a"));
+        assert_eq!(
+            invoke(&occurrence, &bound, None)
+                .expect("a bound term")
+                .len() as u64,
+            declared
+        );
+    }
+
     /// Sweep **every** binding pattern of both relations and hold the declared
     /// bound to two properties.
     ///
@@ -1750,8 +2110,16 @@ mod tests {
         let search = TextSearchRelation::new(mixed());
         check_bounds(&search, 6, 1, &["alpha", "alpha beta", "gamma"]);
 
+        // And over the fixture where one subject spans every partition, which
+        // is where a `?doc`-bound mode can actually approach its bound.
+        let spread = TextSearchRelation::new(spread_subject());
+        check_bounds(&spread, 6, 1, &["alpha", "alpha beta", "gamma"]);
+
         let occurrence = TermOccurrenceRelation::new(occurrences());
         check_bounds(&occurrence, 4, 1, &["alpha", "beta", "gamma"]);
+
+        let spread = TermOccurrenceRelation::new(spread_subject());
+        check_bounds(&spread, 4, 1, &["alpha", "beta", "gamma"]);
     }
 
     /// Properties (a) and (b) of the sweep above, for one relation.

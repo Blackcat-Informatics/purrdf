@@ -488,8 +488,15 @@ fn the_scratch_form_agrees_and_borrows_every_token() {
 /// A single summary number would have to pick one of them, and picking would
 /// hide exactly the case this crate has to survive: a fold table on one Unicode
 /// release while the normalization and segmentation tables are on the next.
+///
+/// The versions are pinned **exactly** rather than merely sanity-checked. An
+/// assertion that a major version is non-zero is satisfied by every possible
+/// table and therefore says nothing; these four numbers decide which literals
+/// produce which terms, so the whole term dictionary and both index
+/// fingerprints are functions of them, and a change to any of them has to be
+/// seen rather than absorbed.
 #[test]
-fn the_reported_unicode_versions_are_the_linked_tables() {
+fn the_reported_unicode_versions_are_the_pinned_tables() {
     let versions = unicode_versions();
     assert_eq!(
         versions,
@@ -497,20 +504,20 @@ fn the_reported_unicode_versions_are_the_linked_tables() {
         "the answer must be a constant"
     );
 
-    for (name, version) in [
-        ("core", versions.core),
-        ("normalization", versions.normalization),
-        ("case folding", versions.case_folding),
-        ("segmentation", versions.segmentation),
+    for (name, version, expected) in [
+        ("core (std)", versions.core, "17.0.0"),
+        ("normalization", versions.normalization, "17.0.0"),
+        ("case folding", versions.case_folding, "16.0.0"),
+        ("segmentation", versions.segmentation, "17.0.0"),
     ] {
-        assert!(
-            version.major > 0,
-            "the {name} table reported no major version"
-        );
         assert_eq!(
             version.to_string(),
-            format!("{}.{}.{}", version.major, version.minor, version.patch),
-            "the {name} version renders as major.minor.patch"
+            expected,
+            "the {name} table moved to {version}. That is not a lint failure to silence: raising a \
+             table can change which literals fold, decompose or segment into which terms, so the \
+             term dictionary, every posting and BOTH index fingerprints change with it. Re-derive \
+             this suite's golden token vectors and the fingerprint goldens, confirm the diff is \
+             the one the new tables intend, and then move this pin."
         );
     }
 }

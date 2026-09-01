@@ -15,7 +15,7 @@
 //! collect allocation and profile data on a controlled host, and it measures
 //! rather than concludes.
 //!
-//! Four paths are covered, because they have genuinely different shapes:
+//! Six paths are covered, because they have genuinely different shapes:
 //!
 //! * building the index, which analyzes every literal and sorts the dictionary;
 //! * a ranked search with **no** ceiling, which scores every candidate and sorts
@@ -23,7 +23,27 @@
 //! * the same search **with** a ceiling, which routes the same candidates
 //!   through a binary heap bounded at the ceiling instead of sorting the tail;
 //! * a term-occurrence lookup, which is a dictionary binary search plus a
-//!   partition-span slice and touches no arithmetic at all.
+//!   partition-span slice and touches no arithmetic at all;
+//! * and the two halves of the **bound-document** path over a multi-partition
+//!   corpus — one ranking every partition and one ranking only the partitions
+//!   the bound subject appears in.
+//!
+//! # Why the last pair exists
+//!
+//! The evaluator drives a property function once per left row, so a pattern that
+//! binds the document position opens the relation once for every candidate
+//! document. A bound document is filtered *after* ranking, so no ceiling is
+//! offered to the ranker on that path (see `TextSearchRelation::open`) — which
+//! left every one of those invocations ranking the whole index and then
+//! discarding all but one row's worth of it.
+//!
+//! `search_bound_doc_every_partition` is that shape and
+//! `search_bound_doc_pushed_down` is the shape after
+//! `TextIndex::partitions_holding_subject` narrows the filter to the partitions
+//! the subject actually occupies. Both are measured here rather than argued
+//! about, and neither asserts a number: the reduction is a complexity claim —
+//! `O(all partitions)` becomes `O(that subject's partitions)` — and it is the
+//! test suite, not this file, that proves the two produce the same rows.
 //!
 //! # The corpus is generated, not sampled
 //!
@@ -145,6 +165,53 @@ fn corpus() -> Arc<RdfDataset> {
         .expect("the generated corpus must validate")
 }
 
+/// The language tags the multi-partition corpus spreads its documents across.
+///
+/// Eight, so the bound-document measurement has a meaningful ratio to report:
+/// ranking every partition touches eight corpora where ranking the bound
+/// subject's touches one.
+const LANGUAGES: [&str; 8] = ["en", "fr", "de", "es", "it", "nl", "pt", "sv"];
+
+/// The same generated text as [`corpus`], but with each document's literal
+/// language-tagged so the index holds one partition per [`LANGUAGES`] entry.
+///
+/// The generator is re-seeded identically, so the two corpora hold the same
+/// text and differ only in partitioning — which is what makes the bound-document
+/// pair below a measurement of the partition walk rather than of two different
+/// bodies of text.
+fn partitioned_corpus() -> Arc<RdfDataset> {
+    let mut generator = SplitMix64::new(SEED);
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+
+    let mut text = String::new();
+    for document in 0..DOCUMENTS {
+        text.clear();
+        for token in 0..TOKENS_PER_DOCUMENT {
+            if token > 0 {
+                text.push(' ');
+            }
+            text.push_str("term");
+            let ordinal = generator.skewed_term();
+            for digit in (0..4).rev() {
+                let place = 10_u64.pow(digit);
+                let value = (ordinal / place) % 10;
+                text.push(char::from(
+                    b'0' + u8::try_from(value).expect("a digit is one byte"),
+                ));
+            }
+        }
+        let subject = builder.intern_iri(&format!("https://example.org/doc/{document:04}"));
+        let language = LANGUAGES[document as usize % LANGUAGES.len()];
+        let literal = builder.intern_literal(RdfLiteral::language_tagged(&text, language));
+        builder.push_quad(subject, note, literal, None);
+    }
+
+    builder
+        .freeze()
+        .expect("the generated corpus must validate")
+}
+
 /// The configuration every measurement here builds under.
 fn configuration() -> TextIndexConfig {
     TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
@@ -215,6 +282,49 @@ fn benchmark(criterion: &mut Criterion) {
                 .postings(black_box(&partition), black_box("term0000"))
                 .map(|(document, positions)| u64::from(document) + positions.len() as u64)
                 .sum::<u64>()
+        });
+    });
+
+    // ── the bound-document pair ─────────────────────────────────────────────
+    //
+    // One index, one needle, one bound subject; the only difference is whether
+    // the filter names the partitions that subject occupies.
+    let spread = partitioned_corpus();
+    let spread_index =
+        TextIndex::from_dataset(&*spread, &config).expect("the partitioned corpus must build");
+    let subject = TermValue::iri("https://example.org/doc/0007");
+    let narrowed = PartitionFilter::unconstrained()
+        .restricted_to(spread_index.partitions_holding_subject(&subject));
+    assert_eq!(
+        narrowed.keys().map(<[_]>::len),
+        Some(1),
+        "the bound subject must occupy exactly one of the corpus's partitions, or the pair below \
+         measures nothing"
+    );
+
+    group.bench_function("search_bound_doc_every_partition", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&spread_index),
+                black_box(&query),
+                black_box(&filter),
+                None,
+                None,
+            )
+            .expect("a well-formed needle ranks")
+        });
+    });
+
+    group.bench_function("search_bound_doc_pushed_down", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&spread_index),
+                black_box(&query),
+                black_box(&narrowed),
+                None,
+                None,
+            )
+            .expect("a well-formed needle ranks")
         });
     });
 
