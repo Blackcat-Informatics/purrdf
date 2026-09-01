@@ -21,8 +21,13 @@
 pub enum TextError {
     /// The caller's configuration is not usable as written — an absent
     /// property-function IRI (PurRDF mints none, so there is nothing to fall
-    /// back to), an empty set of indexed predicates, or a BM25 parameter
-    /// outside its defined range.
+    /// back to), an empty set of indexed predicates, or a predicate that is not
+    /// an IRI.
+    ///
+    /// A BM25 parameter is deliberately *not* on that list: `k1` and `b` are
+    /// crate constants rather than caller knobs, so there is no range for a
+    /// caller to leave. See [`crate::K1`] for why optionality there would be a
+    /// semantic change per consumer rather than a convenience.
     Config(String),
 
     /// The input data cannot be indexed or queried as given — a predicate the

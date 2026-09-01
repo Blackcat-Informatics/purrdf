@@ -45,6 +45,31 @@ engine. The logarithm here is a fixed-length series over integers — a fixed
 iteration count, never a convergence test — so its result is a pure function of
 its input on every target, and a ranking is reproducible byte for byte.
 
+## BM25 without knobs, ranked within a partition
+
+The BM25 constants `k1 = 1.2` and `b = 0.75` are the canonical values from the
+retrieval literature, and they are **crate constants rather than caller
+parameters**. PurRDF is a carrier, and optionality that changes semantics per
+consumer is forbidden: two callers must not get different scores — and so
+different ranks — out of the same index and the same needle.
+
+Corpus statistics are computed per `(graph, language)` partition, so a score is a
+number relative to one corpus. `?rank` is therefore the 1-based position of a
+document **within its own partition**, never a global position; a rank spanning
+partitions would order numbers computed against different corpora. Rows are
+emitted in `(partition key ASC, rank ASC)` order, and a query wanting one ranked
+list binds `?lang` and `?graph` or uses a single-partition index.
+
+Within a partition the order is `(score DESC, document id ASC)`. Document ids are
+assigned only after sorting on `(graph, subject, language)`, so ascending id is
+ascending canonical order and the tie-break is reproducible across independently
+built indexes. Because ids are distinct, the order is strict and total.
+
+A score reaches a consumer as an `xsd:decimal` of fixed width, so two rows can
+report the same `?score` while carrying different `?rank` — whether their scores
+are exactly equal or merely equal once rounded. `ORDER BY ?rank` is the
+reproducing idiom; `ORDER BY DESC(?score)` can disagree with it.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
