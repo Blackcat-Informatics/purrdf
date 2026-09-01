@@ -16,17 +16,21 @@
 //! XFAIL entries must actually fail: a passing xfail is a test error (it
 //! means the ledger is stale).
 //!
-//! Every ShExC parse here is given the document's own retrieval IRI as base —
-//! the convention `validation_conformance.rs` and the upstream harness both use.
-//! Nineteen corpus schemas carry a relative `IMPORT` (`IMPORT <1dot>`) and no
-//! `BASE` directive, so without one they have no way to denote what they import.
+//! Every parse here — ShExC *and* ShExJ — is given the document's own retrieval
+//! IRI as base, the convention `validation_conformance.rs` and the upstream
+//! harness both use. Nineteen corpus schemas carry a relative `IMPORT` (`IMPORT
+//! <1dot>`) and no `BASE` directive, and their frozen `.json` ground truth stores
+//! the same relative reference (`"imports": ["1dot"]`); without a base neither
+//! side has any way to denote what it imports. ShExJ is a JSON-LD dialect, so its
+//! IRI-valued members are document-relative exactly as ShExC's IRIREFs are, which
+//! is why the two syntaxes reach identical ASTs from one base rather than needing
+//! the ground truth patched up after the fact.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use purrdf_iri::BaseIri;
-use purrdf_shex::{Schema, check_structure, parse_shexc, parse_shexj};
+use purrdf_shex::{check_structure, parse_shexc, parse_shexj};
 
 /// Exact corpus sizes (the vendored tree is byte-frozen; a change here means
 /// the vectors were touched, which the harness must notice).
@@ -88,29 +92,6 @@ fn document_url(path: &Path) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or_else(|| panic!("corpus document has no file name: {path:?}"));
     format!("{CORPUS_URL}{dir}/{file}")
-}
-
-/// Put the frozen ShExJ ground truth on the same footing as the ShExC parse by
-/// resolving its `imports` against `base`.
-///
-/// The upstream `.json` documents store an import as the RELATIVE reference the
-/// `.shex` wrote (`"imports": ["1dot"]`), because upstream resolves an import only
-/// at the moment it fetches it. ShExJ itself admits no relative IRI, and ShExC
-/// resolves the `IMPORT` IRIREF against the base in force, so the two sides would
-/// otherwise disagree on 19 documents for a reason that has nothing to do with the
-/// parse. `imports` is the only relative position anywhere in the corpus's JSON.
-fn resolve_ground_truth_imports(truth: &mut Schema, base: &str) {
-    let base = BaseIri::parse(base).expect("the corpus URL is an absolute IRI");
-    truth.imports = truth
-        .imports
-        .iter()
-        .map(|import| {
-            base.resolve(import)
-                .unwrap_or_else(|e| panic!("ground-truth import {import:?}: {e}"))
-                .as_str()
-                .to_owned()
-        })
-        .collect();
 }
 
 #[test]
@@ -228,7 +209,7 @@ fn schemas_shexj_all_parse() {
     for path in &pairs {
         let name = stem(path).to_owned();
         let source = fs::read_to_string(path).expect("read .json");
-        let result = parse_shexj(&source);
+        let result = parse_shexj(&source, Some(&document_url(path)));
         if xfail.contains(name.as_str()) {
             if result.is_ok() {
                 stale_xfails.push(name);
@@ -268,11 +249,16 @@ fn schemas_shexc_matches_shexj_ground_truth() {
         let url = document_url(&shex_path);
         let shex = fs::read_to_string(&shex_path).expect("read .shex");
         let json = fs::read_to_string(&json_path).expect("read .json");
-        let (Ok(from_shexc), Ok(mut truth)) = (parse_shexc(&shex, Some(&url)), parse_shexj(&json))
-        else {
+        // The SAME base for both syntaxes: the ShExC document's retrieval IRI. The
+        // `.json` sibling differs from it only in its final extension, and no
+        // corpus document's meaning depends on that segment, so one base keeps the
+        // comparison about the parse rather than about which file it came from.
+        let (Ok(from_shexc), Ok(truth)) = (
+            parse_shexc(&shex, Some(&url)),
+            parse_shexj(&json, Some(&url)),
+        ) else {
             continue; // parse failures are owned by the two tests above
         };
-        resolve_ground_truth_imports(&mut truth, &url);
         compared += 1;
         let matches = from_shexc == truth;
         if xfail.contains(name.as_str()) {

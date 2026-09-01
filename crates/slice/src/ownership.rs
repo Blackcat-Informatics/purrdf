@@ -29,6 +29,7 @@
 //! produces a dependency edge.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 
 use purrdf::{RdfDataset, TermId, TermRef};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
@@ -345,7 +346,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                 if !is_ownership_bearing(&artifact.role) {
                     continue;
                 }
-                let store = parse_rdf_artifact(artifact)?;
+                let store = parse_rdf_artifact(artifact, &record.slice_dir)?;
                 let facts = inspect_rdf_dataset(store.inner(), self.catalog.vocab());
                 // Collect rdfs:isDefinedBy claims.
                 for (subject, owner) in &facts.is_defined_by {
@@ -511,7 +512,7 @@ impl<'a> OwnershipAnalyzer<'a> {
 
                 let key = (record_index, artifact_index);
                 if let std::collections::hash_map::Entry::Vacant(entry) = rdf_facts.entry(key) {
-                    let Ok(store) = parse_rdf_artifact(artifact) else {
+                    let Ok(store) = parse_rdf_artifact(artifact, &record.slice_dir) else {
                         continue;
                     };
                     entry.insert(inspect_rdf_dataset(store.inner(), self.catalog.vocab()));
@@ -673,13 +674,23 @@ struct RdfArtifactFacts {
 }
 
 /// Parse an RDF artifact's bytes into a native dataset (lenient for `@x-purrdf-*`
-/// language tags). Hard-fails on a syntax error.
-fn parse_rdf_artifact(artifact: &ArtifactRecord) -> Result<Dataset, SliceError> {
+/// language tags), under the artifact's **own** RFC-8089 retrieval IRI. Hard-fails on a
+/// syntax error.
+///
+/// `slice_dir` is the artifact's on-disk home, so `slice_dir/logical_path` is the file
+/// the bytes were read from and therefore the document's retrieval IRI (RFC-3986
+/// §5.1.3). Without it, a module that spells its terms relative to itself — the
+/// idiomatic `<> rdfs:isDefinedBy …` / `<Term> a owl:Class` form — could not be read at
+/// all, so its terms would vanish from the one-validated-owner gate.
+fn parse_rdf_artifact(artifact: &ArtifactRecord, slice_dir: &Path) -> Result<Dataset, SliceError> {
     // A malformed ownership-bearing artifact must FAIL LOUDLY, never be silently
     // dropped — a swallowed parse error would hide a term from the
     // one-validated-owner gate and miscompute the dependency graph
     // (no-optionality / hard-fail doctrine).
-    Dataset::parse_turtle(artifact.content.as_slice(), &artifact.logical_path)
+    Dataset::parse_file(
+        artifact.content.as_slice(),
+        &slice_dir.join(&artifact.logical_path),
+    )
 }
 
 /// Inspect one parsed RDF artifact once. Borrowed IRI slices are deduplicated
@@ -1095,7 +1106,8 @@ mod rdf_fact_tests {
              ex:term a owl:Class ; rdfs:isDefinedBy ex:slice .\n\
              ex:record ex:mentions <<( ex:term ex:edge \"value\"^^ex:datatype )>> .\n"
         );
-        let store = Dataset::parse_turtle(input.as_bytes(), "facts.ttl").expect("valid RDF 1.2");
+        let store =
+            Dataset::parse_turtle(input.as_bytes(), None, "facts.ttl").expect("valid RDF 1.2");
         let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
 
         assert_eq!(
@@ -1135,7 +1147,8 @@ mod rdf_fact_tests {
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              math:Quantity a owl:Class ; rdfs:isDefinedBy ex:slices/math .\n"
         );
-        let store = Dataset::parse_turtle(input.as_bytes(), "facts.ttl").expect("valid RDF 1.2");
+        let store =
+            Dataset::parse_turtle(input.as_bytes(), None, "facts.ttl").expect("valid RDF 1.2");
         let quantity = NamedNode::new_unchecked(format!("{MATH}Quantity"));
 
         // Declared: the term is owned, exactly as a framework-namespace term is.

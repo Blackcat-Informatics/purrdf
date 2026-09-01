@@ -34,6 +34,11 @@ pub(crate) const MAX_TERM_NESTING_DEPTH: usize = 16;
 pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
     let term_count = builder.term_count();
 
+    // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
+    //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
+    //    every positional check below would report a downstream symptom of it.
+    require_absolute_iris(builder)?;
+
     // 1. Every interned triple term references in-range ids, has an IRI predicate
     //    and a non-literal subject, and the whole nesting forest is acyclic and
     //    depth-bounded.
@@ -87,6 +92,33 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     }
 
     Ok(())
+}
+
+/// Enforce the IR-boundary absoluteness invariant: no interned IRI term may be a
+/// relative IRI reference.
+///
+/// The check itself already ran, once per DISTINCT IRI, on the miss path of the
+/// builder's store-once interner (`super::absolute::check_absolute`); this reads the
+/// recorded verdict rather than re-walking the term table, so freeze costs nothing
+/// extra for the overwhelmingly common case of a dataset with no violation.
+///
+/// The reported `code` is [`purrdf_iri::IriError::diagnostic_code`] verbatim — the
+/// workspace's single owner of these spellings — so a relative IRI reaching the IR
+/// through a non-codec ingress reports exactly the code the codecs report.
+fn require_absolute_iris(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
+    let Some((iri, err)) = builder.relative_iri() else {
+        return Ok(());
+    };
+    let diagnostic = diag(
+        err.diagnostic_code(),
+        format!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
+    );
+    // The `Display` text above already carries the remedy, but `with_detail` keeps it
+    // available as its own field for consumers that render the hint separately.
+    Err(match err.remedy_hint() {
+        Some(hint) => diagnostic.with_detail(hint),
+        None => diagnostic,
+    })
 }
 
 /// Validate every interned triple term: in-range components, IRI predicate,

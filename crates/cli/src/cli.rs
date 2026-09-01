@@ -102,19 +102,74 @@ use crate::source::TransportPolicy;
 fn parse_base_iri(raw: &str) -> Result<String, String> {
     match purrdf_iri::BaseIri::parse(raw) {
         Ok(base) => Ok(base.as_str().to_owned()),
-        Err(error) => {
-            // A path-shaped argument is the likely intent, so name the spelling that
-            // would have worked rather than only restating the rule.
-            let hint = if raw.starts_with('/') || raw.starts_with('.') {
-                format!(" did you mean `file://{}`?", raw.trim_start_matches('.'))
-            } else {
-                String::new()
-            };
-            Err(format!(
-                "a base IRI must be absolute (with a scheme): {error}.{hint}"
-            ))
-        }
+        Err(error) => Err(format!(
+            "a base IRI must be absolute (with a scheme): {error}.{}",
+            path_shaped_hint(raw)
+        )),
     }
+}
+
+/// The `did you mean …?` half of a rejected `--base`, for a value shaped like a filesystem
+/// path.
+///
+/// The suggestion is DERIVED, never spliced. The previous version built it by trimming the
+/// leading dots off the argument and prefixing `file://`, which named a directory the
+/// operator did not write: `./vocab/` suggested `file:///vocab/`, and `../vocab/` suggested
+/// the same thing, because `trim_start_matches` strips every leading dot. A diagnostic that
+/// confidently names the wrong fix is worse than one that names none, so a dot-relative
+/// value is RESOLVED through the same [`crate::source::retrieval_base_iri`] the pipeline
+/// derives a retrieval IRI with, and a value that does not resolve gets the rule and no
+/// path-specific suggestion at all.
+fn path_shaped_hint(raw: &str) -> String {
+    match path_shaped_base(raw) {
+        Some(iri) => format!(" did you mean `{iri}`?"),
+        // A relative path is not a base IRI and, unresolved, there is no honest absolute
+        // spelling to offer for it — so state the rule and stop.
+        None if is_relative_path(raw) => {
+            " a relative filesystem path is not a base IRI, and this one does not resolve \
+             against the working directory: pass an absolute `file://` IRI."
+                .to_owned()
+        }
+        None => String::new(),
+    }
+}
+
+/// The absolute `file://` IRI a path-shaped `--base` value denotes, or `None` when the value
+/// is not path-shaped or cannot be resolved.
+fn path_shaped_base(raw: &str) -> Option<String> {
+    if is_relative_path(raw) {
+        let mut iri = crate::source::retrieval_base_iri(raw).ok()?;
+        // A DIRECTORY base ends in `/`. RFC-3986 §5.2.4 resolution replaces a base's last
+        // segment, so `file:///x/vocab` and `file:///x/vocab/` are different bases and only
+        // the second is the directory the operator named.
+        if !iri.ends_with('/') && std::path::Path::new(raw).is_dir() {
+            iri.push('/');
+        }
+        return Some(iri);
+    }
+    is_absolute_path(raw).then(|| crate::source::file_iri_for_absolute_path(raw))
+}
+
+/// Whether `raw` is a DOT-RELATIVE filesystem path — one whose meaning depends on the
+/// working directory, so nothing but the filesystem can say which IRI it denotes.
+fn is_relative_path(raw: &str) -> bool {
+    raw.starts_with('.')
+}
+
+/// Whether `raw` is an ABSOLUTE filesystem path in this platform's spelling: a POSIX
+/// `/path`, a Windows UNC `\\host\share`, or a Windows drive path `C:\dir` / `C:/dir`.
+///
+/// An absolute path needs no filesystem lookup to name its IRI, which is what lets the
+/// suggestion stand for a path that does not exist yet.
+fn is_absolute_path(raw: &str) -> bool {
+    if raw.starts_with('/') || raw.starts_with(r"\\") {
+        return true;
+    }
+    let mut chars = raw.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
+    )
 }
 
 /// The `purrdf` command-line interface.
@@ -247,9 +302,14 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the input. When
-        /// omitted, a filesystem input is parsed under its own `file://` retrieval
-        /// IRI; stdin has none, so a relative IRI there is an error.
+        /// Base IRI, on BOTH legs of the conversion. A relative IRI in the input
+        /// resolves against it while parsing, and a target syntax that can write a
+        /// base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
+        /// output document's base and relativizes against it; a target that cannot
+        /// (ntriples, nquads, trix, hextuples) writes absolute IRIs. When omitted, a
+        /// filesystem input still parses under its own `file://` retrieval IRI —
+        /// stdin has none, so a relative IRI there is an error — and no base is
+        /// written on output.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Materialize an entailment regime's closure in memory before
@@ -287,7 +347,10 @@ pub(crate) enum Command {
         #[arg(long)]
         data: String,
         /// Base IRI for resolving relative IRIs while parsing the data AND in the
-        /// query text.
+        /// query text. A CONSTRUCT/DESCRIBE graph written through an RDF
+        /// `--results-format` that can express a base (turtle, trig, rdfxml, jsonld,
+        /// yamlld) is additionally serialized under it; a SPARQL-results
+        /// serialization has no base surface to carry one.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Materialize an entailment regime's closure in memory before querying
@@ -410,7 +473,10 @@ pub(crate) enum Command {
         /// Output format override, required when `--output -` writes stdout.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI for parsing the data and UPDATE request.
+        /// Base IRI for parsing the data and the UPDATE request, and for the
+        /// mutated dataset on the way out: a `--to` syntax that can express a base
+        /// (turtle, trig, rdfxml, jsonld, yamlld) writes it and relativizes against
+        /// it.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Bound abstract execution steps. Inclusive; zero trips on the first charge.
@@ -459,9 +525,12 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the input. When
-        /// omitted, a filesystem input is parsed under its own `file://` retrieval
-        /// IRI; stdin has none, so a relative IRI there is an error.
+        /// Base IRI, on BOTH legs. A relative IRI in the input resolves against it
+        /// while parsing, and a target syntax that can write a base directive
+        /// (turtle, trig, rdfxml, jsonld, yamlld) emits it as the closure document's
+        /// base and relativizes against it. When omitted, a filesystem input still
+        /// parses under its own `file://` retrieval IRI; stdin has none, so a
+        /// relative IRI there is an error.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
@@ -514,7 +583,10 @@ pub(crate) enum Command {
         /// `--import` document; inferred from each path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing those documents.
+        /// Base IRI for resolving relative IRIs while parsing those documents. A
+        /// PARSE base only: the answer is a verdict rather than a document, and each
+        /// input crosses the entailment boundary as N-Quads, whose grammar can
+        /// express no base directive.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Answer path `OUT`, or `-` for stdout.
@@ -599,7 +671,9 @@ pub(crate) enum Command {
         /// Input format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the input.
+        /// Base IRI for resolving relative IRIs while parsing the input. A PARSE
+        /// base only: this command answers with a verdict and a certificate rather
+        /// than a document, so there is no serializer for one to reach.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
@@ -620,7 +694,9 @@ pub(crate) enum Command {
         /// Input RDF/pack format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing input RDF.
+        /// Base IRI for resolving relative IRIs while parsing input RDF. A PARSE
+        /// base only: the output is a carrier archive rather than an RDF document,
+        /// so no serializer leg reads it.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
@@ -641,9 +717,11 @@ pub(crate) enum Command {
         /// Native RDF output syntax.
         #[arg(long, value_enum)]
         to: CliNativeRdfFormat,
-        /// Base IRI for resolving relative IRIs while parsing the input. When
-        /// omitted, a filesystem input is parsed under its own `file://` retrieval
-        /// IRI; stdin has none, so a relative IRI there is an error.
+        /// Base IRI the RDF SERIALIZER writes as the output document's base and
+        /// relativizes against, on a `--to` syntax that can express one (turtle,
+        /// trig, rdfxml, jsonld, yamlld). `lift` reads a USTAR carrier archive
+        /// rather than an RDF document, so there is no parse leg for a base to feed
+        /// and no `file://` retrieval IRI is derived for the input.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Canonical USTAR input path `IN`, or `-` for stdin.
@@ -700,7 +778,9 @@ pub(crate) enum Command {
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
         /// graph is a separate document and resolves against its OWN `file://` retrieval
-        /// IRI (or its own `@base`), so this flag never silently retargets it.
+        /// IRI (or its own `@base`), so this flag never silently retargets it. A PARSE
+        /// base only: the validation report is a graph the engine mints with absolute
+        /// terms, and it is serialized with no base rather than under this one.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// How to serialize the validation report: an RDF syntax for the SHACL results
@@ -771,8 +851,13 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the data graph, the schema
-        /// (ShExC only — ShExJ has no relative-IRI syntax), and the shape map.
+        /// Base IRI for the relative IRIs of the DATA graph and the MAP — the two inputs
+        /// with no base of their own (a shape map is command-line text, so `--base` is the
+        /// only base it can ever have). NOT the schema's: `--schema` is an independent
+        /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
+        /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
+        /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
+        /// Each `--import`ed document likewise resolves against the import IRI.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
@@ -814,8 +899,11 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the input; when omitted a
-        /// filesystem input is parsed under its own `file://` retrieval IRI.
+        /// Base IRI, on BOTH legs: relative IRIs in the input resolve against it while
+        /// parsing, and a `--to` syntax that can write a base directive (turtle, trig,
+        /// rdfxml, jsonld, yamlld) emits it as the description's base and relativizes
+        /// against it. When omitted, a filesystem input is still parsed under its own
+        /// `file://` retrieval IRI.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).

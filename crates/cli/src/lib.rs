@@ -94,6 +94,11 @@ mod source;
 mod update;
 mod validate;
 
+// The one derivation of a filesystem input's RFC-8089 `file://` retrieval IRI, re-exported
+// so the integration tests assert against the pipeline's own function instead of keeping a
+// second transcription of it that can silently diverge per platform.
+pub use crate::source::file_retrieval_iri;
+
 use std::fs::File;
 use std::io::Read as _;
 
