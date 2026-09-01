@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::datatype::CdtDatatype;
+use crate::error::CdtError;
 use crate::term::{CdtEntry, CdtKey, CdtTerm, CdtTripleTerm};
 
 /// A parsed composite value.
@@ -56,37 +57,60 @@ impl CdtValue {
 
     /// Build a map from entries in any order, establishing the key-order invariant.
     ///
-    /// Returns `None` when two entries share a key — a map with duplicate keys is
-    /// not a value this type can hold, so the constructor refuses rather than
-    /// silently keeping one of them.
+    /// # A duplicate key is a diagnostic, not a bare refusal
+    ///
+    /// A map with two entries under one key is not a value this type can hold, so the
+    /// constructor refuses rather than silently keeping one of them — and it says
+    /// **which** key collided, in the same [`CdtError::DuplicateMapKey`] the scanner
+    /// raises, carrying the key's canonical lexical form
+    /// ([`crate::canonical_key_lexical`]). A caller that is handed a bare "no" cannot
+    /// report what went wrong, so it either invents a message or drops the
+    /// information; neither is an admissible outcome.
+    ///
+    /// The `offset` a scanner error carries is a position in the lexical form that was
+    /// scanned, and a programmatically built map has no such input. The offset here is
+    /// therefore the position the offending key **would** occupy in the map's own
+    /// canonical form — the one lexical form this value is guaranteed to have — so it
+    /// still points at the key it names.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use purrdf_cdt::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtValue};
+    /// use purrdf_cdt::{CdtEntry, CdtError, CdtKey, CdtLiteral, CdtTerm, CdtValue};
     ///
     /// let entry = |k: &str, v: &str| CdtEntry {
     ///     key: CdtKey::Literal(CdtLiteral::plain(k)),
     ///     value: CdtTerm::Literal(CdtLiteral::plain(v)),
     /// };
     /// // Authoring order does not reach the rendered bytes.
-    /// let a = CdtValue::map(vec![entry("b", "2"), entry("a", "1")]).unwrap();
-    /// let b = CdtValue::map(vec![entry("a", "1"), entry("b", "2")]).unwrap();
+    /// let a = CdtValue::map(vec![entry("b", "2"), entry("a", "1")])?;
+    /// let b = CdtValue::map(vec![entry("a", "1"), entry("b", "2")])?;
     /// assert_eq!(a.canonical_lexical(), b.canonical_lexical());
     ///
-    /// // A duplicate key is refused, not silently deduplicated.
-    /// assert!(CdtValue::map(vec![entry("a", "1"), entry("a", "2")]).is_none());
+    /// // A duplicate key is refused, and the refusal names the key.
+    /// let error = CdtValue::map(vec![entry("a", "1"), entry("a", "2")]).unwrap_err();
+    /// let CdtError::DuplicateMapKey { key, .. } = error else { unreachable!() };
+    /// assert_eq!(key, "\"a\"^^<http://www.w3.org/2001/XMLSchema#string>");
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
-    #[must_use]
-    pub fn map(mut entries: Vec<CdtEntry>) -> Option<Self> {
+    pub fn map(mut entries: Vec<CdtEntry>) -> Result<Self, CdtError> {
         entries.sort_by(|x, y| crate::ops::total_key_cmp(&x.key, &y.key));
-        if entries
-            .windows(2)
-            .any(|w| crate::ops::total_key_cmp(&w[0].key, &w[1].key) == Ordering::Equal)
-        {
-            return None;
+        // `{`, then each preceding entry as `key` `:` `value` `,`.
+        let mut offset = 1usize;
+        for window in entries.windows(2) {
+            // `key` `:` `value` `,` — the two punctuation bytes are the `+ 2`.
+            offset = offset
+                .saturating_add(crate::render::key_lexical_len(&window[0].key))
+                .saturating_add(crate::render::term_lexical_len(&window[0].value))
+                .saturating_add(2);
+            if crate::ops::total_key_cmp(&window[0].key, &window[1].key) == Ordering::Equal {
+                return Err(CdtError::DuplicateMapKey {
+                    offset,
+                    key: crate::render::canonical_key_lexical(&window[0].key),
+                });
+            }
         }
-        Some(Self::Map(entries))
+        Ok(Self::Map(entries))
     }
 
     /// The composite datatype of this value.

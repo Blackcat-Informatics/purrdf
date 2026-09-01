@@ -148,7 +148,7 @@ fn entries_strategy(term: BoxedStrategy<CdtTerm>) -> impl Strategy<Value = Vec<C
                 .into_iter()
                 .map(|(key, value)| CdtEntry { key, value })
                 .collect();
-            match CdtValue::map(entries)? {
+            match CdtValue::map(entries).ok()? {
                 CdtValue::Map(entries) => Some(entries),
                 CdtValue::List(_) => None,
             }

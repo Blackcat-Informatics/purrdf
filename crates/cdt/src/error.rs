@@ -98,8 +98,14 @@ pub enum CdtError {
     /// Two entries of one map have the same key. SEP-0009 requires map keys to be
     /// pairwise distinct; see [`crate::parse_map`] for the exact distinctness rule
     /// this crate enforces.
+    ///
+    /// Raised by [`crate::parse_map`] for a scanned map and by
+    /// [`CdtValue::map`](crate::CdtValue::map) for a programmatically built one — the
+    /// two differ only in what `offset` indexes into, which each documents.
     DuplicateMapKey {
-        /// Byte offset of the first byte of the *second* occurrence of the key.
+        /// Byte offset of the first byte of the *second* occurrence of the key: into
+        /// the scanned lexical form, or — for a map with no scanned form — into the
+        /// canonical form the map would have.
         offset: usize,
         /// The canonical lexical form of the duplicated key.
         key: String,

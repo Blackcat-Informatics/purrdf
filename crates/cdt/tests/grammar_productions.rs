@@ -358,6 +358,35 @@ fn ill_formed_duplicate_map_key() {
     );
 }
 
+/// A map built programmatically reports the duplicate key too, and its offset points
+/// at the key inside the canonical form the map would have had.
+#[test]
+fn a_programmatic_duplicate_map_key_carries_the_same_diagnostic() {
+    let entry = |key: &str, value: &str| CdtEntry {
+        key: CdtKey::Literal(CdtLiteral::plain(key)),
+        value: CdtTerm::Literal(CdtLiteral::plain(value)),
+    };
+    let error = CdtValue::map(vec![entry("a", "1"), entry("a", "2")])
+        .expect_err("two entries under one key are not a map");
+    let CdtError::DuplicateMapKey { offset, key } = error else {
+        panic!("expected a duplicate-key error, got {error:?}");
+    };
+    let rendered = "\"a\"^^<http://www.w3.org/2001/XMLSchema#string>";
+    assert_eq!(key, rendered);
+    // `{` + the first entry (`key` `:` `value` `,`).
+    let first_value = "\"1\"^^<http://www.w3.org/2001/XMLSchema#string>";
+    assert_eq!(offset, 1 + rendered.len() + 1 + first_value.len() + 1);
+
+    // A map whose keys are pairwise distinct is built, sorted into key order.
+    let ok = CdtValue::map(vec![entry("b", "2"), entry("a", "1")]).expect("distinct keys");
+    assert_eq!(
+        ok.canonical_lexical(),
+        format!(
+            "{{{rendered}:{first_value},\"b\"^^<http://www.w3.org/2001/XMLSchema#string>:\"2\"^^<http://www.w3.org/2001/XMLSchema#string>}}"
+        )
+    );
+}
+
 #[test]
 fn ill_formed_relative_iriref() {
     let error = parse_list("[<relative/path>]").unwrap_err();
