@@ -17,10 +17,20 @@ use purrdf_sparql_eval::NativeSparqlEngine;
 
 use crate::paths;
 
-/// The sentinel base IRI the manifest is parsed against, so a relative file
-/// reference `<agg01.rq>` resolves to `<BASE>agg01.rq` and the local name is
-/// recoverable by stripping the prefix.
-const BASE: &str = "http://purrdf.test/manifest/";
+/// The ROOT of the sentinel base IRI space every manifest is parsed against.
+///
+/// Each manifest gets its OWN base below this root — see [`BaseResolver`] — so a
+/// relative file reference `<agg01.rq>` resolves to `<base>agg01.rq` and the file
+/// it names is recoverable from the IRI alone.
+///
+/// The root itself denotes the Cargo workspace root, so the sentinel IRI space
+/// mirrors the workspace tree exactly. It is never a manifest's own base (except
+/// for the degenerate case of a manifest sitting at the workspace root, which no
+/// corpus does): using ONE constant base for every manifest is what made two
+/// manifests that each declare the relative `@prefix : <manifest#>` mint
+/// byte-identical case IRIs, and the [`crate::xfail`] ledger — which is global —
+/// could then not tell the two apart.
+pub(crate) const BASE_ROOT: &str = "http://purrdf.test/manifest/";
 
 const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 
@@ -116,6 +126,17 @@ pub enum ExpectedResult {
 pub struct SparqlTestCase {
     /// The full test IRI (used for diagnostics and xfail matching).
     pub iri: String,
+    /// The sentinel base IRI of the manifest that declared this case (see
+    /// [`BaseResolver`]), ending in `/`.
+    ///
+    /// Carried on the case because the base is a PER-MANIFEST fact and every stage
+    /// that resolves a relative IRI for this case must use the SAME one. A query
+    /// like `GRAPH <exists02.ttl> { … }` names its graph relatively, and that
+    /// reference has to land on the identical IRI the manifest's
+    /// `qt:graphData <exists02.ttl>` produced — if the loader and the evaluator
+    /// resolved against different bases the graph would simply not be found, and
+    /// the case would fail with an empty result rather than a diagnosable error.
+    pub base: String,
     /// The human-readable `mf:name`.
     pub name: String,
     /// The test kind.
@@ -150,12 +171,11 @@ pub struct SparqlTestCase {
 ///
 /// Returns a message on a read/parse failure or a malformed manifest.
 pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
+    let resolver = BaseResolver::new(manifest_path)?;
     let bytes = std::fs::read(manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
-    let dataset = purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE))
+    let dataset = purrdf::parse_dataset(&bytes, "text/turtle", Some(&resolver.base))
         .map_err(|e| format!("parse manifest {}: {e}", manifest_path.display()))?;
-
-    let dir = paths::manifest_dir(manifest_path);
 
     // One row per (test × data × graphData × serviceData × result) combination;
     // grouped by ?test below. Property paths walk the rdf:List of entries.
@@ -187,6 +207,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
             .entry(test_iri.clone())
             .or_insert_with(|| SparqlTestCase {
                 iri: test_iri.clone(),
+                base: resolver.base.clone(),
                 name: lexical_of(row, "name").unwrap_or_default(),
                 kind,
                 query: PathBuf::new(),
@@ -204,30 +225,30 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
 
         // The query file: qt:query for eval tests, else mf:action itself (syntax).
         if let Some(q) = iri_of(row, "query") {
-            entry.query = local_path(&dir, &q);
+            entry.query = resolver.path(&q)?;
         } else if entry.query.as_os_str().is_empty()
             && let Some(act) = iri_of(row, "act")
         {
-            entry.query = local_path(&dir, &act);
+            entry.query = resolver.path(&act)?;
         }
         push_unique_path(
             &mut entry.data,
-            iri_of(row, "data").map(|i| local_path(&dir, &i)),
+            resolve_opt(&resolver, iri_of(row, "data"))?,
         );
         if let Some(gd) = iri_of(row, "graphData") {
-            let path = local_path(&dir, &gd);
+            let path = resolver.path(&gd)?;
             if !entry.graph_data.iter().any(|(_, p)| *p == path) {
                 entry.graph_data.push((gd, path));
             }
         }
         if let (Some(ep), Some(sd)) = (iri_of(row, "serviceEp"), iri_of(row, "serviceData")) {
-            let path = local_path(&dir, &sd);
+            let path = resolver.path(&sd)?;
             if !entry.service_data.iter().any(|(e, _)| *e == ep) {
                 entry.service_data.push((ep, path));
             }
         }
         if let Some(result) = iri_of(row, "result") {
-            entry.expected = classify_result(&local_path(&dir, &result));
+            entry.expected = classify_result(&resolver.path(&result)?);
         }
         if entry.aggregate_namespace.is_none()
             && let Some(ns) = lexical_of(row, "aggNs")
@@ -243,6 +264,13 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
     // every `mf:entries` member directly (no mandatory triple beyond list membership)
     // and fail loudly on any member that did not turn into a loaded case, naming it,
     // rather than letting the manifest quietly advertise fewer cases than it declares.
+    //
+    // The declared set is a SET, not a slot count: an `rdf:List` may name the same
+    // test IRI in two cells (the vendored SEP-0009 `orderby` manifest lists
+    // `:order-map-03` twice), and a repeated member denotes the SAME test. Running
+    // it once is the only sound reading — running it per slot would inflate the
+    // pass tally by re-counting one test — so the repeat collapses here and in
+    // `by_test` alike, and the two counts still agree.
     let declared_list = list_entry_iris(&dataset)?;
     let declared: std::collections::BTreeSet<String> = declared_list.into_iter().collect();
     let missing: Vec<&String> = declared
@@ -271,7 +299,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
     // with a dedicated pass so the `ut:` shape (nested graphData blank nodes) is
     // read explicitly rather than shoe-horned into the query SELECT.
     if cases.iter().any(|c| c.kind == TestKind::UpdateEval) {
-        load_update_details(&dataset, &dir, &mut cases)?;
+        load_update_details(&dataset, &resolver, &mut cases)?;
     }
     // Entailment tests declare an `sd:entailmentRegime` list; select the regime
     // the native reasoner should materialize before the query runs.
@@ -383,7 +411,7 @@ type ExpectedState = (Vec<PathBuf>, Vec<(String, PathBuf)>);
 /// the expected post-state (`mf:result` → `ut:data`/`ut:graphData`).
 fn load_update_details(
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
-    dir: &Path,
+    resolver: &BaseResolver,
     cases: &mut [SparqlTestCase],
 ) -> Result<(), String> {
     let query = format!(
@@ -425,28 +453,25 @@ fn load_update_details(
         let case = &mut cases[idx];
 
         if let Some(req) = iri_of(row, "request") {
-            case.query = local_path(dir, &req);
+            case.query = resolver.path(&req)?;
         }
         push_unique_path(
             &mut case.data,
-            iri_of(row, "inData").map(|i| local_path(dir, &i)),
+            resolve_opt(resolver, iri_of(row, "inData"))?,
         );
         if let Some(g) = iri_of(row, "inGraph") {
             let name = lexical_of(row, "inLabel").unwrap_or_else(|| g.clone());
-            let path = local_path(dir, &g);
+            let path = resolver.path(&g)?;
             if !case.graph_data.iter().any(|(n, _)| *n == name) {
                 case.graph_data.push((name, path));
             }
         }
 
         let acc = expected.entry(test_iri.clone()).or_default();
-        push_unique_path(
-            &mut acc.0,
-            iri_of(row, "resData").map(|i| local_path(dir, &i)),
-        );
+        push_unique_path(&mut acc.0, resolve_opt(resolver, iri_of(row, "resData"))?);
         if let Some(g) = iri_of(row, "resGraph") {
             let name = lexical_of(row, "resLabel").unwrap_or_else(|| g.clone());
-            let path = local_path(dir, &g);
+            let path = resolver.path(&g)?;
             if !acc.1.iter().any(|(n, _)| *n == name) {
                 acc.1.push((name, path));
             }
@@ -476,7 +501,14 @@ pub(crate) fn query_rows(
             dataset,
             SparqlRequest {
                 query,
-                base_iri: Some(BASE),
+                // The base for the QUERY TEXT, which is a different thing from the
+                // manifest's own base: every IRI in every query this module and
+                // `crate::rs_resultset` build is written out absolutely, so no
+                // relative reference is ever resolved against it and it can stay the
+                // shared root. It must NOT be mistaken for the per-manifest base —
+                // that one is computed by `manifest_base` and threaded through
+                // `local_path`.
+                base_iri: Some(BASE_ROOT),
                 substitutions: &[],
             },
         )
@@ -516,10 +548,149 @@ fn lexical_of(row: &BTreeMap<String, TermValue>, var: &str) -> Option<String> {
     }
 }
 
-/// Map a sentinel-based file IRI back to a local path under the manifest dir.
-fn local_path(dir: &Path, iri: &str) -> PathBuf {
-    let relative = iri.strip_prefix(BASE).unwrap_or(iri);
-    paths::resolve(dir, relative)
+/// One manifest's sentinel IRI space and the disk directory it denotes.
+///
+/// The base is [`BASE_ROOT`] followed by the manifest's directory path **relative
+/// to the Cargo workspace root**, and [`BASE_ROOT`] itself denotes that workspace
+/// root. So the sentinel IRI space is an exact mirror of the workspace tree, and
+/// mapping a file IRI back to a file is one strip and one join — for a reference
+/// pointing down (`<agg01.rq>`) and equally for one pointing up (`<../x.ttl>`),
+/// which a base-relative strip alone could not resolve.
+///
+/// # Why the base is per-manifest
+///
+/// Deriving the base from the manifest's own location is what makes a case IRI
+/// globally unique. A single constant base gave every manifest that declares the
+/// relative `@prefix : <manifest#>` the identical namespace `<BASE_ROOT>manifest#`,
+/// so two sibling group manifests minted byte-identical case IRIs for every local
+/// name they share — and the global [`crate::xfail`] ledger, which matches on the
+/// case IRI, could then not tell one group's `get-01` from another's.
+///
+/// The anchor is the workspace root, not the caller's working directory and not
+/// the absolute path, so the base — and every IRI resolved against it — is
+/// byte-identical in every checkout on every machine, whether the caller passes a
+/// relative or an absolute manifest path. A corpus outside the workspace has no
+/// such stable identity and is refused rather than given a machine-specific one.
+///
+/// Every manifest wired into the live suite today declares an ABSOLUTE `@prefix`,
+/// so their case IRIs are unaffected: an absolute prefix ignores the base
+/// entirely. Only a manifest using a relative prefix — which is exactly the shape
+/// that collided — sees its IRIs change.
+struct BaseResolver {
+    /// This manifest's own base IRI, ending in `/`.
+    base: String,
+    /// The Cargo workspace root, which [`BASE_ROOT`] denotes.
+    workspace_root: PathBuf,
+}
+
+impl BaseResolver {
+    /// Derive the base for `manifest_path`.
+    fn new(manifest_path: &Path) -> Result<Self, String> {
+        let dir = manifest_path.parent().ok_or_else(|| {
+            format!(
+                "{}: manifest path has no parent directory",
+                manifest_path.display()
+            )
+        })?;
+        let dir = dir
+            .canonicalize()
+            .map_err(|e| format!("resolve manifest directory {}: {e}", dir.display()))?;
+        let workspace_root = workspace_root(&dir).ok_or_else(|| {
+            format!(
+                "{}: no ancestor directory carries a Cargo.toml with a [workspace] table, so no \
+                 workspace-relative manifest identity can be derived. The conformance corpora \
+                 must live inside this workspace; a base derived from an absolute path would \
+                 differ between checkouts and put machine-specific strings into every case IRI",
+                manifest_path.display()
+            )
+        })?;
+        let relative = dir.strip_prefix(&workspace_root).map_err(|_| {
+            format!(
+                "{}: manifest directory is not under the workspace root {}",
+                manifest_path.display(),
+                workspace_root.display()
+            )
+        })?;
+
+        let mut base = String::from(BASE_ROOT);
+        for component in relative.components() {
+            let std::path::Component::Normal(name) = component else {
+                return Err(format!(
+                    "{}: workspace-relative path carries a non-ordinary component \
+                     ({component:?}); it cannot be turned into a stable manifest base",
+                    manifest_path.display()
+                ));
+            };
+            let name = name.to_str().ok_or_else(|| {
+                format!(
+                    "{}: path component is not valid UTF-8, so it cannot become an IRI segment",
+                    manifest_path.display()
+                )
+            })?;
+            if !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~'))
+            {
+                return Err(format!(
+                    "{}: path component {name:?} carries a character outside the IRI unreserved \
+                     set. Percent-encoding it here would let two different directories normalize \
+                     onto one base and re-open the collision this per-manifest base exists to \
+                     close, so the path is refused instead: name corpus directories with ASCII \
+                     letters, digits, '.', '-', '_' or '~'",
+                    manifest_path.display()
+                ));
+            }
+            base.push_str(name);
+            base.push('/');
+        }
+        Ok(Self {
+            base,
+            workspace_root,
+        })
+    }
+
+    /// Map a sentinel-space file IRI back to the file it denotes.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an IRI outside the sentinel space — an absolute reference to some
+    /// other authority, or one whose `..` segments escaped [`BASE_ROOT`] entirely.
+    /// Such an IRI names no file in this workspace; silently falling back to
+    /// joining it onto the manifest directory (as this used to) produced a path
+    /// that could never open, so the failure surfaced later as an unreadable
+    /// fixture instead of here as the unresolvable reference it is.
+    fn path(&self, iri: &str) -> Result<PathBuf, String> {
+        let relative = iri.strip_prefix(BASE_ROOT).ok_or_else(|| {
+            format!(
+                "manifest based at {} references <{iri}>, which is outside the sentinel space \
+                 {BASE_ROOT} and therefore names no file in this workspace",
+                self.base
+            )
+        })?;
+        Ok(paths::resolve(&self.workspace_root, relative))
+    }
+}
+
+/// The nearest ancestor of `start` (inclusive) whose `Cargo.toml` declares a
+/// `[workspace]` table.
+///
+/// Member crates carry `[package]` and `workspace = true` VALUES but never a
+/// `[workspace]` section header, so the first ancestor that matches is the true
+/// workspace root and not an intervening member.
+fn workspace_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| {
+            std::fs::read_to_string(dir.join("Cargo.toml"))
+                .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
+        })
+        .map(Path::to_path_buf)
+}
+
+/// Resolve an OPTIONAL file IRI, keeping "no such column bound" (`None`) distinct
+/// from "bound to an IRI that names no file here" (an error).
+fn resolve_opt(resolver: &BaseResolver, iri: Option<String>) -> Result<Option<PathBuf>, String> {
+    iri.map(|i| resolver.path(&i)).transpose()
 }
 
 /// Push `path` into `dst` if present and not already there.

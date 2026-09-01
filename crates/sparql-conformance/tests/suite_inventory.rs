@@ -218,11 +218,13 @@ fn suite_root() -> std::path::PathBuf {
 
 /// The vendored `vectors/sparql-cdt` root (SEP-0009, `awslabs/SPARQL-CDTs`).
 ///
-/// Deliberately NOT under `suite/`: this chunk lands the corpus only (no
-/// `purrdf-sparql-conformance` suite reads it yet — no `datatest_stable` case, no
-/// `conformance-matrix.py` row), because a matrix row for an unimplemented CDT/FOLD/
-/// UNFOLD surface would show a permanently red suite. Wiring it into `suite/` is
-/// separate follow-on work.
+/// Deliberately NOT under `suite/`: the corpus is graded by no
+/// `purrdf-sparql-conformance` suite (no `datatest_stable` case, no
+/// `conformance-matrix.py` row) because the evaluator implements no CDT/FOLD/
+/// UNFOLD surface for it to grade, and a matrix row over an absent surface would
+/// report a permanently red suite rather than a measurement. The corpus, its
+/// aggregator manifest, and its per-group counts are still gated here and in
+/// `tests/manifest_include.rs`, so the vendored bytes cannot drift unnoticed.
 fn sparql_cdt_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -414,8 +416,15 @@ fn broken_manifest_with_a_described_entry_loads_cleanly() {
          one case, got {}",
         cases.len()
     );
+    // The base is derived from the manifest's own workspace-relative directory
+    // (`manifest::manifest_base`), not from one constant shared by every manifest,
+    // so this fixture's relative `<#describedEntry>` resolves under its own path.
+    // That is what makes a case IRI globally unique — see
+    // `tests/manifest_include.rs`.
     assert_eq!(
-        cases[0].iri, "http://purrdf.test/manifest/#describedEntry",
+        cases[0].iri,
+        "http://purrdf.test/manifest/crates/sparql-conformance/tests/fixtures/\
+         broken-manifests/described-entry/#describedEntry",
         "the loaded case must be the described entry, not some other IRI"
     );
     assert_eq!(

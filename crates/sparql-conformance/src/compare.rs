@@ -186,7 +186,7 @@ fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(),
             case.iri
         ));
     };
-    let expected = crate::run::build_dataset(data, graph_data)?;
+    let expected = crate::run::build_dataset(&case.base, data, graph_data)?;
     let actual_canon = purrdf_core::canonicalize(actual).nquads;
     let expected_canon = purrdf_core::canonicalize(&expected).nquads;
     if actual_canon == expected_canon {
@@ -227,6 +227,7 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             },
         ) => {
             let expected = crate::rs_resultset::parse(
+                &case.base,
                 &std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?,
             )
             .map_err(|e| format!("parse expected rs:ResultSet {}: {e}", path.display()))?;
@@ -454,6 +455,7 @@ mod tests {
     fn case_with(expected: ExpectedResult) -> SparqlTestCase {
         SparqlTestCase {
             iri: "http://purrdf.test/property-functions#probe".to_owned(),
+            base: crate::manifest::BASE_ROOT.to_owned(),
             name: "probe".to_owned(),
             kind: TestKind::QueryEval,
             query: std::path::PathBuf::new(),

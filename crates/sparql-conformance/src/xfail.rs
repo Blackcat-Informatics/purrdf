@@ -11,8 +11,31 @@
 //!   surprise PASS as a HARD ERROR (so a stale xfail is caught and removed);
 //! * prints an end-of-run tally (`N passed, M xfail, K unexpected-pass, …`).
 //!
-//! Entries are matched on the test-case IRI's local name (the fragment after the
-//! manifest base), which is stable across vendored manifests.
+//! # How an entry is matched
+//!
+//! An entry names a **tail** of the case IRI, and the match is ANCHORED at an IRI
+//! path-segment boundary: `case_iri` must end with [`Xfail::iri_tail`] AND the
+//! character immediately before it must be `/` (or the tail must be the whole
+//! IRI). A bare `ends_with` would let a short tail like `t01` swallow `subtest01`
+//! in an unrelated group, so an entry could mark a passing test xfail or mask a
+//! real failure without anything saying so.
+//!
+//! Two further rules keep the ledger from rotting, both HARD ERRORS rather than
+//! silent no-ops:
+//!
+//! * an IRI matched by MORE THAN ONE entry is refused by [`lookup`] — two reasons
+//!   for one case means the ledger cannot say which gap the case represents;
+//! * an entry matching ZERO cases across the whole live suite is refused by the
+//!   `every_xfail_entry_matches_exactly_one_case` test in
+//!   `tests/xfail_ledger.rs` — a dead entry is a ceiling with nothing under it,
+//!   and it keeps the budget in `scripts/conformance-baseline.json` propped up
+//!   after the gap it named is gone.
+//!
+//! Case IRIs are globally unique by construction: every manifest is parsed
+//! against its OWN base (see [`crate::manifest`]), so two group manifests that
+//! each declare the relative `@prefix : <manifest#>` no longer mint the same IRI
+//! for a shared local name, and [`crate::manifest::load`] refuses a closure in
+//! which two manifests mint one IRI anyway.
 
 /// Why a conformance case is expected to fail today.
 ///
@@ -74,13 +97,31 @@ impl XfailReason {
     }
 }
 
-/// One registered expected failure: a case-IRI local-name suffix plus its reason.
+/// One registered expected failure: an anchored case-IRI tail plus its reason.
 #[derive(Debug)]
 pub struct Xfail {
-    /// Match when the case IRI ends with this string (usually its local name).
-    pub iri_suffix: &'static str,
+    /// The tail of the case IRI this entry governs — conventionally
+    /// `<group>/manifest#<local-name>`, which cannot cross-match between groups.
+    ///
+    /// Matched by [`matches`]: the case IRI must END with this string and the
+    /// match must START at an IRI path-segment boundary, so a tail can never
+    /// capture the back half of a longer segment.
+    pub iri_tail: &'static str,
     /// Why it is expected to fail.
     pub reason: XfailReason,
+}
+
+/// Whether `case_iri` is governed by the entry tail `iri_tail`.
+///
+/// The tail must be a suffix of the IRI AND begin at a `/` boundary (or be the
+/// whole IRI). Anchoring is what stops a short tail from matching the back half
+/// of an unrelated case's local name.
+#[must_use]
+pub fn matches(case_iri: &str, iri_tail: &str) -> bool {
+    let Some(head) = case_iri.strip_suffix(iri_tail) else {
+        return false;
+    };
+    head.is_empty() || head.ends_with('/')
 }
 
 /// The registry. Each entry is justified inline. Vendored W3C cases that the
@@ -110,15 +151,15 @@ pub const XFAIL: &[Xfail] = &[
     //     XPath F&O §19 numeric/boolean→`xsd:string` casting rule) are spec-clean
     //     and pass natively; they are not ledgered here.
     Xfail {
-        iri_suffix: "cast/manifest#cast-decimal",
+        iri_tail: "cast/manifest#cast-decimal",
         reason: XfailReason::UpstreamErratum,
     },
     Xfail {
-        iri_suffix: "cast/manifest#cast-double",
+        iri_tail: "cast/manifest#cast-double",
         reason: XfailReason::UpstreamErratum,
     },
     Xfail {
-        iri_suffix: "cast/manifest#cast-float",
+        iri_tail: "cast/manifest#cast-float",
         reason: XfailReason::UpstreamErratum,
     },
     // --- Whole-valued `xsd:decimal` lexical form: the vendored W3C SPARQL 1.1
@@ -144,11 +185,11 @@ pub const XFAIL: &[Xfail] = &[
     //     "X.0" expectation and are the ledgered erratum. Their value and datatype
     //     are computed correctly — only the divergent legacy lexical differs.
     Xfail {
-        iri_suffix: "functions/manifest#coalesce01",
+        iri_tail: "functions/manifest#coalesce01",
         reason: XfailReason::UpstreamErratum,
     },
     Xfail {
-        iri_suffix: "functions/manifest#plus-1-corrected",
+        iri_tail: "functions/manifest#plus-1-corrected",
         reason: XfailReason::UpstreamErratum,
     },
     // === Full W3C sparql11 UPDATE-eval groups (commit 426c7df) ===============
@@ -183,10 +224,30 @@ pub const XFAIL: &[Xfail] = &[
 ];
 
 /// The registered [`XfailReason`] for `case_iri`, if any.
-#[must_use]
-pub fn lookup(case_iri: &str) -> Option<XfailReason> {
-    XFAIL
-        .iter()
-        .find(|x| case_iri.ends_with(x.iri_suffix))
-        .map(|x| x.reason)
+///
+/// # Errors
+///
+/// Returns a message when MORE THAN ONE registry entry matches `case_iri`. An
+/// ambiguous ledger entry is a bug, not a preference: whichever entry the lookup
+/// happened to return would decide the case's typed reason (and therefore which
+/// category the matrix reports the gap under) by registry order alone, and the
+/// other entry would be silently inert. Refusing is the only reading that cannot
+/// hide one of the two.
+pub fn lookup(case_iri: &str) -> Result<Option<XfailReason>, String> {
+    let mut hits = XFAIL.iter().filter(|x| matches(case_iri, x.iri_tail));
+    let Some(first) = hits.next() else {
+        return Ok(None);
+    };
+    let rest: Vec<&str> = hits.map(|x| x.iri_tail).collect();
+    if rest.is_empty() {
+        return Ok(Some(first.reason));
+    }
+    Err(format!(
+        "case {case_iri} is matched by {} xfail entries ({}, {}). One case must have exactly one \
+         typed reason; the extra entries would be silently inert and the reported gap category \
+         would depend on registry order",
+        rest.len() + 1,
+        first.iri_tail,
+        rest.join(", ")
+    ))
 }

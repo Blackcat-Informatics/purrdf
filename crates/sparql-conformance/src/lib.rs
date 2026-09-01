@@ -123,14 +123,18 @@ enum Verdict {
 ///
 /// # Errors
 ///
-/// Returns a message if the manifest itself cannot be loaded/parsed.
+/// Returns a message if the manifest itself cannot be loaded/parsed, or if a case
+/// IRI is matched by more than one [`xfail`] registry entry.
 pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
     let cases = manifest::load(manifest_path)?;
     let mut summary = Summary::default();
     for case in &cases {
         match verdict_of(case) {
             Verdict::Unmodeled => summary.unmodeled.push(case.iri.clone()),
-            Verdict::Pass => match xfail::lookup(&case.iri) {
+            // An ambiguous ledger entry is a hard error, not a preference — see
+            // `xfail::lookup` — so it aborts the whole manifest rather than letting
+            // one of the two matching entries win by registry order.
+            Verdict::Pass => match xfail::lookup(&case.iri)? {
                 Some(reason) => summary.unexpected_pass.push(format!(
                     "{} (xfail: {})",
                     case.iri,
@@ -138,7 +142,7 @@ pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
                 )),
                 None => summary.passed += 1,
             },
-            Verdict::Fail(msg) => match xfail::lookup(&case.iri) {
+            Verdict::Fail(msg) => match xfail::lookup(&case.iri)? {
                 Some(reason) => {
                     log_xfail(&case.iri, reason, &msg);
                     summary.xfail += 1;

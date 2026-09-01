@@ -19,9 +19,7 @@ use purrdf_sparql_eval::{
     QueryOptions, RemoteQuerySource, StandpointPredicates,
 };
 
-use crate::manifest::{SparqlTestCase, TestKind};
-
-pub(crate) const BASE: &str = "http://purrdf.test/manifest/";
+use crate::manifest::{BASE_ROOT, SparqlTestCase, TestKind};
 
 /// The extension-function namespace the first-party suite fixtures spell their
 /// calls under. PurRDF itself mints no vocabulary — the namespace is HARNESS
@@ -141,10 +139,16 @@ pub fn harness_relations() -> &'static PropertyFunctionRegistry {
 }
 
 /// Parse [`RELATION_TABLES`] into the dataset every table is read out of.
+///
+/// Parsed against [`BASE_ROOT`] rather than any manifest's own base: this fixture
+/// is harness configuration shared by EVERY case (built once into a `OnceLock`),
+/// not a case's `qt:data`, so it belongs to no single manifest. Every IRI it
+/// carries is written absolutely under [`TABLE_NS`], so the base is inert here —
+/// there is no relative reference for it to resolve.
 fn relation_tables() -> Arc<RdfDataset> {
     let bytes = std::fs::read(RELATION_TABLES)
         .unwrap_or_else(|e| panic!("read harness relation tables {RELATION_TABLES}: {e}"));
-    purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE))
+    purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE_ROOT))
         .unwrap_or_else(|e| panic!("parse harness relation tables {RELATION_TABLES}: {e}"))
 }
 
@@ -188,7 +192,7 @@ fn table_head(local: &str) -> TermValue {
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
     use purrdf_entail::{Materialization, Regime};
-    let ds = build_dataset(&case.data, &case.graph_data)?;
+    let ds = build_dataset(&case.base, &case.data, &case.graph_data)?;
     // For a rule-table lane, close the dataset before it is queried (the eval loop is
     // untouched — it queries an already-reasoned dataset). `OWL-Direct` and `RIF` are
     // handled by the CALLER (the `QueryEval` arm), which has the two inputs this
@@ -230,32 +234,44 @@ fn data_media_type(path: &std::path::Path) -> &'static str {
 }
 
 /// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed
-/// against: `<BASE><file name>`, matching how the manifest's OWN relative
-/// reference (e.g. `<exists-graph-variable.ttl>`) resolves against the harness's
-/// sentinel [`BASE`] — the vendored suite never nests fixtures in
-/// subdirectories, so a bare file name round-trips the manifest's relative
-/// reference exactly. Using the SHARED harness-wide [`BASE`] for every file
-/// instead (as opposed to the file's own resolved IRI) would make a bare `<>`
-/// inside the Turtle content resolve to the same IRI for every fixture, instead
-/// of self-referencing that fixture's own `qt:data`/`qt:graphData` graph name —
-/// the exact self-reference some W3C fixtures (e.g. `exists-graph-variable`)
-/// depend on.
-fn file_base_iri(path: &std::path::Path) -> String {
+/// against: `<case base><file name>`, which is exactly what the manifest's OWN
+/// relative reference (e.g. `<exists-graph-variable.ttl>`) resolved to — the
+/// vendored suite never nests fixtures in subdirectories, so a bare file name
+/// round-trips that reference.
+///
+/// `base` is the DECLARING MANIFEST's base (see
+/// [`crate::manifest::SparqlTestCase::base`]), never a harness-wide constant.
+/// Resolving here against a different base than the loader used would give the
+/// fixture a graph name no query could refer to: a `GRAPH <exists02.ttl> { … }`
+/// would name one IRI and `qt:graphData <exists02.ttl>` another, and the pattern
+/// would match nothing while the case reported a plain empty-result mismatch.
+///
+/// Using the base ALONE for every file (as opposed to appending the file's own
+/// name) would make a bare `<>` inside the Turtle content resolve to the same IRI
+/// for every fixture, instead of self-referencing that fixture's own
+/// `qt:data`/`qt:graphData` graph name — the exact self-reference some W3C
+/// fixtures (e.g. `exists-graph-variable`) depend on.
+fn file_base_iri(base: &str, path: &std::path::Path) -> String {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
-    format!("{BASE}{name}")
+    format!("{base}{name}")
 }
 
 /// Build a dataset from default-graph Turtle files (`data`) and named-graph files
 /// (`graph_data`, each `(graph IRI, file)`). Shared by the query pre-state loader
 /// and the UPDATE pre-/post-state builders.
 ///
+/// `base` is the declaring manifest's own sentinel base (see
+/// [`crate::manifest::SparqlTestCase::base`]) — see [`file_base_iri`] for why it
+/// must be that one and not a harness-wide constant.
+///
 /// # Errors
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn build_dataset(
+    base: &str,
     data: &[std::path::PathBuf],
     graph_data: &[(String, std::path::PathBuf)],
 ) -> Result<Arc<RdfDataset>, String> {
@@ -263,8 +279,12 @@ pub fn build_dataset(
     let mut combined_nq: Vec<u8> = Vec::new();
     for data in data {
         let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, data_media_type(data), Some(&file_base_iri(data)))
-            .map_err(|e| format!("parse data {}: {e}", data.display()))?;
+        let ds = purrdf::parse_dataset(
+            &chunk,
+            data_media_type(data),
+            Some(&file_base_iri(base, data)),
+        )
+        .map_err(|e| format!("parse data {}: {e}", data.display()))?;
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize {}: {e}", data.display()))?;
         combined_nq.extend_from_slice(&nq);
@@ -317,7 +337,10 @@ pub fn build_dataset(
         }
     }
 
-    let parsed = purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
+    // N-Quads has no relative IRIs, so this base is inert; it is the case's own for
+    // consistency with every other parse in this function rather than a second,
+    // differently-based reading of the same bytes.
+    let parsed = purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(base))
         .map_err(|e| format!("parse combined n-quads: {e}"))?;
     if empty_graphs.is_empty() {
         return Ok(parsed);
@@ -358,14 +381,14 @@ pub fn run(
         // `mf:action <file.rq>` resolves against [`BASE`].
         TestKind::PositiveSyntax | TestKind::NegativeSyntax => {
             let parsed_ok = SparqlParser::new()
-                .with_base_iri(file_base_iri(&case.query))
+                .with_base_iri(file_base_iri(&case.base, &case.query))
                 .parse_query(&query_text)
                 .is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::PositiveUpdateSyntax | TestKind::NegativeUpdateSyntax => {
             let parsed_ok = SparqlParser::new()
-                .with_base_iri(file_base_iri(&case.query))
+                .with_base_iri(file_base_iri(&case.base, &case.query))
                 .parse_update(&query_text)
                 .is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
@@ -377,7 +400,7 @@ pub fn run(
             // dataset to the UNMODIFIED engine (whose simple-entailment answers then
             // coincide with the OWL Direct-Semantics certain answers).
             if case.regime == Some(purrdf_entail::Regime::OwlDirect) {
-                let bgp = collect_query_bgp(&query_text);
+                let bgp = collect_query_bgp(&case.base, &query_text);
                 dataset = purrdf_entail::materialize_dl_reported(&dataset, &bgp)
                     .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?
                     .0;
@@ -420,7 +443,7 @@ pub fn run(
                 ));
             let request = SparqlRequest {
                 query: &query_text,
-                base_iri: Some(BASE),
+                base_iri: Some(&case.base),
                 substitutions: &[],
             };
             // `purrdf:aggregateNamespace` (see `crate::manifest::SparqlTestCase`) is
@@ -463,7 +486,7 @@ pub fn run(
         TestKind::UpdateEval => {
             // Apply the `ut:request` update to the pre-state dataset; the mutated
             // dataset is diffed against the expected post-state in `compare`.
-            let mut dataset = build_dataset(&case.data, &case.graph_data)?;
+            let mut dataset = build_dataset(&case.base, &case.data, &case.graph_data)?;
             let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
                 property_fn_namespaces: vec![REL_NS.to_owned()],
@@ -471,7 +494,7 @@ pub fn run(
             });
             let request = SparqlRequest {
                 query: &query_text,
-                base_iri: Some(BASE),
+                base_iri: Some(&case.base),
                 substitutions: &[],
             };
             engine
@@ -581,9 +604,9 @@ fn build_rif_ruleset(
 /// data's own vocabulary, and the engine (which will also fail to parse) reports the
 /// error. RDF-1.2 quoted-triple term positions (absent from the entailment fixtures)
 /// are skipped — they are never a class-expression scaffold.
-fn collect_query_bgp(query_text: &str) -> Vec<QTriple> {
+fn collect_query_bgp(base: &str, query_text: &str) -> Vec<QTriple> {
     let Ok(query) = SparqlParser::new()
-        .with_base_iri(BASE)
+        .with_base_iri(base)
         .parse_query(query_text)
     else {
         return Vec::new();
