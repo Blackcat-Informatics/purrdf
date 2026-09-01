@@ -588,13 +588,14 @@ fn bench_sort_order(c: &mut Criterion) {
     let far_double = parse_operand("1.0E300", XsdDatatype::Double);
     // Close enough that only the exact cross-multiplication answers.
     let near_decimal = parse_operand("17.500000000000000001", XsdDatatype::Decimal);
-    // A near-`i128::MAX` mantissa against a non-integral double: `mantissa × 2^-exp`
-    // outgrows `u128`, so this is the `BigInt` row.
+    // A near-`i128::MAX` mantissa against a double needing two fractional bits:
+    // `mantissa × 2^-exp` outgrows `u128`, so this is the `BigInt` row. (One
+    // fractional bit would not: `(2^127 - 1) << 1` still fits.)
     let huge_decimal = parse_operand(
         "170141183460469231731687303715884105727",
         XsdDatatype::Decimal,
     );
-    let half = parse_operand("5.0E-1", XsdDatatype::Double);
+    let quarter = parse_operand("2.5E-1", XsdDatatype::Double);
 
     // Untimed sanity: every pair below must be COMPARABLE, or the timed closure
     // would be measuring the (much cheaper) `None` path and a correctness
@@ -605,7 +606,7 @@ fn bench_sort_order(c: &mut Criterion) {
         ("double_vs_double", &double_a, &double_b),
         ("int_vs_double_window", &int_a, &far_double),
         ("dec_vs_double_u128", &near_decimal, &double_a),
-        ("dec_vs_double_bigint", &huge_decimal, &half),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
     ] {
         assert!(
             value_total_cmp(a, b).is_some() && value_cmp(a, b).is_some(),
@@ -620,7 +621,7 @@ fn bench_sort_order(c: &mut Criterion) {
         ("double_vs_double", &double_a, &double_b),
         ("int_vs_double_window", &int_a, &far_double),
         ("dec_vs_double_u128", &near_decimal, &double_a),
-        ("dec_vs_double_bigint", &huge_decimal, &half),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
     ] {
         group.bench_function(format!("{label}_total"), |bencher| {
             bencher.iter(|| {

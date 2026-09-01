@@ -1701,19 +1701,21 @@ mod tests {
             Some(Ordering::Greater)
         );
 
-        // Negative IEEE exponent: `mantissa × 2^-exp` exceeds 2^128 for any mantissa
-        // near the i128 ceiling against any non-integral double.
+        // Negative IEEE exponent: `mantissa × 2^-exp` exceeds 2^128 once the mantissa
+        // is near the i128 ceiling and the double needs two or more fractional bits
+        // (`0.5` alone would not — `(2^127 - 1) << 1` still fits `u128`).
         let biggest = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0));
         assert_eq!(
-            numeric_total_cmp(&biggest, &XsdValue::Double(0.5)),
+            numeric_total_cmp(&biggest, &XsdValue::Double(0.25)),
             Some(Ordering::Greater)
         );
         assert_eq!(
-            numeric_total_cmp(&XsdValue::Double(0.5), &biggest),
+            numeric_total_cmp(&XsdValue::Double(0.25), &biggest),
             Some(Ordering::Less)
         );
-        // And the same shape where the answer is a genuine tie rather than a rout:
-        // 2^126 is exactly a double and exactly an i128, and `0.5 × 2^127` is it.
+        // And the near-tie, one ulp of the EXACT side at a magnitude where a
+        // promotion through `f64` could not have resolved it at all: `2^126` is
+        // exactly a double, and the two decimals either side of it are not.
         let two_126 = XsdValue::Decimal(Decimal::from_parts(1i128 << 126, 0));
         assert_eq!(
             numeric_total_cmp(
@@ -1721,6 +1723,20 @@ mod tests {
                 &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
             ),
             Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_total_cmp(
+                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) - 1, 0)),
+                &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
+            ),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            numeric_total_cmp(
+                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) + 1, 0)),
+                &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
+            ),
+            Some(Ordering::Greater)
         );
     }
 
