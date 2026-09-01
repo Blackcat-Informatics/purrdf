@@ -841,11 +841,47 @@ impl<'a> Parser<'a, '_> {
         loop {
             if self.eat_kw("BASE") {
                 let at = self.span();
-                // The directive is NOT resolved as an ordinary IRIREF: a relative
-                // `BASE` resolves against the base already in force (SPARQL 1.1
-                // §4.1.1 → RFC-3986 §5.1.1), which is exactly `BaseScope::rebind`.
-                // With no base in scope, a relative directive has nothing to
-                // resolve against and stays an error.
+                // The directive is NOT resolved as an ordinary IRIREF, and the
+                // chaining below is NOT Turtle's rule imported by analogy — it is
+                // what SPARQL's own normative reference requires. The chain is:
+                //
+                //   1. `BaseDecl ::= 'BASE' IRIREF` takes the general IRI
+                //      *reference* production — the same one that spells the
+                //      relative `<book1>` in the specification's own example —
+                //      not an `absolute-IRI`. A relative operand is therefore
+                //      well-formed, and the only open question is its meaning.
+                //   2. SPARQL 1.2 Query §4.1.1.2 "Relative IRIs" (word-for-word
+                //      SPARQL 1.1 §4.1.1.1): "The BASE keyword defines the Base
+                //      IRI used to resolve relative IRIs per [RFC3986] section
+                //      5.1.1, 'Base URI Embedded in Content'." SPARQL states no
+                //      rule of its own; it delegates to RFC 3986.
+                //   3. RFC 3986 §5.1 "Establishing a Base URI" — the section
+                //      §5.1.1 is a subsection OF, so its requirements bind here:
+                //      "A base URI must conform to the <absolute-URI> syntax rule
+                //      (Section 4.3). If the base URI is obtained from a URI
+                //      reference, then that reference must be converted to
+                //      absolute form and stripped of any fragment component prior
+                //      to its use as a base URI."
+                //
+                // A `BASE` operand is precisely "a base URI obtained from a URI
+                // reference", so RFC 3986 requires it be *converted* to absolute
+                // form — that conversion is §5.2 resolution against the base
+                // already established — rather than refused; and the
+                // `<absolute-URI>` requirement binds the RESULT of that
+                // conversion. `BaseScope::rebind` is exactly that operation, so
+                // `BASE <http://example.org/a/> BASE <b/>` yields
+                // `http://example.org/a/`.
+                //
+                // The requirement on the result is what keeps a lone relative
+                // directive an error: with no base established there is nothing
+                // to convert against, so no `<absolute-URI>` can be produced and
+                // `rebind` hard-fails with `iri-non-absolute-base` rather than
+                // storing a base that would silently mis-resolve every reference
+                // after it. The vendored W3C corpora contain no `BASE <relative>`
+                // case in either direction (every `BASE` in
+                // `crates/sparql-conformance/suite/w3c-sparql11` and
+                // `w3c-sparql12` is absolute), so the suite neither licenses nor
+                // forbids this; clause 3 above decides it.
                 let directive = self.expect_raw_iriref()?;
                 let origin = self.directive_origin(at);
                 self.base
@@ -6800,9 +6836,40 @@ mod tests {
         }
     }
 
-    /// A relative `BASE` resolves against the base already in force (SPARQL 1.1
-    /// §4.1.1 → RFC-3986 §5.1.1), so a chain of directives composes left to
-    /// right instead of the later one being taken verbatim.
+    /// A relative `BASE` resolves against the base already in force, so a chain
+    /// of directives composes left to right instead of the later one being taken
+    /// verbatim.
+    ///
+    /// This is NOT Turtle §6.1's permission carried across by analogy. SPARQL
+    /// states no relative-`BASE` rule of its own; it delegates, and the clause it
+    /// delegates to settles the question:
+    ///
+    /// > **SPARQL 1.2 Query §4.1.1.2, "Relative IRIs"** (word-for-word SPARQL 1.1
+    /// > §4.1.1.1): "The `BASE` keyword defines the Base IRI used to resolve
+    /// > relative IRIs per \[RFC3986\] section 5.1.1, 'Base URI Embedded in
+    /// > Content'."
+    ///
+    /// > **RFC 3986 §5.1, "Establishing a Base URI"** — the section §5.1.1 is a
+    /// > subsection of, so its requirements govern the delegated case: "A base
+    /// > URI must conform to the `<absolute-URI>` syntax rule (Section 4.3). If
+    /// > the base URI is obtained from a URI reference, then that reference must
+    /// > be converted to absolute form and stripped of any fragment component
+    /// > prior to its use as a base URI."
+    ///
+    /// `BaseDecl ::= 'BASE' IRIREF` takes the general IRI *reference* production,
+    /// so a `BASE` operand is exactly "a base URI obtained from a URI reference":
+    /// RFC 3986 requires it be **converted** to absolute form — §5.2 resolution
+    /// against the base already established — not refused, and applies the
+    /// `<absolute-URI>` requirement to the result of that conversion. Chaining is
+    /// therefore mandated, not merely permitted.
+    ///
+    /// Corpus evidence, for completeness: the vendored W3C suites carry no
+    /// `BASE <relative>` case at all — every `BASE` declaration under
+    /// `crates/sparql-conformance/suite/w3c-sparql11` and `w3c-sparql12` is
+    /// absolute — so no positive or negative syntax test bears on this and the
+    /// clauses above are the whole authority. See
+    /// `relative_base_directive_with_no_base_in_scope_is_an_error` for the other
+    /// half of the same clause.
     #[test]
     fn base_directive_chains_against_the_base_in_force() {
         assert_eq!(
@@ -6814,8 +6881,16 @@ mod tests {
         );
     }
 
-    /// With no base in scope there is nothing for a relative directive to
-    /// resolve against, so that — and only that — stays an error.
+    /// The other half of RFC 3986 §5.1: "A base URI must conform to the
+    /// `<absolute-URI>` syntax rule (Section 4.3). If the base URI is obtained
+    /// from a URI reference, then that reference must be converted to absolute
+    /// form … prior to its use as a base URI." With no base established there is
+    /// nothing to convert against, so no `<absolute-URI>` can be produced and the
+    /// directive is refused outright rather than stored as a base that would
+    /// silently mis-resolve every reference after it. That the requirement binds
+    /// the *converted* result — not the operand as written — is exactly why
+    /// `base_directive_chains_against_the_base_in_force` is the correct reading
+    /// of the same clause, and why this case is the only one that errors.
     #[test]
     fn relative_base_directive_with_no_base_in_scope_is_an_error() {
         let err = SparqlParser::new()

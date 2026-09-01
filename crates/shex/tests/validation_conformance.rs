@@ -248,8 +248,10 @@ struct Caches {
 }
 
 /// Read one schema document, choosing ShExC/ShExJ by the on-disk extension
-/// and parsing with `url` as base. An import IRI carries no extension, so
-/// `.shex` then `.json` are tried; a schema URL names the file directly.
+/// and parsing with `url` as base — both syntaxes, because ShExJ is a JSON-LD
+/// dialect whose IRI-valued members are document-relative exactly as ShExC's
+/// IRIREFs are. An import IRI carries no extension, so `.shex` then `.json` are
+/// tried; a schema URL names the file directly.
 fn read_schema(url: &str) -> Result<Schema, ShexError> {
     let base = url_to_path(url);
     let candidates: Vec<PathBuf> = if base.extension().is_some() {
@@ -262,7 +264,7 @@ fn read_schema(url: &str) -> Result<Schema, ShexError> {
             continue;
         };
         return if path.extension().is_some_and(|x| x == "json") {
-            parse_shexj(&source)
+            parse_shexj(&source, Some(url))
         } else {
             parse_shexc(&source, Some(url))
         };

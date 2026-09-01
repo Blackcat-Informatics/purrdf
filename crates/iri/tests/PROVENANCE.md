@@ -19,10 +19,18 @@ IRI-bearing fixtures in W3C `rdf-tests` (the `IRI-resolution-01/02/07/08`,
 `IRIREF_datatype`, `IRI_with_*_numeric_escape`, … cases) are **RDF-syntax**
 documents: they exercise base-IRI resolution *while parsing Turtle/TriG/N-Triples*
 and assert on the resulting graph. Consuming them requires a full RDF parser, so
-they belong to the RDF **syntax-codec** conformance suite
-(`crates/rdf/tests/corpus/w3c/`), not to this zero-dep IRI kernel. Base-IRI
-resolution is thus exercised end-to-end there; here it is exercised directly
-against `purrdf_iri::Iri::resolve` using the RFC's own normative table.
+they belong to the RDF **syntax-codec** conformance suite, not to this zero-dep
+IRI kernel.
+
+They are vendored there, in `crates/rdf/tests/corpus/w3c/turtle/iri/` and
+`crates/rdf/tests/corpus/w3c/trig/iri/`, and are run by
+`crates/rdf/tests/native_codec_conformance.rs` — parsed, round-tripped, and
+compared against each case's `mf:result`. Base-IRI resolution is thus exercised
+end-to-end there; here it is exercised directly against
+`purrdf_iri::Iri::resolve` using the RFC's own normative table. The two halves
+are deliberately redundant: the kernel table pins the arithmetic, the codec
+suite pins that a document's `@base`/`xml:base`/retrieval IRI actually reaches
+it.
 
 ## The normative sources (verbatim)
 

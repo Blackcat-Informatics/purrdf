@@ -1699,9 +1699,14 @@ fn convert_stdout(out: &Output) -> String {
 
 /// The `file://` IRI the CLI derives for a fixture path, so assertions stay
 /// machine-independent.
+///
+/// This calls the BINARY'S OWN derivation (`purrdf_cli::file_retrieval_iri`) rather than
+/// re-transcribing it here. A local `format!("file://{path}")` agreed with itself on POSIX
+/// and hid two divergences: it percent-encoded nothing, and it had no answer at all for a
+/// Windows path, where the derivation must strip the extended-length prefix and rewrite the
+/// separators. A second implementation in the harness is how a platform bug stays green.
 fn retrieval_iri(path: &str) -> String {
-    let absolute = std::fs::canonicalize(path).expect("fixture path canonicalizes");
-    format!("file://{}", absolute.to_str().expect("temp path is UTF-8"))
+    purrdf_cli::file_retrieval_iri(path).expect("fixture path has a file:// retrieval IRI")
 }
 
 /// The empty IRI reference `<>` denotes the document itself. From a FILE that is the
@@ -1816,6 +1821,74 @@ fn a_relative_reference_from_a_file_resolves_rather_than_emitting_invalid_ntripl
     );
 }
 
+/// A path carrying every byte a `file://` IRI cannot hold literally — a space, `#`, `?`,
+/// `%` and a non-ASCII character — derives an ENCODED retrieval IRI rather than one that
+/// re-parses as a query or a fragment.
+///
+/// The fixture puts the characters in a DIRECTORY name as well as the filename, so an
+/// unencoded `#`/`?` would truncate the base before its last segment and silently retarget
+/// every relative reference in the document.
+#[test]
+fn a_path_with_reserved_and_non_ascii_bytes_derives_an_encoded_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let awkward = dir.path().join("a b#c?d%e\u{e9}");
+    std::fs::create_dir(&awkward).expect("create the awkward directory");
+    let input = write_file(
+        &awkward,
+        "x y#z?w%v\u{e9}.ttl",
+        "<> a <http://example.org/t> .\n",
+    );
+
+    let iri = retrieval_iri(&input);
+    for encoded in ["%20", "%23", "%3F", "%25", "%C3%A9"] {
+        assert!(
+            iri.contains(encoded),
+            "the derived IRI must percent-encode {encoded}: {iri}"
+        );
+    }
+    // Everything after the `file://` scheme+authority must be one path: no literal space,
+    // fragment or query byte survives to re-parse the IRI.
+    let path = iri.strip_prefix("file://").expect("a file:// IRI");
+    assert!(
+        !path.contains([' ', '#', '?']),
+        "no reserved byte may survive literally: {iri}"
+    );
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        convert_stdout(&out).trim_end(),
+        format!(
+            "<{iri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/t> ."
+        ),
+        "`<>` denotes the document, whose IRI is the encoded retrieval IRI"
+    );
+}
+
+/// A relative reference resolves against that encoded base by REPLACING the last segment —
+/// which is only well defined because the awkward bytes are encoded rather than read as a
+/// query or fragment delimiter.
+#[test]
+fn a_relative_reference_resolves_against_an_encoded_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let awkward = dir.path().join("q?r#s t");
+    std::fs::create_dir(&awkward).expect("create the awkward directory");
+    let input = write_file(&awkward, "rel.ttl", "<foo> a <http://example.org/t> .\n");
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected = retrieval_iri(&input).replace("/rel.ttl", "/foo");
+    assert!(
+        expected.contains("q%3Fr%23s%20t/foo"),
+        "the encoded directory must survive the resolution: {expected}"
+    );
+    assert!(
+        convert_stdout(&out).starts_with(&format!("<{expected}> ")),
+        "expected subject <{expected}> in: {}",
+        convert_stdout(&out)
+    );
+}
+
 /// The RFC-3986 5.2 corners, driven through the binary with an explicit `--base` that
 /// carries both a query and a fragment.
 #[test]
@@ -1882,5 +1955,88 @@ fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
     assert!(
         err.contains("file:///tmp/not-an-iri"),
         "the refusal names the spelling that would have worked: {err}"
+    );
+}
+
+/// Run `purrdf` with `args` from the working directory `cwd`, so a dot-relative argument
+/// means something the test controls.
+fn run_in(cwd: &Path, args: &[&str]) -> Output {
+    purrdf()
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("spawn the built purrdf binary")
+}
+
+/// The `--base` refusal for a DOT-RELATIVE value names the directory the operator actually
+/// wrote, resolved against the working directory — never a different one.
+///
+/// `./vocab/` used to suggest `file:///vocab/`, and `../vocab/` suggested the same string,
+/// because the hint was built by trimming every leading dot off the argument. Both named a
+/// directory at the filesystem root that has nothing to do with the operator's tree.
+#[test]
+fn the_base_hint_for_a_dot_relative_value_names_the_directory_that_was_written() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
+    std::fs::create_dir(root.join("vocab")).expect("create ./vocab");
+    std::fs::create_dir(root.join("work")).expect("create ./work");
+
+    // `./vocab/` from the root, and `../vocab/` from `work/`, name the SAME directory —
+    // and the hint must say so, with the trailing `/` that makes it a directory base.
+    let here = run_in(&root, &["convert", "--base", "./vocab/", "-"]);
+    let up = run_in(&root.join("work"), &["convert", "--base", "../vocab/", "-"]);
+
+    let expected = format!(
+        "`{}`",
+        purrdf_cli::file_retrieval_iri(root.join("vocab").to_str().expect("temp path is UTF-8"))
+            .expect("the directory has a file:// retrieval IRI")
+            + "/"
+    );
+    for (label, out) in [("./vocab/", &here), ("../vocab/", &up)] {
+        assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(out));
+        let err = stderr(out);
+        assert!(
+            err.contains(&expected),
+            "{label} must suggest {expected}, got: {err}"
+        );
+        assert!(
+            !err.contains("`file:///vocab/`"),
+            "{label} must not name a root-level directory nobody wrote: {err}"
+        );
+    }
+}
+
+/// A dot-relative `--base` that does NOT resolve gets the rule and NO path-specific
+/// suggestion: there is no honest absolute spelling to offer for a path the filesystem
+/// cannot place, and inventing one is the defect this hint had.
+#[test]
+fn an_unresolvable_dot_relative_base_is_given_the_rule_and_no_invented_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
+
+    let out = run_in(&root, &["convert", "--base", "./no/such/dir/", "-"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("must be absolute"), "{err}");
+    assert!(
+        err.contains("a relative filesystem path is not a base IRI"),
+        "the rule is still stated: {err}"
+    );
+    assert!(
+        !err.contains("did you mean"),
+        "no suggestion may be invented for a path that does not resolve: {err}"
+    );
+}
+
+/// An ABSOLUTE path needs no filesystem lookup, so its suggestion stands even for a file
+/// that does not exist — and it is percent-encoded by the same derivation the pipeline uses.
+#[test]
+fn the_base_hint_for_an_absolute_path_is_derived_and_encoded() {
+    let out = run(&["convert", "--base", "/no/such/a b#c", "-"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("`file:///no/such/a%20b%23c`"),
+        "the absolute-path suggestion is derived and encoded: {err}"
     );
 }
