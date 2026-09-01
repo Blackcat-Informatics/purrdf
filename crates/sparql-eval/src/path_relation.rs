@@ -53,6 +53,143 @@
 //! `ORDER BY ?step` orders numerically; a simple literal would sort `"10"` before `"2"`
 //! and silently scramble the reconstruction.
 //!
+//! ## Reconstructing the whole walk: the `GROUP_CONCAT` recipe
+//!
+//! One row per hop is not a lossy shape. It carries strictly more than an `rdf:List` of
+//! nodes would — it names the traversed STATEMENT of every hop, which a node list cannot
+//! express — and the node sequence an `rdf:List` would have held is recoverable in the
+//! query language itself, with no unfolding operator and no host code:
+//!
+//! ```text
+//! PREFIX ex: <http://example.org/>
+//! SELECT ?start ?end ?len (GROUP_CONCAT(?node; separator="->") AS ?route)
+//! WHERE {
+//!   ?start <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge )
+//! }
+//! GROUP BY ?pathId ?start ?end ?len
+//! ORDER BY ?len ?start
+//! ```
+//!
+//! `GROUP BY ?pathId` is the whole trick: the identifier is constant across one walk's
+//! rows and distinct between walks, so each group IS one walk. `?start`, `?end` and
+//! `?len` are constant within a group, so grouping by them alongside is free and lets
+//! them be projected. The concatenation order is `?step` order, which is why `?step` is
+//! an `xsd:integer` and not a simple literal.
+//!
+//! The same grouping reconstructs the EDGE sequence — swap `?node` for `?edge` — and the
+//! same group is where an aggregate over a walk belongs: `SUM` of a per-hop weight joined
+//! in through `?edge`, `MIN` of a per-hop confidence, a `HAVING` that keeps only routes
+//! whose every hop is annotated. None of that is reachable from a relation that returned
+//! endpoints, and none of it needed a list term.
+//!
+//! # The snapshot is not the queried dataset
+//!
+//! **A relation is built from a dataset at construction, and the property-function seam
+//! hands a relation no dataset at evaluation time.** [`PropertyFunction::open`] receives
+//! bound arguments and a row ceiling — nothing else. So a [`PathGraph`] snapshotted from
+//! dataset *A* and registered in a registry that is then used to evaluate a query against
+//! dataset *B* will answer, silently and without any diagnostic, about *A*'s edges. The
+//! query text names no dataset the relation can check itself against, and the seam has no
+//! place to put one.
+//!
+//! This is a precondition on the HOST, and it is not negotiable. Do not try to fix it by
+//! reshaping the seam: a relation that took a dataset would be a relation whose answers
+//! depended on a value the planner cannot see when it prices the call, and every
+//! host-injected relation — a text index, a vector store, a remote service — would then
+//! have to explain what it does with a dataset it does not read.
+//!
+//! The pattern that avoids it is to build the relation where the dataset is chosen, per
+//! dataset, and never to hoist a registry above the thing it describes:
+//!
+//! ```text
+//! // WRONG: one registry, built once, evaluated against whatever arrives.
+//! let registry = build_walk_registry(&startup_dataset);
+//! for dataset in incoming { engine.query_with_options_view(dataset, .., &registry) }
+//!
+//! // RIGHT: the snapshot's lifetime is the dataset's.
+//! for dataset in incoming {
+//!     let registry = build_walk_registry(dataset);
+//!     engine.query_with_options_view(dataset, .., &registry)
+//! }
+//! ```
+//!
+//! A host that caches snapshots deliberately — because rebuilding one per query is real
+//! work — asserts the pairing instead of assuming it.
+//! [`PathGraph::snapshot_fingerprint`] is the surface for that: it records the source
+//! view's [`DatasetView::stats_fingerprint`] and [`DatasetView::term_count`] alongside the
+//! snapshot's own node and edge counts, so a cache entry can be compared against the
+//! dataset about to be queried and rebuilt when it moves. It is a discriminator, not a
+//! content digest, so equality is evidence rather than proof — which is exactly the right
+//! strength for a cache key, and exactly the wrong thing to skip.
+//!
+//! # Wiring one up
+//!
+//! End to end, from a dataset to answers, using only public API:
+//!
+//! ```
+//! use std::sync::Arc;
+//!
+//! use purrdf_core::{
+//!     GraphMatch, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue,
+//! };
+//! use purrdf_sparql_eval::{
+//!     NativeSparqlEngine, ParserOptions, PathDirection, PathGraph, PathLimits, PathStep,
+//!     PathWitnessRelation, PropertyFunctionRegistry, QueryOptions,
+//! };
+//!
+//! // The caller's IRI for this relation. PurRDF mints none.
+//! const WALK: &str = "http://example.org/pf#walk";
+//!
+//! // 1. The data: a three-edge chain.
+//! let mut builder = RdfDatasetBuilder::new();
+//! let a = builder.intern_iri("http://example.org/a");
+//! let b = builder.intern_iri("http://example.org/b");
+//! let c = builder.intern_iri("http://example.org/c");
+//! let p = builder.intern_iri("http://example.org/p");
+//! builder.push_quad(a, p, b, None);
+//! builder.push_quad(b, p, c, None);
+//! let dataset = builder.freeze()?;
+//!
+//! // 2. The step, and the snapshot of it over THIS dataset (see the precondition above).
+//! let step = PathStep::new(vec![(
+//!     TermValue::iri("http://example.org/p"),
+//!     PathDirection::Forward,
+//! )])?;
+//! let graph = Arc::new(PathGraph::from_dataset(&*dataset, &step, GraphMatch::Default)?);
+//!
+//! // 3. The envelope. There is no `Default`: the host states what it will buy.
+//! let limits = PathLimits::new(1, 4, 1_024, 100_000)?;
+//!
+//! // 4. Register the relation under the caller's IRI.
+//! let mut registry = PropertyFunctionRegistry::new();
+//! registry.register(WALK.to_owned(), Arc::new(PathWitnessRelation::new(graph, limits)));
+//!
+//! // 5. Parse-time recognition. Without the IRI here the same text is an ordinary
+//! //    triple pattern reading the graph.
+//! let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+//!     extension_fn_namespaces: Vec::new(),
+//!     property_fn_namespaces: Vec::new(),
+//!     property_fn_iris: vec![WALK.to_owned()],
+//! });
+//!
+//! // 6. Run.
+//! let query = format!(
+//!     "SELECT ?end ?len ?step ?node ?edge WHERE {{ \
+//!      <http://example.org/a> <{WALK}> ( ?end ?pathId ?len ?step ?node ?edge ) \
+//!      }} ORDER BY ?len ?step"
+//! );
+//! let result = engine.query_with_options_view(
+//!     &*dataset,
+//!     SparqlRequest { query: &query, base_iri: None, substitutions: &[] },
+//!     QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY },
+//! )?;
+//!
+//! let SparqlResult::Solutions { rows, .. } = result else { unreachable!("a SELECT") };
+//! // a→b (one row) and a→b→c (two rows).
+//! assert_eq!(rows.len(), 3);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
 //! # Walk semantics: the simple-prefix walk
 //!
 //! Every node on an enumerated walk is distinct, EXCEPT that the FINAL node may repeat
