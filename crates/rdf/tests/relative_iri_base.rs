@@ -410,3 +410,131 @@ fn rdfxml_xml_base_nests_and_may_be_relative() {
         TermValue::Iri("http://example.org/outer/inner/a".to_owned())
     );
 }
+
+// ── RDF/XML: the RFC-3986 tables through `xml:base` ─────────────────────────────
+//
+// RDF/XML used to carry a byte-identical copy of the same hand-rolled resolver Turtle
+// had, plus a `validate_iri` that tested only for a `:` — so a `urn`-shaped relative
+// reference passed as "absolute". Both are gone; these drive the normative tables
+// through `xml:base` to prove the shared layer is what answers.
+
+/// One `rdf:Description` whose `rdf:about` is `reference`, under `xml:base`.
+fn rdfxml_with(base: &str, reference: &str) -> String {
+    format!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+         xmlns:ex=\"http://example.org/\" xml:base=\"{base}\">\
+         <rdf:Description rdf:about=\"{reference}\"><ex:p>v</ex:p></rdf:Description>\
+         </rdf:RDF>"
+    )
+}
+
+#[test]
+fn rdfxml_resolves_the_full_rfc3986_5_4_table_through_xml_base() {
+    for (reference, expected) in NORMAL.iter().chain(ABNORMAL.iter()) {
+        // `&` and `<` would need XML escaping and none of the table rows contain them;
+        // the `g:h` / `http:g` rows are absolute and exercise the scheme-bearing arm.
+        let xml = rdfxml_with(RFC_BASE, reference);
+        assert_eq!(
+            only_subject(&xml, "application/rdf+xml", None),
+            *expected,
+            "xml:base=\"{RFC_BASE}\" with rdf:about=\"{reference}\""
+        );
+    }
+}
+
+/// `xml:base` is SCOPED to its element's subtree: an inner declaration resolves against
+/// the enclosing one, and a sibling after that element closes still sees the OUTER base.
+/// A base stack that leaked would give the sibling the inner base.
+#[test]
+fn rdfxml_xml_base_is_scoped_to_its_subtree() {
+    let xml = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\" xml:base=\"http://example.org/outer/\">",
+        // Inner declaration is RELATIVE and resolves against the outer one.
+        "<rdf:Description rdf:about=\"a\" xml:base=\"inner/\"><ex:p>v</ex:p></rdf:Description>",
+        // Sibling AFTER the inner element closed: must see the OUTER base, not `inner/`.
+        "<rdf:Description rdf:about=\"b\"><ex:p>v</ex:p></rdf:Description>",
+        "</rdf:RDF>",
+    );
+    let dataset = parse_dataset(xml.as_bytes(), "application/rdf+xml", None).expect("parses");
+    let mut subjects: Vec<String> = dataset
+        .quads()
+        .map(|q| match dataset.term_value(q.s) {
+            TermValue::Iri(iri) => iri,
+            other => panic!("not an IRI: {other:?}"),
+        })
+        .collect();
+    subjects.sort();
+    assert_eq!(
+        subjects,
+        vec![
+            "http://example.org/outer/b".to_owned(),
+            "http://example.org/outer/inner/a".to_owned(),
+        ],
+        "the inner xml:base must not leak to the following sibling"
+    );
+}
+
+/// `rdf:ID="x"` is the same-document reference `#x`, RESOLVED against the base rather
+/// than concatenated onto it — so the base's own fragment is dropped and its query kept.
+#[test]
+fn rdfxml_rdf_id_is_a_resolved_same_document_reference() {
+    let xml = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\" xml:base=\"http://example.org/d?q=1#frag\">",
+        "<rdf:Description rdf:ID=\"x\"><ex:p>v</ex:p></rdf:Description>",
+        "</rdf:RDF>",
+    );
+    assert_eq!(
+        only_subject(xml, "application/rdf+xml", None),
+        "http://example.org/d?q=1#x",
+        "rdf:ID resolves as `#x`: the base's fragment is replaced, its query kept"
+    );
+}
+
+/// An empty `rdf:about=""` is the document itself — the RDF/XML spelling of Turtle's
+/// `<>`, and the same defect.
+#[test]
+fn rdfxml_empty_about_denotes_the_document() {
+    let xml = rdfxml_with("http://example.org/d?q=1#frag", "");
+    assert_eq!(
+        only_subject(&xml, "application/rdf+xml", None),
+        "http://example.org/d?q=1",
+        "rdf:about=\"\" keeps the base's query and drops its fragment"
+    );
+}
+
+/// The colon test this codec used to apply admitted a `path-noscheme` relative
+/// reference whose first segment merely contained a `:`. It is not absolute, and with
+/// no base in scope it must be refused rather than interned.
+#[test]
+fn rdfxml_urn_shaped_relative_reference_is_not_mistaken_for_absolute() {
+    // `1a:b` cannot be a scheme (a scheme must start with ALPHA), so this is a relative
+    // reference whose first segment illegally contains a colon — RFC-3986 4.2.
+    let xml = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\">",
+        "<rdf:Description rdf:about=\"1a:b\"><ex:p>v</ex:p></rdf:Description>",
+        "</rdf:RDF>",
+    );
+    let error = parse_dataset(xml.as_bytes(), "application/rdf+xml", None)
+        .expect_err("a path-noscheme reference is not an absolute IRI");
+    assert_eq!(error.code, "iri-disallowed-char");
+
+    // And a plain relative reference with no base is the base-less error, not a
+    // silently-accepted "it has a colon somewhere" pass.
+    let bare = rdfxml_with_no_base("urn");
+    let error = parse_dataset(bare.as_bytes(), "application/rdf+xml", None)
+        .expect_err("`urn` alone is a relative reference, not the urn: scheme");
+    assert_eq!(error.code, "iri-relative-no-base");
+}
+
+/// `rdf:about` with no `xml:base` and no caller base.
+fn rdfxml_with_no_base(reference: &str) -> String {
+    format!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+         xmlns:ex=\"http://example.org/\">\
+         <rdf:Description rdf:about=\"{reference}\"><ex:p>v</ex:p></rdf:Description>\
+         </rdf:RDF>"
+    )
+}

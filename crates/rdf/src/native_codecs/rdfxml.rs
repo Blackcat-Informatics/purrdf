@@ -935,19 +935,29 @@ fn blank_label(label: &str) -> Result<String, RdfDiagnostic> {
     Ok(label.to_owned())
 }
 
-/// The minimal syntactic IRI contract the prior purrdf-gts `Iri::new` enforced for
-/// generated and imported rows: non-empty, a scheme separator (`:`), and no ASCII
-/// whitespace / control characters (nor `<` / `>`). A failing IRI hard-fails the parse.
+/// Validate an IRI built from an XML qualified NAME (`namespace + local`), which is the
+/// one IRI position in this codec that is not a reference and so never resolves.
+///
+/// A `rdf:about` / `rdf:resource` / `rdf:ID` value goes through the base scope instead
+/// (see [`iri_ref`](RdfXmlParser::iri_ref)); this is only for element and attribute
+/// names, whose namespace comes from an `xmlns:` declaration.
+///
+/// The check is the shared RFC-3987 grammar plus the absoluteness requirement, NOT the
+/// bare "contains a `:`" test this used to apply. That test admitted a relative
+/// reference whose first segment merely contained a colon — a `urn`-shaped namespace
+/// like `xmlns:ex="urn"` composed to `urnLocal`, which has no colon and was rejected for
+/// the right reason by accident, while `xmlns:ex="a:b"` composed to `a:bLocal` and was
+/// accepted as "absolute" when it is a `path-noscheme` relative reference.
 fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    if value.is_empty()
-        || !value.contains(':')
-        || value
-            .chars()
-            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace() || ch == '<' || ch == '>')
-    {
-        return Err(parse_err(format!("invalid IRI {value:?}")));
-    }
-    Ok(())
+    purrdf_iri::BaseScope::empty()
+        .resolve_absolute_only(value)
+        .map(|_| ())
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                error.diagnostic_code(),
+                format!("invalid IRI from an XML qualified name: {error}"),
+            )
+        })
 }
 
 /// The blank-node label contract for an `rdf:nodeID` / `rdf:annotationNodeID`
