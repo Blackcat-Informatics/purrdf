@@ -13,6 +13,20 @@
 //!   N-Quads, TriX, `HexTuples`) require an absolute IRI regardless of whether a
 //!   base happens to be available — [`BaseScope::resolve_absolute_only`].
 //!
+//! # Only relative references are resolved
+//!
+//! Both families agree on what an **absolute** reference means: it is the IRI, taken
+//! lexical-verbatim, whether or not a base happens to be in scope. Every grammar here
+//! resolves *relative* IRIs against the base (Turtle §6.1, SPARQL §4.1.1, RDF/XML
+//! `xml:base`, JSON-LD IRI expansion) and says nothing about resolving an absolute
+//! one; putting one through RFC-3986 §5.2.2 anyway would apply `remove_dot_segments`
+//! to it, which is §6.2.2.3 *syntax-based normalization* — forbidden by RDF Concepts
+//! §3.2 ("Further normalization MUST NOT be performed") and pinned against by the
+//! W3C JSON-LD REC vectors, which require `<http://a/bb/ccc/../d;p?q>` to survive
+//! intact. Resolving it under a base and not without one would mean identical
+//! document bytes denoting two different graphs with two different RDFC-1.0 digests,
+//! so the rule lives in ONE place ([`Reference`]) that all three entry points share.
+//!
 //! # Where the base comes from (RFC-3986 §5.1)
 //!
 //! The precedence is the spec's, in the spec's order: an in-document base directive
@@ -117,10 +131,14 @@ impl BaseIri {
     /// new absolute [`Iri`].
     ///
     /// This delegates to [`Iri::resolve`] — the single resolution algorithm in the
-    /// workspace. There is deliberately **no** "the reference is already absolute"
-    /// fast path: `Iri::resolve` already dot-normalizes and revalidates an absolute
-    /// reference, and a second entry point that skipped that would be free to
-    /// diverge, which is precisely the defect this layer exists to delete.
+    /// workspace — and is the faithful RFC-3986 answer, including §5.2.2's
+    /// `remove_dot_segments(R.path)` for a reference that carries its own scheme.
+    /// There is deliberately **no** second copy of that algorithm anywhere.
+    ///
+    /// Whether a reference is resolved *at all* is a separate question, and not this
+    /// method's to answer: the RDF grammars resolve **relative** references only, so
+    /// [`BaseScope`] decides it once, for every grammar family, in [`Reference`]. An
+    /// absolute reference never reaches here from that layer.
     pub fn resolve(&self, reference: &str) -> Result<Iri> {
         self.0.resolve(reference)
     }
@@ -129,7 +147,11 @@ impl BaseIri {
     ///
     /// The directive itself may be relative, in which case it is resolved against
     /// the base currently in force (Turtle §6.1, RFC-3986 §5.1.1) — so a chain of
-    /// directives composes left to right.
+    /// directives composes left to right. An **absolute** directive simply replaces
+    /// the base, lexical-verbatim: it is not a reference to be resolved, and
+    /// [`BaseScope::rebind`] on an empty scope has no choice but to take it verbatim,
+    /// so taking it any other way here would make the same directive establish two
+    /// different bases depending on what preceded it.
     ///
     /// # Examples
     ///
@@ -140,10 +162,24 @@ impl BaseIri {
     /// let once = root.rebind("d/")?;
     /// assert_eq!(once.as_str(), "http://example.org/a/b/d/");
     /// assert_eq!(once.rebind("e/")?.as_str(), "http://example.org/a/b/d/e/");
+    ///
+    /// // An absolute directive replaces the base exactly as written.
+    /// assert_eq!(
+    ///     once.rebind("http://example.org/x/./y/")?.as_str(),
+    ///     "http://example.org/x/./y/"
+    /// );
     /// # Ok::<(), purrdf_iri::IriError>(())
     /// ```
     pub fn rebind(&self, directive: &str) -> Result<Self> {
-        Self::try_from(self.resolve(directive)?)
+        // `@base <>` is the same-document reference (RFC-3986 §4.4): it re-establishes
+        // the base in force, minus any fragment.
+        if directive.is_empty() {
+            return Self::try_from(self.resolve("")?);
+        }
+        match Reference::parse(directive)? {
+            Reference::Absolute(iri) => Self::try_from(iri),
+            Reference::Relative(iri) => Self::try_from(self.0.resolve_iri(&iri)?),
+        }
     }
 
     /// Spell `target` as a reference relative to this base — the exact inverse of
@@ -309,6 +345,46 @@ fn first_segment_has_colon(path: &str) -> bool {
     path.split('/').next().is_some_and(|seg| seg.contains(':'))
 }
 
+/// A parsed, non-empty IRI reference, classified by whether the RDF grammars
+/// resolve it at all.
+///
+/// This is the **single owner** of that rule for the base layer:
+/// [`BaseScope::resolve`], [`BaseScope::resolve_absolute_only`] and
+/// [`BaseIri::rebind`] all route through it, so the same string cannot be answered
+/// three different ways.
+enum Reference {
+    /// The reference already **is** an IRI (it has a scheme).
+    ///
+    /// Every RDF grammar in scope here — Turtle/TriG/N3 §6.1, SPARQL §4.1.1,
+    /// RDF/XML `xml:base`, JSON-LD IRI expansion — says *relative* IRIs are resolved
+    /// against the base. An absolute one is not a reference to be resolved; it is
+    /// the IRI, and it is carried lexical-verbatim. Running it through RFC-3986
+    /// §5.2.2 anyway would apply `remove_dot_segments` to it, which is RFC-3986
+    /// §6.2.2.3 *syntax-based normalization* — exactly what RDF Concepts §3.2
+    /// forbids ("Further normalization MUST NOT be performed"), and what the pinned
+    /// W3C JSON-LD REC vectors 0122/0123 pin by expecting
+    /// `<http://a/bb/ccc/../d;p?q>` to survive intact.
+    Absolute(Iri),
+    /// The reference has no scheme and needs the base in force (RFC-3986 §5.2).
+    Relative(Iri),
+}
+
+impl Reference {
+    /// Parse and classify a **non-empty** reference.
+    ///
+    /// Parsing happens FIRST so that a malformed reference is reported as the syntax
+    /// error it is, rather than as a base-related failure that would send the author
+    /// off to add a `@base` that cannot help.
+    fn parse(reference: &str) -> Result<Self> {
+        let iri = parse(reference)?;
+        if iri.has_scheme() {
+            Ok(Self::Absolute(iri))
+        } else {
+            Ok(Self::Relative(iri))
+        }
+    }
+}
+
 /// Where the base IRI currently in force came from.
 ///
 /// Carried so a diagnostic can say *"resolved against the `@base` on line 3, which
@@ -468,27 +544,31 @@ impl BaseScope {
     /// # Ok::<(), IriError>(())
     /// ```
     pub fn resolve(&self, reference: &str) -> Result<Iri> {
-        if let Some(scoped) = self.current() {
-            return scoped.iri().resolve(reference);
-        }
-        // No base in scope. The EMPTY reference is the same-document reference, so
-        // it is relative by definition — `parse` would reject it as merely empty,
+        // The EMPTY reference is the same-document reference (RFC-3986 §4.4), so it
+        // is relative by definition — and `parse` would reject it as merely empty,
         // which would misreport the actual problem.
         if reference.is_empty() {
-            return Err(IriError::NoBase {
-                reference: String::new(),
-            });
+            return match self.current() {
+                Some(scoped) => scoped.iri().resolve(""),
+                None => Err(IriError::NoBase {
+                    reference: String::new(),
+                }),
+            };
         }
-        // Parse FIRST: a malformed reference is a syntax error on its own terms and
-        // must not be reported as "no base" (which would send the user off to add a
-        // `@base` that cannot help).
-        let iri = parse(reference)?;
-        if iri.has_scheme() {
-            Ok(iri)
-        } else {
-            Err(IriError::NoBase {
-                reference: reference.to_owned(),
-            })
+        match Reference::parse(reference)? {
+            // Verbatim, whether or not a base is in scope. Which of these two
+            // branches a document takes must never change the IRI it denotes:
+            // resolving an absolute reference through §5.2.2 with a base but not
+            // without one is what made `<http://a/b/../c>` intern as
+            // `http://a/c` in one and `http://a/b/../c` in the other — identical
+            // bytes, two graphs, two RDFC-1.0 digests.
+            Reference::Absolute(iri) => Ok(iri),
+            Reference::Relative(iri) => match self.current() {
+                Some(scoped) => scoped.iri().as_iri().resolve_iri(&iri),
+                None => Err(IriError::NoBase {
+                    reference: reference.to_owned(),
+                }),
+            },
         }
     }
 
@@ -499,6 +579,10 @@ impl BaseScope {
     /// whether a base is in scope: the base is never applied, because applying it
     /// would accept a document the grammar rejects. This is deliberately a
     /// different error from [`IriError::NoBase`] — supplying a base cannot fix it.
+    ///
+    /// An **absolute** reference is carried lexical-verbatim, which is the identical
+    /// answer [`resolve`](Self::resolve) gives it: these grammars differ from the
+    /// others in what they *reject*, never in what an accepted IRI denotes.
     ///
     /// # Examples
     ///
@@ -517,13 +601,11 @@ impl BaseScope {
                 reference: String::new(),
             });
         }
-        let iri = parse(reference)?;
-        if iri.has_scheme() {
-            Ok(iri)
-        } else {
-            Err(IriError::NotAbsoluteByGrammar {
+        match Reference::parse(reference)? {
+            Reference::Absolute(iri) => Ok(iri),
+            Reference::Relative(_) => Err(IriError::NotAbsoluteByGrammar {
                 reference: reference.to_owned(),
-            })
+            }),
         }
     }
 }
