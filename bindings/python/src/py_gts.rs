@@ -449,15 +449,16 @@ fn from_json_ld(
 /// parse the input RDF bytes into the frozen IR, then emit RDF/XML through the in-repo
 /// `native_codecs::rdfxml` serializer — no longer the external purrdf-gts RDF/XML codec.
 ///
-/// `base` is the INGRESS document base: relative references in `data` resolve against
-/// it. It is deliberately not forwarded to the egress leg here. RDF/XML is
-/// star-incapable in the transcode loss contract, so the only public base-carrying
-/// serialize entry (`serialize_dataset_to_format`) would also DROP the RDF 1.2
-/// statement layer this function currently emits as `rdf:reifies` /
-/// `parseType="Triple"` rows. Silently losing those rows to gain an `xml:base` would
-/// be a worse trade than emitting absolute IRIs, so this leg keeps the star-preserving
-/// serializer until the core exposes one that takes both a base and the statement
-/// layer.
+/// `base` is the document base for BOTH legs: relative references in `data` resolve
+/// against it, and the emitted RDF/XML declares it as `xml:base` on the `rdf:RDF` root
+/// with its `rdf:about` / `rdf:resource` references spelled against it (RDF/XML's
+/// registry row can express a base).
+///
+/// The statement layer is [`StatementLayer::Emit`], which is what this function already
+/// did. RDF/XML's emitter really can render a reifier binding — as
+/// `rdf:parseType="Triple"` — so the fidelity answer keeps those rows; `Project` would
+/// have thinned the document to buy the `xml:base`, which is the trade this surface
+/// deliberately refused before the core could express both at once.
 #[pyfunction]
 #[pyo3(signature = (data, *, format, base=None))]
 fn to_rdf_xml(
@@ -469,13 +470,18 @@ fn to_rdf_xml(
     let raw = data.as_bytes();
     py.detach(move || {
         let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
-        let bytes = crate::serialize_dataset(
+        let outcome = crate::serialize_dataset_with(
             &dataset,
-            NativeRdfFormat::RdfXml.media_type(),
-            crate::SerializeGraph::Dataset,
+            NativeRdfFormat::RdfXml,
+            base.as_deref(),
+            &crate::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::StatementLayer::Emit,
+                jsonld_options: None,
+            },
         )
         .map_err(|e| PyValueError::new_err(format!("rdf/xml serialization error: {e}")))?;
-        String::from_utf8(bytes).map_err(|e| {
+        String::from_utf8(outcome.bytes).map_err(|e| {
             PyValueError::new_err(format!("rdf/xml serialization produced non-utf8: {e}"))
         })
     })

@@ -37,8 +37,8 @@ use super::term::{
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlRequest, TermValue,
-    query_with_entailment_governed, serialize_dataset, serialize_dataset_with_jsonld_options,
+    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions, SparqlRequest,
+    StatementLayer, TermValue, query_with_entailment_governed, serialize_dataset_with,
 };
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
@@ -633,10 +633,20 @@ impl PyStore {
     /// the oxigraph Python `Store.dump`: when `output` (a file-like with `.write`) is given
     /// the bytes are written to it and `None` is returned; otherwise the bytes are
     /// returned directly.
-    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None))]
+    ///
+    /// `base` is the document base the output is written under — the egress MIRROR of
+    /// [`load`](Self::load)'s, which this surface lacked. A syntax that can express a
+    /// base writes it and relativizes against it; one that cannot emits absolute IRIs.
+    /// A base that is not an absolute IRI is a hard failure whatever the format.
+    ///
+    /// The statement layer is [`StatementLayer::Emit`], which is what this dump already
+    /// did before it carried a base. A dump round-trips a user's own store, so its RDF
+    /// 1.2 reifier and annotation rows must survive: `Project` would silently thin the
+    /// data on the way out, and a format with no surface for them fails closed instead.
+    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None, base=None))]
     #[allow(
         clippy::too_many_arguments,
-        reason = "Python dump names graph selection and JSON-LD configuration explicitly"
+        reason = "Python dump names graph selection, the document base, and JSON-LD configuration explicitly"
     )]
     fn dump(
         &self,
@@ -647,6 +657,7 @@ impl PyStore {
         jsonld_options: Option<&str>,
         jsonld_context: Option<&PyCompiledJsonLdContext>,
         yaml_schema_url: Option<&str>,
+        base: Option<String>,
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
@@ -671,7 +682,7 @@ impl PyStore {
             } else {
                 None
             };
-        let buf: Vec<u8> = py.detach(|| {
+        let buf: Vec<u8> = py.detach(move || {
             // Serialize natively: materialize the store's quads into the IR
             // verbatim (preserving literal lexical forms) and dispatch to the codec.
             let (quads, selection) = match &graph_projection {
@@ -683,18 +694,21 @@ impl PyStore {
             };
             let dataset = dataset_from_quads_verbatim(&quads)
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
-            if let Some(options) = &configured {
-                serialize_dataset_with_jsonld_options(
-                    &dataset,
-                    native.media_type(),
+            // ONE serialization call, not a configured/unconfigured pair: the JSON-LD
+            // options are an axis of the same options value the base and the graph
+            // selection travel on, so a base cannot reach one arm and miss the other.
+            serialize_dataset_with(
+                &dataset,
+                native,
+                base.as_deref(),
+                &SerializeOptions {
                     selection,
-                    options,
-                )
-                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
-            } else {
-                serialize_dataset(&dataset, native.media_type(), selection)
-                    .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
-            }
+                    statement_layer: StatementLayer::Emit,
+                    jsonld_options: configured.as_ref(),
+                },
+            )
+            .map(|outcome| outcome.bytes)
+            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
         })?;
         match output {
             Some(output) => {

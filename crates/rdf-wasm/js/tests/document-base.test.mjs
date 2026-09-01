@@ -88,3 +88,75 @@ test("omitting the egress base leaves the document absolute", () => {
     `without a base the JSON-LD must stay absolute: ${text}`,
   );
 });
+
+// ── serialize(format, base?): the generic egress leg ────────────────────────────
+//
+// Each case pairs the based call with a NO-BASE CONTROL on the same dataset, so the
+// observed base declaration is attributable to the argument.
+
+const ABSOLUTE_NT =
+  `<${BASE}s> <${BASE}p> <${BASE}o> .\n`;
+
+test("serialize emits the base declaration, with a no-base control", () => {
+  const dataset = Dataset.parse(ABSOLUTE_NT, "ntriples");
+  const withBase = dataset.serialize("turtle", BASE);
+  const control = dataset.serialize("turtle");
+
+  assert.ok(withBase.includes(`@base <${BASE}> .`), `expected @base: ${withBase}`);
+  assert.ok(!control.includes("@base"), "the control must not already carry a base");
+  // The base is applied, not merely declared.
+  assert.ok(withBase.includes("<s>"), `expected a relative subject: ${withBase}`);
+  assert.ok(control.includes(`<${BASE}s>`));
+});
+
+test("serialize to a base-incapable format stays absolute rather than throwing", () => {
+  const dataset = Dataset.parse(ABSOLUTE_NT, "ntriples");
+  const text = dataset.serialize("nquads", BASE);
+  assert.ok(text.includes(`<${BASE}s>`));
+  assert.ok(!text.includes("@base"));
+});
+
+test("serialize rejects a base that is not an absolute IRI", () => {
+  const dataset = Dataset.parse(ABSOLUTE_NT, "ntriples");
+  assert.throws(() => dataset.serialize("turtle", "not-absolute/"));
+});
+
+test("serialize without a base is byte-identical to omitting the argument", () => {
+  const dataset = Dataset.parse(ABSOLUTE_NT, "ntriples");
+  assert.equal(dataset.serialize("turtle"), dataset.serialize("turtle", undefined));
+  assert.equal(dataset.serialize("turtle"), dataset.serialize("turtle", null));
+});
+
+test("serialize keeps the RDF 1.2 statement layer under a base", () => {
+  // The fidelity answer: gaining a base must not cost reifier/annotation rows.
+  const star =
+    `<${BASE}r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ` +
+    `<<( <${BASE}s> <${BASE}p> <${BASE}o> )>> .\n` +
+    `<${BASE}r> <${BASE}confidence> "0.9" .\n`;
+  const dataset = Dataset.parse(star, "ntriples");
+
+  const turtle = dataset.serialize("turtle", BASE);
+  assert.ok(turtle.includes(`@base <${BASE}> .`));
+  assert.ok(turtle.includes("reifies"), `reifier binding must survive: ${turtle}`);
+  assert.ok(turtle.includes("confidence"), `annotation must survive: ${turtle}`);
+
+  // RDF/XML renders it as rdf:parseType="Triple" and still takes the base.
+  const xml = dataset.serialize("rdfxml", BASE);
+  assert.ok(xml.includes(`xml:base="${BASE}"`), `expected xml:base: ${xml}`);
+  assert.ok(xml.includes("Triple"), `reifier binding must survive: ${xml}`);
+});
+
+test("a format with no triple-term surface fails closed rather than dropping rows", () => {
+  // TriX and HexTuples cannot represent a triple term at all. Emitting is the
+  // fidelity answer, so they throw instead of silently thinning the document.
+  const star =
+    `<${BASE}r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ` +
+    `<<( <${BASE}s> <${BASE}p> <${BASE}o> )>> .\n`;
+  const dataset = Dataset.parse(star, "ntriples");
+  for (const format of ["trix", "hextuples"]) {
+    assert.throws(
+      () => dataset.serialize(format, BASE),
+      `${format} must refuse rather than drop the statement layer`,
+    );
+  }
+});
