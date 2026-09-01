@@ -41,7 +41,7 @@ HOME = "crates/iri/src"
 HOME_IMPORT = "purrdf_iri::BaseScope"
 
 # Trees that hold no first-party Rust we govern.
-IGNORED_DIRS = {".git", ".claude", ".coding-ethos", "target", "node_modules"}
+IGNORED_DIRS = {".git", ".claude", "target", "node_modules"}
 
 # rule id -> (compiled pattern, what it means). A rule is unconditional: any
 # match is a finding.
