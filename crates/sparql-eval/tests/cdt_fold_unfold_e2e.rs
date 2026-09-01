@@ -492,12 +492,18 @@ fn an_empty_composite_contributes_zero_rows() {
     }
 }
 
-/// An operand that denotes NO composite contributes zero rows, whichever of the
-/// four ways it fails to: unbound, raised, not `cdt:`-typed, or `cdt:`-typed with
-/// a lexical form that does not parse. It is a graph pattern with no solutions —
-/// the ordinary SPARQL answer — never a query failure.
+/// An operand that denotes NO composite PASSES THE ROW THROUGH, whichever of the
+/// four ways it fails to denote one: unbound, raised, not `cdt:`-typed, or
+/// `cdt:`-typed with a lexical form that does not parse.
+///
+/// SEP-0009 §12.3 states this outcome directly in both operator definitions —
+/// "expr(μ) is an error or an RDF term that is neither a well-formed cdt:List
+/// literal nor a well-formed cdt:Map literal, then Unfold1(μ, var, expr) = { μ }"
+/// — so the result is ONE row with the target unbound, not zero rows. The
+/// vendored corpus exercises none of these operands, which is precisely why the
+/// spec text rather than the corpus is the authority here.
 #[test]
-fn an_operand_that_denotes_no_composite_contributes_zero_rows() {
+fn an_operand_that_denotes_no_composite_passes_the_row_through() {
     for operand in [
         "?nosuchvariable",             // unbound
         "(1/0)",                       // raised
@@ -510,19 +516,36 @@ fn an_operand_that_denotes_no_composite_contributes_zero_rows() {
             &empty(),
             &format!("SELECT ?e WHERE {{ UNFOLD({operand} AS ?e) }}"),
         );
+        assert_eq!(
+            rows(&result),
+            vec![row(&[("e", "UNBOUND")])],
+            "`{operand}` denotes no composite, so §12.3 keeps the row with `?e` unbound"
+        );
+    }
+    // The NEIGHBOURING case that must still give the other answer: a WELL-FORMED
+    // but EMPTY composite is the one condition §12.3's Notes assign the empty
+    // multiset. If the pass-through above were implemented by treating every
+    // non-expanding row alike, this would wrongly gain a row.
+    for operand in ["\"[]\"^^cdt:List", "\"{}\"^^cdt:Map"] {
+        let result = evaluate(
+            &empty(),
+            &format!("SELECT ?e WHERE {{ UNFOLD({operand} AS ?e) }}"),
+        );
         assert!(
             rows(&result).is_empty(),
-            "`{operand}` must expand to no rows, got {:?}",
-            rows(&result)
+            "`{operand}` is well-formed and empty, so it still contributes no rows"
         );
     }
 }
 
-/// A row whose operand denotes no composite drops out while its NEIGHBOURS still
+/// A row whose operand denotes no composite passes through while its NEIGHBOURS
 /// expand — the per-row reading of the rule above, which is what makes `UNFOLD`
 /// usable over a column that is only sometimes a composite.
+///
+/// `ORDER BY ?e` puts the passed-through row first, because SPARQL sorts unbound
+/// before every bound value.
 #[test]
-fn a_non_composite_row_drops_while_its_neighbours_expand() {
+fn a_non_composite_row_passes_through_while_its_neighbours_expand() {
     let result = evaluate(
         &graphed(),
         "SELECT ?s ?e WHERE { ?s :list ?c UNFOLD(?c AS ?e) } ORDER BY ?e",
@@ -530,10 +553,11 @@ fn a_non_composite_row_drops_while_its_neighbours_expand() {
     assert_eq!(
         rows(&result),
         vec![
+            row(&[("s", "<https://example.org/cdt#t>"), ("e", "UNBOUND")]),
             row(&[("s", "<https://example.org/cdt#s>"), ("e", "1")]),
             row(&[("s", "<https://example.org/cdt#s>"), ("e", "2")]),
         ],
-        "`:t`'s plain-string object contributes nothing; `:s`'s list expands"
+        "`:t`'s plain-string object keeps its row with `?e` unbound; `:s`'s list expands"
     );
 }
 
@@ -670,6 +694,9 @@ fn an_uncorrelated_optional_body_sees_no_left_binding() {
 
 /// `LATERAL` is the correlating form, and over an `UNFOLD` it does what the naive
 /// `OPTIONAL` above cannot: each left row's OWN operand is expanded.
+///
+/// `:t`'s plain-string object denotes no composite, so §12.3 keeps its row with
+/// `?e` unbound, and `ORDER BY ?e` sorts that unbound cell first.
 #[test]
 fn lateral_correlates_an_unfold_with_its_left_row() {
     let result = evaluate(
@@ -679,6 +706,7 @@ fn lateral_correlates_an_unfold_with_its_left_row() {
     assert_eq!(
         rows(&result),
         vec![
+            row(&[("s", "<https://example.org/cdt#t>"), ("e", "UNBOUND")]),
             row(&[("s", "<https://example.org/cdt#s>"), ("e", "1")]),
             row(&[("s", "<https://example.org/cdt#s>"), ("e", "2")]),
         ]

@@ -109,17 +109,23 @@ fn walk(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+type Spanned<'a> = purrdf_sparql_algebra::lexer::Spanned<'a>;
+
+/// A corpus lexer: source text in, one token stream out. Named so the
+/// [`lexer_for`] signature stays readable — the bare `fn` pointer type spells
+/// out two nested generics and a lifetime, which is exactly the shape
+/// `clippy::type_complexity` asks to be given a name.
+type Lexer = fn(&str) -> purrdf_sparql_algebra::Result<Vec<Spanned<'_>>>;
+
 /// Which lexer a corpus file needs, or `None` when it carries no RDF/SPARQL
 /// syntax at all.
-fn lexer_for(path: &Path) -> Option<fn(&str) -> purrdf_sparql_algebra::Result<Vec<Spanned>>> {
+fn lexer_for(path: &Path) -> Option<Lexer> {
     match path.extension().and_then(|e| e.to_str())? {
         "rq" | "ru" => Some(tokenize),
         "ttl" | "trig" | "nt" | "nq" | "n3" => Some(tokenize_turtle),
         _ => None,
     }
 }
-
-type Spanned<'a> = purrdf_sparql_algebra::lexer::Spanned<'a>;
 
 /// Recover every `cdt:List` / `cdt:Map`-typed literal in one already-tokenized
 /// file.
@@ -386,6 +392,15 @@ fn the_grader_fires_on_each_extended_production() {
 /// one, a NON-`cdt` prefix bound to the SEP-0009 namespace, a `cdt` prefix bound
 /// to something else (which must NOT be recovered), a long-quoted literal, and a
 /// non-composite datatype.
+// `{3:4}` and `{5:6}` are SEP-0009 cdt:Map LEXICAL FORMS, not format strings:
+// `{key:value}` is the spec's own map syntax and `3`/`5` are map keys, not
+// positional argument indices. Nothing here reaches a formatting macro — the
+// forms are compared as data — so the lint is reading map syntax as `{}`
+// syntax. Scoped to this one fixture rather than the module.
+#[allow(
+    clippy::literal_string_with_formatting_args,
+    reason = "cdt:Map lexical forms, never formatted"
+)]
 #[test]
 fn the_recovery_resolves_datatypes_the_way_the_parser_does() {
     let source = concat!(

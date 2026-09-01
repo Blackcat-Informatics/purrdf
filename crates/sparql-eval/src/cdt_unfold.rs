@@ -42,23 +42,33 @@
 //! round trip, which is also why an unfolded element is `sameTerm` with what
 //! `cdt:get` returns for the same position (all ten `unfold-get-*` cases).
 //!
-//! # A row whose expression denotes no composite contributes ZERO rows
+//! # A row whose expression denotes no composite PASSES THROUGH
 //!
 //! Unbound, raised, not `cdt:`-typed, or a `cdt:`-typed literal whose lexical form
 //! does not parse: all four are "this row has nothing to expand", and all four
-//! contribute no output row. The corpus pins none of them, so this is a
-//! first-party decision, and it is the SPARQL-shaped one rather than a refusal:
-//! `UNFOLD` is a graph pattern, and a graph pattern with no solutions for a row is
-//! ordinary — it is what a BGP that matches nothing does, and it is what makes
-//! `OPTIONAL { UNFOLD(?x AS ?e) }` over a column that is only sometimes a
-//! composite behave the way every other optional pattern does. Raising instead
-//! would make one non-composite value in one row abort a whole query, which no
-//! other pattern in SPARQL does.
+//! emit the INPUT ROW UNCHANGED, with both targets unbound.
 //!
-//! An EMPTY composite is the same answer for the same reason: `UNFOLD` is one row
-//! per element, and zero elements is zero rows. It is not one row with an unbound
-//! target — that would claim an element exists whose value is `null`, which is a
-//! different value from an empty list.
+//! This is not a first-party choice. SEP-0009 §12.3 fixes it in the definitions
+//! of both algebra operators, in the same words: "If var ∉ dom(μ) and expr(μ) is
+//! an error or an RDF term that is neither a well-formed cdt:List literal nor a
+//! well-formed cdt:Map literal, then Unfold1(μ, var, expr) = { μ }", with
+//! cardinality 1 at μ. `Unfold2` repeats it for its pair.
+//!
+//! The vendored corpus does NOT pin this — all 42 `unfold` cases use a
+//! well-formed composite — so reading the corpus alone leads to the opposite,
+//! plausible-sounding answer (a graph pattern that matches nothing yields no
+//! rows). The spec text is the authority here, and it says otherwise.
+//!
+//! An EMPTY composite is a DIFFERENT condition with a different answer: zero
+//! rows. `UNFOLD` is one row per element, and zero elements is zero rows — see
+//! the Notes under both §12.3 definitions, which state the empty-multiset result
+//! for the empty term list and the empty term map explicitly. It is not one row
+//! with an unbound target either, since that would claim an element exists whose
+//! value is `null`, a different value from an empty list.
+//!
+//! Keeping the two apart is load-bearing rather than pedantic: under `OPTIONAL`,
+//! `MINUS` and `FILTER NOT EXISTS`, a column that is only SOMETIMES a composite
+//! gives different answers depending on which reading is used.
 //!
 //! The one thing that is NOT swallowed is a hard failure while evaluating the
 //! expression itself ([`crate::error::EvalError::CompositeBound`] from a
@@ -164,8 +174,34 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
         // however many output rows that row expands to.
         ctx.current_row = idx as u64;
         let Some(value) = composite_of(expression, mu, &seq.schema, ctx)? else {
-            // Unbound, raised, not composite-typed, or an ill-formed composite
-            // literal: nothing to expand, so this row contributes no output row.
+            // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
+            // expr(μ) is an error or an RDF term that is neither a well-formed
+            // cdt:List literal nor a well-formed cdt:Map literal, then
+            // Unfold1(μ, var, expr) = { μ }" — and `Unfold2` says the same for
+            // its pair. The row PASSES THROUGH with both targets left unbound.
+            // It is not dropped.
+            //
+            // This is the one place the operator is not "one row per element",
+            // and the distinction is load-bearing: the EMPTY multiset is
+            // reserved for a composite that is well-formed and EMPTY (the Notes
+            // under both definitions), which is a different condition reached
+            // below by `expansion` yielding nothing. Collapsing the two would
+            // silently drop rows from `OPTIONAL`/`MINUS`/`FILTER NOT EXISTS`
+            // over a column that is only sometimes a composite.
+            if let Some(governor) = ctx.stop_check() {
+                tripped = Some(governor);
+                break 'input;
+            }
+            match ingest.admit(ctx, rows.len()) {
+                RowAdmission::Abandoned(governor) => {
+                    tripped = governor;
+                    break 'input;
+                }
+                RowAdmission::Admitted => {}
+            }
+            let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
+            row[..in_width].copy_from_slice(mu);
+            rows.push(row);
             continue;
         };
         for (element_term, companion_term) in expansion(&value) {
