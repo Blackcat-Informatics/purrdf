@@ -1699,9 +1699,14 @@ fn convert_stdout(out: &Output) -> String {
 
 /// The `file://` IRI the CLI derives for a fixture path, so assertions stay
 /// machine-independent.
+///
+/// This calls the BINARY'S OWN derivation (`purrdf_cli::file_retrieval_iri`) rather than
+/// re-transcribing it here. A local `format!("file://{path}")` agreed with itself on POSIX
+/// and hid two divergences: it percent-encoded nothing, and it had no answer at all for a
+/// Windows path, where the derivation must strip the extended-length prefix and rewrite the
+/// separators. A second implementation in the harness is how a platform bug stays green.
 fn retrieval_iri(path: &str) -> String {
-    let absolute = std::fs::canonicalize(path).expect("fixture path canonicalizes");
-    format!("file://{}", absolute.to_str().expect("temp path is UTF-8"))
+    purrdf_cli::file_retrieval_iri(path).expect("fixture path has a file:// retrieval IRI")
 }
 
 /// The empty IRI reference `<>` denotes the document itself. From a FILE that is the
@@ -1813,6 +1818,74 @@ fn a_relative_reference_from_a_file_resolves_rather_than_emitting_invalid_ntripl
     assert!(
         text.starts_with(&format!("<{expected}> ")),
         "expected subject <{expected}> in: {text}"
+    );
+}
+
+/// A path carrying every byte a `file://` IRI cannot hold literally — a space, `#`, `?`,
+/// `%` and a non-ASCII character — derives an ENCODED retrieval IRI rather than one that
+/// re-parses as a query or a fragment.
+///
+/// The fixture puts the characters in a DIRECTORY name as well as the filename, so an
+/// unencoded `#`/`?` would truncate the base before its last segment and silently retarget
+/// every relative reference in the document.
+#[test]
+fn a_path_with_reserved_and_non_ascii_bytes_derives_an_encoded_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let awkward = dir.path().join("a b#c?d%e\u{e9}");
+    std::fs::create_dir(&awkward).expect("create the awkward directory");
+    let input = write_file(
+        &awkward,
+        "x y#z?w%v\u{e9}.ttl",
+        "<> a <http://example.org/t> .\n",
+    );
+
+    let iri = retrieval_iri(&input);
+    for encoded in ["%20", "%23", "%3F", "%25", "%C3%A9"] {
+        assert!(
+            iri.contains(encoded),
+            "the derived IRI must percent-encode {encoded}: {iri}"
+        );
+    }
+    // Everything after the `file://` scheme+authority must be one path: no literal space,
+    // fragment or query byte survives to re-parse the IRI.
+    let path = iri.strip_prefix("file://").expect("a file:// IRI");
+    assert!(
+        !path.contains([' ', '#', '?']),
+        "no reserved byte may survive literally: {iri}"
+    );
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        convert_stdout(&out).trim_end(),
+        format!(
+            "<{iri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/t> ."
+        ),
+        "`<>` denotes the document, whose IRI is the encoded retrieval IRI"
+    );
+}
+
+/// A relative reference resolves against that encoded base by REPLACING the last segment —
+/// which is only well defined because the awkward bytes are encoded rather than read as a
+/// query or fragment delimiter.
+#[test]
+fn a_relative_reference_resolves_against_an_encoded_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let awkward = dir.path().join("q?r#s t");
+    std::fs::create_dir(&awkward).expect("create the awkward directory");
+    let input = write_file(&awkward, "rel.ttl", "<foo> a <http://example.org/t> .\n");
+
+    let out = run(&["convert", "--to", "ntriples", "--from", "turtle", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected = retrieval_iri(&input).replace("/rel.ttl", "/foo");
+    assert!(
+        expected.contains("q%3Fr%23s%20t/foo"),
+        "the encoded directory must survive the resolution: {expected}"
+    );
+    assert!(
+        convert_stdout(&out).starts_with(&format!("<{expected}> ")),
+        "expected subject <{expected}> in: {}",
+        convert_stdout(&out)
     );
 }
 
