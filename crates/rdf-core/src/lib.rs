@@ -32,6 +32,7 @@
 
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
+pub mod cdt_blank;
 // The arity-generic binding-pattern adornment lattice shared by the Datalog
 // evaluator's demand keying and the SPARQL property-function access-pattern
 // feasibility check.

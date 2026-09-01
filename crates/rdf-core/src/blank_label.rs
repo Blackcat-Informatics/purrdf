@@ -571,13 +571,13 @@ fn is_pn_chars_base(c: char) -> bool {
 }
 
 /// `PN_CHARS_U ::= PN_CHARS_BASE | '_'` (== `NCNameStartChar`).
-fn is_pn_chars_u(c: char) -> bool {
+pub(crate) fn is_pn_chars_u(c: char) -> bool {
     c == '_' || is_pn_chars_base(c)
 }
 
 /// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x036F] |
 /// [#x203F-#x2040]`.
-fn is_pn_chars(c: char) -> bool {
+pub(crate) fn is_pn_chars(c: char) -> bool {
     is_pn_chars_u(c) || c == '-' || c.is_ascii_digit() || in_ranges(c as u32, PN_CHARS_EXTRA_RANGES)
 }
 

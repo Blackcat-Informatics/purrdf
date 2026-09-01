@@ -1347,6 +1347,7 @@ dependencies = [
  "oxilangtag",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-events",
  "purrdf-iri",
  "sha2",
