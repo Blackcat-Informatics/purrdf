@@ -1083,14 +1083,59 @@ mod tests {
         assert!(datasets_isomorphic(&unbased.dataset, &based.dataset));
     }
 
-    /// A document base that is not an absolute IRI is refused at configuration time.
+    /// A document base that is not an absolute IRI is refused at configuration time, with the
+    /// workspace's shared `purrdf_iri` diagnostic code and the FIELD's name.
     #[test]
     fn a_non_absolute_document_base_is_refused() {
-        assert!(
-            config(SkosGraphSelection::DefaultGraph, 1_000)
-                .with_document_base_iri(Some("scheme.ttl".to_owned()))
-                .is_err()
-        );
+        let relative = config(SkosGraphSelection::DefaultGraph, 1_000)
+            .with_document_base_iri(Some("scheme.ttl".to_owned()))
+            .expect_err("a relative document base is refused")
+            .to_string();
+        assert!(relative.contains("iri-non-absolute-base"), "{relative}");
+        assert!(relative.contains("SKOS document base IRI"), "{relative}");
+
+        let malformed = config(SkosGraphSelection::DefaultGraph, 1_000)
+            .with_document_base_iri(Some("ht tp://example.org/scheme.ttl".to_owned()))
+            .expect_err("a malformed document base is refused")
+            .to_string();
+        assert!(malformed.contains("iri-bad-scheme"), "{malformed}");
+    }
+
+    /// `scheme_iri` becomes the SUBJECT of the emitted `skos:ConceptScheme`, so a relative or
+    /// malformed one would put a non-absolute IRI into the projected graph. It is refused at
+    /// configuration time instead, carrying the shared code and naming the field.
+    #[test]
+    fn the_scheme_iri_is_gated_by_the_shared_iri_layer() {
+        let build = |scheme_iri: &str| {
+            SkosConfig::new(
+                source_roles(),
+                target_roles(),
+                scheme_iri,
+                SkosGraphSelection::DefaultGraph,
+                ProjectionLimits::new(8, 2_000_000, 4_000_000, 5_000_000, 16).expect("limits"),
+                1_000,
+            )
+        };
+        assert!(build(&format!("{DATA}scheme")).is_ok());
+
+        for bad in ["scheme", "schemes/one"] {
+            let error = build(bad)
+                .expect_err("a relative scheme IRI is refused")
+                .to_string();
+            assert!(error.contains("iri-non-absolute-base"), "{bad:?}: {error}");
+            assert!(
+                error.contains("SKOS caller-owned concept-scheme IRI"),
+                "{bad:?}: {error}"
+            );
+        }
+        let empty = build("")
+            .expect_err("an empty scheme IRI is refused")
+            .to_string();
+        assert!(empty.contains("iri-empty"), "{empty}");
+        let malformed = build("ht tp://example.org/scheme")
+            .expect_err("a malformed scheme IRI is refused")
+            .to_string();
+        assert!(malformed.contains("iri-bad-scheme"), "{malformed}");
     }
 
     fn push_iri_quad(
