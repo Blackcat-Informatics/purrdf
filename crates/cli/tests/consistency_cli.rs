@@ -381,8 +381,9 @@ fn base_resolves_relative_iris_piped_via_stdin() {
         child.wait_with_output().expect("wait for purrdf")
     };
 
-    // Without `--base`, a relative IRI has no scheme to be absolute with — the negative
-    // control that keeps the assertion below from passing by accident.
+    // Without `--base`, a relative IRI has no base to resolve against — the negative
+    // control that keeps the assertion below from passing by accident. stdin carries no
+    // retrieval IRI, so no base can be derived for it and the refusal is the whole point.
     let unbased = pipe(&["consistency", "--from", "turtle", "-"]);
     assert_eq!(
         code(&unbased),
@@ -391,8 +392,13 @@ fn base_resolves_relative_iris_piped_via_stdin() {
         stderr(&unbased)
     );
     assert!(
-        stderr(&unbased).contains("absolute"),
-        "the refusal names what a relative IRI is missing: {}",
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition a base fixes: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("@base"),
+        "the refusal names the remedy: {}",
         stderr(&unbased)
     );
 

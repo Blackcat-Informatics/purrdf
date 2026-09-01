@@ -31,6 +31,7 @@ use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
 use purrdf_core::blank_label::LabelAlphabet;
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -165,10 +166,11 @@ pub fn parse_dataset_with(
         // is a distinct `SpanTable` monomorphization of `text_parse_without_panicking`,
         // so the hot `NoSpans` path the codec's `parse` drives stays zero-cost.
         let mut table = SpanTable::default();
+        let base = base_scope_for(base_iri)?;
         let graph = text_parse_without_panicking(
             format,
             text,
-            base_iri,
+            &base,
             LineParseMode::ForceSequential,
             &mut table,
         )?;
@@ -198,6 +200,25 @@ pub fn parse_dataset_forced_sequential(
     parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::ForceSequential)
 }
 
+/// Build the in-scope base stack for a caller-supplied base string.
+///
+/// This is the ONE boundary where the public `Option<&str>` base becomes the typed
+/// [`BaseScope`] the codecs consume, so the "is this base absolute?" check happens once
+/// here rather than inside each codec. A caller-supplied base that is not absolute is a
+/// hard `iri-non-absolute-base` — the library never derives a base of its own (it is
+/// handed BYTES and has no retrieval IRI; see RFC-3986 §5.1.4).
+pub(super) fn base_scope_for(base_iri: Option<&str>) -> Result<BaseScope, RdfDiagnostic> {
+    match base_iri {
+        None => Ok(BaseScope::empty()),
+        Some(raw) => {
+            let base = BaseIri::parse(raw).map_err(|e| {
+                RdfDiagnostic::error(e.diagnostic_code(), format!("invalid base IRI: {e}"))
+            })?;
+            Ok(BaseScope::rooted(base, BaseOrigin::Caller))
+        }
+    }
+}
+
 fn parse_dataset_mode(
     bytes: &[u8],
     media_type: &str,
@@ -205,6 +226,7 @@ fn parse_dataset_mode(
     mode: LineParseMode,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let format = classify(media_type)?;
+    let base = base_scope_for(base_iri)?;
     let text = std::str::from_utf8(bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
 
@@ -217,7 +239,7 @@ fn parse_dataset_mode(
     // bnode minting — see `text_parse::parse_to_gts_graph_mode`); RDF/XML, TriX and
     // HexTuples intern straight into the frozen IR through the SAME shared fold, no
     // intermediate GTS graph. `mode` is honored only by the line/Turtle family.
-    super::codec::codec_for(format).parse(text, base_iri, mode)
+    super::codec::codec_for(format).parse(text, &base, mode)
 }
 
 /// Run a first-party codec parse under a panic guard, converting any unwind into a
@@ -245,12 +267,12 @@ where
 pub(super) fn text_parse_without_panicking<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
-    base_iri: Option<&str>,
+    base: &BaseScope,
     mode: LineParseMode,
     collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::text_parse::parse_to_gts_graph_mode(format, text, base_iri, mode, collector)
+        super::text_parse::parse_to_gts_graph_mode(format, text, base, mode, collector)
     }));
     match outcome {
         Ok(result) => result,
@@ -267,10 +289,10 @@ pub(super) fn text_parse_without_panicking<S: SpanCollector>(
 
 pub(super) fn parse_rdfxml_without_panicking(
     text: &str,
-    base_iri: Option<&str>,
+    base: &BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::rdfxml::parse_rdfxml_to_dataset(text, base_iri)
+        super::rdfxml::parse_rdfxml_to_dataset(text, base)
     }));
     match outcome {
         Ok(result) => result,

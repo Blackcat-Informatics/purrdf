@@ -678,12 +678,13 @@ fn a_structurally_incomplete_shape_hard_fails() {
 /// `--base` resolves relative IRIs in the data graph, and the resolution is what makes the
 /// shapes graph apply at all.
 ///
-/// The unbased run is the negative control and it is deliberately not an error: relative IRIs
-/// are legal terms, they simply are not `ex:Person` and `ex:alice`, so no target selects a
-/// focus node and the report VACUOUSLY conforms. That vacuous pass is exactly the failure mode
-/// a base-less invocation would otherwise hide, and it is the thing `--base` fixes: with it,
-/// `<alice>`/`<Person>`/`<age>` resolve to the IRIs the shape targets and the violation is
-/// found.
+/// The unbased run is the negative control, and it is an ERROR. It used to be a vacuous
+/// PASS: the relative terms were interned verbatim, so they simply were not `ex:Person` and
+/// `ex:alice`, no target selected a focus node, and the report conformed with zero results.
+/// That is the worst possible outcome for a validator — a clean "conforms true" over a
+/// document none of whose constraints were actually evaluated. A relative IRI with no base
+/// in scope is now refused outright, so a conformance verdict is never reported over terms
+/// that were never resolved.
 #[test]
 fn base_resolves_relative_iris_in_the_data_graph() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -697,15 +698,20 @@ fn base_resolves_relative_iris_in_the_data_graph() {
         &["validate", "--shapes", &shapes, "--from", "turtle", "-"],
         relative,
     );
-    assert_eq!(code(&unbased), 0, "{}", stderr(&unbased));
-    assert!(
-        stderr(&unbased).contains("shacl conforms true\n"),
-        "unresolved relative IRIs select no focus node, so the report vacuously conforms: {}",
+    assert_eq!(
+        code(&unbased),
+        1,
+        "a relative IRI with no base must be refused, never vacuously conform: {}",
         stderr(&unbased)
     );
     assert!(
-        stderr(&unbased).contains("shacl results 0\n"),
-        "{}",
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition --base fixes: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        !stderr(&unbased).contains("shacl conforms"),
+        "no conformance verdict may be reported over unresolved terms: {}",
         stderr(&unbased)
     );
 

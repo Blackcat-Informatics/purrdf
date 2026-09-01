@@ -40,7 +40,7 @@ impl RdfCodec for TriXCodec {
     fn parse(
         &self,
         text: &str,
-        _base_iri: Option<&str>,
+        _base: &purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text))

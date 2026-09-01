@@ -776,11 +776,14 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
         stderr(&based)
     );
 
-    // The negative control. Without `--base` nothing is resolved: the three documents still
-    // agree with each other (all three keep the relative term `<alice>`, so the map still
-    // matches the data), which is exactly why the assertion above has to be about the term
-    // IDENTITY rather than about the verdict. What changed is what the node IS, and the
-    // unbased run says so in its own output.
+    // The negative control. Without `--base` the data graph is REFUSED: a relative IRI with
+    // no base in scope is a hard error, not a term.
+    //
+    // This used to "succeed" with the three documents agreeing among themselves — all three
+    // kept the bare relative term `<alice>`, so the map still matched the data and a verdict
+    // came out. That agreement was the danger: the run reported a real-looking conformance
+    // result over terms that are not IRIs at all and would serialize as invalid N-Triples.
+    // Refusing is the only honest answer, and stdin carries no retrieval IRI to fall back to.
     let unbased = pipe(
         &[
             "shex",
@@ -794,15 +797,20 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
         ],
         relative_data,
     );
-    assert_eq!(code(&unbased), 0, "{}", stderr(&unbased));
-    assert!(
-        stdout(&unbased).contains("\"node\":\"<alice>\""),
-        "unresolved, the node is the relative term the document wrote:\n{}",
+    assert_eq!(
+        code(&unbased),
+        1,
+        "a relative IRI with no base must be refused, not decided:\n{}",
         stdout(&unbased)
     );
     assert!(
-        !stdout(&unbased).contains("http://example.org/alice"),
-        "and it is NOT the absolute IRI --base produced:\n{}",
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition --base fixes:\n{}",
+        stderr(&unbased)
+    );
+    assert!(
+        !stdout(&unbased).contains("\"node\""),
+        "no conformance verdict may be reported over unresolved terms:\n{}",
         stdout(&unbased)
     );
 }

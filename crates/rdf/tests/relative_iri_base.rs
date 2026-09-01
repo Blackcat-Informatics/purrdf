@@ -1,0 +1,412 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Relative-IRI resolution across every native codec.
+//!
+//! The defect this pins: a relative IRI reference with no base in scope used to be
+//! interned VERBATIM into the frozen IR, so `<foo>` parsed "successfully" and was then
+//! emitted as invalid N-Triples, and `<>` interned as the empty string and tripped a
+//! downstream guard with an unrelated message. Both are now typed hard failures, and
+//! the two failure modes are kept apart:
+//!
+//! * a syntax that ADMITS relative references but has no base — `iri-relative-no-base`,
+//!   which supplying a base fixes;
+//! * a syntax that admits NO relative reference — `iri-not-absolute-by-grammar`, which
+//!   supplying a base does not fix, and where the base is never applied.
+//!
+//! Which of the two applies is read off the format registry's `admits_relative_iri`
+//! column, so the totality test at the bottom covers every registered format.
+
+use purrdf_rdf::native_codecs::{NativeRdfFormat, parse_dataset};
+use purrdf_rdf::{SerializeGraph, TermValue, serialize_dataset};
+
+const P: &str = "<http://example.org/p>";
+const O: &str = "<http://example.org/o>";
+
+/// Turtle source asserting `reference` in SUBJECT position, under `base` if given.
+fn turtle_with(base: Option<&str>, reference: &str) -> String {
+    match base {
+        Some(b) => format!("@base <{b}> .\n<{reference}> {P} {O} .\n"),
+        None => format!("<{reference}> {P} {O} .\n"),
+    }
+}
+
+/// The single subject IRI of a one-triple document.
+fn only_subject(text: &str, media_type: &str, base: Option<&str>) -> String {
+    let dataset = parse_dataset(text.as_bytes(), media_type, base)
+        .unwrap_or_else(|e| panic!("parse {media_type} failed: {e}"));
+    let quad = dataset.quads().next().expect("one quad");
+    match dataset.term_value(quad.s) {
+        TermValue::Iri(iri) => iri,
+        other => panic!("subject is not an IRI: {other:?}"),
+    }
+}
+
+// ── RFC-3986 §5.4 through a real Turtle document ────────────────────────────────
+
+const RFC_BASE: &str = "http://a/b/c/d;p?q";
+
+/// RFC-3986 §5.4.1 normal examples. `g:h` is omitted only because Turtle's own
+/// `IRIREF` production is exercised by every other row identically.
+const NORMAL: &[(&str, &str)] = &[
+    ("g:h", "g:h"),
+    ("g", "http://a/b/c/g"),
+    ("./g", "http://a/b/c/g"),
+    ("g/", "http://a/b/c/g/"),
+    ("/g", "http://a/g"),
+    ("//g", "http://g"),
+    ("?y", "http://a/b/c/d;p?y"),
+    ("g?y", "http://a/b/c/g?y"),
+    ("#s", "http://a/b/c/d;p?q#s"),
+    ("g#s", "http://a/b/c/g#s"),
+    ("g?y#s", "http://a/b/c/g?y#s"),
+    (";x", "http://a/b/c/;x"),
+    ("g;x", "http://a/b/c/g;x"),
+    ("g;x?y#s", "http://a/b/c/g;x?y#s"),
+    ("", "http://a/b/c/d;p?q"),
+    (".", "http://a/b/c/"),
+    ("./", "http://a/b/c/"),
+    ("..", "http://a/b/"),
+    ("../", "http://a/b/"),
+    ("../g", "http://a/b/g"),
+    ("../..", "http://a/"),
+    ("../../", "http://a/"),
+    ("../../g", "http://a/g"),
+];
+
+/// RFC-3986 §5.4.2 abnormal examples.
+const ABNORMAL: &[(&str, &str)] = &[
+    ("../../../g", "http://a/g"),
+    ("../../../../g", "http://a/g"),
+    ("/./g", "http://a/g"),
+    ("/../g", "http://a/g"),
+    ("g.", "http://a/b/c/g."),
+    (".g", "http://a/b/c/.g"),
+    ("g..", "http://a/b/c/g.."),
+    ("..g", "http://a/b/c/..g"),
+    ("./../g", "http://a/b/g"),
+    ("./g/.", "http://a/b/c/g/"),
+    ("g/./h", "http://a/b/c/g/h"),
+    ("g/../h", "http://a/b/c/h"),
+    ("g;x=1/./y", "http://a/b/c/g;x=1/y"),
+    ("g;x=1/../y", "http://a/b/c/y"),
+    ("g?y/./x", "http://a/b/c/g?y/./x"),
+    ("g?y/../x", "http://a/b/c/g?y/../x"),
+    ("g#s/./x", "http://a/b/c/g#s/./x"),
+    ("g#s/../x", "http://a/b/c/g#s/../x"),
+    ("http:g", "http:g"),
+];
+
+#[test]
+fn turtle_resolves_the_full_rfc3986_5_4_table() {
+    for (reference, expected) in NORMAL.iter().chain(ABNORMAL.iter()) {
+        let text = turtle_with(Some(RFC_BASE), reference);
+        assert_eq!(
+            only_subject(&text, "text/turtle", None),
+            *expected,
+            "@base <{RFC_BASE}> with <{reference}>"
+        );
+    }
+}
+
+#[test]
+fn trig_resolves_the_full_rfc3986_5_4_table() {
+    for (reference, expected) in NORMAL.iter().chain(ABNORMAL.iter()) {
+        let text = turtle_with(Some(RFC_BASE), reference);
+        assert_eq!(
+            only_subject(&text, "application/trig", None),
+            *expected,
+            "@base <{RFC_BASE}> with <{reference}>"
+        );
+    }
+}
+
+/// The caller-supplied base (the API argument) must resolve identically to an
+/// in-document `@base` — same algorithm, same table.
+#[test]
+fn caller_supplied_base_matches_the_in_document_directive() {
+    for (reference, expected) in NORMAL.iter().chain(ABNORMAL.iter()) {
+        let text = turtle_with(None, reference);
+        assert_eq!(
+            only_subject(&text, "text/turtle", Some(RFC_BASE)),
+            *expected,
+            "caller base with <{reference}>"
+        );
+    }
+}
+
+// ── No base in scope ────────────────────────────────────────────────────────────
+
+/// The reported defect, in both of its shapes.
+#[test]
+fn relative_reference_without_a_base_is_a_located_hard_error() {
+    for reference in ["", "foo", "./foo", "../foo", "/foo", "#frag"] {
+        let text = turtle_with(None, reference);
+        let error = parse_dataset(text.as_bytes(), "text/turtle", None)
+            .expect_err("a relative IRI with no base must not parse");
+        assert_eq!(
+            error.code, "iri-relative-no-base",
+            "reference <{reference}> produced {error:?}"
+        );
+        // The message names the offending reference and points at the remedy.
+        assert!(
+            error.message.contains(&format!("{reference:?}")),
+            "message must name <{reference}> verbatim: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("@base"),
+            "message must point at the remedy: {}",
+            error.message
+        );
+        let location = error.location.as_ref().expect("error is located");
+        assert_eq!(location.line, Some(1));
+        assert_eq!(location.column, Some(1), "column points at the subject IRI");
+    }
+}
+
+/// Previously `<foo>` parsed and was then emitted as INVALID N-Triples. Nothing may
+/// reach the serializer unresolved, so the whole document is refused instead.
+#[test]
+fn an_unresolved_relative_iri_never_reaches_the_serializer() {
+    let text = turtle_with(None, "foo");
+    assert!(parse_dataset(text.as_bytes(), "text/turtle", None).is_err());
+
+    // With a base it resolves, and the emitted N-Triples is well-formed absolute.
+    let dataset = parse_dataset(
+        text.as_bytes(),
+        "text/turtle",
+        Some("http://example.org/dir/"),
+    )
+    .expect("parses under a base");
+    let out = String::from_utf8(
+        serialize_dataset(&dataset, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize"),
+    )
+    .expect("utf-8");
+    assert!(
+        out.starts_with("<http://example.org/dir/foo> "),
+        "subject must be absolute in the output: {out}"
+    );
+}
+
+/// RFC-3986 §4.2 `path-noscheme`: this is a SYNTAX error about the reference, so it
+/// must not be reported as "no base" — adding a `@base` could not fix it.
+#[test]
+fn path_noscheme_is_a_parse_error_not_a_missing_base() {
+    let text = turtle_with(None, "1a:b");
+    let error = parse_dataset(text.as_bytes(), "text/turtle", None).expect_err("must fail");
+    assert_eq!(error.code, "iri-disallowed-char");
+    assert_ne!(error.code, "iri-relative-no-base");
+}
+
+// ── RFC-3986 §5.2 corners that the old hand-rolled resolver got wrong ───────────
+
+#[test]
+fn network_path_reference_takes_the_bases_scheme() {
+    let text = turtle_with(Some("http://a/b"), "//example.org/x");
+    assert_eq!(
+        only_subject(&text, "text/turtle", None),
+        "http://example.org/x"
+    );
+}
+
+#[test]
+fn same_document_reference_keeps_the_query_and_drops_the_fragment() {
+    let base = "http://example.org/d?q=1#frag";
+    let cases: &[(&str, &str)] = &[
+        ("", "http://example.org/d?q=1"),
+        ("#x", "http://example.org/d?q=1#x"),
+        ("?y=2", "http://example.org/d?y=2"),
+    ];
+    for (reference, expected) in cases {
+        let text = turtle_with(Some(base), reference);
+        assert_eq!(
+            only_subject(&text, "text/turtle", None),
+            *expected,
+            "<{reference}> against {base}"
+        );
+    }
+}
+
+/// A `@base` directive may be relative and resolves against the base already in force
+/// (Turtle §6.1 → RFC-3986 §5.1.1), so directives chain.
+#[test]
+fn base_directives_chain_three_deep() {
+    let text = concat!(
+        "@base <sub/> .\n",
+        "@base <deeper/> .\n",
+        "<x> <http://example.org/p> <http://example.org/o> .\n",
+    );
+    assert_eq!(
+        only_subject(text, "text/turtle", Some("http://example.org/root/doc")),
+        "http://example.org/root/sub/deeper/x"
+    );
+}
+
+/// Turtle §4.4: a prefix's namespace is resolved when the `@prefix` is READ. The same
+/// prefixed name must therefore denote ONE IRI for the whole document, even across a
+/// later `@base` that would have changed a use-time resolution.
+#[test]
+fn a_prefix_namespace_is_fixed_when_the_directive_is_read() {
+    let text = concat!(
+        "@prefix p: <rel/> .\n",
+        "p:x <http://example.org/p> <http://example.org/o> .\n",
+        "@base <http://example.org/moved/> .\n",
+        "p:x <http://example.org/p2> <http://example.org/o> .\n",
+    );
+    let dataset = parse_dataset(
+        text.as_bytes(),
+        "text/turtle",
+        Some("http://example.org/start/"),
+    )
+    .expect("parses");
+    let subjects: Vec<String> = dataset
+        .quads()
+        .map(|q| match dataset.term_value(q.s) {
+            TermValue::Iri(iri) => iri,
+            other => panic!("not an IRI: {other:?}"),
+        })
+        .collect();
+    assert_eq!(subjects.len(), 2);
+    assert_eq!(
+        subjects[0], subjects[1],
+        "the same prefixed name must denote one IRI across a later @base"
+    );
+    assert_eq!(subjects[0], "http://example.org/start/rel/x");
+}
+
+// ── Grammars that admit no relative reference ───────────────────────────────────
+
+/// N-Triples / N-Quads / TriX / HexTuples must refuse a relative reference with the
+/// same code WHETHER OR NOT a base is supplied — the base is never applied to them.
+#[test]
+fn absolute_only_grammars_refuse_relative_references_with_and_without_a_base() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "application/n-triples",
+            "<foo> <http://example.org/p> <http://example.org/o> .\n",
+        ),
+        (
+            "application/n-quads",
+            "<foo> <http://example.org/p> <http://example.org/o> .\n",
+        ),
+    ];
+    for (media_type, text) in cases {
+        for base in [None, Some("http://example.org/dir/")] {
+            let error = parse_dataset(text.as_bytes(), media_type, base).expect_err(
+                "a grammar admitting no relative reference must refuse one, base or not",
+            );
+            assert_eq!(
+                error.code, "iri-not-absolute-by-grammar",
+                "{media_type} with base = {base:?}"
+            );
+            assert!(
+                error.message.contains("\"foo\""),
+                "message names the reference: {}",
+                error.message
+            );
+        }
+    }
+}
+
+/// Every registered format, driven off the capability column rather than a hand list,
+/// so a newly added codec cannot quietly opt out of the policy.
+#[test]
+fn every_format_applies_the_policy_its_capability_column_declares() {
+    for format in NativeRdfFormat::all() {
+        // Only the text syntaxes with a simple one-triple spelling are exercised here;
+        // the tree syntaxes have their own fixtures.
+        let text = match format {
+            NativeRdfFormat::Turtle | NativeRdfFormat::TriG => {
+                format!("<foo> {P} {O} .\n")
+            }
+            NativeRdfFormat::NTriples | NativeRdfFormat::NQuads => {
+                format!("<foo> {P} {O} .\n")
+            }
+            _ => continue,
+        };
+        let result = parse_dataset(text.as_bytes(), format.media_type(), None);
+        let error = result.err().unwrap_or_else(|| {
+            panic!("{format:?}: a relative reference with no base must not parse")
+        });
+        let expected = if format.admits_relative_iri() {
+            "iri-relative-no-base"
+        } else {
+            "iri-not-absolute-by-grammar"
+        };
+        assert_eq!(
+            error.code,
+            expected,
+            "{format:?} (admits_relative_iri = {})",
+            format.admits_relative_iri()
+        );
+
+        // With a base: the admitting formats now succeed; the others fail IDENTICALLY,
+        // because a base is never applied to a grammar that admits no relative form.
+        let with_base = parse_dataset(
+            text.as_bytes(),
+            format.media_type(),
+            Some("http://example.org/dir/"),
+        );
+        if format.admits_relative_iri() {
+            assert!(
+                with_base.is_ok(),
+                "{format:?} must resolve <foo> under a base"
+            );
+        } else {
+            assert_eq!(
+                with_base.expect_err("must still fail").code,
+                "iri-not-absolute-by-grammar",
+                "{format:?}: supplying a base must not change the verdict"
+            );
+        }
+    }
+}
+
+// ── RDF/XML ─────────────────────────────────────────────────────────────────────
+
+/// RDF/XML admits relative references and nests `xml:base` per element, so it routes
+/// through the same layer: a relative `rdf:about` with no base is the same hard error.
+#[test]
+fn rdfxml_relative_about_without_a_base_is_the_same_error() {
+    let xml = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\">",
+        "<rdf:Description rdf:about=\"foo\"><ex:p>v</ex:p></rdf:Description>",
+        "</rdf:RDF>",
+    );
+    let error = parse_dataset(xml.as_bytes(), "application/rdf+xml", None)
+        .expect_err("relative rdf:about with no base must fail");
+    assert_eq!(error.code, "iri-relative-no-base");
+
+    let dataset = parse_dataset(
+        xml.as_bytes(),
+        "application/rdf+xml",
+        Some("http://example.org/dir/"),
+    )
+    .expect("resolves under a base");
+    let quad = dataset.quads().next().expect("one quad");
+    assert_eq!(
+        dataset.term_value(quad.s),
+        TermValue::Iri("http://example.org/dir/foo".to_owned())
+    );
+}
+
+/// `xml:base` nests per element and may itself be relative.
+#[test]
+fn rdfxml_xml_base_nests_and_may_be_relative() {
+    let xml = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\" xml:base=\"http://example.org/outer/\">",
+        "<rdf:Description rdf:about=\"a\" xml:base=\"inner/\">",
+        "<ex:p>v</ex:p></rdf:Description>",
+        "</rdf:RDF>",
+    );
+    let dataset = parse_dataset(xml.as_bytes(), "application/rdf+xml", None).expect("parses");
+    let quad = dataset.quads().next().expect("one quad");
+    assert_eq!(
+        dataset.term_value(quad.s),
+        TermValue::Iri("http://example.org/outer/inner/a".to_owned())
+    );
+}

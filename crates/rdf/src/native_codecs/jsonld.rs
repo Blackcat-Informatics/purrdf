@@ -223,7 +223,7 @@ impl RdfCodec for JsonLdCodec {
     fn parse(
         &self,
         text: &str,
-        _base_iri: Option<&str>,
+        _base: &purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         parse_jsonld(text.as_bytes())
@@ -253,7 +253,7 @@ impl RdfCodec for YamlLdCodec {
     fn parse(
         &self,
         text: &str,
-        _base_iri: Option<&str>,
+        _base: &purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let json = yamlld_to_jsonld(text.as_bytes())?;

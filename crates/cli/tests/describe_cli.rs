@@ -533,7 +533,12 @@ fn base_resolves_relative_iris_while_parsing() {
         stdout(&based)
     );
 
-    // The negative control: unresolved, the subject is a different term and describes nothing.
+    // The negative control: with no base the document is REFUSED rather than parsed with
+    // `<alice>` left unresolved. Silently interning the relative reference and then
+    // describing nothing is the defect this behaviour replaces — an empty description is
+    // indistinguishable from "the subject genuinely has no triples", so the user was told
+    // nothing was there instead of that their document could not be resolved. stdin has no
+    // retrieval IRI, so there is no base to fall back to.
     let unbased = pipe(
         &[
             "describe",
@@ -547,10 +552,20 @@ fn base_resolves_relative_iris_while_parsing() {
         ],
         relative,
     );
-    assert_eq!(code(&unbased), 0, "{}", stderr(&unbased));
+    assert_eq!(
+        code(&unbased),
+        1,
+        "a relative IRI with no base must be refused, not silently unresolved:\n{}",
+        stdout(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition a base fixes:\n{}",
+        stderr(&unbased)
+    );
     assert!(
         stdout(&unbased).trim().is_empty(),
-        "an unresolved relative IRI is not the absolute one:\n{}",
+        "a refused parse emits no description:\n{}",
         stdout(&unbased)
     );
 }

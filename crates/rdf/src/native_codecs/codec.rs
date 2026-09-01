@@ -22,6 +22,8 @@
 
 use std::sync::Arc;
 
+use purrdf_iri::BaseScope;
+
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{self, SerGraph};
 use super::span::NoSpans;
@@ -39,10 +41,17 @@ pub(super) trait RdfCodec {
     /// only by [`LineCodec`] (the N-Triples/N-Quads chunk-parallel toggle); the
     /// standalone codecs ignore it. Every implementor is panic-guarded, matching the
     /// per-format guards the call sites applied before.
+    /// The in-scope base stack is handed to EVERY codec, but what a codec may do with
+    /// it is decided once, by the
+    /// [`admits_relative_iri`](NativeRdfFormat::admits_relative_iri) column of the
+    /// format registry — not per codec. A format whose grammar admits relative
+    /// references resolves through [`BaseScope::resolve`]; one that does not routes
+    /// through [`BaseScope::resolve_absolute_only`] and NEVER applies the base, so a
+    /// relative reference fails identically whether or not a base was supplied.
     fn parse(
         &self,
         text: &str,
-        base_iri: Option<&str>,
+        base: &BaseScope,
         mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
 
@@ -79,14 +88,14 @@ impl RdfCodec for LineCodec {
     fn parse(
         &self,
         text: &str,
-        base_iri: Option<&str>,
+        base: &BaseScope,
         mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         // The hot path never records spans; the span-tracking path in
         // `parse_dataset_with` calls `text_parse_without_panicking` with a `SpanTable`
         // directly (a distinct monomorphization), so `NoSpans` stays zero-cost here.
         let graph =
-            super::parse::text_parse_without_panicking(self.0, text, base_iri, mode, &mut NoSpans)?;
+            super::parse::text_parse_without_panicking(self.0, text, base, mode, &mut NoSpans)?;
         super::parse::dataset_from_text_ser_graph(&graph)
     }
 
