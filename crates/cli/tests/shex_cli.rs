@@ -488,13 +488,17 @@ fn stdin_schemas_are_read_under_schema_from_and_two_stdins_are_refused() {
     );
 }
 
-/// A malformed ShExC schema, a malformed ShExJ schema and a malformed shape map are all
-/// runtime failures (exit 1) that name the document, and none of them writes a verdict.
+/// A malformed ShExC schema and a malformed ShExJ schema are runtime failures (exit 1) that
+/// name the document, and neither writes a verdict.
+///
+/// Exit **1** is the load-bearing assertion: a malformed DOCUMENT is discovered by reading it,
+/// which is the side of [`crate::error`]'s line that is not the command line. The malformed
+/// `MAP` that used to live here is no longer one of these — see
+/// [`a_malformed_map_is_a_usage_error_decided_before_any_document_is_read`].
 #[test]
 fn malformed_inputs_are_runtime_failures() {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
-    let good = write_file(dir.path(), "schema.shex", SCHEMA);
 
     let bad_shexc = write_file(dir.path(), "bad.shex", "ex:Broken { { { ");
     let out = run(&["shex", "--schema", &bad_shexc, "--data", &data, ALICE]);
@@ -505,6 +509,24 @@ fn malformed_inputs_are_runtime_failures() {
     let bad_shexj = write_file(dir.path(), "bad.shexj", "{ not json");
     let out = run(&["shex", "--schema", &bad_shexj, "--data", &data, ALICE]);
     assert_eq!(code(&out), 1, "{}", stderr(&out));
+}
+
+/// A malformed `MAP` is a USAGE error (exit **2**), decided before any document is opened.
+///
+/// A `MAP` is command-line text with its own grammar; its syntax depends on the argument and on
+/// `--base`, and on nothing this run reads. `crates/cli/src/error.rs` puts a fault that is
+/// knowable without reading a document on the exit-2 side — the same line that makes `--rules`
+/// without `--entailment` a usage error while an unreadable rule document is a runtime one.
+///
+/// It used to exit **1**, because nothing decided it until `validate_shape_map` was reached,
+/// which is after the schema AND the data graph have been read. The exit code is asserted
+/// explicitly here because that is the part that silently drifted: the message named `MAP`
+/// correctly the whole time.
+#[test]
+fn a_malformed_map_is_a_usage_error_decided_before_any_document_is_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let good = write_file(dir.path(), "schema.shex", SCHEMA);
 
     let out = run(&[
         "shex",
@@ -514,12 +536,99 @@ fn malformed_inputs_are_runtime_failures() {
         &data,
         "not a shape map",
     ]);
-    assert_eq!(code(&out), 1, "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("MAP"),
-        "the diagnostic names the argument that failed: {}",
+    assert_eq!(
+        code(&out),
+        2,
+        "a fault in an argument is a usage error: {}",
         stderr(&out)
     );
+    assert!(
+        stderr(&out).contains("MAP `not a shape map`"),
+        "the refusal names the argument and quotes it back: {}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).is_empty(), "a failed run writes no verdict");
+
+    // …and it really is decided BEFORE anything is opened: the same bad map, with a schema
+    // path that does not exist, still reports the map rather than the missing file.
+    let missing = run(&[
+        "shex",
+        "--schema",
+        &dir.path().join("nope.shex").to_string_lossy(),
+        "--data",
+        &data,
+        "not a shape map",
+    ]);
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("MAP") && !stderr(&missing).contains("nope.shex"),
+        "the argument is decided before the document is opened: {}",
+        stderr(&missing)
+    );
+}
+
+/// A relative IRI in the `MAP` with no `--base` is a usage error naming `--base`, and says it
+/// ONCE.
+///
+/// Two defects met here. The refusal exited **1** although a shape map is argv text decidable
+/// without any document; and it carried the LIBRARY's remedy — "add a base to the document
+/// (`@base`/`BASE` …, `xml:base` …)" — which names document directives for a value that lives
+/// in no document, the identical wrong-remedy shape `validate --shapes-graph` and `entails
+/// --import` were each fixed for. The remedy that applies is `--base`, and the message now says
+/// that and nothing else.
+#[test]
+fn a_relative_map_iri_with_no_base_names_the_base_flag_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "<alice>@<http://example.org/UserShape>",
+    ]);
+    let why = stderr(&out);
+    assert_eq!(code(&out), 2, "a fault in an argument exits 2: {why}");
+    assert!(
+        why.contains("MAP `<alice>@<http://example.org/UserShape>`"),
+        "the refusal names and quotes the argument: {why}"
+    );
+    assert!(
+        why.contains("iri-relative-no-base") && why.contains("`alice`"),
+        "it carries the shared code and the offending reference: {why}"
+    );
+    assert!(
+        why.contains("pass --base <IRI>"),
+        "and names the remedy that exists on this surface: {why}"
+    );
+    // The library's DOCUMENT remedy must not appear at all — not instead of, and not beside.
+    assert!(
+        !why.contains("xml:base") && !why.contains("add a base to the document"),
+        "a document directive cannot fix a command-line value: {why}"
+    );
+    assert_eq!(
+        why.matches("iri-relative-no-base").count(),
+        1,
+        "the diagnostic is rendered once: {why}"
+    );
+    assert!(stdout(&out).is_empty(), "no verdict is invented");
+
+    // The remedy it names actually works.
+    let based = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--data",
+        &data,
+        "--base",
+        "http://example.org/",
+        "<alice>@<http://example.org/UserShape>",
+    ]);
+    assert_eq!(code(&based), 0, "{}", stderr(&based));
+    assert!(stderr(&based).contains("shex nonconformant 1\n"));
 }
 
 /// A `MAP` naming a shape the schema does not declare is REFUSED, not answered.
@@ -533,6 +642,15 @@ fn malformed_inputs_are_runtime_failures() {
 /// undeclared shape …`, which spends the one word the format has for a finding about the DATA
 /// on a mistake the data had no part in: a shell branching on `shex conformant false` would
 /// read a typo in its own argument as a validation result.
+///
+/// # Exit **1**, and deliberately not 2
+///
+/// Every other `MAP` fault is a usage error decided before a document is opened. This one is
+/// not, and the difference is not cosmetic: an undeclared label cannot be SEEN until the schema
+/// has been read and its import closure walked, which puts it on the runtime side of
+/// `crates/cli/src/error.rs`'s "is the fault knowable from the command line" line. The two used
+/// to share one error channel out of `validate_shape_map`; they are split rather than made to
+/// follow each other, and this half must stay where it is.
 #[test]
 fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconformant() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -547,7 +665,12 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
         &data,
         "<http://example.org/alice>@<http://example.org/NoSuchShape>",
     ]);
-    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert_eq!(
+        code(&out),
+        1,
+        "deciding this needs the schema, so it is a runtime failure: {}",
+        stderr(&out)
+    );
     assert!(
         stderr(&out).contains("<http://example.org/NoSuchShape>"),
         "the refusal names the undeclared label: {}",
@@ -610,6 +733,11 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
 /// shape references against the schema's prefixes "common practice" that "this specification
 /// does not specify". So the answer is a refusal that says all of that and names the remedy,
 /// rather than leaving the operator to guess at "syntax error".
+///
+/// It is exit **2**: a prefixed name in an argument is a fault in the command line, visible
+/// without reading the schema or the data graph. It used to be exit 1 only because nothing
+/// decided the `MAP`'s grammar until the validator was reached, with both documents already
+/// read — a classification accident rather than a judgement.
 #[test]
 fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -626,7 +754,12 @@ fn a_prefixed_name_in_the_map_is_refused_with_the_grammar_reason() {
         &data,
         "ex:alice@ex:UserShape",
     ]);
-    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert_eq!(
+        code(&out),
+        2,
+        "a fault in an argument is a usage error: {}",
+        stderr(&out)
+    );
     let why = stderr(&out);
     assert!(
         why.contains("`ex:alice` is a prefixed name"),
@@ -878,6 +1011,112 @@ fn malformed_import_pairs_are_usage_errors() {
     );
 }
 
+/// The `--import` ontology-IRI HALF must be an absolute IRI, and a bad one is blamed on the
+/// argument (exit **2**) before any document is opened.
+///
+/// The half does two jobs and neither admits a relative reference: it is matched against the
+/// schema's `IMPORT` IRIs, which are absolute, and it is the base the imported document parses
+/// under. It used to be discovered by that document's PARSER — so a typo in an argument meant
+/// reading a file to find out, and was reported as a runtime failure (exit 1) rather than a
+/// usage one. The exit code is asserted explicitly because it is the part that drifted.
+#[test]
+fn an_import_iri_half_must_be_absolute_and_is_blamed_on_the_argument() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let imported = write_file(
+        dir.path(),
+        "imported.shex",
+        "PREFIX ex: <http://example.org/>\n",
+    );
+
+    // RELATIVE: the shared code, the flag, the pair as written, and the offending half.
+    let relative = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--import",
+        &format!("ages={imported}"),
+        "--data",
+        &data,
+        ALICE,
+    ]);
+    let why = stderr(&relative);
+    assert_eq!(code(&relative), 2, "a fault in an argument exits 2: {why}");
+    assert!(
+        why.contains("--import") && why.contains(&format!("ages={imported}")),
+        "the refusal names the flag and quotes the pair: {why}"
+    );
+    assert!(
+        why.contains("iri-non-absolute-base") && why.contains("the ontology-IRI half `ages`"),
+        "…the shared code and the specific malformed part: {why}"
+    );
+    assert!(stdout(&relative).is_empty(), "no verdict is invented");
+
+    // MALFORMED: the specific shared code for what is wrong with it.
+    let malformed = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--import",
+        &format!("ht tp://example.org/ages={imported}"),
+        "--data",
+        &data,
+        ALICE,
+    ]);
+    assert_eq!(code(&malformed), 2, "{}", stderr(&malformed));
+    assert!(
+        stderr(&malformed).contains("iri-bad-scheme"),
+        "{}",
+        stderr(&malformed)
+    );
+
+    // Decided with NO I/O at all: a second pair that is malformed is reported even though the
+    // FIRST pair names a file that does not exist. Before, pair one was read from disk — and
+    // failed — before pair two was so much as looked at.
+    let ordering = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--import",
+        &format!(
+            "http://example.org/ages={}",
+            dir.path().join("nope.shex").to_string_lossy()
+        ),
+        "--import",
+        "no-equals-here",
+        "--data",
+        &data,
+        ALICE,
+    ]);
+    assert_eq!(code(&ordering), 2, "{}", stderr(&ordering));
+    assert!(
+        stderr(&ordering).contains("no-equals-here") && !stderr(&ordering).contains("nope.shex"),
+        "every pair's argument shape is decided before the first file is opened: {}",
+        stderr(&ordering)
+    );
+
+    // The ABSOLUTE spelling is unchanged by any of this.
+    let absolute = run(&[
+        "shex",
+        "--schema",
+        &schema,
+        "--import",
+        &format!("http://example.org/ages={imported}"),
+        "--data",
+        &data,
+        ALICE,
+    ]);
+    // Unused (this schema imports nothing), which is the OTHER usage error — proving the pair
+    // itself was accepted and got as far as the closure check.
+    assert_eq!(code(&absolute), 2, "{}", stderr(&absolute));
+    assert!(
+        stderr(&absolute).contains("never reaches"),
+        "an absolute half passes the IRI gate: {}",
+        stderr(&absolute)
+    );
+}
+
 // ── Three documents, three bases ───────────────────────────────────────────────
 //
 // `shex` reads a data graph, a schema and a shape map, and a base IRI belongs to ONE
@@ -935,7 +1174,7 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
         stderr(&based)
     );
 
-    // The negative control. Without `--base` the data graph is REFUSED: a relative IRI with
+    // The negative control. Without `--base` nothing here can be resolved: a relative IRI with
     // no base in scope is a hard error, not a term.
     //
     // This used to "succeed" with the three documents agreeing among themselves — all three
@@ -943,6 +1182,10 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
     // came out. That agreement was the danger: the run reported a real-looking conformance
     // result over terms that are not IRIs at all and would serialize as invalid N-Triples.
     // Refusing is the only honest answer, and stdin carries no retrieval IRI to fall back to.
+    //
+    // TWO things are unresolvable in this invocation — the shape map and the data graph — and
+    // the ARGUMENT is decided first, which is the right order: it is knowable without opening
+    // anything, and no amount of fixing the data graph would make the map denote a node.
     let unbased = pipe(
         &[
             "shex",
@@ -958,19 +1201,52 @@ fn base_resolves_relative_iris_everywhere_it_applies() {
     );
     assert_eq!(
         code(&unbased),
-        1,
-        "a relative IRI with no base must be refused, not decided:\n{}",
-        stdout(&unbased)
+        2,
+        "the unresolvable ARGUMENT is decided first, and is a usage error:\n{}",
+        stderr(&unbased)
     );
     assert!(
-        stderr(&unbased).contains("iri-relative-no-base"),
-        "the refusal carries the code for the condition --base fixes:\n{}",
+        stderr(&unbased).contains("MAP") && stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal names the argument and carries the code --base fixes:\n{}",
         stderr(&unbased)
     );
     assert!(
         !stdout(&unbased).contains("\"node\""),
         "no conformance verdict may be reported over unresolved terms:\n{}",
         stdout(&unbased)
+    );
+
+    // …and with an ABSOLUTE map, so the command line is beyond reproach, the DATA GRAPH's own
+    // unresolvable term is still refused — as a RUNTIME failure (exit 1), because that one is a
+    // property of a document and was discovered by reading it.
+    let unbased_data = pipe(
+        &[
+            "shex",
+            "--schema",
+            &schema,
+            "--data",
+            "-",
+            "--from",
+            "turtle",
+            "<http://example.org/alice>@<http://example.org/UserShape>",
+        ],
+        relative_data,
+    );
+    assert_eq!(
+        code(&unbased_data),
+        1,
+        "a document's unresolvable term is a runtime failure:\n{}",
+        stderr(&unbased_data)
+    );
+    assert!(
+        stderr(&unbased_data).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition --base fixes:\n{}",
+        stderr(&unbased_data)
+    );
+    assert!(
+        !stdout(&unbased_data).contains("\"node\""),
+        "no conformance verdict may be reported over unresolved terms:\n{}",
+        stdout(&unbased_data)
     );
 }
 
@@ -1215,7 +1491,9 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
     );
 
     // The negative control that keeps the positive honest: without `--base` the same
-    // relative map is REFUSED, because argv carries no retrieval IRI to fall back to.
+    // relative map is REFUSED, because argv carries no retrieval IRI to fall back to. It is a
+    // USAGE error (exit 2) — the fault is in the `MAP` argument, and the pack is not even
+    // opened to discover it.
     let unbased = run(&[
         "shex",
         "--schema",
@@ -1224,10 +1502,15 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
         &pack,
         "<alice>@<UserShape>",
     ]);
-    assert_eq!(code(&unbased), 1, "{}", stdout(&unbased));
+    assert_eq!(
+        code(&unbased),
+        2,
+        "an unresolvable argument is a usage error: {}",
+        stderr(&unbased)
+    );
     assert!(
-        stderr(&unbased).contains("iri-relative-no-base"),
-        "the refusal names the condition --base fixes: {}",
+        stderr(&unbased).contains("MAP") && stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal names the argument and the condition --base fixes: {}",
         stderr(&unbased)
     );
 

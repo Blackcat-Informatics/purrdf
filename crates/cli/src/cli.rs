@@ -849,7 +849,10 @@ pub(crate) enum Command {
         /// `IRI=FILE`. PurRDF fetches nothing, so an import no pair resolves is refused by
         /// name rather than treated as an empty schema — and a pair the schema's import
         /// closure never reaches is refused too, rather than silently unused. Each imported
-        /// document's syntax is inferred from its own extension.
+        /// document's syntax is inferred from its own extension. The IRI half must be
+        /// ABSOLUTE — it is matched against the schema's `IMPORT` IRIs, which are, and it is
+        /// the base its document parses under — and a relative or malformed one is refused
+        /// against the argument before any document is opened.
         #[arg(long = "import", value_name = "IRI=FILE")]
         imports: Vec<String>,
         /// Data-graph path, or `-` for stdin (which requires `--from`).
@@ -872,7 +875,10 @@ pub(crate) enum Command {
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
         /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
         /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
-        /// `<label>`.
+        /// `<label>`. Its grammar admits no prefixed name, and a relative IRI in it resolves
+        /// against `--base` alone; both are decided against the argument before any document
+        /// is opened. A label the schema does not declare is a separate failure, and cannot
+        /// be decided until the schema has been read.
         #[arg(value_name = "MAP")]
         map: String,
         /// Result-shape-map path `OUT`, or `-` for stdout (the default).

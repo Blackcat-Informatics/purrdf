@@ -61,6 +61,36 @@
 //! DOCUMENTS, discovered by reading them, rather than of the command line — which is what
 //! exit **2** is for in this binary.
 //!
+//! # The command line is decided FIRST, and its faults are exit 2
+//!
+//! [`crate::error`] draws the exit line at when a fault is KNOWABLE: exit **2** is a malformed
+//! command line (matching clap's own code), exit **1** is a failure discovered by reading a
+//! document. Two of this subcommand's arguments used to fall on the wrong side of it, because
+//! nothing decided them until a document had already been opened:
+//!
+//! * the **`MAP` argument** is command-line text with its own grammar. A prefixed name, or a
+//!   relative IRI with no `--base`, is a fault in the argument and needs no schema and no data
+//!   graph to see — yet it surfaced from inside `validate_shape_map`, after both documents had
+//!   been read, as exit 1. [`check_map_syntax`] now parses it through the SAME
+//!   [`purrdf_shex::parse_shape_map`] the validator uses, before anything is opened, and
+//!   reports exit 2. A relative reference there also gets a remedy naming `--base`, because the
+//!   library's own remedy names `@base`/`xml:base` document directives and a `MAP` is argv text
+//!   no document reaches.
+//! * the **`--import` ontology-IRI half** is matched against the schema's `IMPORT` IRIs, which
+//!   are absolute, AND is the base its document parses under — so a relative or malformed half
+//!   can do neither job. It used to surface as exit 1 from the imported document's parser,
+//!   after that document had been read. [`resolve_import_pairs`] now decides every pair's whole
+//!   argument shape — the `=`, both halves, `-`, duplicates, the syntax its extension implies,
+//!   and the half's absoluteness through the shared [`purrdf_iri::BaseIri`] — with no I/O at
+//!   all, so the FIRST malformed pair is reported before the FIRST file is opened.
+//!
+//! What deliberately did NOT move is [`purrdf_shex::ShexError::UnknownShape`]: a `MAP` naming a
+//! label the schema does not declare cannot be detected until the schema is loaded and its
+//! import closure walked, so it sits on the runtime side of the same line and stays exit 1.
+//! The two used to share one error channel out of `validate_shape_map`; they are split rather
+//! than made to follow each other, with the syntax half decided in front and the
+//! schema-dependent half left exactly where it was.
+//!
 //! # What "RDF 1.2" means to a ShEx neighbourhood
 //!
 //! ShEx 2.1 predates RDF 1.2 and its data model is arcs, so the two halves of PurRDF's
@@ -137,7 +167,7 @@ use std::collections::BTreeSet;
 
 use purrdf::shex::{
     ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr, TripleExprGroup,
-    ValidationOptions, check_structure, parse_shexc, parse_shexj, resolve_imports,
+    ValidationOptions, check_structure, parse_shape_map, parse_shexc, parse_shexj, resolve_imports,
     validate_shape_map,
 };
 use purrdf_rdf::JsonLdSerializeOptions;
@@ -175,6 +205,11 @@ pub(crate) struct ShexOptions<'a> {
 pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Result<(), CliError> {
     refuse_document_flags(ledger_target, options.jsonld_options)?;
     refuse_two_stdins(options)?;
+    // EVERY command-line decision happens here, before a single document is opened, so a fault
+    // in an ARGUMENT is reported against the argument (exit 2) rather than surfacing later out
+    // of a parser that no longer knows the value came from the command line.
+    let import_pairs = resolve_import_pairs(options)?;
+    check_map_syntax(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
     // No `--base` refusal here, unlike every other subcommand: see the module documentation
@@ -183,7 +218,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
 
     let schema_base = schema_base(options.schema)?;
     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
-    let schema = fold_imports(schema, options)?;
+    let schema = fold_imports(schema, &import_pairs, options)?;
     // Structure BEFORE the unavailable-semantics survey: a schema with a dangling reference
     // is malformed outright, and reporting an `EXTERNAL` inside it would describe a shape
     // that may not even be reachable.
@@ -209,7 +244,9 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     )
     .map_err(|error| match error {
         // The one map failure that is about the PAIRING of two documents rather
-        // than about the map's own syntax, so the refusal names the other one.
+        // than about the map's own syntax, so the refusal names the other one. It stays a
+        // RUNTIME failure (exit 1) precisely because it cannot be seen from the command line:
+        // deciding it needs the schema loaded and its import closure walked.
         ShexError::UnknownShape(_) => CliError::Runtime(format!(
             "MAP: {error} (--schema {}). A shape map is validated AGAINST a schema, so a label \
              neither the schema nor its import closure declares names nothing to decide. \
@@ -217,6 +254,11 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
              data finding on a mistake the data had no part in",
             options.schema
         )),
+        // Defensive, and expected to be unreachable: `validate_shape_map` is
+        // `parse_shape_map` → undeclared-shape check → `validate_with`, the first of which
+        // `check_map_syntax` already ran over the same text and base (so it would have failed
+        // there, as exit 2) and the last of which returns no `Err`. Reported rather than
+        // unwrapped, because an unreachable panic in a CLI is a crash report.
         other => CliError::Runtime(format!("MAP: {other}")),
     })?;
 
@@ -243,6 +285,61 @@ fn surface_verdict(result: &ResultShapeMap) {
     eprintln!("shex nonconformant {nonconformant}");
 }
 
+/// Decide the `MAP` argument's own grammar, before any document is opened.
+///
+/// A `MAP` is command-line text: its syntax and its IRI resolution depend on the argument and
+/// on `--base`, and on nothing this run reads. So a fault in it is a fault in the COMMAND LINE
+/// (exit 2), and it is reported before the schema and the data graph are read rather than from
+/// inside the validator afterwards.
+///
+/// This is [`parse_shape_map`] — the very function [`validate_shape_map`] calls first — over
+/// the same text and the same base, so the classification here cannot come to disagree with
+/// the parse that decides. The parsed map is discarded: the validator owns the decision, and
+/// keeping a second copy of it would be the second opinion this binary refuses. The one
+/// failure NOT decided here is [`ShexError::UnknownShape`], which needs the schema.
+fn check_map_syntax(options: &ShexOptions<'_>) -> Result<(), CliError> {
+    parse_shape_map(options.map, options.base)
+        .map(|_| ())
+        .map_err(|error| map_refusal(options.map, &error))
+}
+
+/// The refusal for a `MAP` argument that does not parse.
+///
+/// A relative IRI reference with no base gets a remedy naming `--base`, and NOT the library's
+/// own: that one names `@base`/`BASE`/`xml:base`, which are DOCUMENT directives, and a `MAP` is
+/// argv text that no document reaches — the identical wrong-remedy shape `describe --iri`,
+/// `validate --shapes-graph` and `entails --import` each fixed for their own surface. The
+/// shared [`purrdf_iri::IriError::diagnostic_code`] still travels, inside the library's
+/// rendered reason, so the failure groups with every other IRI failure in this toolkit.
+fn map_refusal(map: &str, error: &ShexError) -> CliError {
+    if let ShexError::Iri { lexical, reason } = error
+        && reason.starts_with(RELATIVE_NO_BASE)
+    {
+        // `reason` is the library's `{code}: {IriError}`, and `IriError`'s `Display` ENDS with
+        // its own remedy — the `@base`/`xml:base` one. Interpolating it here and then adding
+        // the remedy that actually applies would print two remedies, one of them wrong, which
+        // is the exact defect `validate --shapes-graph` was fixed for. So the condition is
+        // restated from the parts and the library's sentence is not used at all; only the
+        // shared CODE travels, which is the part every consumer switches on.
+        return CliError::Usage(format!(
+            "MAP `{map}`: {RELATIVE_NO_BASE}: the reference `{lexical}` is a relative IRI \
+             reference with no base in scope, so it denotes no node. A shape map is a \
+             command-line value with no document of its own, so no `@base`/`BASE` you write \
+             anywhere resolves it: pass --base <IRI> — which this command spends on the shape \
+             map and the data graph — or write the reference in absolute form"
+        ));
+    }
+    CliError::Usage(format!("MAP `{map}`: {error}"))
+}
+
+/// The one `purrdf-iri` code whose library remedy names DOCUMENT directives, and so has to be
+/// re-worded for a command-line value.
+///
+/// Single-owned here so the branch condition and the rendered code cannot drift apart: every
+/// other `iri-*` code's remedy ("write the IRI in absolute form, with a scheme") already fits
+/// an argument and is passed through verbatim.
+const RELATIVE_NO_BASE: &str = "iri-relative-no-base";
+
 /// The base the SCHEMA document parses under: its own RFC-8089 `file://` retrieval IRI.
 ///
 /// `--base` is deliberately absent from this derivation. It names the base of the DATA graph,
@@ -254,11 +351,30 @@ fn surface_verdict(result: &ResultShapeMap) {
 /// `-` (stdin) gets NO base and keeps the hard error: a piped schema has no retrieval IRI to
 /// derive one from, so there is no honest answer and the parse refuses (RFC-3986 §5.1.4). A
 /// `BASE` directive inside a ShExC schema still overrides what this returns (§5.1.1).
+///
+/// The shared derivation's failure is RE-WORDED here, and only here. [`source::retrieval_base_iri`]
+/// ends its message with "pass --base explicitly", which is the right escape hatch everywhere a
+/// derived retrieval IRI would have become the parse base — but not in this command, where
+/// `--base` is deliberately never applied to the schema. Passing it would change nothing, so
+/// offering it would send an operator whose real problem is an unreadable path to try a flag
+/// that cannot help. The exit code stays **1**: a path that does not resolve is a fact about
+/// the document, not about the shape of the command line.
 fn schema_base(path: &str) -> Result<Option<String>, CliError> {
     if path == "-" {
         return Ok(None);
     }
-    source::retrieval_base_iri(path).map(Some)
+    source::retrieval_base_iri(path).map(Some).map_err(|error| {
+        let rendered = error.to_string();
+        let without_base_hint = rendered
+            .strip_suffix("; pass --base explicitly")
+            .unwrap_or(&rendered);
+        CliError::Runtime(format!(
+            "--schema {without_base_hint}. The schema resolves its relative IRIs against its \
+             OWN retrieval IRI, and `--base` names the DATA graph's base here, so passing one \
+             would not supply this: give --schema a readable path, or write a `BASE` directive \
+             in the schema"
+        ))
+    })
 }
 
 /// Read and parse the root schema.
@@ -274,7 +390,7 @@ fn read_schema(
     explicit: Option<CliShexFormat>,
     base: Option<&str>,
 ) -> Result<Schema, CliError> {
-    let syntax = resolve_schema_format(explicit, path, "--schema")?;
+    let syntax = resolve_schema_format(explicit, path, "--schema", SyntaxOverride::SchemaFrom)?;
     let text = read_text(path, "--schema")?;
     match syntax {
         CliShexFormat::Shexc => parse_shexc(&text, base),
@@ -284,18 +400,40 @@ fn read_schema(
 }
 
 /// Resolve a ShEx document's syntax from an explicit choice or its path extension.
+/// Whether the document whose syntax is being resolved has a flag that can override it.
+///
+/// Only the ROOT schema does. `--schema-from` names the root schema's syntax and nothing
+/// else — an import closure may legitimately mix ShExC and ShExJ, so each imported document is
+/// classified by its own extension. Telling an operator with an unclassifiable IMPORT path to
+/// "pass an explicit --schema-from" named a flag that would not have applied to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyntaxOverride {
+    /// The root schema: `--schema-from` overrides the inference.
+    SchemaFrom,
+    /// An imported document: its own extension is the only classifier there is.
+    None,
+}
+
 fn resolve_schema_format(
     explicit: Option<CliShexFormat>,
     path: &str,
     what: &str,
+    override_flag: SyntaxOverride,
 ) -> Result<CliShexFormat, CliError> {
     if let Some(choice) = explicit {
         return Ok(choice);
     }
+    let remedy = match override_flag {
+        SyntaxOverride::SchemaFrom => "pass an explicit --schema-from",
+        SyntaxOverride::None => {
+            "an imported document is classified by its OWN extension, because --schema-from \
+             names the root schema's syntax; give it a recognized one"
+        }
+    };
     if path == "-" {
         return Err(CliError::Usage(format!(
             "{what} - reads standard input, which has no extension to infer a ShEx syntax from: \
-             pass an explicit --schema-from (shexc or shexj)"
+             {remedy}"
         )));
     }
     let extension = std::path::Path::new(path)
@@ -307,8 +445,7 @@ fn resolve_schema_format(
         Some("shexj" | "json") => Ok(CliShexFormat::Shexj),
         _ => Err(CliError::Usage(format!(
             "{what} {path}: cannot infer a ShEx syntax from this path — the recognized \
-             extensions are `.shex`/`.shexc` (ShExC) and `.shexj`/`.json` (ShExJ); pass an \
-             explicit --schema-from"
+             extensions are `.shex`/`.shexc` (ShExC) and `.shexj`/`.json` (ShExJ); {remedy}"
         ))),
     }
 }
@@ -321,8 +458,12 @@ fn resolve_schema_format(
 /// is what makes both halves of the contract enforceable afterwards: an import with no pair is
 /// refused by name, and a pair the closure never reached is refused as unused rather than
 /// silently ignored.
-fn fold_imports(schema: Schema, options: &ShexOptions<'_>) -> Result<Schema, CliError> {
-    let table = read_import_table(options)?;
+fn fold_imports(
+    schema: Schema,
+    pairs: &[ImportPair<'_>],
+    options: &ShexOptions<'_>,
+) -> Result<Schema, CliError> {
+    let table = read_import_table(pairs)?;
     let requested: RefCell<BTreeSet<String>> = RefCell::new(BTreeSet::new());
 
     let resolved = {
@@ -348,25 +489,54 @@ fn fold_imports(schema: Schema, options: &ShexOptions<'_>) -> Result<Schema, Cli
         other => CliError::Runtime(format!("--schema {}: {other}", options.schema)),
     })?;
 
+    // A pair the closure never reached, quoted back exactly as the operator wrote it. This
+    // one refusal is a USAGE error (exit 2) that nevertheless needs the schema to decide,
+    // which is not a contradiction: the fault is in the command line — a pair that should not
+    // have been written — and only its DETECTION needs the closure walked. Reporting it as a
+    // runtime failure would blame the documents for an argument nobody asked for.
     let requested = requested.into_inner();
-    if let Some((iri, _)) = table.iter().find(|(iri, _)| !requested.contains(iri)) {
+    if let Some(pair) = pairs.iter().find(|pair| !requested.contains(pair.iri)) {
         return Err(CliError::Usage(format!(
-            "--import {iri}=…: the schema's import closure never reaches <{iri}>, so this \
-             document would be read and never used. Remove the pair, or import the IRI from \
-             the schema"
+            "--import {}: the schema's import closure never reaches <{}>, so this document \
+             would be read and never used. Remove the pair, or import the IRI from the schema",
+            pair.spec, pair.iri
         )));
     }
     Ok(resolved)
 }
 
-/// Parse every `--import IRI=FILE` pair into `(iri, schema)`.
+/// One `--import IRI=FILE` argument, fully DECIDED but not yet read.
+struct ImportPair<'a> {
+    /// The pair exactly as the operator wrote it, so a diagnostic can quote it back.
+    spec: &'a str,
+    /// The ontology-IRI half, checked absolute.
+    iri: &'a str,
+    /// The document-path half.
+    path: &'a str,
+    /// The syntax the path's own extension classifies it as.
+    syntax: CliShexFormat,
+}
+
+/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all.
 ///
 /// A malformed pair is a usage error naming the argument, never a skipped import: a schema
-/// folded without a document the operator supplied is a different schema. Each imported
-/// document's syntax comes from its OWN extension, because `--schema-from` names the root
-/// schema's syntax and an import closure may legitimately mix ShExC and ShExJ.
-fn read_import_table(options: &ShexOptions<'_>) -> Result<Vec<(String, Schema)>, CliError> {
-    let mut table: Vec<(String, Schema)> = Vec::with_capacity(options.imports.len());
+/// folded without a document the operator supplied is a different schema. Because nothing here
+/// touches the filesystem, the FIRST bad pair is reported before the FIRST file is opened —
+/// where the old shape read pair one from disk before noticing that pair two had no `=`.
+///
+/// # The ontology-IRI half must be absolute
+///
+/// It does two jobs and neither admits a relative reference: it is MATCHED against the schema's
+/// `IMPORT` IRIs, which are absolute by the time the schema parser is done with them, and it is
+/// the BASE the imported document parses under (the per-document base
+/// [`purrdf_shex::resolve_imports`] documents as its injection boundary). So it is checked with
+/// [`purrdf_iri::BaseIri::parse`] — the workspace's shared "valid IRI with a scheme" primitive,
+/// the same gate `--base` passes at the clap boundary — and a failure carries
+/// [`purrdf_iri::IriError::diagnostic_code`]. It used to be discovered by the imported
+/// document's parser instead, which meant reading a file to learn that an ARGUMENT was
+/// malformed, and reporting it as a runtime failure rather than a usage one.
+fn resolve_import_pairs<'a>(options: &ShexOptions<'a>) -> Result<Vec<ImportPair<'a>>, CliError> {
+    let mut pairs: Vec<ImportPair<'a>> = Vec::with_capacity(options.imports.len());
     for spec in options.imports {
         let Some((iri, path)) = spec.split_once('=') else {
             return Err(CliError::Usage(format!(
@@ -386,23 +556,65 @@ fn read_import_table(options: &ShexOptions<'_>) -> Result<Vec<(String, Schema)>,
                  extension, and `-` has none. Write the document to a `.shex`/`.shexj` path"
             )));
         }
-        if table.iter().any(|(seen, _)| seen == iri) {
+        if let Err(error) = purrdf_iri::BaseIri::parse(iri) {
+            return Err(import_iri_refusal(spec, iri, &error));
+        }
+        if pairs.iter().any(|seen| seen.iri == iri) {
             return Err(CliError::Usage(format!(
                 "--import {iri}=…: the IRI is named twice, and one IRI resolves to one \
                  document; the second pair would be read and never used"
             )));
         }
+        let syntax =
+            resolve_schema_format(None, path, &format!("--import {iri}"), SyntaxOverride::None)?;
+        pairs.push(ImportPair {
+            spec,
+            iri,
+            path,
+            syntax,
+        });
+    }
+    Ok(pairs)
+}
+
+/// The refusal for an `--import` whose own ontology-IRI half is not an absolute IRI.
+///
+/// It names the FLAG, the pair as written and the offending half, and carries the shared
+/// [`purrdf_iri::IriError::diagnostic_code`]. Exit **2**: nothing was read to discover it.
+fn import_iri_refusal(spec: &str, iri: &str, error: &purrdf_iri::IriError) -> CliError {
+    let code = error.diagnostic_code();
+    if code == "iri-non-absolute-base" {
+        return CliError::Usage(format!(
+            "--import {spec}: {code}: the ontology-IRI half `{iri}` is a relative IRI reference. \
+             It is matched against the schema's `IMPORT` IRIs, which are absolute, and it is \
+             also the base the imported document parses under — a relative reference can do \
+             neither. This is a command-line value, so no `BASE` in any document reaches it: \
+             write the half as the absolute IRI the schema's `IMPORT` names"
+        ));
+    }
+    CliError::Usage(format!(
+        "--import {spec}: {code}: the ontology-IRI half `{iri}` is not a usable IRI: {error}"
+    ))
+}
+
+/// Read and parse each DECIDED `--import` pair into `(iri, schema)`.
+///
+/// Every argument-level decision was already made by [`resolve_import_pairs`], so what remains
+/// here is I/O and parsing: nothing in this function refuses a command line, and every failure
+/// it can report is a property of a document (exit 1).
+fn read_import_table(pairs: &[ImportPair<'_>]) -> Result<Vec<(String, Schema)>, CliError> {
+    let mut table: Vec<(String, Schema)> = Vec::with_capacity(pairs.len());
+    for pair in pairs {
         // Parsed with the import IRI as its base, which is the per-document base resolution
         // `purrdf_shex::resolve_imports` documents its injection boundary as satisfying.
-        let what = format!("--import {iri}");
-        let syntax = resolve_schema_format(None, path, &what)?;
-        let text = read_text(path, &what)?;
-        let schema = match syntax {
-            CliShexFormat::Shexc => parse_shexc(&text, Some(iri)),
-            CliShexFormat::Shexj => parse_shexj(&text, Some(iri)),
+        let what = format!("--import {}", pair.iri);
+        let text = read_text(pair.path, &what)?;
+        let schema = match pair.syntax {
+            CliShexFormat::Shexc => parse_shexc(&text, Some(pair.iri)),
+            CliShexFormat::Shexj => parse_shexj(&text, Some(pair.iri)),
         }
-        .map_err(|error| CliError::Runtime(format!("{what} {path}: {error}")))?;
-        table.push((iri.to_owned(), schema));
+        .map_err(|error| CliError::Runtime(format!("{what} {}: {error}", pair.path)))?;
+        table.push((pair.iri.to_owned(), schema));
     }
     Ok(table)
 }
