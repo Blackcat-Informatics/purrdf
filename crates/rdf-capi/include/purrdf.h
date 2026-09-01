@@ -23,16 +23,45 @@
  * ABI major version. `0` signals the surface is still **beta** — the freeze
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
+ *
+ * # The bump rule this triple obeys
+ *
+ * The project's pre-1.0 policy — `docs/book/src/project/releases.md`, the
+ * "Pre-1.0 semver policy" section — is: while the version is `0.x`, a **minor**
+ * bump (`0.x` → `0.(x+1)`) may include breaking changes, and a **patch** bump
+ * (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. So while MAJOR is
+ * `0`, **an incompatible C-ABI change rides the MINOR component**; MAJOR does
+ * not move, because moving it would declare the 1.0 stability this surface has
+ * explicitly not earned yet (the paragraph above).
+ *
+ * A change is incompatible — and therefore MUST bump MINOR — when a host built
+ * against the previous header would mis-execute against the new library:
+ * removing an exported function, renaming one, retyping or reordering its
+ * parameters, inserting a parameter anywhere but the end, changing its return
+ * type, or renumbering a status discriminant. `tests/abi_signatures.rs` pins
+ * the complete exported prototype list to this triple, so such a change cannot
+ * reach a release without an author deliberately touching these constants.
  */
 #define PURRDF_ABI_MAJOR 0
 
 /**
  * ABI minor version.
+ *
+ * `0.6.0` → `0.7.0`: `purrdf_shacl_validate_to_sarif` and
+ * `purrdf_shacl_entail_to_ntriples` each gained a `shapes_base_iri` parameter
+ * **in the middle** of their existing parameter list, between `shapes_ttl` and
+ * `data_nt`. For a host compiled against `0.6.0` that is a silent, unguardable
+ * break: it passes `data_nt` into the `shapes_base_iri` slot and its
+ * `PurrdfBuffer **` out-pointer into `data_nt`, which the boundary then reads
+ * as a NUL-terminated C string. The parameter is deliberately positional rather
+ * than appended — it belongs immediately beside the document it qualifies, and
+ * one declared break beats a permanently confusing argument order — so the
+ * version, not the signature, absorbs the incompatibility.
  */
-#define PURRDF_ABI_MINOR 6
+#define PURRDF_ABI_MINOR 7
 
 /**
- * ABI patch version.
+ * ABI patch version. Reset to `0` by the MINOR bump documented above.
  */
 #define PURRDF_ABI_PATCH 0
 
