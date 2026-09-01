@@ -52,6 +52,11 @@ purrdf = { workspace = true }
 # second renderer described as equivalent; `regime_name` is the same regime
 # vocabulary `--regime`/`--entailment` accept.
 purrdf-validate = { workspace = true }
+# The zero-dependency IRI foundation. `--path-relation` validates every IRI position
+# in its value grammar as an ABSOLUTE IRI through the same `parse`/`has_scheme` pair
+# `ProvenanceNamespace::new` uses, rather than keeping a second opinion about what an
+# absolute IRI is.
+purrdf-iri = { workspace = true }
 # Zero-copy memory-mapped reads of on-disk pack files: a pack source is mmap'd
 # and handed to `PackView::from_bytes` with no materialization. Native-only —
 # this crate is never built for wasm32 (it is absent from the `make wasm`

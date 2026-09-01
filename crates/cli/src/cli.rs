@@ -368,6 +368,25 @@ pub(crate) enum Command {
         /// SAME namespace.
         #[arg(long, value_name = "PREFIX=IRI", value_parser = crate::query::parse_provenance_namespace)]
         provenance_namespace: Option<(String, String)>,
+        /// Register a PATH-WITNESS relation under `iri=`, callable from predicate
+        /// position as `?start <IRI> ( ?end ?pathId ?len ?step ?node ?edge )`. Repeatable:
+        /// one flag registers one relation. Unlike a property path, which answers only
+        /// with the endpoint pair, this binds the DERIVATION — one row per hop, carrying
+        /// the traversed statement as a first-class RDF 1.2 term — so `GROUP BY ?pathId`
+        /// with `ORDER BY ?step` reassembles the whole walk inside the query language.
+        ///
+        /// The value is semicolon-separated `key=value` pairs:
+        /// `iri=IRI;forward=IRI;inverse=IRI;min-hops=N;max-hops=N;max-paths-per-seed=N;max-expansions=N;mode=walk|shortest`.
+        /// `forward`/`inverse` build the hop's ordered alternation of directed predicates
+        /// and may each repeat; at least one must appear. Every other key is MANDATORY and
+        /// has NO default: PurRDF mints no vocabulary IRIs of its own, so the relation IRI
+        /// is caller-supplied and there is no default namespace, and a traversal envelope
+        /// this binary invented would be a limit the operator never read — a zero-hop path
+        /// has no witness and an unbounded depth is a stack-overflow abort. `mode=walk`
+        /// enumerates every simple-prefix witness (exponential in the worst case);
+        /// `mode=shortest` yields one shortest witness per reachable pair (polynomial).
+        #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
+        path_relation: Vec<crate::path_relation::PathRelationSpec>,
         /// The SPARQL query text.
         query: String,
     },
@@ -411,6 +430,12 @@ pub(crate) enum Command {
         /// every one of the ten names stays an unregistered custom-aggregate IRI.
         #[arg(long, value_name = "IRI")]
         aggregate_namespace: Option<String>,
+        /// Register a path-witness relation — identical to `query --path-relation`, and
+        /// reachable from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern
+        /// context exactly as a query's is. The relation is snapshotted from the
+        /// PRE-update dataset, which is the same state the `WHERE` clause matches.
+        #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
+        path_relation: Vec<crate::path_relation::PathRelationSpec>,
         /// The SPARQL UPDATE text.
         update: String,
     },

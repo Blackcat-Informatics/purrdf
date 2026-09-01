@@ -1303,6 +1303,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-entail",
  "purrdf-gts",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",

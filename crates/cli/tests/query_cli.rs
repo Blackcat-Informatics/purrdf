@@ -1430,3 +1430,612 @@ fn rules_without_entailment_is_refused_by_name() {
         stderr(&out)
     );
 }
+
+// ── --path-relation: the CLI's property-function registration surface ─────────────
+//
+// `--path-relation` registers a PATH-WITNESS relation under a caller-supplied IRI,
+// callable from predicate position as
+// `?start <IRI> ( ?end ?pathId ?len ?step ?node ?edge )`. Unlike a property path — which
+// answers only with the endpoint pair — it binds the DERIVATION: one row per hop,
+// carrying the traversed statement as a first-class RDF 1.2 term, so `GROUP BY ?pathId`
+// with `ORDER BY ?step` reassembles the whole walk inside the query language.
+//
+// Every assertion below drives the BUILT binary, because the point of this surface is
+// that it is reachable from the shipped executable and not only from a Rust host.
+
+/// A three-edge chain `a → b → c → d` over one predicate.
+const CHAIN_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:a ex:p ex:b .\n",
+    "ex:b ex:p ex:c .\n",
+    "ex:c ex:p ex:d .\n",
+);
+
+/// A diamond `a → {b, c} → d`: two distinct derivations reach `d` in two hops, which is
+/// exactly where `mode=walk` and `mode=shortest` must disagree.
+const DIAMOND_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:a ex:p ex:b .\n",
+    "ex:a ex:p ex:c .\n",
+    "ex:b ex:p ex:d .\n",
+    "ex:c ex:p ex:d .\n",
+);
+
+/// The relation IRI the tests register. `example.org`, caller-supplied: PurRDF mints no
+/// vocabulary IRIs and there is no default namespace to fall back on.
+const WALK_IRI: &str = "http://example.org/pf#walk";
+
+/// A `--path-relation` value over `ex:p` in `mode`, with a stated envelope on every key.
+fn walk_spec(mode: &str) -> String {
+    format!(
+        "iri={WALK_IRI};forward=http://example.org/p;min-hops=1;max-hops=4;\
+         max-paths-per-seed=64;max-expansions=4096;mode={mode}"
+    )
+}
+
+/// A call seeded at `ex:a`, projecting the four columns whose values are exactly pinnable
+/// (`?pathId` is a content digest and is asserted structurally instead).
+fn walk_query(order: &str) -> String {
+    format!(
+        "SELECT ?end ?len ?step ?node WHERE {{ <http://example.org/a> <{WALK_IRI}> \
+         ( ?end ?pathId ?len ?step ?node ?edge ) }} ORDER BY {order}"
+    )
+}
+
+/// **The demonstration.** A multi-hop chain, through the shipped binary, one row per hop
+/// with `?step` an `xsd:integer` and `?node` the node that hop arrived at — the exact rows,
+/// not a count.
+///
+/// Three walks leave `ex:a` (`→b`, `→b→c`, `→b→c→d`) and they emit `1 + 2 + 3 = 6` rows.
+/// CSV rather than JSON because a CSV body is a byte-exact table; the JSON test below
+/// covers the term-level shape CSV cannot show.
+#[test]
+fn path_relation_binds_every_hop_of_a_multi_hop_chain() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &walk_spec("walk"),
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "the --path-relation query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out),
+        concat!(
+            "end,len,step,node\r\n",
+            "http://example.org/b,1,1,http://example.org/b\r\n",
+            "http://example.org/c,2,1,http://example.org/b\r\n",
+            "http://example.org/c,2,2,http://example.org/c\r\n",
+            "http://example.org/d,3,1,http://example.org/b\r\n",
+            "http://example.org/d,3,2,http://example.org/c\r\n",
+            "http://example.org/d,3,3,http://example.org/d\r\n",
+        ),
+        "one row per hop of every simple-prefix walk out of ex:a, in (len, step) order"
+    );
+}
+
+/// `?pathId` groups the hops of ONE walk: `GROUP BY ?pathId` with the concatenation in
+/// `?step` order reconstructs each route, which is the recipe the relation's own
+/// documentation gives for recovering a whole walk without a list term.
+#[test]
+fn path_relation_path_id_groups_the_hops_of_one_walk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &walk_spec("walk"),
+        &format!(
+            "SELECT ?end ?len (GROUP_CONCAT(?node; separator=\"->\") AS ?route) WHERE {{ \
+             <http://example.org/a> <{WALK_IRI}> ( ?end ?pathId ?len ?step ?node ?edge ) \
+             }} GROUP BY ?pathId ?end ?len ORDER BY ?len"
+        ),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "the GROUP BY ?pathId query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out),
+        concat!(
+            "end,len,route\r\n",
+            "http://example.org/b,1,http://example.org/b\r\n",
+            "http://example.org/c,2,http://example.org/b->http://example.org/c\r\n",
+            "http://example.org/d,3,http://example.org/b->http://example.org/c->\
+             http://example.org/d\r\n",
+        ),
+        "each ?pathId group is exactly one walk, concatenated in ?step order"
+    );
+}
+
+/// `?edge` is an RDF 1.2 STATEMENT TERM, not a reified stand-in: SPARQL-results JSON
+/// renders it as `"type":"triple"` with the asserted subject/predicate/object.
+#[test]
+fn path_relation_binds_each_hop_to_an_rdf_12_statement_term() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "--path-relation",
+        &walk_spec("walk"),
+        &format!(
+            "SELECT ?edge WHERE {{ <http://example.org/a> <{WALK_IRI}> \
+             ( ?end ?pathId ?len ?step ?node ?edge ) FILTER(?len = 1) }}"
+        ),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "the ?edge query must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\"type\":\"triple\""),
+        "?edge must be a first-class RDF 1.2 statement term; got:\n{body}"
+    );
+    assert!(
+        body.contains("\"subject\":{\"type\":\"uri\",\"value\":\"http://example.org/a\"}"),
+        "the statement is the ASSERTED triple the hop traversed; got:\n{body}"
+    );
+}
+
+/// `mode=shortest` yields ONE shortest witness per reachable pair; `mode=walk` yields
+/// every simple-prefix witness. On a diamond the two answers differ by exactly the second
+/// two-hop derivation of `ex:d`, which is the whole reason they are two registrations
+/// rather than one relation with a runtime flag.
+#[test]
+fn path_relation_shortest_mode_yields_one_witness_per_pair_on_a_diamond() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "diamond.ttl", DIAMOND_TTL);
+    let query = walk_query("?end ?len ?step");
+
+    let shortest = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &walk_spec("shortest"),
+        &query,
+    ]);
+    assert!(
+        shortest.status.success(),
+        "mode=shortest must exit 0; stderr:\n{}",
+        stderr(&shortest)
+    );
+    assert_eq!(
+        stdout(&shortest),
+        concat!(
+            "end,len,step,node\r\n",
+            "http://example.org/b,1,1,http://example.org/b\r\n",
+            "http://example.org/c,1,1,http://example.org/c\r\n",
+            "http://example.org/d,2,1,http://example.org/b\r\n",
+            "http://example.org/d,2,2,http://example.org/d\r\n",
+        ),
+        "one shortest witness per reachable (seed, end) pair"
+    );
+
+    let walk = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &walk_spec("walk"),
+        &query,
+    ]);
+    assert!(
+        walk.status.success(),
+        "mode=walk must exit 0; stderr:\n{}",
+        stderr(&walk)
+    );
+    assert_eq!(
+        stdout(&walk),
+        concat!(
+            "end,len,step,node\r\n",
+            "http://example.org/b,1,1,http://example.org/b\r\n",
+            "http://example.org/c,1,1,http://example.org/c\r\n",
+            "http://example.org/d,2,1,http://example.org/b\r\n",
+            "http://example.org/d,2,1,http://example.org/c\r\n",
+            "http://example.org/d,2,2,http://example.org/d\r\n",
+            "http://example.org/d,2,2,http://example.org/d\r\n",
+        ),
+        "mode=walk keeps BOTH two-hop derivations of ex:d; mode=shortest keeps one"
+    );
+}
+
+/// Without the flag the SAME query text is an ordinary triple pattern — the object-side
+/// parentheses are an `rdf:List`, which this data does not contain — so it answers
+/// nothing. Pinned rather than assumed: it is the difference the flag makes.
+#[test]
+fn without_the_flag_the_same_query_text_is_an_ordinary_triple_pattern() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "the unregistered call is a triple pattern, not an error; stderr:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out),
+        "end,len,step,node\r\n",
+        "with no --path-relation the predicate is data, and this data holds no such triple"
+    );
+}
+
+/// Recognition is derived from the registry ONE-TO-ONE, so the parser's exact-IRI set and
+/// the registered relations cannot disagree: a REGISTERED IRI is a call, and any OTHER
+/// IRI stays an ordinary triple pattern that reads the data.
+///
+/// That one-to-one derivation is also why this binary cannot produce the third case —
+/// an IRI the parser recognizes but no relation answers, which the engine hard-fails at
+/// plan time with `no property function is registered for <…>`. There is no flag here
+/// that adds to the recognition set without also registering, and that is the property
+/// being pinned: the CLI has no spelling that degrades a recognized call into a silently
+/// empty scan.
+#[test]
+fn only_the_registered_iri_becomes_a_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "chain-plus.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:a ex:p ex:b .\n",
+            "ex:b ex:p ex:c .\n",
+            "ex:c ex:p ex:d .\n",
+            "ex:a <http://example.org/pf#other> ex:z .\n",
+        ),
+    );
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &walk_spec("walk"),
+        "SELECT ?o WHERE { <http://example.org/a> <http://example.org/pf#other> ?o }",
+    ]);
+
+    assert!(
+        out.status.success(),
+        "an unregistered IRI must stay a triple pattern; stderr:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out),
+        "o\r\nhttp://example.org/z\r\n",
+        "registering <pf#walk> must not reclassify the merely-same-prefixed <pf#other>"
+    );
+}
+
+/// Every malformed spec is refused by name, never coerced and never defaulted. Each row
+/// is one rule of the grammar and the substring the diagnostic must carry.
+#[test]
+fn a_malformed_path_relation_spec_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+    let query = walk_query("?len ?step");
+
+    let cases: [(&str, &str); 6] = [
+        // An unknown key.
+        (
+            "iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=1;\
+             max-hops=4;max-paths-per-seed=64;max-expansions=99;mode=walk;depth=2",
+            "`depth`",
+        ),
+        // A missing mandatory key, named.
+        (
+            "iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=1;\
+             max-hops=4;max-paths-per-seed=64;mode=walk",
+            "`max-expansions`",
+        ),
+        // No `forward=`/`inverse=` predicate at all.
+        (
+            "iri=http://example.org/pf#walk;min-hops=1;max-hops=4;max-paths-per-seed=64;\
+             max-expansions=99;mode=walk",
+            "names no predicate",
+        ),
+        // A mode that is neither of the two registrations.
+        (
+            "iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=1;\
+             max-hops=4;max-paths-per-seed=64;max-expansions=99;mode=cheapest",
+            "`mode=cheapest`",
+        ),
+        // A relative IRI in an IRI position.
+        (
+            "iri=pf#walk;forward=http://example.org/p;min-hops=1;max-hops=4;\
+             max-paths-per-seed=64;max-expansions=99;mode=walk",
+            "relative IRI reference",
+        ),
+        // A zero `min-hops`: the kernel's own envelope diagnostic, carried verbatim.
+        (
+            "iri=http://example.org/pf#walk;forward=http://example.org/p;min-hops=0;\
+             max-hops=4;max-paths-per-seed=64;max-expansions=99;mode=walk",
+            "min_hops must be at least 1",
+        ),
+    ];
+
+    for (spec, expected) in cases {
+        let out = run(&["query", "--data", &ttl, "--path-relation", spec, &query]);
+        assert!(
+            !out.status.success(),
+            "`{spec}` must be refused; stdout:\n{}",
+            stdout(&out)
+        );
+        assert!(
+            stderr(&out).contains(expected),
+            "the refusal of `{spec}` must contain {expected:?}; got:\n{}",
+            stderr(&out)
+        );
+    }
+}
+
+/// One IRI declared twice across repeated flags is a usage error (exit 2), not a
+/// silently shadowed relation — and not the abort `PropertyFunctionRegistry::register`
+/// would otherwise be.
+#[test]
+fn one_relation_iri_declared_twice_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+    let spec = walk_spec("walk");
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--path-relation",
+        &spec,
+        "--path-relation",
+        &spec,
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(!out.status.success(), "a duplicate IRI must be refused");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&out).contains("twice"),
+        "the refusal must say the IRI is declared twice: {}",
+        stderr(&out)
+    );
+}
+
+/// An alternative the data has no edges for contributes zero edges rather than failing:
+/// an operator with a FIXED step vocabulary running the same command line across many
+/// datasets supplies valid configuration every time, and a dataset that carries none of
+/// those edges has a correct answer — the empty one. The relation is still a CALL, so
+/// the empty answer comes from the traversal rather than from a triple pattern.
+#[test]
+fn a_path_relation_over_an_edgeless_predicate_answers_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &format!(
+            "iri={WALK_IRI};forward=http://example.org/noSuchPredicate;min-hops=1;\
+             max-hops=4;max-paths-per-seed=64;max-expansions=99;mode=walk"
+        ),
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "an edgeless alternative is valid configuration; stderr:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out),
+        "end,len,step,node\r\n",
+        "no edges, no walks — and the header proves the call was planned, not refused"
+    );
+}
+
+/// An envelope the ENGINE refuses is refused whichever lane it reaches, and the message
+/// names both the relation and the kernel's own diagnostic.
+#[test]
+fn a_path_relation_with_an_unbuildable_envelope_names_the_relation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--path-relation",
+        &format!(
+            "iri={WALK_IRI};forward=http://example.org/p;min-hops=1;max-hops=99999;\
+             max-paths-per-seed=64;max-expansions=99;mode=walk"
+        ),
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(!out.status.success(), "a max-hops past the cap is refused");
+    let message = stderr(&out);
+    assert!(
+        message.contains(WALK_IRI),
+        "must name the relation: {message}"
+    );
+    assert!(
+        message.contains("exceeds the hard cap"),
+        "must carry the kernel's own diagnostic: {message}"
+    );
+}
+
+/// The GOVERNED lane carries the registry too: a relation's rows are charged like every
+/// other row source, and an answer cap below the walk's row count trips (exit 3) rather
+/// than reporting a short answer as complete.
+#[test]
+fn a_governed_query_over_a_path_relation_trips_on_an_answer_cap() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let complete = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--max-answers",
+        "6",
+        "--path-relation",
+        &walk_spec("walk"),
+        &walk_query("?len ?step"),
+    ]);
+    assert!(
+        complete.status.success(),
+        "a cap at the exact row count completes; stderr:\n{}",
+        stderr(&complete)
+    );
+    assert_eq!(
+        stdout(&complete).lines().count(),
+        7,
+        "a header plus six hop rows"
+    );
+
+    let tripped = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--max-answers",
+        "2",
+        "--path-relation",
+        &walk_spec("walk"),
+        &walk_query("?len ?step"),
+    ]);
+    assert_eq!(
+        tripped.status.code(),
+        Some(3),
+        "a tripped governor exits 3; stderr:\n{}",
+        stderr(&tripped)
+    );
+}
+
+/// `--explain` reaches the same registry, so the rendered `relations` block NAMES the
+/// registered relation instead of being empty. (Before this flag existed the CLI had no
+/// registration surface at all, and the block was empty on every call.)
+#[test]
+fn explain_lists_the_registered_path_relation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--explain",
+        "--path-relation",
+        &walk_spec("walk"),
+        &walk_query("?len ?step"),
+    ]);
+
+    assert!(
+        out.status.success(),
+        "--explain with --path-relation must exit 0; stderr:\n{}",
+        stderr(&out)
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains(WALK_IRI),
+        "the explanation's relations block must name the registered relation; got:\n{body}"
+    );
+}
+
+/// `purrdf update --path-relation` reaches an `INSERT … WHERE`, which is a triple-pattern
+/// context exactly as a query's is, and the relation is read from the PRE-update state.
+#[test]
+fn update_registers_a_path_relation_for_its_where_clause() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+    let out_path = write_file(dir, "out.nt", "");
+
+    let updated = run(&[
+        "update",
+        "--data",
+        &ttl,
+        "--output",
+        &out_path,
+        "--to",
+        "ntriples",
+        "--path-relation",
+        &walk_spec("shortest"),
+        &format!(
+            "INSERT {{ <http://example.org/a> <http://example.org/reaches> ?end }} WHERE {{ \
+             <http://example.org/a> <{WALK_IRI}> ( ?end ?pathId ?len ?step ?node ?edge ) }}"
+        ),
+    ]);
+    assert!(
+        updated.status.success(),
+        "the update must exit 0; stderr:\n{}",
+        stderr(&updated)
+    );
+
+    let body = std::fs::read_to_string(&out_path).expect("read the updated dataset");
+    for local in ["b", "c", "d"] {
+        assert!(
+            body.contains(&format!(
+                "<http://example.org/a> <http://example.org/reaches> \
+                 <http://example.org/{local}> ."
+            )),
+            "the WHERE clause must have reached ex:{local} through the relation; got:\n{body}"
+        );
+    }
+}
