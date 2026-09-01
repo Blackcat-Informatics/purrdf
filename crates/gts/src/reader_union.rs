@@ -55,6 +55,20 @@ struct Unioner {
 }
 
 impl Unioner {
+    /// # Termination
+    ///
+    /// `key_for` ↔ `map_term` recurse through a term's triple components and its
+    /// datatype with no depth bound and no visited set — see the module-level
+    /// rationale above for why: `union_segments` is `pub(crate)` in a private
+    /// module, so `reader::read_with_options` is its only caller, and every
+    /// `Graph` reaching it has already passed `reader::read`'s per-segment
+    /// refusal of a self-reaching triple term (`reifier_binding_is_recursive`,
+    /// `DamagedFrame`, covering the implicit self-bound spelling of §7.1 too). A
+    /// guard was considered and rejected here: it would put two hash lookups per
+    /// term on the fold's hot path to defend against a shape the reader cannot
+    /// produce — a closed decision, not deferred work. Any future path into this
+    /// union that does not run through `reader::read` must establish its own
+    /// acyclicity before calling in; this walk will not.
     fn key_for(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> InternKey {
         let t = &seg.terms[tid];
         match t.kind {
@@ -86,6 +100,12 @@ impl Unioner {
         }
     }
 
+    /// # Termination
+    ///
+    /// Mirrors [`key_for`](Self::key_for)'s unguarded recursion into a term's
+    /// triple/datatype edges, and rests on the same invariant — reachable only
+    /// through a `reader::read`-validated segment. See `key_for` for the full
+    /// rationale.
     fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
         let key = self.key_for(seg, seg_idx, tid);
         if let Some(&got) = self.intern.get(&key) {

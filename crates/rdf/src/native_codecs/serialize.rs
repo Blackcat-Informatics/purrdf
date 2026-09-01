@@ -70,6 +70,18 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// every star-capable format. To serialize the base quads ONLY — for a star-incapable
 /// projection target where the statement layer is declared loss (RDF/XML, JSON-LD in
 /// the transcode contract) — use [`serialize_dataset_base_only`].
+///
+/// # Termination
+///
+/// `D: DatasetView` is a public trait. The `SerGraph` lowering this function
+/// drives — `build_ser_graph`'s term interner — resolves a quoted-triple term's
+/// components through `DatasetView::resolve` with no depth bound and no visited
+/// set, so it terminates only if `dataset` does. That is [`DatasetView`]'s own
+/// contract (see its `# Termination` doc), not something this function — or
+/// `ensure_terms_terminate`, which polices a concrete GTS `Graph` and
+/// structurally cannot police an arbitrary trait impl — can check on `dataset`'s
+/// behalf. Every in-repo `DatasetView` satisfies it; a caller supplying a
+/// third-party one owes it directly.
 pub fn serialize_dataset<D: DatasetView>(
     dataset: &D,
     media_type: &str,
