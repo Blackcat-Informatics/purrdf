@@ -13,6 +13,9 @@ use std::fmt::Write as _;
 
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3};
 
+use crate::RdfDiagnostic;
+use crate::gts_resolve::ensure_terms_terminate;
+
 /// Scope name for the default graph (quads with no graph term).
 pub const DEFAULT_SCOPE: &str = "";
 /// Sentinel scope name selecting every quad regardless of graph.
@@ -176,12 +179,31 @@ impl GtsFoldView {
     /// built-in W3C/schema.org prefixes. Pass a [`GtsFoldViewConfig`] via
     /// [`GtsFoldView::with_config`] to supply the consumer's language vocab
     /// and CURIE prefixes.
-    pub fn new(graph: Graph) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
+    /// resolve through itself — see [`GtsFoldView::with_config`].
+    pub fn new(graph: Graph) -> Result<Self, RdfDiagnostic> {
         Self::with_config(graph, GtsFoldViewConfig::default())
     }
 
     /// A view configured with the consumer's [`GtsFoldViewConfig`].
-    pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
+    /// resolve through itself. The view's accessors — [`GtsFoldView::nq_token`],
+    /// [`GtsFoldView::public_value`] and everything built on them — walk a quoted
+    /// triple's resolved components to the leaves, so a self-reaching term would
+    /// recurse without bound and abort the process. A graph off the wire cannot
+    /// contain one (the reader refuses the row that would close the loop); a graph
+    /// a caller assembled can, so the view REFUSES to exist rather than handing
+    /// back an object whose every renderer is a process kill. This is the fold-time
+    /// refusal GTS-SPEC §7.3 permits, applied once at construction rather than as a
+    /// guard inside every walk.
+    pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Result<Self, RdfDiagnostic> {
+        ensure_terms_terminate(&graph)?;
         let mut view = Self {
             graph,
             iri_index: BTreeMap::new(),
@@ -195,7 +217,7 @@ impl GtsFoldView {
         if let Some(vocab) = &config.language_vocab {
             view.tag_map = view.build_tag_map(vocab);
         }
-        view
+        Ok(view)
     }
 
     /// Consume the view and return the underlying folded [`Graph`].
@@ -838,6 +860,18 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
         .min_by(|a, b| rank_language(&a.1.2).cmp(&rank_language(&b.1.2)))
 }
 
+/// Render one term as its N-Quads token, resolving a quoted triple's components to
+/// the leaves.
+///
+/// # Termination
+///
+/// This recurses on the two structural edges a term carries — a quoted triple's
+/// `(s, p, o)` and a literal's datatype — with no depth bound and no visited set,
+/// because the graph it walks has already been proven to terminate. Every route to a
+/// `Graph` inside this module runs through [`GtsFoldView::with_config`], which
+/// refuses a self-reaching term table outright. Keep it that way: a new constructor
+/// that skips that check hands this function an input it will die on, and a stack
+/// overflow in Rust aborts the process rather than panicking.
 fn render_term(graph: &Graph, tid: usize) -> String {
     let term = &graph.terms[tid];
     match term.kind {
@@ -996,6 +1030,7 @@ mod tests {
         writer.add_reifies(&[(16, (0, 1, 2), None)]);
         writer.add_annot(&[(16, 17, 18, None)]);
         GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate")
     }
 
     #[test]
@@ -1032,7 +1067,8 @@ mod tests {
             lit("false", None, Some(0)),
             lit("not-a-boolean", None, Some(0)),
         ]);
-        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None));
+        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate");
         assert_eq!(view.public_value(1), PublicValue::Boolean(false));
         assert_eq!(
             view.public_value(2),
@@ -1106,7 +1142,8 @@ mod tests {
                 language_vocab: Some(vocab),
                 curie_prefixes: vec![("ex".to_string(), EX.to_string())],
             },
-        );
+        )
+        .expect("the fixture graph's terms terminate");
         assert_eq!(
             view.tag_map().get("x-purrdf-english"),
             Some(&"en".to_string())
@@ -1128,7 +1165,8 @@ mod tests {
 
         // With NO vocab configured the retag map is empty — no fabricated
         // namespace scanning happens.
-        let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None));
+        let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None))
+            .expect("the fixture graph's terms terminate");
         assert!(bare.tag_map().is_empty());
     }
 
@@ -1167,7 +1205,8 @@ mod tests {
         // statement-layer rows that only the graph column tells apart.
         writer.add_reifies(&[(4, (0, 1, 2), Some(8)), (4, (0, 1, 2), Some(9))]);
         writer.add_annot(&[(4, 5, 6, Some(8)), (4, 5, 7, Some(9))]);
-        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None));
+        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None))
+            .expect("the fixture graph's terms terminate");
 
         let rows = view.relational_rows().expect("relational rows");
         assert_eq!(

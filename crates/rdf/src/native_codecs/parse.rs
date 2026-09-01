@@ -503,6 +503,16 @@ impl SerInterner<'_> {
     /// Intern a GTS term id, returning a [`FoldNode`]: a leaf becomes `Term`, a
     /// quoted-triple term becomes `Triple` (its components already interned) so a
     /// caller can fold it as a reifier binding rather than re-interning it.
+    ///
+    /// # Termination
+    ///
+    /// `intern_node` → `intern` → `intern_node` recurses on a quoted triple's
+    /// components with no depth bound and no visited set. It terminates because the
+    /// term table it walks does: every producer of a [`SerGraph`] guarantees that, and
+    /// the one that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it,
+    /// refusing a self-reaching table with `gts-self-reaching-term`. The IR's own
+    /// acyclicity check runs at `freeze()`, which is far too late — this walk would
+    /// have overflowed the stack, and aborted, long before reaching it.
     fn intern_node(
         &self,
         builder: &mut RdfDatasetBuilder,

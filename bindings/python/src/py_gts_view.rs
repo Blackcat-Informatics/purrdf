@@ -39,12 +39,12 @@ pub struct PyGtsFoldView {
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
     #[staticmethod]
-    fn from_bytes(py: Python<'_>, data: &[u8]) -> Self {
+    fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
         py.detach(|| {
             let graph = purrdf_gts::reader::read(data, true, None);
-            Self {
-                inner: GtsFoldView::new(graph),
-            }
+            Ok(Self {
+                inner: fold_view(graph)?,
+            })
         })
     }
 
@@ -59,7 +59,7 @@ impl PyGtsFoldView {
         py.detach(|| {
             let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
             Ok(Self {
-                inner: GtsFoldView::new(graph),
+                inner: fold_view(graph)?,
             })
         })
     }
@@ -328,6 +328,20 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// Build the Rust-owned view, turning the fold's refusal into a `ValueError`.
+///
+/// The view REFUSES a term table in which a term resolves through itself: every
+/// accessor that renders a quoted triple (`nq_token`, `python_value`, the public-text
+/// family) walks its components to the leaves, and an unbounded walk overflows the
+/// stack — which in Rust aborts the process, killing the interpreter outright rather
+/// than raising anything Python could catch. `from_parts` accepts a term table
+/// straight from the caller, so this is the boundary where that is stopped: term ids
+/// are range-checked in [`validate_terms`], and the shape they describe is checked for
+/// termination here.
+fn fold_view(graph: Graph) -> PyResult<GtsFoldView> {
+    GtsFoldView::new(graph).map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))
+}
+
 fn graph_from_parts(
     terms: Vec<PyTermRow>,
     quads: Vec<(usize, usize, usize, Option<usize>)>,
@@ -384,7 +398,9 @@ fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
         validate_optional_term_id(*datatype, term_count, &format!("terms[{idx}].datatype"))?;
         validate_optional_term_id(*reifier, term_count, &format!("terms[{idx}].reifier"))?;
         // A self-describing quoted triple names its own components; every id is
-        // validated exactly like the reifier slot, so no silent acceptance.
+        // validated exactly like the reifier slot, so no silent acceptance. Range is
+        // all this pass can say: whether the SHAPE those ids describe terminates is a
+        // property of the whole table, checked once in `fold_view`.
         if let Some((s, p, o)) = *triple {
             validate_term_id(s, term_count, &format!("terms[{idx}].triple.s"))?;
             validate_term_id(p, term_count, &format!("terms[{idx}].triple.p"))?;

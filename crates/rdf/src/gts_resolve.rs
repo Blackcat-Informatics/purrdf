@@ -9,9 +9,10 @@
 //! datatype-must-be-IRI checks, reifier lookup for quoted-triple terms, and the
 //! cyclic-nesting depth guard.
 //!
-//! This module keeps the shared nesting bound and literal-direction parser used by
-//! the production importers. A test-only eager resolver remains here for regression
-//! coverage over malformed folded graphs.
+//! This module keeps the shared nesting bound, the shared **termination check**
+//! ([`ensure_terms_terminate`]) every caller-built graph is admitted through, and the
+//! literal-direction parser used by the production importers. A test-only eager
+//! resolver remains here for regression coverage over malformed folded graphs.
 //!
 //! The consuming `import_graph` importer cannot reuse these directly: it consumes a
 //! `Graph` *by value* and MOVES term strings into the interner, which is structurally
@@ -24,7 +25,6 @@
 //! from the original `gts.rs` implementation), so error contracts are unchanged by
 //! the extraction.
 
-#[cfg(test)]
 use purrdf_gts::model::{Graph, TermKind};
 
 use crate::{RdfDiagnostic, RdfTextDirection};
@@ -35,6 +35,120 @@ use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 /// nested triple term hard-fails rather than recursing without bound. Shared by the
 /// eager resolver here and the move-based importer in [`super::import_graph`].
 pub(crate) const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
+
+/// The outgoing structural edges of one term: the ids it makes another walker
+/// resolve. Three is the maximum (a quoted triple's `(s, p, o)`); a literal
+/// contributes one (its datatype term) and an IRI or blank node none.
+type TermEdges = ([usize; 3], usize);
+
+/// Refuse a folded [`Graph`] whose term table lets a term reach ITSELF.
+///
+/// GTS-SPEC §7.3 makes termination normative for EVERY walk of a triple term's
+/// resolved components — the segment union and every projection or re-authoring
+/// pass alike. A term reaches another through exactly two edges, and both are
+/// followed recursively by this crate's walkers:
+///
+/// * a quoted-triple term reaches its `(s, p, o)` through
+///   [`Graph::triple_of`](purrdf_gts::model::Graph::triple_of), which prefers the
+///   self-describing `tt` components and otherwise resolves the statement layer
+///   through the reifier id the term names — or, when it names none, through its
+///   OWN id (§7.1, a self-bound triple term may leave `rf` implicit);
+/// * a literal reaches its datatype term.
+///
+/// A cycle over those edges makes every such walk non-terminating, and an unbounded
+/// recursion in Rust overflows the stack, which **aborts the process** — it is not a
+/// catchable panic, so no binding can contain it. The GTS reader already refuses a
+/// `reifies` row that would close such a loop, which closes the wire route; a graph
+/// assembled by a caller (`GtsFoldView::new`, the Python `from_parts`, any consumer
+/// holding a `purrdf_gts::model::Graph`) carries no such guarantee, so it is checked
+/// HERE, once, at every boundary where one enters this crate.
+///
+/// This is the fold-time refusal §7.3 permits, taken in preference to guarding each
+/// walker: one O(terms + edges) pass paid once per graph, against a visited set or a
+/// depth counter threaded through every render, every serialization and every fold.
+/// The walk below is iterative — a recursive acyclicity check would abort on exactly
+/// the input it exists to reject.
+///
+/// # Errors
+///
+/// Returns `gts-self-reaching-term` naming the first term that reaches itself. An
+/// out-of-range component id is NOT this check's business and is skipped: it names no
+/// term, so it closes no loop, and the resolvers report it under their own range codes
+/// (`gts-term-out-of-range`, `native-codec-term-out-of-range`) when they reach it.
+/// Reporting it here would put a range error under a misleading code.
+pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic> {
+    /// Never visited.
+    const UNSEEN: u8 = 0;
+    /// On the current DFS path — reaching it again is a cycle.
+    const ON_PATH: u8 = 1;
+    /// Fully explored and proven to terminate.
+    const SETTLED: u8 = 2;
+
+    let mut state = vec![UNSEEN; graph.terms.len()];
+    // One frame per term on the current path: its id, its outgoing edges resolved
+    // once, and how many of them have been followed.
+    let mut path: Vec<(usize, TermEdges, usize)> = Vec::new();
+
+    for root in 0..graph.terms.len() {
+        if state[root] != UNSEEN {
+            continue;
+        }
+        state[root] = ON_PATH;
+        path.push((root, term_edges(graph, root), 0));
+        while let Some(frame) = path.last_mut() {
+            let (tid, (edges, edge_count), cursor) = *frame;
+            if cursor == edge_count {
+                state[tid] = SETTLED;
+                path.pop();
+                continue;
+            }
+            frame.2 = cursor + 1;
+            let next = edges[cursor];
+            match state.get(next) {
+                // A dangling component id resolves to no term, so it closes no loop.
+                None | Some(&SETTLED) => {}
+                Some(&ON_PATH) => {
+                    return Err(RdfDiagnostic::error(
+                        "gts-self-reaching-term",
+                        format!(
+                            "GTS term {next} resolves through itself, so no walk of its \
+                             components can terminate"
+                        ),
+                    ));
+                }
+                Some(_) => {
+                    state[next] = ON_PATH;
+                    path.push((next, term_edges(graph, next), 0));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The term ids `term_id` makes a walker resolve, in the order the walkers follow
+/// them. This MUST mirror what those walkers actually read: an edge omitted here is
+/// a loop the check admits and the first walker then dies on.
+fn term_edges(graph: &Graph, term_id: usize) -> TermEdges {
+    let Some(term) = graph.terms.get(term_id) else {
+        return ([0; 3], 0);
+    };
+    match term.kind {
+        // `render_literal`, the N-Triples/TriG/RDF-XML writers and the IR fold all
+        // resolve a literal's datatype as a term of its own.
+        TermKind::Literal => match term.datatype {
+            Some(datatype) => ([datatype, 0, 0], 1),
+            None => ([0; 3], 0),
+        },
+        // `Graph::triple_of` is the ONE place a folded quoted triple's components are
+        // resolved, so it is the one edge set that matters here.
+        TermKind::Triple => match graph.triple_of(term_id) {
+            Some(triple) => (<[usize; 3]>::from(triple), 3),
+            None => ([0; 3], 0),
+        },
+        TermKind::Iri | TermKind::Bnode => ([0; 3], 0),
+    }
+}
 
 /// Parse a GTS literal base-direction string (`"ltr"`/`"rtl"`)
 /// into the IR's [`RdfTextDirection`]. `None` is legitimate absence; an

@@ -13,7 +13,8 @@ pub use crate::gts_core::*;
 pub use crate::gts_verify::{ContentChainVerification, verify_content_chain};
 
 use crate::RdfDiagnostic;
-use crate::native_codecs::ser_model::{SerGraph, SerTerm, SerTermKind};
+use crate::gts_resolve::ensure_terms_terminate;
+use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermKind};
 
 /// Copy a real `purrdf_gts::model::Graph` (read from a GTS bundle) into the first-party
 /// [`SerGraph`] the native statement-layer fold consumes. The two shapes mirror each
@@ -23,11 +24,60 @@ use crate::native_codecs::ser_model::{SerGraph, SerTerm, SerTermKind};
 /// This is the GtsGraph→SerGraph bridge for the CONTAINER read path. purrdf_gts use is
 /// allow-listed in this container file (the purrdf.gts bundle reader legitimately yields
 /// a real `purrdf_gts::model::Graph`); the codec seam never sees the purrdf-gts model.
-pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> SerGraph {
-    let terms = g
-        .terms
-        .iter()
-        .map(|t| SerTerm {
+///
+/// # Quoted triples
+///
+/// The two models spell a quoted triple's components differently and the difference is
+/// load-bearing. `purrdf_gts::model::Term` states them in its own `triple` slot (wire
+/// `"tt"`) — that is what [`crate::gts_write`] writes and what
+/// `Graph::triple_of` prefers. A [`SerGraph`] has no such slot: EVERY producer of one
+/// (the text parsers, the IR lowering in `serialize.rs`) spells a triple TERM as the
+/// self-reifier sentinel — the term's `reifier` is its OWN id, and `reifiers` carries
+/// `(id, (s, p, o), None)` — which the serializers render inline as `<<( s p o )>>` and
+/// skip as an `rdf:reifies` output row. So `tt` is TRANSLATED into that spelling here.
+/// Copying the term without it dropped the components on the floor: a modern `tt`-only
+/// triple term rendered as `_:unbound_triple_N` on the text path and hard-failed the IR
+/// fold with `native-codec-unbound-triple-term`.
+///
+/// The translated rows are placed AHEAD of the statement layer because
+/// `SerGraph::reifier` returns the first row for an id and `tt` takes precedence over
+/// the reifier indirection, exactly as `Graph::triple_of` orders them.
+///
+/// # Errors
+///
+/// Returns `gts-self-reaching-term` when the graph's term table lets a term resolve
+/// through itself. Everything downstream of this bridge — the IR fold's `SerInterner`,
+/// the N-Triples/TriG writers, the RDF/XML and JSON-LD serializers — walks a quoted
+/// triple's components recursively with no depth bound, so an unchecked graph here is
+/// a stack overflow, which aborts the process. A graph off the wire cannot contain such
+/// a term; a caller-built one reaching the public `dataset_from_gts_graph` /
+/// `flattened_dataset_from_gts_graph` can, and is refused here.
+pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDiagnostic> {
+    ensure_terms_terminate(g)?;
+
+    let mut self_bound: Vec<SerReifierRow> = Vec::new();
+    let mut terms = Vec::with_capacity(g.terms.len());
+    for (id, t) in g.terms.iter().enumerate() {
+        let reifier = if t.kind != purrdf_gts::model::TermKind::Triple {
+            t.reifier
+        } else if let Some(triple) = t.triple {
+            // Self-describing (`tt`): re-spell it under the term's own id.
+            self_bound.push((id, triple, None));
+            Some(id)
+        } else if t.reifier.is_some_and(|rid| g.reifier(rid).is_some()) {
+            // The legacy indirection already resolves through the statement layer;
+            // leave the spelling alone so a genuine `rdf:reifies` row still emits.
+            t.reifier
+        } else if g.reifier(id).is_some() {
+            // §7.1: a self-bound triple term may leave `rf` implicit, and the binding
+            // is then keyed by the term's OWN id. The row is already in the statement
+            // layer under that id, so naming it is the whole translation.
+            Some(id)
+        } else {
+            // Genuinely unbound; the fold and the serializers report it as such.
+            t.reifier
+        };
+        terms.push(SerTerm {
             kind: match t.kind {
                 purrdf_gts::model::TermKind::Iri => SerTermKind::Iri,
                 purrdf_gts::model::TermKind::Bnode => SerTermKind::Bnode,
@@ -38,15 +88,18 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> SerGraph {
             datatype: t.datatype,
             lang: t.lang.clone(),
             direction: t.direction.clone(),
-            reifier: t.reifier,
-        })
-        .collect();
-    SerGraph {
+            reifier,
+        });
+    }
+
+    let mut reifiers = self_bound;
+    reifiers.extend(g.reifiers.iter().copied());
+    Ok(SerGraph {
         terms,
         quads: g.quads.clone(),
-        reifiers: g.reifiers.clone(),
+        reifiers,
         annotations: g.annotations.clone(),
-    }
+    })
 }
 
 /// Load a real `purrdf_gts::model::Graph` (read from a GTS bundle) into a frozen
@@ -61,7 +114,7 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> SerGraph {
 pub fn dataset_from_gts_graph(
     g: &purrdf_gts::model::Graph,
 ) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
-    let ser = gts_to_ser(g);
+    let ser = gts_to_ser(g)?;
     crate::native_codecs::parse::dataset_from_ser_graph(&ser)
 }
 
@@ -76,7 +129,7 @@ pub fn dataset_from_gts_graph(
 pub fn flattened_dataset_from_gts_graph(
     g: &purrdf_gts::model::Graph,
 ) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
-    let ser = gts_to_ser(g);
+    let ser = gts_to_ser(g)?;
     crate::native_codecs::parse::flattened_dataset_from_ser_graph(&ser)
 }
 
