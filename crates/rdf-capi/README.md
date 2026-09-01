@@ -102,9 +102,24 @@ executes that example against the generated shared library and committed header.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.6.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.7.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
+- **An incompatible change is declared, not smuggled.** Pre-1.0 the project
+  policy (`docs/book/src/project/releases.md`, "Pre-1.0 semver policy") puts
+  breaking changes on the **minor** component, so removing, renaming, retyping,
+  reordering, or mid-list-inserting a parameter on an exported function bumps
+  `PURRDF_ABI_MINOR`. `tests/abi_signatures.rs` snapshots the complete exported
+  prototype list against the version triple in
+  [`tests/abi_signatures.snapshot`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/tests/abi_signatures.snapshot),
+  so a signature edit fails the ordinary `cargo test` gate until the version and
+  the snapshot are both updated on purpose. (`make capi-check` only proves the
+  header agrees with the source; it cannot see that the contract *moved*.)
+  `0.6.0` → `0.7.0` is exactly such a break: `purrdf_shacl_validate_to_sarif`
+  and `purrdf_shacl_entail_to_ntriples` gained a `shapes_base_iri` parameter
+  between `shapes_ttl` and `data_nt`. Recompile against the new header; there is
+  no `_v2` alias, because two entry points for one job is the duplication this
+  library exists to avoid.
 
 ### Status codes
 

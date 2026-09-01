@@ -893,7 +893,19 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 }
                 let graph = self.term(None, 0)?;
                 self.expect(&Token::LBrace)?;
-                self.graph_block(&graph)?;
+                self.graph_block(Some(&graph))?;
+                continue;
+            }
+            // TriG rule [3] admits a bare `wrappedGraph` — `{ … }` with no label — as a
+            // block naming the default graph. It is not a term, so it must be taken
+            // before the subject position below.
+            if self.at(&Token::LBrace) {
+                if !self.allow_named_graphs {
+                    let (l, c) = self.loc();
+                    return Err(err_at("Turtle input cannot contain graph blocks", l, c));
+                }
+                self.pos += 1;
+                self.graph_block(None)?;
                 continue;
             }
             if S::ENABLED {
@@ -905,7 +917,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                     let (l, c) = self.loc();
                     return Err(err_at("Turtle input cannot contain graph blocks", l, c));
                 }
-                self.graph_block(&first)?;
+                self.graph_block(Some(&first))?;
             } else {
                 self.statement_after_subject(&first, None)?;
             }
@@ -1368,8 +1380,14 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn graph_block(&mut self, graph: &Node) -> Result<(), RdfDiagnostic> {
-        if !matches!(graph, Node::Iri(_) | Node::Bnode(_)) {
+    /// A TriG `wrappedGraph` body, the opening `{` already consumed. `graph` is the
+    /// block's label, or `None` for the **unlabelled** `{ … }` block, which TriG rule
+    /// \[3\] `block ::= triplesOrGraph | wrappedGraph | triples2 | 'GRAPH' …` admits and
+    /// which names the *default* graph.
+    fn graph_block(&mut self, graph: Option<&Node>) -> Result<(), RdfDiagnostic> {
+        if let Some(name) = graph
+            && !matches!(name, Node::Iri(_) | Node::Bnode(_))
+        {
             let (l, c) = self.loc();
             return Err(err_at(
                 "graph block name must be an IRI or blank node",
@@ -1385,7 +1403,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             if S::ENABLED {
                 self.subject_off = self.cur_off();
             }
-            let subject = self.term(Some(graph), 0)?;
+            let subject = self.term(graph, 0)?;
             self.statement_after_subject_in_graph(&subject, graph)?;
         }
         Ok(())
@@ -1407,10 +1425,10 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn statement_after_subject_in_graph(
         &mut self,
         subject: &Node,
-        graph: &Node,
+        graph: Option<&Node>,
     ) -> Result<(), RdfDiagnostic> {
         if !(self.at(&Token::Dot) || self.at(&Token::RBrace)) {
-            self.predicate_object_list(subject, Some(graph), 0)?;
+            self.predicate_object_list(subject, graph, 0)?;
         }
         // The trailing `.` is optional for the final statement before `}`.
         if self.eat(&Token::Dot) || self.at(&Token::RBrace) {

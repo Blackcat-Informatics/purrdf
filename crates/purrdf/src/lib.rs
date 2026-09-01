@@ -64,6 +64,59 @@
 //! assert!(!format!("{:?}", purrdf::sparql::SparqlResultsFormat::Json).is_empty());
 //! let _ = schema;
 //! ```
+//!
+//! # The document base
+//!
+//! Both RDF legs of this facade take a document base, and it is the SAME parameter
+//! on each: the trailing `Option<&str>` of [`parse_dataset`] and of
+//! [`serialize_dataset_to_format`]. The Rust surface is therefore exactly as capable
+//! as the Python, WebAssembly, and C ones — a consumer never drops to a sub-crate to
+//! resolve or emit a relative IRI.
+//!
+//! * **Ingress.** [`parse_dataset`] resolves relative references against the supplied
+//!   base for the syntaxes whose grammar admits them
+//!   ([`NativeRdfFormat::admits_relative_iri`]). An in-document base (Turtle `@base`,
+//!   `xml:base`, JSON-LD `@context.@base`) overrides the caller's, per RFC-3986 §5.1.
+//! * **Egress.** [`serialize_dataset_to_format`] writes the base directive and
+//!   relativizes against it for the syntaxes that can express one
+//!   ([`NativeRdfFormat::emits_base`]); the rest emit absolute IRIs. That is the only
+//!   spelling those grammars admit, decided once from the format registry.
+//! * **No base is a hard failure, never a fabricated one.** PurRDF is handed bytes and
+//!   has no retrieval IRI, so it never invents a base from the filesystem or a URL.
+//!   A relative reference with nothing in scope fails with the shared diagnostic code
+//!   `iri-relative-no-base`; a supplied base that is not absolute fails on both legs.
+//!
+//! The types for building and interpreting a base — [`iri::BaseIri`],
+//! [`iri::BaseScope`], [`iri::BaseOrigin`], and [`iri::IriError`] (whose
+//! [`diagnostic_code`](purrdf_iri::IriError::diagnostic_code) owns those strings for
+//! the whole workspace) — are reachable under [`iri`], so naming one never costs a
+//! second dependency.
+//!
+//! ```rust
+//! use purrdf::{NativeRdfFormat, parse_dataset, serialize_dataset_to_format};
+//!
+//! let base = "https://example.org/base/";
+//!
+//! // Ingress: a relative subject resolves against the base.
+//! let doc = "<rel> <https://example.org/p> <https://example.org/o> .\n";
+//! let dataset = parse_dataset(doc.as_bytes(), "text/turtle", Some(base))?;
+//! assert_eq!(dataset.quad_count(), 1);
+//!
+//! // Egress: Turtle can express a base, so it is written and relativized against.
+//! let turtle = serialize_dataset_to_format(&dataset, NativeRdfFormat::Turtle, Some(base))?;
+//! let turtle = String::from_utf8(turtle.bytes).expect("utf-8");
+//! assert!(turtle.contains("@base <https://example.org/base/> ."));
+//!
+//! // N-Triples cannot, so the same base yields absolute IRIs rather than an error.
+//! let nt = serialize_dataset_to_format(&dataset, NativeRdfFormat::NTriples, Some(base))?;
+//! let nt = String::from_utf8(nt.bytes).expect("utf-8");
+//! assert!(nt.contains("<https://example.org/base/rel>"));
+//!
+//! // With nothing in scope the relative reference hard-fails; no base is invented.
+//! let error = parse_dataset(doc.as_bytes(), "text/turtle", None).expect_err("no base");
+//! assert_eq!(error.code, "iri-relative-no-base");
+//! # Ok::<(), purrdf::RdfDiagnostic>(())
+//! ```
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

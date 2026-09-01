@@ -1502,6 +1502,7 @@ dependencies = [
  "hex",
  "insta",
  "petgraph",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-sparql-algebra",
  "rayon",
