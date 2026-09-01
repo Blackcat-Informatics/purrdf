@@ -34,7 +34,7 @@ use purrdf_rdf::native_codecs::{
 };
 use purrdf_rdf::{
     JsonLdSerializeOptions, ParseOptions, SerializeGraph, TermValue, datasets_isomorphic,
-    parse_dataset_with, serialize_dataset,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset,
 };
 
 const P: &str = "<http://example.org/p>";
@@ -1818,4 +1818,124 @@ fn a_transcode_with_no_base_anywhere_invents_none() {
     )
     .expect("utf-8");
     assert!(!text.contains("@base"), "no base was ever in force: {text}");
+}
+
+// ── The refusal must not lie about the base ─────────────────────────────────────
+//
+// `iri-not-absolute-by-grammar` says "supplying a base will not help", which is true —
+// but the codecs raising it built a LOCAL `BaseScope::empty()` at the call site instead
+// of passing the caller's scope down, so the message also said "no base IRI is in scope"
+// to a user who had just run `--base http://example.org/dir/`. A diagnostic that denies
+// the state of the world sends the reader hunting for a dropped parameter instead of at
+// the relative IRI in their document. The base is still never APPLIED; it is now VISIBLE.
+
+/// The one-triple document each absolute-only grammar spells with a relative subject.
+const RELATIVE_SUBJECT_BY_FORMAT: &[(&str, &str)] = &[
+    (
+        "application/n-triples",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    (
+        "application/n-quads",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    ("application/trix", TRIX_RELATIVE_SUBJECT),
+    ("application/x-hextuples", HEXTUPLES_RELATIVE_SUBJECT),
+];
+
+#[test]
+fn an_absolute_only_refusal_names_the_base_in_scope_instead_of_denying_it() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, Some("http://example.org/dir/"))
+            .expect_err("a relative reference is refused whatever the base");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("<http://example.org/dir/>"),
+            "{media_type} must name the base in scope: {}",
+            error.message,
+        );
+        assert!(
+            error.message.contains("is never applied here"),
+            "{media_type} must say the base is deliberately not applied: {}",
+            error.message,
+        );
+        assert!(
+            !error.message.contains("no base IRI is in scope"),
+            "{media_type} must not deny a base the caller supplied: {}",
+            error.message,
+        );
+    }
+}
+
+/// With NO base the same refusal says so — the fix makes the message TRACK the scope, it
+/// does not simply delete the "absent" wording.
+#[test]
+fn an_absolute_only_refusal_still_reports_an_absent_base_as_absent() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, None)
+            .expect_err("a relative reference is refused with no base either");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("no base IRI is in scope"),
+            "{media_type} with nothing in scope must say so: {}",
+            error.message,
+        );
+    }
+}
+
+/// RDF/XML's one non-reference IRI position — an element name built from a RELATIVE
+/// `xmlns:` namespace — refused with the same denial. It resolves against nothing, which
+/// is exactly why the message has to name the base rather than claim there is none.
+#[test]
+fn an_rdfxml_qualified_name_refusal_names_the_base_in_scope() {
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"foo/\">",
+        "<rdf:Description rdf:about=\"http://example.org/s\"><ex:p>v</ex:p>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    let error = parse_dataset(
+        text.as_bytes(),
+        "application/rdf+xml",
+        Some("http://example.org/dir/"),
+    )
+    .expect_err("a relative xmlns namespace yields a relative element IRI");
+    assert_eq!(error.code, "iri-not-absolute-by-grammar");
+    assert!(
+        error.message.contains("<http://example.org/dir/>")
+            && !error.message.contains("no base IRI is in scope"),
+        "the refusal must name the base in scope: {}",
+        error.message,
+    );
+}
+
+/// The STREAMING lane carried the same defect twice over: `parse_dataset_from_reader`
+/// took a base and never built a scope from it at all, so every line-oriented refusal
+/// reported "no base IRI is in scope" no matter what the caller passed. The streamed
+/// message must be the buffered message, byte for byte — that is the whole contract
+/// between the two lanes.
+#[test]
+fn the_streaming_lane_reports_the_same_base_as_the_buffered_lane() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        if !matches!(
+            *media_type,
+            "application/n-triples" | "application/n-quads" | "application/x-hextuples"
+        ) {
+            continue; // only the line-oriented grammars stream
+        }
+        for base in [None, Some("http://example.org/dir/")] {
+            let streamed = parse_dataset_from_reader(text.as_bytes(), media_type, base)
+                .expect_err("the streamed parse refuses it too");
+            let buffered = parse_dataset(text.as_bytes(), media_type, base)
+                .expect_err("the buffered parse refuses it");
+            assert_eq!(
+                streamed.code, buffered.code,
+                "{media_type} with base = {base:?}"
+            );
+            assert_eq!(
+                streamed.message, buffered.message,
+                "{media_type} with base = {base:?}: the two lanes must say the same thing"
+            );
+        }
+    }
 }
