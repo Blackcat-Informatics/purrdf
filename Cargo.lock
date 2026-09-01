@@ -1556,6 +1556,7 @@ dependencies = [
  "camino",
  "datatest-stable",
  "purrdf",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
  "purrdf-sparql-algebra",

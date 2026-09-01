@@ -27,6 +27,9 @@ purrdf-sparql-algebra = { workspace = true }
 # both oxigraph-Store-free.
 purrdf = { workspace = true }
 purrdf-core = { workspace = true }
+# The SEP-0009 composite value space: the lexical-space grader the divergence
+# scan reads (`tests/cdt_lexical_divergence.rs`).
+purrdf-cdt = { workspace = true }
 # Hand-rolled SPARQL Results readers for the expected SRX/SRJ files.
 purrdf-sparql-results = { workspace = true }
 # Native RDFS/OWL-RL entailment closure for `sd:entailmentRegime` tests.
