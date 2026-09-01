@@ -108,7 +108,7 @@ use purrdf_sparql_algebra::{
     Variable,
 };
 use purrdf_xsd::{
-    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_cmp,
+    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -496,7 +496,7 @@ fn compare_keys(a: &[SortKey<'_>], b: &[SortKey<'_>], exprs: &[OrderExpression])
 }
 
 /// A literal's value-space **comparability class** — the coarsest partition under
-/// which [`value_cmp`] is total throughout a block or undefined throughout it.
+/// which [`value_total_cmp`] is total throughout a block or undefined throughout it.
 ///
 /// The obvious reading of §15.1 — "by value, else by a deterministic syntactic
 /// key" — is NOT a total order; it cycles. `"9"^^xsd:double` <
@@ -515,6 +515,28 @@ fn compare_keys(a: &[SortKey<'_>], b: &[SortKey<'_>], exprs: &[OrderExpression])
 /// IRI, split again on whether the lexical carries a timezone (a timezoned and an
 /// untimezoned instant are indeterminate within fourteen hours), and `Binary`
 /// separates the two byte-sequence value spaces.
+///
+/// # Why `Numeric` is one block, and why it needs an EXACT comparison to be one
+///
+/// Splitting the class was never enough for the numbers, because the cycle there
+/// is INSIDE one class. SPARQL §17.3 maps a cross-type numeric comparison onto the
+/// promotion lattice `integer ⊂ decimal ⊂ float ⊂ double`, which compares an
+/// integer against a decimal exactly but routes anything touching a float or a
+/// double through IEEE. Mixing an exact sub-relation with a lossy one is not
+/// transitive: `"1.000000000000000001"^^xsd:decimal` is exactly greater than
+/// `"1"^^xsd:integer`, yet promotion rounds it to `1.0` and calls it equal to
+/// `"1.0E0"^^xsd:double`, which the integer also equals. Three ordinary literals,
+/// one cycle, and a query supplies them.
+///
+/// The fix is not another class — a class rank would have to separate values that
+/// genuinely compare — but an exact comparison, which is what
+/// [`value_total_cmp`] gives this block: every member of the numeric tower except
+/// `NaN` (split out as [`ValueClass::NotANumber`]) is exactly a rational, the
+/// infinities included as its two ends, and comparing those rationals exactly is
+/// transitive by construction. That deliberately DIVERGES from the promotion-based
+/// `<` this crate's `FILTER` still evaluates, in exactly the pairs where the
+/// promoted relation is intransitive and therefore had no admissible sort order to
+/// preserve; see `purrdf_xsd::numeric_total_cmp` for the full argument.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ValueClass {
     Opaque,
@@ -533,7 +555,7 @@ impl ValueClass {
     /// Classify a literal from its parsed value (`None` when its datatype models
     /// no value space, or its lexical does not parse), answering the class with
     /// the value it orders BY — `None` for the three value-less blocks, which
-    /// therefore never reach [`value_cmp`].
+    /// therefore never reach [`value_total_cmp`].
     fn of(parsed: Option<XsdValue>, lexical: &str) -> (Self, Option<XsdValue>) {
         let Some(value) = parsed else {
             return (Self::Opaque, None);
@@ -664,7 +686,7 @@ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
                 return x.class.cmp(&y.class);
             }
             if let (Some(av), Some(bv)) = (&x.value, &y.value)
-                && let Some(ord) = value_cmp(av, bv)
+                && let Some(ord) = value_total_cmp(av, bv)
             {
                 return ord;
             }
@@ -3689,6 +3711,23 @@ mod tests {
             Some(xsd("9", "integer")),
             Some(xsd("30", "integer")),
             Some(xsd("NaN", "double")),
+            // The promotion cycle, in the shape a query can supply: a decimal with
+            // nineteen significant digits beside the IEEE value of the same
+            // magnitude, and the integer that value rounds to. Under §17.3's
+            // promotion the decimal is GREATER than the integer (compared exactly)
+            // and EQUAL to both the double and the float (compared through IEEE),
+            // which is a cycle a Rust sort may abort on. See `ValueClass::Numeric`.
+            Some(xsd("1.000000000000000001", "decimal")),
+            Some(xsd("1", "integer")),
+            Some(xsd("1.0E0", "double")),
+            Some(xsd("1.0E0", "float")),
+            Some(xsd("-1.000000000000000001", "decimal")),
+            Some(xsd("-1", "integer")),
+            Some(xsd("-1.0E0", "double")),
+            // The same failure one type up: 2^53 + 1 is an ordinary integer and an
+            // unrepresentable double, so the promotion rounds it onto 2^53.
+            Some(xsd("9007199254740993", "integer")),
+            Some(xsd("9.007199254740992E15", "double")),
             Some(xsd("abc", "integer")),
             Some(xsd("P1D", "duration")),
             Some(xsd("P1D", "dayTimeDuration")),
