@@ -161,8 +161,8 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
         // N-Triples / N-Quads admit no relative reference by grammar, so they never
         // consult `base` — they route every IRI through `resolve_absolute_only`. This
         // arm matches the `admits_relative_iri = false` column for those two rows.
-        NativeRdfFormat::NTriples => parse_lines(text, false, mode, collector)?,
-        NativeRdfFormat::NQuads => parse_lines(text, true, mode, collector)?,
+        NativeRdfFormat::NTriples => parse_lines(text, false, mode, base, collector)?,
+        NativeRdfFormat::NQuads => parse_lines(text, true, mode, base, collector)?,
         NativeRdfFormat::Turtle => document_statements(text, base, false, collector)?,
         NativeRdfFormat::TriG => document_statements(text, base, true, collector)?,
         NativeRdfFormat::RdfXml => {
@@ -253,15 +253,16 @@ fn parse_lines<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
     mode: LineParseMode,
+    base: &BaseScope,
     collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     if mode == LineParseMode::Auto && text.len() >= PARALLEL_MIN_BYTES {
         // The parallel path is `NoSpans`-only (each chunk gets its own ZST collector);
         // span tracking forces sequential (see `parse_dataset_with`), so `S::ENABLED`
         // is always false here. The parallel branch stays non-generic in the collector.
-        return parse_lines_parallel(text, allow_graph);
+        return parse_lines_parallel(text, allow_graph, base);
     }
-    parse_lines_sequential(text, allow_graph, 1, collector)
+    parse_lines_sequential(text, allow_graph, 1, base, collector)
 }
 
 /// Split `text` into line-aligned chunks of roughly `target_bytes` each: every chunk
@@ -299,11 +300,15 @@ fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
 /// chunk's diagnostic, and each per-line diagnostic is built from the line text alone,
 /// so the message is byte-identical to the sequential path's. Successful chunks
 /// concatenate in order into the exact statement list the sequential pass yields.
-fn parse_lines_parallel(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagnostic> {
+fn parse_lines_parallel(
+    text: &str,
+    allow_graph: bool,
+    base: &BaseScope,
+) -> Result<Vec<Statement>, RdfDiagnostic> {
     let threads = rayon::current_num_threads().max(1);
     let target = (text.len() / (threads * 4).max(1))
         .clamp(PARALLEL_MIN_CHUNK_BYTES, PARALLEL_MAX_CHUNK_BYTES);
-    parse_lines_parallel_with_chunk_size(text, allow_graph, target)
+    parse_lines_parallel_with_chunk_size(text, allow_graph, target, base)
 }
 
 /// [`parse_lines_parallel`] with an explicit chunk size (tests use a tiny size to
@@ -312,6 +317,7 @@ fn parse_lines_parallel_with_chunk_size(
     text: &str,
     allow_graph: bool,
     target_bytes: usize,
+    base: &BaseScope,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let chunks = split_line_chunks(text, target_bytes);
     // Each chunk is a contiguous line-aligned slice; chunk 0 begins at document
@@ -320,18 +326,20 @@ fn parse_lines_parallel_with_chunk_size(
     // diagnostic reports the SAME document-global line the sequential path would,
     // keeping the parallel path byte-identical (line numbers included).
     let mut base_lines = Vec::with_capacity(chunks.len());
-    let mut base = 1u32;
+    let mut next_line = 1u32;
     for chunk in &chunks {
-        base_lines.push(base);
+        base_lines.push(next_line);
         let newlines =
             u32::try_from(chunk.bytes().filter(|&b| b == b'\n').count()).unwrap_or(u32::MAX);
-        base = base.saturating_add(newlines);
+        next_line = next_line.saturating_add(newlines);
     }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
         .par_iter()
         .enumerate()
-        .map(|(i, chunk)| parse_lines_sequential(chunk, allow_graph, base_lines[i], &mut NoSpans))
+        .map(|(i, chunk)| {
+            parse_lines_sequential(chunk, allow_graph, base_lines[i], base, &mut NoSpans)
+        })
         .collect();
     // Phase 2: document order — first error wins, then in-order concatenation.
     let mut statements = Vec::with_capacity(
@@ -356,6 +364,7 @@ fn parse_lines_sequential<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
     base_line: u32,
+    base: &BaseScope,
     collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut statements = Vec::new();
@@ -377,7 +386,7 @@ fn parse_lines_sequential<S: SpanCollector>(
         }
     };
     for raw in text.lines() {
-        let Some(nodes) = parse_one_line(raw, allow_graph, lineno)? else {
+        let Some(nodes) = parse_one_line(raw, allow_graph, lineno, base)? else {
             if S::ENABLED {
                 advance_line_offset(&mut line_offset, raw);
             }
@@ -422,6 +431,7 @@ fn parse_one_line(
     raw: &str,
     allow_graph: bool,
     lineno: u32,
+    base: &BaseScope,
 ) -> Result<Option<Statement>, RdfDiagnostic> {
     let line = raw.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -431,7 +441,7 @@ fn parse_one_line(
         let col = e.byte_offset().map_or(1, |at| column_in_raw(raw, at));
         err_at(e.to_string(), lineno, col)
     })?;
-    let mut cursor = TokenCursor::new(tokens, raw, lineno);
+    let mut cursor = TokenCursor::new(tokens, raw, lineno, base);
     let mut nodes = Vec::new();
     while !cursor.at_statement_end() {
         nodes.push(cursor.term(0)?);
@@ -467,15 +477,21 @@ struct TokenCursor<'a> {
     pos: usize,
     raw: &'a str,
     lineno: u32,
+    /// The base in scope, carried for the DIAGNOSTIC only. This grammar admits no
+    /// relative reference, so the base is never applied — but a refusal that cannot see
+    /// it can only say "no base IRI is in scope", which is false whenever the caller
+    /// supplied one.
+    base: &'a BaseScope,
 }
 
 impl<'a> TokenCursor<'a> {
-    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u32) -> Self {
+    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u32, base: &'a BaseScope) -> Self {
         Self {
             tokens,
             pos: 0,
             raw,
             lineno,
+            base,
         }
     }
 
@@ -542,6 +558,7 @@ impl<'a> TokenCursor<'a> {
                 };
                 Ok(Node::Iri(absolute_iri_by_grammar(
                     &value,
+                    self.base,
                     self.lineno,
                     col,
                 )?))
@@ -608,7 +625,7 @@ impl<'a> TokenCursor<'a> {
                 let Some(Token::Iri(iri)) = self.bump() else {
                     return Err(err_at("datatype must be an IRI", self.lineno, col));
                 };
-                absolute_iri_by_grammar(&iri, self.lineno, col)?;
+                absolute_iri_by_grammar(&iri, self.base, self.lineno, col)?;
                 if matches!(iri.as_ref(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
                     return Err(err_at(
                         "literal cannot explicitly use the RDF language-string datatype",
@@ -683,10 +700,22 @@ fn split_lang_direction(
 /// This routes through [`BaseScope::resolve_absolute_only`], so a relative reference
 /// reports `iri-not-absolute-by-grammar` — the code that says "supplying a base will
 /// not help" — instead of the generic parse error the hand-rolled scheme check gave.
-/// No base is consulted, because none may be applied to these grammars.
-fn absolute_iri_by_grammar(value: &str, line_no: u32, column: u32) -> Result<Iri, RdfDiagnostic> {
-    BaseScope::empty()
-        .resolve_absolute_only(value)
+/// The base is never APPLIED, because none may be applied to these grammars.
+///
+/// It is nonetheless the caller's REAL scope, not a locally minted empty one. The two
+/// resolve identically — `resolve_absolute_only` returns `Err` for a relative reference
+/// whatever is in scope — but they DIAGNOSE differently, and the empty stand-in
+/// diagnosed a lie: a user who ran `purrdf convert --from ntriples --base http://…/`
+/// was told "no base IRI is in scope" about a base they had just supplied and which was
+/// threaded all the way down to this frame. The message now names the base and says it
+/// is deliberately not applied here, which is the fact the user needs.
+fn absolute_iri_by_grammar(
+    value: &str,
+    base: &BaseScope,
+    line_no: u32,
+    column: u32,
+) -> Result<Iri, RdfDiagnostic> {
+    base.resolve_absolute_only(value)
         .map_err(|e| iri_err_at(&e, line_no, column))
 }
 
@@ -2066,11 +2095,16 @@ pub(super) struct LineStreamParser {
     allow_graph: bool,
     /// The 1-based document line number of the NEXT line to be pushed.
     lineno: u32,
+    /// The base in scope, for the diagnostic only — see [`TokenCursor::base`]. The
+    /// streaming lane received the caller's base and dropped it on the floor, so it
+    /// reported "no base IRI is in scope" to a caller who had supplied one, exactly as
+    /// the buffered lane did.
+    base: BaseScope,
 }
 
 impl LineStreamParser {
     /// Start a streaming parse of `format`, which MUST be N-Triples or N-Quads.
-    pub(super) fn new(format: NativeRdfFormat) -> Result<Self, RdfDiagnostic> {
+    pub(super) fn new(format: NativeRdfFormat, base: BaseScope) -> Result<Self, RdfDiagnostic> {
         let allow_graph = match format {
             NativeRdfFormat::NTriples => false,
             NativeRdfFormat::NQuads => true,
@@ -2085,6 +2119,7 @@ impl LineStreamParser {
             accumulator: GraphAccumulator::new(),
             allow_graph,
             lineno: 1,
+            base,
         })
     }
 
@@ -2094,7 +2129,7 @@ impl LineStreamParser {
     /// `str::lines` yields for the buffered path, so the diagnostics (line, column,
     /// message) are the buffered path's diagnostics.
     pub(super) fn push_line(&mut self, raw: &str) -> Result<(), RdfDiagnostic> {
-        if let Some(nodes) = parse_one_line(raw, self.allow_graph, self.lineno)? {
+        if let Some(nodes) = parse_one_line(raw, self.allow_graph, self.lineno, &self.base)? {
             self.accumulator.push(&nodes)?;
         }
         self.lineno = self.lineno.saturating_add(1);
@@ -2228,9 +2263,16 @@ mod tests {
             text.len()
         );
 
-        let seq = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect("sequential parse");
-        let par =
-            parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect("parallel parse");
+        let seq = parse_lines_sequential(&text, true, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect("sequential parse");
+        let par = parse_lines(
+            &text,
+            true,
+            LineParseMode::Auto,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
         let graph_seq = build_gts_graph(&seq).expect("sequential graph");
@@ -2291,10 +2333,12 @@ mod tests {
         let text = "# comment\n\n<https://e/s> <https://e/p> \"a\" .\r\n\
                     <https://e/s> <https://e/p> \"b\"@en <https://e/g> .\n\
                     _:b0 <https://e/p> <<( <https://e/x> <https://e/y> <https://e/z> )>> .\n";
-        let expected = parse_lines_sequential(text, true, 1, &mut NoSpans).expect("sequential");
+        let expected = parse_lines_sequential(text, true, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect("sequential");
         for chunk_bytes in [1usize, 7, 16, 64, 4096] {
-            let actual = parse_lines_parallel_with_chunk_size(text, true, chunk_bytes)
-                .expect("parallel parse");
+            let actual =
+                parse_lines_parallel_with_chunk_size(text, true, chunk_bytes, &BaseScope::empty())
+                    .expect("parallel parse");
             assert!(
                 actual == expected,
                 "chunk size {chunk_bytes} must not change the parse"
@@ -2336,11 +2380,11 @@ mod tests {
         }
         text.push_str("this is not rdf\n");
 
-        let seq_err =
-            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
+        let seq_err = parse_lines_sequential(&text, true, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("sequential must fail");
         // A tiny chunk target guarantees the two bad lines land in different chunks.
-        let par_err =
-            parse_lines_parallel_with_chunk_size(&text, true, 256).expect_err("parallel must fail");
+        let par_err = parse_lines_parallel_with_chunk_size(&text, true, 256, &BaseScope::empty())
+            .expect_err("parallel must fail");
         assert_eq!(
             par_err, seq_err,
             "parallel must report the sequential (earliest) diagnostic byte-identically"
@@ -2377,10 +2421,16 @@ mod tests {
             "fixture must cross the parallel threshold"
         );
 
-        let seq_err =
-            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
-        let par_err = parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans)
-            .expect_err("parallel must fail");
+        let seq_err = parse_lines_sequential(&text, true, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("sequential must fail");
+        let par_err = parse_lines(
+            &text,
+            true,
+            LineParseMode::Auto,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect_err("parallel must fail");
         assert_eq!(par_err, seq_err, "diagnostics must be byte-identical");
         // Resolve the located line back into the source to prove the earlier chunk's
         // error (early-error line) won, not the late garbage line.
@@ -2438,8 +2488,14 @@ mod tests {
         );
 
         // Auto path over a >1 MiB input takes the chunk-parallel branch.
-        let par_err = parse_lines(&text, false, LineParseMode::Auto, &mut NoSpans)
-            .expect_err("parallel must reject the final line");
+        let par_err = parse_lines(
+            &text,
+            false,
+            LineParseMode::Auto,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect_err("parallel must reject the final line");
         let par_line = par_err
             .location
             .as_ref()
@@ -2451,7 +2507,7 @@ mod tests {
         );
 
         // Forced-sequential path over the identical input must agree.
-        let seq_err = parse_lines_sequential(&text, false, 1, &mut NoSpans)
+        let seq_err = parse_lines_sequential(&text, false, 1, &BaseScope::empty(), &mut NoSpans)
             .expect_err("sequential must reject the final line");
         let seq_line = seq_err
             .location
@@ -2515,8 +2571,9 @@ mod tests {
         // The line family: N-Triples and N-Quads share one cursor, and the same line is a
         // legal shape for both, so both are driven.
         for allow_graph in [false, true] {
-            let error = parse_lines_sequential(&quoted, allow_graph, 1, &mut NoSpans)
-                .expect_err("a 20 000-deep quoted triple term must be refused");
+            let error =
+                parse_lines_sequential(&quoted, allow_graph, 1, &BaseScope::empty(), &mut NoSpans)
+                    .expect_err("a 20 000-deep quoted triple term must be refused");
             assert!(
                 error.message.contains("nesting exceeds the parser limit"),
                 "the refusal must name the limit, got: {}",
@@ -2566,7 +2623,8 @@ mod tests {
             term = format!("<<( {s} {p} {term} )>>");
         }
         let line = format!("{s} {p} {term} .");
-        parse_lines_sequential(&line, false, 1, &mut NoSpans).expect("16 nested triple terms");
+        parse_lines_sequential(&line, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect("16 nested triple terms");
         DocParser::new(&line, BaseScope::empty(), false, &mut NoSpans)
             .parse()
             .expect("16 nested triple terms in Turtle");
@@ -2601,7 +2659,8 @@ mod tests {
         let text = "<http://ex/s> <http://ex/p> <http://ex/o> .\n\
                     <http://ex/s> <http://ex/p> <http://ex/o> .\n\
                     <http://ex/s> _:bad <http://ex/o> .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(3));
         assert!(loc.column.is_some(), "column must be attached");
@@ -2621,7 +2680,8 @@ mod tests {
         // `<http://ex/b>` (the token where a `.` was expected) begins at column 15.
         let raw = "<http://ex/a> <http://ex/b>";
         let tokens = tokenize(raw).expect("tokenizes");
-        let mut cursor = TokenCursor::new(tokens, raw, 7);
+        let scope = BaseScope::empty();
+        let mut cursor = TokenCursor::new(tokens, raw, 7, &scope);
         cursor.bump().expect("consume subject IRI");
         let e = cursor.expect_dot().expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -2635,7 +2695,8 @@ mod tests {
     fn term_iri_validation_column_points_at_iri() {
         // The object `<relative>` (no scheme) begins at column 29.
         let text = "<http://ex/s> <http://ex/p> <relative> .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(29));
@@ -2654,7 +2715,8 @@ mod tests {
     fn langtag_direction_column_points_at_langtag() {
         // The `@en--bad` tag begins at column 32.
         let text = "<http://ex/s> <http://ex/p> \"x\"@en--bad .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(32));
@@ -2666,7 +2728,8 @@ mod tests {
     fn langtag_validation_column_points_at_langtag() {
         // The `@toolongprimary` tag begins at column 32 (primary subtag > 8 chars).
         let text = "<http://ex/s> <http://ex/p> \"x\"@toolongprimary .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(32));
@@ -2679,7 +2742,8 @@ mod tests {
     fn datatype_non_iri_column_points_at_datatype() {
         // The datatype string `"y"` begins at column 34 (right after `^^`).
         let text = "<http://ex/s> <http://ex/p> \"x\"^^\"y\" .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(34));
@@ -2691,7 +2755,8 @@ mod tests {
     fn datatype_iri_validation_column_points_at_datatype() {
         // The datatype `<relative>` begins at column 34.
         let text = "<http://ex/s> <http://ex/p> \"x\"^^<relative> .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(34));
@@ -2709,7 +2774,8 @@ mod tests {
         // The datatype IRI begins at column 34.
         let text = "<http://ex/s> <http://ex/p> \"x\"^^\
                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .\n";
-        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(34));
