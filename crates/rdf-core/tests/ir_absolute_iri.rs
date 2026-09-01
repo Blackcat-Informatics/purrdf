@@ -42,10 +42,16 @@ fn builder_refuses_to_freeze_a_relative_iri() {
     let err = b.freeze().expect_err("a relative IRI cannot enter the IR");
     assert_eq!(err.code, RELATIVE);
     assert!(err.message.contains("\"foo\""), "{}", err.message);
-    // The remedy is carried as its own field, not only baked into the message.
-    assert!(
-        err.detail.as_deref().is_some_and(|d| d.contains("@base")),
-        "{err:?}"
+    // The remedy reaches the user through the MESSAGE — `IriError`'s `Display` ends with
+    // it — and through nothing else. It used to be attached as `detail` as well, and
+    // `RdfDiagnostic`'s rendering appends `detail` after the message, so every consumer
+    // read the same sentence twice in one diagnostic.
+    assert!(err.message.contains("@base"), "{err:?}");
+    assert_eq!(err.detail, None, "{err:?}");
+    assert_eq!(
+        err.to_string().matches("@base").count(),
+        1,
+        "the remedy is rendered exactly once: {err}"
     );
 }
 

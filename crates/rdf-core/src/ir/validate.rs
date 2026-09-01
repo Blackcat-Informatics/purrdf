@@ -105,20 +105,21 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
 /// The reported `code` is [`purrdf_iri::IriError::diagnostic_code`] verbatim — the
 /// workspace's single owner of these spellings — so a relative IRI reaching the IR
 /// through a non-codec ingress reports exactly the code the codecs report.
+///
+/// The remedy is carried by the MESSAGE and by nothing else. `IriError`'s
+/// [`Display`](core::fmt::Display) already ends with
+/// [`remedy_hint`](purrdf_iri::IriError::remedy_hint) — that is the contract its own
+/// rustdoc states — and [`RdfDiagnostic`]'s rendering appends `detail` after the
+/// message, so attaching the hint as `detail` here printed the same sentence twice in
+/// one diagnostic at every consumer that formats `{diagnostic}`.
 fn require_absolute_iris(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
     let Some((iri, err)) = builder.relative_iri() else {
         return Ok(());
     };
-    let diagnostic = diag(
+    Err(diag(
         err.diagnostic_code(),
         format!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
-    );
-    // The `Display` text above already carries the remedy, but `with_detail` keeps it
-    // available as its own field for consumers that render the hint separately.
-    Err(match err.remedy_hint() {
-        Some(hint) => diagnostic.with_detail(hint),
-        None => diagnostic,
-    })
+    ))
 }
 
 /// Validate every interned triple term: in-range components, IRI predicate,
