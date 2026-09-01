@@ -603,14 +603,19 @@ export class Dataset implements Iterable<Quad> {
   /**
    * Serialize to any of the nine RDF formats.
    *
-   * This leg takes NO document base, unlike `parse` and `serializeConfigured`. It
-   * reaches the star-incapable formats (RDF/XML, TriX, HexTuples), and the core's
-   * only base-carrying serializer drops the RDF 1.2 statement layer for exactly
-   * those — a base here would silently trade this dataset's reifier and annotation
-   * rows for a base declaration. Use `serializeConfigured` for a base-carrying
-   * JSON-LD/YAML-LD document.
+   * `base` is the document base the output is written under — the egress mirror of
+   * `parse`'s. A syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD,
+   * YAML-LD) writes it and relativizes against it; one that cannot (N-Triples,
+   * N-Quads, TriX, HexTuples) emits absolute IRIs, the only spelling those grammars
+   * admit. A base that is not an absolute IRI throws whatever the format; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
+   *
+   * The RDF 1.2 statement layer is EMITTED, not projected away: this is a dataset you
+   * are reading back, so reifier and annotation rows survive. RDF/XML renders them as
+   * `rdf:parseType="Triple"`; TriX and HexTuples have no triple-term surface and throw
+   * rather than dropping them silently.
    */
-  serialize(format: string): string;
+  serialize(format: string, base?: string | null): string;
   /**
    * `base` is the document base the output is written under: both JSON-LD and
    * YAML-LD can express one, so it reaches the emitted `@context` as `@base` and
