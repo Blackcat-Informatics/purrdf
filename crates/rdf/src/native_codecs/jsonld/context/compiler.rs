@@ -1525,6 +1525,15 @@ fn is_extension_control(value: &str) -> bool {
     EXTENSION_CONTROLS.contains(&value)
 }
 
+/// Resolve a document-relative JSON-LD reference against the base currently in force.
+///
+/// A reference that already carries a scheme is retained VERBATIM: JSON-LD expansion does
+/// not re-normalize an IRI a document spelled absolutely. Everything else goes through the
+/// workspace's shared [`purrdf_iri::BaseScope`], so the "relative reference with no base
+/// in scope" condition reports the SAME `iri-relative-no-base` code (and the same remedy
+/// text) that Turtle, TriG, RDF/XML, SPARQL and ShEx report — it stops being a fifth
+/// JSON-LD-local spelling of a condition every other syntax already names. Genuinely
+/// JSON-LD-specific context failures keep `jsonld-context-invalid`.
 fn resolve_reference(
     reference: &str,
     base: Option<&str>,
@@ -1535,19 +1544,22 @@ fn resolve_reference(
     {
         return Ok(reference.to_owned());
     }
-    let base = base.ok_or_else(|| {
-        context_error(format!(
-            "relative {description} `{reference}` requires an absolute base IRI"
-        ))
-    })?;
-    let base = purrdf_iri::parse(base)
-        .map_err(|source| context_error(format!("invalid base IRI `{base}`: {source}")))?;
-    base.resolve(reference)
+    let scope = match base {
+        None => purrdf_iri::BaseScope::empty(),
+        Some(base) => {
+            let base = purrdf_iri::BaseIri::parse(base)
+                .map_err(|source| context_error(format!("invalid base IRI `{base}`: {source}")))?;
+            purrdf_iri::BaseScope::rooted(base, purrdf_iri::BaseOrigin::Caller)
+        }
+    };
+    scope
+        .resolve(reference)
         .map(|resolved| resolved.as_str().to_owned())
         .map_err(|source| {
-            context_error(format!(
-                "cannot resolve {description} `{reference}` against `{base}`: {source}"
-            ))
+            RdfDiagnostic::error(
+                source.diagnostic_code(),
+                format!("cannot resolve {description}: {source}"),
+            )
         })
 }
 
@@ -1875,10 +1887,31 @@ fn reject_iri_confused_with_prefix(active: &ActiveContext, iri: &str) -> Result<
     Ok(())
 }
 
+/// Spell `iri` as a reference relative to `base` for a document-position `@id`.
+///
+/// This is a SELECTION layer, not a resolver — the sixth hand-rolled resolver this
+/// workspace deliberately does not have. It performs ZERO reference-resolution
+/// arithmetic: every candidate spelling is either read straight off RFC-3986 components
+/// already parsed out of the target, or produced by [`purrdf_iri::BaseIri::relativize`],
+/// the one relativization algorithm in the workspace. Merge and dot-segment arithmetic
+/// live in `purrdf-iri` and nowhere else.
+///
+/// Candidates are enumerated in the JSON-LD 1.1 §4.1.4 preference order — the
+/// same-document reference, then the fragment-only and query-only spellings, then the
+/// absolute path, and finally the shared layer's canonical relative path — and EVERY one
+/// is verified by re-resolving it with [`purrdf_iri::BaseIri::resolve`] and comparing byte
+/// for byte against the target. A candidate that does not reproduce the target is
+/// discarded rather than emitted, so a spelling can never denote a different resource
+/// than the IRI it replaces.
+///
+/// `None` means no relative spelling round-trips (a different scheme or authority, or a
+/// target outside the base's dot-normalized image); the caller then emits the absolute
+/// IRI. It never means "failed".
 fn remove_base(base: &str, iri: &str) -> Option<String> {
-    let base_iri = purrdf_iri::parse(base).ok()?;
+    let base_iri = purrdf_iri::BaseIri::parse(base).ok()?;
+    let base_parts = base_iri.as_iri();
     let target = purrdf_iri::parse(iri).ok()?;
-    if base_iri.scheme() != target.scheme() || base_iri.authority() != target.authority() {
+    if base_parts.scheme() != target.scheme() || base_parts.authority() != target.authority() {
         return None;
     }
 
@@ -1886,13 +1919,13 @@ fn remove_base(base: &str, iri: &str) -> Option<String> {
     if base == iri {
         candidates.push(String::new());
     }
-    if base_iri.path() == target.path()
-        && base_iri.query() == target.query()
+    if base_parts.path() == target.path()
+        && base_parts.query() == target.query()
         && let Some(fragment) = target.fragment()
     {
         candidates.push(format!("#{fragment}"));
     }
-    if base_iri.path() == target.path()
+    if base_parts.path() == target.path()
         && let Some(query) = target.query()
     {
         let mut candidate = format!("?{query}");
@@ -1914,38 +1947,12 @@ fn remove_base(base: &str, iri: &str) -> Option<String> {
     }
     candidates.push(absolute_path);
 
-    let base_directory = base_iri
-        .path()
-        .rsplit_once('/')
-        .map_or("", |(directory, _)| directory);
-    let base_segments: Vec<&str> = base_directory
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let target_segments: Vec<&str> = target
-        .path()
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let shared = base_segments
-        .iter()
-        .zip(&target_segments)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let mut relative = "../".repeat(base_segments.len().saturating_sub(shared));
-    relative.push_str(&target_segments[shared..].join("/"));
-    if relative.is_empty() {
-        relative.push_str("./");
-    }
-    if let Some(query) = target.query() {
-        relative.push('?');
-        relative.push_str(query);
-    }
-    if let Some(fragment) = target.fragment() {
-        relative.push('#');
-        relative.push_str(fragment);
-    }
-    candidates.push(relative);
+    // The shared layer's canonical relative spelling. It is already round-trip verified
+    // internally and carries the two RFC-3986 §4.2 spelling hazards — a first segment
+    // containing `:` needs a `./` prefix or it re-parses as a scheme, and a leading `//`
+    // needs a `/.` prefix or it re-parses as an authority — which the old local
+    // arithmetic emitted unguarded and then silently dropped at verification.
+    candidates.extend(base_iri.relativize(&target));
 
     candidates.retain(|candidate| {
         base_iri

@@ -316,15 +316,33 @@ fn base_and_vocab_resolution_round_trip_exactly() {
     );
 }
 
+/// `@base: null` erases the base, and the document URL must not be silently
+/// resurrected in its place. The failure is the WORKSPACE-SHARED
+/// "relative reference, no base in scope" condition — the same `iri-relative-no-base`
+/// code Turtle, TriG, RDF/XML, SPARQL and ShEx report — not a JSON-LD-local spelling of
+/// it, so a consumer switching on the code sees one condition rather than five.
 #[test]
 fn null_base_is_not_resurrected_from_the_document_url() {
-    for relative_setting in [json!({"@base": "later"}), json!({"@vocab": "later/"})] {
+    for (relative_setting, reference) in [
+        (json!({"@base": "later"}), "later"),
+        (json!({"@vocab": "later/"}), "later/"),
+    ] {
         let error = CompiledJsonLdContext::compile(
             &json!([{"@base": null}, relative_setting]),
             Some("https://example.org/document"),
         )
         .expect_err("relative setting after null @base");
-        assert!(error.message.contains("requires an absolute base IRI"));
+        assert_eq!(error.code, "iri-relative-no-base");
+        assert!(
+            error.message.contains(&format!("{reference:?}")),
+            "message must name the reference verbatim: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("@base"),
+            "message must point at the remedy: {}",
+            error.message
+        );
     }
 
     let error = CompiledJsonLdContext::compile(
@@ -332,7 +350,12 @@ fn null_base_is_not_resurrected_from_the_document_url() {
         Some("https://example.org/document"),
     )
     .expect_err("relative term after null @base");
-    assert!(error.message.contains("requires an absolute base IRI"));
+    assert_eq!(error.code, "iri-relative-no-base");
+    assert!(
+        error.message.contains("\"path/item\""),
+        "message must name the reference verbatim: {}",
+        error.message
+    );
 }
 
 #[test]
