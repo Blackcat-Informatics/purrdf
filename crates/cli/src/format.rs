@@ -263,9 +263,14 @@ impl<'a> BaseUse<'a> {
 /// base consumed by ANY ONE of them is honoured, which is what keeps `--base X --to
 /// ntriples` working from a relative-admitting source.
 ///
-/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text, a
-/// shape map) has a leg this list cannot name and does not call this: for those the base is
-/// never inert, whatever the RDF legs' rows say.
+/// A subcommand whose base ALSO reaches a non-RDF consumer has a leg this list cannot name
+/// and does not call this at all: for those the base is never inert, whatever the RDF legs'
+/// rows say. Three do — a SPARQL query text (`query`), an UPDATE request (`update`), and the
+/// two command-line-text IRI surfaces, `shex`'s shape map and `describe`'s `--iri`. Each is
+/// text typed on the command line with no retrieval IRI of its own, so `--base` is the only
+/// base it can ever have; refusing on the format rows alone would reject `describe --from
+/// ntriples --base http://example.org/ --iri alice`, whose base is doing the one job that
+/// makes the selector denote anything.
 pub(crate) fn refuse_unconsumable_base(
     base: Option<&str>,
     legs: &[BaseUse<'_>],
