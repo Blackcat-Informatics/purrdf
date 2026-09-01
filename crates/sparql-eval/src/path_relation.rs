@@ -114,13 +114,20 @@
 //! ```
 //!
 //! A host that caches snapshots deliberately — because rebuilding one per query is real
-//! work — asserts the pairing instead of assuming it.
-//! [`PathGraph::snapshot_fingerprint`] is the surface for that: it records the source
-//! view's [`DatasetView::stats_fingerprint`] and [`DatasetView::term_count`] alongside the
-//! snapshot's own node and edge counts, so a cache entry can be compared against the
-//! dataset about to be queried and rebuilt when it moves. It is a discriminator, not a
-//! content digest, so equality is evidence rather than proof — which is exactly the right
-//! strength for a cache key, and exactly the wrong thing to skip.
+//! work — asserts the pairing instead of assuming it, and it asserts it by CALLING
+//! something. [`PathGraph::assert_matches`] is that call: hand it the dataset about to be
+//! queried and it returns `Ok(())` or a diagnostic naming both sides. A mitigation that
+//! exists only as a paragraph telling a host to compare a value is a swallowed error with
+//! extra steps, so this one is executable, and the doctest below runs it.
+//!
+//! What it compares is [`PathGraph::snapshot_fingerprint`]: the source view's
+//! [`DatasetView::stats_fingerprint`] and [`DatasetView::term_count`], recorded at
+//! snapshot time alongside the snapshot's own node and edge counts. Every component is a
+//! COUNT, so state its reach honestly: a mismatch is PROOF the pairing is wrong, while a
+//! match is only EVIDENCE that it is right. Two datasets of the same cardinality compare
+//! equal however differently they are wired, and the check will accept the wrong one.
+//! That limit is pinned by a test rather than hoped about. It is still the difference
+//! between an error the host sees and an answer the host believes.
 //!
 //! # Wiring one up
 //!
@@ -160,11 +167,16 @@
 //! // 3. The envelope. There is no `Default`: the host states what it will buy.
 //! let limits = PathLimits::new(1, 4, 1_024, 100_000)?;
 //!
-//! // 4. Register the relation under the caller's IRI.
+//! // 4. The pairing precondition, as a call rather than a promise. A host that rebuilds
+//! //    per dataset (as this example does) cannot get it wrong; a host that CACHES
+//! //    snapshots runs exactly this line before evaluating against one.
+//! graph.assert_matches(&*dataset)?;
+//!
+//! // 5. Register the relation under the caller's IRI.
 //! let mut registry = PropertyFunctionRegistry::new();
 //! registry.register(WALK.to_owned(), Arc::new(PathWitnessRelation::new(graph, limits)));
 //!
-//! // 5. Parse-time recognition. Without the IRI here the same text is an ordinary
+//! // 6. Parse-time recognition. Without the IRI here the same text is an ordinary
 //! //    triple pattern reading the graph.
 //! let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
 //!     extension_fn_namespaces: Vec::new(),
@@ -172,7 +184,7 @@
 //!     property_fn_iris: vec![WALK.to_owned()],
 //! });
 //!
-//! // 6. Run.
+//! // 7. Run.
 //! let query = format!(
 //!     "SELECT ?end ?len ?step ?node ?edge WHERE {{ \
 //!      <http://example.org/a> <{WALK}> ( ?end ?pathId ?len ?step ?node ?edge ) \
@@ -906,6 +918,56 @@ impl PathGraph {
     #[must_use]
     pub fn snapshot_fingerprint(&self) -> PathSnapshotFingerprint {
         self.fingerprint
+    }
+
+    /// Fail unless `dataset` still looks like the one this snapshot was built from.
+    ///
+    /// # Why this is a method and not a paragraph
+    ///
+    /// The property-function seam hands a relation no dataset at evaluation time (see the
+    /// module docs — that constraint is real and not going away), so a snapshot taken from
+    /// dataset *A* and evaluated against dataset *B* answers about *A*'s edges, silently.
+    /// A documented failure mode whose only mitigation is "the host should compare a
+    /// fingerprint" is a swallowed error with extra steps: it puts the check in prose,
+    /// where nothing runs it. This is the same comparison, as one call that either returns
+    /// `Ok(())` or hands back a diagnostic naming both sides.
+    ///
+    /// Call it where the pairing is asserted — immediately before evaluating against a
+    /// cached snapshot — not in the traversal, which has no dataset to check against.
+    ///
+    /// # What passing does and does not prove
+    ///
+    /// [`PathSnapshotFingerprint`] is a DISCRIMINATOR: every component of it is a count.
+    /// So a mismatch is proof the pairing is wrong, and a match is only evidence that it
+    /// is right — two datasets of the same cardinality compare equal however differently
+    /// they are wired, and this method will accept the wrong one. That is the honest reach
+    /// of a cheap check, it is pinned by a test that asserts exactly that limit, and it is
+    /// still the difference between an error a host sees and an answer a host believes.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Data`] when the observed dataset's
+    /// [`DatasetView::stats_fingerprint`] or [`DatasetView::term_count`] differs from the
+    /// snapshot's record of them. The message names both, because "these do not match" is
+    /// not actionable and "expected X, observed Y" is.
+    pub fn assert_matches<D: DatasetView>(&self, dataset: &D) -> Result<(), EvalError> {
+        let observed_fingerprint = dataset.stats_fingerprint();
+        let observed_terms = dataset.term_count();
+        if observed_fingerprint == self.fingerprint.stats_fingerprint
+            && observed_terms == self.fingerprint.term_count
+        {
+            return Ok(());
+        }
+        Err(EvalError::data(format!(
+            "this path snapshot was built from a different dataset than the one being \
+             queried: it recorded stats_fingerprint {} over {} terms, and the dataset \
+             presented reports stats_fingerprint {observed_fingerprint} over \
+             {observed_terms} terms. The property-function seam hands a relation no \
+             dataset at evaluation time, so an unnoticed mismatch is answered silently \
+             about the snapshot's edges; rebuild the snapshot from the dataset being \
+             queried",
+            self.fingerprint.stats_fingerprint, self.fingerprint.term_count,
+        )))
     }
 
     /// The dense index of `value`, or `None` when it participates in no edge.
@@ -2659,6 +2721,33 @@ mod tests {
         assert_eq!(fingerprint.stats_fingerprint, data.stats_fingerprint());
         assert_eq!(graph.node_count(), fingerprint.node_count);
         assert_eq!(graph.edge_count(), fingerprint.edge_count);
+    }
+
+    #[test]
+    fn the_pairing_precondition_is_callable_and_refuses_the_wrong_dataset() {
+        let (data, graph) = chain();
+        graph
+            .assert_matches(&*data)
+            .expect("the dataset the snapshot was built from");
+
+        // The wrong-answer channel, closed: a snapshot of A presented with B. Without this
+        // call the query would answer, completely and undiagnosed, about A's edges.
+        let other = dataset(&[("a", "p", "b")]);
+        let error = graph
+            .assert_matches(&*other)
+            .expect_err("a snapshot of a different dataset must not pass silently");
+        assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+        let text = error.to_string();
+        // Both sides, because "these do not match" is not actionable.
+        assert!(
+            text.contains(&data.stats_fingerprint().to_string()),
+            "the snapshot's own fingerprint must be named: {text}"
+        );
+        assert!(
+            text.contains(&other.stats_fingerprint().to_string()),
+            "the presented dataset's fingerprint must be named: {text}"
+        );
+        assert!(text.contains("rebuild the snapshot"), "{text}");
     }
 
     #[test]
