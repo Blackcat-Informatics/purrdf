@@ -85,7 +85,7 @@ fn rdf_fixture() -> RdfFixture {
         direction: None,
     });
     let inner_triple = dataset.intern_triple(subject, predicate, literal);
-    let outer_triple = dataset.intern_triple(inner_triple, predicate, annotation_object);
+    let outer_triple = dataset.intern_triple(subject, predicate, inner_triple);
     dataset.push_quad(subject, predicate, literal, None);
     dataset.push_quad(subject, predicate, literal, Some(graph_name));
     dataset.push_quad(subject, predicate, outer_triple, Some(graph_name));

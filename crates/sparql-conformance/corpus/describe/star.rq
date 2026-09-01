@@ -1,0 +1,2 @@
+PREFIX : <http://example.org/>
+DESCRIBE * WHERE { :x :refersTo ?y }

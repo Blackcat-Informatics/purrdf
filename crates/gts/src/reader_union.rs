@@ -16,6 +16,28 @@ use crate::wire::map_get;
 // terms intern through their bound SPO identity. Because the union is
 // value-interned, "apply suppression value-wise" (§11) reduces to applying it
 // by result-id.
+//
+// TERMINATION (§7.3, normative) — a quoted triple's VALUE is its `(s, p, o)`
+// binding, so interning one walks its components and `key_for` -> `map_term`
+// -> `key_for` is mutually recursive with NO bound of its own. It terminates
+// because a term can never reach itself:
+//
+//   * `tt` and `dt` components must name an ALREADY-INTRODUCED term, and `rf`
+//     must too (or the term itself, handled without recursing) — see the
+//     sanitizing in `reader::Folder::h_terms`. Ids therefore strictly descend.
+//   * the `reifies` statement layer is the one field that may name any term,
+//     so `reader::reifier_binding_is_recursive` REFUSES, as a `DamagedFrame`,
+//     any binding that would let a triple term reach itself.
+//
+// That is the fold-time-refusal strategy §7.3 permits; the alternative it
+// permits — a per-term sentinel that states no triple — belongs to engines
+// whose readers accept the row. Because the refusal is what this engine does,
+// this walk needs no guard of its own, and adding one would put two hash
+// lookups per term on the fold's hot path to handle input the reader cannot
+// produce. The coupling is not local, so it is pinned:
+// `tests/union_self_reaching_term.rs` builds each attempt at the shape through
+// the real writer and asserts the fold refuses it. Relax the refusal and those
+// tests fail — which is the signal that this walk then needs the sentinel.
 // --------------------------------------------------------------------------- //
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -33,6 +55,20 @@ struct Unioner {
 }
 
 impl Unioner {
+    /// # Termination
+    ///
+    /// `key_for` ↔ `map_term` recurse through a term's triple components and its
+    /// datatype with no depth bound and no visited set — see the module-level
+    /// rationale above for why: `union_segments` is `pub(crate)` in a private
+    /// module, so `reader::read_with_options` is its only caller, and every
+    /// `Graph` reaching it has already passed `reader::read`'s per-segment
+    /// refusal of a self-reaching triple term (`reifier_binding_is_recursive`,
+    /// `DamagedFrame`, covering the implicit self-bound spelling of §7.1 too). A
+    /// guard was considered and rejected here: it would put two hash lookups per
+    /// term on the fold's hot path to defend against a shape the reader cannot
+    /// produce — a closed decision, not deferred work. Any future path into this
+    /// union that does not run through `reader::read` must establish its own
+    /// acyclicity before calling in; this walk will not.
     fn key_for(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> InternKey {
         let t = &seg.terms[tid];
         match t.kind {
@@ -50,20 +86,26 @@ impl Unioner {
                 let anon_tid = label.is_none().then_some(tid);
                 InternKey::Bnode(seg_idx, label, anon_tid)
             }
-            // Quoted triple: identity is the interned SPO binding. Self-bound
-            // triple terms use `rf == tid`; do not recursively map the reifier.
-            TermKind::Triple => InternKey::Qt(t.reifier.and_then(|rf| {
-                seg.reifier(rf).map(|(s, p, o)| {
-                    (
-                        self.map_term(seg, seg_idx, s),
-                        self.map_term(seg, seg_idx, p),
-                        self.map_term(seg, seg_idx, o),
-                    )
-                })
+            // Quoted triple: identity is the interned SPO binding, taken from
+            // the term's own `tt` when it has one and otherwise through the
+            // legacy reifier indirection. Self-bound triple terms use
+            // `rf == tid`; do not recursively map the reifier.
+            TermKind::Triple => InternKey::Qt(seg.term_triple(t).map(|(s, p, o)| {
+                (
+                    self.map_term(seg, seg_idx, s),
+                    self.map_term(seg, seg_idx, p),
+                    self.map_term(seg, seg_idx, o),
+                )
             })),
         }
     }
 
+    /// # Termination
+    ///
+    /// Mirrors [`key_for`](Self::key_for)'s unguarded recursion into a term's
+    /// triple/datatype edges, and rests on the same invariant — reachable only
+    /// through a `reader::read`-validated segment. See `key_for` for the full
+    /// rationale.
     fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
         let key = self.key_for(seg, seg_idx, tid);
         if let Some(&got) = self.intern.get(&key) {
@@ -77,8 +119,15 @@ impl Unioner {
         } else {
             t.reifier.map(|r| self.map_term(seg, seg_idx, r))
         };
-        // Recursive datatype/reifier mapping can push terms, so capture this
-        // term's output id only after those mappings have completed.
+        let triple = t.triple.map(|(s, p, o)| {
+            (
+                self.map_term(seg, seg_idx, s),
+                self.map_term(seg, seg_idx, p),
+                self.map_term(seg, seg_idx, o),
+            )
+        });
+        // Recursive datatype/reifier/triple-component mapping can push terms, so
+        // capture this term's output id only after those mappings have completed.
         let new_id = self.out.terms.len();
         let reifier = if self_bound {
             Some(new_id)
@@ -108,6 +157,7 @@ impl Unioner {
             lang: t.lang,
             direction: t.direction,
             reifier,
+            triple,
         });
         self.intern.insert(key, new_id);
         new_id

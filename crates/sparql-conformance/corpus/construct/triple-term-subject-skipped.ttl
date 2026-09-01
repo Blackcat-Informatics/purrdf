@@ -1,0 +1,6 @@
+@prefix : <http://example.org/> .
+# The template's SECOND triple puts `?t` — bound to a triple term — into subject
+# position, and §16.2 skips that instantiation instead of erroring. The first
+# triple is the control: it consumes the same row, so an empty result would mean
+# the WHERE matched nothing rather than that the skip fired.
+:r1 :reifies <<( :a :knows :b )>> .

@@ -29,6 +29,7 @@ import {
   type Quad,
   type QueryResult,
   type SelectResult,
+  type SerializeLoss,
   type RdfTerm,
   type VisualExport,
   type VisualModel,
@@ -66,6 +67,11 @@ for (const item of matched) {
 
 const stream: AsyncIterableIterator<Quad> = matched.toStream();
 const serialized: string = matched.serialize("nquads");
+const serializeLoss: SerializeLoss = matched.serializeWithLoss("ntriples");
+const lossText: string = serializeLoss.text;
+const lossStatementRows: number = serializeLoss.statementRowsDropped;
+const lossDirectional: number = serializeLoss.directionalLiteralsDropped;
+const lossNamedGraphRows: number = serializeLoss.namedGraphRowsDropped;
 const configured: string = matched.serializeConfigured(
   "jsonld",
   JSON.stringify({ version: 1, mode: "derived" }),
@@ -224,6 +230,10 @@ if (result.kind === "ask") {
 
 void stream;
 void canonical;
+void lossText;
+void lossStatementRows;
+void lossDirectional;
+void lossNamedGraphRows;
 void same;
 void projectionLedger;
 void curatedProfile;

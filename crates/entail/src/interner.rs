@@ -227,21 +227,20 @@ mod tests {
     /// depth, not truncated at the first level.
     #[test]
     fn intern_into_round_trips_a_nested_triple_term() {
-        let inner = quoted(EX_S, EX_P, EX_O);
-        let outer = TermValue::Triple {
+        let nest = |inner: TermValue| TermValue::Triple {
             s: Box::new(TermValue::iri(EX_S)),
             p: Box::new(TermValue::iri(EX_P)),
-            o: Box::new(inner.clone()),
+            o: Box::new(inner),
         };
-        // Nested in the object slot…
+        // Nested in the object slot — the one position RDF 1.2 nests a triple term
+        // in, so it is the whole of the nesting the chase can ever re-materialize.
+        let outer = nest(quoted(EX_S, EX_P, EX_O));
         assert_eq!(round_trip(&outer), outer);
-        // …and in the subject slot, which recurses through a different arm of the match.
-        let subject_nested = TermValue::Triple {
-            s: Box::new(inner),
-            p: Box::new(TermValue::iri(EX_P)),
-            o: Box::new(TermValue::iri(EX_O)),
-        };
-        assert_eq!(round_trip(&subject_nested), subject_nested);
+        // Depth 3, still through the object slot: the recursion is not special-cased
+        // at one level, and a chase that folded the inner-most term to a stand-in
+        // IRI would show up here rather than at depth 2.
+        let deeper = nest(outer);
+        assert_eq!(round_trip(&deeper), deeper);
     }
 
     /// Base direction participates in literal identity (C0.1), so it must survive the

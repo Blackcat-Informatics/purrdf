@@ -300,7 +300,7 @@ MAY map them to error returns or structured warnings):
 | `UnknownCodec` | a transform names a codec the reader lacks; opaque `reason:"unknown-codec"` |
 | `MissingKey` | an `encrypt` codec the reader cannot decrypt; opaque `reason:"missing-key"` |
 | `KeyWrapFailed` | a deferred multi-recipient key unwrap failed; opaque `reason:"missing-key"` |
-| `ConflictingReifier` | a reifier rebound to a different triple (§7.8) |
+| `ConflictingReifier` | a `"tt"`-less `k:3` term whose reifier binds several triples (§7.8) |
 | `PositionConstraint` | a term appears in an illegal subject, predicate, object, or graph-name position; reject/diagnose the offending row (§7.4) |
 | `ForwardReference` | a term-id reference names a term not introduced by an earlier frame in the same segment (§7.2, §7.5) |
 | `SegmentBoundary` | a compatibility reader reaches a later segment header where file-global term ids would misfold; stop with a fatal diagnostic (§3.1, §19) |
@@ -741,9 +741,22 @@ term = {
   ? "dt": term-id,         ; literal datatype IRI (a term)
   ? "l" : tstr,            ; literal language tag (BCP 47)
   ? "dir": "ltr" / "rtl",  ; RDF 1.2 base direction for language-tagged literals
-  ? "rf": term-id,         ; quoted-triple: the reifier (§7.3) whose triple this term denotes
+  ? "rf": term-id,         ; quoted-triple: a reifier (§7.3) whose triple this term denotes
+  ? "tt": [term-id, term-id, term-id], ; quoted-triple: this term's OWN (s, p, o)
 }
 ```
+
+**Self-describing quoted triples (normative).** A `k:3` term SHOULD carry `"tt"`, the
+`(s, p, o)` term-ids it denotes. `"tt"` is authoritative: when present, `"rf"` (if any) is
+reifier metadata and does NOT determine the term's components. A `k:3` term that carries
+neither `"tt"` nor `"rf"` denotes no triple and is a data error for any consumer that
+dereferences it.
+
+`"tt"` exists because `rdf:reifies` is **not a functional property** (§7.3): one reifier id
+may bind several distinct triples, so a term whose components were reached only through a
+reifier id would be double-valued. Every `"tt"` id MUST name an already-introduced term-id of
+the same segment (§7.2), exactly like `"dt"`, which makes a quoted triple acyclic by
+construction.
 
 **Literal datatype defaulting (normative).** For a `k:1` (literal) term: if `"l"` (language
 tag) and `"dir"` are present and `"dt"` is absent, the datatype is `rdf:dirLangString`; if
@@ -782,14 +795,22 @@ triple it quotes.
 reifies-payload = [+ [term-id, term-id, term-id, term-id, ? term-id]] ; reifier, s, p, o, (g)
 ```
 
-A quoted triple used as a node is a term with `"k": 3` and `"rf"` pointing at its reifier.
+A quoted triple used as a node is a term with `"k": 3` carrying its own `"tt"` components
+(§7.1); `"rf"` is the older, indirect spelling that names a reifier instead.
+
+**`rdf:reifies` is not functional (normative).** One reifier id MAY appear in several
+`reifies` rows binding DIFFERENT triples, in the same graph or in different graphs — `R
+rdf:reifies <<( S P O1 )>>` and `R rdf:reifies <<( S P O2 )>>` are both assertable RDF 1.2.
+A reader MUST keep every row; it MUST NOT collapse or drop a binding. The statement layer is
+a multi-valued relation, not a map.
 
 **RDF dataset mapping (normative).** A folded GTS graph maps to an RDF 1.2 dataset as follows:
 each `quads` row `(S,P,O,G?)` asserts the RDF triple `(S,P,O)` in the default graph when `G`
 is absent, or in the named graph `G` when `G` is present. A `reifies` row
 `(R,S,P,O,G?)` asserts the triple `R rdf:reifies <<( S P O )>>` in the default graph when
-`G` is absent, or in the named graph `G` when `G` is present. A `k:3` term denotes that
-triple term, reached through its reifier `R`. Each `annot` row `(R, P', V', G?)` asserts the
+`G` is absent, or in the named graph `G` when `G` is present. A `k:3` term denotes the
+triple named by its own `"tt"`, or — for a term written in the older indirect spelling — the
+triple bound to its `"rf"` reifier. Each `annot` row `(R, P', V', G?)` asserts the
 triple `R P' V'` in the default graph when `G` is absent, or in the named graph `G` when `G`
 is present. Profiles MAY define additional graph-placement conventions for projection, but
 the core mapping above is the interoperable baseline.
@@ -843,10 +864,10 @@ for segment in file order:                      # §3.1; single-segment files: o
   for frame in segment log order:
     P := resolve payload (§6.1); if undecodable -> add opaque node (§7.6); continue
     switch frame.t:
-      "terms"    : append each term (assign next id); each "dt"/"rf" MUST name an
+      "terms"    : append each term (assign next id); each "dt"/"rf"/"tt" id MUST name an
                    already-introduced term-id (no forward references)
       "quads"    : add each (s,p,o,g) value tuple to graph
-      "reifies"  : append each (reifier,s,p,o,g) row; a reifier keeps one non-conflicting (s,p,o) binding across graphs (§7.8)
+      "reifies"  : append each (reifier,s,p,o,g) row; a reifier MAY carry several distinct bindings (§7.3, §7.8)
       "annot"    : append (reifier, predicate, value, graph)
       "blob"     : if "d" present -> blobs[BLAKE3(decoded "d")] := bytes (inline);
                    else -> register external blob by "pub".digest;
@@ -930,7 +951,7 @@ policy:
 |---|---|
 | Duplicate terms | A writer SHOULD intern repeated terms, but each term entry still receives its own segment-local id. Non-blank values that compare equal by §7 are the same value in the file union. Anonymous blank nodes (`"v"` absent or empty) are fresh per term entry. |
 | Duplicate quads | The folded graph is a set: identical `(s,p,o,g)` value rows collapse to one without diagnostic. |
-| Reifier rows | A reifier SHOULD bind to exactly one `(s,p,o)` triple identity. Repeated identical `(reifier,s,p,o,g)` rows are harmless. The same reifier MAY appear in multiple graphs only when `(s,p,o)` is unchanged. A conflicting `(s,p,o)` for the same reifier is a data-quality error: the reader surfaces `ConflictingReifier`, keeps the first triple identity in file order, and ignores conflicting reifier rows. |
+| Reifier rows | A reifier MAY bind several distinct `(s,p,o)` triples, in one graph or across graphs: `rdf:reifies` is not functional (§7.3). Every row is kept; repeated identical `(reifier,s,p,o,g)` rows are harmless. The one error case left is a `"tt"`-less `k:3` term (§7.1) whose `"rf"` reifier binds more than one triple, which would give that ONE term two meanings: the reader surfaces `ConflictingReifier`, resolves that term through the first binding in file order, and still keeps every reifier row. |
 | Annotations | Annotation rows are an ordered multiset (§7.4). Multiple rows on one reifier coexist, including rows partitioned by graph; exact duplicate rows are retained in the GTS fold. RDF dataset projections may collapse identical emitted triples. |
 | Blob bytes | Blobs are addressed by digest. Repeating the same digest/bytes is idempotent; a content-addressed view stores one byte value per digest. Validating extraction re-hashes inline bytes against the requested digest (§14.1). |
 | Blob metadata | `blob_meta[digest]` is a shallow map built in file order. Later metadata keys for the same digest replace earlier keys in the file-level view; earlier declarations remain in the original frames. |
@@ -2023,7 +2044,7 @@ claims.
 11. Literal datatype defaulting (§7.1): a literal with `"l"` + `"dir"` and no `"dt"` →
     `rdf:dirLangString`; with `"l"` and no `"dt"` → `rdf:langString`; with neither →
     `xsd:string`.
-12. A reifier rebound to a different triple → `ConflictingReifier`, first binding kept (§7.8).
+12. A `"tt"`-less quoted-triple term whose reifier binds several triples → `ConflictingReifier`; the term resolves through the first binding and every reifier row is kept (§7.8).
 13. A position-constraint violation, e.g. a literal in predicate position → rejected/diagnosed
     (§7.4).
 14. Blank-node label locality (§7.1, §12.1): identical bnode labels in an outer and a nested GTS
@@ -2220,6 +2241,7 @@ term = {
   ? "l": tstr,
   ? "dir": "ltr" / "rtl",          ; RDF 1.2 base direction for language-tagged literals
   ? "rf": term-id,
+  ? "tt": triple-row,              ; quoted triple: its own (s, p, o)
   * extension-key => any,
 }
 

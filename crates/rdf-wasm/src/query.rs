@@ -17,12 +17,24 @@
 //! rather than silently returning an empty or partial result: in a browser there is
 //! no resolver to fetch a remote graph, and a false answer is worse than an error.
 //!
+//! The one exception is the caller's own: `SERVICE SILENT` and `LOAD SILENT` succeed
+//! with nothing fetched — the `SILENT` keyword is the query author writing "an
+//! unreachable endpoint is not an error" into the request, and SPARQL 1.1 §10 and
+//! §3.1.4 require it to be honoured. `SERVICE SILENT` contributes the join identity
+//! (so the surrounding pattern's own solutions come back, unaugmented) and
+//! `LOAD SILENT` leaves the dataset untouched. Drop `SILENT` to get the hard failure.
+//!
 //! ## Result encoding
 //!
 //! - SELECT / ASK → **SPARQL Results JSON** (the W3C SRJ format) via
 //!   [`purrdf_sparql_results`].
-//! - CONSTRUCT / DESCRIBE → **Turtle** via the `native_codecs` serializer (the one
-//!   serialization seam; never `oxigraph::io`, never the `purrdf-gts` crate).
+//! - CONSTRUCT / DESCRIBE → **Turtle**, or **TriG** when the result carries a named
+//!   graph, via the `native_codecs` serializer (the one serialization seam; never
+//!   `oxigraph::io`, never the `purrdf-gts` crate). See [`default_graph_format`]: a
+//!   quad-template CONSTRUCT would serialize to an EMPTY Turtle document, so the
+//!   no-format default widens to Turtle's dataset superset rather than answering with
+//!   nothing. An EXPLICIT single-graph format for such a result throws instead — see
+//!   [`refuse_uncarriable_named_graphs`].
 //!
 //! ## The governed lane
 //!
@@ -55,6 +67,7 @@ use purrdf::{
     GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, SerializeGraph,
     query_with_entailment_governed, serialize_dataset,
 };
+use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
@@ -67,7 +80,7 @@ use purrdf_sparql_results::{
 };
 use wasm_bindgen::prelude::*;
 
-use crate::codec::resolve_media_type;
+use crate::codec::resolve_format;
 use crate::convert::term_value_into_rdf_term;
 use crate::dataset::{Dataset, diag_to_err};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
@@ -1040,6 +1053,12 @@ impl QueryEngine {
 
     /// Run any SPARQL query and serialize its raw result.
     ///
+    /// `format` is optional: omitted, a SELECT/ASK result is SPARQL-Results JSON and a
+    /// CONSTRUCT/DESCRIBE result is Turtle, or TriG when it carries a named graph
+    /// (`default_graph_format`). Naming a single-graph RDF syntax for a
+    /// graph-carrying result throws rather than emitting a document missing exactly
+    /// what the query asked for (`refuse_uncarriable_named_graphs`).
+    ///
     /// `provenance_prefix`/`provenance_iri` (both `undefined`, or both a string) anchor
     /// the additive `purrdf` provenance extension on a SELECT/ASK result serialized to
     /// SPARQL-results JSON/XML, under that `PREFIX`/`IRI`. `undefined` (the default)
@@ -1395,10 +1414,16 @@ impl QueryEngine {
 impl Dataset {
     /// `query(sparql, base?)` → run a SPARQL query against this dataset, offline.
     ///
-    /// Returns **SPARQL Results JSON** for SELECT / ASK and **Turtle** for
-    /// CONSTRUCT / DESCRIBE. A parse error, an evaluation error, or a `SERVICE` /
-    /// `LOAD` clause (unresolvable in-browser) throws a JsError — never a silent
-    /// empty result.
+    /// Returns **SPARQL Results JSON** for SELECT / ASK, and for CONSTRUCT / DESCRIBE
+    /// **Turtle** — widened to **TriG** when the result carries a named graph, because
+    /// Turtle has no `GRAPH` construct and would render such a result as an empty
+    /// document. TriG is Turtle's dataset superset, so a default-graph-only result is
+    /// byte-identical Turtle exactly as before; see `default_graph_format`.
+    ///
+    /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause
+    /// (unresolvable in-browser) throws a JsError — never a silent empty result. The
+    /// `SILENT` forms are the caller's own opt-out and still succeed with nothing
+    /// fetched, as SPARQL 1.1 requires; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {
@@ -1657,7 +1682,9 @@ fn serialize_query_result(
     query: &str,
 ) -> Result<String, JsError> {
     match result {
-        SparqlResult::Graph(graph) => serialize_graph_result(graph, format.unwrap_or("turtle")),
+        SparqlResult::Graph(graph) => {
+            serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
+        }
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
             let results_format = match format {
                 None => SparqlResultsFormat::Json,
@@ -1697,12 +1724,101 @@ fn serialize_tabular_result(
         .map_err(|e| JsError::new(&format!("SPARQL result is not valid UTF-8: {e}")))
 }
 
+/// The closing imperative of every named-graph refusal on this binding: the
+/// quad-capable spellings [`resolve_media_type`] accepts.
+///
+/// The rest of the sentence is [`named_graph_refusal`], shared verbatim with the CLI
+/// and Python hosts; only the remedy is per-host, because these format tokens are the
+/// ones a JS caller actually passes.
+const QUAD_CAPABLE_REMEDY: &str =
+    "Re-serialize with a quad-capable format (trig/nquads/trix/hextuples/jsonld/yamlld)";
+
+/// The format a CONSTRUCT/DESCRIBE result is serialized to when the JS caller named
+/// NONE: `turtle`, or `trig` when the result carries a named graph.
+///
+/// # Why the default WIDENS instead of throwing
+///
+/// A caller who passed no format asked for "the readable default", not for Turtle
+/// specifically — and Turtle cannot hold a named graph, so a graph-carrying result met
+/// with the historical `turtle` default produced a well-formed EMPTY document and no
+/// error at all: `dataset.query('… CONSTRUCT { GRAPH ex:g { … } } …')` returned `""`.
+/// That is the silent empty result the [`query`](Dataset::query) contract promises can
+/// never happen.
+///
+/// TriG is Turtle's dataset superset — same prefixes, same abbreviations, same
+/// blank-node syntax, plus a `GRAPH` block — so widening the default costs the caller
+/// nothing they asked for and gives them the graph names the query spelled out. A
+/// result with no named graph still gets `turtle`, byte-for-byte as before, so no
+/// existing SPARQL 1.1 CONSTRUCT or DESCRIBE changes shape.
+///
+/// This is deliberately NOT the answer for an EXPLICIT format: naming `turtle` for a
+/// graph-carrying result is a request this binding cannot honour, and silently
+/// answering with TriG would hand a triple-only consumer bytes it cannot read. That
+/// case throws — see [`refuse_uncarriable_named_graphs`].
+fn default_graph_format(graph: &Arc<purrdf::RdfDataset>) -> &'static str {
+    if distinct_graph_names(&**graph).is_empty() {
+        "turtle"
+    } else {
+        "trig"
+    }
+}
+
+/// Refuse to serialize a graph result that carries named graphs to a single-graph RDF
+/// syntax, naming the graphs, the format, and what to use instead.
+///
+/// # Why this THROWS rather than quietly widening the format
+///
+/// [`default_graph_format`] widens `turtle` to `trig` when the caller named no format,
+/// because there was no request to contradict. An EXPLICIT `serialize("turtle")` is the
+/// opposite situation: the caller named a syntax, most likely because something
+/// downstream reads only that syntax, so answering with TriG bytes would break them and
+/// answering with Turtle bytes would drop exactly the statements the query asked for
+/// (the single-graph serializers DROP graph-scoped rows — they do not fold them into
+/// the default graph). Both silent answers are wrong, so this one is loud, exactly as
+/// the `purrdf query` lane and the Python `QueryQuads.serialize` are.
+fn refuse_uncarriable_named_graphs(
+    graph: &Arc<purrdf::RdfDataset>,
+    fmt: purrdf::NativeRdfFormat,
+    token: &str,
+) -> Result<(), JsError> {
+    match uncarriable_named_graphs(graph, fmt, token) {
+        Some(message) => Err(JsError::new(&message)),
+        None => Ok(()),
+    }
+}
+
+/// The refusal message [`refuse_uncarriable_named_graphs`] would throw, or `None` when
+/// the pair is carriable.
+///
+/// Split out of the throwing wrapper so the wording is unit-testable on the NATIVE
+/// build: constructing a `JsError` calls a wasm-only import that panics off wasm, the
+/// same reason `codec::resolve_media_type` returns a `String` error. The Node lane
+/// (`js/tests/query.test.mjs`) then observes the real thrown message on the real
+/// module, so both halves of the refusal are pinned.
+fn uncarriable_named_graphs(
+    graph: &Arc<purrdf::RdfDataset>,
+    fmt: purrdf::NativeRdfFormat,
+    token: &str,
+) -> Option<String> {
+    if fmt.supports_datasets() {
+        return None;
+    }
+    let names = distinct_graph_names(&**graph);
+    if names.is_empty() {
+        return None;
+    }
+    Some(named_graph_refusal(&names, token, QUAD_CAPABLE_REMEDY))
+}
+
 fn serialize_graph_result(
     graph: &Arc<purrdf::RdfDataset>,
     format: &str,
 ) -> Result<String, JsError> {
-    let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-    let bytes = serialize_dataset(graph, media_type, SerializeGraph::Dataset)
+    let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
+    // Refused BEFORE the serializer runs: a result the requested syntax would silently
+    // empty out never becomes a string.
+    refuse_uncarriable_named_graphs(graph, fmt, format)?;
+    let bytes = serialize_dataset(graph, fmt.media_type(), SerializeGraph::Dataset)
         .map_err(|e| diag_to_err(&e))?;
     String::from_utf8(bytes)
         .map_err(|e| JsError::new(&format!("SPARQL graph result is not valid UTF-8: {e}")))
@@ -1752,5 +1868,226 @@ mod tests {
         assert!(Rc::ptr_eq(&result.variables, &first.variables));
         assert_eq!(result.remaining(), 0);
         assert!(result.next_row().is_none());
+    }
+
+    /// A quad-template `CONSTRUCT` hands JS the graph names, and they survive
+    /// serialization.
+    ///
+    /// The JS egress for a graph result is a `Dataset` wrapping the frozen IR the
+    /// engine produced, with nothing projected out of it — so unlike a triple-shaped
+    /// result surface it has somewhere to PUT a graph name. This pins that: the graph
+    /// the query named is still on the quad when the `Dataset` is serialized to
+    /// N-Quads, so a JS caller can never silently receive a CONSTRUCT result with its
+    /// graph names removed.
+    #[test]
+    fn construct_graph_result_keeps_its_graph_name() {
+        let source = Dataset::parse(
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
+            "ntriples",
+            None,
+        )
+        .expect("seed dataset parses");
+        let constructed = QueryEngine::new()
+            .construct(
+                &source,
+                "CONSTRUCT { GRAPH <https://example.org/g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+                None,
+            )
+            .expect("quad-template CONSTRUCT evaluates");
+        let nquads = constructed.serialize("nquads").expect("N-Quads serializes");
+        assert_eq!(
+            nquads.trim(),
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+             <https://example.org/g> ."
+        );
+    }
+
+    const SEED_NT: &str =
+        "<https://example.org/s> <https://example.org/p> <https://example.org/o> .";
+    const GRAPH_CONSTRUCT: &str =
+        "CONSTRUCT { GRAPH <https://example.org/g> { ?s ?p ?o } } WHERE { ?s ?p ?o }";
+    const PLAIN_CONSTRUCT: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
+
+    fn seed() -> Dataset {
+        Dataset::parse(SEED_NT, "ntriples", None).expect("seed dataset parses")
+    }
+
+    /// The DEFAULT entry point never answers a graph-carrying result with nothing.
+    ///
+    /// `Dataset.query` passes no format, and the historical `turtle` default rendered a
+    /// quad-template CONSTRUCT as a well-formed EMPTY document with no error — the exact
+    /// silent empty result the method's own contract forbids.
+    #[test]
+    fn the_default_format_carries_a_named_graph_instead_of_emptying_it() {
+        let out = seed()
+            .query(GRAPH_CONSTRUCT, None)
+            .expect("quad-template CONSTRUCT serializes under the default format");
+        assert!(!out.trim().is_empty(), "the default must never be empty");
+        assert!(
+            out.contains("<https://example.org/g>"),
+            "the graph the query named must be in the output: {out}"
+        );
+        assert!(
+            out.contains("<https://example.org/s>"),
+            "the constructed statement must be in the output: {out}"
+        );
+    }
+
+    /// A result with no named graph still defaults to Turtle, byte-for-byte: widening
+    /// the default is conditional on what the result carries, not a blanket switch.
+    #[test]
+    fn the_default_format_is_still_turtle_for_a_default_graph_result() {
+        let out = seed()
+            .query(PLAIN_CONSTRUCT, None)
+            .expect("plain CONSTRUCT serializes");
+        let turtle = seed()
+            .query_with_format(PLAIN_CONSTRUCT, "turtle")
+            .expect("explicit turtle serializes");
+        assert_eq!(out, turtle);
+        assert!(
+            !out.contains("GRAPH"),
+            "no GRAPH block for a default-graph result: {out}"
+        );
+    }
+
+    /// An EXPLICIT single-graph format is a request this binding cannot honour, so it
+    /// throws — naming the graphs, the format, and the quad-capable alternatives.
+    ///
+    /// Asserted through the message builder rather than the thrown `JsError`, because
+    /// constructing a `JsError` panics off wasm; `js/tests/query.test.mjs` observes the
+    /// real throw on the real module.
+    #[test]
+    fn an_explicit_single_graph_format_refuses_a_graph_carrying_result() {
+        let constructed = QueryEngine::new()
+            .construct(&seed(), GRAPH_CONSTRUCT, None)
+            .expect("quad-template CONSTRUCT evaluates");
+        let frozen = constructed.inner.freeze().expect("freeze");
+        for token in ["turtle", "ntriples", "rdfxml"] {
+            let fmt = resolve_format(token).expect("format resolves");
+            let message = uncarriable_named_graphs(&frozen, fmt, token)
+                .expect("a single-graph syntax must refuse a graph-carrying result");
+            assert!(
+                message.contains("carrying 1 named graph (<https://example.org/g>)"),
+                "the refusal names the graph: {message}"
+            );
+            assert!(
+                message.contains(token),
+                "the refusal names the offending format: {message}"
+            );
+            assert!(
+                message.contains("trig/nquads/trix/hextuples/jsonld/yamlld"),
+                "the refusal names the alternatives: {message}"
+            );
+        }
+        // Nothing to refuse on the quad-capable side, or for a default-graph result.
+        for token in ["trig", "nquads", "trix", "hextuples", "jsonld", "yamlld"] {
+            let fmt = resolve_format(token).expect("format resolves");
+            assert!(uncarriable_named_graphs(&frozen, fmt, token).is_none());
+        }
+        let plain = QueryEngine::new()
+            .construct(&seed(), PLAIN_CONSTRUCT, None)
+            .expect("plain CONSTRUCT evaluates");
+        let plain = plain.inner.freeze().expect("freeze");
+        let fmt = resolve_format("turtle").expect("format resolves");
+        assert!(uncarriable_named_graphs(&plain, fmt, "turtle").is_none());
+    }
+
+    /// The quad-capable syntaxes are untouched by the refusal.
+    #[test]
+    fn a_quad_capable_format_serializes_a_graph_carrying_result() {
+        let out = seed()
+            .query_with_format(GRAPH_CONSTRUCT, "nquads")
+            .expect("N-Quads carries a named graph");
+        assert!(out.contains("<https://example.org/g>"), "{out}");
+    }
+
+    /// A single-graph syntax is still fine for a result that names no graph.
+    #[test]
+    fn a_single_graph_format_still_serializes_a_default_graph_result() {
+        let out = seed()
+            .query_with_format(PLAIN_CONSTRUCT, "ntriples")
+            .expect("N-Triples carries a default-graph result");
+        assert_eq!(out.trim(), SEED_NT);
+    }
+
+    /// The default is chosen from what the RESULT carries, not from the query text.
+    #[test]
+    fn the_default_format_widens_only_for_a_graph_carrying_result() {
+        let graphed = QueryEngine::new()
+            .construct(&seed(), GRAPH_CONSTRUCT, None)
+            .expect("quad-template CONSTRUCT evaluates")
+            .inner
+            .freeze()
+            .expect("freeze");
+        assert_eq!(default_graph_format(&graphed), "trig");
+        let plain = QueryEngine::new()
+            .construct(&seed(), PLAIN_CONSTRUCT, None)
+            .expect("plain CONSTRUCT evaluates")
+            .inner
+            .freeze()
+            .expect("freeze");
+        assert_eq!(default_graph_format(&plain), "turtle");
+    }
+
+    /// A graph-scoped RDF 1.2 statement layer: base quad, reifier declaration and
+    /// annotation all asserted in `ex:g`.
+    const GRAPH_STAR_TRIG: &str = concat!(
+        "@prefix ex: <https://example.org/> .\n",
+        "GRAPH ex:g { ex:s ex:p ex:o ~ex:r {| ex:note \"n\" |} . }\n",
+    );
+
+    /// A `DESCRIBE` reaches the SAME egress a quad-template `CONSTRUCT` does: the
+    /// description's graphs survive to JS, the default format widens to TriG rather
+    /// than emitting nothing, and an explicit single-graph format refuses.
+    ///
+    /// `describe` and `construct` are one function behind two names
+    /// (`graph_result_from_sparql`), and a description is graph-faithful at every layer
+    /// — base quad, reifier declaration and annotation alike — so the DESCRIBE lane
+    /// carries named graphs even though no `DESCRIBE` ever names one.
+    #[test]
+    fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
+        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None).expect("TriG parses");
+        let described = QueryEngine::new()
+            .describe(&source, "DESCRIBE <https://example.org/s>", None)
+            .expect("DESCRIBE evaluates");
+        let nquads = described.serialize("nquads").expect("N-Quads serializes");
+        for row in [
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+             <https://example.org/g> .",
+            "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> \
+             <https://example.org/g> .",
+            "<https://example.org/r> <https://example.org/note> \"n\" \
+             <https://example.org/g> .",
+        ] {
+            assert!(
+                nquads.contains(row),
+                "the description must carry `{row}`:\n{nquads}"
+            );
+        }
+
+        let frozen = described.inner.freeze().expect("freeze");
+        assert_eq!(
+            default_graph_format(&frozen),
+            "trig",
+            "the default must widen, not empty the description out"
+        );
+        for token in ["turtle", "ntriples", "rdfxml"] {
+            let fmt = resolve_format(token).expect("format resolves");
+            let message = uncarriable_named_graphs(&frozen, fmt, token)
+                .expect("a single-graph syntax must refuse a graph-carrying description");
+            assert!(
+                message.contains("carrying 1 named graph (<https://example.org/g>)"),
+                "the refusal names the graph: {message}"
+            );
+        }
+    }
+
+    impl Dataset {
+        /// `queryRaw` with an explicit format and no provenance namespace — the
+        /// two-argument shape these tests exercise.
+        fn query_with_format(&self, sparql: &str, format: &str) -> Result<String, JsError> {
+            QueryEngine::new().query_raw(self, sparql, None, Some(format.to_owned()), None, None)
+        }
     }
 }

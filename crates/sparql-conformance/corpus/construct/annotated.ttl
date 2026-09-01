@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# An RDF 1.2 fixture whose reification layer puts a TRIPLE TERM within reach of
+# an ordinary triple pattern: `:r1 rdf:reifies <<( :a :knows :b )>>`. A template
+# that carries that binding into subject position is asking for an asserted
+# statement about a quoted triple, which the RDF 1.2 term model does not admit —
+# so the instantiation is ill-formed and §16.2 skips it.
+#
+# The reifier is an IRI, not a blank node, so the expectations name it directly.
+@prefix : <http://example.org/> .
+
+:a :knows :b ~:r1 {| :certainty "0.9" |} .

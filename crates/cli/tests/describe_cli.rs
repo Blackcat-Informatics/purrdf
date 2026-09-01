@@ -12,6 +12,9 @@
 //! * it carries the RDF 1.2 statement layer — the reifiers about the subject and their
 //!   annotations — and a target syntax that cannot hold them records the drop in the loss
 //!   ledger rather than losing it silently;
+//! * it is GRAPH-FAITHFUL at every layer — a base quad, a reifier declaration and an
+//!   annotation each come back in the graph the source asserted them in — and a single-graph
+//!   target refuses the result rather than writing a document missing what was asked for;
 //! * `describe --iri X` is BYTE-IDENTICAL to `query 'DESCRIBE <X>'`, which is the assertion
 //!   that this verb reaches the shared `Describer` rather than re-deriving a second walk;
 //! * every native source syntax and the pack container reach the same description;
@@ -713,4 +716,148 @@ fn a_malformed_source_is_a_runtime_failure() {
     ]);
     assert_eq!(code(&out), 1, "{}", stderr(&out));
     assert!(stdout(&out).is_empty(), "no description is invented");
+}
+
+/// A TriG document whose whole statement layer is graph-scoped: the base quad, the reifier
+/// declaration and the annotation are all asserted in `ex:g`, and a second graph carries an
+/// unrelated statement so the description is graded against something narrower than "the
+/// dataset".
+const GRAPH_STAR_DATA: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "GRAPH ex:g {\n",
+    "  ex:alice ex:knows ex:bob ~ex:r {| ex:certainty \"high\" |} .\n",
+    "}\n",
+    "GRAPH ex:other {\n",
+    "  ex:erin ex:knows ex:frank ~ex:r2 {| ex:certainty \"low\" |} .\n",
+    "}\n",
+);
+
+/// A described statement stays in the graph it came from at EVERY layer — the base quad, the
+/// reifier declaration and the annotation alike.
+///
+/// The statement layer used to be re-emitted into the default graph while the base quad kept
+/// its graph, so a TriG description silently relocated two rows out of the world that asserted
+/// them. TriG out is where that is observable at all.
+#[test]
+fn the_statement_layer_stays_in_the_graph_it_came_from() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "graphs.trig", GRAPH_STAR_DATA);
+
+    let out = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/alice",
+        "--to",
+        "nquads",
+        &data,
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let body = stdout(&out);
+
+    for row in [
+        "<http://example.org/alice> <http://example.org/knows> <http://example.org/bob> \
+         <http://example.org/g> .",
+        "<http://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+         <<( <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> )>> \
+         <http://example.org/g> .",
+        "<http://example.org/r> <http://example.org/certainty> \"high\" \
+         <http://example.org/g> .",
+    ] {
+        assert!(
+            body.contains(row),
+            "the description must carry `{row}`:\n{body}"
+        );
+    }
+    assert!(
+        !body.contains("<http://example.org/other>"),
+        "the unrelated graph's statement must not ride along:\n{body}"
+    );
+    // Every emitted row is a quad: nothing was relocated into the default graph.
+    for line in body.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            line.contains("<http://example.org/g> ."),
+            "a graph-less row means the statement layer was collapsed: `{line}`"
+        );
+    }
+
+    // The same claim through the SPARQL spelling, byte for byte: one authority.
+    let sparql = run(&[
+        "query",
+        "--data",
+        &data,
+        "--results-format",
+        "nquads",
+        "DESCRIBE <http://example.org/alice>",
+    ]);
+    assert!(sparql.status.success(), "{}", stderr(&sparql));
+    assert_eq!(stdout(&sparql), body, "one authority, one description");
+}
+
+/// A description carrying named graphs is REFUSED by a single-graph target, naming the graphs,
+/// the format and the quad-capable alternatives — exactly as the `query` lane refuses the same
+/// `DESCRIBE`.
+///
+/// Before this, the whole-graph-scoped case wrote ZERO bytes and exited 0: a well-formed empty
+/// document standing in for the description that was asked for.
+#[test]
+fn a_named_graph_description_is_refused_by_a_single_graph_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "graphs.trig", GRAPH_STAR_DATA);
+
+    for target in ["turtle", "ntriples", "rdfxml"] {
+        let out = run(&[
+            "describe",
+            "--iri",
+            "http://example.org/alice",
+            "--to",
+            target,
+            &data,
+        ]);
+        assert_eq!(
+            code(&out),
+            2,
+            "`{target}` must be a usage refusal, not a silent drop:\n{}",
+            stdout(&out)
+        );
+        let message = stderr(&out);
+        assert!(
+            message.contains("<http://example.org/g>"),
+            "`{target}`: the refusal must name the graph:\n{message}"
+        );
+        assert!(
+            message.contains(target),
+            "`{target}`: the refusal must name the format:\n{message}"
+        );
+        assert!(
+            message.contains("--to"),
+            "`{target}`: the refusal must name this verb's remedy:\n{message}"
+        );
+        assert!(
+            stdout(&out).is_empty(),
+            "`{target}`: a refused description writes nothing"
+        );
+    }
+
+    // A quad-capable target is untouched, and so is a default-graph-only description into a
+    // single-graph target — the refusal is about what the description CARRIES, not about TriG.
+    let quads = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/alice",
+        "--to",
+        "trig",
+        &data,
+    ]);
+    assert_eq!(code(&quads), 0, "{}", stderr(&quads));
+    let plain = write_file(dir.path(), "plain.ttl", STAR_DATA);
+    let flat = run(&[
+        "describe",
+        "--iri",
+        "http://example.org/alice",
+        "--to",
+        "turtle",
+        &plain,
+    ]);
+    assert_eq!(code(&flat), 0, "{}", stderr(&flat));
+    assert!(!stdout(&flat).is_empty());
 }

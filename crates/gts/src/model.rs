@@ -71,7 +71,22 @@ pub struct Term {
     /// RDF 1.2 literal base direction (`"ltr"` or `"rtl"`) for language-tagged strings.
     pub direction: Option<String>,
     /// Term-id of the reifier of a quoted triple (`kind == Triple`).
+    ///
+    /// This is the ORIGINAL, indirect spelling of a quoted triple's components:
+    /// the term names a reifier id and the `reifies` frame supplies that id's
+    /// `(s, p, o)`. It is retained for files written that way, and is the
+    /// fallback whenever [`Self::triple`] is absent.
     pub reifier: Option<usize>,
+    /// The quoted triple's own `(subject, predicate, object)` term ids
+    /// (`kind == Triple`), read from the wire `"tt"` field.
+    ///
+    /// `rdf:reifies` is NOT a functional property — one reifier id may bind
+    /// several distinct triples — so routing a triple TERM's identity through a
+    /// reifier id cannot express RDF 1.2. A self-describing triple term does:
+    /// `tt` names the components directly and the `reifies` frame is left to be
+    /// what RDF 1.2 says it is, a multi-valued statement layer. When present,
+    /// this takes precedence over [`Self::reifier`].
+    pub triple: Option<Triple3>,
 }
 
 /// A quad of term-ids; the graph slot is `None` for the default graph.
@@ -351,12 +366,79 @@ impl Graph {
         }
     }
 
-    /// Look up a reifier binding.
+    /// Look up the FIRST triple a reifier id binds.
+    ///
+    /// `rdf:reifies` is not functional, so a reifier id may bind several
+    /// triples; use [`Self::reifier_bindings`] when every binding matters. This
+    /// accessor exists for the legacy, indirect triple-term spelling
+    /// ([`Term::reifier`]), which can only name one.
     pub fn reifier(&self, rid: usize) -> Option<Triple3> {
         self.reifiers
             .iter()
             .find(|(r, _, _)| *r == rid)
             .map(|(_, spo, _)| *spo)
+    }
+
+    /// Every `(triple, graph?)` binding recorded for one reifier id, in fold
+    /// order.
+    pub fn reifier_bindings(
+        &self,
+        rid: usize,
+    ) -> impl Iterator<Item = (Triple3, Option<usize>)> + '_ {
+        self.reifiers
+            .iter()
+            .filter(move |(r, _, _)| *r == rid)
+            .map(|&(_, spo, g)| (spo, g))
+    }
+
+    /// How many distinct triples one reifier id binds.
+    pub fn reifier_binding_count(&self, rid: usize) -> usize {
+        let mut seen: Vec<Triple3> = Vec::new();
+        for (spo, _) in self.reifier_bindings(rid) {
+            if !seen.contains(&spo) {
+                seen.push(spo);
+            }
+        }
+        seen.len()
+    }
+
+    /// The `(s, p, o)` of a quoted-triple term.
+    ///
+    /// Prefers the term's own self-describing [`Term::triple`] (wire `"tt"`);
+    /// falls back to the legacy indirection through [`Term::reifier`] for terms
+    /// written before the triple term carried its own components. This is the
+    /// ONE place a quoted triple's components are resolved from a folded graph.
+    ///
+    /// # Termination
+    ///
+    /// Resolving a component of the returned triple, and so on recursively, is
+    /// what every consumer of a quoted triple does — the segment union, the
+    /// canonical writer, every projection to text. That walk terminates on a
+    /// reader-produced graph and MUST NOT be assumed to on any other: `tt` and
+    /// `dt` ids are sanitized to name strictly earlier terms, and the fold
+    /// REFUSES a `reifies` row that would let a triple term reach itself. A
+    /// [`Graph`] assembled by hand carries no such guarantee, and an unguarded
+    /// walk over a self-reaching one blows the stack, which aborts rather than
+    /// panics. Callers that accept caller-built graphs must bound their own
+    /// recursion.
+    pub fn triple_of(&self, term_id: usize) -> Option<Triple3> {
+        let term = self.terms.get(term_id)?;
+        // A self-bound triple term may leave `rf` implicit, in which case the
+        // binding is keyed by the term's own id (§7.1).
+        self.term_triple(term).or_else(|| {
+            (term.kind == TermKind::Triple && term.reifier.is_none())
+                .then(|| self.reifier(term_id))
+                .flatten()
+        })
+    }
+
+    /// [`Self::triple_of`] for an already-borrowed [`Term`].
+    pub fn term_triple(&self, term: &Term) -> Option<Triple3> {
+        if term.kind != TermKind::Triple {
+            return None;
+        }
+        term.triple
+            .or_else(|| term.reifier.and_then(|rid| self.reifier(rid)))
     }
 
     /// Record a reifier row unless the identical row is already present.

@@ -405,7 +405,7 @@ fn parse_one_line(
             column_in_raw(raw, 0),
         ));
     }
-    validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
+    validate_statement(&nodes, lineno, column_in_raw(raw, 0))?;
     Ok(Some(nodes))
 }
 
@@ -711,17 +711,12 @@ fn is_literal(node: &Node) -> bool {
     matches!(node, Node::Literal { .. })
 }
 
-fn validate_subject(
-    node: &Node,
-    line_no: u32,
-    column: u32,
-    allow_triple_subject: bool,
-) -> Result<(), RdfDiagnostic> {
+/// A subject position — asserted, or nested inside a triple term — is an IRI or a
+/// blank node in the RDF 1.2 term model, with no per-syntax variation: N-Triples and
+/// N-Quads read the same terms, one of them merely carries a fourth (graph) slot.
+fn validate_subject(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode]) {
         return Ok(());
-    }
-    if allow_triple_subject && let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
     }
     Err(err_at("invalid subject term", line_no, column))
 }
@@ -734,17 +729,15 @@ fn validate_predicate(node: &Node, line_no: u32, column: u32) -> Result<(), RdfD
     }
 }
 
-fn validate_object(
-    node: &Node,
-    line_no: u32,
-    column: u32,
-    allow_triple_subject: bool,
-) -> Result<(), RdfDiagnostic> {
+/// An object position — asserted, or nested inside a triple term — admits every term
+/// kind, and a triple term there carries the term model down into its own components.
+/// This is the ONLY position RDF 1.2 nests a triple term in.
+fn validate_object(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode, is_literal]) {
         return Ok(());
     }
     if let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
+        return validate_triple(s, p, o, line_no, column);
     }
     Err(err_at("invalid object term", line_no, column))
 }
@@ -755,22 +748,16 @@ fn validate_triple(
     o: &Node,
     line_no: u32,
     column: u32,
-    allow_triple_subject: bool,
 ) -> Result<(), RdfDiagnostic> {
-    validate_subject(s, line_no, column, allow_triple_subject)?;
+    validate_subject(s, line_no, column)?;
     validate_predicate(p, line_no, column)?;
-    validate_object(o, line_no, column, allow_triple_subject)
+    validate_object(o, line_no, column)
 }
 
-fn validate_statement(
-    nodes: &[Node],
-    line_no: u32,
-    column: u32,
-    allow_graph: bool,
-) -> Result<(), RdfDiagnostic> {
-    validate_subject(&nodes[0], line_no, column, allow_graph)?;
+fn validate_statement(nodes: &[Node], line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+    validate_subject(&nodes[0], line_no, column)?;
     validate_predicate(&nodes[1], line_no, column)?;
-    validate_object(&nodes[2], line_no, column, allow_graph)?;
+    validate_object(&nodes[2], line_no, column)?;
     if let Some(graph_name) = nodes.get(3)
         && !node_is(graph_name, &[is_iri, is_bnode])
     {
@@ -1986,7 +1973,7 @@ impl GraphAccumulator {
             let ss = self.interner.node(ts, &mut self.reifiers);
             let pp = self.interner.node(tp, &mut self.reifiers);
             let oo = self.interner.node(to, &mut self.reifiers);
-            set_reifier(&mut self.reifiers, rid, (ss, pp, oo))?;
+            set_reifier(&mut self.reifiers, rid, (ss, pp, oo));
             return Ok(());
         }
 
@@ -2101,24 +2088,21 @@ impl LineStreamParser {
     }
 }
 
-/// Bind a reifier, hard-failing on a conflicting rebinding — never silently
-/// last-write-win — and idempotent on an identical rebind. Mirrors
-/// `from_nquads`'s `set_reifier`.
-fn set_reifier(
-    reifiers: &mut Vec<(usize, SerTriple3)>,
-    rid: usize,
-    spo: SerTriple3,
-) -> Result<(), RdfDiagnostic> {
-    if let Some((_, existing)) = reifiers.iter().find(|(r, _)| *r == rid) {
-        if *existing != spo {
-            return Err(err(format!(
-                "conflicting rdf:reifies binding for reifier term {rid}"
-            )));
-        }
-    } else {
+/// Record a reifier binding, idempotent on an identical rebind.
+///
+/// `rdf:reifies` is NOT a functional property: `<r> rdf:reifies <<( s p o1 )>>`
+/// and `<r> rdf:reifies <<( s p o2 )>>` are both assertable, so a second,
+/// different binding for one reifier is ordinary RDF 1.2 and every one of them
+/// is kept. This does not make a quoted-triple TERM ambiguous: a triple term in
+/// this model is SELF-reifying (its binding is keyed by its own term id), so it
+/// never shares a key with a statement reifier.
+fn set_reifier(reifiers: &mut Vec<(usize, SerTriple3)>, rid: usize, spo: SerTriple3) {
+    if !reifiers
+        .iter()
+        .any(|&(r, existing)| r == rid && existing == spo)
+    {
         reifiers.push((rid, spo));
     }
-    Ok(())
 }
 
 #[cfg(test)]

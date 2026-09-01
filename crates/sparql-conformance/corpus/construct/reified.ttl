@@ -1,0 +1,7 @@
+@prefix : <http://example.org/> .
+# Every statement is in the default graph, including the RDF 1.2 statement
+# layer: the reifier declarations and the annotations hung off them. The
+# template's blank reifier is minted per solution row, so the two constructed
+# edges are reified separately and each carries its own annotation.
+:a :related :b ~_:r1 {| :source :ledger |} .
+:a :related :c ~_:r2 {| :source :ledger |} .

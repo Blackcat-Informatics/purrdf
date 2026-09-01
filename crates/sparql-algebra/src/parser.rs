@@ -1268,6 +1268,22 @@ impl<'a> Parser<'a, '_> {
 
     fn parse_construct(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
         self.expect_kw("CONSTRUCT")?;
+        // `CONSTRUCT GRAPH VarOrIri …` — the whole-template shorthand of the
+        // quad-producing form (see the `Query::Construct::template` rustdoc).
+        // Read BEFORE the short/long-form fork, because it prefixes both: it
+        // names where the instantiated statements go by DEFAULT, and says
+        // nothing about how the template is written.
+        //
+        // Unambiguous at exactly one token of lookahead: the long form's next
+        // token is `{` and the short form's is `FROM` or `WHERE`, so a `GRAPH`
+        // here can be nothing else. A plain `CONSTRUCT { … }` never reaches
+        // `eat_kw` with anything but `{`, so its parse is bit-for-bit what it
+        // was.
+        let default_graph = if self.eat_kw("GRAPH") {
+            Some(self.parse_var_or_iri_name()?)
+        } else {
+            None
+        };
         // Short form (§16.2.1): `CONSTRUCT DatasetClause* WHERE { TriplesTemplate }`
         // with no explicit template — the template *is* the WHERE triples block.
         if !self.at(&Token::LBrace) {
@@ -1294,7 +1310,7 @@ impl<'a> Parser<'a, '_> {
             let (template, counters) = {
                 let mut template_parser = self.fork_block();
                 template_parser.expect(&Token::LBrace)?;
-                let template = template_parser.parse_construct_template()?;
+                let template = template_parser.parse_short_form_template()?;
                 let counters = (
                     template_parser.agg_counter,
                     template_parser.anon_counter,
@@ -1304,8 +1320,12 @@ impl<'a> Parser<'a, '_> {
             };
             self.set_counters(counters);
             self.expect(&Token::LBrace)?;
-            let where_patterns = self.parse_construct_template()?;
+            let where_patterns = self.parse_short_form_template()?;
             self.expect(&Token::RBrace)?;
+            // The short form's block is a `TriplesTemplate`, so every statement
+            // is unscoped; the `CONSTRUCT GRAPH …` shorthand — the only graph
+            // name this form can carry — supplies the graph for all of them.
+            let template = scope_triples(template, default_graph.as_ref());
             let where_pat = GraphPattern::Bgp {
                 patterns: where_patterns,
             };
@@ -1348,10 +1368,15 @@ impl<'a> Parser<'a, '_> {
                 version: self.version.clone(),
             });
         }
-        // Long form: CONSTRUCT { template } WHERE { ... }
+        // Long form: CONSTRUCT { ConstructQuads } WHERE { ... }
         self.expect(&Token::LBrace)?;
-        let template = self.parse_construct_template()?;
+        let template = self.parse_construct_quads()?;
         self.expect(&Token::RBrace)?;
+        // The `CONSTRUCT GRAPH …` shorthand is a DEFAULT, not an override: it
+        // supplies the graph for every template slot that did not name one
+        // itself, so an inner `GRAPH` block still wins over it. With no
+        // shorthand this is the identity.
+        let template = scope_template(template, default_graph.as_ref());
         let dataset = self.parse_dataset_clauses()?;
         self.eat_kw("WHERE");
         self.push_exists_scope_boundary();
@@ -1463,10 +1488,15 @@ impl<'a> Parser<'a, '_> {
         Ok(QueryDataset { default, named })
     }
 
-    fn parse_construct_template(&mut self) -> Result<Vec<TriplePattern>> {
+    fn parse_triples_template(&mut self) -> Result<Vec<TriplePattern>> {
         // A `TriplesTemplate` (§16.2 grammar) — the same triples-block grammar as
         // a group's BGP, so RDF 1.2 reifiers/annotations and triple terms desugar
         // identically. Property paths are *not* valid in a template.
+        //
+        // `parse_triples_block` stops of its own accord at a `block_boundary()`,
+        // which includes both `GRAPH` and `{`; that is what lets
+        // [`Self::parse_construct_quads`] resume at a nested graph block without
+        // this function needing to know graph blocks exist at all.
         if self.at(&Token::RBrace) {
             return Ok(Vec::new());
         }
@@ -1483,6 +1513,91 @@ impl<'a> Parser<'a, '_> {
                 self.span(),
             )),
         }
+    }
+
+    /// The `CONSTRUCT` short form's `WHERE { TriplesTemplate }` block
+    /// (§16.2.1): triples only, because that ONE block is read twice — once as
+    /// the template and once as the `WHERE` algebra, which is a
+    /// [`GraphPattern::Bgp`] and has no graph slot to carry a scope into. A
+    /// `GRAPH` block here is refused BY NAME rather than left to fail as an
+    /// unexpected-term error further along.
+    fn parse_short_form_template(&mut self) -> Result<Vec<TriplePattern>> {
+        self.reject_graph_block_in_short_form()?;
+        let triples = self.parse_triples_template()?;
+        // `parse_triples_block` stops at a `GRAPH`/`{` boundary rather than
+        // erroring, so the check has to run on the far side of it too.
+        self.reject_graph_block_in_short_form()?;
+        Ok(triples)
+    }
+
+    /// Refuse a graph block at the cursor with the short form's own diagnostic.
+    fn reject_graph_block_in_short_form(&self) -> Result<()> {
+        if self.peek_kw("GRAPH") || self.at(&Token::LBrace) {
+            return Err(ParseError::syntax(
+                "a GRAPH block is not allowed in the CONSTRUCT short form; write the long form \
+                 `CONSTRUCT { GRAPH … { … } } WHERE { … }` instead",
+                self.span(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parse a `CONSTRUCT` template body as **quads**:
+    ///
+    /// ```text
+    /// ConstructQuads           ::= TriplesTemplate? ( ConstructQuadsNotTriples '.'? TriplesTemplate? )*
+    /// ConstructQuadsNotTriples ::= ( 'GRAPH' VarOrIri )? '{' TriplesTemplate? '}'
+    /// ```
+    ///
+    /// The cursor is positioned just inside the template's opening `{`; parsing
+    /// stops at the matching `}`, which the caller consumes.
+    ///
+    /// Statements written outside any block are unscoped (`graph: None`, the
+    /// default graph), which is exactly the SPARQL 1.1 template. A `GRAPH`
+    /// block scopes the statements it encloses; blocks may repeat, may name
+    /// different graphs, and may be interleaved with unscoped statements in one
+    /// template. The graph name is a `VarOrIri`, so it may be a variable whose
+    /// binding decides the graph per solution row.
+    fn parse_construct_quads(&mut self) -> Result<Vec<QuadPattern>> {
+        let mut quads = Vec::new();
+        loop {
+            if self.at(&Token::RBrace) {
+                break;
+            }
+            // The optional `.` separating a graph block from what follows it.
+            if self.eat(&Token::Dot) {
+                continue;
+            }
+            if self.peek_kw("GRAPH") || self.at(&Token::LBrace) {
+                // `GRAPH` is optional in this production: a bare nested `{ … }`
+                // block is the default graph, spelled as a block.
+                let graph = if self.eat_kw("GRAPH") {
+                    Some(self.parse_var_or_iri_name()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::LBrace)?;
+                let triples = self.parse_triples_template()?;
+                self.expect(&Token::RBrace)?;
+                quads.extend(scope_triples(triples, graph.as_ref()));
+                continue;
+            }
+            // An unscoped `TriplesTemplate` run. `parse_triples_block` always
+            // consumes at least one token or errors, and the two block-opening
+            // tokens it would refuse are dispatched above, so the loop always
+            // makes progress — asserted rather than assumed, because a silent
+            // failure of that property would be a hang rather than an error.
+            let before = self.pos;
+            let triples = self.parse_triples_template()?;
+            if self.pos == before {
+                return Err(ParseError::syntax(
+                    "expected a template statement, a GRAPH block, or `}`",
+                    self.span(),
+                ));
+            }
+            quads.extend(scope_triples(triples, None));
+        }
+        Ok(quads)
     }
 
     // ── SPARQL 1.1 Update (§3 + grammar §19) ─────────────────────────────────
@@ -2542,11 +2657,37 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Parse the `s p o` inside a `<< … >>` (reifying triple) / `<<( … )>>`
-    /// (triple term). Per RDF 1.2 the component productions are restricted: a
-    /// **triple term**'s subject is a `Var | iri | BlankNode` (no nested triple
-    /// node), while a **reifying triple**'s subject may itself be a triple node.
-    /// Neither admits an RDF collection or a populated blank-node property list in
-    /// any position (both would emit auxiliary triples a single triple cannot
+    /// (triple term), in **graph-pattern** position.
+    ///
+    /// One component parser serves the subject and the object of both spellings,
+    /// because in a pattern the two positions carry the SAME production: a nested
+    /// triple node is admissible in either. That is not laxity, it is the SPARQL 1.2
+    /// grammar — `TripleTermSubject` includes `TripleTerm`, exactly as SPARQL 1.1's
+    /// `VarOrTerm` includes a literal in subject position. The W3C SPARQL 1.2 suite
+    /// pins it as two **positive** syntax tests
+    /// (`syntax-triple-terms-positive/nested-tripleterm-02.rq`, whose second pattern
+    /// is `<<( <<(?S :p :o )>> :r :z )>> :q 1`, and
+    /// `syntax-triple-terms-positive/compound-tripleterm-subject.rq`), so refusing it
+    /// here would be a non-conformance, not a tightening. A pattern is a *matcher*:
+    /// one naming a term the RDF 1.2 term model cannot hold simply matches nothing.
+    ///
+    /// The term model is therefore enforced where a triple term becomes a **value**
+    /// rather than a matcher, and those positions ARE separate parsers:
+    ///
+    /// * ground data (`VALUES`, `BIND` of a constant) —
+    ///   [`parse_ground_triple`](Self::parse_ground_triple) refuses a literal or a
+    ///   nested triple term in the subject, which is what the suite's
+    ///   `tripleterm-subject-01`..`-06` **negative** syntax tests require;
+    /// * expression position (`ExprTripleTerm`, §17.4) —
+    ///   [`parse_triple_term_expr`](Self::parse_triple_term_expr) refuses the same;
+    /// * a `CONSTRUCT` / `UPDATE` template instantiated per solution row, where a
+    ///   variable can bind a triple term no syntax mentions, so no parser could
+    ///   decide it: `purrdf-sparql-eval`'s `template::positionally_ill_formed` skips
+    ///   the instantiation, which is what SPARQL §16.2 mandates for an ill-formed
+    ///   instantiation (skip the statement, keep the rest of the template).
+    ///
+    /// Neither spelling admits an RDF collection or a populated blank-node property
+    /// list in any position (both would emit auxiliary triples a single triple cannot
     /// carry).
     fn parse_inner_triple(&mut self, sink: &mut BlockSink) -> Result<TriplePattern> {
         let subject = self.parse_triple_node_component(sink)?;
@@ -4179,6 +4320,41 @@ fn is_empty_bgp(p: &GraphPattern) -> bool {
     matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
 }
 
+/// Lift a run of template triples into quad patterns, all scoped to `graph`
+/// (`None` = the default graph).
+fn scope_triples(
+    triples: Vec<TriplePattern>,
+    graph: Option<&NamedNodePattern>,
+) -> Vec<QuadPattern> {
+    triples
+        .into_iter()
+        .map(|triple| QuadPattern {
+            triple,
+            graph: graph.cloned(),
+        })
+        .collect()
+}
+
+/// Apply the `CONSTRUCT GRAPH VarOrIri …` whole-template shorthand: it is the
+/// DEFAULT graph for the template, so it fills only the slots that named no
+/// graph of their own and an inner `GRAPH` block still wins. With no shorthand
+/// (`graph: None`) this is the identity, so a template that never mentions a
+/// graph is returned untouched.
+fn scope_template(
+    mut template: Vec<QuadPattern>,
+    graph: Option<&NamedNodePattern>,
+) -> Vec<QuadPattern> {
+    let Some(graph) = graph else {
+        return template;
+    };
+    for quad in &mut template {
+        if quad.graph.is_none() {
+            quad.graph = Some(graph.clone());
+        }
+    }
+    template
+}
+
 /// Does a just-parsed triples block contain a property-function call? Walks only
 /// the shapes [`BlockSink::into_pattern`] can build (`Bgp`/`Path` leaves under
 /// `Join`/`Lateral` spines), which is all the template callers need to tell a
@@ -4948,6 +5124,18 @@ fn builtin_function(upper: &str) -> Option<Function> {
         "SHA256" => Function::Sha256,
         "SHA384" => Function::Sha384,
         "SHA512" => Function::Sha512,
+        // SEP-0008, in BOTH spellings the proposal uses. The hyphenated names are the
+        // only built-ins carrying a `-`; the lexer's PN_PREFIX scan admits `-`, so each
+        // arrives here as ONE word (see `Function::Sha3_224`'s rustdoc and the parser
+        // tests below). The underscored names are SEP-0008's own literal spelling of the
+        // four functions, accepted here so a query written from the proposal text parses
+        // rather than failing as an unsupported construct. Both spellings resolve to the
+        // SAME `Function`, so the serializer has exactly one form to emit and output
+        // stays byte-deterministic — see `sha3_serializes_to_one_canonical_spelling`.
+        "SHA3-224" | "SHA3_224" => Function::Sha3_224,
+        "SHA3-256" | "SHA3_256" => Function::Sha3_256,
+        "SHA3-384" | "SHA3_384" => Function::Sha3_384,
+        "SHA3-512" | "SHA3_512" => Function::Sha3_512,
         "STRLANG" => Function::StrLang,
         "STRDT" => Function::StrDt,
         "ISIRI" => Function::IsIri,
@@ -5604,6 +5792,296 @@ mod tests {
             panic!("expected CONSTRUCT");
         };
         assert_eq!(template.len(), 1);
+        assert_eq!(
+            template_graphs(&template),
+            vec![None],
+            "a plain CONSTRUCT names no graph — it is the triple-producing form"
+        );
+    }
+
+    // ── The quad-producing CONSTRUCT ─────────────────────────────────────────
+
+    /// Every template quad's graph term, spelled the way the query wrote it
+    /// (`<iri>` / `?var`), or `None` for an unscoped (default-graph) statement.
+    fn template_graphs(template: &[QuadPattern]) -> Vec<Option<String>> {
+        template
+            .iter()
+            .map(|quad| {
+                quad.graph.as_ref().map(|g| match g {
+                    NamedNodePattern::NamedNode(n) => format!("<{}>", n.as_str()),
+                    NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
+                })
+            })
+            .collect()
+    }
+
+    fn construct_template(query: &str) -> Vec<QuadPattern> {
+        let Query::Construct { template, .. } = parse(query) else {
+            panic!("expected CONSTRUCT for `{query}`");
+        };
+        template
+    }
+
+    /// The upstream form: a `GRAPH <iri> { … }` block INSIDE the template.
+    #[test]
+    fn construct_template_graph_block_scopes_its_statements() {
+        let template = construct_template(
+            "CONSTRUCT { GRAPH <http://example.org/g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+        );
+        assert_eq!(
+            template_graphs(&template),
+            vec![Some("<http://example.org/g>".to_owned())]
+        );
+    }
+
+    /// A VARIABLE graph name — the first of the three upstream forms the
+    /// whole-template shorthand alone could not express.
+    #[test]
+    fn construct_admits_a_variable_graph_name() {
+        // Inside the template, as Jena spells it.
+        let template = construct_template(
+            "CONSTRUCT { GRAPH ?g { ?s ?p ?o } } WHERE { GRAPH ?g { ?s ?p ?o } }",
+        );
+        assert_eq!(template_graphs(&template), vec![Some("?g".to_owned())]);
+
+        // And as the whole-template shorthand, which takes a `VarOrIri` too.
+        let template =
+            construct_template("CONSTRUCT GRAPH ?g { ?s ?p ?o } WHERE { GRAPH ?g { ?s ?p ?o } }");
+        assert_eq!(template_graphs(&template), vec![Some("?g".to_owned())]);
+    }
+
+    /// MULTIPLE target graphs in ONE template — the second upstream form.
+    #[test]
+    fn construct_admits_multiple_graph_blocks_in_one_template() {
+        let template = construct_template(
+            "CONSTRUCT { GRAPH <http://example.org/g> { ?s ?p ?o } \
+             GRAPH <http://example.org/h> { ?o ?p ?s } \
+             GRAPH ?w { ?s ?s ?s } } WHERE { ?s ?p ?o }",
+        );
+        assert_eq!(
+            template_graphs(&template),
+            vec![
+                Some("<http://example.org/g>".to_owned()),
+                Some("<http://example.org/h>".to_owned()),
+                Some("?w".to_owned()),
+            ]
+        );
+    }
+
+    /// Default-graph triples MIXED with named-graph quads in one template — the
+    /// third upstream form. The unscoped runs before, between and after the
+    /// blocks all stay unscoped, and the optional `.` after a block is admitted.
+    #[test]
+    fn construct_admits_default_graph_triples_mixed_with_graph_blocks() {
+        let template = construct_template(
+            "CONSTRUCT { ?s <http://example.org/a> ?o . \
+             GRAPH <http://example.org/g> { ?s <http://example.org/b> ?o } . \
+             ?s <http://example.org/c> ?o . \
+             GRAPH ?w { ?s <http://example.org/d> ?o } \
+             ?s <http://example.org/e> ?o } WHERE { ?s ?p ?o }",
+        );
+        assert_eq!(
+            template_graphs(&template),
+            vec![
+                None,
+                Some("<http://example.org/g>".to_owned()),
+                None,
+                Some("?w".to_owned()),
+                None,
+            ]
+        );
+        // The statements themselves keep their template order and content.
+        let predicates: Vec<String> = template
+            .iter()
+            .map(|quad| match &quad.triple.predicate {
+                NamedNodePattern::NamedNode(n) => n.as_str().to_owned(),
+                NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
+            })
+            .collect();
+        assert_eq!(
+            predicates,
+            [
+                "http://example.org/a",
+                "http://example.org/b",
+                "http://example.org/c",
+                "http://example.org/d",
+                "http://example.org/e",
+            ]
+        );
+    }
+
+    /// `GRAPH` is optional in `ConstructQuadsNotTriples`: a bare nested `{ … }`
+    /// block is the DEFAULT graph, spelled as a block.
+    #[test]
+    fn construct_admits_a_bare_nested_block_as_the_default_graph() {
+        let template = construct_template(
+            "CONSTRUCT { { ?s <http://example.org/a> ?o } GRAPH <http://example.org/g> \
+             { ?s <http://example.org/b> ?o } } WHERE { ?s ?p ?o }",
+        );
+        assert_eq!(
+            template_graphs(&template),
+            vec![None, Some("<http://example.org/g>".to_owned())]
+        );
+    }
+
+    // ── The `CONSTRUCT GRAPH …` whole-template shorthand ─────────────────────
+
+    #[test]
+    fn construct_graph_shorthand_scopes_the_whole_template() {
+        let q = format!(
+            "{GM}CONSTRUCT GRAPH <http://example.org/g> {{ ?s a purrdf:Out . ?s a purrdf:In }} \
+             WHERE {{ ?s a purrdf:In }}"
+        );
+        let template = construct_template(&q);
+        assert_eq!(template.len(), 2);
+        assert_eq!(
+            template_graphs(&template),
+            vec![
+                Some("<http://example.org/g>".to_owned()),
+                Some("<http://example.org/g>".to_owned())
+            ]
+        );
+    }
+
+    /// A prefixed name and a `BASE`-relative reference are both legal graph
+    /// names, resolved by the ordinary IRI production.
+    #[test]
+    fn construct_graph_accepts_prefixed_and_relative_graph_names() {
+        let q = format!("{GM}CONSTRUCT GRAPH purrdf:g {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o }}");
+        // `GM` binds `purrdf:` to `<https://x/>`.
+        assert_eq!(
+            template_graphs(&construct_template(&q)),
+            vec![Some("<https://x/g>".to_owned())]
+        );
+
+        let q = "BASE <http://example.org/> CONSTRUCT GRAPH <g> { ?s ?p ?o } WHERE { ?s ?p ?o }";
+        assert_eq!(
+            template_graphs(&construct_template(q)),
+            vec![Some("<http://example.org/g>".to_owned())]
+        );
+    }
+
+    /// The shorthand is a DEFAULT, not an override: an inner `GRAPH` block wins
+    /// over it, and only the slots that named no graph take the shorthand's.
+    #[test]
+    fn construct_graph_shorthand_yields_to_an_inner_graph_block() {
+        let template = construct_template(
+            "CONSTRUCT GRAPH <http://example.org/outer> { ?s <http://example.org/a> ?o . \
+             GRAPH <http://example.org/inner> { ?s <http://example.org/b> ?o } } \
+             WHERE { ?s ?p ?o }",
+        );
+        assert_eq!(
+            template_graphs(&template),
+            vec![
+                Some("<http://example.org/outer>".to_owned()),
+                Some("<http://example.org/inner>".to_owned()),
+            ]
+        );
+    }
+
+    /// The short form (§16.2.1, template ≡ WHERE block) takes the shorthand
+    /// too: `GRAPH VarOrIri` is read before the short/long fork, so both
+    /// spellings reach the same algebra node.
+    #[test]
+    fn construct_graph_works_with_the_short_form() {
+        let template =
+            construct_template("CONSTRUCT GRAPH <http://example.org/g> WHERE { ?s ?p ?o }");
+        assert_eq!(template.len(), 1, "the short form's template IS the block");
+        assert_eq!(
+            template_graphs(&template),
+            vec![Some("<http://example.org/g>".to_owned())]
+        );
+
+        // Including with a variable graph name. (The short form's block is a
+        // `TriplesTemplate`, so `?g` can only be bound by a solution modifier's
+        // scope here — the parse is what this pins.)
+        let template = construct_template("CONSTRUCT GRAPH ?g WHERE { ?s ?p ?o }");
+        assert_eq!(template_graphs(&template), vec![Some("?g".to_owned())]);
+    }
+
+    // ── Negative syntax pins ─────────────────────────────────────────────────
+
+    /// The shorthand's `GRAPH` must be followed by a graph NAME; a bare
+    /// `CONSTRUCT GRAPH { … }` is a syntax error rather than a
+    /// silently-default-graph CONSTRUCT. (The optional-`GRAPH` bare block form
+    /// lives INSIDE the template braces, not before them, so this spelling
+    /// stays unambiguous.)
+    #[test]
+    fn construct_graph_shorthand_without_a_name_is_refused() {
+        SparqlParser::new()
+            .parse_query("CONSTRUCT GRAPH { ?s ?p ?o } WHERE { ?s ?p ?o }")
+            .expect_err("the CONSTRUCT GRAPH shorthand requires a graph name");
+    }
+
+    /// The upstream grammar's graph name is a `VarOrIri`: a literal, a blank
+    /// node and a triple term are all refused.
+    #[test]
+    fn construct_template_graph_name_must_be_a_var_or_iri() {
+        for q in [
+            r#"CONSTRUCT { GRAPH "g" { ?s ?p ?o } } WHERE { ?s ?p ?o }"#,
+            "CONSTRUCT { GRAPH _:g { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+            "CONSTRUCT { GRAPH <<( ?a ?b ?c )>> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+            r#"CONSTRUCT GRAPH "g" { ?s ?p ?o } WHERE { ?s ?p ?o }"#,
+        ] {
+            SparqlParser::new()
+                .parse_query(q)
+                .expect_err("a CONSTRUCT template graph name must be an IRI or a variable");
+        }
+    }
+
+    /// `ConstructQuadsNotTriples` blocks do not nest, and the short form's
+    /// block is a `TriplesTemplate` — it is read twice, once as the template and
+    /// once as the `WHERE` BGP, which has no graph slot to carry a scope into.
+    /// Both are refused, the short form by name.
+    #[test]
+    fn construct_graph_blocks_are_refused_where_the_grammar_has_none() {
+        let err = SparqlParser::new()
+            .parse_query("CONSTRUCT WHERE { GRAPH <http://example.org/g> { ?s ?p ?o } }")
+            .expect_err("the CONSTRUCT short form admits no GRAPH block");
+        assert!(
+            format!("{err}").contains("short form"),
+            "the diagnostic must name the short form, got: {err}"
+        );
+
+        SparqlParser::new()
+            .parse_query(
+                "CONSTRUCT { GRAPH <http://example.org/g> { GRAPH <http://example.org/h> \
+                 { ?s ?p ?o } } } WHERE { ?s ?p ?o }",
+            )
+            .expect_err("a graph block does not nest inside another graph block");
+    }
+
+    /// A property path and a property function are no more assertable inside a
+    /// `GRAPH` block than they are at the template's top level.
+    #[test]
+    fn construct_graph_block_still_refuses_paths() {
+        let err = SparqlParser::new()
+            .parse_query(
+                "CONSTRUCT { GRAPH <http://example.org/g> { ?s <http://example.org/p>+ ?o } } \
+                 WHERE { ?s ?p ?o }",
+            )
+            .expect_err("a property path is not assertable in a template");
+        assert!(format!("{err}").contains("property paths"), "got: {err}");
+    }
+
+    /// Adding the quad template must not perturb any OTHER CONSTRUCT spelling:
+    /// the dataset clause, the WHERE-less short form, and the solution
+    /// modifiers all parse to exactly the algebra they did before, with every
+    /// template slot unscoped.
+    #[test]
+    fn plain_construct_spellings_are_unchanged_and_name_no_graph() {
+        for q in [
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } FROM <http://example.org/d> WHERE { ?s ?p ?o }",
+            "CONSTRUCT WHERE { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } ORDER BY ?s LIMIT 3",
+        ] {
+            let template = construct_template(q);
+            assert!(
+                template.iter().all(|quad| quad.graph.is_none()),
+                "`{q}` must name no graph on any template slot"
+            );
+        }
     }
 
     #[test]
@@ -7972,6 +8450,173 @@ mod tests {
             matches!(&func, Function::Custom(n) if n.as_str() == format!("{EXT_NS}heldIn")),
             "got {func:?}"
         );
+    }
+
+    // ── SEP-0008 SHA-3 built-ins (the hyphenated keyword surface) ────────────
+
+    #[test]
+    fn sha3_builtins_parse_under_their_hyphenated_names() {
+        for (name, expected) in [
+            ("SHA3-224", Function::Sha3_224),
+            ("SHA3-256", Function::Sha3_256),
+            ("SHA3-384", Function::Sha3_384),
+            ("SHA3-512", Function::Sha3_512),
+        ] {
+            let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+            let Expression::FunctionCall(func, args) = bound_expr(&q) else {
+                panic!("expected a FunctionCall for {name}");
+            };
+            assert_eq!(func, expected, "{name} dispatched to the wrong builtin");
+            assert_eq!(args.len(), 1, "{name} takes one argument");
+        }
+    }
+
+    /// Case-insensitivity is the whole `BuiltInCall` keyword rule, and the
+    /// hyphen must not break it (`upper` is an ASCII uppercase of the WHOLE
+    /// token, hyphen included).
+    #[test]
+    fn sha3_builtin_names_are_case_insensitive() {
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(sha3-512(STR(?o)) AS ?h) }";
+        let Expression::FunctionCall(func, _) = bound_expr(q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Sha3_512);
+    }
+
+    /// THE hyphen trap, pinned from the parser side: `SHA3-224(…)` is ONE
+    /// built-in call, while a SPACED `SHA3 - 224` is a different token sequence
+    /// that must NOT resolve to it. `SHA3` alone is not a function, so the
+    /// spaced form is a hard parse error rather than a silently different
+    /// meaning — which is exactly the outcome that keeps the two unambiguous.
+    #[test]
+    fn sha3_hyphen_is_one_token_not_a_subtraction() {
+        // The joined form is the built-in.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(SHA3-224(STR(?o)) AS ?h) }";
+        assert!(matches!(
+            bound_expr(q),
+            Expression::FunctionCall(Function::Sha3_224, _)
+        ));
+
+        // The spaced form is not: `SHA3` is no function or keyword.
+        let spaced = "SELECT ?h WHERE { ?s ?p ?o . BIND(SHA3 - 224 AS ?h) }";
+        let err = SparqlParser::new()
+            .parse_query(spaced)
+            .expect_err("`SHA3 - 224` must not resolve to the SHA3-224 builtin");
+        assert!(
+            format!("{err:?}").contains("SHA3"),
+            "the diagnostic must name the unresolved token, got {err:?}"
+        );
+
+        // And subtraction against a real hash call still parses as subtraction:
+        // the `-` there follows `)`, not a word character.
+        let sub = "SELECT ?h WHERE { ?s ?p ?o . BIND(STRLEN(SHA3-256(STR(?o))) - 4 AS ?h) }";
+        assert!(
+            matches!(bound_expr(sub), Expression::Subtract(_, _)),
+            "an ordinary subtraction beside a SHA-3 call must stay a subtraction"
+        );
+    }
+
+    /// SEP-0008 writes its four functions UNDERSCORED (`sha3_256`), so a query
+    /// copied out of the proposal must parse. Both spellings are the same call:
+    /// each `SHA3_NNN` pins to the SAME [`Function`] as its `SHA3-NNN` twin, and
+    /// the two parse to an identical expression tree, so nothing downstream can
+    /// tell which spelling the author typed.
+    #[test]
+    fn sha3_underscored_sep_spelling_pins_to_the_same_function() {
+        for (hyphen, underscore, expected) in [
+            ("SHA3-224", "SHA3_224", Function::Sha3_224),
+            ("SHA3-256", "SHA3_256", Function::Sha3_256),
+            ("SHA3-384", "SHA3_384", Function::Sha3_384),
+            ("SHA3-512", "SHA3_512", Function::Sha3_512),
+        ] {
+            let q = |name: &str| {
+                format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}")
+            };
+            let under = bound_expr(&q(underscore));
+            let Expression::FunctionCall(func, args) = &under else {
+                panic!("expected a FunctionCall for {underscore}");
+            };
+            assert_eq!(
+                func, &expected,
+                "{underscore} dispatched to the wrong builtin"
+            );
+            assert_eq!(args.len(), 1, "{underscore} takes one argument");
+            assert_eq!(
+                under,
+                bound_expr(&q(hyphen)),
+                "{underscore} and {hyphen} must parse to the same expression"
+            );
+        }
+
+        // Case-insensitive, exactly like the hyphenated spelling — and this is
+        // SEP-0008's own lower-case rendering of the name.
+        let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(sha3_256(STR(?o)) AS ?h) }";
+        assert!(matches!(
+            bound_expr(q),
+            Expression::FunctionCall(Function::Sha3_256, _)
+        ));
+    }
+
+    /// Accepting two spellings must NOT put two spellings on the wire. The
+    /// serializer has one arm per [`Function`], so a query written in either
+    /// spelling serializes to the HYPHENATED canonical form, byte-identically —
+    /// which is what keeps a spelling choice at the input from reaching the
+    /// output at all.
+    #[test]
+    fn sha3_serializes_to_one_canonical_spelling() {
+        for (hyphen, underscore) in [
+            ("SHA3-224", "SHA3_224"),
+            ("SHA3-256", "SHA3_256"),
+            ("SHA3-384", "SHA3_384"),
+            ("SHA3-512", "SHA3_512"),
+        ] {
+            let text = |name: &str| {
+                let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+                crate::serialize::pattern_to_select_query(&unproject(select_pattern(&q)))
+            };
+            let from_underscore = text(underscore);
+            assert_eq!(
+                from_underscore,
+                text(hyphen),
+                "{underscore} and {hyphen} must serialize byte-identically"
+            );
+            assert!(
+                from_underscore.contains(hyphen),
+                "the canonical spelling is `{hyphen}`, got: {from_underscore}"
+            );
+            assert!(
+                !from_underscore.contains(underscore),
+                "`{underscore}` must never be emitted, got: {from_underscore}"
+            );
+            // And the canonical text re-parses to the same call, so the
+            // round trip from the SEP spelling is closed.
+            assert_eq!(
+                unproject(select_pattern(&from_underscore)),
+                unproject(select_pattern(&format!(
+                    "SELECT ?h WHERE {{ ?s ?p ?o . BIND({underscore}(STR(?o)) AS ?h) }}"
+                ))),
+                "the canonical form must re-parse to the {underscore} call"
+            );
+        }
+    }
+
+    /// Parse → serialize → parse must be stable for the hyphenated names: the
+    /// serializer re-emits `SHA3-224`, which the lexer must read back as the
+    /// same single word (a serializer that emitted `SHA3 - 224`, or a lexer that
+    /// split it, would make the round trip lose the call).
+    #[test]
+    fn sha3_builtins_round_trip_through_the_serializer() {
+        for name in ["SHA3-224", "SHA3-256", "SHA3-384", "SHA3-512"] {
+            let q = format!("SELECT ?h WHERE {{ ?s ?p ?o . BIND({name}(STR(?o)) AS ?h) }}");
+            let pattern = unproject(select_pattern(&q));
+            let text = crate::serialize::pattern_to_select_query(&pattern);
+            assert!(
+                text.contains(name),
+                "the serializer must re-emit `{name}` verbatim, got: {text}"
+            );
+            let reparsed = unproject(select_pattern(&text));
+            assert_eq!(reparsed, pattern, "round-trip mismatch for {name}");
+        }
     }
 
     #[test]

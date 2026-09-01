@@ -1,0 +1,6 @@
+PREFIX : <http://example.org/>
+CONSTRUCT {
+  ?r :reifies ?t .
+  :nesting :holds <<( ?t :sourcedFrom :ledger )>> .
+}
+WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?t }

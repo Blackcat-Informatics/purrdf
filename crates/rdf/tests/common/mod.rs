@@ -5,9 +5,9 @@
 //! (`pack_reconstruct_roundtrip.rs` and `serialize_pack_parity.rs`).
 //!
 //! Both guards need the SAME rich RDF-1.2 dataset — default + named graphs, every
-//! literal shape, a scoped blank node, a quoted-triple term, a reifier with a
-//! default-scoped AND a graph-scoped annotation, `example.org` IRIs only — so a single
-//! copy lives here instead of drifting across two files.
+//! literal shape, a scoped blank node, a quoted-triple term, a reifier declared in the
+//! default graph AND in a named graph with an annotation in each, `example.org` IRIs
+//! only — so a single copy lives here instead of drifting across two files.
 
 use std::sync::Arc;
 
@@ -17,8 +17,9 @@ use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfText
 /// `crates/sparql-eval/tests/pack_query_e2e.rs`: default graph (with a two-hop `knows`
 /// join chain, a term used as both predicate and subject, every literal shape — simple,
 /// typed, language-tagged, directional — a scoped blank node, and an RDF 1.2 triple
-/// term asserted as an object) + 2 named graphs + a reifier with a default-scoped AND a
-/// graph-scoped annotation. `example.org` IRIs ONLY.
+/// term asserted as an object) + 2 named graphs + a reifier declared in the default
+/// graph and again in `graph1`, carrying a default-scoped AND a graph-scoped
+/// annotation. `example.org` IRIs ONLY.
 pub(crate) fn build_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
@@ -106,7 +107,14 @@ pub(crate) fn build_fixture() -> Arc<RdfDataset> {
     // -- Reifier + annotations -----------------------------------------------------
     b.push_reifier(reifier, alice_knows_bob);
     b.push_annotation(reifier, confidence, high);
-    // A second, graph-scoped annotation on the SAME reifier.
+    // The SAME reifier declared a second time inside a named graph, with its own
+    // annotation there. The statement layer is per-graph, so an annotation belongs
+    // to the reifier declared in ITS graph: a `graph1` annotation needs a `graph1`
+    // declaration to hang off, and without one the same bytes would read back as an
+    // ordinary `graph1` quad about the reifier resource. Declaring it in both graphs
+    // is what makes this fixture's graph-scoped annotation expressible in every
+    // syntax, which is what the serializer round-trip guards require.
+    b.push_reifier_in_graph(reifier, alice_knows_bob, Some(graph1));
     b.push_annotation_in_graph(reifier, source, doc, Some(graph1));
 
     b.freeze().expect("fixture dataset must validate")

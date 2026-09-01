@@ -1669,7 +1669,7 @@ mod tests {
         });
         builder.push_quad(subject, predicate, literal, Some(graph));
         let quoted = builder.intern_triple(subject, predicate, literal);
-        let nested = builder.intern_triple(quoted, predicate, subject);
+        let nested = builder.intern_triple(subject, predicate, quoted);
         builder.push_quad(subject, predicate, nested, None);
         let reifier = builder.intern_blank("reifier", BlankScope(7));
         builder.push_reifier_in_graph(reifier, quoted, Some(graph));

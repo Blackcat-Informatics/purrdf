@@ -2627,6 +2627,8 @@ mod tests {
                     std::ptr::null(),
                     &raw mut buffer,
                     std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                     &raw mut error,
                 ),
                 PurrdfStatus::Ok as i32

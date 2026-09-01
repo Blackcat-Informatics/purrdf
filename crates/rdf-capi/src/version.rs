@@ -12,8 +12,15 @@ use crate::status::{PurrdfAbiVersion, PurrdfCapabilities, PurrdfStatus};
 /// discipline (append-only status enum, drift-gated header) is in place, but the
 /// version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
 pub const PURRDF_ABI_MAJOR: u32 = 0;
-/// ABI minor version.
-pub const PURRDF_ABI_MINOR: u32 = 6;
+/// ABI minor version. It TRACKS THE EXPORTED SIGNATURES: every change to the
+/// parameter list, the return contract, or the documented behaviour of an exported
+/// symbol bumps it, including a purely additive out-param — additive in source is
+/// still a recompile for every C consumer, and a library whose minor is below the
+/// header's cannot honour the call the header describes. It is the number a consumer
+/// linking against an unknown build reads back from `purrdf_abi_version` to decide
+/// whether the header it compiled against and the library it loaded agree, so it must
+/// never stand still across a signature change.
+pub const PURRDF_ABI_MINOR: u32 = 7;
 /// ABI patch version.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

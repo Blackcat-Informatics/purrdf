@@ -39,6 +39,16 @@ use purrdf_shapes::engine;
 /// blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
 ///
+/// The writer is [`purrdf_rdf::canonical_flat_nquads`], which is graph-CARRYING —
+/// it spells out a fourth term for any row in a named graph, and it re-materializes
+/// the RDF 1.2 statement layer in the graph that asserted it. The result is
+/// nonetheless N-Triples, byte for byte, and that is a property of the INPUTS
+/// rather than of the writer: an N-Triples data graph and a Turtle shapes graph
+/// are both single-graph syntaxes and `sh:rule` inferences land beside the base
+/// graph, so no row this function can produce has a graph name to write. Naming
+/// the writer here rather than only its output is deliberate — a caller who
+/// widened either input to a quad syntax would get quads, not a silent drop.
+///
 /// # Errors
 ///
 /// Returns the SHACL engine's error string if either graph fails to parse or if

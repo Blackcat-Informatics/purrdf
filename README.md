@@ -325,7 +325,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
-| GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
+| GTS | frozen cross-language vectors (`vectors/`) | **38 / 39** fold byte-exactly into their committed expectation, 1 ledgered divergence |
 
 ## Direction
 
@@ -333,8 +333,9 @@ SPARQL breadth grows through caller-keyed extension seams — scalar functions,
 property functions, custom aggregates, and the host-injected service transport
 — so new capability lands as composition through a seam, never as a Cargo
 feature flag and never as a vocabulary PurRDF mints itself. In capability
-terms, the near-term direction includes quad-form `CONSTRUCT`, SEP-0008 SHA-3
-builtins, SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
+terms, quad-form `CONSTRUCT` and the SEP-0008 SHA-3 builtins have landed; the
+near-term direction continues with
+SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
 `FOLD`/`UNFOLD`), deterministic full-text search, property-path binding,
 embedding similarity, and GeoSPARQL — each arriving out-of-core through those
 seams, under the same conformance discipline as everything above.

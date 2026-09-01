@@ -12,7 +12,10 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
+use super::io::{
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
+    read_input,
+};
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
     PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
@@ -204,6 +207,29 @@ impl PyMutableDataset {
             }
             None => Ok(Some(PyBytes::new(py, &buf).unbind())),
         }
+    }
+
+    /// Dump the WHOLE effective dataset in `format`, with the realized loss attached.
+    ///
+    /// The counting twin of [`dump`](Self::dump) — same bytes, plus the three
+    /// independent loss counts a `SerializeLoss` carries — and the same entry point
+    /// `Store.dump_with_loss`, the wasm `Dataset.serializeWithLoss` and the C ABI's
+    /// `purrdf_serialize` count out-params expose on their hosts. See
+    /// `Store.dump_with_loss` for why it takes neither a graph selection nor JSON-LD
+    /// configuration.
+    #[pyo3(signature = (format))]
+    fn dump_with_loss(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<PySerializeLoss> {
+        let native = format.to_native();
+        let inner = &self.inner;
+        py.detach(|| {
+            let quads: Vec<RdfQuad> = inner
+                .quads_for_pattern(None, None, None, GraphMatchValue::Any)
+                .iter()
+                .map(values_to_rdf_quad)
+                .collect();
+            dump_quads_with_loss(&quads, native)
+                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+        })
     }
 
     /// Run a SPARQL query over the effective dataset.

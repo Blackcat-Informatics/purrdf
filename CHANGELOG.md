@@ -370,6 +370,17 @@ called out below with what a consumer must do.
   resolves over a raw view. The C ABI's version moves `0.4.0` -> `0.6.0` (`0.5.0` is skipped —
   one commit carries both the host-surface change and the version bump) and its header is
   regenerated.
+- **BREAKING** **capi:** `purrdf_serialize` gains `out_directional_literals_dropped` and
+  `out_named_graph_rows_dropped` beside the existing `out_statement_rows_dropped`, so the whole
+  realized loss of one serialization is partitioned by cause and no row is charged twice: a
+  star-capable single-graph target (Turtle, N-Triples) previously reported `0` while silently
+  discarding every named graph it was handed. Each count stays independently nullable. This
+  transcode lane flattens and counts rather than refusing the way the query lane does, so a
+  dataset whose every row is graph-scoped serializes to a single-graph syntax as a well-formed
+  EMPTY document with status `OK` and the whole loss in `out_named_graph_rows_dropped` — pinned
+  from C in the smoke test. The C ABI's version moves `0.6.0` -> `0.7.0` and its header is
+  regenerated; the minor number tracks the exported signatures, so an additive parameter bumps it
+  too, and every C caller must widen the call.
 - **BREAKING** **sparql-eval,cli:** Give the engine one options-carrying explain entry,
   `NativeSparqlEngine::explain_query_with_options`/`_view`, that carries the SHACL-AF function,
   property-function, and aggregate registries together, and remove the narrower single-registry

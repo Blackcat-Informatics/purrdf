@@ -46,6 +46,10 @@ pub(crate) fn entail_to_ntriples_impl(shapes_ttl: &str, data_nt: &str) -> Result
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse or if rule application fails.
+///
+/// Nothing is dropped on the way out: the underlying writer is the graph-carrying
+/// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+/// are single-graph syntaxes, not because a graph slot was discarded.
 #[wasm_bindgen(js_name = shaclEntail)]
 pub fn shacl_entail(shapes_ttl: &str, data_nt: &str) -> Result<String, JsError> {
     entail_to_ntriples_impl(shapes_ttl, data_nt).map_err(|e| JsError::new(&e))

@@ -4,7 +4,7 @@
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
-// RegimeClosure, ReasoningAnswer) and the free functions (version,
+// RegimeClosure, ReasoningAnswer, SerializeLoss) and the free functions (version,
 // shaclValidateToSarif, shaclEntail, entailMaterialize, entailRules,
 // entailImplementedRules, entailCheckGoldenVectors,
 // entailCheckInconsistentRefusal, entailConsistency, entailClassify,
@@ -75,6 +75,7 @@ import init, {
   Reasoner,
   ReasoningAnswer,
   RegimeClosure,
+  SerializeLoss,
   shaclEntail,
   shaclValidateToSarif,
   Sink,
@@ -837,6 +838,7 @@ export {
   Reasoner,
   ReasoningAnswer,
   RegimeClosure,
+  SerializeLoss,
   shaclEntail,
   shaclValidateToSarif,
   Sink,

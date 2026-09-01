@@ -200,7 +200,11 @@ const HANDLERS = {
     if (parsed && (Object.hasOwn(parsed, "head") || Object.hasOwn(parsed, "boolean"))) {
       return { kind: "srj", srj: parsed };
     }
-    // CONSTRUCT / DESCRIBE → Turtle text.
+    // CONSTRUCT / DESCRIBE → Turtle text, or TriG when the result carries a named
+    // graph (a quad template — a first-party extension, not a SPARQL 1.2 feature):
+    // Turtle has no `GRAPH` construct, so the
+    // engine widens to Turtle's dataset superset rather than rendering the answer as
+    // an empty document. Both are Turtle-family text and display identically.
     return { kind: "turtle", turtle: out };
   },
 

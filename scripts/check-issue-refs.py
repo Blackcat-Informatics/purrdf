@@ -3,17 +3,25 @@
 
 """Reject development-process references in PurRDF comments and docs.
 
-Five token families are rejected, over exactly the same scanned surface.
+Six token families are rejected, over exactly the same scanned surface.
 
 **Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
-and misleading, so we do not allow new ones. The same debt hides in a second
-shape: an issue number baked into a fixture IRI's path segment, such as
+and misleading, so we do not allow new ones. The same debt hides in two further
+shapes. One is an issue number baked into a fixture IRI's path segment, such as
 ``https://example.org/187-lateral-graph#p``. A reader who meets that host
 after the issue closes has no more of a referent than they would from a bare
 ``#187`` — the digits just moved from a comment into a string literal, which
 is exactly the surface the plain ``#NNN`` scan of Rust source does not reach
-(string, not comment). Both shapes are banned outright, with no grandfather
-register, because the codebase carries zero legitimate occurrences of either.
+(string, not comment). The other is the URL form, ``.../issues/31`` or
+``.../pull/42``: ``#NNN`` is merely the shorthand for it, and a doc comment
+reading ``proposed at <https://github.com/an-org/a-repo/issues/31>`` shipped
+in the SPARQL algebra while this lint ran, looked, and was structurally unable
+to see it — the digits sat behind a ``/`` rather than a ``#``. Any owner/repo
+matches, not just this project's: an upstream tracker thread goes stale for a
+reader exactly as fast as our own, and the rule bans the reference, not the
+repository it points into. All three shapes are banned outright, with no
+grandfather register, because the codebase carries zero legitimate occurrences
+of any of them.
 
 **Process references** — ``Task 28``, ``EPIC``, ``this branch``, a phrase
 that locates something in the repository's own history (``on origin/main``,
@@ -107,10 +115,45 @@ This lint scans:
   scans), so an issue reference hiding in a docstring is caught while an
   issue-shaped token inside an ordinary string literal is not flagged. The
   checker's own file is excluded so its detection examples are not matched.
+* ``.ttl``/``.nt``/``.nq``/``.rq`` under ``generated/``, ``queries/`` and the
+  first-party ``crates/*/corpus/`` trees. RDF and SPARQL text is SHIPPED text
+  wherever it lives, and the conformance corpora carry prose comments,
+  ``mf:name`` strings and fixture IRIs — every surface this lint polices in a
+  Rust file — while being scanned for none of them. One lexer reads all four
+  grammars: ``#`` opens a comment except inside a quoted literal (data) or an
+  ``<IRIREF>`` (a fragment). That second exception is load-bearing in both
+  directions — almost every line of a fixture carries ``<http://…/ns#p>``, so
+  splitting on the first ``#`` of the line reads the rest of the line as a
+  comment and never reaches the real comment after it, and an IRI's own ``#123``
+  fragment is not a tracker reference. Comments are scanned for every family;
+  literals and IRIs for the issue families only, exactly as Rust literals are.
 * ``.yaml``/``.yml`` workflow files under ``.github/`` — only ``#`` comments are
   examined. A ``#`` is a comment only at line start or after whitespace and only
   when outside a quoted scalar (matching YAML's own comment rule), so a ``#``
   inside a quoted string is treated as data.
+
+Vendored payload is excluded by PATH, never by pattern: the byte-frozen W3C
+suites (which are outside the corpus scoping above) and the verbatim RDFLib test
+files under ``bindings/python/tests/rdflib_suite/vendor/``. Upstream material
+legitimately carries tracker URLs as provenance — W3C's own ``rdfs:seeAlso``
+links, RDFLib's own issue citations — and this repository runs it unmodified, so
+a lint firing there would demand an edit ``check-corpus-frozen.py`` forbids and
+the drop-in oracle depends on not having. First-party sidecars in those
+directories (this repository's own ``README.md``/``PROVENANCE.md``) stay in
+scope.
+
+# The gate proves it can SEE, on every run
+
+A lint's failure mode is not a false positive, it is a hole: it runs, it looks,
+it cannot match the thing it exists to reject, and it prints OK — which reads
+exactly like a clean tree. Two such holes shipped here, one per axis (a shape
+no pattern matched, a surface no scanner read). So ``self_test`` asserts every
+rejected shape against the scanners as they actually run, asserts that each
+declared RDF/SPARQL surface holds first-party files rather than being nominal,
+and asserts that each vendored control both MATCHES the patterns and sits
+outside the scan — so the exclusion is proven to be what spares it rather than
+blindness. It runs before the scan on every invocation, and ``--self-test`` runs
+it alone, printing one line per case.
 
 The issue token pattern is ``#`` followed by 1–5 decimal digits that is not
 followed by another digit, a hex letter, a hyphen, or a decimal fraction
@@ -177,17 +220,30 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
+
+# A tracker reference spelled as a URL. ``#NNN`` is the SHORTHAND for this, and a
+# lint that saw only the shorthand had a hole exactly one paste wide: a doc
+# comment reading ``proposed at <https://github.com/an-org/a-repo/issues/31>``
+# shipped in the SPARQL algebra while this gate ran, looked, and was structurally
+# unable to see it — the digits were behind a ``/`` instead of a ``#``. Any
+# owner/repo is matched, not just this project's: an upstream tracker thread goes
+# stale for a reader exactly as fast as our own, and the standing rule bans the
+# reference, not the repository it points into. Vendored trees carry these
+# legitimately as provenance and are excluded by path, not by pattern.
+ISSUE_URL_PATTERN = r"github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+"
 
 # Every rejected token family in ONE pattern, so a file is lexed once no matter
 # how many families there are. ``match.lastgroup`` names the family, which is what
 # separates an issue reference from a process reference in the report and what
 # keeps the inline-code exclusion applying to the former alone.
 TOKEN_RE = re.compile(
-    rf"(?P<issue>{ISSUE_PATTERN})"
+    rf"(?P<issue_url>{ISSUE_URL_PATTERN})"
+    rf"|(?P<issue>{ISSUE_PATTERN})"
     r"|(?P<issue_iri>example\.org/\d{2,4}-)"
     r"|(?P<task>\b[Tt]ask\s+#?\d+\b)"
     r"|(?P<epic>\bEPIC\b)"
@@ -204,6 +260,13 @@ TOKEN_RE = re.compile(
     r"|\bG\d{1,2}:"
     r"|\bR\d{1,2}:)"
 )
+
+# The families that name a TRACKER ITEM — a bare number, a fixture host carrying
+# one, or the URL form of the same thing. They are banned outright with no
+# register, are the only families read out of non-comment text (string literals,
+# fixture IRIs), and are reported as issue references rather than as process
+# references, so none of them has a ``PROCESS_REMEDY`` row.
+ISSUE_FAMILIES = ("issue", "issue_iri", "issue_url")
 
 # The prose fix each process family's message suggests.
 PROCESS_REMEDY: dict[str, str] = {
@@ -346,6 +409,57 @@ PY_SCAN_DIRS = (*SCAN_DIRS, "scripts")
 # opening quote. ``u`` never combines; ``r`` combines with ``b``/``f``.
 PY_STRING_PREFIXES = frozenset({"r", "b", "u", "f", "rb", "br", "rf", "fr"})
 
+# RDF/SPARQL text: Turtle, N-Triples, N-Quads and SPARQL queries. All four share
+# one comment rule (``#`` to end of line, outside a string literal and outside an
+# ``<IRIREF>``), so one lexer reads all four.
+RDF_SUFFIXES = (".ttl", ".nt", ".nq", ".rq")
+
+# The first-party RDF/SPARQL text this lint reads, as ``git ls-files`` path
+# shapes. Two families:
+#
+# * ``generated/`` and ``queries/`` — emitted and first-party SPARQL, already
+#   covered because a committed query is SHIPPED text.
+# * ``crates/<crate>/corpus/`` — the first-party conformance corpora (the frozen
+#   SHACL corpus and the CONSTRUCT/DESCRIBE corpora). These carry prose comments,
+#   ``mf:name`` strings and fixture IRIs — every surface this lint polices in a
+#   Rust file — and were unguarded entirely.
+#
+# Deliberately NOT covered, and by PATH so no pattern has to guess: the vendored
+# W3C suites under ``crates/*/suite/``, ``crates/*/entailment-suite/`` and
+# ``crates/*/tests/corpus/``, and the vendored vectors under ``vectors/``. Those
+# are byte-frozen upstream material this repository may not edit, and upstream
+# manifests legitimately carry tracker URLs as provenance (W3C's own
+# ``rdfs:seeAlso`` links, for one). A lint that fires on them demands an edit
+# that ``check-corpus-frozen.py`` forbids.
+CORPUS_TOP_DIRS = ("generated", "queries")
+
+
+def _is_first_party_rdf_text(segments: list[str]) -> bool:
+    """Whether a ``git ls-files`` path is first-party RDF/SPARQL text."""
+    if segments[0] in CORPUS_TOP_DIRS:
+        return True
+    return (
+        len(segments) > 3 and segments[0] == "crates" and segments[2] == "corpus"
+    )
+
+
+# Vendored trees whose payload is verbatim upstream text. ``rdflib_suite/vendor/``
+# holds byte-for-byte copies of RDFLib's own test files (see its PROVENANCE.md);
+# they are run UNMODIFIED as the drop-in conformance oracle, so an upstream
+# comment citing an upstream issue thread is provenance, not this repository's
+# debt — and it cannot be paid down here without breaking the very property the
+# corpus exists to have. First-party sidecars in the same directory (this
+# repository's own README/PROVENANCE prose) stay in scope, mirroring the payload/
+# sidecar split ``check-corpus-frozen.py`` already draws.
+VENDORED_TREES = ("bindings/python/tests/rdflib_suite/vendor/",)
+VENDORED_FIRST_PARTY_SIDECARS = frozenset({"README.md", "PROVENANCE.md"})
+
+
+def _is_vendored_payload(rel: str) -> bool:
+    if not rel.startswith(VENDORED_TREES):
+        return False
+    return rel.rsplit("/", 1)[-1] not in VENDORED_FIRST_PARTY_SIDECARS
+
 # This checker's own path. Its module/function docstrings and strings carry
 # issue-number-shaped *example* tokens (e.g. ``#16``, ``#123``) that document
 # what the lint detects; scanning them would flag the documentation of the lint
@@ -362,14 +476,17 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     """Yield every tracked source file the lint enforces.
 
     Covered: ``.rs``/``.md``/``.toml`` under ``crates``/``bindings``/``docs``
-    (plus root ``.md``/``.toml``), ``.py`` under those dirs and ``scripts``, and
-    ``.yaml``/``.yml`` GitHub workflow files under ``.github``.
+    (plus root ``.md``/``.toml``), ``.py`` under those dirs and ``scripts``,
+    ``.ttl``/``.nt``/``.nq``/``.rq`` under ``generated``/``queries`` and under
+    the first-party ``crates/*/corpus/`` trees, and ``.yaml``/``.yml`` GitHub
+    workflow files under ``.github``.
 
     Enumeration is driven by ``git ls-files`` rather than a filesystem walk so
     the scan covers exactly the committed first-party source. Untracked build
     artifacts and third-party trees (``bindings/python/.venv`` linkml docs,
     ``target/``) are never scanned, keeping the lint deterministic and free of
-    "green in CI, red locally" divergence.
+    "green in CI, red locally" divergence. Vendored payload that IS tracked is
+    excluded by path (see ``VENDORED_TREES``).
     """
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
@@ -379,7 +496,11 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     ).stdout
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
-        if suffix not in (".rs", ".md", ".toml", ".py", ".pyi", ".rq", ".yaml", ".yml"):
+        if suffix not in (
+            ".rs", ".md", ".toml", ".py", ".pyi", ".yaml", ".yml", *RDF_SUFFIXES
+        ):
+            continue
+        if _is_vendored_payload(rel):
             continue
         segments = rel.split("/")
         top = segments[0]
@@ -390,12 +511,14 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             )
             if not (in_scan_dir or root_file):
                 continue
-        elif suffix == ".rq":
-            # SPARQL is SHIPPED text wherever it lives: a tracker token in a committed
-            # query is published exactly as one in a printed string is, and six of these
-            # carried one while every gate reported clean. `generated/` holds emitted
-            # artifacts, `queries/` first-party ones; both are read by users.
-            if top not in ("generated", "queries"):
+        elif suffix in RDF_SUFFIXES:
+            # RDF and SPARQL text is SHIPPED text wherever it lives: a tracker token
+            # in a committed query or fixture is published exactly as one in a printed
+            # string is, and six queries carried one while every gate reported clean.
+            # `generated/` holds emitted artifacts and `queries/` first-party ones;
+            # `crates/*/corpus/` holds the first-party conformance corpora, whose
+            # comments, `mf:name` strings and fixture IRIs were unguarded entirely.
+            if not _is_first_party_rdf_text(segments):
                 continue
         elif suffix in (".py", ".pyi"):
             # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
@@ -675,8 +798,8 @@ def literal_token_is_a_reference(text: str, token: str) -> bool:
     return False
 
 
-def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
-    """Return violations found in a Rust source file.
+def scan_rust(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in Rust source text.
 
     ``exclude_inline_code`` is requested, but ``scan_comments`` applies the
     inline-code-span exclusion only to Rust *doc* comments (which render as
@@ -684,22 +807,144 @@ def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
     literal, not a stale issue reference. Ordinary ``//``/``/* */`` comments are
     not Markdown, so a ``#NNN`` inside backticks there is still flagged.
     """
-    src = path.read_text(encoding="utf-8")
     comments, literals = rust_comments_and_literals(src)
     found = scan_comments(comments, exclude_inline_code=True)
-    # String literals are scanned for ISSUE tokens (both shapes) only. A process
-    # reference like "this branch" is ordinary prose a program may legitimately
-    # print, whereas a `#NNN` or an `example.org/<digits>-` fixture host in a
-    # printed, returned, or test-fixture string publishes a tracker id to a
-    # caller — which `.baseline` bans outright, and which three shipped surfaces
-    # (and, for the IRI shape, two fixture-heavy test files) carried while this
-    # lint reported clean.
-    found.extend(
+    found.extend(literal_issue_hits(scan_comments(literals, exclude_inline_code=False)))
+    found.sort(key=lambda hit: (hit[0], hit[1]))
+    return found
+
+
+def literal_issue_hits(
+    hits: list[tuple[int, int, str, str, str]],
+) -> list[tuple[int, int, str, str, str]]:
+    """The reportable hits from a NON-comment span (a string literal, an IRI).
+
+    Only the ISSUE families survive here. A process reference like "this branch"
+    is ordinary prose a program may legitimately print, whereas a ``#NNN``, an
+    ``example.org/<digits>-`` fixture host or a tracker URL in a printed,
+    returned, or fixture string publishes a tracker id to a caller — which
+    ``.baseline`` bans outright, and which three shipped surfaces (and, for the
+    IRI shape, two fixture-heavy test files) carried while this lint reported
+    clean.
+
+    The bare ``#NNN`` shape is additionally disambiguated by
+    ``literal_token_is_a_reference``, because inside a literal it collides with
+    format specifiers and IRI fragments. The URL and fixture-host shapes need no
+    such filter: neither has a legitimate non-tracker reading.
+    """
+    return [
         hit
-        for hit in scan_comments(literals, exclude_inline_code=False)
-        if hit[4] == "issue_iri"
+        for hit in hits
+        if hit[4] in ("issue_iri", "issue_url")
         or (hit[4] == "issue" and literal_token_is_a_reference(hit[3], hit[2]))
-    )
+    ]
+
+
+def rdf_comments_and_text(
+    src: str,
+) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str]]]:
+    """One pass over Turtle/N-Triples/N-Quads/SPARQL text: its comments and its text.
+
+    All four grammars share one comment rule — ``#`` runs to end of line — with
+    two exceptions that a naive "everything after the first ``#``" split gets
+    backwards in both directions:
+
+    * a ``#`` inside an ``<IRIREF>`` is a FRAGMENT, not a comment. Almost every
+      line of an RDF fixture carries one (``<http://example.org/ns#p>``), so the
+      naive split reads the rest of every such line as a comment and never
+      reaches the real trailing comment after it.
+    * a ``#`` inside a quoted literal is DATA.
+
+    An ``<IRIREF>`` is recognised by the grammar's own rule rather than by
+    guessing: it contains no whitespace and none of ``<>"{}|^`\\``. That is what
+    keeps SPARQL's ``FILTER(?a < 3 && ?b > 4)`` from being mistaken for an IRI
+    and swallowing whatever follows.
+
+    Returns ``(comments, text)`` where *text* is the contents of every quoted
+    literal and every IRIREF — the ``mf:name`` prose and fixture IRIs a corpus
+    publishes, which are exactly as shipped as a Rust string literal is.
+    """
+    comments: list[tuple[int, int, str]] = []
+    text: list[tuple[int, int, str]] = []
+    n = len(src)
+    i = 0
+
+    while i < n:
+        c = src[i]
+
+        if c == "#":
+            j = src.find("\n", i)
+            if j == -1:
+                j = n
+            line, col = pos_to_line_col(src, i)
+            comments.append((line, col, src[i:j]))
+            i = j
+            continue
+
+        if c == "<":
+            end = _iriref_end(src, i, n)
+            if end is not None:
+                line, col = pos_to_line_col(src, i + 1)
+                text.append((line, col, src[i + 1 : end]))
+                i = end + 1
+                continue
+            i += 1
+            continue
+
+        if c in "\"'":
+            triple = src[i : i + 3] == c * 3
+            quote = c * 3 if triple else c
+            start = i + len(quote)
+            j = start
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j : j + len(quote)] == quote:
+                    break
+                if not triple and src[j] == "\n":
+                    break  # unterminated single-line literal
+                j += 1
+            line, col = pos_to_line_col(src, start)
+            text.append((line, col, src[start : min(j, n)]))
+            i = min(j, n) + (len(quote) if j < n else 0)
+            continue
+
+        i += 1
+
+    return comments, text
+
+
+def _iriref_end(src: str, start: int, n: int) -> int | None:
+    """Index of the ``>`` closing the IRIREF opening at ``src[start]``, or None.
+
+    ``None`` means the ``<`` is not an IRIREF opener — in SPARQL it is then the
+    less-than operator. The test is the grammar's: an IRIREF admits no whitespace
+    and none of ``<>"{}|^`\\``.
+    """
+    j = start + 1
+    while j < n:
+        c = src[j]
+        if c == ">":
+            return j
+        if c.isspace() or c in '<"{}|^`\\':
+            return None
+        j += 1
+    return None
+
+
+def scan_rdf(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in Turtle/N-Triples/N-Quads/SPARQL text.
+
+    Comments are prose and are scanned for every token family. Literals and
+    IRIREFs are scanned for the ISSUE families only, exactly as Rust string
+    literals are — a fixture IRI or an ``mf:name`` is published text, but the
+    process-reference families describe developer prose and have no bearing on
+    a data file's payload.
+    """
+    comments, text = rdf_comments_and_text(src)
+    found = scan_comments(comments, exclude_inline_code=False)
+    found.extend(literal_issue_hits(scan_comments(text, exclude_inline_code=False)))
     found.sort(key=lambda hit: (hit[0], hit[1]))
     return found
 
@@ -835,14 +1080,13 @@ def python_docstrings(src: str) -> list[tuple[int, int, str]]:
     return docstrings
 
 
-def scan_python(path: Path) -> list[tuple[int, int, str, str, str]]:
-    """Return violations found in a Python source file.
+def scan_python(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in Python source text.
 
     Both ``#`` line comments and documentation strings (module/class/function
     docstrings) are scanned; the docstring pass closes the prose gap that let
     an issue reference hide inside a module docstring.
     """
-    src = path.read_text(encoding="utf-8")
     return scan_comments(python_comments(src)) + scan_comments(
         python_docstrings(src)
     )
@@ -891,9 +1135,8 @@ def yaml_comments(src: str) -> list[tuple[int, int, str]]:
     return comments
 
 
-def scan_yaml(path: Path) -> list[tuple[int, int, str, str, str]]:
-    """Return violations found in a YAML source file."""
-    src = path.read_text(encoding="utf-8")
+def scan_yaml(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in YAML source text."""
     return scan_comments(yaml_comments(src))
 
 
@@ -930,9 +1173,8 @@ def find_inline_code_spans(line: str) -> list[tuple[int, int]]:
     return spans
 
 
-def scan_markdown(path: Path) -> list[tuple[int, int, str, str, str]]:
-    """Return violations found in a Markdown file."""
-    src = path.read_text(encoding="utf-8")
+def scan_markdown(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in Markdown text."""
     violations: list[tuple[int, int, str, str, str]] = []
 
     in_fence = False
@@ -966,8 +1208,8 @@ def scan_markdown(path: Path) -> list[tuple[int, int, str, str, str]]:
     return violations
 
 
-def scan_toml(path: Path) -> list[tuple[int, int, str, str, str]]:
-    """Return violations found in a TOML file.
+def scan_toml(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in TOML text.
 
     TOML has no comment/string-lexer subtlety worth modelling here: manifest
     ``description`` strings and ``#`` dependency comments are both plain prose,
@@ -975,7 +1217,6 @@ def scan_toml(path: Path) -> list[tuple[int, int, str, str, str]]:
     already excluded by the token pattern, and after the cleanup there are no
     legitimate ``#NNN`` tokens in these files.
     """
-    src = path.read_text(encoding="utf-8")
     violations: list[tuple[int, int, str, str, str]] = []
 
     for line_no, line in enumerate(src.splitlines(), start=1):
@@ -994,36 +1235,277 @@ def scan_toml(path: Path) -> list[tuple[int, int, str, str, str]]:
     return violations
 
 
+def scan_source(suffix: str, src: str) -> list[tuple[int, int, str, str, str]]:
+    """Scan one file's TEXT with the scanner its suffix calls for.
+
+    Separate from [`scan_path`] because the self-test scans strings: a
+    falsifiability case that had to write a file to be measured would either
+    touch the tree or measure something other than what ships.
+
+    A suffix listed in ``iter_scan_paths`` and absent HERE would extend the
+    gate's apparent scope while it inspected nothing, so an unknown suffix is a
+    hard failure rather than an empty list.
+    """
+    if suffix == ".rs":
+        return scan_rust(src)
+    if suffix == ".md":
+        return scan_markdown(src)
+    if suffix == ".toml":
+        return scan_toml(src)
+    if suffix in RDF_SUFFIXES:
+        return scan_rdf(src)
+    if suffix in (".py", ".pyi"):
+        # A stub is Python syntax, so the Python scanner reads its comments correctly.
+        # `.pyi` is SHIPPED (the PEP 561 stub inside every published wheel), which is
+        # why it is enumerated at all.
+        return scan_python(src)
+    if suffix in (".yaml", ".yml"):
+        return scan_yaml(src)
+    raise SystemExit(
+        f"check-issue-refs: {suffix!r} is enumerated for scanning but no scanner "
+        "reads it — the gate would report clean over a surface it never inspected."
+    )
+
+
 def scan_path(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Scan one file with the scanner its suffix calls for."""
-    if path.suffix == ".rs":
-        return scan_rust(path)
-    if path.suffix == ".md":
-        return scan_markdown(path)
-    if path.suffix == ".toml":
-        return scan_toml(path)
-    if path.suffix == ".rq":
-        # A `#` opens a comment in SPARQL, so the comment scanner reads these directly.
-        return scan_comments(
-            [
-                (n + 1, line.index("#") + 1, line[line.index("#") :])
-                for n, line in enumerate(path.read_text(encoding="utf-8").splitlines())
-                if "#" in line
-            ],
-            exclude_inline_code=False,
+    return scan_source(path.suffix, path.read_text(encoding="utf-8"))
+
+
+# ── This gate's own falsifiability ────────────────────────────────────────────
+#
+# A lint's failure mode is not a false positive, it is a hole: it runs, it looks,
+# and it is structurally unable to see the thing it is written to reject — and it
+# prints OK, which reads exactly like a clean tree. Two such holes shipped here.
+# The cases below are the shapes that got through, each asserted against the
+# scanners as they actually run, plus the clean shapes that must NOT be flagged
+# (a lint no one can live with is removed, and then there is no lint at all).
+
+# The token SHAPE that shipped in a first-party Rust doc comment while this gate
+# reported clean: the digits were behind a `/`, so the `#NNN` scan could not see
+# them. The owner/repo is a placeholder for the same reason fixtures say
+# `example.org` — a specimen must exercise the pattern without becoming the very
+# reference it is written to reject.
+_SHIPPED_URL = "https://github.com/an-org/a-repo/issues/31"
+_SHIPPED_URL_TOKEN = "github.com/an-org/a-repo/issues/31"
+
+# ``(what, suffix, source text, token that must be reported — or None for
+# "must report nothing")``. Every one is text this gate scans for real.
+_DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
+    (
+        "an issue URL in a Rust doc comment (the shape that shipped)",
+        ".rs",
+        f"/// The form proposed at <{_SHIPPED_URL}> and already implemented.\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an issue URL in a Rust string literal",
+        ".rs",
+        f'const NOTE: &str = "see {_SHIPPED_URL}";\n',
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "a pull-request URL in Markdown prose",
+        ".md",
+        "The rewrite landed in https://github.com/example-org/example/pull/42 .\n",
+        "github.com/example-org/example/pull/42",
+    ),
+    (
+        "an issue URL in a Turtle comment",
+        ".ttl",
+        f"@prefix ex: <http://example.org/ns#> .\n# tracked at {_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an issue URL in an mf:name string",
+        ".ttl",
+        f'[] mf:name "regression for {_SHIPPED_URL}" .\n',
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an issue URL baked into a fixture IRI",
+        ".ttl",
+        f"<{_SHIPPED_URL}> a ex:Case .\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an issue URL in a SPARQL comment",
+        ".rq",
+        f"SELECT * WHERE {{ ?s ?p ?o }}  # {_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "a bare #NNN in an N-Quads comment",
+        ".nq",
+        "# regression for #31\n<http://example.org/s> <http://example.org/p> "
+        '"o" <http://example.org/g> .\n',
+        "#31",
+    ),
+    (
+        "an issue-number fixture host in a Turtle IRI",
+        ".ttl",
+        "<https://example.org/187-lateral-graph#p> a ex:Case .\n",
+        "example.org/187-",
+    ),
+    (
+        # The trailing comment is reachable ONLY if the `#` inside the IRI is
+        # read as a fragment. Splitting on the first `#` of the line — which is
+        # what this scan used to do for `.rq` — swallows the IRI and never
+        # reaches the reference after it.
+        "a reference AFTER an IRI that itself contains a # fragment",
+        ".ttl",
+        "ex:a <http://example.org/ns#label> ex:b .  # tracked at "
+        f"{_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # `<` is SPARQL's less-than as well as an IRI opener. Treating every `<`
+        # as an IRI start swallows the rest of the line and hides the comment.
+        "a reference after a SPARQL less-than comparison",
+        ".rq",
+        "SELECT * WHERE { FILTER(?a < 3 && ?b > 4) }  # "
+        f"{_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an ordinary IRI fragment that merely looks like an issue number",
+        ".ttl",
+        "ex:a <http://example.org/ns#123> ex:b .\n",
+        None,
+    ),
+    (
+        "an ordinary N-Triples fixture with no reference at all",
+        ".nt",
+        "<http://example.org/s> <http://example.org/p> "
+        '"a plain literal"@en .\n',
+        None,
+    ),
+)
+
+# ``(what, path, suffix)`` — vendored payload that CARRIES a reference the
+# widened patterns match. Each must be outside the scan (upstream text this
+# repository runs verbatim and may not edit) AND must be reported when scanned
+# directly, so the exclusion is proven to be what spares it rather than the
+# patterns being blind.
+_VENDORED_CONTROLS: tuple[tuple[str, str], ...] = (
+    (
+        "W3C's own rdfs:seeAlso issue link in a vendored SPARQL manifest",
+        "crates/sparql-conformance/suite/w3c-sparql11/functions/manifest.ttl",
+    ),
+    (
+        "RDFLib's own issue reference in a verbatim vendored test",
+        "bindings/python/tests/rdflib_suite/vendor/test_optional.py",
+    ),
+)
+
+
+def self_test(report: bool) -> list[str]:
+    """Every way this gate is blind. An empty list is the only passing answer."""
+    problems: list[str] = []
+
+    for what, suffix, src, expected in _DETECTION_CASES:
+        tokens = [hit[2] for hit in scan_source(suffix, src)]
+        if report:
+            verdict = (
+                (expected in tokens) if expected is not None else (not tokens)
+            )
+            print(f"  {'ok' if verdict else 'BLIND':6}  {suffix}: {what}")
+        if expected is None:
+            if tokens:
+                problems.append(
+                    f"  • {suffix}: {what} is FLAGGED ({tokens}) — a lint that "
+                    "fires on ordinary data is a lint that gets switched off"
+                )
+        elif expected not in tokens:
+            problems.append(
+                f"  • {suffix}: {what} is NOT reported (found {tokens or 'nothing'}) "
+                f"— {expected!r} is exactly the shape this gate exists to reject"
+            )
+
+    root = repo_root()
+    scanned = {str(path.relative_to(root)) for path in iter_scan_paths(root)}
+
+    for suffix in RDF_SUFFIXES:
+        covered = [
+            rel
+            for rel in scanned
+            if rel.endswith(suffix) and _is_first_party_rdf_text(rel.split("/"))
+        ]
+        if report:
+            print(
+                f"  {'ok' if covered else 'BLIND':6}  {suffix}: "
+                f"{len(covered)} first-party file(s) in the scan"
+            )
+        if not covered:
+            problems.append(
+                f"  • no first-party {suffix} file is in the scan — the surface is "
+                "declared and inspects nothing"
+            )
+
+    for what, rel in _VENDORED_CONTROLS:
+        path = root / rel
+        if not path.is_file():
+            raise SystemExit(
+                f"check-issue-refs: the vendored control {rel} is gone, so nothing "
+                f"proves {what} is still spared by PATH rather than by blindness. "
+                "Re-point the control rather than leaving the gate untested."
+            )
+        reported = bool(scan_source(path.suffix, path.read_text(encoding="utf-8")))
+        excluded = rel not in scanned
+        if report:
+            print(
+                f"  {'ok' if (reported and excluded) else 'BROKEN':6}  {rel}: {what}"
+            )
+        if not reported:
+            problems.append(
+                f"  • {rel}: {what} is no longer matched at all, so its exclusion "
+                "proves nothing about the patterns"
+            )
+        if not excluded:
+            problems.append(
+                f"  • {rel}: vendored payload is INSIDE the scan — upstream text "
+                "this repository runs verbatim would have to be edited to satisfy "
+                "a lint about this repository's own debt"
+            )
+
+    return problems
+
+
+def main(argv: list[str]) -> int:
+    unknown = [argument for argument in argv[1:] if argument != "--self-test"]
+    if unknown:
+        print(f"usage: {Path(argv[0]).name} [--self-test]", file=sys.stderr)
+        return 2
+    alone = "--self-test" in argv[1:]
+
+    if alone:
+        print(
+            "check-issue-refs: checking that this gate can SEE each shape it "
+            "rejects, and that it spares vendored text by path —"
         )
-    if path.suffix in (".py", ".pyi"):
-        # A stub is Python syntax, so the Python scanner reads its comments correctly.
-        # Listing `.pyi` in the path iterator without adding it HERE would extend the
-        # gate's apparent scope while it inspected nothing — the same silent no-op this
-        # script exists to prevent in prose.
-        return scan_python(path)
-    if path.suffix in (".yaml", ".yml"):
-        return scan_yaml(path)
-    return []
+    # BEFORE the scan itself, on every run: this gate's whole failure mode is
+    # printing OK over a surface it never inspected or a shape it cannot match,
+    # and it has done both. Pure text over strings plus one `git ls-files`, so it
+    # costs a fraction of the scan it precedes.
+    blind = self_test(report=alone)
+    if blind:
+        print(
+            "check-issue-refs: this gate reports clean over shapes it exists to "
+            "reject:\n" + "\n".join(blind)
+            + "\n\nEach line above is a reference that ships with every gate "
+            "green. Fix the scan, not the case.",
+            file=sys.stderr,
+        )
+        return 1
+    if alone:
+        print(
+            f"OK: all {len(_DETECTION_CASES)} shapes are matched or spared as "
+            f"written, all {len(RDF_SUFFIXES)} RDF/SPARQL surfaces hold "
+            f"first-party files, and all {len(_VENDORED_CONTROLS)} vendored "
+            "controls are excluded by path."
+        )
+        return 0
 
-
-def main() -> int:
     root = repo_root()
 
     issues: list[tuple[Path, int, int, str, str]] = []
@@ -1038,7 +1520,7 @@ def main() -> int:
     for path in iter_scan_paths(root):
         rel = str(path.relative_to(root))
         for line, col, token, text, kind in scan_path(path):
-            if kind in ("issue", "issue_iri"):
+            if kind in ISSUE_FAMILIES:
                 issues.append((path, line, col, token, text))
                 continue
             key = (rel, token)
@@ -1112,4 +1594,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))
