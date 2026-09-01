@@ -39,6 +39,12 @@
 //! SEP-0009 *can* express is written in SEP-0009's own lexical space and conformance
 //! is preserved.
 //!
+//! Both are also **separately graded**. SEP-0009's conformance corpus contains no
+//! `<<(` and no `--ltr` / `--rtl`, so running it can never reveal that PurRDF accepts
+//! more than the spec does; [`lexical_space`] therefore lets the crate report its own
+//! position, and `tests/superset.rs` pins every widened form as an executable
+//! assertion. See [`conformance`] for why that is reporting rather than optionality.
+//!
 //! ## Superset 1 — RDF 1.2 triple terms
 //!
 //! Productions `[3]` and `[8]` gain one alternative:
@@ -125,6 +131,7 @@
 
 extern crate alloc;
 
+pub mod conformance;
 pub mod datatype;
 pub mod error;
 pub mod functions;
@@ -136,6 +143,9 @@ pub mod render;
 pub mod term;
 pub mod value;
 
+pub use conformance::{
+    LexicalSpace, key_lexical_space, lexical_space, literal_lexical_space, term_lexical_space,
+};
 pub use datatype::{
     CDT_LIST, CDT_MAP, CDT_NS, CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN,
     XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING,
