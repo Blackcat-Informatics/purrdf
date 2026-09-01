@@ -826,9 +826,13 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the data graph, the schema
-        /// (BOTH syntaxes — ShExJ is a JSON-LD dialect, so its IRI-valued members are
-        /// document-relative exactly as ShExC's IRIREFs are), and the shape map.
+        /// Base IRI for the relative IRIs of the DATA graph and the MAP — the two inputs
+        /// with no base of their own (a shape map is command-line text, so `--base` is the
+        /// only base it can ever have). NOT the schema's: `--schema` is an independent
+        /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
+        /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
+        /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
+        /// Each `--import`ed document likewise resolves against the import IRI.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
