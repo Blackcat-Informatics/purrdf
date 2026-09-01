@@ -68,11 +68,12 @@ use crate::value::CdtValue;
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_cdt::{CdtValue, parse_list};
+/// use purrdf_cdt::{CdtDatatype, parse_list};
 ///
 /// let value = parse_list("[1, \"a\", null]")?;
 /// assert_eq!(value.len(), 3);
-/// assert!(matches!(value, CdtValue::List(_)));
+/// assert_eq!(value.datatype(), CdtDatatype::List);
+/// assert!(value.as_list().is_some());
 ///
 /// // An unterminated list is a typed error carrying a byte offset.
 /// assert!(parse_list("[1, 2").is_err());
@@ -141,6 +142,18 @@ pub fn parse_cdt(lexical: &str, datatype: CdtDatatype) -> Result<CdtValue, CdtEr
     if scanner.position < scanner.bytes.len() {
         return Err(CdtError::TrailingText {
             offset: scanner.position,
+        });
+    }
+    // The canonical form spells every shorthand out, so it can be far longer than the
+    // input that was accepted: `[1]` is three bytes in and forty-eight out. The
+    // invariant is on the value, not on the input, so the form the value would be
+    // *written* as is measured too — once, with the same walker `canonical_lexical`
+    // uses, so the two can never disagree about what the bytes would be.
+    let bytes = crate::render::canonical_lexical_len(&value);
+    if bytes > MAX_LEXICAL_BYTES {
+        return Err(CdtError::InputTooLarge {
+            offset: MAX_LEXICAL_BYTES,
+            length: bytes,
         });
     }
     Ok(value)
@@ -439,9 +452,16 @@ impl<'a> Scanner<'a> {
     /// otherwise appends the finished element to its parent.
     fn close_frame(&self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, CdtError> {
         let frame = stack.pop().expect("the frame stack is never empty here");
+        // The scanner has enforced the depth and element bounds as it went, before the
+        // offending element was allocated, so re-measuring each closed frame here
+        // would only make the scan quadratic in nesting depth.
         let term = match frame {
-            Frame::List(items) => CdtTerm::composite(CdtValue::List(items)),
-            Frame::Map { entries, .. } => CdtTerm::composite(finish_map(entries)?),
+            Frame::List(items) => {
+                CdtTerm::Composite(alloc::boxed::Box::new(CdtValue::from_checked_items(items)))
+            }
+            Frame::Map { entries, .. } => {
+                CdtTerm::Composite(alloc::boxed::Box::new(finish_map(entries)?))
+            }
             Frame::Triple(mut parts) => {
                 let object = parts.pop().expect("a triple frame closes with three parts");
                 let predicate = parts.pop().expect("a triple frame closes with three parts");
@@ -942,7 +962,7 @@ fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError>
             });
         }
     }
-    Ok(CdtValue::Map(
+    Ok(CdtValue::from_checked_entries(
         entries.into_iter().map(|(_, entry)| entry).collect(),
     ))
 }

@@ -50,7 +50,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
-use crate::value::CdtValue;
+use crate::value::{CdtContents, CdtValue};
 
 /// Uppercase hex digits, for the `\u00XX` escape forms.
 const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
@@ -209,8 +209,8 @@ fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
 
 /// Push the jobs for a composite, in reverse emission order (the stack pops LIFO).
 fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
-    match value {
-        CdtValue::List(items) => {
+    match value.contents() {
+        CdtContents::List(items) => {
             jobs.push(Job::Punct("]"));
             for (index, item) in items.iter().enumerate().rev() {
                 jobs.push(Job::Term(item));
@@ -220,7 +220,7 @@ fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
             }
             jobs.push(Job::Punct("["));
         }
-        CdtValue::Map(entries) => {
+        CdtContents::Map(entries) => {
             jobs.push(Job::Punct("}"));
             for (index, CdtEntry { key, value: item }) in entries.iter().enumerate().rev() {
                 jobs.push(Job::Term(item));

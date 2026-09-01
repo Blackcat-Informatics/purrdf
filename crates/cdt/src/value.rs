@@ -11,7 +11,49 @@ use crate::datatype::CdtDatatype;
 use crate::error::CdtError;
 use crate::term::{CdtEntry, CdtKey, CdtTerm, CdtTripleTerm};
 
-/// A parsed composite value.
+/// The owned contents of a [`CdtValue`], as [`CdtValue::into_parts`] hands them back.
+///
+/// Freely constructible, and deliberately so: it is *not* a [`CdtValue`], so building
+/// one asserts nothing. Turning it back into a value goes through
+/// [`CdtValue::list`] / [`CdtValue::map`], which is where the bounds are enforced.
+#[derive(Debug, Clone)]
+pub enum CdtParts {
+    /// `cdt:List` — an ordered sequence of elements.
+    List(Vec<CdtTerm>),
+    /// `cdt:Map` — entries in [`crate::total_key_cmp`] order, keys pairwise distinct.
+    Map(Vec<CdtEntry>),
+}
+
+/// A borrowed view of a [`CdtValue`]'s contents, as [`CdtValue::contents`] returns it.
+///
+/// This is how a consumer pattern-matches on which composite datatype it has while the
+/// value itself stays sealed. It is `Copy`, borrows for as long as the value does, and
+/// costs nothing to produce.
+#[derive(Debug, Clone, Copy)]
+pub enum CdtContents<'a> {
+    /// The elements of a `cdt:List`, in the list's own order.
+    List(&'a [CdtTerm]),
+    /// The entries of a `cdt:Map`, in [`crate::total_key_cmp`] key order.
+    Map(&'a [CdtEntry]),
+}
+
+/// A composite value: a `cdt:List` or a `cdt:Map`.
+///
+/// # The three bounds are an invariant of this type
+///
+/// The contents are **private**, and every constructor — [`CdtValue::list`],
+/// [`CdtValue::map`], [`crate::parse_cdt`] and each minting function in
+/// [`crate::functions`] — checks [`crate::MAX_NESTING_DEPTH`],
+/// [`crate::MAX_ELEMENTS`] and [`crate::MAX_LEXICAL_BYTES`] before it will hand one
+/// back. A public tuple variant would have made those checks a property of whichever
+/// code path happened to run rather than of the value, and any consumer could then
+/// have built an arbitrarily deep composite whose `Drop` glue overflows the stack —
+/// an `abort` in Rust, catchable by nobody. See [`crate::limits`] for the full
+/// argument.
+///
+/// Reading the contents costs nothing: [`CdtValue::contents`] borrows,
+/// [`CdtValue::as_list`] / [`CdtValue::as_map`] borrow one arm, and
+/// [`CdtValue::into_parts`] moves them out.
 ///
 /// # The map representation, and why rendering is a pure function of the value
 ///
@@ -34,25 +76,66 @@ use crate::term::{CdtEntry, CdtKey, CdtTerm, CdtTripleTerm};
 ///
 /// [`CdtValue::map`] establishes the invariant for programmatically built maps.
 #[derive(Debug, Clone)]
-pub enum CdtValue {
-    /// `cdt:List` — an ordered sequence of elements.
-    List(Vec<CdtTerm>),
-    /// `cdt:Map` — entries held in [`crate::total_key_cmp`] order, keys pairwise
-    /// distinct.
-    Map(Vec<CdtEntry>),
+pub struct CdtValue {
+    /// Private: the only way to put contents here is through a bounded constructor.
+    parts: CdtParts,
 }
 
 impl CdtValue {
     /// An empty list.
     #[must_use]
     pub const fn empty_list() -> Self {
-        Self::List(Vec::new())
+        Self {
+            parts: CdtParts::List(Vec::new()),
+        }
     }
 
     /// An empty map.
     #[must_use]
     pub const fn empty_map() -> Self {
-        Self::Map(Vec::new())
+        Self {
+            parts: CdtParts::Map(Vec::new()),
+        }
+    }
+
+    /// Build a list from elements, in the given order.
+    ///
+    /// Refuses — before the value is handed back — anything that would break one of
+    /// the crate's three bounds: nesting deeper than [`crate::MAX_NESTING_DEPTH`],
+    /// more than [`crate::MAX_ELEMENTS`] elements at every level together, or a
+    /// canonical form longer than [`crate::MAX_LEXICAL_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
+    /// [`CdtError::InputTooLarge`], whichever bound the prospective list crosses first.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtError, CdtTerm, CdtValue, MAX_NESTING_DEPTH};
+    ///
+    /// let list = CdtValue::list(vec![CdtTerm::Null])?;
+    /// assert_eq!(list.canonical_lexical(), "[null]");
+    ///
+    /// // Nesting one level at a time is refused at the bound, not at the stack.
+    /// let mut deep = CdtValue::empty_list();
+    /// for _ in 1..MAX_NESTING_DEPTH {
+    ///     deep = CdtValue::list(vec![CdtTerm::composite(deep)?])?;
+    /// }
+    /// assert_eq!(deep.depth(), MAX_NESTING_DEPTH);
+    /// // A value at the bound cannot become an element: there is nowhere to put it.
+    /// assert!(matches!(
+    ///     CdtTerm::composite(deep),
+    ///     Err(CdtError::DepthExceeded { .. })
+    /// ));
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    pub fn list(items: Vec<CdtTerm>) -> Result<Self, CdtError> {
+        crate::limits::check_extent(&crate::limits::list_extent(items.iter()))?;
+        Ok(Self {
+            parts: CdtParts::List(items),
+        })
     }
 
     /// Build a map from entries in any order, establishing the key-order invariant.
@@ -110,24 +193,157 @@ impl CdtValue {
                 });
             }
         }
-        Ok(Self::Map(entries))
+        crate::limits::check_extent(&crate::limits::map_extent(
+            entries.iter().map(|entry| (&entry.key, &entry.value)),
+        ))?;
+        Ok(Self {
+            parts: CdtParts::Map(entries),
+        })
+    }
+
+    /// Build a list whose bounds the caller has **just** checked.
+    ///
+    /// The two callers are the lexical scanner — which enforces the depth and element
+    /// bounds as it scans, before the offending element is allocated, and the byte
+    /// bound on both the input and the finished canonical form — and
+    /// [`crate::functions`], which measures every prospective result from borrowed
+    /// parts and refuses before cloning. Re-measuring here would make the scanner
+    /// quadratic in nesting depth, since every enclosing frame would re-walk the
+    /// element it just closed.
+    pub(crate) const fn from_checked_items(items: Vec<CdtTerm>) -> Self {
+        Self {
+            parts: CdtParts::List(items),
+        }
+    }
+
+    /// Build a map whose bounds the caller has **just** checked, and whose entries are
+    /// already sorted into [`crate::total_key_cmp`] order with pairwise distinct keys.
+    ///
+    /// See [`CdtValue::from_checked_items`] for who is allowed to call this and why it
+    /// exists.
+    pub(crate) const fn from_checked_entries(entries: Vec<CdtEntry>) -> Self {
+        Self {
+            parts: CdtParts::Map(entries),
+        }
+    }
+
+    /// A borrowed view of the contents, for matching on which datatype this is.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtContents, parse_list, parse_map};
+    ///
+    /// let describe = |value: &purrdf_cdt::CdtValue| match value.contents() {
+    ///     CdtContents::List(items) => items.len(),
+    ///     CdtContents::Map(entries) => entries.len(),
+    /// };
+    /// assert_eq!(describe(&parse_list("[1,2,3]")?), 3);
+    /// assert_eq!(describe(&parse_map("{1:2}")?), 1);
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    #[must_use]
+    pub fn contents(&self) -> CdtContents<'_> {
+        match &self.parts {
+            CdtParts::List(items) => CdtContents::List(items),
+            CdtParts::Map(entries) => CdtContents::Map(entries),
+        }
+    }
+
+    /// The elements, when this value is a `cdt:List`, and `None` when it is a map.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{parse_list, parse_map};
+    ///
+    /// assert_eq!(parse_list("[1,2]")?.as_list().map(<[_]>::len), Some(2));
+    /// assert!(parse_map("{}")?.as_list().is_none());
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    #[must_use]
+    pub fn as_list(&self) -> Option<&[CdtTerm]> {
+        match &self.parts {
+            CdtParts::List(items) => Some(items),
+            CdtParts::Map(_) => None,
+        }
+    }
+
+    /// The entries, when this value is a `cdt:Map`, and `None` when it is a list.
+    #[must_use]
+    pub fn as_map(&self) -> Option<&[CdtEntry]> {
+        match &self.parts {
+            CdtParts::Map(entries) => Some(entries),
+            CdtParts::List(_) => None,
+        }
+    }
+
+    /// Move the elements out, when this value is a `cdt:List`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtTerm, parse_list};
+    ///
+    /// let items = parse_list("[null]")?.into_list().expect("a cdt:List");
+    /// assert_eq!(items, vec![CdtTerm::Null]);
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    #[must_use]
+    pub fn into_list(self) -> Option<Vec<CdtTerm>> {
+        match self.parts {
+            CdtParts::List(items) => Some(items),
+            CdtParts::Map(_) => None,
+        }
+    }
+
+    /// Move the entries out, when this value is a `cdt:Map`.
+    #[must_use]
+    pub fn into_map(self) -> Option<Vec<CdtEntry>> {
+        match self.parts {
+            CdtParts::Map(entries) => Some(entries),
+            CdtParts::List(_) => None,
+        }
+    }
+
+    /// Move the contents out of the value.
+    ///
+    /// The result is no longer a [`CdtValue`] and asserts nothing; putting it back
+    /// together goes through [`CdtValue::list`] / [`CdtValue::map`], which is where the
+    /// bounds are re-established.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtParts, CdtValue, parse_list};
+    ///
+    /// let CdtParts::List(mut items) = parse_list("[1,2]")?.into_parts() else {
+    ///     unreachable!("parse_list yields a list")
+    /// };
+    /// items.reverse();
+    /// assert_eq!(CdtValue::list(items)?.canonical_lexical(), parse_list("[2,1]")?.canonical_lexical());
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    #[must_use]
+    pub fn into_parts(self) -> CdtParts {
+        self.parts
     }
 
     /// The composite datatype of this value.
     #[must_use]
     pub const fn datatype(&self) -> CdtDatatype {
-        match self {
-            Self::List(_) => CdtDatatype::List,
-            Self::Map(_) => CdtDatatype::Map,
+        match &self.parts {
+            CdtParts::List(_) => CdtDatatype::List,
+            CdtParts::Map(_) => CdtDatatype::Map,
         }
     }
 
     /// The number of elements at the top level (list items, or map entries).
     #[must_use]
     pub fn len(&self) -> usize {
-        match self {
-            Self::List(items) => items.len(),
-            Self::Map(entries) => entries.len(),
+        match &self.parts {
+            CdtParts::List(items) => items.len(),
+            CdtParts::Map(entries) => entries.len(),
         }
     }
 
@@ -218,20 +434,16 @@ impl CdtValue {
 
     /// The list items, or the map entries' values, in this value's own order.
     pub(crate) fn values(&self) -> impl Iterator<Item = &CdtTerm> {
-        let (items, entries): (&[CdtTerm], &[CdtEntry]) = match self {
-            Self::List(items) => (items.as_slice(), &[]),
-            Self::Map(entries) => (&[], entries.as_slice()),
+        let (items, entries): (&[CdtTerm], &[CdtEntry]) = match self.contents() {
+            CdtContents::List(items) => (items, &[]),
+            CdtContents::Map(entries) => (&[], entries),
         };
         items.iter().chain(entries.iter().map(|e| &e.value))
     }
 
     /// The map's keys in key order, or nothing at all for a list.
     pub fn keys(&self) -> impl Iterator<Item = &CdtKey> {
-        let entries: &[CdtEntry] = match self {
-            Self::List(_) => &[],
-            Self::Map(entries) => entries.as_slice(),
-        };
-        entries.iter().map(|e| &e.key)
+        self.as_map().unwrap_or_default().iter().map(|e| &e.key)
     }
 
     /// The canonical lexical form PurRDF writes for this value.

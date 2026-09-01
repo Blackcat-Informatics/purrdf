@@ -19,17 +19,28 @@ fn typed(lexical: &str, local: &str) -> CdtTerm {
 }
 
 fn items(lexical: &str) -> Vec<CdtTerm> {
-    match parse_list(lexical).expect("the lexical form is well formed") {
-        CdtValue::List(items) => items,
-        CdtValue::Map(_) => unreachable!("parse_list yields a list"),
-    }
+    parse_list(lexical)
+        .expect("the lexical form is well formed")
+        .into_list()
+        .expect("parse_list yields a list")
 }
 
 fn entries(lexical: &str) -> Vec<CdtEntry> {
-    match parse_map(lexical).expect("the lexical form is well formed") {
-        CdtValue::Map(entries) => entries,
-        CdtValue::List(_) => unreachable!("parse_map yields a map"),
-    }
+    parse_map(lexical)
+        .expect("the lexical form is well formed")
+        .into_map()
+        .expect("parse_map yields a map")
+}
+
+/// A composite element, refused by the constructor only when it would break one of
+/// the crate's three bounds — which no fixture in this file does.
+fn composite(value: CdtValue) -> CdtTerm {
+    CdtTerm::composite(value).expect("the fixture is within every bound")
+}
+
+/// A triple-term element, under the same standing as [`composite`].
+fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
+    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
 }
 
 // ── list-equal ────────────────────────────────────────────────────────────────
@@ -239,14 +250,14 @@ fn the_total_order_is_defined_where_the_operator_raises() {
     assert_ne!(total_term_cmp(&nan, &one), Ordering::Equal);
 
     // Category ranks: null < blank node < IRI < literal < triple term < composite.
-    let triple = CdtTerm::triple(iri_a.clone(), iri_b, one.clone());
+    let triple = triple(iri_a.clone(), iri_b, one.clone());
     let ranked = [
         CdtTerm::Null,
         CdtTerm::Blank("b".into()),
         iri_a,
         one,
         triple,
-        CdtTerm::composite(CdtValue::empty_list()),
+        composite(CdtValue::empty_list()),
     ];
     for window in ranked.windows(2) {
         assert_eq!(
@@ -320,7 +331,7 @@ fn the_total_order_sorts_and_is_strict_on_distinct_keys() {
 
     // Sorting a heterogeneous vector terminates with a deterministic arrangement.
     let mut terms = [
-        CdtTerm::composite(CdtValue::empty_map()),
+        composite(CdtValue::empty_map()),
         typed("NaN", "double"),
         CdtTerm::Null,
         CdtTerm::Iri("http://example.org/z".into()),
@@ -333,13 +344,21 @@ fn the_total_order_sorts_and_is_strict_on_distinct_keys() {
 
     let sorted_once: Vec<String> = terms
         .iter()
-        .map(|term| CdtValue::List(vec![term.clone()]).canonical_lexical())
+        .map(|term| {
+            CdtValue::list(vec![term.clone()])
+                .expect("a one-element list is within every bound")
+                .canonical_lexical()
+        })
         .collect();
     terms.reverse();
     terms.sort_by(total_term_cmp);
     let sorted_twice: Vec<String> = terms
         .iter()
-        .map(|term| CdtValue::List(vec![term.clone()]).canonical_lexical())
+        .map(|term| {
+            CdtValue::list(vec![term.clone()])
+                .expect("a one-element list is within every bound")
+                .canonical_lexical()
+        })
         .collect();
     assert_eq!(sorted_once, sorted_twice);
     assert_eq!(sorted_once[0], "[null]");

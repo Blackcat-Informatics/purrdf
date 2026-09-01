@@ -12,32 +12,37 @@ use purrdf_cdt::{
 
 /// The items of a value that must be a list.
 fn items(value: &CdtValue) -> &[CdtTerm] {
-    match value {
-        CdtValue::List(items) => items,
-        CdtValue::Map(_) => panic!("expected a list, got a map"),
-    }
+    value.as_list().expect("expected a list, got a map")
 }
 
 /// The entries of a value that must be a map.
 fn entries(value: &CdtValue) -> &[CdtEntry] {
-    match value {
-        CdtValue::Map(entries) => entries,
-        CdtValue::List(_) => panic!("expected a map, got a list"),
-    }
+    value.as_map().expect("expected a map, got a list")
 }
 
 fn list_items(lexical: &str) -> Vec<CdtTerm> {
     items(&parse_list(lexical).expect("the lexical form is well formed")).to_vec()
 }
 
+/// A composite element, refused by the constructor only when it would break one of
+/// the crate's three bounds — which no fixture in this file does.
+fn composite(value: CdtValue) -> CdtTerm {
+    CdtTerm::composite(value).expect("the fixture is within every bound")
+}
+
+/// A triple-term element, under the same standing as [`composite`].
+fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
+    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
+}
+
 // ── [1] List ::= '[' (NonEmptyListContent)? ']' ────────────────────────────────
 
 #[test]
 fn production_1_list_is_bracketed_and_may_be_empty() {
-    assert_eq!(parse_list("[]").unwrap(), CdtValue::List(vec![]));
+    assert_eq!(parse_list("[]").unwrap(), CdtValue::empty_list());
     assert_eq!(list_items("[null]"), vec![CdtTerm::Null]);
     // Whitespace between the terminals is permitted and carries no meaning.
-    assert_eq!(parse_list("  [  ]  ").unwrap(), CdtValue::List(vec![]));
+    assert_eq!(parse_list("  [  ]  ").unwrap(), CdtValue::empty_list());
     // The brackets are mandatory.
     assert!(matches!(
         parse_list("null"),
@@ -98,19 +103,19 @@ fn production_3_every_list_element_alternative_is_admitted() {
     assert_eq!(parsed[7], CdtTerm::Null);
     assert_eq!(
         parsed[8],
-        CdtTerm::composite(CdtValue::List(vec![CdtTerm::Literal(CdtLiteral::typed(
-            "2",
-            XSD_INTEGER
-        ))]))
+        composite(
+            CdtValue::list(vec![CdtTerm::Literal(CdtLiteral::typed("2", XSD_INTEGER))])
+                .expect("a one-element list is within every bound")
+        )
     );
-    assert!(matches!(&parsed[9], CdtTerm::Composite(inner) if matches!(**inner, CdtValue::Map(_))));
+    assert!(matches!(&parsed[9], CdtTerm::Composite(inner) if inner.as_map().is_some()));
 }
 
 // ── [4] Map ::= '{' (NonEmptyMapContent)? '}' ──────────────────────────────────
 
 #[test]
 fn production_4_map_is_braced_and_may_be_empty() {
-    assert_eq!(parse_map("{}").unwrap(), CdtValue::Map(vec![]));
+    assert_eq!(parse_map("{}").unwrap(), CdtValue::empty_map());
     assert_eq!(entries(&parse_map("{ \"a\" : 1 }").unwrap()).len(), 1);
     // A map lexical form is not a list lexical form and vice versa.
     assert!(parse_map("[]").is_err());
@@ -259,7 +264,7 @@ fn production_128s_rdf_literal_covers_all_four_string_forms_and_both_suffixes() 
 
 #[test]
 fn superset_triple_term_is_admitted_as_an_element_and_a_value() {
-    let expected = CdtTerm::triple(
+    let expected = triple(
         CdtTerm::Iri("http://example.org/s".into()),
         CdtTerm::Iri("http://example.org/p".into()),
         CdtTerm::Literal(CdtLiteral::typed("1", XSD_INTEGER)),
@@ -271,7 +276,7 @@ fn superset_triple_term_is_admitted_as_an_element_and_a_value() {
     let value = parse_map("{\"k\": <<(_:b <http://example.org/p> null)>>}").unwrap();
     assert_eq!(
         entries(&value)[0].value,
-        CdtTerm::triple(
+        triple(
             CdtTerm::Blank("b".into()),
             CdtTerm::Iri("http://example.org/p".into()),
             CdtTerm::Null,

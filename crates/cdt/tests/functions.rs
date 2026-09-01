@@ -35,17 +35,22 @@ fn map(lexical: &str) -> CdtValue {
 }
 
 fn items(lexical: &str) -> Vec<CdtTerm> {
-    match list(lexical) {
-        CdtValue::List(items) => items,
-        CdtValue::Map(_) => unreachable!("parse_list yields a list"),
-    }
+    list(lexical).into_list().expect("parse_list yields a list")
 }
 
 fn entries(lexical: &str) -> Vec<CdtEntry> {
-    match map(lexical) {
-        CdtValue::Map(entries) => entries,
-        CdtValue::List(_) => unreachable!("parse_map yields a map"),
-    }
+    map(lexical).into_map().expect("parse_map yields a map")
+}
+
+/// A composite element, refused by the constructor only when it would break one of
+/// the crate's three bounds — which no fixture in this file does.
+fn composite(value: CdtValue) -> CdtTerm {
+    CdtTerm::composite(value).expect("the fixture is within every bound")
+}
+
+/// A triple-term element, under the same standing as [`composite`].
+fn triple(subject: CdtTerm, predicate: CdtTerm, object: CdtTerm) -> CdtTerm {
+    CdtTerm::triple(subject, predicate, object).expect("the fixture is within every bound")
 }
 
 fn int(lexical: &str) -> CdtTerm {
@@ -245,11 +250,11 @@ fn list_get_returns_a_nested_composite_and_a_blank_node_as_they_are() {
     // list-functions/get-06.rq … get-08.rq: the element of `[[1]]` is the list `[1]`.
     let outer = items("[[1], 3]");
     let nested = value(list_get(&outer, &int("1")));
-    assert_eq!(nested, CdtTerm::composite(list("[1]")));
+    assert_eq!(nested, composite(list("[1]")));
     let CdtTerm::Composite(inner) = &nested else {
         panic!("the first element is a nested list")
     };
-    let CdtValue::List(inner_items) = inner.as_ref() else {
+    let Some(inner_items) = inner.as_list() else {
         panic!("the nested composite is a list")
     };
     assert_eq!(value(list_get(inner_items, &int("1"))), int("1"));
@@ -315,14 +320,8 @@ fn list_head_is_the_first_element() {
     // list-functions/head-02.rq … head-06.rq, head-08.rq, head-09.rq.
     assert_eq!(value(list_head(&items("[1, 2]"))), int("1"));
     assert_eq!(value(list_head(&items("['a', 1]"))), text("a"));
-    assert_eq!(
-        value(list_head(&items("[[]]"))),
-        CdtTerm::composite(list("[]"))
-    );
-    assert_eq!(
-        value(list_head(&items("[[1], 2]"))),
-        CdtTerm::composite(list("[1]"))
-    );
+    assert_eq!(value(list_head(&items("[[]]"))), composite(list("[]")));
+    assert_eq!(value(list_head(&items("[[1], 2]"))), composite(list("[1]")));
     // head-11.rq / head-12.rq: a blank node is an answer, and the same one each time.
     assert_eq!(
         value(list_head(&items("[_:b]"))),
@@ -503,7 +502,7 @@ fn list_concat_copies_nulls_as_positions() {
     let nulls = items("[null]");
     let joined = value(list_concat(&[&nulls, &nulls]));
     assert_eq!(size(&joined), 2);
-    let CdtValue::List(joined_items) = &joined else {
+    let Some(joined_items) = joined.as_list() else {
         panic!("concat yields a list")
     };
     assert!(list_get(joined_items, &int("1")).is_error());
@@ -578,7 +577,7 @@ fn list_contains_compares_blank_nodes_by_identity() {
 fn list_contains_finds_nested_composites_in_either_spelling() {
     // list-functions/contains-07.rq: a nested `[2]`.
     let nested = items("[1,[2]]");
-    let sought = CdtTerm::composite(list("[2]"));
+    let sought = composite(list("[2]"));
     assert_eq!(value(list_contains(&nested, &int("1"))), true);
     assert_eq!(value(list_contains(&nested, &int("2"))), false);
     assert_eq!(value(list_contains(&nested, &sought)), true);
@@ -591,7 +590,7 @@ fn list_contains_finds_nested_composites_in_either_spelling() {
     assert_eq!(value(list_contains(&as_literal, &sought)), true);
 
     // contains-09.rq and contains-10.rq: the same pair of spellings for a map.
-    let sought_map = CdtTerm::composite(map("{2: 3}"));
+    let sought_map = composite(map("{2: 3}"));
     let nested_map = items("[1,{2: 3}]");
     assert_eq!(value(list_contains(&nested_map, &int("2"))), false);
     assert_eq!(value(list_contains(&nested_map, &int("3"))), false);
@@ -743,7 +742,7 @@ fn map_keys_is_a_list_of_the_keys() {
     // — so that the result is byte-deterministic.
     let keys_list = map_keys(&entries("{2: 'two', 1: 'one'}"));
     assert_eq!(size(&keys_list), 2);
-    let CdtValue::List(key_items) = &keys_list else {
+    let Some(key_items) = keys_list.as_list() else {
         panic!("cdt:keys yields a list")
     };
     assert_eq!(value(list_contains(key_items, &int("1"))), true);
@@ -804,7 +803,7 @@ fn map_put_stores_a_null_value_without_raising() {
     // null, and both are BOUND — the entry exists and only `cdt:get` on it raises.
     let out = value(map_put(&entries("{}"), &int("1"), &CdtTerm::Null));
     assert_eq!(size(&out), 1);
-    let CdtValue::Map(out_entries) = &out else {
+    let Some(out_entries) = out.as_map() else {
         panic!("cdt:put yields a map")
     };
     assert!(map_contains_key(out_entries, &int("1")));
@@ -815,7 +814,7 @@ fn map_put_stores_a_null_value_without_raising() {
         &int("1"),
         &CdtTerm::Null,
     ));
-    let CdtValue::Map(out_entries) = &out else {
+    let Some(out_entries) = out.as_map() else {
         panic!("cdt:put yields a map")
     };
     assert_eq!(map_size(out_entries), 2);
@@ -872,7 +871,7 @@ fn map_put_refuses_a_key_that_cannot_be_a_key() {
     let empty = entries("{}");
     assert!(map_put(&empty, &CdtTerm::Blank("b".into()), &text("one")).is_error());
     assert!(map_put(&empty, &CdtTerm::Null, &text("one")).is_error());
-    assert!(map_put(&empty, &CdtTerm::composite(list("[1]")), &text("one")).is_error());
+    assert!(map_put(&empty, &composite(list("[1]")), &text("one")).is_error());
 }
 
 #[test]
@@ -1011,7 +1010,7 @@ fn a_stored_null_wins_a_merge_conflict_like_any_other_value() {
     let right = entries("{1: 'one'}");
     let merged = value(map_merge(&[&left, &right]));
     assert_eq!(size(&merged), 1);
-    let CdtValue::Map(merged_entries) = &merged else {
+    let Some(merged_entries) = merged.as_map() else {
         panic!("cdt:merge yields a map")
     };
     assert!(map_contains_key(merged_entries, &int("1")));
@@ -1027,7 +1026,7 @@ fn a_stored_null_wins_a_merge_conflict_like_any_other_value() {
     let left = entries("{1: null, 2: 'two'}");
     let right = entries("{3: 'three'}");
     let merged = value(map_merge(&[&left, &right]));
-    let CdtValue::Map(merged_entries) = &merged else {
+    let Some(merged_entries) = merged.as_map() else {
         panic!("cdt:merge yields a map")
     };
     assert_eq!(map_size(merged_entries), 3);
@@ -1063,14 +1062,11 @@ fn the_list_constructor_builds_in_argument_order() {
         list("['a', 1]")
     );
     assert_eq!(
-        value(list_constructor(vec![CdtTerm::composite(list("[]"))])),
+        value(list_constructor(vec![composite(list("[]"))])),
         list("[[]]")
     );
     assert_eq!(
-        value(list_constructor(vec![
-            CdtTerm::composite(list("[1]")),
-            int("2")
-        ])),
+        value(list_constructor(vec![composite(list("[1]")), int("2")])),
         list("[[1], 2]")
     );
 }
@@ -1102,7 +1098,7 @@ fn a_constructed_list_keeps_a_blank_node_argument() {
     // list-functions/list-constructor-16.rq: the constructor does not raise on a
     // blank node, and `cdt:get` returns the very same blank node.
     let built = value(list_constructor(vec![CdtTerm::Blank("b".into())]));
-    let CdtValue::List(built_items) = &built else {
+    let Some(built_items) = built.as_list() else {
         panic!("the list constructor yields a list")
     };
     assert_eq!(
@@ -1205,7 +1201,7 @@ fn the_map_constructor_keeps_an_entry_whose_value_failed() {
         (int("3"), CdtTerm::Null),
     ]));
     assert_eq!(size(&built), 2);
-    let CdtValue::Map(built_entries) = &built else {
+    let Some(built_entries) = built.as_map() else {
         panic!("the map constructor yields a map")
     };
     assert_eq!(value(map_get(built_entries, &int("1"))), int("2"));
@@ -1217,7 +1213,7 @@ fn the_map_constructor_keeps_an_entry_whose_value_failed() {
         (int("1"), int("2")),
         (int("3"), CdtTerm::Blank("b".into())),
     ]));
-    let CdtValue::Map(built_entries) = &built else {
+    let Some(built_entries) = built.as_map() else {
         panic!("the map constructor yields a map")
     };
     assert_eq!(
@@ -1262,7 +1258,7 @@ fn the_map_only_functions_raise_for_a_list() {
 #[test]
 fn the_three_outcomes_are_distinguishable() {
     let a_list = list("[1]");
-    let CdtValue::List(list_items) = &a_list else {
+    let Some(list_items) = a_list.as_list() else {
         panic!("parse_list yields a list")
     };
     let ok = list_get(list_items, &int("1"));
@@ -1278,13 +1274,18 @@ fn the_three_outcomes_are_distinguishable() {
 }
 
 /// Nest lists until one more level would exceed [`MAX_NESTING_DEPTH`].
+///
+/// The last element is spelled with the `CdtTerm::Composite` variant rather than with
+/// `CdtTerm::composite`, which would refuse it: the point of this fixture is that the
+/// **minting function** refuses on its own, so that a consumer which built the element
+/// some other way still cannot get an over-deep value out of the library.
 fn deep_enough_to_refuse() -> CdtOutcome<CdtValue> {
     let mut built = value(list_constructor(Vec::new()));
     for _ in 1..MAX_NESTING_DEPTH {
-        built = value(list_constructor(vec![CdtTerm::composite(built)]));
+        built = value(list_constructor(vec![composite(built)]));
     }
     assert_eq!(built.depth(), MAX_NESTING_DEPTH);
-    list_constructor(vec![CdtTerm::composite(built)])
+    list_constructor(vec![CdtTerm::Composite(Box::new(built))])
 }
 
 // ── The three bounds, on values that never passed the scanner ─────────────────
@@ -1312,32 +1313,26 @@ fn repeated_self_insertion_hits_the_element_bound_instead_of_memory() {
     // application: with N elements in the seed's list, the results have 2N+3 and
     // 4N+7 elements.
     let seed_len = MAX_ELEMENTS / 4;
-    let big_list = CdtValue::List(vec![CdtTerm::Null; seed_len]);
-    let seed = value(map_constructor(&[(
-        text("k0"),
-        CdtTerm::composite(big_list),
-    )]));
+    let big_list =
+        CdtValue::list(vec![CdtTerm::Null; seed_len]).expect("the seed list is within every bound");
+    let seed = value(map_constructor(&[(text("k0"), composite(big_list))]));
     assert_eq!(seed.element_count(), seed_len + 1);
 
     // First application: it fits, and it really does produce the doubled value.
-    let CdtValue::Map(seed_entries) = &seed else {
+    let Some(seed_entries) = seed.as_map() else {
         panic!("the map constructor yields a map")
     };
-    let once = value(map_put(
-        seed_entries,
-        &text("k1"),
-        &CdtTerm::composite(seed.clone()),
-    ));
+    let once = value(map_put(seed_entries, &text("k1"), &composite(seed.clone())));
     assert_eq!(once.element_count(), 2 * seed_len + 3);
     assert!(once.element_count() <= MAX_ELEMENTS);
     assert_eq!(size(&once), 2);
 
     // Second application: it would be 4N+7 elements, which is over the bound, so it
     // is refused rather than built.
-    let CdtValue::Map(once_entries) = &once else {
+    let Some(once_entries) = once.as_map() else {
         panic!("cdt:put yields a map")
     };
-    let twice = map_put(once_entries, &text("k2"), &CdtTerm::composite(once.clone()));
+    let twice = map_put(once_entries, &text("k2"), &composite(once.clone()));
     assert_eq!(
         twice,
         CdtOutcome::Bound(CdtError::TooManyElements {
@@ -1399,9 +1394,9 @@ fn only_iris_and_literals_can_be_map_keys() {
     );
     assert_eq!(CdtKey::from_term(&CdtTerm::Blank("b".into())), None);
     assert_eq!(CdtKey::from_term(&CdtTerm::Null), None);
-    assert_eq!(CdtKey::from_term(&CdtTerm::composite(list("[1]"))), None);
+    assert_eq!(CdtKey::from_term(&composite(list("[1]"))), None);
     assert_eq!(
-        CdtKey::from_term(&CdtTerm::triple(
+        CdtKey::from_term(&triple(
             iri("http://example.org/s"),
             iri("http://example.org/p"),
             iri("http://example.org/o")

@@ -57,7 +57,7 @@ use crate::datatype::CdtDatatype;
 use crate::error::CdtTypeError;
 use crate::limits::MAX_NESTING_DEPTH;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
-use crate::value::CdtValue;
+use crate::value::{CdtContents, CdtValue};
 
 // ── 1. The syntactic total order ────────────────────────────────────────────────
 
@@ -200,16 +200,18 @@ fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
 /// Push the jobs comparing two composites, in reverse evaluation order (the
 /// worklist pops LIFO, so the length tie-break goes on first and is consulted last).
 fn push_value_cmp<'a>(jobs: &mut Vec<CmpJob<'a>>, a: &'a CdtValue, b: &'a CdtValue) {
-    match (a, b) {
-        (CdtValue::List(_), CdtValue::Map(_)) => jobs.push(CmpJob::Decided(Ordering::Less)),
-        (CdtValue::Map(_), CdtValue::List(_)) => jobs.push(CmpJob::Decided(Ordering::Greater)),
-        (CdtValue::List(left), CdtValue::List(right)) => {
+    match (a.contents(), b.contents()) {
+        (CdtContents::List(_), CdtContents::Map(_)) => jobs.push(CmpJob::Decided(Ordering::Less)),
+        (CdtContents::Map(_), CdtContents::List(_)) => {
+            jobs.push(CmpJob::Decided(Ordering::Greater));
+        }
+        (CdtContents::List(left), CdtContents::List(right)) => {
             jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
             for (p, q) in left.iter().zip(right.iter()).rev() {
                 jobs.push(CmpJob::Pair(p, q));
             }
         }
-        (CdtValue::Map(left), CdtValue::Map(right)) => {
+        (CdtContents::Map(left), CdtContents::Map(right)) => {
             jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
             for (p, q) in left.iter().zip(right.iter()).rev() {
                 jobs.push(CmpJob::Pair(&p.value, &q.value));
@@ -401,14 +403,14 @@ fn equal_worklist<'a>(
                 work.push((&p.subject, &q.subject));
             }
             (CdtTerm::Composite(p), CdtTerm::Composite(q)) => {
-                match (p.as_ref(), q.as_ref()) {
-                    (CdtValue::List(left), CdtValue::List(right)) => {
+                match (p.contents(), q.contents()) {
+                    (CdtContents::List(left), CdtContents::List(right)) => {
                         if left.len() != right.len() {
                             return Ok(false);
                         }
                         work.extend(left.iter().zip(right.iter()));
                     }
-                    (CdtValue::Map(left), CdtValue::Map(right)) => {
+                    (CdtContents::Map(left), CdtContents::Map(right)) => {
                         if left.len() != right.len() {
                             return Ok(false);
                         }
@@ -558,8 +560,8 @@ fn sequence_less_than(left: Seq<'_>, right: Seq<'_>) -> Result<Verdict, CdtTypeE
 
         let (x, y) = (left.value(index), right.value(index));
         if let (CdtTerm::Composite(p), CdtTerm::Composite(q)) = (x, y) {
-            match (p.as_ref(), q.as_ref()) {
-                (CdtValue::List(a), CdtValue::List(b)) => {
+            match (p.contents(), q.contents()) {
+                (CdtContents::List(a), CdtContents::List(b)) => {
                     stack.push(Frame {
                         left: Seq::List(a),
                         right: Seq::List(b),
@@ -567,7 +569,7 @@ fn sequence_less_than(left: Seq<'_>, right: Seq<'_>) -> Result<Verdict, CdtTypeE
                     });
                     continue;
                 }
-                (CdtValue::Map(a), CdtValue::Map(b)) => {
+                (CdtContents::Map(a), CdtContents::Map(b)) => {
                     stack.push(Frame {
                         left: Seq::Map(a),
                         right: Seq::Map(b),
@@ -642,9 +644,11 @@ pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
 /// ```rust
 /// use purrdf_cdt::{CdtDatatype, CdtValue, list_less_than, parse_list};
 ///
-/// let items = |lexical: &str| match parse_list(lexical).unwrap() {
-///     CdtValue::List(items) => items,
-///     CdtValue::Map(_) => unreachable!("parse_list yields a list"),
+/// let items = |lexical: &str| {
+///     parse_list(lexical)
+///         .unwrap()
+///         .into_list()
+///         .expect("parse_list yields a list")
 /// };
 /// assert_eq!(list_less_than(&items("[1,2]"), &items("[1,3]")), Ok(true));
 /// // A shorter list is smaller than any list it is a prefix of.
@@ -671,14 +675,14 @@ pub fn value_equal(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
 /// [`value_equal`], carrying the remaining composite-literal resolution budget (see
 /// [`spend`]).
 fn value_equal_at(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<bool, CdtTypeError> {
-    match (a, b) {
-        (CdtValue::List(left), CdtValue::List(right)) => {
+    match (a.contents(), b.contents()) {
+        (CdtContents::List(left), CdtContents::List(right)) => {
             if left.len() != right.len() {
                 return Ok(false);
             }
             equal_worklist(left.iter().zip(right.iter()).collect(), budget)
         }
-        (CdtValue::Map(left), CdtValue::Map(right)) => {
+        (CdtContents::Map(left), CdtContents::Map(right)) => {
             if left.len() != right.len()
                 || left.iter().zip(right.iter()).any(|(p, q)| p.key != q.key)
             {
@@ -699,9 +703,9 @@ fn value_equal_at(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<bool, Cdt
 /// SEP-0009 `<` over two composite values, dispatching on their datatypes. A list
 /// and a map are unordered, which is `false`, not an error.
 pub fn value_less_than(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
-    match (a, b) {
-        (CdtValue::List(left), CdtValue::List(right)) => list_less_than(left, right),
-        (CdtValue::Map(left), CdtValue::Map(right)) => map_less_than(left, right),
+    match (a.contents(), b.contents()) {
+        (CdtContents::List(left), CdtContents::List(right)) => list_less_than(left, right),
+        (CdtContents::Map(left), CdtContents::Map(right)) => map_less_than(left, right),
         _ => Ok(false),
     }
 }

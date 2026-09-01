@@ -107,10 +107,7 @@
 //! assert_eq!(parse_list(&canonical)?.canonical_lexical(), canonical);
 //!
 //! // The spec's ordering is partial and raises where SPARQL `<` has no answer.
-//! let items = |value: CdtValue| match value {
-//!     CdtValue::List(items) => items,
-//!     CdtValue::Map(_) => unreachable!("parse_list yields a list"),
-//! };
+//! let items = |value: CdtValue| value.into_list().expect("parse_list yields a list");
 //! assert_eq!(
 //!     list_less_than(&items(parse_list("[1,2]")?), &items(parse_list("[1,3]")?)),
 //!     Ok(true)
@@ -160,4 +157,4 @@ pub use ops::{
 pub use parse::{parse_cdt, parse_cdt_by_iri, parse_list, parse_map};
 pub use render::{canonical_key_lexical, canonical_lexical, canonical_lexical_len};
 pub use term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
-pub use value::CdtValue;
+pub use value::{CdtContents, CdtParts, CdtValue};

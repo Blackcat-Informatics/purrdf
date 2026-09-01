@@ -63,11 +63,10 @@ use alloc::vec::Vec;
 use purrdf_xsd::XsdValue;
 
 use crate::error::{CdtError, CdtTypeError};
-use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH};
+use crate::limits::{check_extent, list_extent, map_extent};
 use crate::ops::total_key_cmp;
-use crate::render::{key_lexical_len, term_lexical_len};
 use crate::term::{CdtEntry, CdtKey, CdtTerm};
-use crate::value::CdtValue;
+use crate::value::{CdtContents, CdtValue};
 
 // ── The registry ────────────────────────────────────────────────────────────────
 
@@ -500,138 +499,6 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
     }
 }
 
-// ── Bounds on a value that is about to be minted ────────────────────────────────
-
-/// The shape a prospective composite would have, measured from borrowed parts.
-struct Extent {
-    /// Elements at every level, counted the way
-    /// [`CdtValue::element_count`](crate::CdtValue::element_count) counts them.
-    elements: usize,
-    /// Nesting depth, counted the way [`CdtValue::depth`](crate::CdtValue::depth)
-    /// counts it: the composite itself is 1.
-    depth: usize,
-    /// The exact byte length of the canonical lexical form the composite would have.
-    bytes: usize,
-}
-
-/// The elements and nesting depth one element contributes to its container.
-///
-/// Returns `(elements, depth)` where `depth` is 0 for a leaf, so a container adds 1
-/// to the maximum over its own elements. Iterative, with an explicit worklist.
-fn term_extent(term: &CdtTerm) -> (usize, usize) {
-    let mut elements = 0usize;
-    let mut depth = 0usize;
-    let mut work: Vec<(&CdtTerm, usize)> = alloc::vec![(term, 0usize)];
-    while let Some((current, level)) = work.pop() {
-        match current {
-            CdtTerm::Composite(inner) => {
-                let value = inner.as_ref();
-                let here = level.saturating_add(1);
-                if here > depth {
-                    depth = here;
-                }
-                elements = elements.saturating_add(value.len());
-                match value {
-                    CdtValue::List(items) => work.extend(items.iter().map(|item| (item, here))),
-                    CdtValue::Map(entries) => {
-                        work.extend(entries.iter().map(|entry| (&entry.value, here)));
-                    }
-                }
-            }
-            CdtTerm::TripleTerm(triple) => {
-                work.push((&triple.subject, level));
-                work.push((&triple.predicate, level));
-                work.push((&triple.object, level));
-            }
-            CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {}
-        }
-    }
-    (elements, depth)
-}
-
-/// The extent of the list these elements would form.
-fn list_extent<'a>(items: impl IntoIterator<Item = &'a CdtTerm>) -> Extent {
-    let mut count = 0usize;
-    let mut elements = 0usize;
-    let mut depth = 0usize;
-    let mut bytes = 0usize;
-    for term in items {
-        count = count.saturating_add(1);
-        let (inner_elements, inner_depth) = term_extent(term);
-        elements = elements.saturating_add(inner_elements);
-        if inner_depth > depth {
-            depth = inner_depth;
-        }
-        bytes = bytes.saturating_add(term_lexical_len(term));
-    }
-    Extent {
-        elements: elements.saturating_add(count),
-        depth: depth.saturating_add(1),
-        // `[`, `]`, and one `,` between each adjacent pair.
-        bytes: bytes
-            .saturating_add(2)
-            .saturating_add(count.saturating_sub(1)),
-    }
-}
-
-/// The extent of the map these key/value pairs would form. The pairs must already be
-/// deduplicated by key.
-fn map_extent<'a>(pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>) -> Extent {
-    let mut count = 0usize;
-    let mut elements = 0usize;
-    let mut depth = 0usize;
-    let mut bytes = 0usize;
-    for (key, value) in pairs {
-        count = count.saturating_add(1);
-        let (inner_elements, inner_depth) = term_extent(value);
-        elements = elements.saturating_add(inner_elements);
-        if inner_depth > depth {
-            depth = inner_depth;
-        }
-        // `key` `:` `value`.
-        bytes = bytes
-            .saturating_add(key_lexical_len(key))
-            .saturating_add(1)
-            .saturating_add(term_lexical_len(value));
-    }
-    Extent {
-        elements: elements.saturating_add(count),
-        depth: depth.saturating_add(1),
-        // `{`, `}`, and one `,` between each adjacent pair.
-        bytes: bytes
-            .saturating_add(2)
-            .saturating_add(count.saturating_sub(1)),
-    }
-}
-
-/// Check a prospective composite against all three bounds.
-///
-/// The offsets these errors carry are positions in a lexical form, and a minted value
-/// has no input to point into; each therefore names the position the offending
-/// construct *would* occupy in the value's own canonical form, which for the opening
-/// delimiter is byte 0.
-fn check_extent(extent: &Extent) -> Result<(), CdtError> {
-    if extent.depth > MAX_NESTING_DEPTH {
-        return Err(CdtError::DepthExceeded {
-            offset: 0,
-            limit: MAX_NESTING_DEPTH,
-        });
-    }
-    if extent.elements > MAX_ELEMENTS {
-        return Err(CdtError::TooManyElements {
-            offset: 0,
-            limit: MAX_ELEMENTS,
-        });
-    }
-    if extent.bytes > MAX_LEXICAL_BYTES {
-        return Err(CdtError::InputTooLarge {
-            offset: MAX_LEXICAL_BYTES,
-            length: extent.bytes,
-        });
-    }
-    Ok(())
-}
-
 // ── cdt:List and cdt:Map — the two constructors ─────────────────────────────────
 
 /// `cdt:List(…)` — build a list from the argument terms, in argument order.
@@ -666,7 +533,7 @@ pub fn list_constructor(items: Vec<CdtTerm>) -> CdtOutcome<CdtValue> {
     if let Err(error) = check_extent(&list_extent(items.iter())) {
         return CdtOutcome::Bound(error);
     }
-    CdtOutcome::Value(CdtValue::List(items))
+    CdtOutcome::Value(CdtValue::from_checked_items(items))
 }
 
 /// `cdt:Map(…)` — build a map from alternating key and value arguments.
@@ -730,7 +597,7 @@ pub fn map_constructor(pairs: &[(CdtTerm, CdtTerm)]) -> CdtOutcome<CdtValue> {
             value: pairs[index].1.clone(),
         })
         .collect();
-    CdtOutcome::Value(CdtValue::Map(entries))
+    CdtOutcome::Value(CdtValue::from_checked_entries(entries))
 }
 
 // ── The list functions ──────────────────────────────────────────────────────────
@@ -747,7 +614,7 @@ pub fn map_constructor(pairs: &[(CdtTerm, CdtTerm)]) -> CdtOutcome<CdtValue> {
 /// ```rust
 /// use purrdf_cdt::{CdtValue, list_size, parse_list};
 ///
-/// let CdtValue::List(items) = parse_list("[null, 2]")? else { unreachable!() };
+/// let items = parse_list("[null, 2]")?.into_list().expect("a cdt:List");
 /// assert_eq!(list_size(&items), 2);
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
@@ -793,7 +660,7 @@ pub fn list_size(items: &[CdtTerm]) -> usize {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::List(items) = parse_list("[1, null, 3]")? else { unreachable!() };
+/// let items = parse_list("[1, null, 3]")?.into_list().expect("a cdt:List");
 /// assert_eq!(list_get(&items, &int("1")).value(), Some(&int("1")));
 /// // Position 2 holds a null, so there is no term to return.
 /// assert!(list_get(&items, &int("2")).is_error());
@@ -834,9 +701,9 @@ pub fn list_get(items: &[CdtTerm], index: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// ```rust
 /// use purrdf_cdt::{CdtValue, list_head, parse_list};
 ///
-/// let CdtValue::List(items) = parse_list("[null, 2]")? else { unreachable!() };
+/// let items = parse_list("[null, 2]")?.into_list().expect("a cdt:List");
 /// assert!(list_head(&items).is_error());
-/// let CdtValue::List(items) = parse_list("[]")? else { unreachable!() };
+/// let items = parse_list("[]")?.into_list().expect("a cdt:List");
 /// assert!(list_head(&items).is_error());
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
@@ -865,7 +732,7 @@ pub fn list_head(items: &[CdtTerm]) -> CdtOutcome<CdtTerm> {
 /// ```rust
 /// use purrdf_cdt::{CdtOutcome, CdtValue, list_tail, parse_list};
 ///
-/// let CdtValue::List(items) = parse_list("[null, 2]")? else { unreachable!() };
+/// let items = parse_list("[null, 2]")?.into_list().expect("a cdt:List");
 /// assert_eq!(list_tail(&items), CdtOutcome::Value(parse_list("[2]")?));
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
@@ -873,7 +740,7 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
     let Some((_, rest)) = items.split_first() else {
         return raise("cdt:tail on an empty cdt:List");
     };
-    CdtOutcome::Value(CdtValue::List(rest.to_vec()))
+    CdtOutcome::Value(CdtValue::from_checked_items(rest.to_vec()))
 }
 
 /// `cdt:reverse(list)` — the same elements in the opposite order.
@@ -894,7 +761,7 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
 /// ```rust
 /// use purrdf_cdt::{CdtValue, list_reverse, parse_list};
 ///
-/// let CdtValue::List(items) = parse_list("[null, 2]")? else { unreachable!() };
+/// let items = parse_list("[null, 2]")?.into_list().expect("a cdt:List");
 /// assert_eq!(list_reverse(&items), parse_list("[2, null]")?);
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
@@ -902,7 +769,7 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
 pub fn list_reverse(items: &[CdtTerm]) -> CdtValue {
     let mut reversed = items.to_vec();
     reversed.reverse();
-    CdtValue::List(reversed)
+    CdtValue::from_checked_items(reversed)
 }
 
 /// `cdt:subseq(list, start[, length])` — a contiguous run of elements.
@@ -942,7 +809,7 @@ pub fn list_reverse(items: &[CdtTerm]) -> CdtValue {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::List(items) = parse_list("[1,2,3,4,5]")? else { unreachable!() };
+/// let items = parse_list("[1,2,3,4,5]")?.into_list().expect("a cdt:List");
 /// // A start and a LENGTH.
 /// assert_eq!(
 ///     list_subseq(&items, &int("2"), Some(&int("3"))),
@@ -996,7 +863,7 @@ pub fn list_subseq(
     if let Err(error) = check_extent(&list_extent(taken.iter())) {
         return CdtOutcome::Bound(error);
     }
-    CdtOutcome::Value(CdtValue::List(taken.to_vec()))
+    CdtOutcome::Value(CdtValue::from_checked_items(taken.to_vec()))
 }
 
 /// `cdt:concat(…)` — the concatenation of the argument lists, in argument order.
@@ -1018,8 +885,8 @@ pub fn list_subseq(
 /// ```rust
 /// use purrdf_cdt::{CdtOutcome, CdtValue, list_concat, parse_list};
 ///
-/// let CdtValue::List(a) = parse_list("[1]")? else { unreachable!() };
-/// let CdtValue::List(b) = parse_list("[2,3]")? else { unreachable!() };
+/// let a = parse_list("[1]")?.into_list().expect("a cdt:List");
+/// let b = parse_list("[2,3]")?.into_list().expect("a cdt:List");
 /// assert_eq!(
 ///     list_concat(&[&a, &b, &a]),
 ///     CdtOutcome::Value(parse_list("[1,2,3,1]")?)
@@ -1033,7 +900,7 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
         return CdtOutcome::Bound(error);
     }
     let items: Vec<CdtTerm> = lists.iter().copied().flatten().cloned().collect();
-    CdtOutcome::Value(CdtValue::List(items))
+    CdtOutcome::Value(CdtValue::from_checked_items(items))
 }
 
 /// `cdt:contains(list, term)` — does the list hold an element **equal by value** to
@@ -1079,7 +946,7 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
 ///
 /// const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 ///
-/// let CdtValue::List(items) = parse_list("[1, null, 2]")? else { unreachable!() };
+/// let items = parse_list("[1, null, 2]")?.into_list().expect("a cdt:List");
 /// let one_point_oh = CdtTerm::Literal(CdtLiteral::typed("1.0", XSD_DECIMAL));
 /// assert_eq!(list_contains(&items, &one_point_oh), CdtOutcome::Value(true));
 /// let three = CdtTerm::Literal(CdtLiteral::typed("3.0", XSD_DECIMAL));
@@ -1117,7 +984,7 @@ pub fn list_contains(items: &[CdtTerm], term: &CdtTerm) -> CdtOutcome<bool> {
 /// ```rust
 /// use purrdf_cdt::{CdtValue, map_size, parse_map};
 ///
-/// let CdtValue::Map(entries) = parse_map("{1: 'one', 2: null}")? else { unreachable!() };
+/// let entries = parse_map("{1: 'one', 2: null}")?.into_map().expect("a cdt:Map");
 /// assert_eq!(map_size(&entries), 2);
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
@@ -1161,7 +1028,7 @@ pub fn map_size(entries: &[CdtEntry]) -> usize {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::Map(entries) = parse_map("{1: 'one', 2: null}")? else { unreachable!() };
+/// let entries = parse_map("{1: 'one', 2: null}")?.into_map().expect("a cdt:Map");
 /// assert_eq!(
 ///     map_get(&entries, &int("1")).value(),
 ///     Some(&CdtTerm::Literal(CdtLiteral::plain("one")))
@@ -1211,7 +1078,7 @@ pub fn map_get(entries: &[CdtEntry], key: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::Map(entries) = parse_map("{1: null}")? else { unreachable!() };
+/// let entries = parse_map("{1: null}")?.into_map().expect("a cdt:Map");
 /// // The key is there even though its value is a null.
 /// assert!(map_contains_key(&entries, &int("1")));
 /// assert!(!map_contains_key(&entries, &int("01")));
@@ -1252,13 +1119,13 @@ pub fn map_contains_key(entries: &[CdtEntry], key: &CdtTerm) -> bool {
 /// ```rust
 /// use purrdf_cdt::{map_keys, parse_list, parse_map, CdtValue};
 ///
-/// let CdtValue::Map(entries) = parse_map("{2: 'two', 1: 'one'}")? else { unreachable!() };
+/// let entries = parse_map("{2: 'two', 1: 'one'}")?.into_map().expect("a cdt:Map");
 /// assert_eq!(map_keys(&entries), parse_list("[1, 2]")?);
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 #[must_use]
 pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
-    CdtValue::List(entries.iter().map(|entry| entry.key.to_term()).collect())
+    CdtValue::from_checked_items(entries.iter().map(|entry| entry.key.to_term()).collect())
 }
 
 /// `cdt:put(map, key[, value])` — the map with one entry set to a value.
@@ -1308,7 +1175,7 @@ pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::Map(entries) = parse_map("{1:'one', 2:'two'}")? else { unreachable!() };
+/// let entries = parse_map("{1:'one', 2:'two'}")?.into_map().expect("a cdt:Map");
 /// let value = CdtTerm::Literal(CdtLiteral::plain("alsoOne"));
 /// assert_eq!(
 ///     map_put(&entries, &int("1"), &value),
@@ -1355,7 +1222,7 @@ pub fn map_put(entries: &[CdtEntry], key: &CdtTerm, value: &CdtTerm) -> CdtOutco
             value: value.clone(),
         })
         .collect();
-    CdtOutcome::Value(CdtValue::Map(built))
+    CdtOutcome::Value(CdtValue::from_checked_entries(built))
 }
 
 /// What `cdt:remove` did.
@@ -1400,7 +1267,7 @@ pub enum MapRemoval {
 /// const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// let int = |lexical: &str| CdtTerm::Literal(CdtLiteral::typed(lexical, XSD_INTEGER));
 ///
-/// let CdtValue::Map(entries) = parse_map("{1:'one', 2:'two'}")? else { unreachable!() };
+/// let entries = parse_map("{1:'one', 2:'two'}")?.into_map().expect("a cdt:Map");
 /// assert_eq!(
 ///     map_remove(&entries, &int("1")),
 ///     MapRemoval::Removed(parse_map("{2:'two'}")?)
@@ -1421,7 +1288,7 @@ pub fn map_remove(entries: &[CdtEntry], key: &CdtTerm) -> MapRemoval {
     let mut kept = Vec::with_capacity(entries.len() - 1);
     kept.extend_from_slice(&entries[..index]);
     kept.extend_from_slice(&entries[index + 1..]);
-    MapRemoval::Removed(CdtValue::Map(kept))
+    MapRemoval::Removed(CdtValue::from_checked_entries(kept))
 }
 
 /// `cdt:merge(…)` — the union of the argument maps.
@@ -1449,8 +1316,8 @@ pub fn map_remove(entries: &[CdtEntry], key: &CdtTerm) -> MapRemoval {
 /// ```rust
 /// use purrdf_cdt::{CdtOutcome, CdtValue, map_merge, parse_map};
 ///
-/// let CdtValue::Map(a) = parse_map("{1: 'one', 2: 'two'}")? else { unreachable!() };
-/// let CdtValue::Map(b) = parse_map("{1: 'another one', 3: 'three'}")? else { unreachable!() };
+/// let a = parse_map("{1: 'one', 2: 'two'}")?.into_map().expect("a cdt:Map");
+/// let b = parse_map("{1: 'another one', 3: 'three'}")?.into_map().expect("a cdt:Map");
 /// assert_eq!(
 ///     map_merge(&[&a, &b]),
 ///     CdtOutcome::Value(parse_map("{1: 'one', 2: 'two', 3: 'three'}")?)
@@ -1478,7 +1345,7 @@ pub fn map_merge(maps: &[&[CdtEntry]]) -> CdtOutcome<CdtValue> {
         .into_iter()
         .map(|(_, entry)| entry.clone())
         .collect();
-    CdtOutcome::Value(CdtValue::Map(entries))
+    CdtOutcome::Value(CdtValue::from_checked_entries(entries))
 }
 
 // ── Dispatch on the runtime composite datatype ──────────────────────────────────
@@ -1511,9 +1378,9 @@ fn wrong_datatype<T>(wanted: &'static str) -> CdtOutcome<T> {
 /// ```
 #[must_use]
 pub fn size(value: &CdtValue) -> usize {
-    match value {
-        CdtValue::List(items) => list_size(items),
-        CdtValue::Map(entries) => map_size(entries),
+    match value.contents() {
+        CdtContents::List(items) => list_size(items),
+        CdtContents::Map(entries) => map_size(entries),
     }
 }
 
@@ -1538,9 +1405,9 @@ pub fn size(value: &CdtValue) -> usize {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn get(value: &CdtValue, argument: &CdtTerm) -> CdtOutcome<CdtTerm> {
-    match value {
-        CdtValue::List(items) => list_get(items, argument),
-        CdtValue::Map(entries) => map_get(entries, argument),
+    match value.contents() {
+        CdtContents::List(items) => list_get(items, argument),
+        CdtContents::Map(entries) => map_get(entries, argument),
     }
 }
 
@@ -1553,9 +1420,9 @@ pub fn get(value: &CdtValue, argument: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// this value" or "contains this key" — inventing an answer where the spec has none
 /// is what `.goals` forbids.
 pub fn contains(value: &CdtValue, term: &CdtTerm) -> CdtOutcome<bool> {
-    match value {
-        CdtValue::List(items) => list_contains(items, term),
-        CdtValue::Map(_) => {
+    match value.contents() {
+        CdtContents::List(items) => list_contains(items, term),
+        CdtContents::Map(_) => {
             wrong_datatype("cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey")
         }
     }
@@ -1563,33 +1430,33 @@ pub fn contains(value: &CdtValue, term: &CdtTerm) -> CdtOutcome<bool> {
 
 /// `cdt:head(list)` — raising for a `cdt:Map`.
 pub fn head(value: &CdtValue) -> CdtOutcome<CdtTerm> {
-    match value {
-        CdtValue::List(items) => list_head(items),
-        CdtValue::Map(_) => wrong_datatype("cdt:head applies to a cdt:List"),
+    match value.contents() {
+        CdtContents::List(items) => list_head(items),
+        CdtContents::Map(_) => wrong_datatype("cdt:head applies to a cdt:List"),
     }
 }
 
 /// `cdt:tail(list)` — raising for a `cdt:Map`.
 pub fn tail(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value {
-        CdtValue::List(items) => list_tail(items),
-        CdtValue::Map(_) => wrong_datatype("cdt:tail applies to a cdt:List"),
+    match value.contents() {
+        CdtContents::List(items) => list_tail(items),
+        CdtContents::Map(_) => wrong_datatype("cdt:tail applies to a cdt:List"),
     }
 }
 
 /// `cdt:reverse(list)` — raising for a `cdt:Map`.
 pub fn reverse(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value {
-        CdtValue::List(items) => CdtOutcome::Value(list_reverse(items)),
-        CdtValue::Map(_) => wrong_datatype("cdt:reverse applies to a cdt:List"),
+    match value.contents() {
+        CdtContents::List(items) => CdtOutcome::Value(list_reverse(items)),
+        CdtContents::Map(_) => wrong_datatype("cdt:reverse applies to a cdt:List"),
     }
 }
 
 /// `cdt:subseq(list, start[, length])` — raising for a `cdt:Map`.
 pub fn subseq(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>) -> CdtOutcome<CdtValue> {
-    match value {
-        CdtValue::List(items) => list_subseq(items, start, length),
-        CdtValue::Map(_) => wrong_datatype("cdt:subseq applies to a cdt:List"),
+    match value.contents() {
+        CdtContents::List(items) => list_subseq(items, start, length),
+        CdtContents::Map(_) => wrong_datatype("cdt:subseq applies to a cdt:List"),
     }
 }
 
@@ -1613,9 +1480,9 @@ pub fn subseq(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>) -> Cd
 pub fn concat(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
     let mut lists: Vec<&[CdtTerm]> = Vec::with_capacity(values.len());
     for value in values {
-        match value {
-            CdtValue::List(items) => lists.push(items),
-            CdtValue::Map(_) => {
+        match value.contents() {
+            CdtContents::List(items) => lists.push(items),
+            CdtContents::Map(_) => {
                 return wrong_datatype("cdt:concat applies to cdt:List arguments only");
             }
         }
@@ -1625,9 +1492,9 @@ pub fn concat(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
 
 /// `cdt:containsKey(map, key)` — raising for a `cdt:List`.
 pub fn contains_key(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<bool> {
-    match value {
-        CdtValue::Map(entries) => CdtOutcome::Value(map_contains_key(entries, key)),
-        CdtValue::List(_) => {
+    match value.contents() {
+        CdtContents::Map(entries) => CdtOutcome::Value(map_contains_key(entries, key)),
+        CdtContents::List(_) => {
             wrong_datatype("cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains")
         }
     }
@@ -1635,9 +1502,9 @@ pub fn contains_key(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<bool> {
 
 /// `cdt:keys(map)` — raising for a `cdt:List`.
 pub fn keys(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value {
-        CdtValue::Map(entries) => CdtOutcome::Value(map_keys(entries)),
-        CdtValue::List(_) => wrong_datatype("cdt:keys applies to a cdt:Map"),
+    match value.contents() {
+        CdtContents::Map(entries) => CdtOutcome::Value(map_keys(entries)),
+        CdtContents::List(_) => wrong_datatype("cdt:keys applies to a cdt:Map"),
     }
 }
 
@@ -1645,9 +1512,9 @@ pub fn keys(value: &CdtValue) -> CdtOutcome<CdtValue> {
 pub fn merge(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
     let mut maps: Vec<&[CdtEntry]> = Vec::with_capacity(values.len());
     for value in values {
-        match value {
-            CdtValue::Map(entries) => maps.push(entries),
-            CdtValue::List(_) => {
+        match value.contents() {
+            CdtContents::Map(entries) => maps.push(entries),
+            CdtContents::List(_) => {
                 return wrong_datatype("cdt:merge applies to cdt:Map arguments only");
             }
         }
@@ -1657,9 +1524,9 @@ pub fn merge(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
 
 /// `cdt:put(map, key[, value])` — raising for a `cdt:List`.
 pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtValue> {
-    match value {
-        CdtValue::Map(entries) => map_put(entries, key, item),
-        CdtValue::List(_) => wrong_datatype("cdt:put applies to a cdt:Map"),
+    match value.contents() {
+        CdtContents::Map(entries) => map_put(entries, key, item),
+        CdtContents::List(_) => wrong_datatype("cdt:put applies to a cdt:Map"),
     }
 }
 
@@ -1668,8 +1535,8 @@ pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtVal
 /// See [`MapRemoval`] for why the "nothing was removed" case has to be distinguished
 /// from "here is an equal map".
 pub fn remove(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<MapRemoval> {
-    match value {
-        CdtValue::Map(entries) => CdtOutcome::Value(map_remove(entries, key)),
-        CdtValue::List(_) => wrong_datatype("cdt:remove applies to a cdt:Map"),
+    match value.contents() {
+        CdtContents::Map(entries) => CdtOutcome::Value(map_remove(entries, key)),
+        CdtContents::List(_) => wrong_datatype("cdt:remove applies to a cdt:Map"),
     }
 }

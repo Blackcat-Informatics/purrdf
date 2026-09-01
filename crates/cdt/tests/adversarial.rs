@@ -18,11 +18,20 @@
 //! the platform's ordinary thread stack and nothing is being propped up. The deep
 //! case additionally runs on a thread with a **256 KiB** stack — far smaller than
 //! any default — to make the claim independent of the host's default at all.
+//!
+//! # The scanner is not the only way in
+//!
+//! A bound the *scanner* enforces is a property of one code path; a bound the *type*
+//! enforces is a property of every value. The second half of this file therefore
+//! attacks the programmatic constructors — `CdtValue::list`, `CdtValue::map`,
+//! `CdtTerm::composite`, `CdtTerm::triple` — with the same shapes, since a consumer
+//! assembling a value from bindings never goes near a lexical form.
 
 use std::thread;
 
 use purrdf_cdt::{
-    CdtError, MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH, parse_list, parse_map,
+    CdtEntry, CdtError, CdtKey, CdtLiteral, CdtTerm, CdtValue, MAX_ELEMENTS, MAX_LEXICAL_BYTES,
+    MAX_NESTING_DEPTH, canonical_lexical_len, parse_list, parse_map,
 };
 
 /// Roughly 200 MB — comfortably past [`MAX_LEXICAL_BYTES`], and past what a 32-bit
@@ -198,4 +207,110 @@ fn a_deeply_nested_but_admissible_value_parses_renders_and_compares() {
         parse_list(&too_deep),
         Err(CdtError::DepthExceeded { .. })
     ));
+}
+
+// ── The programmatic constructors carry the same bounds ────────────────────────
+
+/// A composite element the fixture is known to be within every bound for.
+fn composite(value: CdtValue) -> CdtTerm {
+    CdtTerm::composite(value).expect("the fixture is within every bound")
+}
+
+#[test]
+fn programmatic_nesting_is_refused_at_the_same_depth_the_scanner_refuses() {
+    // Exactly at the bound, built one level at a time with no lexical form in sight.
+    let mut value = CdtValue::empty_list();
+    for _ in 1..MAX_NESTING_DEPTH {
+        value = CdtValue::list(vec![composite(value)]).expect("still within the bound");
+    }
+    assert_eq!(value.depth(), MAX_NESTING_DEPTH);
+
+    // One deeper is refused twice over: by the element constructor, which knows a
+    // composite of this depth has nowhere left to go, and by the value constructor.
+    let element = CdtTerm::composite(value.clone());
+    assert!(
+        matches!(element, Err(CdtError::DepthExceeded { limit, .. }) if limit == MAX_NESTING_DEPTH),
+        "CdtTerm::composite must refuse an element that could never be placed"
+    );
+    let smuggled = CdtTerm::Composite(Box::new(value));
+    assert!(
+        matches!(
+            CdtValue::list(vec![smuggled]),
+            Err(CdtError::DepthExceeded { .. })
+        ),
+        "the value constructor must refuse it even when the element bypassed CdtTerm::composite"
+    );
+}
+
+#[test]
+fn programmatic_element_counts_are_refused_at_the_same_bound() {
+    let too_many = vec![CdtTerm::Null; MAX_ELEMENTS + 1];
+    assert!(matches!(
+        CdtValue::list(too_many),
+        Err(CdtError::TooManyElements { limit, .. }) if limit == MAX_ELEMENTS
+    ));
+
+    // A triple term is where three separately admissible elements combine into one
+    // that is not: each third is inside the bound, the union is not.
+    let third =
+        || composite(CdtValue::list(vec![CdtTerm::Null; MAX_ELEMENTS / 2]).expect("a half"));
+    assert!(matches!(
+        CdtTerm::triple(third(), third(), third()),
+        Err(CdtError::TooManyElements { .. })
+    ));
+}
+
+#[test]
+fn a_map_built_programmatically_is_bounded_too() {
+    let entries: Vec<CdtEntry> = (0..=MAX_ELEMENTS)
+        .map(|index| CdtEntry {
+            key: CdtKey::Literal(CdtLiteral::plain(index.to_string())),
+            value: CdtTerm::Null,
+        })
+        .collect();
+    assert!(matches!(
+        CdtValue::map(entries),
+        Err(CdtError::TooManyElements { limit, .. }) if limit == MAX_ELEMENTS
+    ));
+}
+
+/// The canonical form can be far longer than the input that produced it, so the byte
+/// bound is checked on both.
+///
+/// A raw control code point costs one input byte and six canonical bytes (`\u0001`),
+/// which is a sixfold amplification well inside both the element and the depth bounds.
+/// Checking only the input would therefore admit a value whose own lexical form is
+/// larger than any host is asked to hold.
+#[test]
+fn a_lexical_form_whose_canonical_form_is_oversized_is_refused() {
+    let payload = MAX_LEXICAL_BYTES / 6 + 64;
+    let mut lexical = String::with_capacity(payload + 4);
+    lexical.push_str("[\"");
+    for _ in 0..payload {
+        lexical.push('\u{1}');
+    }
+    lexical.push_str("\"]");
+    assert!(
+        lexical.len() < MAX_LEXICAL_BYTES,
+        "the input must pass the input-length check so this exercises the canonical one"
+    );
+    let error = parse_list(&lexical).expect_err("an oversized canonical form is refused");
+    let CdtError::InputTooLarge { offset, length } = error else {
+        panic!("expected an input-size error, got {error:?}");
+    };
+    assert_eq!(offset, MAX_LEXICAL_BYTES);
+    assert!(length > MAX_LEXICAL_BYTES);
+
+    // The same payload one order of magnitude smaller is admitted, and the length the
+    // refusal reported is the length the renderer would actually have produced.
+    let mut smaller = String::from("[\"");
+    for _ in 0..1024 {
+        smaller.push('\u{1}');
+    }
+    smaller.push_str("\"]");
+    let value = parse_list(&smaller).expect("a small control-character payload is admissible");
+    assert_eq!(
+        canonical_lexical_len(&value),
+        value.canonical_lexical().len()
+    );
 }

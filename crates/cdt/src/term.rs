@@ -23,6 +23,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 
 use crate::datatype::{RDF_DIR_LANG_STRING, RDF_LANG_STRING};
+use crate::error::CdtError;
 use crate::value::CdtValue;
 
 /// The RDF 1.2 base direction of a directional language-tagged string.
@@ -154,11 +155,14 @@ pub struct CdtTripleTerm {
 /// # Nesting depth is an invariant, not a suggestion
 ///
 /// This is an owning tree, so its `Drop`, `Clone` and `Debug` glue is the
-/// compiler-generated recursive one and each costs stack proportional to the
-/// nesting depth. [`crate::parse_cdt`] enforces [`crate::MAX_NESTING_DEPTH`], which
-/// is what makes those safe. Code that assembles a value **programmatically** owns
-/// the same invariant; [`CdtValue::depth`] reports the depth iteratively (it never
-/// recurses) so it can be checked without risking what it is checking for.
+/// compiler-generated recursive one and each costs stack proportional to the nesting
+/// depth. What makes those safe is that the only composite an element can hold is a
+/// [`CdtValue`], and **every** [`CdtValue`] is within [`crate::MAX_NESTING_DEPTH`]
+/// because its contents are private and every constructor checks (see
+/// [`crate::limits`]). The variants below are therefore free to be public: the deepest
+/// tree they can assemble is one level deeper than the deepest value, and that level
+/// is refused the moment the element is offered to [`CdtValue::list`] /
+/// [`CdtValue::map`] — or here, at [`CdtTerm::composite`], which refuses it earlier.
 #[derive(Debug, Clone)]
 pub enum CdtTerm {
     /// `IRIREF` — always absolute (CDT lexical forms carry no base).
@@ -180,19 +184,70 @@ pub enum CdtTerm {
 
 impl CdtTerm {
     /// A nested composite element.
-    #[must_use]
-    pub fn composite(value: CdtValue) -> Self {
-        Self::Composite(Box::new(value))
+    ///
+    /// A composite of depth *d* can only ever appear inside a value of depth *d + 1*,
+    /// so an element already at [`crate::MAX_NESTING_DEPTH`] has nowhere to go. The
+    /// bound is therefore checked here, at the point the element is made, rather than
+    /// leaving the caller to discover it only when the element is finally placed.
+    ///
+    /// # Errors
+    ///
+    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
+    /// [`CdtError::InputTooLarge`], whichever bound the element crosses first.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtTerm, CdtValue, parse_list};
+    ///
+    /// let nested = CdtTerm::composite(parse_list("[1]")?)?;
+    /// assert_eq!(
+    ///     CdtValue::list(vec![nested])?.canonical_lexical(),
+    ///     "[[\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>]]"
+    /// );
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    pub fn composite(value: CdtValue) -> Result<Self, CdtError> {
+        let term = Self::Composite(Box::new(value));
+        crate::limits::check_term(&term)?;
+        Ok(term)
     }
 
     /// A triple-term element.
-    #[must_use]
-    pub fn triple(subject: Self, predicate: Self, object: Self) -> Self {
-        Self::TripleTerm(Box::new(CdtTripleTerm {
+    ///
+    /// A triple term adds no nesting level of its own, but it *combines* three
+    /// elements' element counts and canonical lengths into one, so all three bounds
+    /// are checked against the combined term.
+    ///
+    /// # Errors
+    ///
+    /// [`CdtError::DepthExceeded`], [`CdtError::TooManyElements`] or
+    /// [`CdtError::InputTooLarge`], whichever bound the combined term crosses first.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtTerm, CdtValue};
+    ///
+    /// let triple = CdtTerm::triple(
+    ///     CdtTerm::Iri("http://example.org/s".into()),
+    ///     CdtTerm::Iri("http://example.org/p".into()),
+    ///     CdtTerm::Null,
+    /// )?;
+    /// assert_eq!(
+    ///     CdtValue::list(vec![triple])?.canonical_lexical(),
+    ///     "[<<(<http://example.org/s> <http://example.org/p> null)>>]"
+    /// );
+    /// # Ok::<(), purrdf_cdt::CdtError>(())
+    /// ```
+    pub fn triple(subject: Self, predicate: Self, object: Self) -> Result<Self, CdtError> {
+        let term = Self::TripleTerm(Box::new(CdtTripleTerm {
             subject,
             predicate,
             object,
-        }))
+        }));
+        crate::limits::check_term(&term)?;
+        Ok(term)
     }
 
     /// `true` for [`CdtTerm::Null`].

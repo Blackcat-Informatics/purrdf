@@ -148,10 +148,7 @@ fn entries_strategy(term: BoxedStrategy<CdtTerm>) -> impl Strategy<Value = Vec<C
                 .into_iter()
                 .map(|(key, value)| CdtEntry { key, value })
                 .collect();
-            match CdtValue::map(entries).ok()? {
-                CdtValue::Map(entries) => Some(entries),
-                CdtValue::List(_) => None,
-            }
+            CdtValue::map(entries).ok()?.into_map()
         },
     )
 }
@@ -160,13 +157,20 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
     leaf_term_strategy()
         .prop_recursive(3, 24, 3, |inner| {
             prop_oneof![
-                proptest::collection::vec(inner.clone(), 0..4)
-                    .prop_map(|items| CdtTerm::composite(CdtValue::List(items))),
-                entries_strategy(inner.clone())
-                    .prop_map(|entries| CdtTerm::composite(CdtValue::Map(entries))),
-                (inner.clone(), inner.clone(), inner).prop_map(|(subject, predicate, object)| {
-                    CdtTerm::triple(subject, predicate, object)
-                }),
+                proptest::collection::vec(inner.clone(), 0..4).prop_filter_map(
+                    "a generated list must be within the crate's three bounds",
+                    |items| CdtTerm::composite(CdtValue::list(items).ok()?).ok(),
+                ),
+                entries_strategy(inner.clone()).prop_filter_map(
+                    "a generated map must be within the crate's three bounds",
+                    |entries| CdtTerm::composite(CdtValue::map(entries).ok()?).ok(),
+                ),
+                (inner.clone(), inner.clone(), inner).prop_filter_map(
+                    "a generated triple term must be within the crate's three bounds",
+                    |(subject, predicate, object)| {
+                        CdtTerm::triple(subject, predicate, object).ok()
+                    },
+                ),
             ]
         })
         .boxed()
@@ -174,8 +178,14 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
 
 fn value_strategy() -> impl Strategy<Value = CdtValue> {
     prop_oneof![
-        proptest::collection::vec(term_strategy(), 0..5).prop_map(CdtValue::List),
-        entries_strategy(term_strategy()).prop_map(CdtValue::Map),
+        proptest::collection::vec(term_strategy(), 0..5).prop_filter_map(
+            "a generated list must be within the crate's three bounds",
+            |items| CdtValue::list(items).ok(),
+        ),
+        entries_strategy(term_strategy()).prop_filter_map(
+            "a generated map must be within the crate's three bounds",
+            |entries| CdtValue::map(entries).ok(),
+        ),
     ]
 }
 
