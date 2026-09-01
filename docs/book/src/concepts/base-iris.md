@@ -107,19 +107,28 @@ whatever base your application means *before* it becomes a term.
 
 ### When you see the error
 
-A mutable, still-being-built dataset — a `RdfDatasetBuilder`, or the copy-on-write
-overlay a `Store` mutates — is a working area, not the IR. Adding a quad to one
-is accepted as written; the refusal comes at the moment that work becomes a
-dataset, which is where the invariant lives:
+At the mutation that introduced it. `Store.add`, `MutableDataset.add`, the RDF/JS
+`dataset.add`, and `purrdf_graph_insert` all refuse a relative IRI at the call,
+naming the offending term:
 
-* freezing a builder, or a `Store`'s pending edits;
-* serializing, canonicalizing, or digesting the result;
-* reopening a `.pack` file — pack bytes may have been written by another engine,
-  an older version, or corrupted on disk, so they are checked as they decode.
+```python
+>>> store.add(Quad(NamedNode("rel"), p, o))
+ValueError: iri-relative-no-base: relative IRI reference "rel" cannot be resolved:
+no base IRI is in scope; add a base to the document (`@base`/`BASE` in
+Turtle-family syntaxes, `xml:base` in RDF/XML) or pass a base IRI to the API
+```
 
-So a relative IRI added programmatically does not vanish quietly and does not
-reach an output file either: it stops the operation that would have published it,
-naming `iri-relative-no-base` and quoting the offending IRI.
+The refused quad does not land — the store is unchanged and still usable.
+
+The check is repeated at every point where a working set becomes a dataset:
+freezing a builder or a store's pending edits, serializing, canonicalizing or
+digesting the result, and reopening a `.pack` file (whose bytes may have been
+written by another engine, an older version, or corrupted on disk). That
+repetition is deliberate. The freeze-time check is the *invariant* — it is what
+makes a relative IRI unrepresentable in the IR from any ingress, including ones
+that do not go through a mutation call at all. The insert-time check is the
+*diagnosis*: it exists so the error can name the line that caused it. Neither
+subsumes the other.
 
 ### One exception you may rely on
 

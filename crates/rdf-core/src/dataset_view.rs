@@ -574,9 +574,22 @@ pub trait DatasetMut: sealed::Sealed {
     /// The owned, dataset-independent quad value this dataset is mutated with.
     type Quad;
 
-    /// Insert a quad into the effective set. Returns `true` iff the effective set
-    /// changed (a quad already present is a no-op returning `false`).
-    fn insert(&mut self, quad: Self::Quad) -> bool;
+    /// Insert a quad into the effective set. Returns `Ok(true)` iff the effective set
+    /// changed (a quad already present is a no-op returning `Ok(false)`).
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] if the quad carries a non-absolute IRI in any position — its own
+    /// terms, a literal's datatype, or one nested in a triple term. This is the
+    /// **fail-fast** half of the IR-boundary absoluteness invariant: freezing would
+    /// refuse the quad anyway, but by then the error can no longer name the call that
+    /// introduced it, and a mutable dataset may be mutated many times before it is
+    /// frozen. Reported with the workspace's shared
+    /// [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code) spelling.
+    ///
+    /// `remove` and `contains` stay infallible: they resolve values WITHOUT minting,
+    /// so a quad naming a term interned nowhere is simply absent, not an error.
+    fn insert(&mut self, quad: Self::Quad) -> Result<bool, purrdf_iri::IriError>;
 
     /// Remove a quad from the effective set. Returns `true` iff the effective set
     /// changed (removing an absent quad is a no-op returning `false`).

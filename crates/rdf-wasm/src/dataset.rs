@@ -175,6 +175,13 @@ pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
     JsError::new(&diag.to_string())
 }
 
+/// Render an IRI failure as a thrown JS error, leading with the workspace's shared
+/// [`purrdf_iri::IriError::diagnostic_code`] so JS callers can switch on the same
+/// stable string every other surface reports.
+pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
+    JsError::new(&format!("{}: {err}", err.diagnostic_code()))
+}
+
 /// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
 #[wasm_bindgen]
 #[derive(Debug)]
@@ -337,10 +344,15 @@ impl Dataset {
     }
 
     /// `add(quad)` → insert a quad. Returns `true` if the effective set changed.
+    ///
+    /// Throws if the quad carries a relative IRI in any position: this surface is
+    /// handed terms, never a document, so there is no base in scope to resolve one
+    /// against and none is invented. The thrown message carries the workspace's
+    /// shared `iri-relative-no-base` code.
     #[wasm_bindgen(js_name = add)]
     pub fn add(&mut self, quad: &Quad) -> Result<bool, JsError> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
-        Ok(self.inner.insert(values))
+        self.inner.insert(values).map_err(|e| iri_to_err(&e))
     }
 
     /// `delete(quad)` → remove a quad. Returns `true` if the effective set changed.
@@ -439,7 +451,10 @@ impl Dataset {
             .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), graph_match);
         let mut out = Self::empty_base()?;
         for qv in &matched {
-            out.insert(qv.clone());
+            // These values were just read back out of an existing dataset, so they
+            // already satisfy the absoluteness invariant. Propagate rather than
+            // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
+            out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
         }
         Ok(Self { inner: out })
     }

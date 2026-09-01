@@ -166,6 +166,13 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
+/// The typed IRI failure this kernel's mutation surfaces return.
+///
+/// Re-exported because [`DatasetMut::insert`] is fallible with it: a public trait
+/// whose error type callers cannot name without taking their own dependency on
+/// `purrdf-iri` would be unusable. `IriError::diagnostic_code` is the workspace's
+/// single owner of the stable IRI diagnostic strings.
+pub use purrdf_iri::IriError;
 pub use small::{IdVec, SmallVec, smallvec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,

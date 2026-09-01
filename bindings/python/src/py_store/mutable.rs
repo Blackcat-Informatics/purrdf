@@ -25,6 +25,7 @@ use super::term::{
     rdf_term_to_value_scoped,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
+use crate::py_store::iri_value_error;
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDatasetBuilder, RdfLiteral,
     RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions, SparqlRequest, StatementLayer,
@@ -72,15 +73,24 @@ impl PyMutableDataset {
             for quad in parse_quads(&data, format.to_native(), base_ref)
                 .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
             {
-                inner.insert(rdf_quad_to_values_scoped(&quad, blank_scope));
+                inner
+                    .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
+                    .map_err(|e| iri_value_error(&e))?;
             }
             Ok(())
         })
     }
 
     /// Add a single quad. Returns whether the effective set changed.
+    ///
+    /// Raises `ValueError` if the quad carries a relative IRI in any position. This
+    /// surface is handed terms, never a document, so no base is in scope to resolve
+    /// one against and none is invented; the message leads with the shared
+    /// `iri-relative-no-base` diagnostic code.
     fn add(&mut self, quad: &PyQuad) -> PyResult<bool> {
-        Ok(self.inner.insert(rdf_quad_to_values(&quad.inner)))
+        self.inner
+            .insert(rdf_quad_to_values(&quad.inner))
+            .map_err(|e| iri_value_error(&e))
     }
 
     /// Remove a single quad. Returns whether the effective set changed.

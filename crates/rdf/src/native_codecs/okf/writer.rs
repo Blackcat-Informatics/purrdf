@@ -1176,11 +1176,15 @@ mod tests {
         let config = config();
         let base = lift(&source_bundle(), &config);
         let mut mutable = MutableDataset::new(base.clone());
-        assert!(mutable.insert(QuadValues::triple(
-            TermValue::blank("okf_link_1_0"),
-            TermValue::iri("https://example.org/meta#reviewer"),
-            TermValue::simple_literal("Ada"),
-        )));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    TermValue::blank("okf_link_1_0"),
+                    TermValue::iri("https://example.org/meta#reviewer"),
+                    TermValue::simple_literal("Ada"),
+                ))
+                .expect("the fixture IRI is absolute")
+        );
         let extended = mutable.freeze().expect("freeze extended dataset");
 
         let outcome = write_okf_bundle(&extended, &config).expect("write extended dataset");

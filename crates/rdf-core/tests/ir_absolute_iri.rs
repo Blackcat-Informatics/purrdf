@@ -176,27 +176,117 @@ fn the_event_ingest_path_is_covered() {
     assert!(sink.into_dataset().is_none(), "no dataset was produced");
 }
 
-/// The copy-on-write mutable overlay re-interns its inserted values into a fresh
-/// builder when it materializes, so it is covered by the same gate.
-#[test]
-fn the_mutable_overlay_boundary_is_covered() {
+/// A base with one absolute quad, for the overlay cases.
+fn absolute_base() -> std::sync::Arc<purrdf_core::ir::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
     b.push_quad(s, p, o, None);
-    let base = b.freeze().expect("the base dataset is absolute");
+    b.freeze().expect("the base dataset is absolute")
+}
 
-    let mut overlay = MutableDataset::new(base);
-    assert!(overlay.insert(QuadValues::triple(
-        TermValue::Iri("http://example.org/s".to_owned()),
-        TermValue::Iri("http://example.org/p".to_owned()),
-        TermValue::Iri("relativeObject".to_owned()),
-    )));
+/// The copy-on-write mutable overlay refuses a relative IRI **at the insert that
+/// names it**, not at some later freeze.
+///
+/// Freezing would refuse it too — that is the invariant, and the case below pins it —
+/// but a mutable dataset may be mutated thousands of times before it is frozen, and
+/// by then the error can no longer point at the call that introduced the bad term.
+#[test]
+fn the_mutable_overlay_refuses_at_the_insert_not_at_the_freeze() {
+    let mut overlay = MutableDataset::new(absolute_base());
     let err = overlay
-        .freeze()
-        .expect_err("a relative IRI cannot be re-frozen");
-    assert_eq!(err.code, RELATIVE);
+        .insert(QuadValues::triple(
+            TermValue::Iri("http://example.org/s".to_owned()),
+            TermValue::Iri("http://example.org/p".to_owned()),
+            TermValue::Iri("relativeObject".to_owned()),
+        ))
+        .expect_err("the insert itself must refuse");
+    assert_eq!(err.diagnostic_code(), RELATIVE);
+    assert!(format!("{err}").contains("\"relativeObject\""), "{err}");
+
+    // The refused quad did not land: the overlay is unchanged and still freezes.
+    assert_eq!(overlay.added_len(), 0);
+    let frozen = overlay.freeze().expect("a refused insert left no residue");
+    assert_eq!(frozen.quad_count(), 1);
+}
+
+/// Every IRI-bearing position of an inserted quad is checked, including a literal's
+/// datatype and an IRI nested inside a quoted triple (which the delta interns whole).
+#[test]
+fn the_overlay_checks_every_iri_position_of_an_inserted_quad() {
+    let absolute = || TermValue::Iri("http://example.org/ok".to_owned());
+    let cases: Vec<(&str, QuadValues)> = vec![
+        (
+            "subject",
+            QuadValues::triple(
+                TermValue::Iri("relativeSubject".to_owned()),
+                absolute(),
+                absolute(),
+            ),
+        ),
+        (
+            "predicate",
+            QuadValues::triple(
+                absolute(),
+                TermValue::Iri("relativePredicate".to_owned()),
+                absolute(),
+            ),
+        ),
+        (
+            "graph name",
+            QuadValues::quad(
+                absolute(),
+                absolute(),
+                absolute(),
+                TermValue::Iri("relativeGraph".to_owned()),
+            ),
+        ),
+        (
+            "literal datatype",
+            QuadValues::triple(
+                absolute(),
+                absolute(),
+                TermValue::typed_literal("42", "relativeDatatype"),
+            ),
+        ),
+        (
+            "IRI nested in a quoted triple",
+            QuadValues::triple(
+                absolute(),
+                absolute(),
+                TermValue::Triple {
+                    s: Box::new(absolute()),
+                    p: Box::new(TermValue::Iri("relativeQuotedPredicate".to_owned())),
+                    o: Box::new(absolute()),
+                },
+            ),
+        ),
+    ];
+    for (position, quad) in cases {
+        let mut overlay = MutableDataset::new(absolute_base());
+        let Err(err) = overlay.insert(quad) else {
+            panic!("a relative IRI in {position} position must be refused at insert");
+        };
+        assert_eq!(err.diagnostic_code(), RELATIVE, "{position}");
+        assert_eq!(overlay.added_len(), 0, "{position} left residue");
+    }
+}
+
+/// A blank-node label and a literal's lexical form are arbitrary strings: the
+/// absoluteness rule applies to IRIs only and must not leak onto them.
+#[test]
+fn the_overlay_leaves_non_iri_strings_alone() {
+    let mut overlay = MutableDataset::new(absolute_base());
+    assert!(
+        overlay
+            .insert(QuadValues::triple(
+                TermValue::blank("notAbsolute"),
+                TermValue::Iri("http://example.org/p".to_owned()),
+                TermValue::simple_literal("../also/not/an/iri"),
+            ))
+            .expect("blank labels and lexical forms are not IRIs")
+    );
 }
 
 /// Absolute IRIs of every shape still freeze — the gate must not become a
@@ -222,6 +312,50 @@ fn absolute_iris_of_every_shape_still_freeze() {
     }
     let ds = b.freeze().expect("every absolute IRI is admissible");
     assert_eq!(ds.quad_count(), 8);
+}
+
+/// The gate is a PREDICATE, never a rewrite.
+///
+/// `check_absolute` parses only to decide "does this have a scheme"; it drops the
+/// parsed `Iri` and the interner stores the original `&str` byte for byte. Nothing
+/// here may apply RFC 3986 §5.2.4 dot-segment removal or §6.2.2 case/percent
+/// normalization — that is syntax-based normalization, which RDF Concepts §3.2
+/// forbids: identical document bytes must denote one graph with one canonical digest.
+#[test]
+fn the_gate_never_normalizes_the_iri_it_admits() {
+    // Every one of these is absolute and every one has a shorter normalized form.
+    let hostile = [
+        "http://a/bb/ccc/../d;p?q",
+        "http://example.org/a/./b/../c",
+        "HTTP://EXAMPLE.ORG/Path",
+        "http://example.org/%7Ename",
+        "http://example.org/a//b",
+        "http://example.org/.",
+    ];
+    let mut b = RdfDatasetBuilder::new();
+    let p = abs(&mut b, "p");
+    let s = abs(&mut b, "s");
+    for iri in hostile {
+        let o = b.intern_iri(iri);
+        b.push_quad(s, p, o, None);
+    }
+    let ds = b.freeze().expect("all absolute, all admissible");
+
+    // Read every IRI back out of the frozen term table and compare byte for byte.
+    let mut seen: Vec<&str> = Vec::new();
+    for raw in 0..ds.term_count() {
+        if let purrdf_core::ir::TermRef::Iri(iri) =
+            ds.resolve(purrdf_core::ir::TermId::from_index(raw as u32))
+        {
+            seen.push(iri);
+        }
+    }
+    for iri in hostile {
+        assert!(
+            seen.contains(&iri),
+            "{iri:?} was not interned verbatim; frozen IRIs were {seen:?}"
+        );
+    }
 }
 
 /// Skolemization mints IRIs internally, under a caller-supplied authority. Those
