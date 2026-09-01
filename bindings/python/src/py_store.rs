@@ -60,6 +60,16 @@ pub(crate) use io::{PyRdfFormat, parse_quads};
 
 use pyo3::prelude::*;
 
+/// Render an IRI failure as the `ValueError` every mutation surface raises.
+///
+/// One spelling for the whole binding: the message leads with
+/// [`purrdf_iri::IriError::diagnostic_code`], the workspace's single owner of those
+/// stable strings, so Python callers switch on the same code the CLI, the C ABI and
+/// wasm report for the same condition.
+pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("{}: {err}", err.diagnostic_code()))
+}
+
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRdfFormat>()?;

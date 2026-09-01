@@ -35,6 +35,7 @@ use super::term::{
     rdf_term_to_value_scoped,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
+use crate::py_store::iri_value_error;
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlRequest, TermValue,
@@ -93,7 +94,9 @@ impl PyStore {
             for quad in parse_quads(&data, format.to_native(), base_ref)
                 .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
             {
-                inner.insert(rdf_quad_to_values_scoped(&quad, scope));
+                inner
+                    .insert(rdf_quad_to_values_scoped(&quad, scope))
+                    .map_err(|e| iri_value_error(&e))?;
             }
             Ok(())
         })
@@ -114,8 +117,17 @@ impl PyStore {
     }
 
     /// Add a single quad.
+    ///
+    /// Raises `ValueError` if the quad carries a relative IRI in any position — its
+    /// own terms, a literal's datatype, or one nested in a quoted triple. A `Store`
+    /// mutated this way is handed terms, never a document, so there is no base in
+    /// scope to resolve a relative reference against and PurRDF invents none. Resolve
+    /// it yourself before adding it. The message leads with the shared
+    /// `iri-relative-no-base` diagnostic code.
     fn add(&mut self, quad: &PyQuad) -> PyResult<()> {
-        self.inner.insert(rdf_quad_to_values(&quad.inner));
+        self.inner
+            .insert(rdf_quad_to_values(&quad.inner))
+            .map_err(|e| iri_value_error(&e))?;
         Ok(())
     }
 
@@ -1077,7 +1089,8 @@ mod tests {
                 iri(&format!("https://e/s{i}")),
                 "https://e/p",
                 iri("https://e/o"),
-            )));
+            )))
+            .expect("fixture IRIs are absolute");
         }
         m
     }
@@ -1120,11 +1133,13 @@ mod tests {
         assert_eq!(snapshot.quad_count(), 1);
 
         // The store mutates AFTER the snapshot was taken (a later `Store.add`).
-        store.insert(rdf_quad_to_values(&RdfQuad::new(
-            iri("https://e/s-new"),
-            "https://e/p",
-            iri("https://e/o"),
-        )));
+        store
+            .insert(rdf_quad_to_values(&RdfQuad::new(
+                iri("https://e/s-new"),
+                "https://e/p",
+                iri("https://e/o"),
+            )))
+            .expect("fixture IRIs are absolute");
         let after = store.freeze().expect("freeze again");
 
         // The earlier snapshot the consumer holds is UNCHANGED…

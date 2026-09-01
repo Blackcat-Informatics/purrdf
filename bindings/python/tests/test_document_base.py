@@ -209,3 +209,73 @@ def test_the_base_is_the_same_parameter_across_parse_surfaces() -> None:
         RELATIVE_TURTLE, RdfFormat.TURTLE, base=BASE
     ).to_nquads()
     assert {str(q.subject) for q in store} == {expected}
+
+
+# ── programmatic ingress: no document, so no base can ever be in scope ──────────
+
+
+def _abs(name: str) -> purrdf.NamedNode:
+    return purrdf.NamedNode(f"https://example.org/{name}")
+
+
+def _quad(subject, predicate, obj) -> purrdf.Quad:
+    return purrdf.Quad(subject, predicate, obj)
+
+
+def test_store_add_refuses_a_relative_iri_at_the_call() -> None:
+    """The refusal must arrive at `add`, not at a later freeze.
+
+    A document at least HAS a base to supply. A quad built from Python objects has
+    no document and no base, and never will, so the relative IRI can only be a
+    mistake. Reporting it here means the traceback names the offending `add`; a
+    store may be mutated thousands of times before anything freezes it.
+    """
+    store = purrdf.Store()
+    with pytest.raises(ValueError) as excinfo:
+        store.add(_quad(purrdf.NamedNode("rel"), _abs("p"), _abs("o")))
+    assert NO_BASE_CODE in str(excinfo.value)
+    # The refused quad did not land, and the store is still usable.
+    assert len(store) == 0
+    store.add(_quad(_abs("s"), _abs("p"), _abs("o")))
+    assert len(store) == 1
+
+
+def test_store_add_checks_every_iri_position() -> None:
+    store = purrdf.Store()
+    cases = {
+        "subject": _quad(purrdf.NamedNode("relSubject"), _abs("p"), _abs("o")),
+        "predicate": _quad(_abs("s"), purrdf.NamedNode("relPredicate"), _abs("o")),
+        "object": _quad(_abs("s"), _abs("p"), purrdf.NamedNode("relObject")),
+        "datatype": _quad(
+            _abs("s"),
+            _abs("p"),
+            purrdf.Literal("42", datatype=purrdf.NamedNode("relDatatype")),
+        ),
+    }
+    for position, quad in cases.items():
+        with pytest.raises(ValueError) as excinfo:
+            store.add(quad)
+        assert NO_BASE_CODE in str(excinfo.value), position
+    assert len(store) == 0
+
+
+def test_store_add_leaves_blank_labels_and_lexical_forms_alone() -> None:
+    # Only IRIs are IRIs: a blank label or a literal's lexical form may be any
+    # string at all, including one that looks like a relative reference.
+    store = purrdf.Store()
+    store.add(_quad(purrdf.BlankNode("notAbsolute"), _abs("p"), purrdf.Literal("../x")))
+    assert len(store) == 1
+
+
+def test_the_empty_iri_is_refused_before_it_can_reach_the_store() -> None:
+    """`<>` never gets as far as `add`: `NamedNode` itself refuses it.
+
+    The empty IRI is the same-document reference, so it is relative by definition
+    and the store would refuse it too. But the term constructor is an even earlier
+    boundary, and it already rejects the empty string on its own terms. Pinning
+    that here records WHICH layer answers, so a later refactor cannot quietly move
+    the check and leave `NamedNode("")` constructible.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        purrdf.NamedNode("")
+    assert "must not be empty" in str(excinfo.value)
