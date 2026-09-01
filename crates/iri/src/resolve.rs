@@ -31,6 +31,18 @@ impl Parts {
         }
     }
 
+    /// The all-undefined reference: RFC-3986 §4.4's same-document reference `""`,
+    /// which `parse` cannot produce because it is not a standalone IRI.
+    fn same_document() -> Self {
+        Self {
+            scheme: None,
+            authority: None,
+            path: String::new(),
+            query: None,
+            fragment: None,
+        }
+    }
+
     /// §5.3 component recomposition.
     fn recompose(&self) -> String {
         let mut out = String::new();
@@ -83,27 +95,36 @@ impl Iri {
         if !self.has_scheme() {
             return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));
         }
-        let base = Parts::of(self);
         // An EMPTY reference is the valid "same-document reference" (RFC-3986
         // §4.4 / §5.4.1 `"" = base`) — it is not a standalone IRI, so `parse`
         // (rightly) rejects it, but resolution must accept it as all-undefined.
-        let r = if reference.is_empty() {
-            Parts {
-                scheme: None,
-                authority: None,
-                path: String::new(),
-                query: None,
-                fragment: None,
-            }
-        } else {
-            Parts::of(&parse(reference)?)
-        };
+        if reference.is_empty() {
+            return self.transform_and_reparse(&Parts::same_document());
+        }
+        self.resolve_iri(&parse(reference)?)
+    }
 
-        let t = transform(&base, &r);
-        // Recompose and re-parse so the returned Iri carries correct spans and is
-        // itself validated (a resolution that produced something malformed is a
-        // hard error, never a silently-returned bad IRI).
-        parse(&t.recompose())
+    /// [`resolve`](Self::resolve) for a reference the caller has **already parsed**.
+    ///
+    /// The string entry point is exactly this plus a parse, so the two cannot
+    /// diverge. It exists because [`BaseScope`](crate::BaseScope) must inspect a
+    /// reference's scheme before deciding whether the grammar resolves it at all,
+    /// and re-parsing it afterwards would double the parse cost of every relative
+    /// IRI in a Turtle document.
+    pub(crate) fn resolve_iri(&self, r: &Self) -> Result<Self> {
+        if !self.has_scheme() {
+            return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));
+        }
+        self.transform_and_reparse(&Parts::of(r))
+    }
+
+    /// §5.2.2 transform + §5.3 recomposition, then re-parse.
+    ///
+    /// Recomposing and re-parsing is what makes the returned `Iri` carry correct
+    /// spans and be itself validated: a resolution that produced something malformed
+    /// is a hard error, never a silently-returned bad IRI.
+    fn transform_and_reparse(&self, r: &Parts) -> Result<Self> {
+        parse(&transform(&Parts::of(self), r).recompose())
     }
 }
 
@@ -221,5 +242,38 @@ fn pop_last_segment(out: &mut String) {
         out.truncate(slash);
     } else {
         out.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parse::parse;
+
+    /// [`Iri::resolve_iri`] must be [`Iri::resolve`] minus the parse, or the base
+    /// layer that calls it would be a second resolver free to drift.
+    #[test]
+    fn resolve_iri_matches_the_string_entry_point() {
+        let base = parse("http://a/b/c/d;p?q").expect("base parses");
+        for reference in [
+            "g",
+            "./g",
+            "../g",
+            "/g",
+            "//g",
+            "?y",
+            "#s",
+            "g;x?y#s",
+            "g:h",
+            "http:g",
+            "http://a/b/../c",
+            "g/../h",
+        ] {
+            let parsed = parse(reference).expect("reference parses");
+            assert_eq!(
+                base.resolve_iri(&parsed).map(|iri| iri.as_str().to_owned()),
+                base.resolve(reference).map(|iri| iri.as_str().to_owned()),
+                "ref = {reference:?}"
+            );
+        }
     }
 }

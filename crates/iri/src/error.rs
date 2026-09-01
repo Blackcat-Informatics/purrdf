@@ -10,6 +10,26 @@
 
 use core::fmt;
 
+/// The remedy for [`IriError::NoBase`].
+///
+/// Each `REMEDY_*` constant is the **single owner** of its wording: both
+/// [`IriError::remedy_hint`] and the [`Display`](fmt::Display) rendering read it
+/// from here, so the accessor and the message cannot drift apart the way they did
+/// when each spelled its own prose.
+const REMEDY_NO_BASE: &str = "add a base to the document (`@base`/`BASE` in \
+     Turtle-family syntaxes, `xml:base` in RDF/XML) or pass a base IRI to the API";
+
+/// The remedy for [`IriError::NotAbsoluteByGrammar`].
+const REMEDY_NOT_ABSOLUTE_BY_GRAMMAR: &str = "write the IRI in absolute form; this \
+     syntax admits no relative IRI reference, so supplying a base will not help";
+
+/// The remedy for [`IriError::NonAbsoluteBase`].
+const REMEDY_NON_ABSOLUTE_BASE: &str =
+    "supply a base IRI that has a scheme, e.g. `http://example.org/dir/`";
+
+/// The remedy for [`IriError::MissingScheme`].
+const REMEDY_MISSING_SCHEME: &str = "write the IRI in absolute form, with a scheme";
+
 /// Why an IRI/URI string (or a reference-resolution / CURIE operation) failed.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -124,30 +144,59 @@ impl IriError {
     /// where the only remedy is "fix the malformed string" and the message already
     /// pinpoints the offending byte.
     ///
-    /// The [`Display`](core::fmt::Display) text of the base-related variants already
-    /// ends with this same guidance, so a plain `{err}` is self-sufficient; this
-    /// accessor exists for diagnostics that render the hint in a separate field and
-    /// should not be concatenated onto the message as well.
+    /// The [`Display`](core::fmt::Display) rendering **appends exactly this string**
+    /// (after `"; "`) for every variant that has one, reading it from the same
+    /// `REMEDY_*` constant this accessor returns — so `{err}` is self-sufficient at
+    /// every consumer, and the two can never drift. Use this accessor only when a
+    /// diagnostic renders the remedy in its own field; concatenating it onto `{err}`
+    /// as well would print it twice.
     #[must_use]
     pub fn remedy_hint(&self) -> Option<&'static str> {
         match self {
-            Self::NoBase { .. } => Some(
-                "add a base to the document (`@base`/`BASE` in Turtle-family syntaxes, \
-                 `xml:base` in RDF/XML) or pass a base IRI to the API",
-            ),
-            Self::NotAbsoluteByGrammar { .. } => Some(
-                "write the IRI in absolute form; this syntax admits no relative IRI \
-                 reference, so supplying a base will not help",
-            ),
-            Self::NonAbsoluteBase(_) => {
-                Some("supply a base IRI that has a scheme, e.g. `http://example.org/dir/`")
-            }
-            Self::MissingScheme => Some("write the IRI in absolute form, with a scheme"),
+            Self::NoBase { .. } => Some(REMEDY_NO_BASE),
+            Self::NotAbsoluteByGrammar { .. } => Some(REMEDY_NOT_ABSOLUTE_BY_GRAMMAR),
+            Self::NonAbsoluteBase(_) => Some(REMEDY_NON_ABSOLUTE_BASE),
+            Self::MissingScheme => Some(REMEDY_MISSING_SCHEME),
             Self::Empty
             | Self::BadScheme(_)
             | Self::BadPercentEncoding(_)
             | Self::DisallowedChar(_, _)
             | Self::BadAuthority(_) => None,
+        }
+    }
+
+    /// Write the *condition* — what went wrong — without the remedy.
+    ///
+    /// [`Display`](fmt::Display) is exactly this followed by
+    /// [`remedy_hint`](Self::remedy_hint); splitting them is what keeps the message
+    /// and the hint derived from one string per variant.
+    fn write_condition(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("empty IRI/URI string"),
+            Self::MissingScheme => f.write_str("missing scheme"),
+            Self::BadScheme(s) => write!(f, "malformed scheme: {s:?}"),
+            Self::BadPercentEncoding(at) => {
+                write!(f, "malformed percent-encoding at byte {at}")
+            }
+            Self::DisallowedChar(c, at) => {
+                write!(f, "disallowed character {c:?} at byte {at}")
+            }
+            Self::BadAuthority(why) => write!(f, "malformed authority: {why}"),
+            Self::NonAbsoluteBase(b) => {
+                write!(f, "base IRI is not absolute (no scheme): {b:?}")
+            }
+            Self::NoBase { reference } => {
+                write!(
+                    f,
+                    "relative IRI reference {reference:?} has no base IRI in scope"
+                )
+            }
+            Self::NotAbsoluteByGrammar { reference } => {
+                write!(
+                    f,
+                    "relative IRI reference {reference:?} is not permitted by this syntax"
+                )
+            }
         }
     }
 
@@ -164,34 +213,17 @@ impl IriError {
 }
 
 impl fmt::Display for IriError {
+    /// The condition, then the remedy — `"<what went wrong>; <what to do>"`.
+    ///
+    /// The remedy is part of the message rather than a field a consumer has to
+    /// remember to fetch: `crates/shex`, `crates/sparql-algebra` and the text codecs
+    /// all render `{code}: {err}`, so anything not in `{err}` reaches no user.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => f.write_str("empty IRI/URI string"),
-            Self::MissingScheme => f.write_str("missing scheme"),
-            Self::BadScheme(s) => write!(f, "malformed scheme: {s:?}"),
-            Self::BadPercentEncoding(at) => {
-                write!(f, "malformed percent-encoding at byte {at}")
-            }
-            Self::DisallowedChar(c, at) => {
-                write!(f, "disallowed character {c:?} at byte {at}")
-            }
-            Self::BadAuthority(why) => write!(f, "malformed authority: {why}"),
-            Self::NonAbsoluteBase(b) => {
-                write!(f, "base IRI is not absolute (no scheme): {b:?}")
-            }
-            Self::NoBase { reference } => write!(
-                f,
-                "relative IRI reference {reference:?} has no base IRI in scope; \
-                 add a base to the document (`@base`/`BASE` in Turtle-family syntaxes, \
-                 `xml:base` in RDF/XML) or pass a base IRI to the API"
-            ),
-            Self::NotAbsoluteByGrammar { reference } => write!(
-                f,
-                "relative IRI reference {reference:?} is not permitted by this syntax, \
-                 which admits only absolute IRIs; write the IRI in absolute form \
-                 (supplying a base will not help)"
-            ),
+        self.write_condition(f)?;
+        if let Some(remedy) = self.remedy_hint() {
+            write!(f, "; {remedy}")?;
         }
+        Ok(())
     }
 }
 
@@ -212,19 +244,14 @@ pub type Result<T> = core::result::Result<T, IriError>;
 mod tests {
     use super::*;
 
-    #[test]
-    fn byte_offset_only_for_offset_variants() {
-        assert_eq!(IriError::BadPercentEncoding(4).byte_offset(), Some(4));
-        assert_eq!(IriError::DisallowedChar(' ', 6).byte_offset(), Some(6));
-        assert_eq!(IriError::Empty.byte_offset(), None);
-        assert_eq!(IriError::MissingScheme.byte_offset(), None);
-    }
-
-    /// Every variant must have its OWN code: a duplicate would silently merge two
-    /// distinct conditions at every consumer that switches on the code.
-    #[test]
-    fn diagnostic_codes_are_distinct_and_kebab_prefixed() {
-        let all = [
+    /// One sample of **every** [`IriError`] variant.
+    ///
+    /// The exhaustive `match` below is the enforcement: adding a variant stops this
+    /// compiling until the new arm is written, and the arm cannot be reached unless
+    /// the sample is in `all`. Without it, a new variant would silently escape every
+    /// total-mapping test in this module.
+    fn every_variant() -> Vec<IriError> {
+        let all = vec![
             IriError::Empty,
             IriError::MissingScheme,
             IriError::BadScheme("1x".to_owned()),
@@ -239,6 +266,37 @@ mod tests {
                 reference: "foo".to_owned(),
             },
         ];
+        let mut seen = 0usize;
+        for err in &all {
+            match err {
+                IriError::Empty
+                | IriError::MissingScheme
+                | IriError::BadScheme(_)
+                | IriError::BadPercentEncoding(_)
+                | IriError::DisallowedChar(_, _)
+                | IriError::BadAuthority(_)
+                | IriError::NonAbsoluteBase(_)
+                | IriError::NoBase { .. }
+                | IriError::NotAbsoluteByGrammar { .. } => seen += 1,
+            }
+        }
+        assert_eq!(seen, all.len());
+        all
+    }
+
+    #[test]
+    fn byte_offset_only_for_offset_variants() {
+        assert_eq!(IriError::BadPercentEncoding(4).byte_offset(), Some(4));
+        assert_eq!(IriError::DisallowedChar(' ', 6).byte_offset(), Some(6));
+        assert_eq!(IriError::Empty.byte_offset(), None);
+        assert_eq!(IriError::MissingScheme.byte_offset(), None);
+    }
+
+    /// Every variant must have its OWN code: a duplicate would silently merge two
+    /// distinct conditions at every consumer that switches on the code.
+    #[test]
+    fn diagnostic_codes_are_distinct_and_kebab_prefixed() {
+        let all = every_variant();
         let mut codes: Vec<&str> = all.iter().map(IriError::diagnostic_code).collect();
         let total = codes.len();
         codes.sort_unstable();
@@ -273,6 +331,44 @@ mod tests {
                 .contains("will not help")
         );
         assert_eq!(IriError::Empty.remedy_hint(), None);
+    }
+
+    /// The contract `remedy_hint`'s rustdoc states: `{err}` is self-sufficient.
+    ///
+    /// Every consumer in this workspace renders `{code}: {err}` and never reads
+    /// `remedy_hint` — `crates/shex/src/error.rs`, `crates/sparql-algebra/src/parser.rs`
+    /// and `crates/rdf/src/native_codecs/text_parse.rs` among them — so a hint that
+    /// lives only in the accessor reaches no user at all.
+    #[test]
+    fn display_ends_with_the_remedy_for_every_hint_bearing_variant() {
+        let mut with_hints = 0usize;
+        for err in every_variant() {
+            let rendered = format!("{err}");
+            if let Some(hint) = err.remedy_hint() {
+                with_hints += 1;
+                assert!(
+                    rendered.ends_with(hint),
+                    "{}: {rendered:?} does not end with its remedy {hint:?}",
+                    err.diagnostic_code()
+                );
+                // …and the condition survives in front of it, rather than the
+                // message having been replaced by the hint.
+                assert!(
+                    rendered.len() > hint.len() + 2,
+                    "{}: message is nothing but its remedy",
+                    err.diagnostic_code()
+                );
+            } else {
+                // A hintless variant must not grow a trailing "; …" clause that no
+                // accessor owns.
+                assert!(
+                    !rendered.contains("; "),
+                    "{}: {rendered:?} carries unowned guidance",
+                    err.diagnostic_code()
+                );
+            }
+        }
+        assert_eq!(with_hints, 4, "the hint-bearing variant set changed");
     }
 
     #[test]
