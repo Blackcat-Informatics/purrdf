@@ -1,0 +1,17 @@
+PREFIX cdt:    <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
+PREFIX xsd:    <http://www.w3.org/2001/XMLSchema#>
+
+ASK {
+        {
+                SELECT * WHERE {
+                        VALUES (?id ?map) {
+                                (1  "{ 99: 1 }"^^cdt:Map)
+                                (2  "  { 1: '01'^^<http://www.w3.org/2001/XMLSchema#integer> }"^^cdt:Map)
+                                (3  "  { 1: '001'^^<http://www.w3.org/2001/XMLSchema#integer> }"^^cdt:Map)
+                                (4  "    { 99: 99 }"^^cdt:Map) # a system that doesn't know about CDTs will return this.
+                        }
+                }
+                ORDER BY ?map LIMIT 1
+        }
+        FILTER ( (?id = 2) || (?id = 3) )
+}

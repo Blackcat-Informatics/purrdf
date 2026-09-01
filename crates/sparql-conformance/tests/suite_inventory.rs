@@ -216,6 +216,97 @@ fn suite_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
 }
 
+/// The vendored `vectors/sparql-cdt` root (SEP-0009, `awslabs/SPARQL-CDTs`).
+///
+/// Deliberately NOT under `suite/`: this chunk lands the corpus only (no
+/// `purrdf-sparql-conformance` suite reads it yet — no `datatest_stable` case, no
+/// `conformance-matrix.py` row), because a matrix row for an unimplemented CDT/FOLD/
+/// UNFOLD surface would show a permanently red suite. Wiring it into `suite/` is
+/// separate follow-on work.
+fn sparql_cdt_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("vectors")
+        .join("sparql-cdt")
+}
+
+/// Exact pinned totals for the vendored SEP-0009 SPARQL Composite Datatypes (CDT)
+/// corpus (`vectors/sparql-cdt`, upstream `awslabs/SPARQL-CDTs` commit
+/// `e0a746561ad6a2db0f70fdcccb57eadea04f50c8`) — both the `mf:entries` count each
+/// group manifest declares (loaded exactly like a live suite manifest, via
+/// `manifest::load`, so a re-sync that silently drops or duplicates a case is
+/// caught the same way `purrdf_extend_case_count_and_kinds` catches it above) and
+/// the on-disk file count per group directory (catching a re-sync that changes
+/// fixture files without changing the declared case count, e.g. a renamed `.rq`
+/// still referenced by the same `mf:entries` member count).
+///
+/// This is corpus-inventory only: no evaluation runs against these manifests yet
+/// (no CDT/FOLD/UNFOLD support), so this test loads and counts but never executes
+/// a case.
+#[test]
+fn sparql_cdt_inventory() {
+    const GROUPS: &[(&str, usize, usize)] = &[
+        // (group, expected mf:entries count, expected file count)
+        ("unfold", 42, 77),
+        ("fold", 30, 33),
+        ("list-functions", 287, 290),
+        ("map-functions", 196, 199),
+        ("orderby", 27, 30),
+        ("bnodes", 76, 118),
+    ];
+
+    let root = sparql_cdt_root();
+    assert!(
+        root.is_dir(),
+        "vendored SEP-0009 CDT corpus is missing: {}",
+        root.display()
+    );
+    assert!(
+        root.join("manifest-all.ttl").is_file(),
+        "vendored CDT corpus lost its mf:include aggregator manifest-all.ttl"
+    );
+
+    let mut total_entries = 0usize;
+    for (group, expected_entries, expected_files) in GROUPS {
+        let group_dir = root.join(group);
+        assert!(
+            group_dir.is_dir(),
+            "vendored CDT corpus lost its '{group}' group directory: {}",
+            group_dir.display()
+        );
+
+        let manifest = group_dir.join("manifest.ttl");
+        let cases = purrdf_sparql_conformance::manifest::load(&manifest)
+            .unwrap_or_else(|e| panic!("{}: failed to load: {e}", manifest.display()));
+        assert_eq!(
+            cases.len(),
+            *expected_entries,
+            "vectors/sparql-cdt/{group}/manifest.ttl must declare exactly {expected_entries} \
+             mf:entries member(s); got {} — the vendored corpus drifted from the pinned \
+             upstream commit",
+            cases.len()
+        );
+        total_entries += cases.len();
+
+        let file_count = std::fs::read_dir(&group_dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", group_dir.display()))
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(
+            file_count, *expected_files,
+            "vectors/sparql-cdt/{group}/ must carry exactly {expected_files} file(s); got \
+             {file_count} — the vendored corpus drifted from the pinned upstream commit"
+        );
+    }
+
+    assert_eq!(
+        total_entries, 658,
+        "vectors/sparql-cdt must declare exactly 658 mf:entries across its six groups; got \
+         {total_entries}"
+    );
+}
+
 /// The `tests/fixtures/` directory of this crate — deliberately NOT under `suite/`,
 /// so nothing here is ever discovered as a live conformance case by
 /// `sparql_conformance.rs`'s `datatest_stable::harness!` (rooted at `suite/` only).
