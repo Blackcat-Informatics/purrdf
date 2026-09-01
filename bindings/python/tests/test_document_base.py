@@ -211,6 +211,175 @@ def test_the_base_is_the_same_parameter_across_parse_surfaces() -> None:
     assert {str(q.subject) for q in store} == {expected}
 
 
+# ── dump: the egress mirror `load(base=...)` had no partner for ─────────────────
+#
+# Every test below pairs the base call with a NO-BASE CONTROL on the same data, so
+# the observed `@base` / `xml:base` is attributable to the argument and not to
+# something already in the fixture.
+
+#: A store whose IRIs all sit under BASE, so relativizing against it is observable.
+ABSOLUTE_NT = f"<{BASE}s> <{BASE}p> <{BASE}o> .\n"
+
+
+def _store() -> purrdf.Store:
+    store = purrdf.Store()
+    store.load(ABSOLUTE_NT, RdfFormat.N_TRIPLES)
+    return store
+
+
+def test_store_dump_emits_the_base_declaration_with_a_no_base_control() -> None:
+    with_base = _store().dump(format=RdfFormat.TURTLE, base=BASE).decode()
+    without = _store().dump(format=RdfFormat.TURTLE).decode()
+
+    assert f"@base <{BASE}> ." in with_base
+    assert "@base" not in without, "the control must not already carry a base"
+    # And the base is actually applied, not merely declared.
+    assert "<s>" in with_base
+    assert f"<{BASE}s>" in without
+
+
+def _mutable() -> purrdf.MutableDataset:
+    md = purrdf.MutableDataset()
+    md.load(ABSOLUTE_NT, RdfFormat.N_TRIPLES)
+    return md
+
+
+def test_mutable_dataset_dump_emits_the_base_declaration_with_a_control() -> None:
+    with_base = _mutable().dump(format=RdfFormat.TURTLE, base=BASE).decode()
+    without = _mutable().dump(format=RdfFormat.TURTLE).decode()
+    assert f"@base <{BASE}> ." in with_base
+    assert "@base" not in without, "the control must not already carry a base"
+    assert "<s>" in with_base
+    assert f"<{BASE}s>" in without
+
+
+def test_dump_to_a_base_incapable_format_stays_absolute() -> None:
+    # N-Quads cannot express a base: the parameter is still read and validated, and
+    # the answer is the only spelling that grammar admits.
+    out = _store().dump(format=RdfFormat.N_QUADS, base=BASE).decode()
+    assert f"<{BASE}s>" in out
+    assert "@base" not in out
+
+
+def test_dump_rejects_a_base_that_is_not_absolute() -> None:
+    with pytest.raises(ValueError):
+        _store().dump(format=RdfFormat.TURTLE, base="not-absolute/")
+
+
+def test_dump_without_a_base_is_unchanged() -> None:
+    # The parameter is additive: omitting it reproduces the previous bytes exactly.
+    assert _store().dump(format=RdfFormat.TURTLE) == _store().dump(
+        format=RdfFormat.TURTLE, base=None
+    )
+
+
+# The combination that had no entry point before: a document base TOGETHER WITH a
+# non-default graph selection, over data carrying the RDF 1.2 statement layer.
+
+#: A reifier binding plus its annotation, all under BASE, inside a named graph.
+STAR_NQ = (
+    f"<{BASE}s> <{BASE}p> <{BASE}o> <{BASE}g> .\n"
+    f"<{BASE}r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> "
+    f"<<( <{BASE}s> <{BASE}p> <{BASE}o> )>> <{BASE}g> .\n"
+    f"<{BASE}r> <{BASE}confidence> \"0.9\" <{BASE}g> .\n"
+)
+
+
+def _star_store() -> purrdf.Store:
+    store = purrdf.Store()
+    store.load(STAR_NQ, RdfFormat.N_QUADS)
+    return store
+
+
+def test_dump_applies_a_base_and_a_graph_selection_together() -> None:
+    # `from_graph` projects one named graph into the default graph; the base is
+    # applied to that projection. Neither axis cancels the other.
+    selected = (
+        _star_store()
+        .dump(
+            format=RdfFormat.TURTLE,
+            from_graph=purrdf.NamedNode(f"{BASE}g"),
+            base=BASE,
+        )
+        .decode()
+    )
+    control = (
+        _star_store()
+        .dump(format=RdfFormat.TURTLE, from_graph=purrdf.NamedNode(f"{BASE}g"))
+        .decode()
+    )
+
+    assert f"@base <{BASE}> ." in selected
+    assert "@base" not in control
+    # The graph selection really happened: its quads are present, relativized.
+    assert "<s>" in selected
+    assert f"{BASE}s" in control
+
+
+def test_dump_keeps_the_statement_layer_under_a_base_and_a_selection() -> None:
+    # The RDF 1.2 statement layer must SURVIVE a based, graph-selected dump. This is
+    # the combination that had no entry point, and the one that would regress
+    # silently if someone later reached for a projecting spelling.
+    dumped = (
+        _star_store()
+        .dump(format=RdfFormat.TRIG, base=BASE)
+        .decode()
+    )
+    assert f"@base <{BASE}> ." in dumped
+    assert "reifies" in dumped, f"the reifier binding must survive: {dumped}"
+    assert "confidence" in dumped, f"the annotation must survive: {dumped}"
+
+    # And it round-trips back to the same statement layer.
+    back = purrdf.RdfDataset(dumped, RdfFormat.TRIG, base=BASE)
+    assert "reifies" in back.to_nquads()
+    assert "confidence" in back.to_nquads()
+
+
+def test_mutable_dump_keeps_the_statement_layer_under_a_base() -> None:
+    md = purrdf.MutableDataset()
+    md.load(STAR_NQ, RdfFormat.N_QUADS)
+    dumped = md.dump(format=RdfFormat.TRIG, base=BASE).decode()
+    assert f"@base <{BASE}> ." in dumped
+    assert "reifies" in dumped
+    assert "confidence" in dumped
+
+
+# ── to_rdf_xml: xml:base on the egress leg, statement layer intact ──────────────
+
+
+def test_to_rdf_xml_emits_xml_base_with_a_no_base_control() -> None:
+    with_base = purrdf.to_rdf_xml(
+        ABSOLUTE_NT.encode(), format=RdfFormat.N_TRIPLES, base=BASE
+    )
+    without = purrdf.to_rdf_xml(ABSOLUTE_NT.encode(), format=RdfFormat.N_TRIPLES)
+
+    assert f'xml:base="{BASE}"' in with_base
+    assert "xml:base" not in without, "the control must not already carry a base"
+    assert f'rdf:about="{BASE}s"' in without
+    assert 'rdf:about="s"' in with_base
+
+
+def test_to_rdf_xml_keeps_the_statement_layer_under_a_base() -> None:
+    # RDF/XML renders a reifier binding as `rdf:parseType="Triple"`. Gaining the
+    # `xml:base` must not cost those rows.
+    star_nt = (
+        f"<{BASE}r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> "
+        f"<<( <{BASE}s> <{BASE}p> <{BASE}o> )>> .\n"
+        f"<{BASE}r> <{BASE}confidence> \"0.9\" .\n"
+    )
+    xml = purrdf.to_rdf_xml(star_nt.encode(), format=RdfFormat.N_TRIPLES, base=BASE)
+    assert f'xml:base="{BASE}"' in xml
+    assert "Triple" in xml, f"the reifier binding must survive: {xml}"
+    assert "confidence" in xml, f"the annotation must survive: {xml}"
+
+
+def test_to_rdf_xml_rejects_a_base_that_is_not_absolute() -> None:
+    with pytest.raises(ValueError):
+        purrdf.to_rdf_xml(
+            ABSOLUTE_NT.encode(), format=RdfFormat.N_TRIPLES, base="not-absolute/"
+        )
+
+
 # ── programmatic ingress: no document, so no base can ever be in scope ──────────
 
 

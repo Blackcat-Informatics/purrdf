@@ -48,6 +48,23 @@
 //! silently truncated premise — and a malformed pair (no `=`) is a usage error here, never a
 //! silently skipped one.
 //!
+//! ## The ontology-IRI half is an IRI, and it is checked as one
+//!
+//! The half before the `=` is matched against the premise's `owl:imports` OBJECTS, which are
+//! absolute by the time the parser is done with them. So `--import foo=FILE` could never
+//! resolve anything, and the only thing the operator saw was the boundary's refusal naming
+//! the premise's own `owl:imports` — a diagnostic that sends someone who fat-fingered an
+//! ARGUMENT to go and look at their DATA.
+//!
+//! [`resolve_imports`] decides the half against the command line instead, through the shared
+//! [`purrdf_iri::BaseScope`] with no base in scope: an absolute half is carried
+//! lexical-verbatim, so nothing about a correct invocation changes, and anything else is a
+//! usage error (exit 2) naming the flag, the pair as written and the offending half, decided
+//! before a single document is opened. No base is guessed for it, and that is the point —
+//! which base an `owl:imports` object resolved under is the premise document's business, so a
+//! base picked here would turn a typo into some other absolute IRI that still matched nothing
+//! and hand back the same wrong-blame message for the same mistake.
+//!
 //! # Formats: `--from`, and the ONE media type the boundary takes
 //!
 //! The boundary parses N-Quads (which accepts N-Triples unchanged). The CLI's own format
@@ -93,6 +110,7 @@
 //! [`ReportTarget`] tri-state `reason --report` uses, so the two never mix even when `OUT` is
 //! `-`.
 
+use purrdf_iri::BaseScope;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_validate::regime::{
     ReasoningAnswer, certain_answers_to_string, graph_entails_to_string,
@@ -181,12 +199,17 @@ pub(crate) fn run(
     let question = question(options)?;
     refuse_two_stdins(options, question)?;
     refuse_unconsumable_base(options, question)?;
+    // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
+    // pair, or an ontology-IRI half that denotes nothing, is a defect in the command line and
+    // must fail against it rather than surfacing later as the boundary's refusal naming the
+    // premise's own `owl:imports`.
+    let import_pairs = resolve_imports(options)?;
 
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
     // to the premise's `owl:imports`.
     let premise = read_as_nquads(options.premise, "--premise", options)?;
-    let imports = read_imports(options)?;
+    let imports = read_imports(&import_pairs, options)?;
     let table: Vec<(&str, &str)> = imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))
@@ -314,13 +337,34 @@ fn split_import(spec: &str) -> Option<(&str, &str)> {
     spec.split_once('=')
 }
 
-/// Read every `--import IRI=FILE` pair, transcoding each document into the boundary's N-Quads.
+/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O: the pair's shape, and the
+/// ontology-IRI half as an ABSOLUTE IRI.
 ///
 /// A malformed pair is a usage error naming the argument, never a skipped import: a premise
 /// answered without a document the operator supplied is answered over a different premise.
 /// A DUPLICATE ontology IRI is not checked here — the boundary refuses it, and re-deciding
 /// that in the CLI would be a second opinion about the same input.
-fn read_imports(options: &EntailsOptions<'_>) -> Result<Vec<(String, String)>, CliError> {
+///
+/// # Why the half must be absolute, rather than resolved against something
+///
+/// The half is compared with the premise's `owl:imports` OBJECTS, which are absolute by the
+/// time the parser is done with them. So `foo` matched nothing, and the only thing the
+/// operator saw was the boundary's refusal naming the premise's `owl:imports` — a typo in an
+/// ARGUMENT reported as a defect in their DATA.
+///
+/// Resolving the half against a base this command guessed would not fix that; it would hide
+/// it. Which base an `owl:imports` object resolved under is the PREMISE's business — it may
+/// declare its own `@base`, and one document may rebind it several times — so a base picked
+/// here would turn `foo` into some absolute IRI that still matches nothing, and the same
+/// wrong-blame message would come back for the same typo. The half is therefore required to
+/// be absolute, through the shared [`BaseScope`] with NO base in scope: an absolute value is
+/// carried lexical-verbatim, and anything else is refused against the command line by
+/// [`import_iri_refusal`], naming the flag, the pair and the offending half.
+fn resolve_imports<'a>(options: &EntailsOptions<'a>) -> Result<Vec<(String, &'a str)>, CliError> {
+    // No base, deliberately: see the section above. `BaseScope` is still the seam, so the
+    // codes an operator sees here are the workspace's shared `purrdf_iri` spellings rather
+    // than a private one this subcommand invented.
+    let scope = BaseScope::empty();
     let mut resolved = Vec::with_capacity(options.imports.len());
     for spec in options.imports {
         let Some((iri, path)) = split_import(spec) else {
@@ -335,8 +379,49 @@ fn read_imports(options: &EntailsOptions<'_>) -> Result<Vec<(String, String)>, C
                  names what the premise imports, and the path names the document that is it"
             )));
         }
+        let absolute = scope
+            .resolve(iri)
+            .map_err(|error| import_iri_refusal(spec, iri, &error))?;
+        resolved.push((absolute.as_str().to_owned(), path));
+    }
+    Ok(resolved)
+}
+
+/// The refusal for an `--import` whose own ontology-IRI half denotes no ontology.
+///
+/// It names the FLAG, the pair as written and the offending half, and carries the shared
+/// [`purrdf_iri::IriError::diagnostic_code`]. It does NOT carry the library's remedy for a
+/// missing base: that one names `@base` and `xml:base`, which are document directives, and
+/// this value is argv text that no document reaches — the same reason `describe --iri` and
+/// `validate --shapes-graph` write their own.
+fn import_iri_refusal(spec: &str, iri: &str, error: &purrdf_iri::IriError) -> CliError {
+    let code = error.diagnostic_code();
+    if code == "iri-relative-no-base" {
+        return CliError::Usage(format!(
+            "--import {spec}: {code}: the ontology-IRI half `{iri}` is a relative IRI reference, \
+             and it is matched against the premise's `owl:imports` objects, which are absolute. \
+             It can therefore resolve no import at all. This is a command-line value, so no \
+             `@base` in any document reaches it and none is guessed for it: write the half as \
+             the absolute IRI the premise's `owl:imports` names"
+        ));
+    }
+    CliError::Usage(format!(
+        "--import {spec}: {code}: the ontology-IRI half `{iri}` is not a usable IRI: {error}"
+    ))
+}
+
+/// Read each resolved `--import` document, transcoding it into the boundary's N-Quads.
+///
+/// Every argument-level decision was already made by [`resolve_imports`], so what remains
+/// here is I/O: this function reads documents and nothing else refuses a command line.
+fn read_imports(
+    pairs: &[(String, &str)],
+    options: &EntailsOptions<'_>,
+) -> Result<Vec<(String, String)>, CliError> {
+    let mut resolved = Vec::with_capacity(pairs.len());
+    for (iri, path) in pairs {
         let what = format!("--import {iri}");
-        resolved.push((iri.to_owned(), read_as_nquads(path, &what, options)?));
+        resolved.push((iri.clone(), read_as_nquads(path, &what, options)?));
     }
     Ok(resolved)
 }

@@ -583,6 +583,13 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
+    # `base` is the document base the dump is WRITTEN under — the egress mirror of
+    # `load(base=...)`, which this surface previously lacked. A syntax that can express
+    # a base writes it and relativizes against it; one that cannot emits absolute IRIs.
+    # A base that is not an absolute IRI raises whatever the format. It composes with
+    # `from_graph`: a base and a non-default graph selection apply together, and the
+    # RDF 1.2 statement layer is emitted rather than projected away, so a dump does not
+    # silently thin the store on the way out.
     @overload
     def dump(
         self,
@@ -593,6 +600,7 @@ class Store:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -604,6 +612,7 @@ class Store:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> bytes: ...
     def __len__(self) -> int: ...
 
@@ -630,6 +639,9 @@ class MutableDataset:
         *,
         any_graph: bool = ...,
     ) -> list[Quad]: ...
+    # `base` is the document base the dump is WRITTEN under — the egress mirror of
+    # `load(base=...)`, honored exactly as on `Store.dump`, including alongside a
+    # `from_graph` selection. The RDF 1.2 statement layer is emitted, not projected.
     @overload
     def dump(
         self,
@@ -640,6 +652,7 @@ class MutableDataset:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -651,6 +664,7 @@ class MutableDataset:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> bytes: ...
     # Engine configuration kwargs: as on `Store.query` / `Store.update`, including
     # `aggregate_namespace` (see `Store.query`).
@@ -924,11 +938,11 @@ def from_json_ld(
     base: str | None = ...,
 ) -> bytes: ...
 
-# `to_rdf_xml`'s `base` is the INGRESS base only. RDF/XML is star-incapable in the
-# transcode loss contract, so the core's only base-carrying serialize entry would
-# also drop the RDF 1.2 statement layer this function emits; the star-preserving
-# serializer is kept and the output stays absolute rather than gaining an `xml:base`
-# at the cost of silently losing reifier and annotation rows.
+# `to_rdf_xml`'s `base` applies to BOTH legs: relative references in `data` resolve
+# against it, and the emitted RDF/XML declares it as `xml:base` with its `rdf:about` /
+# `rdf:resource` references spelled against it. The RDF 1.2 statement layer is still
+# emitted (RDF/XML renders a reifier binding as `rdf:parseType="Triple"`), so the base
+# is not bought at the cost of reifier and annotation rows.
 def to_rdf_xml(
     data: bytes, *, format: RdfFormat, base: str | None = ...
 ) -> str: ...

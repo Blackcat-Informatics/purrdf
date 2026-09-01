@@ -79,6 +79,25 @@
 //! is read as Turtle or as TriG. It did not always: the Turtle route reached a
 //! `parse_shapes` that took no base at all, so the one document in this command that
 //! could not resolve a relative IRI was the one describing the constraints.
+//!
+//! # `--shapes-graph` is command-line text, and its refusal says so
+//!
+//! `--shapes-graph` names the graph the shapes document is exposed under, overriding a
+//! `sh:shapesGraph` that document declares. That declaration is an IRI *inside* the shapes
+//! document, so it resolves against the shapes document's base — and the flag that overrides
+//! it resolves against the SAME base, through [`resolve_shapes_graph`]. `--shapes-graph
+//! sg` therefore names what `sh:shapesGraph <sg>` written in that document names, and an
+//! absolute value is carried lexical-verbatim (`BaseScope::resolve`'s own contract), so
+//! nothing about an already-absolute invocation changes.
+//!
+//! A relative value with NO base in scope — a `--shapes -` stdin shapes graph, or a pack —
+//! is a hard usage error (exit 2) decided before a byte of either document is read. It used
+//! to travel all the way into `RdfDatasetBuilder::freeze`, which refused it as an
+//! un-internable IRI TERM and advised adding an `@base`/`xml:base` DOCUMENT directive. No
+//! directive an operator writes in any document can fix an argv string, so the remedy named
+//! a fix that could not be applied; the refusal here names the flag, keeps the shared
+//! `purrdf_iri` diagnostic code, and names a remedy that exists on the surface the value
+//! came from.
 
 use std::sync::Arc;
 
@@ -86,6 +105,7 @@ use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
 use purrdf_core::RdfDataset;
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat, parse_dataset};
 use purrdf_validate::SarifOptions;
 
@@ -107,7 +127,9 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) shapes: &'a str,
     /// `--shapes-from`: the shapes-graph format override.
     pub(crate) shapes_from: Option<CliRdfFormat>,
-    /// `--shapes-graph`: the IRI the shapes graph is exposed under to SHACL-SPARQL paths.
+    /// `--shapes-graph`: the IRI the shapes graph is exposed under to SHACL-SPARQL paths,
+    /// as the operator wrote it. [`resolve_shapes_graph`] turns it into the absolute IRI
+    /// the engine is handed.
     pub(crate) shapes_graph: Option<&'a str>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
@@ -139,11 +161,19 @@ pub(crate) fn run(
         &[format::BaseUse::parse(data_format, "the --from data graph")],
     )?;
     let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
+    // The shapes document's base is derived ONCE and spent twice: the document parses under
+    // it, and `--shapes-graph` resolves against it. Deriving it separately per consumer is
+    // how the flag would come to name a graph the shapes document cannot.
+    let shapes_base = shapes_document_base(options.shapes, shapes_format)?;
+    // Decided BEFORE either document is read: a `--shapes-graph` that names no graph is a
+    // malformed request, and it should fail against the command line rather than after the
+    // data has been parsed and validated.
+    let shapes_graph = resolve_shapes_graph(options.shapes_graph, shapes_base.as_deref())?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
-    let shapes = load_shapes(options.shapes, shapes_format)?;
+    let shapes = load_shapes(options.shapes, shapes_format, shapes_base.as_deref())?;
 
-    let Some(report) = validate(&data, &shapes, options)? else {
+    let Some(report) = validate(&data, &shapes, options, shapes_graph.as_deref())? else {
         // A tripped governor: the receipt is already on stderr and there is no report to
         // write, by the engine's own design. Exit 3 carries that to the shell.
         return Ok(CliOutcome::BudgetExhausted);
@@ -167,9 +197,10 @@ fn validate(
     data: &Arc<RdfDataset>,
     shapes: &Shapes,
     options: &ValidateOptions<'_>,
+    shapes_graph: Option<&str>,
 ) -> Result<Option<ValidationReport>, CliError> {
     if !options.governors.is_engaged() {
-        return engine::validate_dataset_with_shapes_graph(data, shapes, options.shapes_graph)
+        return engine::validate_dataset_with_shapes_graph(data, shapes, shapes_graph)
             .map(Some)
             .map_err(CliError::Runtime);
     }
@@ -177,7 +208,7 @@ fn validate(
     let governed = engine::validate_dataset_with_governors(
         data,
         shapes,
-        options.shapes_graph,
+        shapes_graph,
         &options.governors.to_governors(),
     )
     .map_err(CliError::Runtime)?;
@@ -242,25 +273,90 @@ fn emit(
 /// could not resolve a relative IRI. Threading the base is what deletes that asymmetry;
 /// `--base` is deliberately NOT used here, because it names the base of the DATA graph
 /// and the two documents are independent.
-fn load_shapes(path: &str, format: SourceFormat) -> Result<Shapes, CliError> {
-    let base = match format {
-        SourceFormat::Native(native) => source::effective_base(path, native, None)?,
-        // A pack/GTS container stores resolved IRIs; there is no document base to derive.
-        SourceFormat::Pack | SourceFormat::Gts => None,
-    };
-
+///
+/// The base is a parameter rather than derived here because [`run`] spends the same value
+/// on `--shapes-graph` as well (see [`resolve_shapes_graph`]): one derivation is what keeps
+/// the flag and the document agreeing about what a relative IRI denotes.
+fn load_shapes(path: &str, format: SourceFormat, base: Option<&str>) -> Result<Shapes, CliError> {
     if format == SourceFormat::Native(NativeRdfFormat::Turtle) {
         let bytes = source::read_bytes(path)?;
         let text = String::from_utf8(bytes).map_err(|error| {
             CliError::Runtime(format!("--shapes {path}: not UTF-8 text: {error}"))
         })?;
-        return engine::parse_shapes(&text, base.as_deref())
+        return engine::parse_shapes(&text, base)
             .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")));
     }
 
-    let dataset = source::load_dataset(path, format, base.as_deref())?;
+    let dataset = source::load_dataset(path, format, base)?;
     purrdf::shapes::shapes::from_dataset(&dataset)
         .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
+}
+
+/// The base the SHAPES document parses under, and the base `--shapes-graph` resolves
+/// against.
+///
+/// It is [`source::effective_base`] with an explicit `None` for `--base`: that flag names
+/// the base of the DATA graph, and silently retargeting a second document with it is the
+/// confusion `--base`'s own help text promises this command does not create. A pack/GTS
+/// container stores resolved IRIs and has no document base to derive.
+fn shapes_document_base(path: &str, format: SourceFormat) -> Result<Option<String>, CliError> {
+    match format {
+        SourceFormat::Native(native) => source::effective_base(path, native, None),
+        SourceFormat::Pack | SourceFormat::Gts => Ok(None),
+    }
+}
+
+/// Resolve `--shapes-graph` against the shapes document's base.
+///
+/// An ABSOLUTE value is carried lexical-verbatim — [`BaseScope::resolve`]'s own contract —
+/// so an already-absolute invocation is byte-for-byte what it always was. A RELATIVE one
+/// resolves against the base the shapes document itself parses under, so `--shapes-graph sg`
+/// names exactly what `sh:shapesGraph <sg>` written in that document names, which is the
+/// declaration this flag overrides. A relative one with nothing in scope is refused.
+fn resolve_shapes_graph(raw: Option<&str>, base: Option<&str>) -> Result<Option<String>, CliError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let scope = match base {
+        // A derived retrieval IRI is produced by its own parse, so a failure here is not
+        // reachable from the command line; it is still reported rather than unwrapped,
+        // because an unreachable panic in a CLI is a crash report.
+        Some(base) => BaseScope::rooted(
+            BaseIri::parse(base).map_err(|error| {
+                CliError::Usage(format!(
+                    "the shapes graph's base `{base}` is not a usable base IRI: {error}"
+                ))
+            })?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
+    scope
+        .resolve(raw)
+        .map(|iri| Some(iri.as_str().to_owned()))
+        .map_err(|error| shapes_graph_refusal(raw, &error))
+}
+
+/// The refusal for a `--shapes-graph` that names no graph.
+///
+/// It carries the shared [`purrdf_iri::IriError::diagnostic_code`] so it groups with every
+/// other IRI failure in this toolkit, and it does NOT carry the library's own remedy for a
+/// missing base: that one names `@base` and `xml:base`, which are DOCUMENT directives, and a
+/// `--shapes-graph` value is argv text that no document can reach. Naming a fix the operator
+/// cannot apply is worse than naming none — this is the same refusal shape `describe --iri`
+/// carries, for the same reason.
+fn shapes_graph_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
+    let code = error.diagnostic_code();
+    if code == "iri-relative-no-base" {
+        return CliError::Usage(format!(
+            "--shapes-graph `{raw}`: {code}: a relative IRI reference has no base in scope, so \
+             it names no graph to expose the shapes under. This is a command-line value, so no \
+             `@base` you write in a document resolves it: give --shapes a PATH, whose `file://` \
+             retrieval IRI this flag resolves against exactly as a `sh:shapesGraph` inside that \
+             document would, or write the graph name in absolute form"
+        ));
+    }
+    CliError::Usage(format!("--shapes-graph `{raw}`: {code}: {error}"))
 }
 
 /// Refuse a command line that reads standard input twice.

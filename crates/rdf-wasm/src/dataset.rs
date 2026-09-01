@@ -13,9 +13,9 @@
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue,
-    canonical_flat_nquads, classify, datasets_isomorphic, parse_dataset, serialize_dataset,
-    serialize_dataset_to_format_with_jsonld_options,
+    JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, SerializeOptions,
+    StatementLayer, TermValue, canonical_flat_nquads, classify, datasets_isomorphic, parse_dataset,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_with,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -225,36 +225,49 @@ impl Dataset {
         })
     }
 
-    /// `serialize(format)` → the dataset rendered in `format` (a UTF-8 string).
+    /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
     ///
-    /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` / `jsonld`
-    /// (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media types — all resolved
-    /// through the one core registry.
+    /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` / `trix` /
+    /// `hextuples` / `jsonld` (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media
+    /// types — all resolved through the one core registry.
     ///
     /// Object-position quoted-triple terms (RDF-1.2 triple terms) are preserved
     /// through N-Quads, JSON-LD, and YAML-LD; the other text syntaxes (Turtle,
     /// N-Triples, TriG, RDF/XML) flatten them.
     ///
-    /// # No document base here, and why
+    /// # The document base
     ///
-    /// Unlike [`parse`](Self::parse) — and unlike
-    /// [`serializeConfigured`](Self::serialize_configured), which does take one — this
-    /// entry point carries no base. It reaches ALL NINE formats, three of which
-    /// (RDF/XML, TriX, HexTuples) are star-incapable in the transcode loss contract,
-    /// and the core's only public base-carrying serializer
-    /// (`serialize_dataset_to_format`) drops the RDF 1.2 statement layer for exactly
-    /// those three. Adding a base through it would silently trade this dataset's
-    /// reifier and annotation rows for a base declaration, which is the worse loss.
-    /// A base-carrying JSON-LD/YAML-LD document is reachable today through
-    /// `serializeConfigured`; the generic leg needs a core serializer that takes both
-    /// a base and the statement layer.
+    /// `base` is the egress mirror of [`parse`](Self::parse)'s: a syntax that can
+    /// express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) writes it and
+    /// relativizes its IRIs against it; one that cannot (N-Triples, N-Quads, TriX,
+    /// HexTuples) emits absolute IRIs, which is the only spelling those grammars admit.
+    /// A base that is not an absolute IRI throws whatever the target format is; omitting
+    /// it emits absolute IRIs. No base is ever fabricated.
+    ///
+    /// The statement layer is [`StatementLayer::Emit`] — the FIDELITY answer, and what
+    /// this entry point already did before it carried a base. This is a dataset a caller
+    /// built or parsed and is now reading back, so its RDF 1.2 reifier and annotation
+    /// rows must survive: RDF/XML renders them as `rdf:parseType="Triple"`, and TriX /
+    /// HexTuples, which have no triple-term surface at all, FAIL CLOSED rather than
+    /// dropping them silently. `Project` would make a round trip lose rows without the
+    /// caller ever being told.
     #[wasm_bindgen(js_name = serialize)]
-    pub fn serialize(&self, format: &str) -> Result<String, JsError> {
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize(&self, format: &str, base: Option<String>) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-        let bytes = serialize_dataset(&frozen, media_type, SerializeGraph::Dataset)
-            .map_err(|e| diag_to_err(&e))?;
-        String::from_utf8(bytes)
+        let native = classify(format).map_err(|e| diag_to_err(&e))?;
+        let outcome = serialize_dataset_with(
+            &frozen,
+            native,
+            base.as_deref(),
+            &SerializeOptions {
+                selection: SerializeGraph::Dataset,
+                statement_layer: StatementLayer::Emit,
+                jsonld_options: None,
+            },
+        )
+        .map_err(|e| diag_to_err(&e))?;
+        String::from_utf8(outcome.bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
     }
 
@@ -520,7 +533,7 @@ mod tests {
             "yamlld",
             "application/ld+yaml",
         ] {
-            let Ok(text) = ds.serialize(fmt) else {
+            let Ok(text) = ds.serialize(fmt, None) else {
                 panic!("serialize {fmt} failed");
             };
             let Ok(reparsed) = Dataset::parse(&text, fmt, None) else {
@@ -697,7 +710,7 @@ mod tests {
         let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
         let ds = Dataset::parse(input, "ntriples", None).unwrap();
         assert_eq!(ds.size(), 1);
-        let out = ds.serialize("ntriples").unwrap();
+        let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://e/s"));
         assert!(out.contains("https://e/p"));
         assert!(out.contains("https://e/o"));
@@ -710,7 +723,7 @@ mod tests {
     fn parse_turtle_with_base_resolves_relative_iris() {
         let input = "<rel> <https://e/p> <https://e/o> .\n";
         let ds = Dataset::parse(input, "turtle", Some("https://example.org/".to_owned())).unwrap();
-        let out = ds.serialize("ntriples").unwrap();
+        let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://example.org/rel"));
     }
 

@@ -572,6 +572,10 @@ pub(crate) enum Command {
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
         /// resolves is refused by name rather than treated as an empty document.
+        /// The IRI half must be ABSOLUTE — it is matched against the premise's
+        /// `owl:imports` objects, which are — and a relative or malformed one is
+        /// refused by name here rather than surfacing as an unresolved import
+        /// attributed to the premise's data.
         #[arg(long = "import", value_name = "IRI=FILE")]
         imports: Vec<String>,
         /// Surface the reasoning certificate: bare writes it to stderr,
@@ -770,7 +774,10 @@ pub(crate) enum Command {
         /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
         /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
         /// vocabulary IRIs, so there is no default: without this flag and without a
-        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed.
+        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed. A relative
+        /// value resolves against the shapes document's own base — the same base the
+        /// `sh:shapesGraph` it overrides would resolve against — and is refused when the
+        /// shapes graph has none (stdin, or a container).
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
         /// Data-graph format override; inferred from the input extension when omitted.
@@ -892,7 +899,11 @@ pub(crate) enum Command {
     Describe {
         /// A resource to describe: repeatable, and at least one is required. Several are
         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
-        /// as several documents.
+        /// as several documents. A RELATIVE reference resolves against the base in force —
+        /// the same base the data graph parses under, so `--iri alice` denotes what
+        /// `<alice>` written inside the document denotes — and one with no base in scope is
+        /// refused rather than silently matching nothing. An IRI the graph does not mention
+        /// is a legitimate EMPTY description, not an error.
         #[arg(long = "iri", value_name = "IRI", required = true)]
         iris: Vec<String>,
         /// Input format override; inferred from the input extension when omitted.
@@ -901,11 +912,14 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
-        /// Base IRI, on BOTH legs: relative IRIs in the input resolve against it while
-        /// parsing, and a `--to` syntax that can write a base directive (turtle, trig,
-        /// rdfxml, jsonld, yamlld) emits it as the description's base and relativizes
-        /// against it. When omitted, a filesystem input is still parsed under its own
-        /// `file://` retrieval IRI.
+        /// Base IRI, on THREE legs: relative IRIs in the input resolve against it while
+        /// parsing, every `--iri` selector resolves against it, and a `--to` syntax that can
+        /// write a base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
+        /// description's base and relativizes against it. When omitted, a filesystem input
+        /// is still parsed — and its `--iri` selectors resolved — under its own `file://`
+        /// retrieval IRI. Because `--iri` is required and always resolves against it, this
+        /// flag is never inert here and is never refused, even against a pack or GTS source
+        /// whose own syntax could not spend it.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
