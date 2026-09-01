@@ -770,7 +770,10 @@ pub(crate) enum Command {
         /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
         /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
         /// vocabulary IRIs, so there is no default: without this flag and without a
-        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed.
+        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed. A relative
+        /// value resolves against the shapes document's own base — the same base the
+        /// `sh:shapesGraph` it overrides would resolve against — and is refused when the
+        /// shapes graph has none (stdin, or a container).
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
         /// Data-graph format override; inferred from the input extension when omitted.

@@ -1180,3 +1180,156 @@ fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
         stdout(&from_stdin)
     );
 }
+
+/// A RELATIVE `--shapes-graph` resolves against the shapes document's own base — the base
+/// the `sh:shapesGraph` it overrides would resolve against — rather than being interned
+/// verbatim and refused deep inside the IR.
+///
+/// The load-bearing half is that the resolved graph is the one the SHACL-SPARQL constraint
+/// reads: the shape below is satisfied only when the shapes graph is visible under exactly
+/// the IRI the binary derived, so a resolution that landed anywhere else would fail here.
+#[test]
+fn a_relative_shapes_graph_resolves_against_the_shapes_document_base() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    // The retrieval IRI comes from the binary's OWN derivation, never a second
+    // transcription of it in this harness — and it is derived from a path that already
+    // exists, because the derivation canonicalizes.
+    let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
+    let shapes_iri =
+        purrdf_cli::file_retrieval_iri(&shapes).expect("fixture has a file:// retrieval IRI");
+    let shapes_text = SHAPES_GRAPH_SHAPES.replace("http://example.org/shapes", &shapes_iri);
+    let shapes = write_file(dir.path(), "sg.ttl", &shapes_text);
+
+    // `sg.ttl` relative to the shapes document's own retrieval IRI IS that document.
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        "sg.ttl",
+        &data,
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("shacl conforms true\n"),
+        "the relative flag must name the same graph `sh:shapesGraph <sg.ttl>` would: {}",
+        stderr(&out)
+    );
+}
+
+/// An ABSOLUTE `--shapes-graph` is carried lexical-verbatim, so the resolution above changes
+/// nothing for an already-absolute invocation.
+#[test]
+fn an_absolute_shapes_graph_is_carried_verbatim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        "http://example.org/shapes",
+        &data,
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("shacl conforms true\n"),
+        "an absolute graph name is unchanged by resolution: {}",
+        stderr(&out)
+    );
+}
+
+/// A relative `--shapes-graph` with NO base in scope is refused against the COMMAND LINE,
+/// once, with a remedy the operator can actually apply.
+///
+/// Two defects are pinned here at the same time. The value used to travel into
+/// `RdfDatasetBuilder::freeze`, which refused it as an un-internable IRI TERM and advised
+/// adding an `@base`/`xml:base` DOCUMENT directive — a fix no document can apply to an argv
+/// string — and which attached that same remedy BOTH inside the message and again as the
+/// diagnostic's `detail`, so the sentence was printed twice in one line.
+#[test]
+fn a_relative_shapes_graph_with_no_base_names_the_command_line_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = pipe(
+        &[
+            "validate",
+            "--shapes",
+            "-",
+            "--shapes-from",
+            "turtle",
+            "--shapes-graph",
+            "sg",
+            &data,
+        ],
+        SHAPES,
+    );
+    let err = stderr(&out);
+    assert_eq!(code(&out), 2, "a malformed command line exits 2: {err}");
+    assert!(
+        err.contains("--shapes-graph `sg`") && err.contains("iri-relative-no-base"),
+        "the refusal names the flag, its value and the shared code: {err}"
+    );
+    assert!(
+        err.contains("command-line value"),
+        "the remedy names the surface the value came from: {err}"
+    );
+    // The library's DOCUMENT remedy names `xml:base`; a `--shapes-graph` refusal must not,
+    // because no RDF/XML document is involved and none could fix an argument.
+    assert!(
+        !err.contains("xml:base") && !err.contains("add a base to the document"),
+        "a document directive is not the remedy for an argv value: {err}"
+    );
+    // …and whatever is said, it is said ONCE.
+    assert_eq!(
+        err.matches("iri-relative-no-base").count(),
+        1,
+        "the diagnostic is rendered once: {err}"
+    );
+    assert_eq!(
+        err.matches("write the graph name in absolute form").count(),
+        1,
+        "the remedy is rendered once: {err}"
+    );
+    assert!(
+        !err.contains("shacl conforms"),
+        "no verdict may be reported for a request that named no graph: {err}"
+    );
+    assert!(
+        stdout(&out).trim().is_empty(),
+        "nothing partial is emitted:\n{}",
+        stdout(&out)
+    );
+}
+
+/// A MALFORMED `--shapes-graph` is a usage error naming the flag and the shared code, rather
+/// than an IR-internment failure attributed to a term the operator never wrote.
+#[test]
+fn a_malformed_shapes_graph_is_a_named_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "sg.ttl", SHAPES_GRAPH_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        "ht tp://example.org/shapes",
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 2, "a malformed command line exits 2: {err}");
+    assert!(
+        err.contains("--shapes-graph") && err.contains("iri-bad-scheme"),
+        "the refusal names the flag and the shared code: {err}"
+    );
+    assert!(
+        !err.contains("cannot be interned into the RDF IR"),
+        "the value is refused at the command line, not at the IR boundary: {err}"
+    );
+}
