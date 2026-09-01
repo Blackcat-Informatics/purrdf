@@ -327,14 +327,19 @@ impl<H> PipelineBundle<H> {
     }
 
     /// The canonical [`ContentDigest`] of the named graph `graph` — the subgraph of
-    /// the dataset whose quads carry `g == <graph>`, canonicalized to N-Quads.
+    /// the dataset asserted in `<graph>`, canonicalized to N-Quads.
     ///
-    /// Built by projecting the matching quads into a fresh dataset and hashing its
-    /// canonical form. The RDF 1.2 reifier/annotation side-tables are graph-scopeless
-    /// in this IR (a reifier binding carries no graph dimension), so they travel with
-    /// the projection in whole — a handle over a reified subgraph therefore pins over
-    /// the same statement layer the dataset carries. This is the value a handle's
-    /// pinned digest is checked against in [`pin_handle`](Self::pin_handle).
+    /// Built by [`RdfDataset::project_named_graph`] and hashed over the projection's
+    /// canonical form. The RDF 1.2 reifier/annotation side-tables are keyed per graph
+    /// in this IR (each row carries the graph its declaration or annotation was
+    /// asserted in), so the projection admits exactly the rows whose own graph slot is
+    /// `<graph>` — a handle over a reified subgraph pins over that graph's statement
+    /// layer and nothing else. Consequently this digest is a function of `<graph>`'s
+    /// content alone: adding, removing or annotating statements in ANY other graph
+    /// leaves it untouched, which is what makes the additive invariant in
+    /// [`accumulate_named_graph`](Self::accumulate_named_graph) meaningful rather than
+    /// accidental. This is the value a handle's pinned digest is checked against in
+    /// [`pin_handle`](Self::pin_handle).
     #[must_use]
     pub fn graph_digest(&self, graph: &str) -> ContentDigest {
         // Memoized: the frozen dataset makes each graph's canonical digest stable, so
@@ -633,6 +638,124 @@ mod tests {
             absent,
             ContentDigest::of(canonicalize(&empty_ds).nquads.as_bytes())
         );
+    }
+
+    /// A dataset in which `<g1>` carries a base quad, a plain quad about the reifier
+    /// id `r1`, and `r1`'s declaration + annotation. When `with_g2` is set, `<g2>`
+    /// carries statement-layer rows for the SAME reifier id — content that belongs to
+    /// `<g2>` alone and that `<g1>`'s digest must not see.
+    fn shared_reifier_dataset(with_g2: bool) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = iri(&mut b, "a");
+        let related = iri(&mut b, "related");
+        let bo = iri(&mut b, "b");
+        let c = iri(&mut b, "c");
+        let r1 = iri(&mut b, "r1");
+        let kind = iri(&mut b, "kind");
+        let record = iri(&mut b, "record");
+        let source = iri(&mut b, "source");
+        let ledger = iri(&mut b, "ledger");
+        let elsewhere = iri(&mut b, "elsewhere");
+        let g1 = b.intern_iri("http://example.org/g1");
+        let g2 = b.intern_iri("http://example.org/g2");
+
+        b.push_quad(a, related, bo, Some(g1));
+        b.push_quad(r1, kind, record, Some(g1));
+        let t1 = b.intern_triple(a, related, bo);
+        b.push_reifier_in_graph(r1, t1, Some(g1));
+        b.push_annotation_in_graph(r1, source, ledger, Some(g1));
+
+        if with_g2 {
+            b.push_quad(a, related, c, Some(g2));
+            let t2 = b.intern_triple(a, related, c);
+            b.push_reifier_in_graph(r1, t2, Some(g2));
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+        }
+        b.freeze().expect("valid")
+    }
+
+    fn bundle_over(dataset: Arc<RdfDataset>) -> PipelineBundle<SyntheticHandle> {
+        PipelineBundle::new(
+            dataset,
+            RdfLookaside::default(),
+            Arc::new(ContentStore::new()),
+            DatasetProvenance::new(),
+        )
+    }
+
+    /// `<g1>`'s digest is a function of `<g1>`'s content alone: adding a declaration
+    /// and an annotation for the same reifier id to `<g2>` leaves it untouched. A
+    /// digest that moved when an unrelated graph changed would break every pin over
+    /// `<g1>` for a reason that has nothing to do with `<g1>`.
+    #[test]
+    fn graph_digest_ignores_another_graphs_statement_layer() {
+        let without = bundle_over(shared_reifier_dataset(false));
+        let with = bundle_over(shared_reifier_dataset(true));
+
+        assert_eq!(
+            without.graph_digest("http://example.org/g1"),
+            with.graph_digest("http://example.org/g1"),
+            "<g1>'s digest must not observe statement-layer rows asserted in <g2>"
+        );
+
+        // Non-vacuity of the fixture: <g2>'s own digest DOES move, and the two graphs
+        // do not simply hash alike.
+        assert_ne!(
+            without.graph_digest("http://example.org/g2"),
+            with.graph_digest("http://example.org/g2"),
+            "the added rows must be observable somewhere"
+        );
+        assert_ne!(
+            with.graph_digest("http://example.org/g1"),
+            with.graph_digest("http://example.org/g2")
+        );
+    }
+
+    /// The same isolation through the pinning lane: a handle pinned over `<g1>` still
+    /// verifies after `<g2>`'s statement layer is folded into the carrier.
+    #[test]
+    fn accumulating_a_graphs_statement_layer_leaves_a_pinned_graph_alone() {
+        let mut bundle = bundle_over(shared_reifier_dataset(false));
+        let g1 = "http://example.org/g1";
+        let pinned = bundle.graph_digest(g1);
+        bundle
+            .pin_handle(
+                g1,
+                SyntheticHandle {
+                    note: "g1".to_owned(),
+                },
+                pinned,
+            )
+            .expect("pin over <g1>");
+
+        // A fresh dataset holding ONLY <g2>'s rows — base quad plus the statement
+        // layer for the reifier id <g1> also uses.
+        let g2_only = {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let c = iri(&mut b, "c");
+            let r1 = iri(&mut b, "r1");
+            let source = iri(&mut b, "source");
+            let elsewhere = iri(&mut b, "elsewhere");
+            let g2 = b.intern_iri("http://example.org/g2");
+            b.push_quad(a, related, c, Some(g2));
+            let t2 = b.intern_triple(a, related, c);
+            b.push_reifier_in_graph(r1, t2, Some(g2));
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+            b.freeze().expect("valid")
+        };
+
+        bundle
+            .accumulate_named_graph(
+                "http://example.org/g2",
+                &g2_only,
+                SyntheticHandle {
+                    note: "g2".to_owned(),
+                },
+            )
+            .expect("folding <g2> must not disturb the pinned <g1>");
+        assert_eq!(bundle.graph_digest(g1), pinned);
     }
 
     #[test]

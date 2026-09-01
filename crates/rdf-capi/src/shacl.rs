@@ -71,6 +71,10 @@ fn entail_to_ntriples_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, 
 /// materialized dataset (base graph plus every inferred triple) as canonical
 /// N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
 ///
+/// Nothing is dropped on the way out: the underlying writer is the graph-carrying
+/// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+/// are single-graph syntaxes, not because a graph slot was discarded.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.

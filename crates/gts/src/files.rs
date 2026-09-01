@@ -249,6 +249,7 @@ impl TermBuilder {
             lang: None,
             direction: None,
             reifier: None,
+            triple: None,
         });
         self.ids.insert(key, id);
         id
@@ -281,6 +282,7 @@ fn iri_term(value: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -292,6 +294,7 @@ fn literal_term(value: &str, datatype: Option<usize>) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -303,6 +306,7 @@ fn bnode_term(label: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 

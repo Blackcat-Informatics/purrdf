@@ -1387,6 +1387,14 @@ fn build_nested_triple_node(
 
 /// Encode one component (subject or object) of a triple term, recursing on nested triple
 /// terms so `<<( <<( … )>> p o )>>` round-trips.
+///
+/// # Termination
+///
+/// The `encode_triple_component` → `build_triple_term_value` → `build_nested_triple_node`
+/// cycle carries no depth bound and no visited set. It terminates because the term
+/// table it walks does: every producer of a [`SerGraph`] guarantees that, and the one
+/// that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it, refusing a
+/// self-reaching table with `gts-self-reaching-term`. See `ser_model::write_term`.
 fn encode_triple_component(graph: &SerGraph, idx: usize) -> Result<CarrierTerm, RdfDiagnostic> {
     let term = &graph.terms[idx];
     if term.kind == SerTermKind::Triple {

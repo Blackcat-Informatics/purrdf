@@ -260,12 +260,13 @@ mod tests {
 
     #[test]
     fn nested_triple_term_with_inner_reifier_round_trips_jsonld() {
-        // A depth-2 nested triple term: the OUTER triple term's subject is itself a
-        // triple term (the INNER one), and the inner triple carries a reifier +
-        // annotation. Every other star round-trip test in this module nests only one
-        // level deep (a triple term appearing in a quad's object position); this is
-        // the first to nest a triple term INSIDE another triple term's component,
-        // which is the only path that exercises the `encode_triple_component` /
+        // A depth-2 nested triple term: the OUTER triple term's object is itself a
+        // triple term (the INNER one) — the one position RDF 1.2 nests a triple
+        // term in — and the inner triple carries a reifier + annotation. Every
+        // other star round-trip test in this module nests only one level deep (a
+        // triple term appearing in a quad's object position); this is the first to
+        // nest a triple term INSIDE another triple term's component, which is the
+        // only path that exercises the `encode_triple_component` /
         // `parse_triple_term` recursion (jsonld.rs) — previously zero coverage.
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("https://e/s");
@@ -274,7 +275,7 @@ mod tests {
         let inner = b.intern_triple(s, p, o); // depth-1 triple term: <<( s p o )>>
         let p2 = b.intern_iri("https://e/p2");
         let o2 = b.intern_iri("https://e/o2");
-        let outer = b.intern_triple(inner, p2, o2); // depth-2: subject is itself a triple term
+        let outer = b.intern_triple(o2, p2, inner); // depth-2: object is itself a triple term
         let subj = b.intern_iri("https://e/subj");
         let asserts = b.intern_iri("https://e/asserts");
         b.push_quad(subj, asserts, outer, None); // assert the nested term in object position

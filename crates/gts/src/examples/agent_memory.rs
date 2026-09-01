@@ -962,6 +962,7 @@ fn iri(value: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -973,6 +974,7 @@ fn lit(value: &str) -> Term {
         lang: None,
         direction: None,
         reifier: None,
+        triple: None,
     }
 }
 
@@ -998,6 +1000,7 @@ fn shift_terms(terms: &[Term], base: usize) -> Vec<Term> {
             lang: term.lang.clone(),
             direction: term.direction.clone(),
             reifier: term.reifier.map(|id| id + base),
+            triple: None,
         })
         .collect()
 }

@@ -1,0 +1,5 @@
+@prefix : <http://example.org/> .
+# Clause 3 crossed with clause 4: the blank reifier comes along, and so do the
+# triples describing the blank node its annotation points at.
+:c :worksAt :acme ~_:r {| :since "2020" ; :recordedBy _:ed |} .
+_:ed :name "Ed" .

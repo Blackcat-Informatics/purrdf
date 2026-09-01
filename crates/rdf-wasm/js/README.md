@@ -169,9 +169,15 @@ ownership, and all limits. Complete examples are in
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
 - `Dataset` — `Dataset.parse(input, format, base?)`, `serialize(format)`,
-  `serializeConfigured(format, optionsJson)`, `serializeWithContext(format, context)`,
+  `serializeWithLoss(format)`, `serializeConfigured(format, optionsJson)`,
+  `serializeWithContext(format, context)`,
   `add` / `delete` / `has` / `match` / `quads` / `size`, iteration.
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
+- `Dataset.serializeWithLoss(format)` — the same document `serialize` returns plus the
+  realized loss of producing it (`statementRowsDropped`,
+  `directionalLiteralsDropped`, `namedGraphRowsDropped`). A single-graph target drops
+  every named graph and a star-incapable one drops the RDF 1.2 statement layer; these
+  counts are how many, partitioned so their sum is the total.
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
 - `Dataset.project(profile, configJson)` / `liftProjection(archive, profile,
@@ -187,7 +193,12 @@ ownership, and all limits. Complete examples are in
   and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
   formats. SELECT `rows` are a single-owner iterable; use `take(index)`,
   `toArray()`, or iteration, and call `free()` when abandoning unconsumed rows.
-  `Dataset.query(...)` remains as the compatibility raw-string helper.
+  `Dataset.query(...)` remains as the compatibility raw-string helper. With no
+  `format`, a graph result is Turtle — or TriG when it carries a named graph, since
+  Turtle has no `GRAPH` construct and would otherwise render a quad-template
+  `CONSTRUCT` as an empty document. Naming a single-graph syntax for such a result
+  throws, listing the graphs and the quad-capable alternatives, rather than returning
+  bytes that omit exactly what the query asked for.
 - `QueryEngine.queryGoverned(dataset, sparql, options?)` /
   `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
   execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,

@@ -84,7 +84,6 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("LICENSING.md", 1),
         ("PROVENANCE.md", 5),
         ("bindings/python-rdflib-shadow/README.md", 3),
-        ("bindings/python/src/py_gts_view.rs", 2),
         ("bindings/python/src/py_store/query.rs", 1),
         ("bindings/python/src/py_store/store.rs", 2),
         ("bindings/python/src/rdf.rs", 1),

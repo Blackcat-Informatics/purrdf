@@ -1312,6 +1312,16 @@ fn serializer_namespaces(
     Ok(namespaces)
 }
 
+/// Write one `<predicate>object</predicate>` property, resolving a quoted-triple object
+/// through `rdf:parseType="Triple"`.
+///
+/// # Termination
+///
+/// The `write_property` → `write_triple_node` cycle carries no depth bound and no
+/// visited set. It terminates because the term table it walks does: every producer of a
+/// [`SerGraph`] guarantees that, and the one that takes a caller-supplied graph
+/// (`crate::gts::gts_to_ser`) proves it, refusing a self-reaching table with
+/// `gts-self-reaching-term`. See `ser_model::write_term`.
 fn write_property(
     out: &mut String,
     indent: &str,

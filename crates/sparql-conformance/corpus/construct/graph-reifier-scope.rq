@@ -1,0 +1,6 @@
+PREFIX : <http://example.org/>
+CONSTRUCT {
+  GRAPH <http://example.org/out> { ?s :related ?o ~:r1 {| :source :ledger |} }
+  GRAPH <http://example.org/other> { :r1 :source :elsewhere }
+}
+WHERE { ?s :knows ?o }
