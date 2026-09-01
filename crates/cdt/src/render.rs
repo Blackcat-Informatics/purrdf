@@ -36,6 +36,15 @@
 //! mode, because every inhabitant of the type has a spelling. It walks the value
 //! with an explicit heap job stack and never recurses, so it is safe on a value of
 //! any admissible depth.
+//!
+//! # Measuring without materialising
+//!
+//! [`canonical_lexical_len`] answers "how many bytes would that be?" without
+//! allocating them. It is not a second, parallel spelling of the form — it drives
+//! the **same** walker through a different [`Sink`], so the two can never drift.
+//! [`crate::functions`] needs it: a minted composite must be refused *before* it is
+//! built when its canonical form would exceed [`crate::MAX_LEXICAL_BYTES`], and
+//! rendering the very thing you are trying not to allocate is not a bound check.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -54,6 +63,46 @@ enum Job<'a> {
     Key(&'a CdtKey),
     /// Emit a fixed piece of punctuation.
     Punct(&'static str),
+}
+
+/// Where the canonical renderer puts its output.
+///
+/// There are exactly two implementations — [`String`], which materialises the form,
+/// and [`Measure`], which keeps only its byte length — and **one** walker drives
+/// both. Measuring is therefore guaranteed to agree with rendering, byte for byte,
+/// with no second description of the form to fall out of step.
+trait Sink {
+    /// Append a string slice.
+    fn put_str(&mut self, text: &str);
+    /// Append one character.
+    fn put_char(&mut self, ch: char);
+}
+
+impl Sink for String {
+    fn put_str(&mut self, text: &str) {
+        self.push_str(text);
+    }
+
+    fn put_char(&mut self, ch: char) {
+        self.push(ch);
+    }
+}
+
+/// A [`Sink`] that materialises nothing and accumulates only the byte length.
+///
+/// Saturating rather than wrapping: a length that overflows `usize` is astronomically
+/// over every bound this crate enforces, and saturating keeps the comparison against
+/// [`crate::MAX_LEXICAL_BYTES`] correct instead of wrapping it to a small number.
+struct Measure(usize);
+
+impl Sink for Measure {
+    fn put_str(&mut self, text: &str) {
+        self.0 = self.0.saturating_add(text.len());
+    }
+
+    fn put_char(&mut self, ch: char) {
+        self.0 = self.0.saturating_add(ch.len_utf8());
+    }
 }
 
 /// The canonical lexical form of a composite value.
@@ -84,24 +133,33 @@ pub fn canonical_lexical(value: &CdtValue) -> String {
     let mut out = String::new();
     let mut jobs: Vec<Job<'_>> = Vec::new();
     push_value(&mut jobs, value);
-    while let Some(job) = jobs.pop() {
-        match job {
-            Job::Punct(text) => out.push_str(text),
-            Job::Key(key) => write_key(&mut out, key),
-            Job::Term(term) => match term {
-                CdtTerm::Composite(inner) => push_value(&mut jobs, inner.as_ref()),
-                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
-                CdtTerm::Iri(iri) => write_iri(&mut out, iri),
-                CdtTerm::Blank(label) => {
-                    out.push_str("_:");
-                    out.push_str(label);
-                }
-                CdtTerm::Literal(literal) => write_literal(&mut out, literal),
-                CdtTerm::Null => out.push_str("null"),
-            },
-        }
-    }
+    run(&mut out, jobs);
     out
+}
+
+/// The **byte length** of [`canonical_lexical`], computed without allocating it.
+///
+/// Exactly equal to `canonical_lexical(value).len()` for every value, because both
+/// drive the same walker (see the [`Sink`] trait); this one just never keeps the
+/// bytes. That is what lets [`crate::functions`] check a prospective composite
+/// against [`crate::MAX_LEXICAL_BYTES`] *before* deciding to build it.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_cdt::{canonical_lexical, canonical_lexical_len, parse_list};
+///
+/// let value = parse_list("[1, 'two'@en, [ true ]]")?;
+/// assert_eq!(canonical_lexical_len(&value), canonical_lexical(&value).len());
+/// # Ok::<(), purrdf_cdt::CdtError>(())
+/// ```
+#[must_use]
+pub fn canonical_lexical_len(value: &CdtValue) -> usize {
+    let mut out = Measure(0);
+    let mut jobs: Vec<Job<'_>> = Vec::new();
+    push_value(&mut jobs, value);
+    run(&mut out, jobs);
+    out.0
 }
 
 /// The canonical lexical form of a single map key, used by the duplicate-key
@@ -111,6 +169,42 @@ pub fn canonical_key_lexical(key: &CdtKey) -> String {
     let mut out = String::new();
     write_key(&mut out, key);
     out
+}
+
+/// The byte length one element occupies in a canonical form, without allocating it.
+pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
+    let mut out = Measure(0);
+    run(&mut out, alloc::vec![Job::Term(term)]);
+    out.0
+}
+
+/// The byte length one map key occupies in a canonical form, without allocating it.
+pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
+    let mut out = Measure(0);
+    write_key(&mut out, key);
+    out.0
+}
+
+/// Drive the renderer's job stack into a sink. Iterative: nesting costs heap, never
+/// stack.
+fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
+    while let Some(job) = jobs.pop() {
+        match job {
+            Job::Punct(text) => out.put_str(text),
+            Job::Key(key) => write_key(out, key),
+            Job::Term(term) => match term {
+                CdtTerm::Composite(inner) => push_value(&mut jobs, inner.as_ref()),
+                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
+                CdtTerm::Iri(iri) => write_iri(out, iri),
+                CdtTerm::Blank(label) => {
+                    out.put_str("_:");
+                    out.put_str(label);
+                }
+                CdtTerm::Literal(literal) => write_literal(out, literal),
+                CdtTerm::Null => out.put_str("null"),
+            },
+        }
+    }
 }
 
 /// Push the jobs for a composite, in reverse emission order (the stack pops LIFO).
@@ -152,52 +246,52 @@ fn push_triple<'a>(jobs: &mut Vec<Job<'a>>, triple: &'a CdtTripleTerm) {
     jobs.push(Job::Punct("<<("));
 }
 
-fn write_key(out: &mut String, key: &CdtKey) {
+fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
     match key {
         CdtKey::Iri(iri) => write_iri(out, iri),
         CdtKey::Literal(literal) => write_literal(out, literal),
     }
 }
 
-fn write_iri(out: &mut String, iri: &str) {
-    out.push('<');
+fn write_iri<S: Sink>(out: &mut S, iri: &str) {
+    out.put_char('<');
     for ch in iri.chars() {
         if is_iri_forbidden(ch) {
             push_uchar(out, ch);
         } else {
-            out.push(ch);
+            out.put_char(ch);
         }
     }
-    out.push('>');
+    out.put_char('>');
 }
 
-fn write_literal(out: &mut String, literal: &CdtLiteral) {
-    out.push('"');
+fn write_literal<S: Sink>(out: &mut S, literal: &CdtLiteral) {
+    out.put_char('"');
     for ch in literal.lexical.chars() {
         match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
+            '\\' => out.put_str("\\\\"),
+            '"' => out.put_str("\\\""),
+            '\n' => out.put_str("\\n"),
+            '\r' => out.put_str("\\r"),
+            '\t' => out.put_str("\\t"),
+            '\u{8}' => out.put_str("\\b"),
+            '\u{c}' => out.put_str("\\f"),
             c if c.is_control() => push_uchar(out, c),
-            c => out.push(c),
+            c => out.put_char(c),
         }
     }
-    out.push('"');
+    out.put_char('"');
     match &literal.language {
         Some(language) => {
-            out.push('@');
-            out.push_str(language);
+            out.put_char('@');
+            out.put_str(language);
             if let Some(direction) = literal.direction {
-                out.push_str("--");
-                out.push_str(direction.as_str());
+                out.put_str("--");
+                out.put_str(direction.as_str());
             }
         }
         None => {
-            out.push_str("^^");
+            out.put_str("^^");
             write_iri(out, &literal.datatype);
         }
     }
@@ -215,20 +309,20 @@ fn is_iri_forbidden(ch: char) -> bool {
 /// Push a `UCHAR` escape. Every code point this crate escapes is a control code
 /// point or an ASCII delimiter, so the short `\u00XX` form always suffices; the
 /// wider `\UXXXXXXXX` form is emitted for anything else a future caller escapes.
-fn push_uchar(out: &mut String, ch: char) {
+fn push_uchar<S: Sink>(out: &mut S, ch: char) {
     let value = ch as u32;
     if value <= 0xFFFF {
-        out.push_str("\\u");
+        out.put_str("\\u");
         push_hex(out, value, 4);
     } else {
-        out.push_str("\\U");
+        out.put_str("\\U");
         push_hex(out, value, 8);
     }
 }
 
-fn push_hex(out: &mut String, value: u32, digits: u32) {
+fn push_hex<S: Sink>(out: &mut S, value: u32, digits: u32) {
     for shift in (0..digits).rev() {
         let nibble = (value >> (shift * 4)) & 0xF;
-        out.push(HEX_UPPER[nibble as usize] as char);
+        out.put_char(HEX_UPPER[nibble as usize] as char);
     }
 }

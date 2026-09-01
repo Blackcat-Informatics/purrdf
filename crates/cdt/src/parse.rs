@@ -327,7 +327,8 @@ impl<'a> Scanner<'a> {
                     self.skip_whitespace();
                     let top = stack.last().expect("the frame stack is never empty here");
                     // An empty composite closes immediately. A triple term has a
-                    // fixed arity, so it never takes this branch.
+                    // fixed arity of three, so it is never closed while empty and the
+                    // shortcut does not apply to it.
                     if !matches!(top, Frame::Triple(_))
                         && top.is_empty()
                         && self.peek() == Some(top.close())

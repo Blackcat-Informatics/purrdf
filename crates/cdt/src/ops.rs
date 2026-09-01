@@ -53,7 +53,9 @@ use core::cmp::Ordering;
 
 use purrdf_xsd::XsdValue;
 
+use crate::datatype::CdtDatatype;
 use crate::error::CdtTypeError;
+use crate::limits::MAX_NESTING_DEPTH;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
 use crate::value::CdtValue;
 
@@ -230,16 +232,82 @@ fn xsd_value(literal: &CdtLiteral) -> Option<XsdValue> {
         .flatten()
 }
 
+/// The composite value a `cdt:List` / `cdt:Map` **literal** denotes, or `None` when
+/// the literal is not one of those.
+///
+/// # Why an element that *is* a literal can still be a composite
+///
+/// SEP-0009 admits one and the same composite element written two ways inside a
+/// lexical form: as the grammar's own nested `List` / `Map` production, or as an
+/// ordinary `RDFLiteral` carrying the composite datatype. The corpus writes the same
+/// test both ways and demands the same answer —
+/// `list-functions/contains-07.rq` nests `[2]` while `contains-08.rq` writes
+/// `'[2]'^^cdt:List`, and both must find it; `contains-09.rq` and `contains-10.rq`
+/// do the same for a map. So the two spellings denote the same **value**, and the
+/// value relations have to see through the literal one.
+///
+/// Term identity does not, and must not: `list-functions/sameterm-03.rq` requires two
+/// spellings of one value to be different *terms*. That is exactly why the literal
+/// keeps its lexical form ([`CdtLiteral`] is verbatim), why map keys are still
+/// distinguished lexically, and why this resolution lives here in the value relation
+/// and nowhere else.
+///
+/// `Some(Err(_))` is a literal that claims a composite datatype and whose lexical
+/// form does not parse: it is ill-typed and denotes nothing, so comparing it is a
+/// type error rather than an inequality.
+fn literal_composite(literal: &CdtLiteral) -> Option<Result<CdtValue, CdtTypeError>> {
+    if literal.language.is_some() {
+        return None;
+    }
+    let datatype = CdtDatatype::from_iri(&literal.datatype)?;
+    Some(
+        crate::parse::parse_cdt(&literal.lexical, datatype).map_err(|_| CdtTypeError {
+            reason: "a cdt:List / cdt:Map literal whose lexical form is malformed has no value",
+        }),
+    )
+}
+
+/// Spend one level of the composite-literal resolution budget.
+///
+/// Resolving a `cdt:`-typed literal into a value is the one step in this module that
+/// re-enters the comparator, because the value it yields is owned and cannot be
+/// pushed onto a worklist of borrowed terms. A literal may carry a literal that
+/// carries a literal, so the chain is bounded here — by the same
+/// [`MAX_NESTING_DEPTH`] that bounds *syntactic* nesting, since a composite reached
+/// through an embedded literal is nested just as surely as one reached through a
+/// bracket. That keeps the re-entry depth at 64 frames whatever the input, which is
+/// the same budget the value tree's own `Drop` glue already runs on.
+fn spend(budget: usize) -> Result<usize, CdtTypeError> {
+    budget.checked_sub(1).ok_or(CdtTypeError {
+        reason: "cdt:List / cdt:Map literals nested deeper than the composite nesting bound",
+    })
+}
+
 /// SPARQL `=` over two literals.
 ///
-/// Same term is always `true`. Otherwise: a language-tagged string is never equal to
-/// anything it is not identical to; two literals whose datatypes are both in the XSD
-/// value space have a definite answer (different value spaces are `false`, not an
-/// error — SPARQL's `RDFterm-equal` calls them "known to be different"); anything
-/// else is a type error.
-fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> Result<bool, CdtTypeError> {
+/// Same term is always `true`. Otherwise, in order: a literal that denotes a
+/// composite is compared as that composite, and is never equal to a literal that does
+/// not denote one; a language-tagged string is never equal to anything it is not
+/// identical to; two literals whose datatypes are both in the XSD value space have a
+/// definite answer (different value spaces are `false`, not an error — SPARQL's
+/// `RDFterm-equal` calls them "known to be different"); anything else is a type
+/// error.
+fn literal_equal(a: &CdtLiteral, b: &CdtLiteral, budget: usize) -> Result<bool, CdtTypeError> {
     if a == b {
         return Ok(true);
+    }
+    match (literal_composite(a), literal_composite(b)) {
+        (Some(left), Some(right)) => {
+            return value_equal_at(&left?, &right?, spend(budget)?);
+        }
+        // A composite value is not an XSD value and not a language-tagged string, so
+        // this is "known to be different" — but an ill-typed composite literal still
+        // denotes nothing, and that is an error rather than an inequality.
+        (Some(composite), None) | (None, Some(composite)) => {
+            composite?;
+            return Ok(false);
+        }
+        (None, None) => {}
     }
     if a.language.is_some() || b.language.is_some() {
         // Language-tagged strings have no value space beyond term identity, and a
@@ -256,12 +324,20 @@ fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> Result<bool, CdtTypeError> {
 
 /// SPARQL `=` over two elements that are not both composites and not both triple
 /// terms (those two cases are driven by the iterative walkers instead).
-fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
+fn leaf_equal(a: &CdtTerm, b: &CdtTerm, budget: usize) -> Result<bool, CdtTypeError> {
     match (a, b) {
         (CdtTerm::Iri(p), CdtTerm::Iri(q)) => Ok(p == q),
         (CdtTerm::Blank(p), CdtTerm::Blank(q)) => Ok(p == q),
-        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => literal_equal(p, q),
+        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => literal_equal(p, q, budget),
         (CdtTerm::Null, CdtTerm::Null) => Ok(true),
+        // A nested composite and a composite-typed literal are two spellings of one
+        // value; see `literal_composite`.
+        (CdtTerm::Composite(p), CdtTerm::Literal(q))
+        | (CdtTerm::Literal(q), CdtTerm::Composite(p)) => match literal_composite(q) {
+            None => Ok(false),
+            Some(Err(error)) => Err(error),
+            Some(Ok(value)) => value_equal_at(p.as_ref(), &value, spend(budget)?),
+        },
         // Nulls are indistinguishable from each other and distinguishable from
         // everything else; different term categories are simply not equal, which is
         // `false` and not a type error.
@@ -307,13 +383,16 @@ fn leaf_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
 /// );
 /// ```
 pub fn term_equal(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
-    equal_worklist(alloc::vec![(a, b)])
+    equal_worklist(alloc::vec![(a, b)], MAX_NESTING_DEPTH)
 }
 
 /// Drive an equality worklist to a verdict. Every pair on the list must be equal for
 /// the answer to be `true`.
-fn equal_worklist<'a>(mut work: Vec<(&'a CdtTerm, &'a CdtTerm)>) -> Result<bool, CdtTypeError> {
-    let mut deferred: Option<CdtTypeError> = None;
+fn equal_worklist<'a>(
+    mut work: Vec<(&'a CdtTerm, &'a CdtTerm)>,
+    budget: usize,
+) -> Result<bool, CdtTypeError> {
+    let mut withheld: Option<CdtTypeError> = None;
     while let Some((x, y)) = work.pop() {
         match (x, y) {
             (CdtTerm::TripleTerm(p), CdtTerm::TripleTerm(q)) => {
@@ -349,18 +428,18 @@ fn equal_worklist<'a>(mut work: Vec<(&'a CdtTerm, &'a CdtTerm)>) -> Result<bool,
                     _ => return Ok(false),
                 }
             }
-            _ => match leaf_equal(x, y) {
+            _ => match leaf_equal(x, y, budget) {
                 Ok(true) => {}
                 Ok(false) => return Ok(false),
                 Err(error) => {
-                    if deferred.is_none() {
-                        deferred = Some(error);
+                    if withheld.is_none() {
+                        withheld = Some(error);
                     }
                 }
             },
         }
     }
-    match deferred {
+    match withheld {
         Some(error) => Err(error),
         None => Ok(true),
     }
@@ -531,7 +610,7 @@ pub fn list_equal(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
     if a.len() != b.len() {
         return Ok(false);
     }
-    equal_worklist(a.iter().zip(b.iter()).collect())
+    equal_worklist(a.iter().zip(b.iter()).collect(), MAX_NESTING_DEPTH)
 }
 
 /// SEP-0009 `cdt:map-equal` over two maps' entries.
@@ -549,6 +628,7 @@ pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
             .zip(b.iter())
             .map(|(p, q)| (&p.value, &q.value))
             .collect(),
+        MAX_NESTING_DEPTH,
     )
 }
 
@@ -585,9 +665,33 @@ pub fn map_less_than(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeErro
 /// SEP-0009 `=` over two composite values, dispatching on their datatypes. A list is
 /// never equal to a map.
 pub fn value_equal(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
+    value_equal_at(a, b, MAX_NESTING_DEPTH)
+}
+
+/// [`value_equal`], carrying the remaining composite-literal resolution budget (see
+/// [`spend`]).
+fn value_equal_at(a: &CdtValue, b: &CdtValue, budget: usize) -> Result<bool, CdtTypeError> {
     match (a, b) {
-        (CdtValue::List(left), CdtValue::List(right)) => list_equal(left, right),
-        (CdtValue::Map(left), CdtValue::Map(right)) => map_equal(left, right),
+        (CdtValue::List(left), CdtValue::List(right)) => {
+            if left.len() != right.len() {
+                return Ok(false);
+            }
+            equal_worklist(left.iter().zip(right.iter()).collect(), budget)
+        }
+        (CdtValue::Map(left), CdtValue::Map(right)) => {
+            if left.len() != right.len()
+                || left.iter().zip(right.iter()).any(|(p, q)| p.key != q.key)
+            {
+                return Ok(false);
+            }
+            equal_worklist(
+                left.iter()
+                    .zip(right.iter())
+                    .map(|(p, q)| (&p.value, &q.value))
+                    .collect(),
+                budget,
+            )
+        }
         _ => Ok(false),
     }
 }

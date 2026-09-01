@@ -76,6 +76,16 @@
 //! module. Exceeding one is a typed [`CdtError`] carrying a byte offset, never a
 //! panic and never an abort.
 //!
+//! # The function library
+//!
+//! SEP-0009 also defines fifteen functions over these values — `cdt:List`,
+//! `cdt:concat`, `cdt:get`, `cdt:merge`, `cdt:put` and the rest. [`functions`] is
+//! the closed registry ([`CdtFn`], with each member's spec IRI and arity) and the
+//! pure value-space operation behind each one, written against SEP-0009's own
+//! conformance corpus with the pinning test named in every rustdoc. Functions that
+//! *mint* a composite check all three bounds against the prospective result before
+//! allocating any of it.
+//!
 //! # The canonical lexical form
 //!
 //! SEP-0009 defines none, so this crate chooses one — for values PurRDF *computes*,
@@ -120,6 +130,7 @@ extern crate alloc;
 
 pub mod datatype;
 pub mod error;
+pub mod functions;
 pub mod limits;
 pub mod literal;
 pub mod ops;
@@ -133,6 +144,13 @@ pub use datatype::{
     XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING,
 };
 pub use error::{CdtError, CdtTypeError};
+pub use functions::{
+    CDT_FUNCTIONS, CdtArity, CdtFn, CdtOutcome, MapRemoval, concat, contains, contains_key, get,
+    head, integer_argument, keys, list_concat, list_constructor, list_contains, list_get,
+    list_head, list_reverse, list_size, list_subseq, list_tail, map_constructor, map_contains_key,
+    map_get, map_keys, map_merge, map_put, map_remove, map_size, merge, put, remove, reverse, size,
+    subseq, tail,
+};
 pub use limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH};
 pub use literal::{LiteralValue, parse_literal};
 pub use ops::{
@@ -140,6 +158,6 @@ pub use ops::{
     total_key_cmp, total_term_cmp, total_value_cmp, value_equal, value_less_than,
 };
 pub use parse::{parse_cdt, parse_cdt_by_iri, parse_list, parse_map};
-pub use render::{canonical_key_lexical, canonical_lexical};
+pub use render::{canonical_key_lexical, canonical_lexical, canonical_lexical_len};
 pub use term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
 pub use value::CdtValue;

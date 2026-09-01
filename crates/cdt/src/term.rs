@@ -240,6 +240,39 @@ impl CdtKey {
         }
     }
 
+    /// The key a term denotes, or `None` when the term is **not admissible as a map
+    /// key** at all.
+    ///
+    /// The inverse of [`CdtKey::to_term`], and total in the only way it can be:
+    /// production `[7] MapKey` admits an `IRIREF` and a literal and nothing else, so
+    /// a blank node, a `null`, a nested composite and a triple term each have no key
+    /// to denote. That is a real distinction with observable consequences in
+    /// [`crate::functions`] — `cdt:put` with a blank-node key raises, while
+    /// `cdt:remove` with one leaves the map alone — so it is answered here once,
+    /// rather than re-derived at each call site.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_cdt::{CdtKey, CdtLiteral, CdtTerm};
+    ///
+    /// let literal = CdtTerm::Literal(CdtLiteral::plain("a"));
+    /// assert_eq!(CdtKey::from_term(&literal), Some(CdtKey::Literal(CdtLiteral::plain("a"))));
+    /// // A blank node can never be a map key.
+    /// assert_eq!(CdtKey::from_term(&CdtTerm::Blank("b0".into())), None);
+    /// assert_eq!(CdtKey::from_term(&CdtTerm::Null), None);
+    /// ```
+    #[must_use]
+    pub fn from_term(term: &CdtTerm) -> Option<Self> {
+        match term {
+            CdtTerm::Iri(iri) => Some(Self::Iri(iri.clone())),
+            CdtTerm::Literal(literal) => Some(Self::Literal(literal.clone())),
+            CdtTerm::Blank(_) | CdtTerm::Null | CdtTerm::TripleTerm(_) | CdtTerm::Composite(_) => {
+                None
+            }
+        }
+    }
+
     /// The ordering rank of this key's category, aligned with [`CdtTerm::rank`] so
     /// key order and term order agree.
     pub(crate) const fn rank(&self) -> u8 {
