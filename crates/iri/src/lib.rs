@@ -16,6 +16,15 @@
 //!   URI subset ([`parse_uri`]). Component spans (scheme/authority/path/query/
 //!   fragment) are exposed without re-encoding.
 //! * **Reference resolution** — RFC-3986 §5 strict resolution ([`Iri::resolve`]).
+//! * **Base scoping** — [`BaseIri`] (an IRI whose absoluteness is checked once and
+//!   then carried by the type) and [`BaseScope`], the in-scope base *stack* shared
+//!   by every codec: `xml:base` per element, JSON-LD `@base` per context frame, and
+//!   Turtle `@base` rebinding relative to the previous base. It separates the two
+//!   grammar families — [`BaseScope::resolve`] for syntaxes that admit relative
+//!   references, [`BaseScope::resolve_absolute_only`] for those that do not — and
+//!   carries [`BaseOrigin`] provenance so a diagnostic can name *which* base was in
+//!   force and where it came from. [`BaseIri::relativize`] is the inverse, letting a
+//!   serializer emit `<>` or `<foo>` under a base.
 //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
 //!   encoding, and dot-segment normalization. Idempotent.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
@@ -25,9 +34,23 @@
 //! # Hard-fail
 //!
 //! Malformed input is a typed [`IriError`], never a degraded fallback or silent
-//! default (repo `no-optionality` doctrine). The one `Option`-returning surface is
-//! CURIE expansion, where `None` is a *semantic* "not a CURIE / undeclared prefix"
-//! signal, faithful to the SSSOM behavior this crate subsumes.
+//! default (repo `no-optionality` doctrine). A relative reference with no base in
+//! scope is [`IriError::NoBase`] — the crate never fabricates a base from a
+//! retrieval IRI or the filesystem, because that would break byte determinism,
+//! diverge across surfaces that have no retrieval IRI (stdin, wasm, the C ABI), and
+//! leak local paths into published RDF. Every failure carries a stable
+//! [`IriError::diagnostic_code`], which is the single owner of those strings for the
+//! whole workspace.
+//!
+//! There are exactly **two** `Option`-returning surfaces, and in both the `None` is
+//! a *semantic* answer rather than a degraded failure:
+//!
+//! * [`expand_curie`] — `None` is "not a CURIE / undeclared prefix", faithful to the
+//!   SSSOM behavior this crate subsumes.
+//! * [`BaseIri::relativize`] — `None` is "no relative spelling of this target exists
+//!   against this base" (different scheme, different authority, or a target outside
+//!   the base's dot-normalized image); the caller's correct response is to emit the
+//!   absolute IRI, not to raise an error.
 //!
 //! # Examples
 //!
@@ -77,6 +100,7 @@
 )]
 #![forbid(unsafe_code)]
 
+mod base;
 mod curie;
 mod error;
 mod normalize;
@@ -84,6 +108,7 @@ mod parse;
 pub mod pos;
 mod resolve;
 
+pub use base::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};
 pub use error::{IriError, Result};
 pub use parse::{Iri, parse, parse_uri};
