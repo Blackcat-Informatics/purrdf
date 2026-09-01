@@ -79,6 +79,32 @@ impl ShexError {
         Self::Shexj(reason.into())
     }
 
+    /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
+    /// reason with that crate's [`diagnostic_code`].
+    ///
+    /// Every IRI failure ShEx reports comes through here, so "a relative IRI
+    /// reference with no base in scope" is spelled `iri-relative-no-base` in a ShEx
+    /// diagnostic exactly as it is in an RDF or SPARQL one — ShEx does not get its
+    /// own vocabulary for a condition the whole workspace shares.
+    ///
+    /// [`diagnostic_code`]: purrdf_iri::IriError::diagnostic_code
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_shex::ShexError;
+    ///
+    /// let cause = purrdf_iri::BaseScope::empty().resolve("knows").unwrap_err();
+    /// let err = ShexError::iri("knows", &cause);
+    /// assert!(err.to_string().contains("iri-relative-no-base"));
+    /// ```
+    pub fn iri(lexical: impl Into<String>, cause: &purrdf_iri::IriError) -> Self {
+        Self::Iri {
+            lexical: lexical.into(),
+            reason: format!("{}: {cause}", cause.diagnostic_code()),
+        }
+    }
+
     /// Construct a [`ShexError::Import`] for an unresolvable import IRI,
     /// preserving the concrete `cause` the resolver reported.
     pub fn import(iri: impl Into<String>, cause: Self) -> Self {

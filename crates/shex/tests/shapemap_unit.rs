@@ -208,6 +208,24 @@ fn quoted_triple_term_requires_closing_delimiter() {
     assert!(err.is_err());
 }
 
+/// A relative `<iri>` in a shape map with no base is refused with the same shared
+/// code the schema parser reports, rather than becoming a selector that silently
+/// matches nothing and yields a clean, empty result map.
+#[test]
+fn relative_selector_with_no_base_is_refused() {
+    let err = parse_shape_map("<alice>@<http://a.example/S>", None).unwrap_err();
+    assert!(err.to_string().contains("iri-relative-no-base"), "{err}");
+    let map = parse_shape_map(
+        "<alice>@<http://a.example/S>",
+        Some("http://a.example/dir/"),
+    )
+    .expect("a base in scope resolves the selector");
+    assert_eq!(
+        map.0[0].node,
+        NodeSelector::Node(iri("http://a.example/dir/alice"))
+    );
+}
+
 #[test]
 fn resolve_then_validate() {
     let data = data();

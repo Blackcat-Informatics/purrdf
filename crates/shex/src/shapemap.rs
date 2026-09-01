@@ -31,6 +31,7 @@
 //! The shape label is `@START` or `@<label>`.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
@@ -97,12 +98,21 @@ pub struct ShapeMap(pub Vec<ShapeAssociation>);
 /// # Errors
 ///
 /// Returns [`ShexError::Syntax`] on a grammar violation and [`ShexError::Iri`]
-/// when a relative IRI cannot be resolved against `base`.
+/// when a relative IRI cannot be resolved — including when `base` is `None`, where
+/// a relative reference is the shared `iri-relative-no-base` failure rather than a
+/// selector that silently matches nothing.
 pub fn parse_shape_map(input: &str, base: Option<&str>) -> Result<ShapeMap> {
+    let scope = match base {
+        Some(iri) => BaseScope::rooted(
+            BaseIri::parse(iri).map_err(|e| ShexError::iri(iri, &e))?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
     let mut parser = MapParser {
         chars: input.chars().collect(),
         pos: 0,
-        base,
+        base: scope,
     };
     parser.parse_map()
 }
@@ -234,13 +244,13 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
-struct MapParser<'a> {
+struct MapParser {
     chars: Vec<char>,
     pos: usize,
-    base: Option<&'a str>,
+    base: BaseScope,
 }
 
-impl MapParser<'_> {
+impl MapParser {
     fn parse_map(&mut self) -> Result<ShapeMap> {
         let mut associations = Vec::new();
         self.skip_ws();
@@ -493,19 +503,18 @@ impl MapParser<'_> {
         char::from_u32(value).ok_or_else(|| self.err("escape is not a scalar value"))
     }
 
+    /// Resolve an `<iri>` against the base the map was parsed with.
+    ///
+    /// The compact shape-map syntax admits relative references, so this is
+    /// [`BaseScope::resolve`] — the same entry point the ShExC parser uses, with the
+    /// same refusal when no base is in scope. Keeping a relative reference verbatim
+    /// here was worse than in a schema: an unresolvable node selector matches
+    /// nothing in the data and reports a clean, empty result map.
     fn resolve(&self, reference: &str) -> Result<String> {
-        let Some(base) = self.base else {
-            return Ok(reference.to_owned());
-        };
-        let base = purrdf_iri::parse(base).map_err(|e| ShexError::Iri {
-            lexical: base.to_owned(),
-            reason: e.to_string(),
-        })?;
-        let resolved = base.resolve(reference).map_err(|e| ShexError::Iri {
-            lexical: reference.to_owned(),
-            reason: e.to_string(),
-        })?;
-        Ok(resolved.as_str().to_owned())
+        self.base
+            .resolve(reference)
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| ShexError::iri(reference, &e))
     }
 
     // ── scanning primitives ──────────────────────────────────────────────────
