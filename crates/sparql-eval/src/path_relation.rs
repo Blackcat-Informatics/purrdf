@@ -196,7 +196,12 @@
 //!     QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY },
 //! )?;
 //!
-//! let SparqlResult::Solutions { rows, .. } = result else { unreachable!("a SELECT") };
+//! // Propagated, not `unreachable!`. This example is meant to be copied, and a host that
+//! // copies a panic into its own result-handling has copied a crash for the one case
+//! // where the query text and the result shape ever disagree.
+//! let SparqlResult::Solutions { rows, .. } = result else {
+//!     return Err("a SELECT must answer with solutions".into());
+//! };
 //! // a→b (one row) and a→b→c (two rows).
 //! assert_eq!(rows.len(), 3);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -975,11 +980,20 @@ impl PathGraph {
     /// A binary search rather than a map lookup: `nodes` is already sorted by
     /// [`TermValue`] `Ord`, and a map would add a second membership structure whose
     /// iteration order somebody could later mistake for a source of emission order.
+    ///
+    /// The `None` here means ONE thing — "not a node of this snapshot" — and the narrowing
+    /// to `u32` is deliberately not allowed to add a second meaning to it. An index into
+    /// `nodes` fits `u32` because [`from_dataset`](Self::from_dataset) refused the
+    /// snapshot outright when the node table did not, so a failure at this conversion is
+    /// impossible by construction rather than merely unlikely; laundering it into
+    /// "not present" would turn a broken invariant into a benign empty answer, which is
+    /// the one shape this module exists to refuse.
     fn node_index(&self, value: &TermValue) -> Option<u32> {
-        self.nodes
-            .binary_search(value)
-            .ok()
-            .and_then(|index| u32::try_from(index).ok())
+        let index = self.nodes.binary_search(value).ok()?;
+        Some(
+            u32::try_from(index)
+                .expect("node table length was checked against u32::MAX at construction"),
+        )
     }
 
     /// The node a hop arrives at.
@@ -1235,9 +1249,21 @@ impl Prepared {
         }
 
         // A bound `?start` is a single seed; an unknown one participates in no edge.
+        //
+        // Every `None` this function returns means "these bound arguments can match
+        // nothing", and the seed enumeration is not allowed to smuggle a second meaning
+        // into it: a node count that did not fit `u32` would be a broken invariant, not an
+        // empty answer, and returning `None` for it would open an `EmptyCursor` — zero
+        // rows, reported complete. It cannot happen, because
+        // [`PathGraph::from_dataset`] refuses a snapshot whose node table exceeds the
+        // dense index space, and that is asserted here rather than laundered.
         let seeds: Vec<u32> = match bound[POS_START].as_ref() {
             Some(value) => vec![graph.node_index(value)?],
-            None => (0..u32::try_from(graph.node_count()).ok()?).collect(),
+            None => {
+                let node_count = u32::try_from(graph.node_count())
+                    .expect("node table length was checked against u32::MAX at construction");
+                (0..node_count).collect()
+            }
         };
 
         // A bound `?end` is an exact prune, not merely a filter.
