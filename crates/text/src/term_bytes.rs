@@ -79,7 +79,7 @@ const DIRECTION_RTL: u8 = 0x02;
 /// hand-written triple term nests once or twice) and far below the depth at
 /// which the frames here threaten a default stack, so it separates real data
 /// from a resource attack without arbitrating between two plausible datasets.
-const MAX_TRIPLE_DEPTH: u32 = 64;
+pub(crate) const MAX_TRIPLE_DEPTH: u32 = 64;
 
 /// Append the canonical, injective encoding of `value` to `out`.
 ///
@@ -184,7 +184,11 @@ fn encode_at_depth(value: &TermValue, out: &mut Vec<u8>, depth: u32) -> Result<(
 
 /// Append `text` as a little-endian `u64` byte length followed by its UTF-8
 /// bytes — the one self-delimiting string form this encoding uses.
-fn push_str(text: &str, out: &mut Vec<u8>) {
+///
+/// Visible to the crate so the index fingerprints — which interleave terms with
+/// language tags, dictionary entries and counts — write their strings through
+/// this same length-prefixed form rather than inventing a second one.
+pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
     let bytes = text.as_bytes();
     // `usize` is at most 64 bits on every target this workspace builds for
     // (x86-64 and wasm32, where it is 32), so the length always fits.

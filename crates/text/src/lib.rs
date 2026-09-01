@@ -57,9 +57,13 @@
 mod analysis;
 mod error;
 mod fixed;
+mod index;
 mod term_bytes;
 
 pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_versions};
 pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
+pub use index::{
+    Document, GraphSelector, PartitionKey, PartitionStats, TextIndex, TextIndexConfig,
+};
 pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
