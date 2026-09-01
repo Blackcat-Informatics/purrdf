@@ -75,6 +75,34 @@ fn pub_digest(value: &Value) -> Option<String> {
     }
 }
 
+/// The `(s, p, o)` a triple TERM would resolve to once `pending` is recorded.
+///
+/// This MUST mirror [`Graph::triple_of`] spelling for spelling. `triple_of` is
+/// the one place a folded quoted triple's components are resolved, and every
+/// walker of those components — the segment union, the canonical writer, every
+/// projection to text — recurses through it. A spelling this function fails to
+/// follow is a loop the fold admits and the first such walker then dies on.
+fn pending_binding(graph: &Graph, term_id: usize, pending: (usize, Triple3)) -> Option<Triple3> {
+    let term = graph.terms.get(term_id)?;
+    if term.kind != TermKind::Triple {
+        return None;
+    }
+    // A self-describing triple term (`tt`) can only name already-introduced
+    // components, so it is acyclic by construction and takes precedence.
+    if let Some(triple) = term.triple {
+        return Some(triple);
+    }
+    // Otherwise the components come from the statement layer, through the
+    // reifier id the term names — or, when it names none, through its OWN id
+    // (§7.1: a self-bound triple term may leave `rf` implicit). The row being
+    // read is not recorded yet, so substitute it for the id it binds.
+    let rid = term.reifier.unwrap_or(term_id);
+    if rid == pending.0 {
+        return Some(pending.1);
+    }
+    graph.reifier(rid)
+}
+
 fn term_depends_on_anchor(
     graph: &Graph,
     term_id: usize,
@@ -88,22 +116,7 @@ fn term_depends_on_anchor(
     if !seen.insert(term_id) {
         return false;
     }
-    let Some(term) = graph.terms.get(term_id) else {
-        return false;
-    };
-    if term.kind != TermKind::Triple {
-        return false;
-    }
-    // A self-describing triple term (`tt`) can only name already-introduced
-    // components, so it is acyclic by construction; only the legacy indirection
-    // through a reifier id can close a loop.
-    let binding = match (term.triple, term.reifier) {
-        (Some(triple), _) => Some(triple),
-        (None, Some(reifier)) if reifier == pending.0 => Some(pending.1),
-        (None, Some(reifier)) => graph.reifier(reifier),
-        (None, None) => None,
-    };
-    let Some(triple) = binding else {
+    let Some(triple) = pending_binding(graph, term_id, pending) else {
         return false;
     };
     <[usize; 3]>::from(triple)
@@ -111,12 +124,22 @@ fn term_depends_on_anchor(
         .any(|component| term_depends_on_anchor(graph, component, anchor, pending, seen))
 }
 
+/// Would recording `(rid, triple)` let some quoted-triple term contain itself?
+///
+/// The anchors are the terms whose components this row would supply: those
+/// naming `rid` through `rf`, and — because a self-bound triple term may leave
+/// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
+/// is recorded rather than refused.
 fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
     graph
         .terms
         .iter()
         .enumerate()
-        .filter(|(_, term)| term.kind == TermKind::Triple && term.reifier == Some(rid))
+        .filter(|(tid, term)| {
+            term.kind == TermKind::Triple
+                && (term.reifier == Some(rid)
+                    || (*tid == rid && term.reifier.is_none() && term.triple.is_none()))
+        })
         .any(|(anchor, _)| {
             <[usize; 3]>::from(triple).into_iter().any(|component| {
                 let mut seen = HashSet::new();

@@ -16,6 +16,28 @@ use crate::wire::map_get;
 // terms intern through their bound SPO identity. Because the union is
 // value-interned, "apply suppression value-wise" (§11) reduces to applying it
 // by result-id.
+//
+// TERMINATION (§7.3, normative) — a quoted triple's VALUE is its `(s, p, o)`
+// binding, so interning one walks its components and `key_for` -> `map_term`
+// -> `key_for` is mutually recursive with NO bound of its own. It terminates
+// because a term can never reach itself:
+//
+//   * `tt` and `dt` components must name an ALREADY-INTRODUCED term, and `rf`
+//     must too (or the term itself, handled without recursing) — see the
+//     sanitizing in `reader::Folder::h_terms`. Ids therefore strictly descend.
+//   * the `reifies` statement layer is the one field that may name any term,
+//     so `reader::reifier_binding_is_recursive` REFUSES, as a `DamagedFrame`,
+//     any binding that would let a triple term reach itself.
+//
+// That is the fold-time-refusal strategy §7.3 permits; the alternative it
+// permits — a per-term sentinel that states no triple — belongs to engines
+// whose readers accept the row. Because the refusal is what this engine does,
+// this walk needs no guard of its own, and adding one would put two hash
+// lookups per term on the fold's hot path to handle input the reader cannot
+// produce. The coupling is not local, so it is pinned:
+// `tests/union_self_reaching_term.rs` builds each attempt at the shape through
+// the real writer and asserts the fold refuses it. Relax the refusal and those
+// tests fail — which is the signal that this walk then needs the sentinel.
 // --------------------------------------------------------------------------- //
 
 #[derive(Clone, PartialEq, Eq, Hash)]

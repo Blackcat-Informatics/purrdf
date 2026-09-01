@@ -408,6 +408,19 @@ impl Graph {
     /// falls back to the legacy indirection through [`Term::reifier`] for terms
     /// written before the triple term carried its own components. This is the
     /// ONE place a quoted triple's components are resolved from a folded graph.
+    ///
+    /// # Termination
+    ///
+    /// Resolving a component of the returned triple, and so on recursively, is
+    /// what every consumer of a quoted triple does — the segment union, the
+    /// canonical writer, every projection to text. That walk terminates on a
+    /// reader-produced graph and MUST NOT be assumed to on any other: `tt` and
+    /// `dt` ids are sanitized to name strictly earlier terms, and the fold
+    /// REFUSES a `reifies` row that would let a triple term reach itself. A
+    /// [`Graph`] assembled by hand carries no such guarantee, and an unguarded
+    /// walk over a self-reaching one blows the stack, which aborts rather than
+    /// panics. Callers that accept caller-built graphs must bound their own
+    /// recursion.
     pub fn triple_of(&self, term_id: usize) -> Option<Triple3> {
         let term = self.terms.get(term_id)?;
         // A self-bound triple term may leave `rf` implicit, in which case the
