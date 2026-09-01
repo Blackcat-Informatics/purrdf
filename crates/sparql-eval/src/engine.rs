@@ -128,6 +128,26 @@ pub struct PlanCache {
 }
 
 impl PlanCache {
+    /// The number of memoized plans held.
+    ///
+    /// The cache is keyed on query TEXT and is never evicted, which is right for
+    /// a static query corpus (one entry per distinct query a host issues) and
+    /// wrong for any caller that would splice operand DATA into the text it
+    /// prepares — each such call is a distinct key, so the cache would grow with
+    /// the input rather than with the program. This makes that growth OBSERVABLE,
+    /// so a caller can pin "my evaluation path does not manufacture query text"
+    /// as a test rather than as a comment.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no plan is memoized.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// A fresh, empty cache.
     pub fn new() -> Self {
         Self::default()
@@ -297,6 +317,13 @@ impl std::fmt::Debug for NativeSparqlEngine {
 }
 
 impl NativeSparqlEngine {
+    /// The number of plans this engine's cache currently memoizes — see
+    /// [`PlanCache::len`] for what a growing count means.
+    #[must_use]
+    pub fn cached_plan_count(&self) -> usize {
+        self.cache.borrow().len()
+    }
+
     /// Parse a query through this engine's memoizing plan cache.
     ///
     /// Callers that inspect query algebra before evaluation can retain the

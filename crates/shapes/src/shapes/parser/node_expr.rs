@@ -6,12 +6,12 @@
 use ::purrdf::FastSet;
 use std::sync::{Arc, OnceLock};
 
-use purrdf_sparql_algebra::{Query, SparqlParser};
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 
 use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
-use crate::expression::{FnCall, NodeExpr};
-use crate::model::{rdf, sh, shnex};
+use crate::expression::{FnCall, NodeExpr, sparql_ns_lowering};
+use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::term::{NamedNode, Term};
 
 use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Shape};
@@ -291,7 +291,8 @@ impl Parser<'_> {
             match SparqlParser::new().parse_query(&select) {
                 Ok(query @ Query::Select { .. }) => {
                     // The query runs with $this pre-bound to each focus node;
-                    // the SHACL-SPARQL §5.2.1 pre-binding restrictions (no
+                    // the pre-binding restrictions of SHACL 1.2 SPARQL
+                    // Extensions, Appendix A (no
                     // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
                     // project $this) reject it as a hard failure at load.
                     crate::prebinding::check_select(&query, &["this"])
@@ -1045,6 +1046,49 @@ impl Parser<'_> {
             ExprKind::NodesMatching => Ok(NodeExpr::NodesMatching(Box::new(
                 self.parse_inline_shape(object)?,
             ))),
+            // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`, function name
+            // `sh:SelectExpression`) and §6.2 (`sh:sparqlExpr`, function name
+            // `sh:SPARQLExprExpression`). §6.2 defines itself as an abbreviation:
+            // the expression embedded into `$PREFIXES$ SELECT ($EXPR$ AS ?result)
+            // WHERE {}`, which the specification prints as the "equivalent
+            // expanded form" of the matching `sh:select`. The expansion happens
+            // HERE, once, so the two spellings share one IR arm and one evaluator
+            // rather than two parallel query paths.
+            ExprKind::Select => {
+                let Term::Literal(body) = &object else {
+                    return Err(format!(
+                        "<{iri}> on {node} must be a string literal, got {object}"
+                    ));
+                };
+                let header = self.prefix_header(&[node]);
+                let (query, key) = if iri == sh::SELECT {
+                    (format!("{header}{}", body.value()), "sh:select")
+                } else {
+                    (
+                        format!("{header}SELECT (({}) AS ?result) WHERE {{}}", body.value()),
+                        "sh:sparqlExpr",
+                    )
+                };
+                let parsed = SparqlParser::new().parse_query(&query).map_err(|e| {
+                    format!("{key} node expression on {node} has an unparsable query: {e}")
+                })?;
+                if !matches!(parsed, Query::Select { .. }) {
+                    return Err(format!(
+                        "{key} node expression on {node} must be a SELECT query"
+                    ));
+                }
+                // §6.1: the query "must be a valid SPARQL 1.2 SELECT query
+                // projecting exactly one variable" — whose bindings ARE the output
+                // nodes, so a two-column projection has no answer to give and is
+                // refused at load rather than silently reduced to its first column.
+                let variable = single_projected_variable(&parsed)
+                    .map_err(|e| format!("{key} node expression on {node}: {e}"))?;
+                Ok(NodeExpr::Select {
+                    query,
+                    variable,
+                    key,
+                })
+            }
             // §4.5.3 ConformsToShape expression: a LIST parameter function whose
             // argument list has exactly two members — the node expression under
             // test and an expression producing the shape IRI. The spec constrains
@@ -1160,6 +1204,35 @@ impl Parser<'_> {
         for item in items {
             args.push(self.parse_node_expr(&item)?);
         }
+        // SHACL 1.2 Node Expressions §5: an IRI of the W3C SPARQL 1.2 term
+        // vocabulary in call position IS the corresponding SPARQL function. The
+        // name is resolved and the SPARQL surface text rendered ONCE, here, then
+        // parse-checked — so an unknown name and a wrong-arity call are both
+        // shapes-load failures, never a per-focus surprise or a silent empty
+        // result.
+        if let Some(local) = fn_iri.as_str().strip_prefix(sparql_ns::NS) {
+            let form = sparql_ns_lowering(local)
+                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+            let rendered = form
+                .render(fn_iri.as_str(), args.len())
+                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+            // The rendered text is evaluated as the projection of
+            // `SELECT ((expr) AS ?result) WHERE {}` (see `crate::sparql::eval_scalar_expr`),
+            // so it is validated in exactly that position.
+            let probe = format!("SELECT (({rendered}) AS ?result) WHERE {{}}");
+            SparqlParser::new().parse_query(&probe).map_err(|e| {
+                format!(
+                    "SPARQL function node expression <{}> on {node} does not render a valid SPARQL \
+                     expression ({rendered}): {e}",
+                    fn_iri.as_str()
+                )
+            })?;
+            return Ok(NodeExpr::Call(FnCall::Sparql {
+                iri: fn_iri,
+                expr: rendered,
+                args,
+            }));
+        }
         // A user-defined function is typed `sh:SPARQLFunction` (or `sh:Function`)
         // in the shapes graph; anything else is treated as a builtin.
         let iri_term = Term::NamedNode(fn_iri.clone());
@@ -1233,6 +1306,43 @@ enum ExprKind {
     NodesMatching,
     /// `shnex:conformsToShape` — a two-argument conformance predicate.
     ConformsToShape,
+    /// `sh:select` / `sh:sparqlExpr` — a SPARQL-based node expression.
+    Select,
+}
+
+/// The single variable a SHACL 1.2 SPARQL-based node expression's SELECT query
+/// projects (SPARQL Extensions §6.1).
+///
+/// The solution modifiers wrap the projection in the algebra, so they are peeled
+/// exactly as `crate::prebinding`'s own walk peels them to reach the outermost
+/// `Project`.
+fn single_projected_variable(query: &Query) -> Result<String, String> {
+    let Query::Select { pattern, .. } = query else {
+        return Err("the query is not a SELECT".to_owned());
+    };
+    let mut node = pattern;
+    loop {
+        match node {
+            GraphPattern::Slice { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. } => node = inner,
+            GraphPattern::Project { variables, .. } => {
+                let [only] = variables.as_slice() else {
+                    return Err(format!(
+                        "the SELECT query must project exactly one variable, it projects {}",
+                        variables.len()
+                    ));
+                };
+                return Ok(only.as_str().to_owned());
+            }
+            _ => {
+                return Err(
+                    "the SELECT query has no projection, so it names no output variable".to_owned(),
+                );
+            }
+        }
+    }
 }
 
 /// Every IRI that identifies a node-expression kind, with the kind it identifies.
@@ -1284,6 +1394,9 @@ static PRIMARY_KEYS: &[(&str, ExprKind)] = &[
     (shnex::INSTANCES_OF, ExprKind::InstancesOf),
     (shnex::NODES_MATCHING, ExprKind::NodesMatching),
     (shnex::CONFORMS_TO_SHAPE, ExprKind::ConformsToShape),
+    // SHACL 1.2 SPARQL Extensions spellings.
+    (sh::SELECT, ExprKind::Select),
+    (sh::SPARQL_EXPR, ExprKind::Select),
 ];
 
 /// Every vocabulary term that structures a node expression — none of them can be
@@ -1341,6 +1454,11 @@ static NON_FUNCTION_KEYS: &[&str] = &[
     shnex::INSTANCES_OF,
     shnex::NODES_MATCHING,
     shnex::CONFORMS_TO_SHAPE,
+    // SHACL 1.2 SPARQL Extensions: the two SPARQL-based expression keys and the
+    // `sh:prefixes` each may carry (§6.1 / §6.2).
+    sh::SELECT,
+    sh::SPARQL_EXPR,
+    sh::PREFIXES,
     // RDF collection cells — a list expression's own structure, never a call.
     rdf::FIRST,
     rdf::REST,

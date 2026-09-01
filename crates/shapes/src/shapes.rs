@@ -570,6 +570,18 @@ pub(crate) struct Parser<'s> {
     /// carries a `sh:nodeByExpression` is itself in the index, and a map built
     /// eagerly during its own parse would recurse forever.
     node_shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    /// Whether `sh:rule` is parsed on the shape currently being read.
+    ///
+    /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
+    /// and for exactly one reason: a condition is evaluated by
+    /// [`crate::constraints::conforms`], which reads a shape's CONSTRAINTS and
+    /// never its rules, so a condition shape's rules are dead weight — and
+    /// carrying them would make condition resolution non-terminating, because a
+    /// shape whose rule names that same shape as its condition (the W3C
+    /// `square-triple` case does exactly this) would re-enter its own rule parse
+    /// without bound. Dropping the one thing a condition cannot use is what makes
+    /// resolving conditions at LOAD time finite.
+    parse_rules_enabled: bool,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -664,6 +676,7 @@ impl<'s> Parser<'s> {
             shapes_graph,
             target_types: std::collections::BTreeMap::new(),
             node_shape_index: Arc::new(OnceLock::new()),
+            parse_rules_enabled: true,
         }
     }
 

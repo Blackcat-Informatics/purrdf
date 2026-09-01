@@ -9,6 +9,12 @@
 
 /// SHACL namespace constants (`http://www.w3.org/ns/shacl#`).
 pub mod sh {
+    /// The SHACL namespace IRI. A triple whose PREDICATE sits under it is a SHACL
+    /// structural statement about its subject, which is what makes "is this node
+    /// authored as a shape?" answerable without enumerating every constraint
+    /// parameter.
+    pub const NS: &str = "http://www.w3.org/ns/shacl#";
+
     /// `sh:conforms` — whether the data graph conforms (boolean on a `sh:ValidationReport`).
     pub const CONFORMS: &str = "http://www.w3.org/ns/shacl#conforms";
 
@@ -260,6 +266,10 @@ pub mod sh {
 
     /// `sh:ask` — the ASK query of a SHACL-SPARQL validator.
     pub const ASK: &str = "http://www.w3.org/ns/shacl#ask";
+
+    /// `sh:sparqlExpr` — the SPARQL expression of a SPARQL expr expression
+    /// (SHACL 1.2 SPARQL Extensions §6.2, function name `sh:SPARQLExprExpression`).
+    pub const SPARQL_EXPR: &str = "http://www.w3.org/ns/shacl#sparqlExpr";
 
     // ── SHACL-AF prefix declarations (sh:prefixes / sh:declare) ───────────────
 
@@ -646,6 +656,24 @@ pub mod shnex {
     /// `shnex:conformsToShape` — the two-member argument list of a conformsToShape
     /// expression (§4.5.3).
     pub const CONFORMS_TO_SHAPE: &str = "http://www.w3.org/ns/shacl-node-expr#conformsToShape";
+}
+
+/// The SPARQL 1.2 term vocabulary (`http://www.w3.org/ns/sparql#`).
+///
+/// The W3C SPARQL Working Group's own `sparql-ns.ttl` mints one IRI per SPARQL
+/// 1.2 operator, functional form, function and aggregate, and SHACL 1.2 Node
+/// Expressions §5 makes those IRIs callable from a node expression: "A blank
+/// node that uses a SPARQL function URI `sparql:<NAME>` as its predicate with an
+/// `rdf:List` of arguments as its object is called a SHACL SPARQL function
+/// expression with the corresponding SPARQL function name."
+///
+/// Only the namespace is named here. Which local names are callable, and the
+/// SPARQL surface form each lowers to, is decided by
+/// [`crate::expression::sparql_ns_lowering`] — one uniform table over the
+/// vocabulary, not a per-name branch.
+pub mod sparql_ns {
+    /// The namespace IRI of the SPARQL 1.2 term vocabulary.
+    pub const NS: &str = "http://www.w3.org/ns/sparql#";
 }
 
 /// The CALLER-SUPPLIED graph-box role vocabulary for the OPTIONAL box-role

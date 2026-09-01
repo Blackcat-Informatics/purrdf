@@ -205,7 +205,12 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
         | NodeExpr::Path(_)
         | NodeExpr::Empty
         | NodeExpr::Var(_)
-        | NodeExpr::List(_) => {}
+        | NodeExpr::List(_)
+        // A SPARQL-based node expression (SPARQL Extensions §6.1/§6.2) names its
+        // classes inside opaque query TEXT, which this walk does not read. The
+        // membership view it would want is the SPARQL engine's own, not the
+        // validation plan's, so there is nothing here to pre-resolve.
+        | NodeExpr::Select { .. } => {}
         // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
         // of a class, so that class must be resolved in the validation plan exactly
         // like an `sh:class` constraint or the membership view answers "no
@@ -259,7 +264,9 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
         }
         NodeExpr::Call(call) => {
             let args = match call {
-                FnCall::Builtin { args, .. } | FnCall::UserDefined { args, .. } => args,
+                FnCall::Builtin { args, .. }
+                | FnCall::UserDefined { args, .. }
+                | FnCall::Sparql { args, .. } => args,
             };
             for arg in args {
                 collect_expression_classes(arg, classes);

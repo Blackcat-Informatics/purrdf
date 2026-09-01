@@ -70,7 +70,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
 
 use crate::constraints::conforms;
@@ -236,7 +236,11 @@ pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
         | NodeExpr::OrderBy { of, .. } => node_expr_mints_blank(of),
         // Aggregations and existence tests yield literals, never blank nodes.
         NodeExpr::Count { .. } | NodeExpr::Sum(_) | NodeExpr::Exists(_) => false,
-        NodeExpr::Call(_) => false,
+        // A function call and a SPARQL-based node expression (SPARQL Extensions
+        // §6.1/§6.2, whose query text may reach `BNODE()`) are both opaque to this
+        // walk, and both take the same conservative answer for the same reason:
+        // see this function's docs.
+        NodeExpr::Call(_) | NodeExpr::Select { .. } => false,
 
         // ── SHACL 1.2 Node Expressions ─────────────────────────────────────────
         // `shnex:EmptyExpression` derives nothing at all; a var expression resolves
@@ -288,10 +292,16 @@ pub struct Rule {
     pub id: Term,
     /// The rule head.
     pub body: RuleBody,
-    /// `sh:condition` shapes (as their node terms): a rule fires for a focus node
-    /// only if the node conforms to every one, resolved against the shapes graph's
-    /// top-level shapes at firing time.
-    pub conditions: Vec<Term>,
+    /// The `sh:condition` shapes: a rule fires for a focus node only if the node
+    /// conforms to every one.
+    ///
+    /// These are PARSED SHAPES, resolved by the shapes parser at load time exactly
+    /// as `sh:filterShape` is, not node terms looked up by string when the rule
+    /// fires. A condition that names nothing the shapes graph describes as a shape
+    /// is a shapes-LOAD error, so by the time a rule exists every one of its
+    /// conditions is a shape the engine can evaluate — there is no path on which a
+    /// rule fires over an unevaluated condition.
+    pub conditions: Vec<Shape>,
     /// The `sh:order` sort key, if declared (missing = default order `0`). Rules
     /// sharing an effective order form one stratification layer, and layers run
     /// lowest-order first with each layer's inferences materialized before the
@@ -602,12 +612,6 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         .or_else(|| shapes.shapes_graph.clone())
         .filter(|_| shapes.shapes_dataset.quad_count() > 0);
 
-    // A top-level-shape index for `sh:condition` resolution (id string → shape).
-    let mut shape_index: FastMap<String, &Shape> = FastMap::default();
-    for shape in &shapes.node_shapes {
-        shape_index.insert(shape.id.to_string(), shape);
-    }
-
     // The SEED of the value-preserving term universe: any triple whose every term
     // is drawn from here is value-preserving and cannot diverge. `run_strata` grows
     // it with each stratification phase's materialized output.
@@ -627,12 +631,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
             if rule.deactivated {
                 continue;
             }
-            prepared.push(prepare_rule(
-                shape,
-                rule,
-                &shape_index,
-                shapes_graph_iri.as_deref(),
-            ));
+            prepared.push(prepare_rule(shape, rule, shapes_graph_iri.as_deref()));
         }
     }
 
@@ -698,7 +697,6 @@ pub fn entail_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<Arc<RdfDatas
 fn prepare_rule<'a>(
     shape: &'a Shape,
     rule: &'a Rule,
-    shape_index: &'a FastMap<String, &'a Shape>,
     shapes_graph_iri: Option<&'a str>,
 ) -> PreparedRule<'a> {
     let rule_id = rule.id.to_string();
@@ -713,14 +711,7 @@ fn prepare_rule<'a>(
             let rule_id = rule_id.clone();
             Box::new(move |data: &ShaclData| {
                 triple_rule_producer(
-                    data,
-                    shape,
-                    subject,
-                    predicate,
-                    object,
-                    conditions,
-                    shape_index,
-                    &rule_id,
+                    data, shape, subject, predicate, object, conditions, &rule_id,
                 )
             })
         }
@@ -732,7 +723,6 @@ fn prepare_rule<'a>(
                     shape,
                     construct,
                     conditions,
-                    shape_index,
                     &rule_id,
                     shapes_graph_iri,
                 )
@@ -758,14 +748,13 @@ fn triple_rule_producer(
     subject: &NodeExpr,
     predicate: &NodeExpr,
     object: &NodeExpr,
-    conditions: &[Term],
-    shape_index: &FastMap<String, &Shape>,
+    conditions: &[Shape],
     rule_id: &str,
 ) -> Result<Vec<[Term; 3]>, String> {
     let focus_nodes = focus_nodes(data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions, shape_index)? {
+        if !conditions_hold(data, focus, conditions)? {
             continue;
         }
         let mut guard = RecursionGuard::new();
@@ -801,15 +790,14 @@ fn sparql_rule_producer(
     data: &ShaclData,
     shape: &Shape,
     construct: &str,
-    conditions: &[Term],
-    shape_index: &FastMap<String, &Shape>,
+    conditions: &[Shape],
     rule_id: &str,
     shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
     let focus_nodes = focus_nodes(data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions, shape_index)? {
+        if !conditions_hold(data, focus, conditions)? {
             continue;
         }
         let subs = [("this".to_owned(), focus.to_term_value())];
@@ -867,18 +855,16 @@ fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
         .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
 }
 
-/// Whether `focus` conforms to every `sh:condition` shape (resolved against the
-/// top-level shape index). An unresolvable condition is a hard error.
-fn conditions_hold(
-    data: &ShaclData,
-    focus: &Term,
-    conditions: &[Term],
-    shape_index: &FastMap<String, &Shape>,
-) -> Result<bool, String> {
-    for condition in conditions {
-        let shape = shape_index.get(&condition.to_string()).ok_or_else(|| {
-            format!("sh:condition {condition} does not reference a known top-level shape")
-        })?;
+/// Whether `focus` conforms to every `sh:condition` shape.
+///
+/// The conditions arrive ALREADY RESOLVED from the shapes parser (see
+/// [`Rule::conditions`]), so there is no lookup here that could fail and no shape
+/// this function could decline to evaluate: every condition is checked, and a
+/// non-conforming one stops the rule. An error from the conformance check itself
+/// propagates rather than being read as "the condition did not hold" — a rule must
+/// never fire, or decline to fire, on a verdict that was not computed.
+fn conditions_hold(data: &ShaclData, focus: &Term, conditions: &[Shape]) -> Result<bool, String> {
+    for shape in conditions {
         if !conforms(data, focus, shape)? {
             return Ok(false);
         }
@@ -1179,7 +1165,15 @@ mod tests {
         assert!((rule.order.expect("order").value() - 3.0).abs() < f64::EPSILON);
         assert!(rule.deactivated);
         assert_eq!(rule.conditions.len(), 1);
-        assert_eq!(rule.conditions[0].to_string(), ex("HasName"));
+        // The condition is a RESOLVED shape, not the node term it was written as:
+        // it carries the property shape `ex:HasName` declares, so the rule holds
+        // everything it needs to evaluate the condition without a later lookup.
+        assert_eq!(rule.conditions[0].id.to_string(), ex("HasName"));
+        assert_eq!(
+            rule.conditions[0].property_shapes.len(),
+            1,
+            "the referenced shape's sh:property was parsed into the condition"
+        );
     }
 
     #[test]
@@ -1704,6 +1698,120 @@ mod tests {
         assert!(
             !has_iri(&out, "bob", "greeted", "yes"),
             "bob lacks ex:name, condition fails"
+        );
+    }
+
+    /// An ANONYMOUS inline condition shape gates the rule.
+    ///
+    /// `sh:condition [ sh:property [ … ] ]` is legal SHACL and is what the
+    /// specification's own examples use, but a blank node is in no index of
+    /// top-level shapes: resolving conditions by IRI string at firing time refused
+    /// it outright. Resolving them at shapes-load makes it ordinary.
+    #[test]
+    fn an_inline_anonymous_condition_shape_gates_rule_firing() {
+        let shapes = r"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:TripleRule ;
+                        sh:condition [ sh:property [ sh:path ex:name ; sh:minCount 1 ] ] ;
+                        sh:subject sh:this ; sh:predicate ex:greeted ; sh:object ex:yes ] .";
+        let out = entail(
+            "ex:alice a ex:Person ; ex:name \"Alice\" .\n ex:bob a ex:Person .",
+            shapes,
+        );
+        assert!(
+            has_iri(&out, "alice", "greeted", "yes"),
+            "alice has ex:name, so the inline condition holds"
+        );
+        assert!(
+            !has_iri(&out, "bob", "greeted", "yes"),
+            "bob lacks ex:name, so the inline condition fails and the rule must not fire"
+        );
+    }
+
+    /// A top-level `sh:PropertyShape` is a legal condition, and it constrains the
+    /// focus node's values along its own path.
+    #[test]
+    fn a_property_shape_condition_gates_rule_firing() {
+        let shapes = r"
+            ex:NameRequired a sh:PropertyShape ; sh:path ex:name ; sh:minCount 1 .
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:TripleRule ; sh:condition ex:NameRequired ;
+                        sh:subject sh:this ; sh:predicate ex:greeted ; sh:object ex:yes ] .";
+        let out = entail(
+            "ex:alice a ex:Person ; ex:name \"Alice\" .\n ex:bob a ex:Person .",
+            shapes,
+        );
+        assert!(
+            has_iri(&out, "alice", "greeted", "yes"),
+            "alice satisfies the property-shape condition"
+        );
+        assert!(
+            !has_iri(&out, "bob", "greeted", "yes"),
+            "bob does not, so the rule must not fire"
+        );
+    }
+
+    /// A `sh:condition` naming something that is not a shape is a shapes-LOAD
+    /// error even when the owning shape TARGETS NOTHING.
+    ///
+    /// This is the swallowed error the load-time resolution exists to kill.
+    /// Resolving conditions when a rule fires meant the check ran only after the
+    /// shape produced a focus node — so an untargeted shape never reached it, the
+    /// graph loaded green, and the rule was free to entail as though a condition
+    /// nobody could evaluate had held.
+    #[test]
+    fn an_unresolvable_condition_on_an_untargeted_shape_is_a_load_error() {
+        let err = parse_shapes_err(
+            r"
+            ex:S a sh:NodeShape ;
+              sh:rule [ a sh:TripleRule ; sh:condition ex:NotAShape ;
+                        sh:subject sh:this ; sh:predicate ex:p ; sh:object ex:o ] .",
+        );
+        assert!(
+            err.contains("does not resolve to a shape"),
+            "the refusal must name the unresolvable condition: {err}"
+        );
+        assert!(err.contains("NotAShape"), "got: {err}");
+    }
+
+    /// The same refusal for a TARGETED shape, so the load-time check is not
+    /// specific to the untargeted case.
+    #[test]
+    fn an_unresolvable_condition_on_a_targeted_shape_is_a_load_error() {
+        let err = parse_shapes_err(
+            r"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:TripleRule ; sh:condition ex:NotAShape ;
+                        sh:subject sh:this ; sh:predicate ex:p ; sh:object ex:o ] .",
+        );
+        assert!(err.contains("does not resolve to a shape"), "got: {err}");
+    }
+
+    /// A rule conditioned on ITS OWN shape resolves to that shape's real
+    /// constraints, not to an empty stand-in.
+    ///
+    /// Load-time resolution has to reach a shape that is, at that moment, already
+    /// being parsed. If the ordinary cycle guard answered with the empty
+    /// stand-in shape, the condition would conform to everything and silently
+    /// always hold — so this asserts the negative case actually fails.
+    #[test]
+    fn a_rule_conditioned_on_its_own_shape_sees_that_shape_s_constraints() {
+        let shapes = r"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:property [ sh:path ex:name ; sh:minCount 1 ] ;
+              sh:rule [ a sh:TripleRule ; sh:condition ex:S ;
+                        sh:subject sh:this ; sh:predicate ex:greeted ; sh:object ex:yes ] .";
+        let out = entail(
+            "ex:alice a ex:Person ; ex:name \"Alice\" .\n ex:bob a ex:Person .",
+            shapes,
+        );
+        assert!(
+            has_iri(&out, "alice", "greeted", "yes"),
+            "alice conforms to ex:S, so the self-condition holds"
+        );
+        assert!(
+            !has_iri(&out, "bob", "greeted", "yes"),
+            "bob violates ex:S's own sh:minCount, so the self-condition must NOT hold"
         );
     }
 

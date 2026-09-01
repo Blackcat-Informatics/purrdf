@@ -281,6 +281,203 @@ pub enum NodeExpr {
         /// The shape the node is validated against.
         shape: Box<Shape>,
     },
+
+    // ── SHACL 1.2 SPARQL Extensions (`sh:select` / `sh:sparqlExpr`) ────────────
+    /// A SPARQL-based node expression: `sh:select` (SHACL 1.2 SPARQL Extensions
+    /// §6.1, function name `sh:SelectExpression`) or `sh:sparqlExpr` (§6.2,
+    /// function name `sh:SPARQLExprExpression`).
+    ///
+    /// Both spellings reduce to the SAME thing, because §6.2 defines itself that
+    /// way: a SPARQL expr expression is the expression embedded into the template
+    /// `$PREFIXES$ SELECT ($EXPR$ AS ?result) WHERE {}`, which the specification
+    /// spells out as the "equivalent expanded form" of the corresponding
+    /// `sh:select`. The parser performs that expansion once, at shapes-load, so
+    /// there is one arm, one evaluator and one query text.
+    Select {
+        /// The complete SELECT query, prefix header included.
+        query: String,
+        /// The single projected variable whose bindings are the output nodes
+        /// (`result` for the `sh:sparqlExpr` spelling).
+        variable: String,
+        /// The authored key (`sh:select` / `sh:sparqlExpr`), quoted in diagnostics
+        /// so a writer is told about the property they actually wrote.
+        key: &'static str,
+    },
+}
+
+/// The SPARQL surface form a `sparql:<NAME>` node-expression call lowers to.
+///
+/// SHACL 1.2 Node Expressions §5 makes every IRI of the W3C SPARQL 1.2 term
+/// vocabulary callable "with the corresponding SPARQL function name". SPARQL
+/// spells those names in four different syntactic shapes, and this enum is the
+/// whole of the difference between them — the argument evaluation, the cartesian
+/// product over multi-valued arguments and the result handling are shared by
+/// every name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SparqlCallForm {
+    /// A keyword function call — `NAME(a0, a1, …)`.
+    Call(&'static str),
+    /// A binary infix operator — `(a0 OP a1)`. Exactly two arguments.
+    Infix(&'static str),
+    /// A unary prefix operator — `(OP a0)`. Exactly one argument.
+    Prefix(&'static str),
+    /// The `IN` / `NOT IN` membership forms — `(a0 KEYWORD (a1, a2, …))`. At
+    /// least one argument (an empty candidate list is legal SPARQL).
+    Membership(&'static str),
+    /// `sparql:ebv` — the effective boolean value of the single argument,
+    /// rendered `(!(! a0))`. SPARQL has no `EBV` keyword; `!` is the operator
+    /// defined to coerce its operand through EBV, so applying it twice IS the
+    /// call form, and it raises the same type error on a value that has no
+    /// effective boolean value.
+    Ebv,
+}
+
+impl SparqlCallForm {
+    /// The SPARQL expression text for this form over `arity` placeholder
+    /// variables `?a0 … ?a{arity-1}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` when `arity` cannot satisfy the form (an operator
+    /// applied to the wrong number of operands). A keyword call's arity is the
+    /// SPARQL grammar's business, and the parse of the rendered text — which the
+    /// shapes parser performs at load — is what reports it.
+    pub fn render(self, iri: &str, arity: usize) -> Result<String, String> {
+        let arg = |i: usize| format!("?a{i}");
+        match self {
+            Self::Call(keyword) => {
+                let args: Vec<String> = (0..arity).map(arg).collect();
+                Ok(format!("{keyword}({})", args.join(", ")))
+            }
+            Self::Infix(op) => {
+                if arity != 2 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL `{op}` operator and takes exactly 2 arguments, got {arity}"
+                    ));
+                }
+                Ok(format!("({} {op} {})", arg(0), arg(1)))
+            }
+            Self::Prefix(op) => {
+                if arity != 1 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL unary `{op}` operator and takes exactly 1 argument, got {arity}"
+                    ));
+                }
+                Ok(format!("({op} {})", arg(0)))
+            }
+            Self::Membership(keyword) => {
+                let Some(rest) = arity.checked_sub(1) else {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL `{keyword}` form and takes at least 1 argument, got 0"
+                    ));
+                };
+                let candidates: Vec<String> = (1..=rest).map(arg).collect();
+                Ok(format!(
+                    "({} {keyword} ({}))",
+                    arg(0),
+                    candidates.join(", ")
+                ))
+            }
+            Self::Ebv => {
+                if arity != 1 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL effective-boolean-value coercion and takes exactly \
+                         1 argument, got {arity}"
+                    ));
+                }
+                Ok(format!("(!(! {}))", arg(0)))
+            }
+        }
+    }
+}
+
+/// Resolve a local name of the SPARQL 1.2 term vocabulary
+/// ([`crate::model::sparql_ns`]) to the SPARQL surface form it is called
+/// through — SHACL 1.2 Node Expressions §5's `sparql:<NAME>` dispatch.
+///
+/// The mechanism is a lookup, not a per-name branch. Every name SPARQL spells as
+/// an ordinary *function call* is answered by the parser's own keyword table
+/// through [`purrdf_sparql_algebra::builtin_function_keyword`], so this
+/// implementation cannot claim a function the query parser would then reject,
+/// and a name the parser gains is callable here the same day. The explicit table
+/// below covers only the names SPARQL does NOT spell as a function call — the
+/// operators, the functional forms, and the one name whose keyword is not its
+/// own uppercasing (`encodeForUri` → `ENCODE_FOR_URI`).
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the IRI when the local name is not a callable
+/// SPARQL function: the SPARQL aggregates (`sparql:agg-*`), which are not scalar
+/// functions; the two `EXISTS` functional forms, which take a graph pattern
+/// rather than argument values; and anything the vocabulary does not define. A
+/// refusal, never a silent empty result.
+pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
+    /// The SPARQL 1.2 names that are not spelled as a function call, each with
+    /// the surface form it is spelled as instead.
+    static NON_CALL_FORMS: &[(&str, SparqlCallForm)] = &[
+        // Operators (SPARQL 1.2 Query §17.4.1 / the operator mapping table).
+        ("add", SparqlCallForm::Infix("+")),
+        ("subtract", SparqlCallForm::Infix("-")),
+        ("multiply", SparqlCallForm::Infix("*")),
+        ("divide", SparqlCallForm::Infix("/")),
+        ("unary-plus", SparqlCallForm::Prefix("+")),
+        ("unary-minus", SparqlCallForm::Prefix("-")),
+        ("equals", SparqlCallForm::Infix("=")),
+        ("not-equals", SparqlCallForm::Infix("!=")),
+        ("greater-than", SparqlCallForm::Infix(">")),
+        ("less-than", SparqlCallForm::Infix("<")),
+        ("greater-than-or-equal", SparqlCallForm::Infix(">=")),
+        ("less-than-or-equal", SparqlCallForm::Infix("<=")),
+        // `sameValue` "replaces RDFterm-equal from SPARQL 1.1" and, in the
+        // specification's own words, "cannot be used directly in a query": `=`
+        // IS its call form, and `RDFterm-equal` is the 1.1 name of the same
+        // operator. Both therefore lower to `=`, which is what the evaluator
+        // already implements for them.
+        ("sameValue", SparqlCallForm::Infix("=")),
+        ("RDFterm-equal", SparqlCallForm::Infix("=")),
+        // Functional forms.
+        ("logical-and", SparqlCallForm::Infix("&&")),
+        ("logical-or", SparqlCallForm::Infix("||")),
+        ("logical-not", SparqlCallForm::Prefix("!")),
+        // The effective boolean value of a term is what `!` applied twice
+        // computes, and SPARQL has no other spelling for it: `EBV(x)` is
+        // `!(!x)`, which raises the same type error on a non-EBV-able value that
+        // `sparql:ebv` is defined to raise.
+        ("ebv", SparqlCallForm::Ebv),
+        ("in", SparqlCallForm::Membership("IN")),
+        ("not-in", SparqlCallForm::Membership("NOT IN")),
+        ("bound", SparqlCallForm::Call("BOUND")),
+        ("if", SparqlCallForm::Call("IF")),
+        ("coalesce", SparqlCallForm::Call("COALESCE")),
+        ("sameTerm", SparqlCallForm::Call("sameTerm")),
+        // The one function-call name whose keyword is not its own uppercasing.
+        ("encodeForUri", SparqlCallForm::Call("ENCODE_FOR_URI")),
+    ];
+
+    if let Some(&(_, form)) = NON_CALL_FORMS.iter().find(|&&(name, _)| name == local) {
+        return Ok(form);
+    }
+    if let Some(keyword) = purrdf_sparql_algebra::builtin_function_keyword(local) {
+        return Ok(SparqlCallForm::Call(keyword));
+    }
+    let iri = format!("{}{local}", crate::model::sparql_ns::NS);
+    if local.starts_with("agg-") {
+        return Err(format!(
+            "<{iri}> names a SPARQL AGGREGATE, not a scalar function, and cannot be called from a \
+             node expression; the SHACL aggregate node expressions are shnex:count, shnex:min, \
+             shnex:max and shnex:sum"
+        ));
+    }
+    if local == "filter-exists" || local == "filter-not-exists" {
+        return Err(format!(
+            "<{iri}> is a SPARQL functional form over a GRAPH PATTERN, not over argument values, \
+             and cannot be called from a node expression; the SHACL existence node expression is \
+             shnex:exists"
+        ));
+    }
+    Err(format!(
+        "<{iri}> is not a callable SPARQL 1.2 function name"
+    ))
 }
 
 /// A function-call node expression (`sh:SPARQLFunction` / builtin).
@@ -298,6 +495,23 @@ pub enum FnCall {
         /// The function IRI.
         iri: NamedNode,
         /// The argument expressions.
+        args: Vec<NodeExpr>,
+    },
+    /// A `sparql:<NAME>` call (SHACL 1.2 Node Expressions §5) — an IRI of the
+    /// W3C SPARQL 1.2 term vocabulary invoked over an `rdf:List` of argument
+    /// node expressions.
+    ///
+    /// The SPARQL surface text is resolved and rendered ONCE, at shapes-load, by
+    /// [`sparql_ns_lowering`] plus [`SparqlCallForm::render`], and the rendered
+    /// text is parse-checked there too — so an unknown name, an operator applied
+    /// to the wrong number of operands, and a keyword call of the wrong arity are
+    /// all shapes-load failures rather than per-focus evaluation surprises.
+    Sparql {
+        /// The `sparql:<NAME>` IRI as authored, quoted in diagnostics.
+        iri: NamedNode,
+        /// The rendered SPARQL expression over the `?a0 … ?aN` placeholders.
+        expr: String,
+        /// The argument expressions, positionally matching the placeholders.
         args: Vec<NodeExpr>,
     },
 }
@@ -385,6 +599,27 @@ impl<'a> Scope<'a> {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.frame.is_none()
+    }
+
+    /// Every binding in force, innermost first, each NAME appearing exactly once.
+    ///
+    /// A shadowed outer binding is dropped rather than listed twice, so the result
+    /// is the scope as [`lookup`](Self::lookup) sees it — which is what a caller
+    /// that must materialize the whole environment (a SPARQL-based node
+    /// expression pre-binding its scope variables, SHACL 1.2 SPARQL Extensions
+    /// §6.1) needs. Ordinary evaluation never calls this: the linked list exists
+    /// precisely so the common path resolves one name without building a map.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<(&'a str, &'a Term)> {
+        let mut out: Vec<(&'a str, &'a Term)> = Vec::new();
+        let mut cursor = self.frame;
+        while let Some(binding) = cursor {
+            if !out.iter().any(|(name, _)| *name == binding.name) {
+                out.push((binding.name, binding.value));
+            }
+            cursor = binding.outer.frame;
+        }
+        out
     }
 }
 
@@ -745,7 +980,11 @@ fn eval_node_expr_at_depth(
         // registry (`enter_function_scope`). A builtin whose IRI is a keyword-only
         // SPARQL 1.1 function (STRLEN, CONTAINS, ABS, REGEX, …) is lowered to that
         // keyword; a user function's IRI is never a keyword, so it keeps the call form.
-        NodeExpr::Call(FnCall::Builtin { iri, args } | FnCall::UserDefined { iri, args }) => {
+        NodeExpr::Call(
+            FnCall::Builtin { iri, args }
+            | FnCall::UserDefined { iri, args }
+            | FnCall::Sparql { iri, args, .. },
+        ) => {
             // Each argument is a node expression yielding a SET of values. Per the
             // reference implementations (TopBraid / DASH / pySHACL) the function is
             // invoked once for every tuple in the CARTESIAN PRODUCT of the argument
@@ -759,11 +998,20 @@ fn eval_node_expr_at_depth(
                 .iter()
                 .map(|arg| eval_node_expr_in_scope(store, focus, arg, guard, scope))
                 .collect::<Result<_, _>>()?;
-            let placeholders: Vec<String> =
-                (0..arg_values.len()).map(|i| format!("?a{i}")).collect();
-            let expr_string = match builtin_keyword(iri.as_str()) {
-                Some(kw) => format!("{kw}({})", placeholders.join(", ")),
-                None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
+            // A `sparql:<NAME>` call carries its rendered SPARQL text from
+            // shapes-load (see `FnCall::Sparql`); the other two kinds render an
+            // `<iri>(…)` call (or the keyword form, for the keyword-only builtins)
+            // here.
+            let expr_string = match expr {
+                NodeExpr::Call(FnCall::Sparql { expr, .. }) => expr.clone(),
+                _ => {
+                    let placeholders: Vec<String> =
+                        (0..arg_values.len()).map(|i| format!("?a{i}")).collect();
+                    match builtin_keyword(iri.as_str()) {
+                        Some(kw) => format!("{kw}({})", placeholders.join(", ")),
+                        None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
+                    }
+                }
             };
             // The product size is the product of the per-argument value-set sizes;
             // any empty set collapses it to zero (no invocations).
@@ -1058,6 +1306,33 @@ fn eval_node_expr_at_depth(
                     more.len()
                 )),
             }
+        }
+        // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
+        // whose evaluation clauses are word-for-word the same: run the query
+        // against the focus graph "with focusNode pre-bound to variable $this and
+        // scope variables pre-bound with matching names", and take the bindings of
+        // the single projected variable as the output nodes.
+        NodeExpr::Select {
+            query,
+            variable,
+            key,
+        } => {
+            // "Failure produced if scope contains variable named `this`" — the
+            // pre-bound focus node would otherwise be silently clobbered by a
+            // scope binding, so this is a hard refusal, not a precedence rule.
+            let mut bindings: Vec<(String, Term)> = Vec::with_capacity(1 + scope.bindings().len());
+            bindings.push(("this".to_owned(), focus.clone()));
+            for (name, value) in scope.bindings() {
+                if name == "this" {
+                    return Err(format!(
+                        "{key} node expression cannot be evaluated: the scope binds a variable \
+                         named ?this, which would clobber the pre-bound focus node"
+                    ));
+                }
+                bindings.push((name.to_owned(), value.clone()));
+            }
+            crate::sparql::eval_select_nodes_view(store.sparql_view(), query, variable, &bindings)
+                .map_err(|e| format!("{key} node expression: {e}"))
         }
         NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard, scope),
         NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard, scope),
@@ -2006,16 +2281,43 @@ mod tests {
         assert_eq!(result, vec![ex("b")]);
     }
 
+    /// `sh:min` over a blank node answers the blank node.
+    ///
+    /// A blank node is an ordinary term of the SPARQL total order (the LEAST kind
+    /// of all), so a one-element bag containing one has a minimum, and it is that
+    /// element. This used to be a hard type error — not because the comparator
+    /// could not rank it, but because the operands were serialized into a `VALUES`
+    /// block, which cannot spell a blank node. The refusal was the string bridge's,
+    /// and it left with it.
     #[test]
-    fn aggregate_over_blank_node_is_type_error() {
+    fn aggregate_over_a_blank_node_answers_the_blank_node() {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Min(Box::new(NodeExpr::Constant(Term::blank("b0"))));
-        let err = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).unwrap_err();
-        assert!(
-            err.contains("cannot appear in a SPARQL VALUES block"),
-            "got: {err}"
-        );
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("min over a blank");
+        assert_eq!(result, vec![Term::blank("b0")]);
+    }
+
+    /// `sh:max` over a set mixing every RDF 1.2 term kind answers the triple term,
+    /// because a triple term is the greatest kind in the SPARQL total order.
+    #[test]
+    fn aggregate_over_mixed_rdf12_kinds_answers_the_triple_term() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let triple = Term::Triple(Box::new(crate::term::Triple::new(
+            ex("s"),
+            NamedNode::new_unchecked("http://example.org/ns#p"),
+            ex("o"),
+        )));
+        let expr = NodeExpr::Max(Box::new(NodeExpr::Union(vec![
+            NodeExpr::Constant(Term::blank("b0")),
+            NodeExpr::Constant(ex("a")),
+            NodeExpr::Constant(triple.clone()),
+        ])));
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("max over mixed kinds");
+        assert_eq!(result, vec![triple]);
     }
 
     #[test]

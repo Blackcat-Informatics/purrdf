@@ -25,6 +25,12 @@ impl Parser<'_> {
     /// whose `sh:construct` is missing / unparsable / not a CONSTRUCT / violates
     /// the pre-binding restrictions, or a non-numeric / non-finite `sh:order`.
     pub(crate) fn parse_rules(&mut self, id: &Term) -> Result<Vec<Rule>, String> {
+        // Inside a `sh:condition`'s own shape parse, rules are not read: a
+        // condition is checked by `conforms`, which never looks at them. See
+        // `Parser::parse_rules_enabled`.
+        if !self.parse_rules_enabled {
+            return Ok(Vec::new());
+        }
         let mut rule_nodes: Vec<Term> = self.objects_of(id, sh::RULE);
         crate::term::sort_terms_canonical(&mut rule_nodes);
         let mut rules: Vec<Rule> = Vec::with_capacity(rule_nodes.len());
@@ -70,8 +76,22 @@ impl Parser<'_> {
             }
         };
 
-        let mut conditions: Vec<Term> = self.objects_of(rule_node, sh::CONDITION);
-        crate::term::sort_terms_canonical(&mut conditions);
+        // `sh:condition` is RESOLVED HERE, at shapes-load, exactly as
+        // `sh:filterShape` already is: a condition is a SHAPE, so the parser owns
+        // it, and an unresolvable one is a load failure.
+        //
+        // Resolving it at firing time instead was wrong twice over. It looked the
+        // condition up by IRI STRING in an index of top-level node shapes, so an
+        // INLINE condition (`sh:condition [ sh:property [ … ] ]`) and a top-level
+        // `sh:PropertyShape` condition — both perfectly legal SHACL — were absent
+        // from that index and refused. And the lookup only ran once the owning
+        // shape had produced a focus node, so a rule whose shape targets nothing
+        // never reached it: a nonsense `sh:condition` on an untargeted shape LOADED
+        // GREEN and the rule entailed as if the condition had held. A rule must
+        // never fire on a condition that was not evaluated.
+        let mut condition_nodes: Vec<Term> = self.objects_of(rule_node, sh::CONDITION);
+        crate::term::sort_terms_canonical(&mut condition_nodes);
+        let conditions = self.parse_conditions(shape_id, rule_node, condition_nodes)?;
 
         // Dispatch on rule kind: an explicit rdf:type OR the presence of the
         // kind's structural keys. A node that is both (or neither) is malformed.
@@ -111,6 +131,87 @@ impl Parser<'_> {
             deactivated,
             schedule,
         })
+    }
+
+    /// Resolve every `sh:condition` node of a rule into a parsed [`Shape`].
+    ///
+    /// The sub-parse runs with a FRESH in-flight set and with rule parsing
+    /// disabled. Both are needed, and for the same case: a shape whose rule names
+    /// that shape itself as its condition (the W3C `square-triple` case is exactly
+    /// this — `ex:Rectangle`'s rule is conditioned on `ex:Rectangle`). The
+    /// enclosing shape is in flight at this point, so the ordinary cycle guard
+    /// would hand back the EMPTY stand-in shape, and an empty shape conforms to
+    /// everything — the condition would silently always hold, which is precisely
+    /// the failure mode a condition exists to prevent. Clearing the in-flight set
+    /// resolves the real shape; disabling rules is what keeps that finite, and
+    /// costs nothing because `conforms` never reads a shape's rules.
+    fn parse_conditions(
+        &mut self,
+        shape_id: &Term,
+        rule_node: &Term,
+        condition_nodes: Vec<Term>,
+    ) -> Result<Vec<crate::shapes::Shape>, String> {
+        if condition_nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let saved_in_flight = std::mem::take(&mut self.in_flight);
+        let saved_rules = std::mem::replace(&mut self.parse_rules_enabled, false);
+
+        let mut conditions: Vec<crate::shapes::Shape> = Vec::with_capacity(condition_nodes.len());
+        let mut outcome = Ok(());
+        for condition_node in condition_nodes {
+            if !self.node_is_a_shape(&condition_node) {
+                outcome = Err(format!(
+                    "sh:condition {condition_node} on rule {rule_node} of shape {shape_id} does \
+                     not resolve to a shape in the shapes graph; a rule must never fire on a \
+                     condition that cannot be evaluated"
+                ));
+                break;
+            }
+            match self.parse_inline_shape(condition_node) {
+                Ok(shape) => conditions.push(shape),
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            }
+        }
+
+        // Restore on EVERY path, including the error one: a parser left with a
+        // cleared in-flight set would lose its cycle guard for the rest of the
+        // document.
+        self.in_flight = saved_in_flight;
+        self.parse_rules_enabled = saved_rules;
+        outcome.map(|()| conditions)
+    }
+
+    /// Whether `node` is authored as a SHAPE in the shapes graph.
+    ///
+    /// A shape is a node the shapes graph makes SHACL statements about: it is
+    /// explicitly typed `sh:NodeShape` / `sh:PropertyShape`, or it is the subject
+    /// of at least one triple whose predicate is a SHACL term (`sh:path`,
+    /// `sh:property`, `sh:minCount`, `sh:not`, …). That covers the whole legal
+    /// range a `sh:condition` may name — a top-level node shape, a top-level
+    /// `sh:PropertyShape`, and an anonymous inline shape — while refusing a node
+    /// the shapes graph never described as a shape at all.
+    ///
+    /// The distinction matters because [`Parser::parse_inline_shape`] answers an
+    /// undescribed node with an EMPTY shape, and an empty shape conforms to
+    /// everything: without this test, `sh:condition ex:NotAShape` would not fail,
+    /// it would silently hold.
+    fn node_is_a_shape(&self, node: &Term) -> bool {
+        if self.has_type(node, sh::NODE_SHAPE) || self.has_type(node, sh::PROPERTY_SHAPE) {
+            return true;
+        }
+        crate::data::native_quads(
+            self.data,
+            Some(node),
+            None,
+            None,
+            crate::data::GraphFilter::AnyGraph,
+        )
+        .iter()
+        .any(|(_, predicate, _)| predicate.as_str().starts_with(sh::NS))
     }
 
     /// Parse a `sh:TripleRule` head (`sh:subject`/`sh:predicate`/`sh:object` node
@@ -190,7 +291,8 @@ impl Parser<'_> {
         let schedule = match SparqlParser::new().parse_query(&construct) {
             Ok(query @ Query::Construct { .. }) => {
                 // The query runs with $this pre-bound to each focus node; the
-                // SHACL-SPARQL §5.2.1 pre-binding restrictions reject an illegal
+                // pre-binding restrictions (SHACL 1.2 SPARQL Extensions,
+                // Appendix A) reject an illegal
                 // body (MINUS/SERVICE/VALUES, `AS $this`, …) as a hard failure.
                 crate::prebinding::check_construct(&query, &["this"])
                     .map_err(|e| format!("sh:SPARQLRule {rule_node} on shape {shape_id}: {e}"))?;
