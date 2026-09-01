@@ -570,6 +570,14 @@ pub(crate) struct Parser<'s> {
     /// carries a `sh:nodeByExpression` is itself in the index, and a map built
     /// eagerly during its own parse would recurse forever.
     node_shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    /// Every custom node-expression function the shapes graph declares
+    /// (SHACL 1.2 Node Expressions §6), populated before any shape is parsed so a
+    /// call site inside a shape can resolve to the interned declaration.
+    ///
+    /// Bodies are installed after shape parsing, for the reason
+    /// [`crate::shapes::parser::custom_fn`] gives: a body may call any declared
+    /// function, itself included.
+    custom_fns: parser::custom_fn::CustomFnIndex,
     /// Whether `sh:rule` is parsed on the shape currently being read.
     ///
     /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
@@ -676,6 +684,7 @@ impl<'s> Parser<'s> {
             shapes_graph,
             target_types: std::collections::BTreeMap::new(),
             node_shape_index: Arc::new(OnceLock::new()),
+            custom_fns: parser::custom_fn::CustomFnIndex::default(),
             parse_rules_enabled: true,
         }
     }
@@ -745,6 +754,12 @@ impl<'s> Parser<'s> {
         // `sh:target` blank nodes can be instantiated during shape target parsing.
         self.target_types = self.parse_sparql_target_types()?;
 
+        // SHACL 1.2 Node Expressions §6 custom function DECLARATIONS are discovered
+        // up front, before any shape is parsed, so a `[ ex:f ( … ) ]` call site
+        // inside a shape resolves to the interned declaration rather than to a
+        // builtin. Their bodies are installed after shape parsing (see below).
+        self.custom_fns = self.discover_custom_functions()?;
+
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
         // are wrapped in a single-property Shape carrying the node's targets.
@@ -759,6 +774,12 @@ impl<'s> Parser<'s> {
             };
             node_shapes.push(shape);
         }
+
+        // The custom functions' own bodies. Deferred to here because a body is a
+        // node expression that may call any declared function — itself included —
+        // so it can only be parsed once every declaration is interned.
+        let custom_fns = self.custom_fns.clone();
+        self.install_custom_function_bodies(&custom_fns)?;
 
         let functions = self.parse_sparql_functions()?;
 

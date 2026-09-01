@@ -1848,18 +1848,43 @@ pub struct QueryOptions<'a> {
     /// per-focus-node identity tag — and must never be derived from time, RNG,
     /// or iteration order.
     pub bnode_mint_prefix: Option<&'a str>,
+    /// The frozen graph a dataset-aware (expression-bodied) user function's body is
+    /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3
+    /// "Evaluation of Custom SPARQL Functions".
+    ///
+    /// `None` — the default — means no such function can be called: the call is
+    /// refused rather than answered from a graph it never read (see
+    /// [`crate::user_fn::eval_expr_function`]). Every other function kind is
+    /// unaffected.
+    ///
+    /// Supplied per QUERY rather than captured once when the registry was built, and
+    /// that is the whole point: a caller iterating a fixpoint rebuilds its graph every
+    /// round and passes the round's graph here, so a function called during round *n*
+    /// reads round *n*'s facts. A registry that had captured a graph at build time
+    /// would read the round-zero graph forever.
+    pub focus_graph: Option<&'a Arc<RdfDataset>>,
+    /// The user-function call depth this evaluation starts at (see
+    /// [`EvalCtx::with_call_depth`](crate::eval::EvalCtx::with_call_depth)).
+    ///
+    /// `0` — the default — is a top-level query. A caller that is itself running
+    /// inside an expression-bodied function's body passes that function's
+    /// [`ExprFnCall::depth`](crate::ExprFnCall::depth) here, so a recursion that
+    /// leaves the evaluator and re-enters it through a fresh query is still bounded.
+    pub call_depth: u32,
 }
 
 impl QueryOptions<'_> {
     /// Configure nothing: the ordinary substitution rewrite, every registry the
-    /// canonical empty value, unprefixed blank mints. What every entry did before
-    /// it took options.
+    /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
+    /// depth. What every entry did before it took options.
     pub const EMPTY: Self = Self {
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
         property_functions: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
         aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
         bnode_mint_prefix: None,
+        focus_graph: None,
+        call_depth: 0,
     };
 }
 
@@ -1995,7 +2020,11 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     ctx = ctx
         .with_user_functions(options.functions)
         .with_property_functions(options.property_functions)
-        .with_aggregates(options.aggregates);
+        .with_aggregates(options.aggregates)
+        .with_call_depth(options.call_depth);
+    if let Some(graph) = options.focus_graph {
+        ctx = ctx.with_focus_graph(graph);
+    }
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx
             .with_bnode_mint_prefix(prefix)

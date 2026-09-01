@@ -52,11 +52,11 @@ pub fn eval_target(
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    eval_target_view(&**dataset, select, substitutions)
+    eval_target_view(dataset, select, substitutions)
 }
 
 /// Internal view-generic implementation of [`eval_target`].
-pub(crate) fn eval_target_view<D: DatasetView + Sync>(
+pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, Term)],
@@ -122,7 +122,7 @@ pub fn eval_sparql_constraint(
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
     eval_sparql_constraint_view(
-        &**dataset,
+        dataset,
         focus,
         select,
         component,
@@ -136,7 +136,7 @@ pub fn eval_sparql_constraint(
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync>(
+pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     focus: &Term,
     select: &str,
@@ -224,11 +224,11 @@ pub fn eval_scalar_expr(
     sparql_expr: &str,
     args: &[(String, Term)],
 ) -> Result<Option<Term>, String> {
-    eval_scalar_expr_view(&**dataset, sparql_expr, args)
+    eval_scalar_expr_view(dataset, sparql_expr, args)
 }
 
 /// Internal view-generic implementation of [`eval_scalar_expr`].
-pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync>(
+pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     sparql_expr: &str,
     args: &[(String, Term)],
@@ -281,7 +281,7 @@ pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync>(
 /// query's result header does not carry `variable` at all (a shapes-load check
 /// already established the projection, so this can only mean the header and the
 /// projection disagree).
-pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync>(
+pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     variable: &str,
@@ -338,7 +338,7 @@ pub fn eval_aggregate(
     agg: &str,
     values: &[Term],
 ) -> Result<Option<Term>, String> {
-    eval_aggregate_view(&**dataset, agg, values)
+    eval_aggregate_view(dataset, agg, values)
 }
 
 /// Internal view-generic implementation of [`eval_aggregate`].
@@ -346,7 +346,7 @@ pub fn eval_aggregate(
 /// `dataset` is unused — the fold is a function of the operand VALUES alone —
 /// but the parameter stays so every SHACL-AF evaluation helper keeps one shape
 /// and a caller does not have to remember which of them reads the graph.
-pub(crate) fn eval_aggregate_view<D: DatasetView + Sync>(
+pub(crate) fn eval_aggregate_view<D: DatasetView + Sync + FocusGraphSource>(
     _dataset: &D,
     agg: &str,
     values: &[Term],
@@ -392,13 +392,13 @@ pub fn eval_order(
     values: &[Term],
     descending: bool,
 ) -> Result<Vec<Term>, String> {
-    eval_order_view(&**dataset, values, descending)
+    eval_order_view(dataset, values, descending)
 }
 
 /// Internal view-generic implementation of [`eval_order`].
 ///
 /// `dataset` is unused, for the reason given on [`eval_aggregate_view`].
-pub(crate) fn eval_order_view<D: DatasetView + Sync>(
+pub(crate) fn eval_order_view<D: DatasetView + Sync + FocusGraphSource>(
     _dataset: &D,
     values: &[Term],
     descending: bool,
@@ -467,6 +467,56 @@ thread_local! {
     /// order so scheduling cannot change which query trips or what the evidence consumed;
     /// the `Arc` still lets nested evaluator workers share the one operation-owned state.
     static CURRENT_GOVERNORS: RefCell<Option<Arc<GovernorState>>> = const { RefCell::new(None) };
+
+    /// The custom node-expression function call depth in force on this thread — the
+    /// counter [`crate::expression::RecursionGuard::enter_call`] charges.
+    ///
+    /// It exists because a recursion can LEAVE this evaluator and come back: a
+    /// custom function's body may be a `sh:select` node expression whose query calls
+    /// the same function again through the SPARQL registration of SHACL 1.2 SPARQL
+    /// Extensions §7.3. The fresh evaluation context that query builds would restart
+    /// its own counter at zero, so the cycle would never reach any ceiling. Publishing
+    /// the depth here and seeding it into
+    /// [`QueryOptions::call_depth`](purrdf_sparql_eval::QueryOptions::call_depth) is
+    /// what makes the chain finite.
+    ///
+    /// A plain `Cell<u32>`, not a registry: it is a COUNTER, so it has no staleness
+    /// dimension and nothing about a graph is captured in it.
+    static CURRENT_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A dataset a SHACL query runs over that can also lend the frozen graph behind it.
+///
+/// The one thing SHACL 1.2 SPARQL Extensions §7.3 needs from the query's dataset
+/// that [`DatasetView`] cannot express: a `focusGraph` an expression-bodied function
+/// body can be evaluated against. `DatasetView` carries an associated `Id` type, so
+/// `&dyn DatasetView` is not a legal type and the generic view cannot be erased
+/// behind a trait object — but every backend SHACL actually queries is a frozen
+/// [`RdfDataset`] behind one wrapper or another, and THAT is the erased handle.
+///
+/// The graph travels with the QUERY, which is what keeps it fresh: the rules fixpoint
+/// rebuilds its dataset each round and runs that round's queries over it, so the
+/// focus graph a function sees is the graph the calling query is reading, never a
+/// snapshot captured when the shapes were loaded.
+pub(crate) trait FocusGraphSource {
+    /// The frozen graph behind this view, when there is one.
+    fn focus_graph(&self) -> Option<&Arc<RdfDataset>>;
+}
+
+impl FocusGraphSource for Arc<RdfDataset> {
+    fn focus_graph(&self) -> Option<&Self> {
+        Some(self)
+    }
+}
+
+impl FocusGraphSource for RdfDataset {
+    /// A bare `&RdfDataset` borrow cannot produce the `Arc` that owns it, so a
+    /// caller holding one supplies no focus graph and an expression-bodied function
+    /// call over it is refused rather than answered. Every SHACL path that can call
+    /// one passes the `Arc` (or the class-membership view over it) instead.
+    fn focus_graph(&self) -> Option<&Arc<Self>> {
+        None
+    }
 }
 
 /// An RAII scope that installs `state` as the governor accounting for every SPARQL query
@@ -525,7 +575,7 @@ pub fn current_governors() -> Option<Arc<GovernorState>> {
 /// folding it into a report would produce a `conforms` that means nothing. So the trip
 /// becomes an `Err` on the spot; the governed validation entry recovers the *typed* trip
 /// from the shared state, which latched it, and reports that instead of a report.
-fn run_query_view<D: DatasetView + Sync>(
+fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     query: &str,
     substitutions: &[(String, TermValue)],
@@ -570,6 +620,13 @@ fn run_query_view<D: DatasetView + Sync>(
         property_functions,
         aggregates: agg_registry,
         bnode_mint_prefix,
+        // The graph THIS query is reading, handed to any expression-bodied function
+        // it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a fixpoint round
+        // that rebuilt its dataset supplies the rebuilt one.
+        focus_graph: dataset.focus_graph(),
+        // The custom-function call depth in force, so a recursion that reaches SPARQL
+        // and comes back keeps counting instead of restarting at zero.
+        call_depth: current_call_depth(),
     };
 
     let Some(state) = governors else {
@@ -702,13 +759,53 @@ pub fn current_aggregates() -> Option<Arc<AggregateRegistry>> {
     CURRENT_AGGREGATES.with(|slot| slot.borrow().clone())
 }
 
+/// An RAII scope that publishes the custom node-expression function call depth in
+/// force on this thread, restoring the previous value on drop.
+///
+/// Installed around every custom-function body evaluation, so a `sh:select` body
+/// inside that function starts its query at the depth the caller had reached rather
+/// than at zero. See [`CURRENT_CALL_DEPTH`] for why the counter has to survive the
+/// trip out of this evaluator and back.
+#[must_use]
+#[derive(Debug)]
+pub struct CallDepthScope {
+    previous: u32,
+    /// A thread-local restoration guard must be dropped on the thread where it was
+    /// created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for CallDepthScope {
+    fn drop(&mut self) {
+        let restore = self.previous;
+        CURRENT_CALL_DEPTH.with(|slot| slot.set(restore));
+    }
+}
+
+/// Publish `depth` as the custom-function call depth in force on this thread,
+/// returning a guard that restores the previous depth when dropped.
+pub fn enter_call_depth_scope(depth: u32) -> CallDepthScope {
+    let previous = CURRENT_CALL_DEPTH.with(|slot| slot.replace(depth));
+    CallDepthScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The custom-function call depth in force on this thread (`0` outside any custom
+/// function body).
+#[must_use]
+pub fn current_call_depth() -> u32 {
+    CURRENT_CALL_DEPTH.with(std::cell::Cell::get)
+}
+
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
 /// with variable substitutions.
 ///
 /// This is the path used by SHACL-AF node expressions (scalar, aggregate,
 /// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
 /// `sh:sparql` constraint/component bodies.
-pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
+pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -732,7 +829,7 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
 /// Pre-binds `$this`, and when known `$shapesGraph` and `$currentShape`, then
 /// applies the SHACL-specific substitution rewrite (FILTER/EXISTS expression
 /// substitution and `BOUND($v)` → `true`).
-pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -780,7 +877,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
 /// (`Solutions` / `Boolean` are rejected).
-pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     construct: &str,
     substitutions: &[(String, TermValue)],
@@ -815,7 +912,7 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
 }
 
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
-pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     ask: &str,
     substitutions: &[(String, TermValue)],

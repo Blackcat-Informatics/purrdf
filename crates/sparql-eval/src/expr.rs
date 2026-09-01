@@ -3223,6 +3223,18 @@ fn eval_function<D: DatasetView + Sync>(
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }
+            // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
+            // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
+            // any SHACL instance of sh:ListParameterExpressionFunction". Unlike the
+            // native kind it is handed the query's focus graph and the current call
+            // depth (see `crate::user_fn::ExprFnCall`), because its body is a node
+            // expression rather than a value-level closure. The registry's collision
+            // guard makes a cross-kind IRI unrepresentable, so the three probes are an
+            // ordering, not a precedence rule.
+            if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
+                let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
+                return Ok(result.map(|value| intern(ctx, value)));
+            }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
             }

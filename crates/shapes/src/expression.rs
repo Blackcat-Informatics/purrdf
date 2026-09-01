@@ -87,6 +87,8 @@
 //! produces the order it was asked for. Their determinism comes from their inputs
 //! being deterministic, not from a final sort.
 
+use std::sync::{Arc, OnceLock};
+
 use ::purrdf::{FastMap, FastSet};
 
 use crate::data::ShaclData;
@@ -192,6 +194,32 @@ pub enum NodeExpr {
     Exists(Box<Self>),
     /// A builtin or user-defined function call.
     Call(FnCall),
+
+    // ── SHACL 1.2 Node Expressions §6 "Custom Node Expressions" ────────────────
+    /// `shnex:arg` (§6.3) — an ARGUMENT reference, resolved against the argument
+    /// scope of the innermost enclosing custom-function body.
+    ///
+    /// The sibling of [`Self::Var`], and deliberately a separate arm because the
+    /// specification gives the two different value spaces: `shnex:var`'s scope
+    /// values "are individual nodes", while `shnex:arg`'s "are node expressions",
+    /// evaluated at the point of use in the EMPTY scope. An unbound key yields the
+    /// empty list — §6.3's own second case, an absence rather than an error.
+    Arg(ArgKey),
+    /// A call of a custom node-expression function declared in the shapes graph
+    /// (SHACL 1.2 Node Expressions §6.1 named-parameter / §6.2 list-parameter).
+    ///
+    /// The body is held BY REFERENCE, never inlined: a function whose body calls
+    /// itself is legal (and bounded at evaluation by [`MAX_RECURSION_DEPTH`]),
+    /// whereas inlining it at parse time would not terminate.
+    CustomCall {
+        /// The declared function.
+        func: Arc<CustomFunction>,
+        /// The arguments as authored, keyed the way the function's kind keys them:
+        /// by zero-based index for a list-parameter function, by parameter `sh:path`
+        /// IRI for a named-parameter one. They are node EXPRESSIONS, not values —
+        /// §6.3 evaluates them where `shnex:arg` reads them.
+        args: Vec<(ArgKey, Self)>,
+    },
 
     // ── SHACL 1.2 Node Expressions (W3C WD, `shnex:` namespace) ─────────────────
     /// `shnex:EmptyExpression` (§4.1.1) — a blank node that is the subject of no
@@ -303,6 +331,115 @@ pub enum NodeExpr {
         /// so a writer is told about the property they actually wrote.
         key: &'static str,
     },
+}
+
+/// The key an argument is bound and looked up under inside a custom function's
+/// body — the key space of `shnex:arg` (SHACL 1.2 Node Expressions §6.3).
+///
+/// §6.3 constrains the `shnex:arg` value to `sh:or ( [ sh:nodeKind sh:IRI ]
+/// [ sh:datatype xsd:integer ] )`, and the two spellings mean different things:
+/// an integer is a LIST parameter function's zero-based argument index (§6.2), an
+/// IRI is a NAMED parameter function's parameter `sh:path` (§6.1). Keeping them as
+/// two variants rather than one string means `[ shnex:arg 0 ]` can never
+/// accidentally resolve a parameter whose IRI happens to render as `"0"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgKey {
+    /// A zero-based argument index — `[ shnex:arg 0 ]` (§6.2).
+    Index(u64),
+    /// A parameter `sh:path` IRI — `[ shnex:arg ex:average ]` (§6.1).
+    Named(String),
+}
+
+impl ArgKey {
+    /// The SPARQL variable name this argument is pre-bound under inside a
+    /// SPARQL-based function body.
+    ///
+    /// SHACL 1.2 SPARQL Extensions §7.2 spells an indexed argument `$arg0`, `$arg1`,
+    /// … in a `sh:select` / `sh:sparqlExpr` body, matching the `shnex:arg0` parameter
+    /// path §6.2 declares it under. A named argument has no spelling of its own in
+    /// that document, so it takes the parameter IRI's local name — the same rule
+    /// `sh:SPARQLFunction` already uses to turn a parameter predicate into a
+    /// pre-bound variable.
+    #[must_use]
+    pub fn variable_name(&self) -> String {
+        match self {
+            Self::Index(index) => format!("arg{index}"),
+            Self::Named(iri) => crate::shapes::local_name(iri).to_owned(),
+        }
+    }
+}
+
+impl core::fmt::Display for ArgKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Index(n) => write!(f, "{n}"),
+            Self::Named(iri) => write!(f, "<{iri}>"),
+        }
+    }
+}
+
+/// Which way a custom node-expression function keys its arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomFnKind {
+    /// `sh:ListParameterExpressionFunction` (SHACL 1.2 Node Expressions §6.2): the
+    /// function's own IRI is its list parameter property, and its body reads
+    /// arguments by zero-based index. This is the kind SHACL 1.2 SPARQL Extensions
+    /// §7.3 asks a SPARQL engine to register as a callable function.
+    ListParameter,
+    /// `sh:NamedParameterExpressionFunction` (SHACL 1.2 Node Expressions §6.1):
+    /// arguments are supplied under the parameters' own `sh:path` IRIs, and the
+    /// call site is recognised by a parameter marked `sh:keyParameter true`. It has
+    /// no positional call form, so it is deliberately NOT registered as a SPARQL
+    /// function — §7.3 names only the list-parameter class.
+    NamedParameter,
+}
+
+/// A custom node-expression function declared in the shapes graph.
+///
+/// # Why the body is a `OnceLock`
+///
+/// A function's body is a node expression that may call any declared function,
+/// including itself. Declarations are therefore discovered and interned FIRST (so a
+/// call site can resolve to the same `Arc` no matter which order the graph is read
+/// in), and every body is parsed and installed afterwards. A body that is never
+/// installed is an internal inconsistency, and evaluation reports it as a hard error
+/// rather than treating the missing body as an empty result.
+#[derive(Debug)]
+pub struct CustomFunction {
+    /// The function's own IRI. It is also the `focusNode` its body is evaluated
+    /// with when the function is invoked from SPARQL (SHACL 1.2 SPARQL Extensions
+    /// §7.3: "the `focusNode` passed into a custom SPARQL function based on a node
+    /// expression is the IRI of the function itself").
+    pub iri: NamedNode,
+    /// Which way the function keys its arguments.
+    pub kind: CustomFnKind,
+    /// The declared parameter keys, in call order for a list-parameter function and
+    /// in ascending IRI order for a named-parameter one.
+    pub params: Vec<ArgKey>,
+    /// The number of leading REQUIRED parameters (arity is `[required,
+    /// params.len()]`), from `sh:optional`.
+    pub required: usize,
+    /// The `sh:bodyExpression` node expression, installed once every declaration has
+    /// been interned.
+    pub body: OnceLock<NodeExpr>,
+}
+
+impl CustomFunction {
+    /// The installed body, or a hard error naming the function.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` when no body was ever installed — an internal
+    /// inconsistency, reported rather than silently evaluated as the empty list.
+    pub fn body(&self) -> Result<&NodeExpr, String> {
+        self.body.get().ok_or_else(|| {
+            format!(
+                "internal error: custom node-expression function <{}> has no installed \
+                 sh:bodyExpression",
+                self.iri.as_str()
+            )
+        })
+    }
 }
 
 /// The SPARQL surface form a `sparql:<NAME>` node-expression call lowers to.
@@ -564,21 +701,74 @@ impl<'a> Binding<'a> {
 /// `shnex:flatMap` (§4.3.1) and `shnex:orderBy` (§4.2.8) rebind the FOCUS NODE per
 /// element rather than a scope variable, so they thread the caller's scope through
 /// unchanged — the spec writes them as `evalExpr(inner, focusGraph, n, scope)`.
+/// # Two key spaces, one scope
+///
+/// The specification writes a single `scope`, but it gives its two kinds of entry
+/// different value spaces: a `shnex:var` entry's value "is an individual node"
+/// (§4.1.2) while a `shnex:arg` entry's value is a NODE EXPRESSION evaluated where
+/// it is read (§6.3). They are therefore carried in two fields of this one type
+/// rather than one map — [`Self::lookup`] answers the first, [`Self::lookup_arg`]
+/// the second, and neither can ever answer the other's question by accident.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Scope<'a> {
     frame: Option<&'a Binding<'a>>,
+    /// The argument bindings of the innermost enclosing custom-function body
+    /// (SHACL 1.2 Node Expressions §6.1/§6.2), keyed as that function keys them.
+    ///
+    /// A flat borrowed slice rather than a linked list, because a custom function
+    /// call REPLACES the argument environment outright — `evalExpr(expr, focusGraph,
+    /// focusNode, scope) -> evalExpr(body, focusGraph, focusNode, argScope)` — so
+    /// there is never an outer frame to chain to.
+    args: &'a [(ArgKey, NodeExpr)],
 }
 
 impl<'a> Scope<'a> {
-    /// The empty scope — no variable is bound.
-    pub const EMPTY: Self = Self { frame: None };
+    /// The empty scope — no variable and no argument is bound.
+    pub const EMPTY: Self = Self {
+        frame: None,
+        args: &[],
+    };
 
-    /// The scope whose innermost frame is `binding`.
+    /// The scope whose innermost frame is `binding`, inheriting `binding`'s
+    /// enclosing argument environment.
     #[must_use]
     pub const fn bound(binding: &'a Binding<'a>) -> Self {
         Self {
             frame: Some(binding),
+            args: binding.outer.args,
         }
+    }
+
+    /// The scope a custom function's body is evaluated in: `args` bound, and no
+    /// variable bound at all.
+    ///
+    /// The variable frame is dropped deliberately — SHACL 1.2 Node Expressions
+    /// §6.1/§6.2 evaluate the body under `argScope`, not under the caller's scope
+    /// extended by it, so a `shnex:var` inside a body sees nothing the caller had.
+    #[must_use]
+    pub const fn with_args(args: &'a [(ArgKey, NodeExpr)]) -> Self {
+        Self { frame: None, args }
+    }
+
+    /// The node expression bound to argument key `key`, or `None` when the key is
+    /// not in the argument scope (§6.3's second case).
+    #[must_use]
+    pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
+        self.args
+            .iter()
+            .find(|(bound, _)| bound == key)
+            .map(|(_, expr)| expr)
+    }
+
+    /// Every argument binding in force, in call order.
+    ///
+    /// Read by the SPARQL-based body arm, which pre-binds them as query variables —
+    /// SHACL 1.2 SPARQL Extensions §7.2 writes a `sh:select` body that references
+    /// `$arg0` directly. Ordinary evaluation never calls this: `shnex:arg` resolves
+    /// one key through [`lookup_arg`](Self::lookup_arg).
+    #[must_use]
+    pub const fn args(&self) -> &'a [(ArgKey, NodeExpr)] {
+        self.args
     }
 
     /// The node bound to `name`, innermost binding first, or `None` when the name
@@ -723,6 +913,41 @@ impl RecursionGuard {
     /// Ascend one structural level, undoing an [`enter_node_expr`](Self::enter_node_expr).
     fn exit_node_expr(&mut self) {
         self.structural = self.structural.saturating_sub(1);
+    }
+
+    /// Descend into a custom node-expression function's body (SHACL 1.2 Node
+    /// Expressions §6.1/§6.2), charging one unit of the SAME re-entry counter
+    /// `sh:filterShape` / `sh:exists` charge.
+    ///
+    /// A function body is a re-entry into evaluation exactly as a filter shape is:
+    /// one unit is one call boundary crossed, and a self- or mutually-recursive
+    /// function grows it without bound. It deliberately does NOT get a third,
+    /// separate ceiling — the quantity being bounded is the same quantity, and the
+    /// existing [`MAX_RECURSION_DEPTH`] is what bounds it. The counter is also what
+    /// [`crate::sparql::current_call_depth`] publishes, so a cycle that leaves this
+    /// evaluator through a `sh:select` body and re-enters through a registered
+    /// SPARQL function keeps counting instead of restarting at zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` naming [`MAX_RECURSION_DEPTH`] once the ceiling is
+    /// reached — a hard, catchable refusal in place of the uncatchable process abort
+    /// a native stack overflow would be.
+    pub fn enter_call(&mut self, iri: &str) -> Result<(), String> {
+        if self.depth >= MAX_RECURSION_DEPTH {
+            return Err(format!(
+                "custom node-expression function <{iri}> re-entry depth exceeded \
+                 ({MAX_RECURSION_DEPTH}): the call chain is recursive and has been refused rather \
+                 than allowed to exhaust the native stack"
+            ));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Ascend out of a custom function body, undoing an [`enter_call`](Self::enter_call).
+    pub fn exit_call(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     /// Record `(shape_id, focus)` as in-flight.
@@ -1331,8 +1556,81 @@ fn eval_node_expr_at_depth(
                 }
                 bindings.push((name.to_owned(), value.clone()));
             }
+            // SHACL 1.2 SPARQL Extensions §7.2 writes a custom function's `sh:select`
+            // / `sh:sparqlExpr` body that references its arguments as `$arg0`,
+            // `$arg1`, … directly, so the argument scope is pre-bound here under
+            // those names (and, for a named-parameter function, under each
+            // parameter's local name). The argument is a node EXPRESSION, evaluated
+            // where it is read exactly as `shnex:arg` evaluates it.
+            //
+            // A variable can carry one term: an argument that produces none is left
+            // UNBOUND (an absence the query itself decides what to do with), and one
+            // that produces several is a hard refusal naming the variable — binding
+            // an arbitrary member, or dropping the binding silently, would both hand
+            // the query a different answer than the author wrote.
+            for (arg_key, arg_expr) in scope.args() {
+                let name = arg_key.variable_name();
+                let values = eval_node_expr_in_scope(store, focus, arg_expr, guard, Scope::EMPTY)?;
+                match values.as_slice() {
+                    [] => {}
+                    [only] => bindings.push((name, only.clone())),
+                    more => {
+                        return Err(format!(
+                            "{key} node expression cannot pre-bind ?{name}: the argument produces \
+                             {} nodes and a query variable carries one",
+                            more.len()
+                        ));
+                    }
+                }
+            }
             crate::sparql::eval_select_nodes_view(store.sparql_view(), query, variable, &bindings)
                 .map_err(|e| format!("{key} node expression: {e}"))
+        }
+        // §6.3 Arg expression: look the key up in the argument scope and evaluate
+        // the bound NODE EXPRESSION there, in the empty scope —
+        // `evalExpr(a, focusGraph, focusNode, {})`. An unbound key is the spec's
+        // own second case and yields the empty list.
+        NodeExpr::Arg(key) => match scope.lookup_arg(key) {
+            None => Ok(Vec::new()),
+            Some(arg) => {
+                let out = eval_node_expr_in_scope(store, focus, arg, guard, Scope::EMPTY)?;
+                // §6.2 says of a custom LIST parameter function that "each argument
+                // produces at most one output node", and that "an evaluation failure
+                // occurs if any output produces more than one node". That restriction
+                // belongs to the indexed key space alone: §6.1's own example passes a
+                // multi-valued `shnex:pathValues` to a NAMED parameter and sums it, so
+                // a named argument is deliberately unrestricted here.
+                if matches!(key, ArgKey::Index(_)) && out.len() > 1 {
+                    return Err(format!(
+                        "shnex:arg {key} names a list-parameter argument, which must produce at \
+                         most one node, got {}",
+                        out.len()
+                    ));
+                }
+                Ok(out)
+            }
+        },
+        // §6.1 / §6.2 Custom node-expression function call: evaluate the declared
+        // body with the argument scope in force —
+        // `evalExpr(expr, focusGraph, focusNode, scope) ->
+        //  evalExpr(body, focusGraph, focusNode, argScope)`.
+        //
+        // The focus node and the focus graph both carry through unchanged; only the
+        // scope is replaced. The re-entry counter is charged and released on EVERY
+        // path, so an erroring body never leaves the guard permanently raised.
+        NodeExpr::CustomCall { func, args } => {
+            let body = func.body()?;
+            guard.enter_call(func.iri.as_str())?;
+            // Publish the depth for the duration of the body, so a `sh:select` inside
+            // it starts its query at this depth: a cycle that leaves this evaluator
+            // through SPARQL and re-enters through the §7.3 registration would
+            // otherwise restart the count at zero and never terminate.
+            let result = {
+                let _depth = crate::sparql::enter_call_depth_scope(guard.depth());
+                eval_node_expr_in_scope(store, focus, body, guard, Scope::with_args(args))
+            };
+            guard.exit_call();
+            result
         }
         NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard, scope),
         NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard, scope),
@@ -1375,6 +1673,59 @@ fn eval_node_expr_at_depth(
             let out = eval_node_expr_in_scope(store, focus, inner, guard, scope)?;
             Ok(vec![bool_literal(!out.is_empty())])
         }
+    }
+}
+
+/// Invoke a custom LIST parameter function from a SPARQL query — SHACL 1.2 SPARQL
+/// Extensions §7.3 "Evaluation of Custom SPARQL Functions".
+///
+/// `args` are the ALREADY-EVALUATED argument values the SPARQL engine computed, in
+/// call order. §7.3 keys the scope by argument index, so they are bound to
+/// [`ArgKey::Index`] `0…n-1`; and it fixes the focus node explicitly — "During
+/// SPARQL query evaluation there is no dedicated focus node. Instead, the
+/// `focusNode` passed into a custom SPARQL function based on a node expression is
+/// the IRI of the function itself" — so the body is evaluated with the function's
+/// own IRI as focus.
+///
+/// The return follows §7.3's own two-case rule: "If the list of output nodes `rs`
+/// has exactly one member, then return that node." A body producing NO node has no
+/// value to give, which is `Ok(None)` — SPARQL's unbound expression result, the same
+/// signal every other value-less call in this crate returns. A body producing MORE
+/// than one node is a hard error: the specification refuses to pick one, and so does
+/// this, rather than returning a value it was not told to return.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when the body was never installed, when the re-entry depth
+/// bound is reached, when the body's evaluation fails, or when the body produces
+/// more than one output node.
+pub fn eval_custom_function_call(
+    store: &ShaclData,
+    func: &Arc<CustomFunction>,
+    args: &[Term],
+    guard: &mut RecursionGuard,
+) -> Result<Option<Term>, String> {
+    let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
+    for (index, value) in args.iter().enumerate() {
+        let key = u64::try_from(index)
+            .map_err(|e| format!("argument index {index} is not representable: {e}"))?;
+        bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
+    }
+    let call = NodeExpr::CustomCall {
+        func: Arc::clone(func),
+        args: bound,
+    };
+    let focus = Term::NamedNode(func.iri.clone());
+    let out = eval_node_expr(store, &focus, &call, guard)?;
+    match out.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        more => Err(format!(
+            "custom SPARQL function <{}> produced {} output nodes; SHACL 1.2 SPARQL Extensions \
+             §7.3 returns a value only when the body produces exactly one",
+            func.iri.as_str(),
+            more.len()
+        )),
     }
 }
 

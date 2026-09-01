@@ -10,7 +10,9 @@ use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 
 use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
-use crate::expression::{FnCall, NodeExpr, sparql_ns_lowering};
+use crate::expression::{
+    ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, sparql_ns_lowering,
+};
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::term::{NamedNode, Term};
 
@@ -1089,6 +1091,31 @@ impl Parser<'_> {
                     key,
                 })
             }
+            // §6.3 Arg expression. The key is `sh:or ( [ sh:nodeKind sh:IRI ]
+            // [ sh:datatype xsd:integer ] )`: an IRI names a custom NAMED parameter
+            // function's parameter (§6.1), an integer a custom LIST parameter
+            // function's zero-based argument (§6.2). Anything else names no
+            // argument at all and is refused here rather than silently resolving
+            // to nothing at every call.
+            ExprKind::Arg => match &object {
+                Term::NamedNode(name) => Ok(NodeExpr::Arg(ArgKey::Named(name.as_str().to_owned()))),
+                Term::Literal(lit) => {
+                    match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
+                        Ok(Some(purrdf_xsd::XsdValue::Integer { value, .. })) if value >= 0 => {
+                            Ok(NodeExpr::Arg(ArgKey::Index(u64::try_from(value).map_err(
+                                |e| format!("shnex:arg index {value} on {node} is not usable: {e}"),
+                            )?)))
+                        }
+                        _ => Err(format!(
+                            "shnex:arg on {node} must be an IRI or a non-negative xsd:integer, \
+                             got {object}"
+                        )),
+                    }
+                }
+                other => Err(format!(
+                    "shnex:arg on {node} must be an IRI or a non-negative xsd:integer, got {other}"
+                )),
+            },
             // §4.5.3 ConformsToShape expression: a LIST parameter function whose
             // argument list has exactly two members — the node expression under
             // test and an expression producing the shape IRI. The spec constrains
@@ -1116,6 +1143,66 @@ impl Parser<'_> {
                 })
             }
         }
+    }
+
+    /// Recognise and parse a custom NAMED parameter function call
+    /// (SHACL 1.2 Node Expressions §6.1), or return `Ok(None)` when `candidates`
+    /// mentions no key parameter and the node is therefore some other kind of call.
+    ///
+    /// The call site is a blank node whose predicates are the function's parameter
+    /// `sh:path` IRIs — `[ ex:average [ shnex:pathValues ( ex:employee ex:income ) ] ]`.
+    /// It never names the function, so recognition goes through the key-parameter
+    /// index §6.1 requires to be disjoint across functions.
+    ///
+    /// # Errors
+    ///
+    /// Hard-fails when the node's key parameters identify TWO different functions
+    /// (the node would then be two calls at once), and when a predicate is not one
+    /// of the identified function's declared parameters — a mis-spelled parameter
+    /// would otherwise bind nothing and evaluate to the empty list at every call.
+    fn parse_named_parameter_call(
+        &mut self,
+        node: &Term,
+        candidates: &[(NamedNode, Term)],
+    ) -> Result<Option<NodeExpr>, String> {
+        // Nothing declared: skip the whole question without touching the index.
+        if self.custom_fns.is_empty() {
+            return Ok(None);
+        }
+        let mut func: Option<Arc<CustomFunction>> = None;
+        for (predicate, _) in candidates {
+            let Some(candidate) = self.custom_fns.by_key_parameter(predicate.as_str()) else {
+                continue;
+            };
+            match &func {
+                Some(existing) if existing.iri != candidate.iri => {
+                    return Err(format!(
+                        "node expression on {node} carries the key parameters of two different \
+                         custom named-parameter functions, <{}> and <{}>",
+                        existing.iri.as_str(),
+                        candidate.iri.as_str()
+                    ));
+                }
+                _ => func = Some(Arc::clone(candidate)),
+            }
+        }
+        let Some(func) = func else {
+            return Ok(None);
+        };
+        let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(candidates.len());
+        for (predicate, object) in candidates {
+            let key = ArgKey::Named(predicate.as_str().to_owned());
+            if !func.params.contains(&key) {
+                return Err(format!(
+                    "node expression on {node} calls <{}> with <{}>, which is not one of its \
+                     declared sh:parameter paths",
+                    func.iri.as_str(),
+                    predicate.as_str()
+                ));
+            }
+            bound.push((key, self.parse_node_expr(object)?));
+        }
+        Ok(Some(NodeExpr::CustomCall { func, args: bound }))
     }
 
     /// Parse the RDF list at `(node, predicate)` into a vector of node expressions.
@@ -1179,6 +1266,15 @@ impl Parser<'_> {
                  function call"
             ));
         }
+        // A custom NAMED parameter function call (SHACL 1.2 Node Expressions §6.1) is
+        // recognised by a KEY parameter, not by the function IRI: the call site
+        // `[ ex:average <expr> ]` never mentions `ex:AverageExpression` at all. It is
+        // therefore decided BEFORE the one-predicate rule below — such a call carries
+        // one predicate per supplied argument, so more than one is normal rather than
+        // ambiguous.
+        if let Some(call) = self.parse_named_parameter_call(node, &candidates)? {
+            return Ok(call);
+        }
         if candidates.len() > 1 {
             return Err(format!(
                 "ambiguous function-call node expression on {node}: multiple candidate predicates"
@@ -1203,6 +1299,44 @@ impl Parser<'_> {
         let mut args = Vec::with_capacity(items.len());
         for item in items {
             args.push(self.parse_node_expr(&item)?);
+        }
+        // A custom LIST parameter function call (SHACL 1.2 Node Expressions §6.2):
+        // the function's own IRI IS its list parameter property, so the call site is
+        // shaped exactly like every other `[ <fn> ( … ) ]` and is told apart by the
+        // declaration the shapes graph carries. Checked before the SPARQL/builtin
+        // routes so a declared function can never be mistaken for one of them.
+        if let Some(func) = self.custom_fns.get(fn_iri.as_str()) {
+            if matches!(func.kind, CustomFnKind::NamedParameter) {
+                return Err(format!(
+                    "<{}> on {node} is a sh:NamedParameterExpressionFunction and has no positional \
+                     call form; supply its arguments under its parameters' own sh:path IRIs",
+                    fn_iri.as_str()
+                ));
+            }
+            // Arity is decided HERE, at load, because both the declaration and the
+            // call are in hand: a call with too few or too many arguments would
+            // otherwise read a missing `shnex:arg` as the empty list and quietly
+            // contribute nothing.
+            if args.len() < func.required || args.len() > func.params.len() {
+                return Err(format!(
+                    "sh:ListParameterExpressionFunction <{}> called on {node} with {} argument(s), \
+                     but it declares {}..={}",
+                    fn_iri.as_str(),
+                    args.len(),
+                    func.required,
+                    func.params.len()
+                ));
+            }
+            let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
+            for (index, arg) in args.into_iter().enumerate() {
+                let key = u64::try_from(index)
+                    .map_err(|e| format!("argument index {index} on {node} is not usable: {e}"))?;
+                bound.push((ArgKey::Index(key), arg));
+            }
+            return Ok(NodeExpr::CustomCall {
+                func: Arc::clone(func),
+                args: bound,
+            });
         }
         // SHACL 1.2 Node Expressions §5: an IRI of the W3C SPARQL 1.2 term
         // vocabulary in call position IS the corresponding SPARQL function. The
@@ -1308,6 +1442,8 @@ enum ExprKind {
     ConformsToShape,
     /// `sh:select` / `sh:sparqlExpr` — a SPARQL-based node expression.
     Select,
+    /// `shnex:arg` — an argument reference inside a custom function's body.
+    Arg,
 }
 
 /// The single variable a SHACL 1.2 SPARQL-based node expression's SELECT query
@@ -1394,6 +1530,7 @@ static PRIMARY_KEYS: &[(&str, ExprKind)] = &[
     (shnex::INSTANCES_OF, ExprKind::InstancesOf),
     (shnex::NODES_MATCHING, ExprKind::NodesMatching),
     (shnex::CONFORMS_TO_SHAPE, ExprKind::ConformsToShape),
+    (shnex::ARG, ExprKind::Arg),
     // SHACL 1.2 SPARQL Extensions spellings.
     (sh::SELECT, ExprKind::Select),
     (sh::SPARQL_EXPR, ExprKind::Select),
@@ -1454,6 +1591,7 @@ static NON_FUNCTION_KEYS: &[&str] = &[
     shnex::INSTANCES_OF,
     shnex::NODES_MATCHING,
     shnex::CONFORMS_TO_SHAPE,
+    shnex::ARG,
     // SHACL 1.2 SPARQL Extensions: the two SPARQL-based expression keys and the
     // `sh:prefixes` each may carry (§6.1 / §6.2).
     sh::SELECT,

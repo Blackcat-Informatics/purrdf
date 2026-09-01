@@ -92,11 +92,12 @@ impl ValidationPlan {
     }
 
     fn from_shape_iter<'a>(ds: &RdfDataset, shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
-        let mut classes: FastSet<NamedNode> = FastSet::default();
+        let mut scan = ClassScan::default();
         for shape in shapes {
-            collect_shape_classes(shape, &mut classes);
+            collect_shape_classes(shape, &mut scan);
         }
-        let class_ids = classes
+        let class_ids = scan
+            .classes
             .into_iter()
             .map(|class| {
                 let id = ds.term_id_by_iri(class.as_str());
@@ -115,14 +116,32 @@ impl ValidationPlan {
     }
 }
 
-fn collect_shape_classes(shape: &Shape, classes: &mut FastSet<NamedNode>) {
+/// The accumulator the class-planning walk carries.
+///
+/// It is a struct rather than a bare set because the walk has to be cycle-safe: a
+/// custom node-expression function's `sh:bodyExpression` may CALL the very function
+/// it belongs to (SHACL 1.2 Node Expressions §6.1/§6.2 hold the body by reference
+/// precisely so that is expressible), so the IR genuinely contains a cycle. Walking
+/// it without a record of the bodies already entered would recurse until the native
+/// stack was exhausted — an ABORT, not an error any caller could handle.
+#[derive(Default)]
+struct ClassScan {
+    /// Every class IRI the walk has reached.
+    classes: FastSet<NamedNode>,
+    /// The custom node-expression function bodies already walked, by IRI. A body
+    /// names the same classes at every call site, so once is enough — and once is
+    /// also all a cyclic body can be given.
+    walked_bodies: FastSet<String>,
+}
+
+fn collect_shape_classes(shape: &Shape, scan: &mut ClassScan) {
     for target in &shape.targets {
         match target {
             Target::Class(class) => {
-                classes.insert(class.clone());
+                scan.classes.insert(class.clone());
             }
             Target::ImplicitClass(Term::NamedNode(class)) => {
-                classes.insert(class.clone());
+                scan.classes.insert(class.clone());
             }
             Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
@@ -131,46 +150,46 @@ fn collect_shape_classes(shape: &Shape, classes: &mut FastSet<NamedNode>) {
             | Target::Sparql { .. } => {}
         }
     }
-    collect_constraints_classes(&shape.constraints, classes);
+    collect_constraints_classes(&shape.constraints, scan);
     for property in &shape.property_shapes {
-        collect_property_classes(property, classes);
+        collect_property_classes(property, scan);
     }
 }
 
-fn collect_property_classes(property: &PropertyShape, classes: &mut FastSet<NamedNode>) {
-    collect_constraints_classes(&property.constraints, classes);
+fn collect_property_classes(property: &PropertyShape, scan: &mut ClassScan) {
+    collect_constraints_classes(&property.constraints, scan);
     for nested in &property.property_shapes {
-        collect_property_classes(nested, classes);
+        collect_property_classes(nested, scan);
     }
     for reifier_shape in &property.reifier_shapes {
-        collect_shape_classes(reifier_shape, classes);
+        collect_shape_classes(reifier_shape, scan);
     }
 }
 
-fn collect_constraints_classes(constraints: &[Constraint], classes: &mut FastSet<NamedNode>) {
+fn collect_constraints_classes(constraints: &[Constraint], scan: &mut ClassScan) {
     for constraint in constraints {
         match constraint {
             Constraint::Class(class) => {
-                classes.insert(class.clone());
+                scan.classes.insert(class.clone());
             }
             Constraint::Not(shape) | Constraint::Node(shape) => {
-                collect_shape_classes(shape, classes);
+                collect_shape_classes(shape, scan);
             }
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                 for shape in shapes {
-                    collect_shape_classes(shape, classes);
+                    collect_shape_classes(shape, scan);
                 }
             }
             Constraint::QualifiedValueShape {
                 shape, siblings, ..
             } => {
-                collect_shape_classes(shape, classes);
+                collect_shape_classes(shape, scan);
                 for sibling in siblings {
-                    collect_shape_classes(sibling, classes);
+                    collect_shape_classes(sibling, scan);
                 }
             }
             Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
-                collect_expression_classes(expr, classes);
+                collect_expression_classes(expr, scan);
             }
             Constraint::Datatype(_)
             | Constraint::NodeKind(_)
@@ -198,7 +217,7 @@ fn collect_constraints_classes(constraints: &[Constraint], classes: &mut FastSet
     }
 }
 
-fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>) {
+fn collect_expression_classes(expr: &NodeExpr, scan: &mut ClassScan) {
     match expr {
         NodeExpr::Constant(_)
         | NodeExpr::This
@@ -216,39 +235,59 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
         // like an `sh:class` constraint or the membership view answers "no
         // instances" for it.
         NodeExpr::InstancesOf(class) => {
-            classes.insert(class.clone());
+            scan.classes.insert(class.clone());
         }
         NodeExpr::Filter { nodes, shape } => {
-            collect_expression_classes(nodes, classes);
-            collect_shape_classes(shape, classes);
+            collect_expression_classes(nodes, scan);
+            collect_shape_classes(shape, scan);
         }
         NodeExpr::FindFirst { nodes, shape } | NodeExpr::MatchAll { nodes, shape } => {
-            collect_expression_classes(nodes, classes);
-            collect_shape_classes(shape, classes);
+            collect_expression_classes(nodes, scan);
+            collect_shape_classes(shape, scan);
         }
-        NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, classes),
+        NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, scan),
         NodeExpr::ConformsToShape { node, shape } => {
-            collect_expression_classes(node, classes);
-            collect_shape_classes(shape, classes);
+            collect_expression_classes(node, scan);
+            collect_shape_classes(shape, scan);
         }
         NodeExpr::Remove { nodes, remove } => {
-            collect_expression_classes(nodes, classes);
-            collect_expression_classes(remove, classes);
+            collect_expression_classes(nodes, scan);
+            collect_expression_classes(remove, scan);
         }
         NodeExpr::FlatMap { nodes, map } => {
-            collect_expression_classes(nodes, classes);
-            collect_expression_classes(map, classes);
+            collect_expression_classes(nodes, scan);
+            collect_expression_classes(map, scan);
         }
-        NodeExpr::PathValues { focus, .. } => collect_expression_classes(focus, classes),
+        NodeExpr::PathValues { focus, .. } => collect_expression_classes(focus, scan),
+        // A custom node-expression function call (Node Expressions §6.1/§6.2): the
+        // classes its BODY names must be pre-resolved too, because the body is what
+        // actually evaluates. The arguments are walked for the same reason every
+        // other operand is.
+        NodeExpr::CustomCall { func, args } => {
+            for (_, arg) in args {
+                collect_expression_classes(arg, scan);
+            }
+            // The body is walked ONCE per function: it is shared by `Arc` and names
+            // the same classes at every call site, and it may call this very
+            // function, so re-entering it would not terminate.
+            if scan.walked_bodies.insert(func.iri.as_str().to_owned())
+                && let Some(body) = func.body.get()
+            {
+                collect_expression_classes(body, scan);
+            }
+        }
+        // `shnex:arg` (§6.3) resolves to an argument expression bound at the call
+        // site, which this walk already visited there.
+        NodeExpr::Arg(_) => {}
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             for item in items {
-                collect_expression_classes(item, classes);
+                collect_expression_classes(item, scan);
             }
         }
         NodeExpr::If { cond, then, els } => {
-            collect_expression_classes(cond, classes);
-            collect_expression_classes(then, classes);
-            collect_expression_classes(els, classes);
+            collect_expression_classes(cond, scan);
+            collect_expression_classes(then, scan);
+            collect_expression_classes(els, scan);
         }
         NodeExpr::Count { of, .. }
         | NodeExpr::Distinct(of)
@@ -257,10 +296,10 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
         | NodeExpr::Sum(of)
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
-        | NodeExpr::Exists(of) => collect_expression_classes(of, classes),
+        | NodeExpr::Exists(of) => collect_expression_classes(of, scan),
         NodeExpr::OrderBy { of, key, .. } => {
-            collect_expression_classes(of, classes);
-            collect_expression_classes(key, classes);
+            collect_expression_classes(of, scan);
+            collect_expression_classes(key, scan);
         }
         NodeExpr::Call(call) => {
             let args = match call {
@@ -269,7 +308,7 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
                 | FnCall::Sparql { args, .. } => args,
             };
             for arg in args {
-                collect_expression_classes(arg, classes);
+                collect_expression_classes(arg, scan);
             }
         }
     }

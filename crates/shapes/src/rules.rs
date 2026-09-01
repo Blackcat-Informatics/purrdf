@@ -270,6 +270,18 @@ pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
         NodeExpr::PathValues { .. } => false,
         // Conformance predicates yield booleans, never blank nodes.
         NodeExpr::MatchAll { .. } | NodeExpr::ConformsToShape { .. } => false,
+        // A custom node-expression function call (Node Expressions §6.1/§6.2): the
+        // ARGUMENT expressions are authored right here and are tested, but the
+        // declared BODY is not walked. A body may call the function it belongs to,
+        // so the IR is genuinely cyclic and walking it would abort the process;
+        // and the answer it would give is the one this walk already gives every
+        // opaque callee — see this function's docs. Leaving a body-minting rule
+        // `general` makes it trip the divergence bound, a loud refusal, rather
+        // than misclassifying it as run-once and under-deriving.
+        NodeExpr::CustomCall { args, .. } => args.iter().any(|(_, arg)| node_expr_mints_blank(arg)),
+        // `shnex:arg` (§6.3) resolves to an argument expression bound at the call
+        // site, which this walk already tested there.
+        NodeExpr::Arg(_) => false,
     }
 }
 

@@ -6,14 +6,18 @@
 use ::purrdf::FastSet;
 use std::sync::Arc;
 
+use ::purrdf::TermValue;
 use purrdf_sparql_algebra::{Query, SparqlParser};
 use purrdf_sparql_eval::{
-    NodeKind as EvalNodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
-    UserFunctionRegistry,
+    Arity, EvalError, ExprFnCall, NodeKind as EvalNodeKind, TypeConstraint, UserFnBody,
+    UserFnParam, UserFunction, UserFunctionRegistry,
 };
 
+use crate::data::ShaclData;
+use crate::expression::{CustomFnKind, CustomFunction, RecursionGuard, eval_custom_function_call};
 use crate::model::{rdf, sh};
-use crate::term::Term;
+use crate::sparql::enter_call_depth_scope;
+use crate::term::{Term, term_value_to_native};
 
 use crate::shapes::Parser;
 
@@ -44,10 +48,70 @@ impl Parser<'_> {
             let Term::NamedNode(iri) = &id else {
                 continue;
             };
+            // A node typed both `sh:SPARQLFunction` and one of the custom
+            // node-expression classes has already been parsed as the latter, body and
+            // all; registering it twice would be two different functions under one
+            // IRI. The declaring class it carries decides, once.
+            if self.custom_fns.get(iri.as_str()).is_some() {
+                continue;
+            }
             let func = self.parse_one_sparql_function(&id)?;
             registry.insert(iri.as_str().to_owned(), func);
         }
+        self.register_expression_bodied_functions(&mut registry)?;
         Ok(registry)
+    }
+
+    /// Register every custom LIST parameter function as a callable SPARQL function,
+    /// into the SAME [`UserFunctionRegistry`] the `sh:select`/`sh:ask` bodies go
+    /// into.
+    ///
+    /// SHACL 1.2 SPARQL Extensions §7.3: "SPARQL engines SHOULD register a function
+    /// for any SHACL instance of `sh:ListParameterExpressionFunction` from any
+    /// provided shapes graph." Only that class is registered — a
+    /// `sh:NamedParameterExpressionFunction` keys its arguments by parameter IRI and
+    /// has no positional call form, so §7.3 does not name it and there is no
+    /// well-defined `ex:f(?x, ?y)` for it to answer.
+    ///
+    /// Each registration is a dataset-aware closure
+    /// ([`purrdf_sparql_eval::ExprFnBody`]): the body is a node expression, so it is
+    /// evaluated over the graph the CALLING QUERY supplies rather than over anything
+    /// captured here. That is what makes a call inside a rules fixpoint read the
+    /// current round's facts.
+    ///
+    /// # Errors
+    ///
+    /// Hard-fails when a declaration's body was never installed — an internal
+    /// inconsistency that would otherwise register a function which silently answers
+    /// nothing.
+    fn register_expression_bodied_functions(
+        &self,
+        registry: &mut UserFunctionRegistry,
+    ) -> Result<(), String> {
+        for func in self.custom_fns.iter() {
+            if !matches!(func.kind, CustomFnKind::ListParameter) {
+                continue;
+            }
+            // Registering a function whose body never arrived would put a call site
+            // in reach of a function that answers nothing; refuse at load instead.
+            func.body()?;
+            let arity = if func.required == func.params.len() {
+                Arity::Exact(func.required)
+            } else {
+                Arity::Range {
+                    min: func.required,
+                    max: func.params.len(),
+                }
+            };
+            let declared = Arc::clone(func);
+            let iri = declared.iri.as_str().to_owned();
+            registry.register_expr(
+                iri,
+                arity,
+                Arc::new(move |call: &ExprFnCall<'_>| invoke_expression_function(&declared, call)),
+            );
+        }
+        Ok(())
     }
 
     /// Parse a single `sh:SPARQLFunction` declaration node into a [`UserFunction`].
@@ -178,9 +242,33 @@ impl Parser<'_> {
             })
             .collect();
 
-        // ── Body: exactly one of sh:select / sh:ask ───────────────────────────
+        // ── Body: exactly one of sh:select / sh:ask / sh:bodyExpression ───────
+        //
+        // `sh:bodyExpression` is the third body form: a NODE EXPRESSION rather than
+        // query text (SHACL 1.2 SPARQL Extensions §7; SHACL 1.2 Node Expressions
+        // §6.1/§6.2). It is not parsed here — a node-expression body belongs to the
+        // declaring class that carries it, and `Parser::discover_custom_functions`
+        // has already interned that declaration and
+        // `install_custom_function_bodies` has already parsed the body — so reaching
+        // this point with one means the node declared an expression body WITHOUT one
+        // of the two classes that give it meaning. That is a body nothing would ever
+        // evaluate, so it is refused rather than loaded green.
         let select = self.first_string_object(id, sh::SELECT);
         let ask = self.first_string_object(id, sh::ASK);
+        let body_expression = self.first_object_of(id, sh::BODY_EXPRESSION);
+        if let Some(body) = &body_expression {
+            if select.is_some() || ask.is_some() {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> declares a sh:bodyExpression alongside a \
+                     sh:select/sh:ask body; exactly one body is required"
+                ));
+            }
+            return Err(format!(
+                "<{id}> declares the sh:bodyExpression {body} but is not typed \
+                 sh:ListParameterExpressionFunction or sh:NamedParameterExpressionFunction, so \
+                 nothing would ever evaluate that body"
+            ));
+        }
         let (raw_body, kind) = match (select, ask) {
             (Some(s), None) => (s, UserFnBody::Select),
             (None, Some(a)) => (a, UserFnBody::Ask),
@@ -191,7 +279,7 @@ impl Parser<'_> {
             }
             (None, None) => {
                 return Err(format!(
-                    "sh:SPARQLFunction <{id}> is missing its sh:select/sh:ask body"
+                    "sh:SPARQLFunction <{id}> is missing its sh:select/sh:ask/sh:bodyExpression body"
                 ));
             }
         };
@@ -236,6 +324,54 @@ impl Parser<'_> {
             node_kind,
         }
     }
+}
+
+/// Evaluate one SPARQL call of a custom LIST parameter function — the body of the
+/// closure `register_expression_bodied_functions` installs.
+///
+/// SHACL 1.2 SPARQL Extensions §7.3 in three moves:
+///
+/// 1. The already-evaluated arguments become the argument scope, keyed by INDEX.
+///    An unbound argument in a required position leaves the call with no value
+///    (`Ok(None)` — SPARQL's own expression-error result), which is what §7.3's
+///    "otherwise the argument remains unbound" reduces to at a call boundary.
+/// 2. The body is evaluated over `call.focus_graph`, the graph the calling query is
+///    reading, with the FUNCTION'S OWN IRI as focus node — §7.3: "there is no
+///    dedicated focus node. Instead, the `focusNode` passed into a custom SPARQL
+///    function based on a node expression is the IRI of the function itself."
+/// 3. Exactly one output node is returned; none is no value; more than one is a hard
+///    error, because the specification returns a node only in the one-member case
+///    and picking one would be inventing an answer.
+///
+/// The recursion guard is SEEDED from `call.depth`, so a cycle that passed through
+/// SPARQL to get here keeps counting rather than restarting.
+fn invoke_expression_function(
+    func: &Arc<CustomFunction>,
+    call: &ExprFnCall<'_>,
+) -> Result<Option<TermValue>, EvalError> {
+    let mut args: Vec<Term> = Vec::with_capacity(call.args.len());
+    for (index, value) in call.args.iter().enumerate() {
+        match value {
+            Some(bound) => args.push(term_value_to_native(bound)),
+            // A trailing unbound OPTIONAL argument is simply not supplied; an unbound
+            // REQUIRED one leaves the call with no value at all.
+            None if index >= func.required => break,
+            None => return Ok(None),
+        }
+    }
+    // A fresh view over the calling query's own graph. Both halves are the same
+    // frozen dataset, so the node expression reads exactly the graph the query is
+    // reading — the CURRENT one, never a capture from shapes-load.
+    let store = ShaclData::new(
+        Arc::clone(call.focus_graph),
+        Arc::clone(call.focus_graph),
+        None,
+    );
+    let mut guard = RecursionGuard::with_depth(call.depth);
+    let _depth = enter_call_depth_scope(call.depth);
+    let result = eval_custom_function_call(&store, func, &args, &mut guard)
+        .map_err(|e| EvalError::function(format!("custom SPARQL function: {e}")))?;
+    Ok(result.as_ref().map(Term::to_term_value))
 }
 
 /// Map a `sh:nodeKind` object IRI to the evaluator's [`EvalNodeKind`] for a

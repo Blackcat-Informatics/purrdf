@@ -639,6 +639,23 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
     pub(crate) udf_depth: u32,
+    /// The frozen graph a dataset-aware (expression-bodied) user function's body is
+    /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3,
+    /// supplied per query through
+    /// [`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph).
+    ///
+    /// `None` — the default, and every ordinary query — means no such function can be
+    /// called: [`crate::user_fn::eval_expr_function`] refuses the call rather than
+    /// answering it from a graph it never read. It is deliberately NOT derived from
+    /// [`Self::dataset`]: `D: DatasetView` carries an associated `Id` type, so a
+    /// generic view cannot be erased behind a trait object, and a backend that has no
+    /// frozen `RdfDataset` behind it has no focus graph to give.
+    ///
+    /// Held as a borrow for the dataset lifetime (like [`Self::user_functions`]), so
+    /// carrying it is a `Copy` pointer and a forked worker or a function-body child
+    /// context inherits the SAME graph its parent is querying — never a snapshot taken
+    /// at some earlier time.
+    pub(crate) focus_graph: Option<&'d Arc<RdfDataset>>,
     /// The caller-supplied execution governors in force, if any. `None` — the default —
     /// is an **ungoverned** execution: no ceiling can be exceeded and no stop signal can
     /// fire, so [`Self::stop_check`] short-circuits on one null test and evaluation does
@@ -825,6 +842,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             property_functions: &EMPTY_RELATIONS,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
+            focus_graph: None,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
             cap_pushdown: None,
@@ -1778,6 +1796,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // would.
             aggregates: self.aggregates,
             udf_depth: self.udf_depth,
+            // A `Copy` borrow of the SAME graph the parent is querying: a worker must
+            // evaluate an expression-bodied function against its parent's focus graph.
+            focus_graph: self.focus_graph,
             // SHARED, not fresh: one live accounting state across every worker, so the
             // budget is not multiplied by the thread count.
             governors: self.governors.clone(),
@@ -1807,6 +1828,32 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Self {
         self.user_functions = registry;
+        self
+    }
+
+    /// Attach the frozen graph a dataset-aware (expression-bodied) user function's
+    /// body is evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions
+    /// §7.3. The borrow shares the dataset lifetime `'d`.
+    ///
+    /// A context without one cannot call such a function at all: the call is refused
+    /// rather than answered from a graph it never read (see
+    /// [`crate::user_fn::eval_expr_function`]).
+    #[must_use]
+    pub fn with_focus_graph(mut self, graph: &'d Arc<RdfDataset>) -> Self {
+        self.focus_graph = Some(graph);
+        self
+    }
+
+    /// Seed the user-function call depth this evaluation starts at.
+    ///
+    /// Zero — the default — is a top-level query. A non-zero seed is what makes a
+    /// cycle that LEAVES the evaluator and comes back still terminate: an
+    /// expression-bodied function's body may run a query of its own, and if that
+    /// query's context restarted the counter at zero the depth bound would never be
+    /// reached no matter how deep the cycle went.
+    #[must_use]
+    pub fn with_call_depth(mut self, depth: u32) -> Self {
+        self.udf_depth = depth;
         self
     }
 
@@ -1935,6 +1982,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // registry the calling query sees.
             aggregates: self.aggregates,
             udf_depth: next_depth,
+            // Inherited for the same reason as the registries: a function body is
+            // evaluated over the graph the calling query is running over.
+            focus_graph: self.focus_graph,
             // SHARED: a function body's evaluation spends the caller's budget, not a
             // fresh one — otherwise a query could evade its ceiling by calling a
             // function.

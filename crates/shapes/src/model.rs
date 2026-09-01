@@ -385,6 +385,45 @@ pub mod sh {
     /// (its local name is the pre-bound SPARQL variable).
     pub const PREDICATE: &str = "http://www.w3.org/ns/shacl#predicate";
 
+    // ── Custom node expressions / expression-bodied functions ────────────────
+    // SHACL 1.2 Node Expressions §6 "Custom Node Expressions" and SHACL 1.2
+    // SPARQL Extensions §7 "Declaring SPARQL Functions based on Node Expressions".
+
+    /// `sh:bodyExpression` — the node expression that IS a custom function's body
+    /// (SHACL 1.2 Node Expressions §6.1/§6.2; SHACL 1.2 SPARQL Extensions §7).
+    /// Exactly one value is required on a declaring node.
+    pub const BODY_EXPRESSION: &str = "http://www.w3.org/ns/shacl#bodyExpression";
+
+    /// `sh:ListParameterExpressionFunction` — the class whose SHACL instances are
+    /// custom LIST parameter functions: the function's own IRI is its list
+    /// parameter property and its body reads arguments by INDEX
+    /// (SHACL 1.2 Node Expressions §6.2). SHACL 1.2 SPARQL Extensions §7.3 asks a
+    /// SPARQL engine to register a function for every instance of this class.
+    pub const LIST_PARAMETER_EXPRESSION_FUNCTION: &str =
+        "http://www.w3.org/ns/shacl#ListParameterExpressionFunction";
+
+    /// `sh:ListParameterExpression` — the class custom list parameter functions
+    /// are declared SHACL subclasses of (SHACL 1.2 Node Expressions §6.2).
+    pub const LIST_PARAMETER_EXPRESSION: &str =
+        "http://www.w3.org/ns/shacl#ListParameterExpression";
+
+    /// `sh:NamedParameterExpressionFunction` — the class whose SHACL instances are
+    /// custom NAMED parameter functions: arguments are supplied under the
+    /// parameters' own `sh:path` IRIs (SHACL 1.2 Node Expressions §6.1).
+    pub const NAMED_PARAMETER_EXPRESSION_FUNCTION: &str =
+        "http://www.w3.org/ns/shacl#NamedParameterExpressionFunction";
+
+    /// `sh:NamedParameterExpression` — the class custom named parameter functions
+    /// are declared SHACL subclasses of (SHACL 1.2 Node Expressions §6.1).
+    pub const NAMED_PARAMETER_EXPRESSION: &str =
+        "http://www.w3.org/ns/shacl#NamedParameterExpression";
+
+    /// `sh:keyParameter` — marks a parameter as the KEY under which a custom named
+    /// parameter function is recognised at a call site (SHACL 1.2 Node Expressions
+    /// §6.1). At least one parameter of such a function must carry `true`, and key
+    /// parameters must be disjoint across functions.
+    pub const KEY_PARAMETER: &str = "http://www.w3.org/ns/shacl#keyParameter";
+
     // ── SHACL-AF rules (§rules) ───────────────────────────────────────────────
 
     /// `sh:rule` — attaches a rule to a shape.
@@ -656,6 +695,15 @@ pub mod shnex {
     /// `shnex:conformsToShape` — the two-member argument list of a conformsToShape
     /// expression (§4.5.3).
     pub const CONFORMS_TO_SHAPE: &str = "http://www.w3.org/ns/shacl-node-expr#conformsToShape";
+
+    /// `shnex:arg` — the argument key of an arg expression (§6.3): either an IRI
+    /// (a custom named parameter function's parameter `sh:path`) or an
+    /// `xsd:integer` (a custom list parameter function's zero-based argument
+    /// index).
+    /// A custom LIST parameter function documents its arguments with
+    /// `sh:parameter [ sh:path shnex:arg0 ]`, `shnex:arg1`, … (§6.2); those IRIs
+    /// are this constant with the zero-based index appended.
+    pub const ARG: &str = "http://www.w3.org/ns/shacl-node-expr#arg";
 }
 
 /// The SPARQL 1.2 term vocabulary (`http://www.w3.org/ns/sparql#`).

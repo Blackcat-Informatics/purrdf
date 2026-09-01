@@ -178,8 +178,8 @@ pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, NativeFnBody, NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
-    UserFunction, UserFunctionRegistry, Volatility,
+    Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
+    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
