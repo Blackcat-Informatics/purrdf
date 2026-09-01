@@ -617,7 +617,7 @@ fn a_null_element_neither_matches_nor_poisons_the_search() {
 fn a_definite_hit_dominates_an_undecidable_comparison() {
     // An element in a datatype with no reachable value space cannot be compared with
     // an integer at all. If what is sought is present anyway, the answer is still
-    // `true`; if it is not, the deferred type error surfaces rather than being
+    // `true`; if it is not, the withheld type error surfaces rather than being
     // silently reported as "absent".
     let opaque = CdtTerm::Literal(CdtLiteral::typed("zzz", "http://example.org/opaque"));
     let with_opaque = vec![opaque, int("1")];
