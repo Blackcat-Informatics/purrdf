@@ -40,7 +40,10 @@ purrdf-sparql-eval.workspace = true
 # Fixed-output-length hashing for the index fingerprint. Deterministic and
 # keyless, so the same index yields the same digest on every target.
 blake3.workspace = true
-# NFC normalization (Unicode Annex UAX 15) applied before segmentation.
+# Full Unicode case folding (Unicode Annex UAX 21), the fold half of the
+# compatibility-caseless form the analyzer segments.
+caseless.workspace = true
+# NFD/NFKD/NFC normalization (Unicode Annex UAX 15) applied before segmentation.
 unicode-normalization.workspace = true
 # Unicode Annex UAX 29 word boundaries — the tokenizer's segmentation rule.
 unicode-segmentation.workspace = true

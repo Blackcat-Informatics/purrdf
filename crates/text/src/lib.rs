@@ -5,10 +5,17 @@
 //!
 //! This crate builds an in-memory inverted index over the literals of a frozen
 //! `purrdf-core` dataset and answers ranked retrieval queries against it. Text
-//! is normalized to NFC (`UAX #15`) and then segmented at Unicode word
-//! boundaries (`UAX #29`), so tokenization is the standard's rather than an
-//! ad-hoc run of
-//! alphanumeric characters, and it behaves the same in every script.
+//! is put through one pipeline — compatibility normalization plus full Unicode
+//! case folding (`UAX #15`, `UAX #21`), then segmentation at Unicode word
+//! boundaries (`UAX #29`) — so tokenization is the standard's rather than an
+//! ad-hoc run of alphanumeric characters, and it behaves the same in every
+//! script. See [`Analyzer`] for why the fold is a fold rather than a
+//! lowercasing, and for how a script written without spaces is segmented.
+//!
+//! The index side and the query side run that same pipeline. They have to: a
+//! needle is matched against the dictionary by equality, so two pipelines that
+//! merely resemble each other produce a search that returns nothing and reports
+//! nothing.
 //!
 //! # It mints no vocabulary
 //!
@@ -47,10 +54,12 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::float_arithmetic)]
 
+mod analysis;
 mod error;
 mod fixed;
 mod term_bytes;
 
+pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_versions};
 pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
