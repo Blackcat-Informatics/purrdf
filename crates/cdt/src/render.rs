@@ -306,9 +306,11 @@ fn is_iri_forbidden(ch: char) -> bool {
     ) || ch.is_control()
 }
 
-/// Push a `UCHAR` escape. Every code point this crate escapes is a control code
-/// point or an ASCII delimiter, so the short `\u00XX` form always suffices; the
-/// wider `\UXXXXXXXX` form is emitted for anything else a future caller escapes.
+/// Push a `UCHAR` escape, in the narrow `\uXXXX` form for a code point in the Basic
+/// Multilingual Plane and the wide `\UXXXXXXXX` form above it. Both escape sets this
+/// module applies — the control code points and the `IRIREF` delimiters — lie in the
+/// BMP, so the narrow form is the one an emitted canonical form actually carries; the
+/// wide branch is what keeps the function total over `char`.
 fn push_uchar<S: Sink>(out: &mut S, ch: char) {
     let value = ch as u32;
     if value <= 0xFFFF {
