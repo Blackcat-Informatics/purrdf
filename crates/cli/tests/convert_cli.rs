@@ -1276,11 +1276,12 @@ fn rules_without_entailment_is_refused_by_name() {
     );
 }
 
-/// `--base` resolves relative IRIs on parse and relativizes them on serialize; the
-/// native pack container stores fully-resolved terms and has no relative-IRI syntax,
-/// so `--base` combined with a pack `--from`/`--to` would otherwise be silently
-/// ignored (`source::load_dataset`'s and `sink::write_rdf`'s pack arms never read the
-/// base they are handed) — refused by name instead, on both sides.
+/// `--base` resolves relative IRIs on parse and is written as the document base — and
+/// relativized against — on serialize. The native pack container stores fully-resolved
+/// terms and has no relative-IRI syntax in either direction, so a pack `--from` paired
+/// with an N-Triples `--to` (which can express no base either) leaves the flag with no leg
+/// to spend it on: `source::load_dataset`'s and `sink::write_rdf`'s pack arms never read
+/// the base they are handed. Refused by name instead of accepted and ignored.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1319,7 +1320,8 @@ fn base_with_pack_from_is_refused_by_name() {
     );
 }
 
-/// The `--to` half of [`base_with_pack_from_is_refused_by_name`].
+/// The `--to` half of [`base_with_pack_from_is_refused_by_name`]: a pack TARGET beside an
+/// N-Triples source, so neither leg can spend the base either way round.
 #[test]
 fn base_with_pack_to_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
