@@ -14,7 +14,11 @@
 //! The §16.2 skip rules are graded on BOTH kinds of term that a subject position
 //! refuses — a literal and, over RDF 1.2 data, a triple term — because an engine
 //! that recognised only the literal half would still hard-fail on real annotated
-//! input.
+//! input; and on BOTH DEPTHS at which the rule applies, the asserted subject and
+//! the subject of a triple term nested in an object, because RDF 1.2 nests a
+//! triple term in exactly one position and an engine that enforced the model
+//! only at the asserted level would emit — at exit status zero — a document its
+//! own readers refuse to parse.
 //!
 //! It also grades the quad-template grammar's **boundary**, from both sides: a
 //! positive-syntax case for a spelling that parses and a negative-syntax case
@@ -89,13 +93,13 @@ fn construct_corpus_case_count_and_kinds() {
     let cases = purrdf_sparql_conformance::manifest::load(&manifest())
         .unwrap_or_else(|e| panic!("load the CONSTRUCT corpus manifest: {e}"));
 
-    assert_eq!(cases.len(), 27, "the corpus declares 27 cases");
+    assert_eq!(cases.len(), 29, "the corpus declares 29 cases");
     assert_eq!(
         cases
             .iter()
             .filter(|c| c.kind == TestKind::QueryEval)
             .count(),
-        19
+        21
     );
     assert_eq!(
         cases
@@ -134,13 +138,13 @@ fn construct_corpus_case_count_and_kinds() {
         });
     assert_eq!(
         quad_form.len(),
-        10,
-        "ten evaluation cases must exercise the quad-producing form"
+        11,
+        "eleven evaluation cases must exercise the quad-producing form"
     );
     assert_eq!(
         triple_form.len(),
-        9,
-        "nine evaluation cases must exercise the triple-producing form"
+        10,
+        "ten evaluation cases must exercise the triple-producing form"
     );
 
     // The pairing is the corpus's central claim, so it is checked rather than
@@ -246,7 +250,7 @@ fn quad_form_expectations_actually_name_a_graph() {
         }
     }
     assert!(
-        graph_bearing_lines >= 19,
+        graph_bearing_lines >= 20,
         "the quad-form expectations must pin real statements, saw {graph_bearing_lines}"
     );
 }

@@ -2657,11 +2657,37 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Parse the `s p o` inside a `<< … >>` (reifying triple) / `<<( … )>>`
-    /// (triple term). Per RDF 1.2 the component productions are restricted: a
-    /// **triple term**'s subject is a `Var | iri | BlankNode` (no nested triple
-    /// node), while a **reifying triple**'s subject may itself be a triple node.
-    /// Neither admits an RDF collection or a populated blank-node property list in
-    /// any position (both would emit auxiliary triples a single triple cannot
+    /// (triple term), in **graph-pattern** position.
+    ///
+    /// One component parser serves the subject and the object of both spellings,
+    /// because in a pattern the two positions carry the SAME production: a nested
+    /// triple node is admissible in either. That is not laxity, it is the SPARQL 1.2
+    /// grammar — `TripleTermSubject` includes `TripleTerm`, exactly as SPARQL 1.1's
+    /// `VarOrTerm` includes a literal in subject position. The W3C SPARQL 1.2 suite
+    /// pins it as two **positive** syntax tests
+    /// (`syntax-triple-terms-positive/nested-tripleterm-02.rq`, whose second pattern
+    /// is `<<( <<(?S :p :o )>> :r :z )>> :q 1`, and
+    /// `syntax-triple-terms-positive/compound-tripleterm-subject.rq`), so refusing it
+    /// here would be a non-conformance, not a tightening. A pattern is a *matcher*:
+    /// one naming a term the RDF 1.2 term model cannot hold simply matches nothing.
+    ///
+    /// The term model is therefore enforced where a triple term becomes a **value**
+    /// rather than a matcher, and those positions ARE separate parsers:
+    ///
+    /// * ground data (`VALUES`, `BIND` of a constant) —
+    ///   [`parse_ground_triple`](Self::parse_ground_triple) refuses a literal or a
+    ///   nested triple term in the subject, which is what the suite's
+    ///   `tripleterm-subject-01`..`-06` **negative** syntax tests require;
+    /// * expression position (`ExprTripleTerm`, §17.4) —
+    ///   [`parse_triple_term_expr`](Self::parse_triple_term_expr) refuses the same;
+    /// * a `CONSTRUCT` / `UPDATE` template instantiated per solution row, where a
+    ///   variable can bind a triple term no syntax mentions, so no parser could
+    ///   decide it: `purrdf-sparql-eval`'s `template::positionally_ill_formed` skips
+    ///   the instantiation, which is what SPARQL §16.2 mandates for an ill-formed
+    ///   instantiation (skip the statement, keep the rest of the template).
+    ///
+    /// Neither spelling admits an RDF collection or a populated blank-node property
+    /// list in any position (both would emit auxiliary triples a single triple cannot
     /// carry).
     fn parse_inner_triple(&mut self, sink: &mut BlockSink) -> Result<TriplePattern> {
         let subject = self.parse_triple_node_component(sink)?;

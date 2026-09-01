@@ -42,24 +42,37 @@ Some quad-form cases have no triple-form twin, by nature rather than by
 omission: the syntax verdicts grade the quad grammar itself, and
 `graphReifierScope` needs TWO graphs to say anything at all.
 
-## The §16.2 subject rule, on both kinds of term it refuses
+## The §16.2 subject rule, on every term and every depth it refuses
 
-An asserted subject is an IRI or a blank node. Two kinds of term are therefore
-ill-formed there, and an instantiation that produces either is SKIPPED rather
-than errored:
+A subject position — asserted, or inside a triple term — is an IRI or a blank
+node. Two kinds of term are therefore ill-formed there, at either of the two
+depths a template can reach, and an instantiation that produces any of them is
+SKIPPED rather than errored:
 
-| Case (and its `graph`-prefixed twin) | The term it puts in subject position |
+| Case (and its `graph`-prefixed twin) | The term, and where it lands |
 |---|---|
-| `illFormedSkipped` | a literal |
-| `tripleTermSubjectSkipped` | an RDF 1.2 triple term |
+| `illFormedSkipped` | a literal, asserted subject |
+| `tripleTermSubjectSkipped` | an RDF 1.2 triple term, asserted subject |
+| `nestedTripleTermSubjectSkipped` | an RDF 1.2 triple term, subject of a triple term nested in the object |
 
-The second is not a curiosity. RDF 1.2 data puts a triple term within reach of
+None of these is a curiosity. RDF 1.2 data puts a triple term within reach of
 an ordinary triple pattern — `?r rdf:reifies ?t` binds one — so a template that
-carries that binding into subject position is something an engine meets on real
-input, and a corpus that graded only the literal half would call an engine
+carries that binding into a subject position is something an engine meets on
+real input, and a corpus that graded only the literal half would call an engine
 conformant while it hard-failed on annotated data. `annotated.ttl` is that
-input, and both cases keep one WELL-FORMED triple beside the skipped one so the
-expectation distinguishes "the skip fired" from "the `WHERE` matched nothing".
+input, and every case keeps one WELL-FORMED triple beside the skipped one so
+the expectation distinguishes "the skip fired" from "the `WHERE` matched
+nothing".
+
+The nested case is graded separately from the asserted one because a different
+mechanism decides it — the asserted level is one predicate, the nested level is
+that predicate's RECURSION — and because the two fail differently. An
+ill-formed ASSERTED subject is refused downstream whatever the template rule
+says. An ill-formed NESTED one is not: an engine that enforced the term model
+only at the asserted level would emit the statement at exit status zero, into a
+document its own N-Triples/N-Quads/Turtle readers then refuse to parse, and on
+an `UPDATE` path would persist it. A green corpus that could not see that is
+the failure this case exists to make impossible.
 
 ## The grammar boundary, from both sides
 

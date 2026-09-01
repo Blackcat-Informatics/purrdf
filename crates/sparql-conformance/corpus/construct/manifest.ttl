@@ -27,11 +27,12 @@
 
 :manifest a mf:Manifest ;
     mf:entries ( :rewrite :shortForm :unboundSkipped :illFormedSkipped
-                 :tripleTermSubjectSkipped
+                 :tripleTermSubjectSkipped :nestedTripleTermSubjectSkipped
                  :blankFresh :fromNamedGraph :modifiers :reified
                  :graphRewrite :graphShortForm :graphBlankFresh
                  :graphFromNamedGraph :graphUnboundSkipped
                  :graphIllFormedSkipped :graphTripleTermSubjectSkipped
+                 :graphNestedTripleTermSubjectSkipped
                  :graphModifiers :graphReified
                  :graphReifierScope
                  :graphSyntax :graphNoNameSyntax :graphLiteralNameSyntax
@@ -71,6 +72,20 @@
     mf:name "an RDF 1.2 triple term instantiated into subject position is skipped" ;
     mf:action [ qt:query <triple-term-subject-skipped.rq> ; qt:data <annotated.ttl> ] ;
     mf:result <triple-term-subject-skipped.ttl> .
+
+# The same rule one level DOWN. RDF 1.2 nests a triple term in exactly one
+# position — the OBJECT of another triple term — so a triple term in the SUBJECT
+# of a nested one is ill-formed for the same reason an asserted triple-term
+# subject is, and §16.2 skips it for the same reason. Graded separately because
+# the asserted case is decided by one predicate and the nested case by that
+# predicate's RECURSION: an engine that enforced the term model only at the
+# asserted level would pass the case above while emitting, at exit status zero,
+# a document its own N-Triples/N-Quads/Turtle readers refuse to parse.
+:nestedTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "an RDF 1.2 triple term instantiated into a NESTED triple term's subject is skipped" ;
+    mf:action [ qt:query <nested-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <nested-triple-term-subject-skipped.ttl> .
 
 :blankFresh a mf:QueryEvaluationTest ;
     mf:name "a template blank node is minted fresh per solution row" ;
@@ -131,6 +146,12 @@
     mf:action [ qt:query <graph-triple-term-subject-skipped.rq> ;
                 qt:data <annotated.ttl> ] ;
     mf:result <graph-triple-term-subject-skipped.nq> .
+
+:graphNestedTripleTermSubjectSkipped a mf:QueryEvaluationTest ;
+    mf:name "the nested triple-term-subject skip is unchanged by a target graph" ;
+    mf:action [ qt:query <graph-nested-triple-term-subject-skipped.rq> ;
+                qt:data <annotated.ttl> ] ;
+    mf:result <graph-nested-triple-term-subject-skipped.nq> .
 
 :graphModifiers a mf:QueryEvaluationTest ;
     mf:name "ORDER BY + LIMIT restrict the rows a CONSTRUCT GRAPH is instantiated over" ;

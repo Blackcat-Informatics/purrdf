@@ -1241,6 +1241,60 @@ mod tests {
             .expect("an ill-formed object triple term is skipped, never interned");
     }
 
+    #[test]
+    fn insert_template_skips_a_nested_triple_term_subject() {
+        // The OTHER half of the triple-term-component rule, and the one an
+        // INSERT makes PERSISTENT. RDF 1.2 nests a triple term in exactly one
+        // position — the OBJECT of another triple term — so `<<( ?t ex:q ?r )>>`
+        // with `?t` bound to a triple term is ill-formed, and `?t` is bound
+        // straight from the reifier declaration any RDF 1.2 input carries.
+        //
+        // Unlike the literal half, nothing downstream refuses this: it interned,
+        // it froze, and it was written out as a document PurRDF's own readers
+        // then rejected. So the assertion is a COUNT, not merely a successful
+        // freeze — the well-formed sibling proves the WHERE matched, and the
+        // absent second quad proves the skip fired rather than the row missing.
+        let mut m = mut_with_a_triple_term();
+        let before = quad_set(&m).len();
+        run(
+            &format!(
+                "INSERT {{ ?r ex:q ?t . ?r ex:q <<( ?t ex:q ?r )>> }} \
+                 WHERE {{ ?r {REIFIES_IRI} ?t }}"
+            ),
+            &mut m,
+        );
+        assert_eq!(
+            quad_set(&m).len(),
+            before + 1,
+            "exactly the well-formed template triple lands"
+        );
+        for q in m.quads_for_pattern(None, None, None, GraphMatchValue::Any) {
+            assert!(
+                object_term_model_holds(&q.o),
+                "a persisted object breaks the RDF 1.2 term model: {:?}",
+                q.o
+            );
+        }
+        m.freeze()
+            .expect("a nested triple-term subject is skipped, never interned");
+    }
+
+    /// The RDF 1.2 term model on an OBJECT: any term, and when it is a triple
+    /// term, an IRI-or-blank subject, an IRI predicate, and the same rule again
+    /// on its object. Spelled out here rather than reusing the evaluator's own
+    /// predicate on purpose — a test that called the code under test would agree
+    /// with it by construction.
+    fn object_term_model_holds(v: &TermValue) -> bool {
+        match v {
+            TermValue::Triple { s, p, o } => {
+                matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+                    && matches!(**p, TermValue::Iri(_))
+                    && object_term_model_holds(o)
+            }
+            _ => true,
+        }
+    }
+
     /// The DELETE sink is a set removal, so it cannot *itself* reject an
     /// ill-formed quad — no dataset can hold one — and this case is therefore
     /// weaker than its INSERT twin by nature: it pins that the removal path

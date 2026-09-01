@@ -1927,6 +1927,88 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_object_triple_term_with_a_triple_term_subject_is_skipped() {
+        // The OTHER half of the triple-term-component rule, one level down. RDF
+        // 1.2 nests a triple term in exactly one position — the OBJECT of
+        // another triple term — so `<<( <<( ex:a ex:p ex:b )>> ex:related ex:r )>>`
+        // is ill-formed however deeply it is buried, and the binding is
+        // reachable straight from data: `?t` comes from the reifier declaration
+        // any RDF 1.2 input carries.
+        //
+        // Recognising only the LITERAL half of the rule made PurRDF emit a
+        // document PurRDF itself refuses to parse — silently, at exit status
+        // zero, because unlike an asserted triple-term subject nothing
+        // downstream refuses it. So the assertion is not only "one statement
+        // came out": every emitted statement is re-serialized and re-parsed, and
+        // the term model is checked directly on the emitted object.
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://ex/a");
+        let p = b.intern_iri("http://ex/p");
+        let o = b.intern_iri("http://ex/b");
+        let r = b.intern_iri("http://ex/r");
+        let quoted = b.intern_triple(a, p, o);
+        b.push_reifier(r, quoted);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("r"),
+                predicate: pred(REIFIES),
+                object: var("t"),
+            }],
+        };
+        // The control triple keeps `?t` in the ONE position it is legal in (a
+        // bare object), so a zero count could never be read as "the WHERE
+        // matched nothing".
+        let template = vec![
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: var("t"),
+            },
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: TermPattern::Triple(Box::new(TriplePattern {
+                    subject: var("t"),
+                    predicate: pred(RELATED),
+                    object: var("r"),
+                })),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the nested triple-term subject is skipped; its well-formed sibling is not"
+        );
+        for quad in out.quads() {
+            let object = out.term_value(quad.o);
+            assert!(
+                object_term_model_holds(&object),
+                "an emitted object breaks the RDF 1.2 term model: {object:?}"
+            );
+        }
+    }
+
+    /// The RDF 1.2 term model on an OBJECT: any term, and when it is a triple
+    /// term, an IRI-or-blank subject, an IRI predicate, and the same rule again
+    /// on its object. Written out here rather than reusing the evaluator's own
+    /// predicate on purpose — a test that called the code under test would agree
+    /// with it by construction.
+    fn object_term_model_holds(v: &TermValue) -> bool {
+        match v {
+            TermValue::Triple { s, p, o } => {
+                matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+                    && matches!(**p, TermValue::Iri(_))
+                    && object_term_model_holds(o)
+            }
+            _ => true,
+        }
+    }
+
     // ── Loss-aware CONSTRUCT ──────────────────────────────────────────────────
 
     const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";

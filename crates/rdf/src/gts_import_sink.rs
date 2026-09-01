@@ -1094,7 +1094,8 @@ mod tests {
         );
     }
 
-    /// REAL Writer-serialized NESTED quoted triple `<< <<ex:a ex:b ex:c>> ex:p ex:o >>`.
+    /// REAL Writer-serialized NESTED quoted triple `<< ex:o ex:p <<ex:a ex:b ex:c>> >>`
+    /// — the object is the one position RDF 1.2 nests a triple term in.
     /// The 0.9.2 `Writer::deterministic` DOES support nested triple terms (it emits
     /// all terms in one `terms` frame and all reifier bindings in one `reifies`
     /// frame, regardless of nesting), so this exercises inner-first resolution from
@@ -1119,9 +1120,9 @@ mod tests {
         graph.terms.push(iri("http://example.org/p")); // 5
         graph.terms.push(iri("http://example.org/o")); // 6
         graph.terms.push(iri("http://example.org/r1")); // 7 outer reifier resource
-        // Outer triple: << <<ex:a ex:b ex:c>> ex:p ex:o >> — inner triple (id 4) is
-        // the SUBJECT of the outer triple.
-        graph.reifiers.push((7, (4, 5, 6), None));
+        // Outer triple: << ex:o ex:p <<ex:a ex:b ex:c>> >> — inner triple (id 4) is
+        // the OBJECT of the outer triple, the only position RDF 1.2 nests one in.
+        graph.reifiers.push((7, (6, 5, 4), None));
         graph.terms.push(GtsTerm {
             kind: GtsKind::Triple,
             value: None,
@@ -1130,7 +1131,7 @@ mod tests {
             direction: None,
             reifier: Some(7),
             triple: None,
-        }); // 8 outer << <<...>> ex:p ex:o >>
+        }); // 8 outer << ex:o ex:p <<...>> >>
         graph.terms.push(iri("http://example.org/says")); // 9
         graph.quads.push((0, 9, 8, None));
 
@@ -1145,21 +1146,21 @@ mod tests {
             .quad_refs()
             .find(|q| matches!(q.o, TermRef::Triple { .. }))
             .expect("a quad whose object is the outer quoted triple");
-        let TermRef::Triple { s: outer_s, .. } = quad.o else {
+        let TermRef::Triple { o: outer_o, .. } = quad.o else {
             unreachable!("filtered for Triple above");
         };
-        // The outer triple's SUBJECT is itself a quoted triple <<ex:a ex:b ex:c>>.
+        // The outer triple's OBJECT is itself a quoted triple <<ex:a ex:b ex:c>>.
         let iri_of = |id: TermId| match dataset.resolve(id) {
             TermRef::Iri(iri) => iri.to_owned(),
             other => panic!("expected IRI, got {other:?}"),
         };
-        match dataset.resolve(outer_s) {
+        match dataset.resolve(outer_o) {
             TermRef::Triple { s, p, o } => {
                 assert_eq!(iri_of(s), "http://example.org/a");
                 assert_eq!(iri_of(p), "http://example.org/b");
                 assert_eq!(iri_of(o), "http://example.org/c");
             }
-            other => panic!("outer triple subject must be the inner triple, got {other:?}"),
+            other => panic!("outer triple object must be the inner triple, got {other:?}"),
         }
     }
 

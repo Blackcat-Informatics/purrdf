@@ -405,7 +405,7 @@ fn parse_one_line(
             column_in_raw(raw, 0),
         ));
     }
-    validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
+    validate_statement(&nodes, lineno, column_in_raw(raw, 0))?;
     Ok(Some(nodes))
 }
 
@@ -711,17 +711,12 @@ fn is_literal(node: &Node) -> bool {
     matches!(node, Node::Literal { .. })
 }
 
-fn validate_subject(
-    node: &Node,
-    line_no: u32,
-    column: u32,
-    allow_triple_subject: bool,
-) -> Result<(), RdfDiagnostic> {
+/// A subject position — asserted, or nested inside a triple term — is an IRI or a
+/// blank node in the RDF 1.2 term model, with no per-syntax variation: N-Triples and
+/// N-Quads read the same terms, one of them merely carries a fourth (graph) slot.
+fn validate_subject(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode]) {
         return Ok(());
-    }
-    if allow_triple_subject && let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
     }
     Err(err_at("invalid subject term", line_no, column))
 }
@@ -734,17 +729,15 @@ fn validate_predicate(node: &Node, line_no: u32, column: u32) -> Result<(), RdfD
     }
 }
 
-fn validate_object(
-    node: &Node,
-    line_no: u32,
-    column: u32,
-    allow_triple_subject: bool,
-) -> Result<(), RdfDiagnostic> {
+/// An object position — asserted, or nested inside a triple term — admits every term
+/// kind, and a triple term there carries the term model down into its own components.
+/// This is the ONLY position RDF 1.2 nests a triple term in.
+fn validate_object(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode, is_literal]) {
         return Ok(());
     }
     if let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
+        return validate_triple(s, p, o, line_no, column);
     }
     Err(err_at("invalid object term", line_no, column))
 }
@@ -755,22 +748,16 @@ fn validate_triple(
     o: &Node,
     line_no: u32,
     column: u32,
-    allow_triple_subject: bool,
 ) -> Result<(), RdfDiagnostic> {
-    validate_subject(s, line_no, column, allow_triple_subject)?;
+    validate_subject(s, line_no, column)?;
     validate_predicate(p, line_no, column)?;
-    validate_object(o, line_no, column, allow_triple_subject)
+    validate_object(o, line_no, column)
 }
 
-fn validate_statement(
-    nodes: &[Node],
-    line_no: u32,
-    column: u32,
-    allow_graph: bool,
-) -> Result<(), RdfDiagnostic> {
-    validate_subject(&nodes[0], line_no, column, allow_graph)?;
+fn validate_statement(nodes: &[Node], line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
+    validate_subject(&nodes[0], line_no, column)?;
     validate_predicate(&nodes[1], line_no, column)?;
-    validate_object(&nodes[2], line_no, column, allow_graph)?;
+    validate_object(&nodes[2], line_no, column)?;
     if let Some(graph_name) = nodes.get(3)
         && !node_is(graph_name, &[is_iri, is_bnode])
     {
