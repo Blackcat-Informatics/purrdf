@@ -926,8 +926,14 @@ mod tests {
             variables: Vec::new(),
             aggregates: vec![(
                 var("c"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let inner = GraphPattern::Filter {

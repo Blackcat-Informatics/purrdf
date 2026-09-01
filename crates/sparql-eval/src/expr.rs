@@ -1111,6 +1111,19 @@ fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
             expr_vars(expression, out);
             pattern_all_vars(inner, out);
         }
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            out.insert(element.clone());
+            if let Some(companion) = companion {
+                out.insert(companion.clone());
+            }
+            expr_vars(expression, out);
+            pattern_all_vars(inner, out);
+        }
         GraphPattern::OrderBy { inner, expression } => {
             for oe in expression {
                 match oe {
@@ -2089,6 +2102,31 @@ fn substitute_pattern_impl(
                 map,
             )
         }
+        // `Extend`s shape exactly: the operand is an ordinary expression evaluated
+        // against the substituted inner, so a term-only outer binding it reads is
+        // injected the same way, and the two target variables are carried through
+        // unchanged (they are this nodes OWN bindings, never substitution targets).
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            let mut free = DetHashSet::default();
+            expr_vars(expression, &mut free);
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::Unfold {
+                    inner: inner_final,
+                    expression: substitute_expr(expression, row, map),
+                    element: element.clone(),
+                    companion: companion.clone(),
+                },
+                pattern,
+                map,
+            )
+        }
         GraphPattern::Join { left, right } => {
             let left_sub = substitute_pattern_impl(left, row, map);
             let right_sub = substitute_pattern_impl(right, row, map);
@@ -2299,6 +2337,13 @@ fn substitute_pattern_impl(
                 for arg in agg.args() {
                     expr_vars(arg, &mut free);
                 }
+                // A `FOLD`'s sort keys read the group's rows exactly as its
+                // arguments do, so their variables are free in this node too:
+                // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
+                // unbound in the substituted pattern.
+                for order in agg.order_by() {
+                    expr_vars(crate::modifier::order_sort_key(order), &mut free);
+                }
             }
             let inner_sub = substitute_pattern_impl(inner, row, map);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
@@ -2314,13 +2359,29 @@ fn substitute_pattern_impl(
                                 .iter()
                                 .map(|e| substitute_expr(e, row, &mut *map))
                                 .collect();
+                            let order_by = agg
+                                .order_by()
+                                .iter()
+                                .map(|order| {
+                                    crate::modifier::rebuild_order(
+                                        order,
+                                        substitute_expr(
+                                            crate::modifier::order_sort_key(order),
+                                            row,
+                                            &mut *map,
+                                        ),
+                                    )
+                                })
+                                .collect();
                             // `substitute_expr` rewrites each argument in place and never
-                            // changes the argument COUNT, so this can never turn a valid
-                            // `agg` into an invalid one.
+                            // changes the argument COUNT, and rewriting a sort key never
+                            // removes one, so this can never turn a valid `agg` into an
+                            // invalid one.
                             let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
                                 agg.function().clone(),
                                 args,
                                 agg.scalarvals().to_vec(),
+                                order_by,
                                 agg.distinct,
                             )
                             .expect("substitution preserves argument count, so arity stays valid");

@@ -1025,6 +1025,14 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
             walk_graph_pattern(inner, out);
             walk_expression(expression, out);
         }
+        // `UNFOLD` names no IRI of its own; its operand is an ordinary expression
+        // and can reference a slice-defined term exactly as `BIND`s can.
+        G::Unfold {
+            inner, expression, ..
+        } => {
+            walk_graph_pattern(inner, out);
+            walk_expression(expression, out);
+        }
         G::Service { name, inner, .. } => {
             walk_named_node_pattern(name, out);
             walk_graph_pattern(inner, out);

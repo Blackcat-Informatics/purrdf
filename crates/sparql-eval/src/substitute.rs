@@ -203,6 +203,19 @@ fn substitute_in_graph_pattern(
             variable,
             expression: substitute_in_expression(expression, expr_subs),
         },
+        // The operand is substituted; the two targets are this nodes OWN bindings
+        // and are carried through untouched, exactly as `Extend`s target is.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => GraphPattern::Unfold {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
+            expression: substitute_in_expression(expression, expr_subs),
+            element,
+            companion,
+        },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
             right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
@@ -461,19 +474,18 @@ fn substitute_in_aggregate(
         .into_iter()
         .map(|e| substitute_in_expression(e, expr_subs))
         .collect();
-    // SEP-0009 `FOLD`'s own sort keys are ordinary expressions over the same
-    // row, so they are substituted like the arguments — and, like the
-    // arguments, one per condition, so the CLAUSE survives the rewrite. Losing
-    // it here would turn `FOLD(?v ORDER BY ?k)` into `FOLD(?v)`, a different
-    // (and order-undefined) answer rather than a simplification.
+    // A `FOLD`'s own sort keys are per-row expressions over the SAME solutions
+    // its arguments read, so a substitution that rewrites `?x` in the argument
+    // must rewrite it in the sort key too — leaving them alone would order the
+    // fold by a variable the substituted query no longer binds.
     let order_by = order_by
         .into_iter()
-        .map(|o| substitute_in_order_expression(o, expr_subs))
+        .map(|order| substitute_in_order_expression(order, expr_subs))
         .collect();
     // `substitute_in_expression` rewrites each argument in place and never
-    // changes the argument COUNT, so this can never turn a valid `agg` into
-    // an invalid one.
-    AggregateExpression::rebuild(function, args, scalarvals, order_by, distinct)
+    // changes the argument COUNT, and rewriting a sort key never removes one,
+    // so this can never turn a valid `agg` into an invalid one.
+    AggregateExpression::new(function, args, scalarvals, order_by, distinct)
         .expect("substitution preserves argument count, so arity stays valid")
 }
 

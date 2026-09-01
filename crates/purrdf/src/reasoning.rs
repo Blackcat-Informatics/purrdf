@@ -785,6 +785,16 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
             collect_expression_variables(expression, names);
             collect_returned_value_variables(inner, names);
         }
+        // `UNFOLD` READS its operand exactly as `BIND` does — those bindings
+        // become returned VALUES inside a composite element rather than returned
+        // bindings — and it BINDS its own two targets, which are fresh names the
+        // entailed graph never supplied and so are not witnesses of it.
+        GraphPattern::Unfold {
+            inner, expression, ..
+        } => {
+            collect_expression_variables(expression, names);
+            collect_returned_value_variables(inner, names);
+        }
         GraphPattern::Group {
             inner,
             variables,
@@ -926,6 +936,18 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
             inner, variable, ..
         } => {
             names.insert(variable.as_str().to_owned());
+            collect_all_variables(inner, names);
+        }
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            names.insert(element.as_str().to_owned());
+            if let Some(companion) = companion {
+                names.insert(companion.as_str().to_owned());
+            }
             collect_all_variables(inner, names);
         }
         GraphPattern::Graph { name, inner } => {
@@ -1145,6 +1167,17 @@ fn restrict_pattern(
             inner: recurse(inner),
             variable: variable.clone(),
             expression: expression.clone(),
+        },
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => GraphPattern::Unfold {
+            inner: recurse(inner),
+            expression: expression.clone(),
+            element: element.clone(),
+            companion: companion.clone(),
         },
         GraphPattern::Service {
             name,
@@ -1368,6 +1401,9 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
         | GraphPattern::Extend { inner, .. }
+        // `UNFOLD` matches no triple in any graph either — it expands a value the
+        // solution already carries — so it is transparent to this walk.
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }

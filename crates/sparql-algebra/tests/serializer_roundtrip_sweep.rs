@@ -297,6 +297,17 @@ fn normalize_join_assoc(p: &GraphPattern) -> GraphPattern {
             variable: variable.clone(),
             expression: expression.clone(),
         },
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => GraphPattern::Unfold {
+            inner: Box::new(normalize_join_assoc(inner)),
+            expression: expression.clone(),
+            element: element.clone(),
+            companion: companion.clone(),
+        },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: Box::new(normalize_join_assoc(left)),
             right: Box::new(normalize_join_assoc(right)),

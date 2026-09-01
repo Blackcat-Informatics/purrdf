@@ -977,6 +977,7 @@ fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_cou
         ),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         false,
     )
     .expect_err("a zero-arity Custom aggregate must be unrepresentable, registry or not");

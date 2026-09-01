@@ -978,6 +978,10 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
         | GraphPattern::Extend { inner, .. }
+        // `UNFOLD` matches no triple in the graph either — it expands a value
+        // already in the solution — so it contributes nothing of its own and is
+        // simply transparent to the walk.
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
