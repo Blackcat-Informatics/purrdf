@@ -592,11 +592,38 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 /// so a statistical aggregate — or a `--path-relation` — reaches the entailment-aware lane
 /// exactly as it reaches the ordinary one.
 ///
-/// A path relation snapshotted for this lane is built from the PRE-closure view: it is
-/// registered inside [`EntailedQueryOp::run`], where the source view is what the reasoner
-/// has not yet closed over. That matches the Python surface's `relations_from_graph` on
-/// the same lane, and it is stated rather than assumed because a relation answers about
-/// the dataset it was built from and nothing at the property-function seam can check that.
+/// # A path relation on this lane answers about the PRE-closure edges. Observed.
+///
+/// The snapshot is built inside [`EntailedQueryOp::run`], where the source view is what the
+/// reasoner has not yet closed over; the evaluation then runs against the materialized
+/// closure. So when a regime DERIVES quads under a step's predicate, the walk answers over
+/// a strictly smaller edge set than every other pattern in the same query. This is a real
+/// divergence, not a theoretical one — over
+/// `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .`:
+///
+/// ```text
+/// purrdf query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'
+///   → ex:b, ex:c          (the closure derives `ex:b ex:p ex:c`)
+/// purrdf query --entailment rdfs --path-relation '…forward=ex:p…' <the walk call>
+///   → ex:b                 (only)
+/// ```
+///
+/// `a_path_relation_under_entailment_answers_over_the_pre_closure_edges` in
+/// `tests/query_cli.rs` pins exactly that pair, so the divergence is an asserted answer
+/// rather than one a user discovers. It is a SHORT answer reported as complete, and the
+/// only reason it is not a silent one is that it is written down here and executed there.
+///
+/// The claim this comment used to make — that nothing at the property-function seam could
+/// check it — was false. [`purrdf_sparql_eval::PathGraph::assert_matches`] is precisely
+/// that check, and its own docs say so: it re-walks the step over the dataset being
+/// evaluated and compares a full SHA-256 of the edge set. What blocks calling it HERE is
+/// narrower and worth naming: this lane never holds the closure.
+/// [`purrdf::query_with_entailment_governed`] materializes it internally and returns
+/// answers, so the CLI has no dataset to hand the check, and rebuilding the snapshot
+/// against the closure would require that entry point to expose a
+/// materialize-then-register order it does not have. Fixing it is therefore a change to
+/// that public entry point — which the Python surface's `path_relations` shares verbatim —
+/// and not something this module can do alone.
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input (the engine, the \

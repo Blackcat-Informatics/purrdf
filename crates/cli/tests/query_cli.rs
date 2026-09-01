@@ -1883,6 +1883,189 @@ fn a_path_relation_over_an_edgeless_predicate_answers_nothing() {
     );
 }
 
+/// `inverse=` traverses, end to end, and is not a synonym for `forward=`.
+///
+/// Every other `--path-relation` test in this file spells `forward=`, and `inverse=` was
+/// asserted only at the PARSE tier — that `PathDirection::Inverse` lands in the spec. That
+/// is not evidence the binary walks backwards: a `build_registry` that dropped the
+/// direction, or a parser that mapped both spellings to `Forward`, satisfied every
+/// assertion here. The refusal of an unknown direction was tested; the valid neighbour it
+/// admits was not.
+///
+/// Seeded at `ex:d` — the chain's far end, which has NO outgoing `ex:p` — the two
+/// spellings must give opposite answers: `inverse=` walks `d -> c -> b -> a`, and
+/// `forward=` answers nothing. Asserting only the first would still pass if the direction
+/// were ignored and some other enumeration happened to produce rows, so both are run.
+#[test]
+fn an_inverse_step_walks_backwards_and_a_forward_one_from_the_same_seed_does_not() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
+    let query = format!(
+        "SELECT ?end ?len ?step ?node WHERE {{ <http://example.org/d> <{WALK_IRI}> \
+         ( ?end ?pathId ?len ?step ?node ?edge ) }} ORDER BY ?len ?step"
+    );
+    let spec = |direction: &str| {
+        format!(
+            "iri={WALK_IRI};{direction}=http://example.org/p;min-hops=1;max-hops=4;\
+             max-paths-per-seed=64;max-expansions=999;mode=walk"
+        )
+    };
+
+    let inverse = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec("inverse"),
+        &query,
+    ]);
+    assert!(
+        inverse.status.success(),
+        "an inverse step is valid configuration; stderr:\n{}",
+        stderr(&inverse)
+    );
+    assert_eq!(
+        stdout(&inverse),
+        "end,len,step,node\r\n\
+         http://example.org/c,1,1,http://example.org/c\r\n\
+         http://example.org/b,2,1,http://example.org/c\r\n\
+         http://example.org/b,2,2,http://example.org/b\r\n\
+         http://example.org/a,3,1,http://example.org/c\r\n\
+         http://example.org/a,3,2,http://example.org/b\r\n\
+         http://example.org/a,3,3,http://example.org/a\r\n",
+        "the chain read backwards from its far end, hop by hop"
+    );
+
+    let forward = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec("forward"),
+        &query,
+    ]);
+    assert_eq!(
+        stdout(&forward),
+        "end,len,step,node\r\n",
+        "ex:d has no outgoing ex:p, so the forward reading of the same seed is empty — \
+         which is what proves the direction was honoured rather than ignored"
+    );
+}
+
+/// A `subPropertyOf` chain, where the RDFS closure DERIVES an edge under the step's own
+/// predicate. `ex:b ex:p ex:c` is entailed, never asserted.
+const SUBPROPERTY_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "ex:sub rdfs:subPropertyOf ex:p .\n",
+    "ex:a ex:p ex:b .\n",
+    "ex:b ex:sub ex:c .\n",
+);
+
+/// Under `--entailment`, a path relation answers about the PRE-closure edges — pinned,
+/// because it is a SHORT answer reported as complete.
+///
+/// This is the one place the relation's endpoint projection stops agreeing with the core
+/// grammar's `p+`. Everywhere else that equality is the relation's contract (the kernel's
+/// `a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned` asserts
+/// it in the same engine). Here it breaks, because `--path-relation` snapshots the step
+/// out of the view the CLI holds and `purrdf::query_with_entailment_governed` then
+/// evaluates against a closure the CLI never sees. The two halves of one query therefore
+/// read two different datasets.
+///
+/// Both halves are run below over the same file and the same regime, so the divergence is
+/// a measured pair rather than a claim: `p+` reaches `ex:c` through the derived edge, and
+/// the walk does not. Neither command fails, and neither prints a diagnostic — which is
+/// exactly why this needs an executed assertion. A test that only pinned the walk's
+/// `["b"]` would look like a correct answer; it is the `p+` row beside it that shows the
+/// answer is short.
+///
+/// This test is a description of current behaviour, NOT an endorsement of it. Making the
+/// walk see the closure means giving that entry point a materialize-then-register order it
+/// does not have — a change to a public API the Python `path_relations` surface shares —
+/// so when that lands, this test is the one that must go red.
+#[test]
+fn a_path_relation_under_entailment_answers_over_the_pre_closure_edges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "subproperty.ttl", SUBPROPERTY_TTL);
+    let spec = format!(
+        "iri={WALK_IRI};forward=http://example.org/p;min-hops=1;max-hops=4;\
+         max-paths-per-seed=64;max-expansions=999;mode=walk"
+    );
+
+    // The core grammar, on the entailment lane: it sees the DERIVED edge.
+    let grammar = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--results-format",
+        "csv",
+        "SELECT ?end WHERE { <http://example.org/a> <http://example.org/p>+ ?end } ORDER BY ?end",
+    ]);
+    assert!(
+        grammar.status.success(),
+        "the grammar lane must answer; stderr:\n{}",
+        stderr(&grammar)
+    );
+    assert_eq!(
+        stdout(&grammar),
+        "end\r\nhttp://example.org/b\r\nhttp://example.org/c\r\n",
+        "p+ under RDFS reaches ex:c through the entailed ex:b ex:p ex:c"
+    );
+
+    // The relation, same file, same regime: it does NOT.
+    let relation = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec,
+        &walk_query("?len ?step"),
+    ]);
+    assert!(
+        relation.status.success(),
+        "the relation lane must answer; stderr:\n{}",
+        stderr(&relation)
+    );
+    assert_eq!(
+        stdout(&relation),
+        "end,len,step,node\r\nhttp://example.org/b,1,1,http://example.org/b\r\n",
+        "the snapshot was taken before the closure, so the derived edge is not walked — a \
+         short answer, returned with a success exit and no diagnostic"
+    );
+
+    // WITHOUT the regime the two agree, which is what identifies the closure as the whole
+    // cause. A neighbouring case that still succeeds, rather than a lone failing one.
+    let ungoverned = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec,
+        &walk_query("?len ?step"),
+    ]);
+    assert_eq!(
+        stdout(&ungoverned),
+        stdout(&relation),
+        "the relation's answer is identical with and without --entailment: the regime \
+         changed the dataset under it and the snapshot did not follow"
+    );
+}
+
 /// A predicate IRI carrying the field separator is EXPRESSIBLE, and traverses.
 ///
 /// `;` is a sub-delimiter RFC 3987 permits inside an IRI, and this binary's own parser

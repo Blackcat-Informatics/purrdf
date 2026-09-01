@@ -608,6 +608,57 @@ def test_a_path_relation_binds_every_hop_of_a_multi_hop_chain() -> None:
     ]
 
 
+def test_an_inverse_step_traverses_the_same_statements_backwards() -> None:
+    """`"inverse"` is the other half of the accepted direction set, executed.
+
+    `test_a_malformed_path_relation_is_refused_by_name` proves `"sideways"` is refused,
+    and every other test here spells `"forward"` — so until this test existed, writing
+    ``"inverse" => PathDirection::Forward`` in the binding's match arm passed the entire
+    Python suite. A refusal is only evidence about the set it excludes if the set it
+    ADMITS is executed too, and half of that set was not.
+
+    The same chain, read the other way: seeded at `ex:d`, an inverse `ex:p` step walks
+    `d -> c -> b -> a`. The rows are the mirror of the forward test's, which is what
+    makes this a direction assertion rather than merely a non-empty one — a step that
+    quietly ran forwards from `ex:d` would answer nothing at all.
+    """
+    store = _store_with(CHAIN_TTL)
+
+    solutions = store.query(
+        f"SELECT ?end ?len ?step ?node WHERE {{ <{EX}d> <{WALK}> "
+        "( ?end ?pathId ?len ?step ?node ?edge ) } ORDER BY ?len ?step",
+        path_relations={WALK: ([(_node("p"), "inverse")], 1, 4, 1024, 100_000, "walk")},
+    )
+
+    assert _walk_rows(solutions) == [
+        ("c", 1, 1, "c"),
+        ("b", 2, 1, "c"),
+        ("b", 2, 2, "b"),
+        ("a", 3, 1, "c"),
+        ("a", 3, 2, "b"),
+        ("a", 3, 3, "a"),
+    ]
+
+
+def test_a_forward_step_from_the_far_end_of_the_chain_answers_nothing() -> None:
+    """The control for the test above: same seed, same data, direction flipped.
+
+    `ex:d` has no outgoing `ex:p`, so the forward reading answers nothing. Without this
+    row the inverse test could be satisfied by a step that ignored the direction and
+    happened to enumerate the chain some other way; with it, the two spellings are shown
+    to produce genuinely different answers from the same seed.
+    """
+    store = _store_with(CHAIN_TTL)
+
+    solutions = store.query(
+        f"SELECT ?end ?len ?step ?node WHERE {{ <{EX}d> <{WALK}> "
+        "( ?end ?pathId ?len ?step ?node ?edge ) } ORDER BY ?len ?step",
+        path_relations=_walk_relation(),
+    )
+
+    assert _walk_rows(solutions) == []
+
+
 def test_the_step_and_len_columns_are_xsd_integer_literals() -> None:
     """Typed, never simple: a simple literal would sort `"10"` before `"2"`."""
     store = _store_with(CHAIN_TTL)
@@ -653,7 +704,37 @@ def test_path_id_groups_the_hops_of_one_walk() -> None:
         by_id.setdefault(str(row[0].value), set()).add(int(row[1].value))
     assert len(by_id) == 3, "one identifier per walk"
     assert all(len(lengths) == 1 for lengths in by_id.values()), (
-        "a walk's rows all agree on ?len, so no two walks share an identifier"
+        "each identifier's rows belong to a single walk length"
+    )
+
+
+def test_two_equal_length_walks_do_not_share_an_identifier() -> None:
+    """Distinctness, on the fixture where length cannot stand in for identity.
+
+    `test_path_id_groups_the_hops_of_one_walk` runs on the chain, which has exactly one
+    walk per length — so "every identifier's rows agree on `?len`" is satisfied there by
+    an implementation that keyed `?pathId` on the LENGTH alone, and the chain can never
+    tell the two apart. That is a property of the fixture, not evidence about `?pathId`.
+
+    The diamond is the discriminating case: `a->b->d` and `a->c->d` are two distinct
+    walks of the same length to the same endpoint. Grouping must keep them apart, so
+    there are four identifiers (`->b`, `->c`, `->b->d`, `->c->d`) and the two two-hop
+    routes are both recovered. A length-keyed identifier would fuse the last two into one
+    group and lose a derivation silently — which is the whole failure this column exists
+    to prevent.
+    """
+    store = _store_with(DIAMOND_TTL)
+
+    solutions = store.query(
+        f"SELECT (GROUP_CONCAT(?node; separator=\"->\") AS ?route) WHERE {{ "
+        f"<{EX}a> <{WALK}> ( ?end ?pathId ?len ?step ?node ?edge ) }} "
+        "GROUP BY ?pathId ORDER BY ?route",
+        path_relations=_walk_relation(),
+    )
+
+    routes = sorted(str(row[0].value).replace(EX, "") for row in solutions)  # type: ignore[union-attr]
+    assert routes == ["b", "b->d", "c", "c->d"], (
+        "four walks, four groups: the two equal-length routes to ex:d stay apart"
     )
 
 
