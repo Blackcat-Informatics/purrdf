@@ -551,6 +551,26 @@ impl RdfDatasetBuilder {
     ///
     /// The datatype is always stored as an interned IRI [`TermId`]. The lexical
     /// form is preserved byte-for-byte; base direction participates in identity.
+    ///
+    /// # A composite literal also interns the blank nodes it names
+    ///
+    /// A `cdt:List` / `cdt:Map` lexical form is not opaque text: its
+    /// `BLANK_NODE_LABEL` tokens denote blank nodes of the enclosing document
+    /// (see [`crate::cdt_blank`]). Every `(label, scope)` pair such a literal
+    /// names is therefore interned here, exactly as though the label had been
+    /// written as a bare term, so the pair always resolves through
+    /// [`term_id_by_blank`](super::dataset::RdfDataset::term_id_by_blank) on the
+    /// frozen dataset. That invariant is what lets the canonicalizer, the
+    /// whole-dataset rewriters and the SPARQL evaluator's element accessors hand
+    /// back a REAL blank node of the dataset rather than a dangling label.
+    ///
+    /// The lexical form is expected to be already BOUND — the labels spell their
+    /// `(label, scope)` pairs. Ingress paths get that by routing through
+    /// [`intern_literal_bound`](Self::intern_literal_bound); this entry point is
+    /// the post-binding interner every other caller uses.
+    ///
+    /// The scan is guarded by the datatype IRI, so an ordinary literal pays two
+    /// string comparisons and nothing more.
     pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
         let RdfLiteral {
             lexical_form,
@@ -571,12 +591,67 @@ impl RdfDatasetBuilder {
 
         let datatype_id = self.intern_iri(&datatype_iri);
 
+        // A composite literal's embedded labels are blank nodes of this dataset.
+        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(&lexical_form, &datatype_iri) {
+            self.intern_blank(&label, scope);
+        }
+
         self.interner.intern(TermLookup::Literal {
             lexical: &lexical_form,
             datatype: datatype_id,
             language: language_key.as_deref(),
             direction,
         })
+    }
+
+    /// Intern a literal read from a document, binding the blank-node labels a
+    /// composite (`cdt:List` / `cdt:Map`) lexical form embeds into that
+    /// document's blank-node scope.
+    ///
+    /// This is the ingress choke point for literals, the twin of
+    /// [`intern_text_blank`](Self::intern_text_blank) for bare blank terms.
+    /// `binding` must be the SAME rule the path applies to its bare `_:` tokens
+    /// — [`BlankBinding::Decoded`] with the syntax's alphabet for a text codec,
+    /// [`BlankBinding::Ambient`] with the source's fixed scope for a carrier —
+    /// because that agreement is precisely what makes `_:b` written as a subject
+    /// and `_:b` written inside a composite literal the same node
+    /// (`bnodes-turtle-05`), and what keeps the same label in two different
+    /// documents two different nodes (`bnodes-turtle-15`).
+    ///
+    /// The binding is applied exactly ONCE, here, and never again: an
+    /// already-bound literal re-interned through
+    /// [`intern_literal`](Self::intern_literal) keeps its bytes.
+    ///
+    /// # Errors
+    /// [`CdtBlankError`] when the literal claims a composite datatype but its
+    /// lexical form is not a well-formed value of it, or breaks one of
+    /// `purrdf-cdt`'s resource limits. The caller must refuse the whole document:
+    /// an unparseable composite literal leaves the document's blank-node scope
+    /// undefined, so there is no safe way to admit it. Never fails for any other
+    /// datatype.
+    pub fn intern_literal_bound(
+        &mut self,
+        lit: RdfLiteral,
+        binding: crate::cdt_blank::BlankBinding,
+    ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
+        // The C0.1 datatype the literal will actually carry: a language tag wins
+        // over any explicit datatype, and a language-tagged literal is never
+        // composite.
+        let datatype_iri = match (&lit.language, &lit.datatype) {
+            (Some(_), _) => RDF_LANG_STRING,
+            (None, Some(dt)) => dt.as_str(),
+            (None, None) => XSD_STRING,
+        };
+        if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
+            return Ok(self.intern_literal(lit));
+        }
+        let bound =
+            crate::cdt_blank::bind_cdt_blank_labels(&lit.lexical_form, datatype_iri, binding)?;
+        let lexical_form = bound.into_owned();
+        Ok(self.intern_literal(RdfLiteral {
+            lexical_form,
+            ..lit
+        }))
     }
 
     /// Intern a triple term (RDF 1.2 quoted triple). Identified structurally by the

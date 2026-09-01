@@ -236,15 +236,49 @@ pub fn bind_cdt_blank_labels<'a>(
         return Ok(Cow::Borrowed(lexical));
     }
     let value = parse_composite(lexical, datatype)?;
-    let spans = scan_blank_labels(lexical);
-    check_scan_agrees(lexical, &spans, &value)?;
-    Ok(splice(lexical, &spans, |label| {
-        match binding.rebind(label) {
+    let spans = scan_tokens(lexical);
+    check_scan_agrees(&spans, &value)?;
+    Ok(splice(lexical, &spans, &mut |token| match token {
+        TokenKind::Blank(label) => match binding.rebind(label) {
             // Nothing to write: the bound spelling IS the token already there.
             Cow::Borrowed(_) => None,
             Cow::Owned(bound) => Some(format!("_:{bound}")),
-        }
+        },
+        TokenKind::Iri { .. } => None,
     }))
+}
+
+/// Rewrite the blank-node AND IRI tokens of an ALREADY-BOUND composite lexical
+/// form, so a whole-dataset term rewrite reaches inside composite literals.
+///
+/// `on_blank` receives a token's label (without the `_:`); `on_iri` receives an
+/// IRI's unescaped value and whether it sits in an IRI-ONLY position (the
+/// datatype of an embedded literal, which can never hold a blank node). Either
+/// returns the full replacement element text — `_:other`, or `<iri>` — or
+/// `None` to leave the token alone.
+///
+/// Both halves matter and they matter together: a skolemization that rewrote
+/// only the blank tokens would not be invertible, because the de-skolemizing
+/// pass would then have no way to turn the genid IRIs it wrote back into blank
+/// nodes.
+///
+/// Returns the lexical form borrowed when nothing changed, and is a no-op for a
+/// non-composite datatype.
+#[must_use]
+pub fn rewrite_cdt_terms<'a>(
+    lexical: &'a str,
+    datatype: &str,
+    on_blank: &mut dyn FnMut(&str) -> Option<String>,
+    on_iri: &mut dyn FnMut(&str, bool) -> Option<String>,
+) -> Cow<'a, str> {
+    if !is_cdt_datatype(datatype) {
+        return Cow::Borrowed(lexical);
+    }
+    let spans = scan_tokens(lexical);
+    splice(lexical, &spans, &mut |token| match token {
+        TokenKind::Blank(label) => on_blank(label),
+        TokenKind::Iri { iri, iri_only } => on_iri(iri, *iri_only),
+    })
 }
 
 /// Rewrite each `BLANK_NODE_LABEL` of an ALREADY-BOUND composite lexical form
@@ -266,11 +300,7 @@ pub fn rewrite_cdt_blank_terms<'a>(
     datatype: &str,
     rewrite: &mut dyn FnMut(&str) -> Option<String>,
 ) -> Cow<'a, str> {
-    if !is_cdt_datatype(datatype) {
-        return Cow::Borrowed(lexical);
-    }
-    let spans = scan_blank_labels(lexical);
-    splice(lexical, &spans, rewrite)
+    rewrite_cdt_terms(lexical, datatype, rewrite, &mut |_, _| None)
 }
 
 /// Every `(label, scope)` pair an ALREADY-BOUND composite lexical form
@@ -291,14 +321,14 @@ pub fn cdt_embedded_blanks(lexical: &str, datatype: &str) -> Vec<(String, BlankS
     if !is_cdt_datatype(datatype) {
         return Vec::new();
     }
-    scan_blank_labels(lexical)
+    scan_tokens(lexical)
         .into_iter()
-        .map(|span| {
-            let (label, scope) = decode_blank_label(
-                &lexical[span.label_start..span.end],
-                LabelAlphabet::BlankNodeLabel,
-            );
-            (label.into_owned(), scope)
+        .filter_map(|span| match span.kind {
+            TokenKind::Blank(token) => {
+                let (label, scope) = decode_blank_label(&token, LabelAlphabet::BlankNodeLabel);
+                Some((label.into_owned(), scope))
+            }
+            TokenKind::Iri { .. } => None,
         })
         .collect()
 }
@@ -321,29 +351,52 @@ fn parse_composite(lexical: &str, datatype: &str) -> Result<CdtValue, CdtBlankEr
     }
 }
 
-/// The byte span of one `BLANK_NODE_LABEL` token, in coordinates of the ROOT
-/// lexical form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LabelSpan {
-    /// Offset of the `_` opening the `_:` prefix.
-    start: usize,
-    /// Offset of the label body (just past the `:`).
-    label_start: usize,
-    /// One past the last byte of the label body.
-    end: usize,
+/// A rewritable term token located inside a composite lexical form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TokenKind {
+    /// A `BLANK_NODE_LABEL`, carrying the label without its `_:` prefix.
+    Blank(String),
+    /// An `IRIREF`, carrying its UNESCAPED value.
+    Iri {
+        /// The IRI the token denotes, with `UCHAR` escapes resolved.
+        iri: String,
+        /// Whether the token sits where a blank node can never go: the datatype
+        /// of an embedded literal. A rewriter that mints blanks from IRIs must
+        /// refuse there rather than produce an invalid literal — the same
+        /// contract [`TermMapper::map_iri`](crate::ir::skolem) states for a
+        /// predicate slot.
+        iri_only: bool,
+    },
 }
 
-/// Replace the located label tokens for which `rewrite` returns a replacement,
+/// One token's byte span in ROOT-lexical-form coordinates, plus its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TokenSpan {
+    /// Offset of the token's first byte (the `_` of `_:`, or the `<`).
+    start: usize,
+    /// One past the token's last byte (the label's end, or past the `>`).
+    end: usize,
+    /// What the token is.
+    kind: TokenKind,
+}
+
+/// Replace the located tokens for which `rewrite` returns a replacement,
 /// splicing into a fresh string and leaving every other byte alone.
 fn splice<'a>(
     lexical: &'a str,
-    spans: &[LabelSpan],
-    mut rewrite: impl FnMut(&str) -> Option<String>,
+    spans: &[TokenSpan],
+    rewrite: &mut dyn FnMut(&TokenKind) -> Option<String>,
 ) -> Cow<'a, str> {
     let mut out: Option<String> = None;
     let mut cursor = 0usize;
     for span in spans {
-        let Some(replacement) = rewrite(&lexical[span.label_start..span.end]) else {
+        // A token the previous splice already consumed (only reachable if the
+        // scan produced overlapping spans, which it does not) is skipped rather
+        // than allowed to slice mid-character.
+        if span.start < cursor {
+            continue;
+        }
+        let Some(replacement) = rewrite(&span.kind) else {
             continue;
         };
         let buf = out.get_or_insert_with(|| String::with_capacity(lexical.len() + 16));
@@ -361,31 +414,27 @@ fn splice<'a>(
 }
 
 /// Cross-check the byte scanner against the SEP-0009 grammar: both must report
-/// the same labels in the same order.
-fn check_scan_agrees(
-    lexical: &str,
-    spans: &[LabelSpan],
-    value: &CdtValue,
-) -> Result<(), CdtBlankError> {
+/// the same blank-node labels.
+fn check_scan_agrees(spans: &[TokenSpan], value: &CdtValue) -> Result<(), CdtBlankError> {
     let parsed = grammar_blank_labels(value)?;
-    let scanned: Vec<&str> = spans
+    let scanned: Vec<String> = spans
         .iter()
-        .map(|s| &lexical[s.label_start..s.end])
+        .filter_map(|span| match &span.kind {
+            TokenKind::Blank(label) => Some(label.clone()),
+            TokenKind::Iri { .. } => None,
+        })
         .collect();
     // Occurrence ORDER differs legitimately: the grammar walk visits a map's
     // entries in the parsed value's key order while the scanner walks raw bytes.
     // Identity only depends on the SET of labels, so compare as multisets.
-    let mut a: Vec<&str> = scanned.clone();
-    let mut b: Vec<&str> = parsed.iter().map(String::as_str).collect();
+    let mut a = scanned.clone();
+    let mut b = parsed.clone();
     a.sort_unstable();
     b.sort_unstable();
     if a == b {
         return Ok(());
     }
-    Err(CdtBlankError::ScannerDisagreement {
-        scanned: scanned.into_iter().map(str::to_owned).collect(),
-        parsed,
-    })
+    Err(CdtBlankError::ScannerDisagreement { scanned, parsed })
 }
 
 /// Every blank label the parsed value holds, found with an EXPLICIT STACK.
@@ -474,15 +523,16 @@ impl Region {
     }
 }
 
-/// Locate every `BLANK_NODE_LABEL` token in a composite lexical form, at any
-/// nesting depth, returning byte spans in ROOT coordinates.
+/// Locate every rewritable term token (`BLANK_NODE_LABEL` and `IRIREF`) in a
+/// composite lexical form, at any nesting depth, returning byte spans in ROOT
+/// coordinates.
 ///
 /// Total: it never fails and never panics on any input, so the infallible
 /// interning path can use it directly. Well-formedness is the parser's job, and
 /// [`check_scan_agrees`] cross-checks the two on the validating path.
 ///
-/// Spans are returned in ascending root order, which is what makes
-/// [`splice`] a single forward pass.
+/// Spans are returned in ascending root order and never overlap, which is what
+/// makes [`splice`] a single forward pass.
 ///
 /// # Byte spans, not re-rendering
 ///
@@ -492,12 +542,8 @@ impl Region {
 /// rewritten by splicing directly into the ROOT bytes: nothing is ever
 /// unescaped-then-re-escaped, so a nested literal's escape spellings survive a
 /// rewrite of its labels byte for byte.
-fn scan_blank_labels(lexical: &str) -> Vec<LabelSpan> {
+fn scan_tokens(lexical: &str) -> Vec<TokenSpan> {
     let mut spans = Vec::new();
-    // The overwhelmingly common composite literal holds no blank node at all.
-    if !lexical.contains("_:") {
-        return spans;
-    }
     let mut queue = vec![Region {
         text: lexical.to_owned(),
         map: Vec::new(),
@@ -513,28 +559,41 @@ fn scan_blank_labels(lexical: &str) -> Vec<LabelSpan> {
         scan_region(&region, &mut spans, &mut queue);
     }
     spans.sort_unstable_by_key(|span| span.start);
+    // A token located inside an embedded literal is nested INSIDE that
+    // literal's own IRIREF-bearing span only in the datatype case, which is
+    // scanned in the parent region; the label regions never overlap. Drop any
+    // span that would still overlap its predecessor rather than trust that.
+    spans.dedup_by(|later, earlier| later.start < earlier.end);
     spans
 }
 
-/// Scan one region, appending label spans and queueing the unescaped content of
+/// Scan one region, appending token spans and queueing the unescaped content of
 /// every composite-typed literal it embeds.
-fn scan_region(region: &Region, spans: &mut Vec<LabelSpan>, queue: &mut Vec<Region>) {
+fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Region>) {
     let bytes = region.text.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
             // A triple term opens with `<<(`, whose leading `<` is not an IRI.
             b'<' if region.text[i..].starts_with("<<(") => i += 3,
-            b'<' => i = skip_iriref(bytes, i),
-            b'"' | b'\'' => i = scan_string(region, i, queue),
+            b'<' => {
+                let (end, close) = scan_iriref(bytes, i);
+                if let Some(close) = close {
+                    // An element-position IRI: `iri_only` is false, because the
+                    // grammar admits a blank node in this very position.
+                    push_iri_span(region, i, close, end, false, spans);
+                }
+                i = end;
+            }
+            b'"' | b'\'' => i = scan_string(region, i, spans, queue),
             b'_' if bytes.get(i + 1) == Some(&b':') => {
                 let label_start = i + 2;
                 let end = scan_label_body(&region.text, label_start);
                 if end > label_start {
-                    spans.push(LabelSpan {
+                    spans.push(TokenSpan {
                         start: region.root_of(i),
-                        label_start: region.root_of(label_start),
                         end: region.root_of(end),
+                        kind: TokenKind::Blank(region.text[label_start..end].to_owned()),
                     });
                 }
                 i = end.max(label_start);
@@ -547,18 +606,24 @@ fn scan_region(region: &Region, spans: &mut Vec<LabelSpan>, queue: &mut Vec<Regi
     }
 }
 
-/// Advance past an `IRIREF` opening at `start`, returning the offset just past
-/// its `>`. UCHAR escapes ride through: no escape spells a raw `>`.
-fn skip_iriref(bytes: &[u8], start: usize) -> usize {
+/// Scan an `IRIREF` opening at `start`, returning `(end, close)` — the offset
+/// just past its `>`, and the offset OF that `>`.
+///
+/// `close` is `None` for an unterminated `IRIREF`, whose body would not be a
+/// well-defined slice; the validating path refuses such a form outright and the
+/// total path simply reports no token for it.
+///
+/// `UCHAR` escapes ride through: no escape spells a raw `>`.
+fn scan_iriref(bytes: &[u8], start: usize) -> (usize, Option<usize>) {
     let mut i = start + 1;
     while i < bytes.len() {
         match bytes[i] {
-            b'>' => return i + 1,
+            b'>' => return (i + 1, Some(i)),
             b'\\' => i += 2,
             _ => i += 1,
         }
     }
-    i
+    (bytes.len(), None)
 }
 
 /// The end offset of the `BLANK_NODE_LABEL` body starting at `start`.
@@ -586,10 +651,35 @@ fn scan_label_body(text: &str, start: usize) -> usize {
     }
 }
 
+/// Record one `IRIREF` token: `open` is the `<`, `close` the `>`, `end` one past
+/// the `>`.
+fn push_iri_span(
+    region: &Region,
+    open: usize,
+    close: usize,
+    end: usize,
+    iri_only: bool,
+    spans: &mut Vec<TokenSpan>,
+) {
+    spans.push(TokenSpan {
+        start: region.root_of(open),
+        end: region.root_of(end),
+        kind: TokenKind::Iri {
+            iri: unescape_iri(&region.text[open + 1..close]).into_owned(),
+            iri_only,
+        },
+    });
+}
+
 /// Scan a quoted string opening at `start`, queueing its unescaped content when
 /// a `^^` datatype marks it as an embedded composite literal. Returns the offset
 /// just past the literal (including any datatype or language tag).
-fn scan_string(region: &Region, start: usize, queue: &mut Vec<Region>) -> usize {
+fn scan_string(
+    region: &Region,
+    start: usize,
+    spans: &mut Vec<TokenSpan>,
+    queue: &mut Vec<Region>,
+) -> usize {
     let bytes = region.text.as_bytes();
     let quote = bytes[start];
     let long = region.text[start..].starts_with(if quote == b'"' { "\"\"\"" } else { "'''" });
@@ -632,11 +722,17 @@ fn scan_string(region: &Region, start: usize, queue: &mut Vec<Region>) -> usize 
     if bytes.get(iri_start) != Some(&b'<') {
         return iri_start;
     }
-    let iri_end = skip_iriref(bytes, iri_start);
-    let datatype = unescape_iri(&region.text[iri_start + 1..iri_end.saturating_sub(1)]);
+    let (iri_end, close) = scan_iriref(bytes, iri_start);
+    let Some(close) = close else {
+        return iri_end;
+    };
+    let datatype = unescape_iri(&region.text[iri_start + 1..close]);
     if is_cdt_datatype(&datatype) {
         queue.push(unescaped_region(region, content_start, content_end));
     }
+    // A literal's datatype can never be a blank node, so a rewriter that mints
+    // blanks from IRIs must refuse here rather than write an invalid literal.
+    push_iri_span(region, iri_start, close, iri_end, true, spans);
     iri_end
 }
 
