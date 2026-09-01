@@ -71,6 +71,32 @@
 //! model rather than inheriting the gap, so `shex`, `validate` (SHACL) and `query` (SPARQL)
 //! all answer alike over the same document.
 //!
+//! # Three documents, three bases — `--base` names the data graph, not the schema
+//!
+//! This command reads THREE independent documents (a data graph, a schema, a query shape
+//! map), and a base IRI is a property of one document rather than of the invocation. Handing
+//! one document's base to another silently re-homes its relative terms onto a namespace its
+//! author never wrote, which is exactly the failure `validate` refuses when it declines to
+//! pass `--base` to the shapes graph.
+//!
+//! * the **data graph** takes `--base` when given, else its own RFC-8089 `file://` retrieval
+//!   IRI (RFC-3986 §5.1.2 then §5.1.3), through the same [`source::effective_base`] seam
+//!   every other RDF input in this binary takes;
+//! * the **schema** takes its OWN retrieval IRI and never `--base`. `<S1> { <p1> . }` in
+//!   `s.shex` therefore means `<…/S1>` and `<…/p1>` relative to `s.shex`, which is what an
+//!   author writing a self-contained schema means — and supplying `--base` to fix a relative
+//!   data graph can no longer move the schema's shapes to the data document's namespace. A
+//!   `BASE` directive inside the schema still wins over the retrieval IRI (§5.1.1);
+//! * each **`--import IRI=FILE`** document is parsed under the IMPORT IRI, because that is
+//!   the name the importing schema gave it — the per-document base
+//!   [`purrdf_shex::resolve_imports`] documents as its injection boundary;
+//! * the **shape map** is command-line text with no retrieval IRI at all, so `--base` is the
+//!   only base it can ever have and it legitimately takes one. That asymmetry is stated on
+//!   `--base`'s help rather than left to be discovered.
+//!
+//! `--schema -` keeps the hard error: a piped schema has no retrieval IRI, so a relative
+//! reference in it is the RFC-3986 §5.1.4 failure naming `BASE`, never a vacuous constraint.
+//!
 //! # No ledger, and nothing transcoded
 //!
 //! The data graph is read through the pipeline's own format resolution straight into the
@@ -105,8 +131,10 @@ pub(crate) struct ShexOptions<'a> {
     pub(crate) data: &'a str,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
-    /// `--base`: the base relative IRIs in the data, the ShExC schema and the map resolve
-    /// against.
+    /// `--base`: the base relative IRIs in the DATA graph and the shape map resolve against.
+    ///
+    /// Deliberately NOT the schema's: see the module documentation for why each of this
+    /// command's three documents gets its own base.
     pub(crate) base: Option<&'a str>,
     /// The query shape map, verbatim from the command line.
     pub(crate) map: &'a str,
@@ -125,7 +153,8 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     format::refuse_base_with_container(data_format, options.base, "the --data source")?;
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
-    let schema = read_schema(options.schema, options.schema_from, options.base)?;
+    let schema_base = schema_base(options.schema)?;
+    let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
     let schema = fold_imports(schema, options)?;
     // Structure BEFORE the unavailable-semantics survey: a schema with a dangling reference
     // is malformed outright, and reporting an `EXTERNAL` inside it would describe a shape
@@ -175,12 +204,32 @@ fn surface_verdict(result: &ResultShapeMap) {
     eprintln!("shex nonconformant {nonconformant}");
 }
 
+/// The base the SCHEMA document parses under: its own RFC-8089 `file://` retrieval IRI.
+///
+/// `--base` is deliberately absent from this derivation. It names the base of the DATA graph,
+/// and the schema is an independent document — the identical rule `validate` states for its
+/// shapes graph, applied to the identical situation. Reusing it here would mean that
+/// supplying a base to resolve `<alice>` in the data silently moved every `<S1>` in the
+/// schema onto the data document's namespace.
+///
+/// `-` (stdin) gets NO base and keeps the hard error: a piped schema has no retrieval IRI to
+/// derive one from, so there is no honest answer and the parse refuses (RFC-3986 §5.1.4). A
+/// `BASE` directive inside a ShExC schema still overrides what this returns (§5.1.1).
+fn schema_base(path: &str) -> Result<Option<String>, CliError> {
+    if path == "-" {
+        return Ok(None);
+    }
+    source::retrieval_base_iri(path).map(Some)
+}
+
 /// Read and parse the root schema.
 ///
 /// The syntax is resolved the way every other format in this binary is: an explicit
 /// `--schema-from` wins, otherwise the path's extension classifies it, and `-` (stdin) has no
-/// extension so it REQUIRES the override. `base` reaches ShExC's `BASE` resolution; ShExJ has
-/// no relative-IRI syntax to resolve, so it takes none.
+/// extension so it REQUIRES the override. `base` reaches BOTH syntaxes: ShExC resolves its
+/// IRIREFs against the `BASE` in force, and ShExJ is a JSON-LD dialect whose IRI-valued
+/// members are document-relative in exactly the same way, so one base decides one schema
+/// whichever spelling it arrived in.
 fn read_schema(
     path: &str,
     explicit: Option<CliShexFormat>,
@@ -190,7 +239,7 @@ fn read_schema(
     let text = read_text(path, "--schema")?;
     match syntax {
         CliShexFormat::Shexc => parse_shexc(&text, base),
-        CliShexFormat::Shexj => parse_shexj(&text),
+        CliShexFormat::Shexj => parse_shexj(&text, base),
     }
     .map_err(|error| CliError::Runtime(format!("--schema {path}: {error}")))
 }
@@ -311,7 +360,7 @@ fn read_import_table(options: &ShexOptions<'_>) -> Result<Vec<(String, Schema)>,
         let text = read_text(path, &what)?;
         let schema = match syntax {
             CliShexFormat::Shexc => parse_shexc(&text, Some(iri)),
-            CliShexFormat::Shexj => parse_shexj(&text),
+            CliShexFormat::Shexj => parse_shexj(&text, Some(iri)),
         }
         .map_err(|error| CliError::Runtime(format!("{what} {path}: {error}")))?;
         table.push((iri.to_owned(), schema));

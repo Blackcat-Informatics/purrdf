@@ -1957,3 +1957,86 @@ fn a_path_shaped_base_is_refused_at_the_argument_boundary() {
         "the refusal names the spelling that would have worked: {err}"
     );
 }
+
+/// Run `purrdf` with `args` from the working directory `cwd`, so a dot-relative argument
+/// means something the test controls.
+fn run_in(cwd: &Path, args: &[&str]) -> Output {
+    purrdf()
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("spawn the built purrdf binary")
+}
+
+/// The `--base` refusal for a DOT-RELATIVE value names the directory the operator actually
+/// wrote, resolved against the working directory — never a different one.
+///
+/// `./vocab/` used to suggest `file:///vocab/`, and `../vocab/` suggested the same string,
+/// because the hint was built by trimming every leading dot off the argument. Both named a
+/// directory at the filesystem root that has nothing to do with the operator's tree.
+#[test]
+fn the_base_hint_for_a_dot_relative_value_names_the_directory_that_was_written() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
+    std::fs::create_dir(root.join("vocab")).expect("create ./vocab");
+    std::fs::create_dir(root.join("work")).expect("create ./work");
+
+    // `./vocab/` from the root, and `../vocab/` from `work/`, name the SAME directory —
+    // and the hint must say so, with the trailing `/` that makes it a directory base.
+    let here = run_in(&root, &["convert", "--base", "./vocab/", "-"]);
+    let up = run_in(&root.join("work"), &["convert", "--base", "../vocab/", "-"]);
+
+    let expected = format!(
+        "`{}`",
+        purrdf_cli::file_retrieval_iri(root.join("vocab").to_str().expect("temp path is UTF-8"))
+            .expect("the directory has a file:// retrieval IRI")
+            + "/"
+    );
+    for (label, out) in [("./vocab/", &here), ("../vocab/", &up)] {
+        assert_eq!(out.status.code(), Some(2), "{label}: {}", stderr(out));
+        let err = stderr(out);
+        assert!(
+            err.contains(&expected),
+            "{label} must suggest {expected}, got: {err}"
+        );
+        assert!(
+            !err.contains("`file:///vocab/`"),
+            "{label} must not name a root-level directory nobody wrote: {err}"
+        );
+    }
+}
+
+/// A dot-relative `--base` that does NOT resolve gets the rule and NO path-specific
+/// suggestion: there is no honest absolute spelling to offer for a path the filesystem
+/// cannot place, and inventing one is the defect this hint had.
+#[test]
+fn an_unresolvable_dot_relative_base_is_given_the_rule_and_no_invented_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = std::fs::canonicalize(dir.path()).expect("tempdir canonicalizes");
+
+    let out = run_in(&root, &["convert", "--base", "./no/such/dir/", "-"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("must be absolute"), "{err}");
+    assert!(
+        err.contains("a relative filesystem path is not a base IRI"),
+        "the rule is still stated: {err}"
+    );
+    assert!(
+        !err.contains("did you mean"),
+        "no suggestion may be invented for a path that does not resolve: {err}"
+    );
+}
+
+/// An ABSOLUTE path needs no filesystem lookup, so its suggestion stands even for a file
+/// that does not exist — and it is percent-encoded by the same derivation the pipeline uses.
+#[test]
+fn the_base_hint_for_an_absolute_path_is_derived_and_encoded() {
+    let out = run(&["convert", "--base", "/no/such/a b#c", "-"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("`file:///no/such/a%20b%23c`"),
+        "the absolute-path suggestion is derived and encoded: {err}"
+    );
+}

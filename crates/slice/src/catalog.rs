@@ -182,8 +182,11 @@ impl SliceCatalog {
 
 // ── Turtle parsing ────────────────────────────────────────────────────────────
 
+/// Parse a `manifest.ttl` under its own RFC-8089 retrieval IRI, so a manifest that
+/// spells a slice or a dependency as a relative reference resolves rather than
+/// hard-failing with the base sitting unused in `path`.
 fn parse_manifest(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    Dataset::parse_turtle(bytes, &path.display().to_string())
+    Dataset::parse_file(bytes, path)
 }
 
 // ── Manifest extraction ───────────────────────────────────────────────────────
@@ -377,8 +380,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
-    let media_type = crate::rdf_query::media_type_for_path(path);
-    Dataset::parse(bytes, media_type, &path.display().to_string())
+    Dataset::parse_file(bytes, path)
 }
 
 fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
@@ -499,8 +501,10 @@ mod tests {
 <https://example.org/slice/alpha> a vocab:Slice .
 <https://example.org/slice/beta>  a vocab:Slice .
 ";
-        let path = Path::new("manifest.ttl");
-        let ds = parse_manifest(ttl.as_bytes(), path).expect("should parse without error");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("manifest.ttl");
+        std::fs::write(&path, ttl).expect("write the manifest");
+        let ds = parse_manifest(ttl.as_bytes(), &path).expect("should parse without error");
         let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
         let result = find_slice_iri(&ds, &vocab);
         match result {
@@ -533,12 +537,15 @@ ex:subject ex:predicate ex:object .
 ";
         let nt_bytes = b"<https://example.org/subject> <https://example.org/predicate> <https://example.org/object> .\n";
 
-        let ttl_path = Path::new("data.ttl");
-        let nt_path = Path::new("data.nt");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ttl_path = dir.path().join("data.ttl");
+        let nt_path = dir.path().join("data.nt");
+        std::fs::write(&ttl_path, turtle_bytes).expect("write the Turtle artifact");
+        std::fs::write(&nt_path, nt_bytes).expect("write the N-Triples artifact");
 
-        let digest_ttl = compute_semantic_digest(turtle_bytes, ttl_path)
+        let digest_ttl = compute_semantic_digest(turtle_bytes, &ttl_path)
             .expect("Turtle semantic digest must not fail");
-        let digest_nt = compute_semantic_digest(nt_bytes, nt_path)
+        let digest_nt = compute_semantic_digest(nt_bytes, &nt_path)
             .expect("N-Triples semantic digest must not fail");
 
         assert!(
@@ -553,5 +560,53 @@ ex:subject ex:predicate ex:object .
             digest_ttl, digest_nt,
             "Turtle and N-Triples digests for identical triples must match"
         );
+    }
+
+    /// An artifact carrying a RELATIVE IRI is digestible: it resolves against the
+    /// artifact's own RFC-8089 retrieval IRI (RFC-3986 §5.1.3) instead of hard-failing
+    /// with `iri-relative-no-base` while that IRI sits unused in `path`.
+    #[test]
+    fn compute_semantic_digest_resolves_relative_iris_against_the_artifact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("module.ttl");
+        let relative = b"<> <https://example.org/declares> <thing> .\n";
+        std::fs::write(&path, relative).expect("write the artifact");
+
+        let digest = compute_semantic_digest(relative, &path)
+            .expect("a relative-IRI artifact resolves under its own retrieval IRI");
+        assert!(!digest.is_empty());
+
+        // The digest is of the RESOLVED graph: writing the same document with the
+        // references already expanded against that base gives the same digest.
+        let base = crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI");
+        let expanded = format!(
+            "<{}> <https://example.org/declares> <{}> .\n",
+            base.as_str(),
+            base.resolve("thing").expect("resolve").as_str()
+        );
+        let expanded_path = dir.path().join("expanded.ttl");
+        std::fs::write(&expanded_path, &expanded).expect("write the expanded artifact");
+        assert_eq!(
+            digest,
+            compute_semantic_digest(expanded.as_bytes(), &expanded_path)
+                .expect("absolute artifact digests"),
+            "the relative form must denote exactly what the resolved form denotes"
+        );
+    }
+
+    /// An all-absolute artifact's semantic digest does NOT depend on where the tree sits
+    /// on disk: the base is only ever consulted for a relative reference, so supplying
+    /// the retrieval IRI cannot make a committed digest machine-dependent.
+    #[test]
+    fn absolute_artifacts_digest_identically_from_two_locations() {
+        let absolute =
+            b"<https://example.org/a> <https://example.org/p> <https://example.org/b> .\n";
+        let digest_at = |name: &str| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join(name);
+            std::fs::write(&path, absolute).expect("write");
+            compute_semantic_digest(absolute, &path).expect("digest")
+        };
+        assert_eq!(digest_at("one.ttl"), digest_at("two.ttl"));
     }
 }

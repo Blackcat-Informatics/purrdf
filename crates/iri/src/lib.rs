@@ -35,10 +35,15 @@
 //!
 //! Malformed input is a typed [`IriError`], never a degraded fallback or silent
 //! default (repo `no-optionality` doctrine). A relative reference with no base in
-//! scope is [`IriError::NoBase`] — the crate never fabricates a base from a
-//! retrieval IRI or the filesystem, because that would break byte determinism,
-//! diverge across surfaces that have no retrieval IRI (stdin, wasm, the C ABI), and
-//! leak local paths into published RDF. Every failure carries a stable
+//! scope is [`IriError::NoBase`] — this crate implements RFC-3986 §5.1.1 and §5.1.2
+//! and then hard-fails exactly where §5.1.4 says to. It never invents a base,
+//! because it is handed BYTES and has no retrieval IRI to invent one from: §5.1.3 is
+//! vacuous here, and so it is for every surface built on this crate that is likewise
+//! handed bytes — the Rust library API, wasm, the C ABI, Python, and CLI stdin.
+//! `purrdf-cli` is the one surface that *has* a retrieval IRI, and it implements
+//! §5.1.3 in one place by deriving a file input's RFC-8089 `file://` IRI and passing
+//! it in as a caller-supplied base like any other, only when nothing of higher
+//! precedence was given. Every failure carries a stable
 //! [`IriError::diagnostic_code`], which is the single owner of those strings for the
 //! whole workspace.
 //!
