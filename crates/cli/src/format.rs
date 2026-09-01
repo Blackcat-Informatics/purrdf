@@ -263,9 +263,9 @@ impl<'a> BaseUse<'a> {
 /// base consumed by ANY ONE of them is honoured, which is what keeps `--base X --to
 /// ntriples` working from a relative-admitting source.
 ///
-/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text,
-/// a ShEx schema, a shape map) has a leg this list cannot name and does not call this: for
-/// those the base is never inert.
+/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text, a
+/// shape map) has a leg this list cannot name and does not call this: for those the base is
+/// never inert, whatever the RDF legs' rows say.
 pub(crate) fn refuse_unconsumable_base(
     base: Option<&str>,
     legs: &[BaseUse<'_>],
@@ -293,22 +293,4 @@ fn base_carrying_syntaxes() -> String {
         .map(purrdf_rdf::NativeRdfFormat::id)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Refuse `--base` when it is paired with a CONTAINER format.
-///
-/// The container case of [`refuse_unconsumable_base`], sharing its predicate and its
-/// message, for the one lane whose base has a consumer no [`BaseUse`] can name: `shex`
-/// resolves relative IRIs in the SCHEMA and the SHAPE MAP as well as in the data graph, so
-/// the data source's syntax alone never makes the base inert. A container source still
-/// does — it stores fully-resolved terms — and that is exactly what this refuses.
-pub(crate) fn refuse_base_with_container(
-    format: SourceFormat,
-    base: Option<&str>,
-    role: &str,
-) -> Result<(), CliError> {
-    if format.is_container() {
-        return refuse_unconsumable_base(base, &[BaseUse::parse(format, role)]);
-    }
-    Ok(())
 }

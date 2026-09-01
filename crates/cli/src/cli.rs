@@ -851,9 +851,11 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
-        /// Base IRI for the relative IRIs of the DATA graph and the MAP — the two inputs
-        /// with no base of their own (a shape map is command-line text, so `--base` is the
-        /// only base it can ever have). NOT the schema's: `--schema` is an independent
+        /// Base IRI for the relative IRIs of the DATA graph and the MAP. It OVERRIDES the
+        /// data graph's own `file://` retrieval IRI, and it is the only base the MAP can
+        /// ever have (a shape map is command-line text, so it has no retrieval IRI) — which
+        /// is why this flag is never inert here and never refused, even against a pack or
+        /// GTS data source that cannot spend it. NOT the schema's: `--schema` is an independent
         /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
         /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
         /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
