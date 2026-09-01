@@ -103,6 +103,7 @@ pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
+pub mod path_relation;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
@@ -166,6 +167,16 @@ pub use purrdf_sparql_algebra::ParserOptions;
 pub use property_fn::{
     MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
     PropertyFunctionRegistry,
+};
+// The path-witness seam: the step definition and traversal envelope a host configures, the
+// frozen snapshot they are compiled into, and the two relations that bind walks over it —
+// every derivation, or one shortest witness per endpoint. Re-exported for the same reason
+// the `property_fn` block above is: a host wires these into a
+// [`PropertyFunctionRegistry`] as ordinary relations, and should not have to name a module
+// path to build the values it registers.
+pub use path_relation::{
+    MAX_HOPS_CAP, PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep,
+    PathWitnessRelation, ShortestPathWitnessRelation,
 };
 pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
