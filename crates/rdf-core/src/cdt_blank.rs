@@ -38,7 +38,7 @@
 //! those bytes. [`bind_cdt_blank_labels`] does exactly that and nothing else: it
 //! rewrites the `BLANK_NODE_LABEL` token spans, in place, to the canonical
 //! `(label, scope)` spelling that
-//! [`encode_blank_label`](crate::blank_label::encode_blank_label) produces, and
+//! [`encode_blank_label`] produces, and
 //! leaves **every other byte of the lexical form untouched** — whitespace,
 //! numeric spellings, map-entry order, quote style, escape spellings and
 //! datatype IRIs all survive byte for byte.

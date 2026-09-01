@@ -611,8 +611,8 @@ impl RdfDatasetBuilder {
     /// This is the ingress choke point for literals, the twin of
     /// [`intern_text_blank`](Self::intern_text_blank) for bare blank terms.
     /// `binding` must be the SAME rule the path applies to its bare `_:` tokens
-    /// — [`BlankBinding::Decoded`] with the syntax's alphabet for a text codec,
-    /// [`BlankBinding::Ambient`] with the source's fixed scope for a carrier —
+    /// — [`BlankBinding::Decoded`](crate::cdt_blank::BlankBinding::Decoded) with the syntax's alphabet for a text codec,
+    /// [`BlankBinding::Ambient`](crate::cdt_blank::BlankBinding::Ambient) with the source's fixed scope for a carrier —
     /// because that agreement is precisely what makes `_:b` written as a subject
     /// and `_:b` written inside a composite literal the same node
     /// (`bnodes-turtle-05`), and what keeps the same label in two different
@@ -623,7 +623,7 @@ impl RdfDatasetBuilder {
     /// [`intern_literal`](Self::intern_literal) keeps its bytes.
     ///
     /// # Errors
-    /// [`CdtBlankError`] when the literal claims a composite datatype but its
+    /// [`CdtBlankError`](crate::cdt_blank::CdtBlankError) when the literal claims a composite datatype but its
     /// lexical form is not a well-formed value of it, or breaks one of
     /// `purrdf-cdt`'s resource limits. The caller must refuse the whole document:
     /// an unparseable composite literal leaves the document's blank-node scope
@@ -719,7 +719,7 @@ impl RdfDatasetBuilder {
     ///
     /// A `cdt:List` / `cdt:Map` literal's embedded blank labels are bound by the
     /// SAME rule this function applies to a bare
-    /// [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode), because a merge assigns
+    /// [`RdfTerm::BlankNode`], because a merge assigns
     /// each source a fresh scope and an embedded label left unbound would name a
     /// node the merged dataset does not have. Binding here is TOTAL — the owned
     /// model is an internal bridge with no document to refuse — so a document
