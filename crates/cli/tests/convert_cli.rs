@@ -1129,6 +1129,127 @@ fn base_resolves_relative_iris_on_parse() {
     );
 }
 
+/// `--base` RELATIVIZES on serialize, and the emitted document declares the base it was
+/// relativized against — so the round trip closes.
+///
+/// This is the leg that did not exist: `--base` resolved `<a>` on the way in and then the
+/// serializer discarded the base, so the document could be READ under a base and never
+/// WRITTEN back under one. The assertions are stated on the emitted TEXT (the `@base`
+/// directive and the relativized reference must both actually be in the bytes) and then
+/// on meaning: re-parsing that output with NO `--base` at all must reproduce the same
+/// graph, which is only possible if the document carries its own base.
+#[test]
+fn base_relativizes_on_serialize_and_the_document_round_trips_through_its_own_base() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> <other> .\n");
+
+    // Absolute reference point: the same document with no base on egress.
+    let absolute = path(dir, "absolute.nt");
+    assert!(
+        run(&[
+            "convert",
+            "--from",
+            "turtle",
+            "--to",
+            "ntriples",
+            "--base",
+            "http://example.org/base/",
+            &ttl,
+            &absolute,
+        ])
+        .status
+        .success(),
+        "the absolute reference conversion must succeed"
+    );
+
+    // Turtle out, under the same base.
+    let based = path(dir, "based.ttl");
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "turtle",
+        "--base",
+        "http://example.org/base/",
+        &ttl,
+        &based,
+    ]);
+    assert!(o.status.success(), "--base turtle egress: {}", stderr(&o));
+    let text = std::fs::read_to_string(&based).expect("read based turtle");
+    assert!(
+        text.contains("@base <http://example.org/base/> ."),
+        "the emitted Turtle must DECLARE the base it relativized against; got:\n{text}"
+    );
+    assert!(
+        text.contains("<thing>"),
+        "the subject must be written as the relative reference `<thing>`; got:\n{text}"
+    );
+    assert!(
+        !text.contains("http://example.org/base/thing"),
+        "the absolute spelling must be gone once the base is declared; got:\n{text}"
+    );
+
+    // Re-parse with NO --base: the document carries its own, so the graph is unchanged.
+    let reparsed = path(dir, "reparsed.nt");
+    let o = run(&[
+        "convert", "--from", "turtle", "--to", "ntriples", &based, &reparsed,
+    ]);
+    assert!(
+        o.status.success(),
+        "the based document must re-parse with no --base: {}",
+        stderr(&o)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&reparsed).expect("read reparsed"),
+        std::fs::read_to_string(&absolute).expect("read absolute"),
+        "the base round trip must reproduce the same graph"
+    );
+}
+
+/// `--base` with a target that CANNOT express one still succeeds, and emits absolute
+/// IRIs.
+///
+/// One `--base` flag serves both legs. N-Triples' registry row says its grammar admits no
+/// relative reference and it can express no base directive, so the egress half of the flag
+/// has exactly one honest answer for it: absolute IRIs. Erroring here instead would break
+/// the ingress half, which is the whole reason the operator passed `--base`.
+#[test]
+fn base_with_a_base_less_target_succeeds_and_emits_absolute_iris() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> <other> .\n");
+    let out = path(dir, "absolute.nt");
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/base/",
+        &ttl,
+        &out,
+    ]);
+    assert!(
+        o.status.success(),
+        "--base with an N-Triples target must succeed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert_eq!(
+        text,
+        "<http://example.org/base/thing> <http://example.org/p> \
+         <http://example.org/base/other> .\n",
+        "N-Triples has no base surface, so every IRI is absolute"
+    );
+    assert!(
+        !text.contains("@base"),
+        "N-Triples has no base directive to emit; got:\n{text}"
+    );
+}
+
 /// `--rules FILE` names the rule document an entailment regime runs under; without
 /// `--entailment` at all it would otherwise be accepted by clap and silently do
 /// nothing (`options.rules` is read only inside the `--entailment`/`--canonical`

@@ -294,6 +294,9 @@ pub fn serialize_dataset_to_jsonld<D: DatasetView>(dataset: &D) -> Result<String
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     serialize_ser_graph(&graph)
 }
@@ -312,6 +315,9 @@ pub fn serialize_dataset_to_jsonld_with_options<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     serialize_ser_graph_with_options(&graph, options)
 }
@@ -330,6 +336,9 @@ pub fn serialize_dataset_to_jsonld_with_context<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     let carrier = build_carrier(&graph, true)?;
     serialize_carrier_compacted(&carrier, context)
@@ -348,14 +357,28 @@ pub fn derive_jsonld_context<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     derived::derive_context(&build_carrier(&graph, true)?)
 }
 
 /// Serialize an already-materialized [`SerGraph`] to a deterministic JSON-LD-star
 /// document.
+///
+/// With no base in force this is the byte-frozen expanded representation. With one, the
+/// base is declared where JSON-LD declares a base — `@context.@base` — and the document
+/// is emitted through compaction against that one-entry context, which is what applies
+/// the JSON-LD 1.1 §4.1.4 spelling rules to document-position `@id`s. No second
+/// relativization path is introduced: the context compiler's existing candidate selection
+/// (itself built on `purrdf_iri::BaseIri::relativize`) is the only one.
 fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-    serialize_carrier_expanded(&build_carrier(graph, false)?)
+    let carrier = build_carrier(graph, false)?;
+    match base_only_context(graph)? {
+        None => serialize_carrier_expanded(&carrier),
+        Some(context) => serialize_carrier_compacted(&carrier, &context),
+    }
 }
 
 pub(crate) fn serialize_ser_graph_with_options(
@@ -365,13 +388,65 @@ pub(crate) fn serialize_ser_graph_with_options(
     let fold_lists = !matches!(options.mode(), JsonLdSerializeMode::Expanded);
     let carrier = build_carrier(graph, fold_lists)?;
     match options.mode() {
-        JsonLdSerializeMode::Expanded => serialize_carrier_expanded(&carrier),
-        JsonLdSerializeMode::Context(context) => serialize_carrier_compacted(&carrier, context),
+        JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
+            None => serialize_carrier_expanded(&carrier),
+            Some(context) => serialize_carrier_compacted(&carrier, &context),
+        },
+        JsonLdSerializeMode::Context(context) => {
+            let merged = context_with_base(context, graph)?;
+            serialize_carrier_compacted(&carrier, merged.as_ref().unwrap_or(context))
+        }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
-            serialize_carrier_compacted(&carrier, &context)
+            let merged = context_with_base(&context, graph)?;
+            serialize_carrier_compacted(&carrier, merged.as_ref().unwrap_or(&context))
         }
     }
+}
+
+/// The one-entry `{"@base": …}` context a based graph is emitted through, or `None` when
+/// the graph carries no base and the frozen expanded representation applies.
+fn base_only_context(graph: &SerGraph) -> Result<Option<CompiledJsonLdContext>, RdfDiagnostic> {
+    graph
+        .base()
+        .map(|base| CompiledJsonLdContext::compile(&base_context_value(base.as_str()), None))
+        .transpose()
+}
+
+/// Fold the graph's base into a caller-supplied (or derived) context, returning `None`
+/// when nothing needs to change.
+///
+/// Nothing changes when there is no base, or when `context` already declares one: a base
+/// the document itself carries WINS over the caller's, which is the same precedence the
+/// parse leg applies when an in-document `@context.@base` overrides the caller's base.
+///
+/// Otherwise the base is appended as the last member of a context ARRAY, so every term
+/// the caller declared survives into the emitted `@context` and the later member's
+/// `@base` is the one in force — the composition JSON-LD 1.1 already defines, rather than
+/// a merge invented here.
+fn context_with_base(
+    context: &CompiledJsonLdContext,
+    graph: &SerGraph,
+) -> Result<Option<CompiledJsonLdContext>, RdfDiagnostic> {
+    let Some(base) = graph.base().filter(|_| context.base_iri().is_none()) else {
+        return Ok(None);
+    };
+    let mut members = match context.canonical_context() {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        other => vec![other.clone()],
+    };
+    members.push(base_context_value(base.as_str()));
+    CompiledJsonLdContext::compile_with_registry(&Value::Array(members), None, context.registry())
+        .map(Some)
+}
+
+/// The `{"@base": iri}` context document.
+fn base_context_value(iri: &str) -> Value {
+    to_json_object(BTreeMap::from([(
+        "@base".to_owned(),
+        Value::String(iri.to_owned()),
+    )]))
 }
 
 fn serialize_carrier_expanded(carrier: &CarrierDocument) -> Result<String, RdfDiagnostic> {
@@ -448,6 +523,9 @@ pub fn serialize_dataset_to_yamlld<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     serialize_ser_graph_to_yamlld(&graph, schema_url)
 }
@@ -465,6 +543,9 @@ pub fn serialize_dataset_to_yamlld_with_options<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     serialize_ser_graph_to_yamlld_with_options(&graph, options)
 }
@@ -481,6 +562,9 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
         true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
     )?;
     let carrier = build_carrier(&graph, true)?;
     let json = serialize_carrier_compacted(&carrier, context)?;
@@ -1592,8 +1676,10 @@ fn scope_base(scope: &purrdf_iri::BaseScope) -> Option<&str> {
 /// received a base, invisibly, because no call site had to mention it. `None` remains a
 /// legitimate answer — an in-document `@base` can still establish one — but it is now an
 /// answer somebody gave. With neither, a relative reference is the shared
-/// `iri-relative-no-base` hard failure rather than a silently interned relative IRI:
-/// PurRDF never fabricates a base from a retrieval IRI or the filesystem.
+/// `iri-relative-no-base` hard failure rather than a silently interned relative IRI: this
+/// layer is handed BYTES and has no retrieval IRI to fall back on, so RFC-3986 §5.1.3
+/// cannot apply and §5.1.4 does. Deriving a retrieval IRI is the CLI's job, and the CLI
+/// hands the result in through this very parameter.
 pub fn parse_jsonld(
     json_bytes: &[u8],
     base: Option<&str>,
@@ -1917,6 +2003,7 @@ mod carrier_law_tests {
             NativeRdfFormat::NQuads,
             SerializeGraph::Dataset,
             true,
+            None,
         )
         .expect("serialization graph");
         let expanded = build_carrier(&graph, true).expect("typed expanded carrier");
@@ -1970,6 +2057,7 @@ mod carrier_law_tests {
                 NativeRdfFormat::NQuads,
                 SerializeGraph::Dataset,
                 true,
+                None,
             )
             .expect("serialization graph")
         };

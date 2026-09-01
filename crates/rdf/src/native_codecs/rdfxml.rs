@@ -1162,6 +1162,19 @@ enum PropertyItem {
 /// drops the statement layer (star-incapable RDF/XML egress), `graph.reifiers` carries
 /// only self-reifier sentinels (skipped) and `graph.annotations` is empty, so only the
 /// base quads render. Named graphs are rejected (RDF/XML is a single-graph syntax).
+///
+/// # The base
+///
+/// RDF/XML's row in the format registry sets `emits_base`, so a base reaching this graph
+/// is declared as `xml:base` on the `rdf:RDF` root and every `rdf:about` / `rdf:resource`
+/// reference is spelled against it. Those are precisely the two attributes the parser
+/// resolves through the base scope, so the document reads back to the same terms. Element
+/// and attribute NAMES are built from namespace IRIs, which are not references and never
+/// resolve against a base, so they stay absolute — as does the `rdf:nodeID` label, which
+/// is not an IRI at all.
+///
+/// Subject GROUPING keys ([`subject_key`]) stay on the absolute IRI, so the emitted
+/// element order is the same whether or not a base is in force.
 pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
     let named = graph.quads.iter().any(|(_, _, _, g)| g.is_some())
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
@@ -1215,6 +1228,12 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
         if prefix != "rdf" && prefix != "xsd" {
             let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace));
         }
+    }
+    // The document base, when one is in force: `xml:base` on the root scopes it to the
+    // whole document, which is what every relativized `rdf:about` / `rdf:resource` below
+    // resolves against on re-read.
+    if let Some(base) = graph.base() {
+        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str()));
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
     // parse is gated on `rdf:version="1.2"`).
@@ -1274,6 +1293,9 @@ fn subject_key(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
 }
 
 /// Write the `rdf:about` / `rdf:nodeID` attribute for a subject node term.
+///
+/// `rdf:about` is an IRI REFERENCE, so it is spelled against the document base declared
+/// as `xml:base` on the root; `rdf:nodeID` is a blank-node label and is not.
 fn write_node_attribute(
     out: &mut String,
     graph: &SerGraph,
@@ -1282,7 +1304,11 @@ fn write_node_attribute(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = write!(out, " rdf:about=\"{}\"", escape_xml_attr(ser_value(term)?));
+            let _ = write!(
+                out,
+                " rdf:about=\"{}\"",
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
+            );
         }
         SerTermKind::Bnode => {
             let _ = write!(out, " rdf:nodeID=\"{}\"", escape_xml_attr(ser_value(term)?));
@@ -1338,10 +1364,12 @@ fn write_property(
     let term = ser_term(graph, object)?;
     match term.kind {
         SerTermKind::Iri => {
+            // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
+            // is spelled against the document base exactly as `rdf:about` is.
             let _ = writeln!(
                 out,
                 "{indent}<{name} rdf:resource=\"{}\"/>",
-                escape_xml_attr(ser_value(term)?)
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
             );
         }
         SerTermKind::Bnode => {
@@ -1394,6 +1422,16 @@ fn write_triple_node(
     write_property(out, &format!("{indent}  "), graph, p, o, namespaces)?;
     let _ = writeln!(out, "{indent}</rdf:Description>");
     Ok(())
+}
+
+/// Spell an IRI that will be written into an attribute the RDF/XML grammar treats as a
+/// REFERENCE (`rdf:about`, `rdf:resource`), relative to the document base when one is in
+/// force.
+///
+/// Delegates to [`ser_model::spell_iri`], which is the one relativization seam in this
+/// crate; this codec performs no reference arithmetic of its own.
+fn iri_reference<'a>(graph: &SerGraph, iri: &'a str) -> std::borrow::Cow<'a, str> {
+    super::ser_model::spell_iri(iri, graph.base())
 }
 
 /// Borrow a [`SerTerm`] by id, hard-failing on an out-of-range id.

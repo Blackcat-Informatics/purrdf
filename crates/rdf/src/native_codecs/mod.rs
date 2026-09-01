@@ -130,13 +130,23 @@ impl RdfParserBackend for GtsCodecBackend {
 }
 
 impl RdfSerializer for GtsCodecBackend {
+    /// `request.base_iri` is the EGRESS base and reaches the codecs, mirroring the way
+    /// [`RdfParserBackend::parse_into`] hands `request.base_iri` to the parse leg. Which
+    /// formats apply it is the format registry's `emits_base` decision, taken once in
+    /// `build_ser_graph`, not a per-backend one.
     fn serialize<W: Write>(
         &self,
         dataset: &RdfDataset,
         request: RdfSerializeRequest<'_>,
         output: W,
     ) -> Result<(), RdfDiagnostic> {
-        serialize::serialize_into(dataset, request.media_type, request.graph, output)
+        serialize::serialize_into(
+            dataset,
+            request.media_type,
+            request.graph,
+            request.base_iri,
+            output,
+        )
     }
 }
 

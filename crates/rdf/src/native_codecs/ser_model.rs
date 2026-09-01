@@ -11,6 +11,8 @@
 
 use std::borrow::Cow;
 
+use purrdf_iri::BaseIri;
+
 use crate::RdfDiagnostic;
 
 /// The kind of a serialization term.
@@ -57,9 +59,28 @@ pub(crate) struct SerGraph {
     pub quads: Vec<SerQuad>,
     pub reifiers: Vec<SerReifierRow>,
     pub annotations: Vec<SerAnnotationRow>,
+    /// The document base this graph is EMITTED under, or `None` for absolute output.
+    ///
+    /// `Some` is set by exactly one place —
+    /// [`build_ser_graph`](super::serialize::build_ser_graph) — and only for a format
+    /// whose [`emits_base`](super::media_type::NativeRdfFormat::emits_base) column is
+    /// `true`. That is the egress mirror of the ingress rule: a syntax that can express
+    /// a base emits it and relativizes against it; a syntax that cannot never applies
+    /// one, so N-Triples, N-Quads, TriX and HexTuples reach their writers with `None`
+    /// here and emit absolute IRIs whatever the caller passed.
+    ///
+    /// The terms themselves stay ABSOLUTE in the table; relativization happens at write
+    /// time ([`write_term`]), so [`Self::sort_canonical`] can key on absolute text and
+    /// the emitted statement order never moves with the base.
+    pub base: Option<BaseIri>,
 }
 
 impl SerGraph {
+    /// The document base this graph is emitted under, or `None` for absolute output.
+    pub(crate) fn base(&self) -> Option<&BaseIri> {
+        self.base.as_ref()
+    }
+
     /// Look up a reifier binding: the `(s, p, o)` of the FIRST `reifiers` row whose id
     /// equals `rid`.
     pub(crate) fn reifier(&self, rid: usize) -> Option<SerTriple3> {
@@ -84,6 +105,16 @@ impl SerGraph {
     /// The lookup in [`Self::reifier`] is by id, so permuting `reifiers` never changes
     /// which binding a quoted-triple term resolves to; the self-reifier sentinel rows
     /// (skipped on output) are permuted harmlessly among the real reifier rows.
+    ///
+    /// # The keys are the ABSOLUTE term text, deliberately
+    ///
+    /// The comparator renders through [`write_term_absolute`], never [`write_term`], so a
+    /// [`base`](Self::base) in force cannot reach the sort key. Sorting on the emitted
+    /// (possibly relativized) spelling would make the document's statement ORDER a
+    /// function of the base — `<b>` and `<../b>` sort in different places than the
+    /// absolute IRIs they abbreviate — which is exactly the nondeterminism this method
+    /// exists to remove. Two exports of one dataset that differ only in `--base`
+    /// therefore carry the same rows in the same order, spelled differently.
     pub(crate) fn sort_canonical(&mut self) {
         // The rows are sorted THROUGH a comparator that renders on demand, rather than
         // by precomputing a key per row. The keys were `Vec<String>` — four or five
@@ -323,8 +354,8 @@ fn cmp_terms(
     for (&x, &y) in a.iter().zip(b.iter()) {
         left.clear();
         right.clear();
-        write_term(g, x, left);
-        write_term(g, y, right);
+        write_term_absolute(g, x, left);
+        write_term_absolute(g, y, right);
         let ordering = left.as_str().cmp(right.as_str());
         if ordering != std::cmp::Ordering::Equal {
             return ordering;
@@ -349,12 +380,43 @@ fn cmp_graph(
     left.clear();
     right.clear();
     if let Some(x) = a {
-        write_term(g, x, left);
+        write_term_absolute(g, x, left);
     }
     if let Some(y) = b {
-        write_term(g, y, right);
+        write_term_absolute(g, y, right);
     }
     left.as_str().cmp(right.as_str())
+}
+
+/// Spell `iri` the way this document should carry it: relative to `base` when a relative
+/// reference round-trips to it, absolute otherwise.
+///
+/// [`BaseIri::relativize`] is the one relativization algorithm in the workspace and
+/// verifies its own answer by re-resolving it, so a `Some` here always resolves back to
+/// `iri` byte for byte and a `None` is the semantic "no relative spelling exists" — the
+/// correct response to which is the absolute IRI, not an error.
+///
+/// With `base = None` — every N-Triples / N-Quads / TriX / HexTuples export, and every
+/// export with no `--base` — this is an `Option` test and a borrow: no parse, no
+/// allocation, and the emitted bytes are the ones this serializer always produced.
+pub(super) fn spell_iri<'a>(iri: &'a str, base: Option<&BaseIri>) -> Cow<'a, str> {
+    let Some(base) = base else {
+        return Cow::Borrowed(iri);
+    };
+    // A term table holds absolute IRIs, so the parse succeeds; an unparseable value has
+    // no relative spelling either way and rides out verbatim rather than failing egress.
+    purrdf_iri::parse(iri)
+        .ok()
+        .and_then(|target| base.relativize(&target))
+        .map_or(Cow::Borrowed(iri), Cow::Owned)
+}
+
+/// Append an `IRIREF` token — `<…>` around the escaped reference — spelling the IRI
+/// against `base` per [`spell_iri`].
+fn write_iri_ref(out: &mut String, iri: &str, base: Option<&BaseIri>) {
+    out.push('<');
+    out.push_str(&escape_iri(&spell_iri(iri, base)));
+    out.push('>');
 }
 
 /// Append one term's N-Triples surface to `out`.
@@ -368,16 +430,28 @@ fn cmp_graph(
 /// `escape_iri` and `escape_literal` already return a [`Cow`], so an unescaped value —
 /// which is nearly all of them — is borrowed straight from the term table and reaches
 /// `out` without an intermediate of any kind.
+///
+/// IRIs are spelled against the graph's [`base`](SerGraph::base), which is `None` for
+/// every format whose registry row says it cannot express one. Use
+/// [`write_term_absolute`] where the absolute spelling is what is wanted regardless — the
+/// canonical sort keys.
 fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
+    write_term_in(g, tid, out, g.base());
+}
+
+/// Append one term's N-Triples surface to `out` with every IRI spelled ABSOLUTELY,
+/// whatever base the graph carries. This is the canonical-ordering key (see
+/// [`SerGraph::sort_canonical`]), never an output spelling.
+fn write_term_absolute(g: &SerGraph, tid: usize, out: &mut String) {
+    write_term_in(g, tid, out, None);
+}
+
+fn write_term_in(g: &SerGraph, tid: usize, out: &mut String, base: Option<&BaseIri>) {
     use std::fmt::Write as _;
 
     let t = &g.terms[tid];
     match t.kind {
-        SerTermKind::Iri => {
-            out.push('<');
-            out.push_str(&escape_iri(t.value.as_deref().unwrap_or("")));
-            out.push('>');
-        }
+        SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), base),
         SerTermKind::Bnode => match &t.value {
             Some(v) => {
                 out.push_str("_:");
@@ -401,7 +475,7 @@ fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
                 }
             } else if let Some(dt) = t.datatype {
                 out.push_str("^^");
-                write_term(g, dt, out);
+                write_term_in(g, dt, out, base);
             }
             // else: plain literal == xsd:string, written bare
         }
@@ -409,11 +483,11 @@ fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
         SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
             Some((s, p, o)) => {
                 out.push_str("<<( ");
-                write_term(g, s, out);
+                write_term_in(g, s, out, base);
                 out.push(' ');
-                write_term(g, p, out);
+                write_term_in(g, p, out, base);
                 out.push(' ');
-                write_term(g, o, out);
+                write_term_in(g, o, out, base);
                 out.push_str(" )>>");
             }
             // degraded but syntactically valid: an unbound reifier becomes a blank node
@@ -452,9 +526,11 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
             continue;
         }
         write_term(g, rid, out);
-        out.push_str(" <");
-        out.push_str(RDF_REIFIES);
-        out.push_str("> <<( ");
+        out.push(' ');
+        // Through the same speller as every other IRI, so one term cannot be written two
+        // ways in one document when a base happens to cover the RDF namespace.
+        write_iri_ref(out, RDF_REIFIES, g.base());
+        out.push_str(" <<( ");
         write_term(g, s, out);
         out.push(' ');
         write_term(g, p, out);
@@ -487,6 +563,21 @@ fn write_graph_terminator(g: &SerGraph, gname: Option<usize>, out: &mut String) 
     out.push_str(" .\n");
 }
 
+/// Append the Turtle/TriG `@base <…> .` directive when `g` carries a base, and nothing at
+/// all when it does not.
+///
+/// The directive's own IRI is written ABSOLUTELY — it is what every later reference
+/// resolves against, so relativizing it against itself would produce `<>`, which resolves
+/// to the base only if a base is already in force.
+fn write_base_directive(g: &SerGraph, out: &mut String) {
+    let Some(base) = g.base() else {
+        return;
+    };
+    out.push_str("@base ");
+    write_iri_ref(out, base.as_str(), None);
+    out.push_str(" .\n");
+}
+
 /// Assert that no row of `g` carries a named-graph slot — the single-graph syntaxes
 /// (N-Triples, Turtle) cannot serialize named-graph quads. Mirrors the upstream
 /// `ensure_default_graph_projection` rejection.
@@ -511,8 +602,15 @@ pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDi
 }
 
 /// Serialise a [`SerGraph`] to Turtle text (default graph only); the N-Quads body is
-/// prefixed with the `rdf:`/`xsd:` `@prefix` header. IRIs in the body stay full
-/// `<...>` — they are NOT abbreviated against the declared prefixes.
+/// prefixed with the `rdf:`/`xsd:` `@prefix` header, and by an `@base` directive when the
+/// graph carries one. IRIs in the body stay full `<...>` — they are NOT abbreviated
+/// against the declared prefixes, but they ARE relativized against the emitted `@base`,
+/// which the directive at the top of the document makes exact on re-read.
+///
+/// The body is [`write_nquads`], which spells its IRIs through the graph's base as well.
+/// N-Triples and N-Quads reach that same function with `base: None` — their registry rows
+/// say they cannot express a base — so the directive-less syntaxes stay absolute for free
+/// rather than by a check repeated per writer.
 pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "Turtle")?;
 
@@ -523,6 +621,7 @@ pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiag
     // `to_nquads` itself was making — so a Turtle export peaked at roughly three times
     // its own output.
     let start = out.len();
+    write_base_directive(g, out);
     out.push_str("@prefix rdf: <");
     out.push_str(RDF_NS);
     out.push_str("> .\n@prefix xsd: <");
@@ -554,11 +653,7 @@ fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
     let t = &g.terms[tid];
     match t.kind {
         SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => out.push_str("rdf:reifies"),
-        SerTermKind::Iri => {
-            out.push('<');
-            out.push_str(&escape_iri(t.value.as_deref().unwrap_or("")));
-            out.push('>');
-        }
+        SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), g.base()),
         SerTermKind::Bnode => match &t.value {
             Some(v) => {
                 out.push_str("_:");
@@ -634,7 +729,8 @@ fn begin_statement(
     out.push_str("  ");
 }
 
-/// Append a [`SerGraph`]'s TriG text to `out`.
+/// Append a [`SerGraph`]'s TriG text to `out`, led by an `@base` directive when the graph
+/// carries one (and by nothing when it does not).
 ///
 /// Statements are written in place. The previous shape collected every line into a
 /// `Vec<String>`, `join`ed it — copying the whole document — and then `format!`ed the
@@ -646,6 +742,7 @@ pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
         return;
     }
 
+    write_base_directive(g, out);
     out.push_str("@prefix rdf: <");
     out.push_str(RDF_NS);
     out.push_str("> .\n\n");
@@ -789,6 +886,109 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A one-IRI-term-per-entry graph over `iris`, with one quad per `(s, p, o)` row.
+    fn graph_of(iris: &[&str], rows: &[(usize, usize, usize)]) -> SerGraph {
+        let mut g = SerGraph::default();
+        for iri in iris {
+            g.terms.push(SerTerm {
+                kind: SerTermKind::Iri,
+                value: Some((*iri).to_owned()),
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+            });
+        }
+        g.quads = rows.iter().map(|&(s, p, o)| (s, p, o, None)).collect();
+        g
+    }
+
+    /// THE EMITTED ROW ORDER DOES NOT MOVE WITH THE BASE.
+    ///
+    /// `sort_canonical` orders rows by rendered term text. If it rendered through the
+    /// base in force, the document's statement order would become a function of
+    /// `--base`: two exports of one dataset differing only in their base would carry the
+    /// same statements in a different sequence, which is precisely the byte
+    /// nondeterminism this serializer forbids.
+    ///
+    /// The fixture is chosen so the two orders genuinely DISAGREE — asserted below
+    /// rather than assumed, so this cannot pass by the relative and absolute spellings
+    /// happening to sort alike. `http://example.org/dir/a` abbreviates to `a` and
+    /// `http://example.org/dir2/b` to `../dir2/b`; absolutely the `dir/` row leads
+    /// (`/` < `2`), relatively the `../` row does (`.` < `a`).
+    #[test]
+    fn canonical_row_order_is_identical_with_and_without_a_base() {
+        const BASE: &str = "http://example.org/dir/";
+        const IN_DIR: &str = "http://example.org/dir/a";
+        const IN_SIBLING: &str = "http://example.org/dir2/b";
+        const PREDICATE: &str = "http://example.org/p";
+
+        let base = BaseIri::parse(BASE).expect("fixture base is absolute");
+
+        // The premise: the two spellings really do sort the other way round.
+        let relative_in_dir = spell_iri(IN_DIR, Some(&base));
+        let relative_sibling = spell_iri(IN_SIBLING, Some(&base));
+        assert_eq!(relative_in_dir, "a");
+        assert_eq!(relative_sibling, "../dir2/b");
+        assert!(IN_DIR < IN_SIBLING, "absolutely, the dir/ row leads");
+        assert!(
+            relative_sibling < relative_in_dir,
+            "relatively, the ../ row leads — the orders disagree, which is what makes \
+             this fixture able to catch a base-sensitive sort"
+        );
+
+        // Rows inserted so neither input order nor a stable sort can produce the answer
+        // by luck: the sibling (which relativization would promote) comes first.
+        let rows = [(2, 0, 1), (1, 0, 2)];
+        let iris = [PREDICATE, IN_DIR, IN_SIBLING];
+
+        let mut absolute = graph_of(&iris, &rows);
+        absolute.sort_canonical();
+
+        let mut based = graph_of(&iris, &rows);
+        based.base = Some(base);
+        based.sort_canonical();
+
+        assert_eq!(
+            based.quads, absolute.quads,
+            "the canonical sort keys must be the ABSOLUTE term text, so the emitted row \
+             order is the same whatever base the document is written under"
+        );
+        // And the leading row is the absolutely-first one, not the relatively-first one.
+        assert_eq!(based.quads[0].0, 1, "the `dir/` subject leads either way");
+    }
+
+    /// The Turtle emission of that same graph: the `@base` directive is present, the
+    /// bodies are relativized, and the STATEMENT ORDER is the absolute one.
+    #[test]
+    fn turtle_under_a_base_emits_the_directive_and_keeps_the_absolute_row_order() {
+        let mut g = graph_of(
+            &[
+                "http://example.org/p",
+                "http://example.org/dir/a",
+                "http://example.org/dir2/b",
+            ],
+            &[(2, 0, 1), (1, 0, 2)],
+        );
+        g.base = Some(BaseIri::parse("http://example.org/dir/").expect("absolute base"));
+        g.sort_canonical();
+        let ttl = to_turtle(&g).expect("turtle");
+
+        assert!(
+            ttl.starts_with("@base <http://example.org/dir/> .\n@prefix rdf:"),
+            "the base directive leads the document, spelled absolutely: {ttl}"
+        );
+        let body = ttl
+            .split_once("\n\n")
+            .expect("header then body")
+            .1
+            .to_owned();
+        assert_eq!(
+            body, "<a> <../p> <../dir2/b> .\n<../dir2/b> <../p> <a> .\n",
+            "IRIs are relativized, and the row order is the absolute-text order"
+        );
     }
 
     /// One term's N-Triples surface as an owned `String`.

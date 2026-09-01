@@ -619,6 +619,10 @@ pub(crate) fn serialize_input_to_nquads(
         type Output = SerializeOutcome;
 
         fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+            // No EGRESS base: `base` is the ingress base and `run_over_input` has
+            // already applied it while parsing, and N-Quads' registry row says its
+            // grammar can express no base directive, so there is nothing for one to do
+            // here. This boundary decides over absolute N-Quads by design.
             Ok(serialize_dataset_to_format(
                 view,
                 NativeRdfFormat::NQuads,

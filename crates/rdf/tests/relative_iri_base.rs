@@ -16,9 +16,23 @@
 //!
 //! Which of the two applies is read off the format registry's `admits_relative_iri`
 //! column, so the totality test at the bottom covers every registered format.
+//!
+//! # The egress leg
+//!
+//! The serialize leg mirrors all of it, keyed on the registry's `emits_base` column: a
+//! syntax that can express a document base emits the directive and relativizes against
+//! it; one that cannot never applies the base and emits absolute IRIs. The egress
+//! totality test drives every registered format off that column for the same reason the
+//! ingress one drives every format off `admits_relative_iri` — a capability column is
+//! only a contract if every row is read.
 
-use purrdf_rdf::native_codecs::{NativeRdfFormat, parse_dataset};
-use purrdf_rdf::{SerializeGraph, TermValue, serialize_dataset};
+use purrdf_rdf::native_codecs::{
+    NativeRdfFormat, parse_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options,
+};
+use purrdf_rdf::{
+    JsonLdSerializeOptions, SerializeGraph, TermValue, datasets_isomorphic, serialize_dataset,
+};
 
 const P: &str = "<http://example.org/p>";
 const O: &str = "<http://example.org/o>";
@@ -414,6 +428,268 @@ fn every_format_applies_the_policy_its_capability_column_declares() {
                 "{format:?}: supplying a base must not change the verdict"
             );
         }
+    }
+}
+
+// ── Egress: the `emits_base` column, over every registered format ───────────────
+//
+// The parse leg resolved a relative reference against a base and the serialize leg threw
+// the same base away, so `<>` could be read in and never written back out. `--base` is
+// one flag serving both legs; these drive the egress half off the registry the way the
+// tests above drive the ingress half.
+
+/// The base every egress case is written under, and a document under it.
+///
+/// `IN_DIR` sits inside the base's directory (relative spelling `a`); `SIBLING` sits
+/// beside it (`../dir2/b`); `PREDICATE` sits one level up (`../p`). Three different
+/// relative shapes, so a codec that relativized only the subject is visible.
+const EGRESS_BASE: &str = "http://example.org/dir/";
+const EGRESS_IN_DIR: &str = "http://example.org/dir/a";
+const EGRESS_SIBLING: &str = "http://example.org/dir2/b";
+const EGRESS_PREDICATE: &str = "http://example.org/p";
+
+/// The one-quad fixture every egress case serializes, as N-Triples source.
+fn egress_source() -> String {
+    format!("<{EGRESS_IN_DIR}> <{EGRESS_PREDICATE}> <{EGRESS_SIBLING}> .\n")
+}
+
+/// The base directive `format` writes, for a format that can express one.
+///
+/// Spelled per syntax rather than searched for loosely, so the assertion is that the
+/// document declares its base in the place its own grammar reads a base FROM — not
+/// merely that the base string appears somewhere in the bytes.
+fn base_directive(format: NativeRdfFormat) -> Option<String> {
+    match format {
+        NativeRdfFormat::Turtle | NativeRdfFormat::TriG => Some(format!("@base <{EGRESS_BASE}> .")),
+        NativeRdfFormat::RdfXml => Some(format!("xml:base=\"{EGRESS_BASE}\"")),
+        NativeRdfFormat::JsonLd => Some(format!("\"@base\": \"{EGRESS_BASE}\"")),
+        NativeRdfFormat::YamlLd => Some(format!("'@base': {EGRESS_BASE}")),
+        NativeRdfFormat::NTriples
+        | NativeRdfFormat::NQuads
+        | NativeRdfFormat::TriX
+        | NativeRdfFormat::HexTuples => None,
+    }
+}
+
+/// EVERY registered format's egress base behaviour, read off `emits_base()`.
+///
+/// The match over [`NativeRdfFormat`] is exhaustive with no `_` arm, so a codec added to
+/// the registry cannot reach `main` until somebody states here what base directive it
+/// writes — or states that it writes none. The alternative shape, a hand list or a
+/// `continue` past the awkward formats, is exactly how the ingress leg's JSON-LD hole
+/// survived: a capability column that no test reads for every row is a comment.
+#[test]
+fn every_format_emits_a_base_exactly_when_its_capability_column_says_so() {
+    let dataset = parse_dataset(
+        egress_source().as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("absolute fixture parses");
+
+    for format in NativeRdfFormat::all() {
+        let outcome = serialize_dataset_to_format(&dataset, format, Some(EGRESS_BASE))
+            .unwrap_or_else(|e| panic!("{format:?}: serializing under a base failed: {e}"));
+        let text = String::from_utf8(outcome.bytes).expect("utf-8 output");
+
+        match base_directive(format) {
+            Some(directive) => {
+                assert!(
+                    format.emits_base(),
+                    "{format:?} declares a base directive but emits_base() is false"
+                );
+                assert!(
+                    text.contains(&directive),
+                    "{format:?} must declare its base as `{directive}`, got:\n{text}"
+                );
+                // Relativized, not merely declared: the subject's absolute spelling is
+                // gone from the document.
+                assert!(
+                    !text.contains(EGRESS_IN_DIR),
+                    "{format:?} declares a base but still writes the absolute \
+                     `{EGRESS_IN_DIR}`:\n{text}"
+                );
+            }
+            None => {
+                assert!(
+                    !format.emits_base(),
+                    "{format:?} declares no base directive but emits_base() is true"
+                );
+                // A syntax that cannot express a base NEVER applies one: every IRI is
+                // absolute, exactly as it would be with no base supplied at all.
+                for absolute in [EGRESS_IN_DIR, EGRESS_PREDICATE, EGRESS_SIBLING] {
+                    assert!(
+                        text.contains(absolute),
+                        "{format:?} cannot express a base, so `{absolute}` must be \
+                         written absolutely:\n{text}"
+                    );
+                }
+                // Stated as byte identity rather than as "no directive appears": a
+                // format with no base surface must produce the SAME document it would
+                // have produced with no base at all, which forecloses a declaration, a
+                // relativization, and a reordering in one assertion.
+                let unbased = serialize_dataset_to_format(&dataset, format, None)
+                    .expect("serializing with no base")
+                    .bytes;
+                assert_eq!(
+                    text.as_bytes(),
+                    unbased.as_slice(),
+                    "{format:?} has no base surface, so `--base` must not change one \
+                     byte of its output"
+                );
+            }
+        }
+    }
+}
+
+/// A document written under a base re-parses to the same graph with NO caller base: it
+/// carries its own.
+///
+/// This is the round trip the missing serialize leg made impossible — `<>` and `<a>`
+/// could be READ under a base and never WRITTEN back under one, so a based document was
+/// a one-way door.
+#[test]
+fn every_base_emitting_format_round_trips_through_its_own_declaration() {
+    let dataset = parse_dataset(
+        egress_source().as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("absolute fixture parses");
+
+    for format in NativeRdfFormat::all().filter(|format| format.emits_base()) {
+        let bytes = serialize_dataset_to_format(&dataset, format, Some(EGRESS_BASE))
+            .unwrap_or_else(|e| panic!("{format:?}: serialize under a base failed: {e}"))
+            .bytes;
+        // NO base is supplied on the way back in: the document must carry its own.
+        let reparsed = parse_dataset(&bytes, format.media_type(), None).unwrap_or_else(|e| {
+            panic!(
+                "{format:?}: a document written under a base must re-parse with no \
+                 caller base: {e}\n{}",
+                String::from_utf8_lossy(&bytes)
+            )
+        });
+        assert!(
+            datasets_isomorphic(&dataset, &reparsed),
+            "{format:?}: the base round trip must be isomorphic:\n{}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+}
+
+/// A caller's JSON-LD context and the egress base COMPOSE: every declared term survives
+/// into the emitted `@context` and the base joins it.
+///
+/// The JSON-LD family expresses its base as `@context.@base`, so a base and a caller
+/// context contend for the same slot. Appending the base as a later context member is
+/// JSON-LD 1.1's own composition, and this pins that it neither drops the caller's terms
+/// nor leaves the base unapplied.
+#[test]
+fn a_caller_jsonld_context_and_the_egress_base_compose() {
+    let dataset = parse_dataset(
+        egress_source().as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("absolute fixture parses");
+    let options = JsonLdSerializeOptions::context(
+        &serde_json::json!({"ex": {"@id": "http://example.org/", "@prefix": true}}),
+        None,
+    )
+    .expect("caller context compiles");
+
+    let bytes = serialize_dataset_to_format_with_jsonld_options(
+        &dataset,
+        NativeRdfFormat::JsonLd,
+        Some(EGRESS_BASE),
+        &options,
+    )
+    .expect("configured JSON-LD under a base")
+    .bytes;
+    let text = String::from_utf8(bytes.clone()).expect("utf-8");
+
+    assert!(
+        text.contains("\"@base\": \"http://example.org/dir/\""),
+        "the egress base joins the emitted context:\n{text}"
+    );
+    assert!(
+        text.contains("\"ex\""),
+        "the caller's own term must survive into the emitted context:\n{text}"
+    );
+    assert!(
+        !text.contains(EGRESS_IN_DIR),
+        "the subject must be relativized against the base:\n{text}"
+    );
+    let reparsed = parse_dataset(&bytes, NativeRdfFormat::JsonLd.media_type(), None)
+        .expect("the emitted document carries its own context and base");
+    assert!(
+        datasets_isomorphic(&dataset, &reparsed),
+        "the composed round trip must be isomorphic:\n{text}"
+    );
+}
+
+/// A context that ALREADY declares a base keeps it: the document's own base wins over the
+/// caller-supplied one, the same precedence the parse leg applies to an in-document
+/// `@context.@base`.
+#[test]
+fn a_context_that_declares_its_own_base_keeps_it_over_the_egress_base() {
+    let dataset = parse_dataset(
+        egress_source().as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("absolute fixture parses");
+    let options = JsonLdSerializeOptions::context(
+        &serde_json::json!({"@base": "http://example.org/dir2/"}),
+        None,
+    )
+    .expect("caller context with its own base compiles");
+
+    let text = String::from_utf8(
+        serialize_dataset_to_format_with_jsonld_options(
+            &dataset,
+            NativeRdfFormat::JsonLd,
+            Some(EGRESS_BASE),
+            &options,
+        )
+        .expect("configured JSON-LD under a base")
+        .bytes,
+    )
+    .expect("utf-8");
+
+    assert!(
+        text.contains("\"@base\": \"http://example.org/dir2/\""),
+        "the context's own base is the one in force:\n{text}"
+    );
+    assert!(
+        !text.contains(EGRESS_BASE),
+        "the caller-supplied base must not override the document's own:\n{text}"
+    );
+}
+
+/// A base that is not an absolute IRI is a hard failure for EVERY format — including the
+/// ones that would not have applied it.
+///
+/// Validating only where the base is used would tell a caller their `--base` was fine
+/// merely because they happened to target N-Triples; the mistake is in the argument, and
+/// it is reported as the shared `purrdf-iri` condition rather than a serializer-local
+/// spelling.
+#[test]
+fn a_non_absolute_egress_base_is_refused_by_every_format() {
+    let dataset = parse_dataset(
+        egress_source().as_bytes(),
+        NativeRdfFormat::NTriples.media_type(),
+        None,
+    )
+    .expect("absolute fixture parses");
+
+    for format in NativeRdfFormat::all() {
+        let error = serialize_dataset_to_format(&dataset, format, Some("/not/absolute"))
+            .expect_err("a relative base is not a base");
+        assert_eq!(
+            error.code, "iri-non-absolute-base",
+            "{format:?} must refuse a non-absolute base with the shared condition"
+        );
     }
 }
 

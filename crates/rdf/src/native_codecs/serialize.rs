@@ -26,6 +26,7 @@ use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTe
 use crate::ir::TermRef;
 use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
 /// the egress contract applied at the [`SerGraph`] ingress so no codec can write
@@ -75,7 +76,42 @@ pub fn serialize_dataset<D: DatasetView>(
     media_type: &str,
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
-    serialize_dataset_inner(dataset, media_type, selection, true)
+    serialize_dataset_inner(dataset, media_type, selection, true, None)
+}
+
+/// Resolve the base `format` will actually be EMITTED under — the single place the egress
+/// base decision is taken, and the exact mirror of the ingress decision in
+/// [`base_scope_for`](super::parse::base_scope_for).
+///
+/// Two steps, in this order and always both:
+///
+/// 1. **Validate.** A supplied base must be an absolute IRI whatever the target format
+///    is. The condition already has a diagnostic code —
+///    [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code) — and it is
+///    reused verbatim rather than respelled, so one identity covers the parse leg and the
+///    serialize leg. A malformed base is a hard failure even for a format that would not
+///    have applied it: the caller is told their base is wrong rather than having the
+///    mistake absorbed.
+/// 2. **Apply, if the registry says the syntax can express one.** `emits_base()` is the
+///    egress mirror of `admits_relative_iri()`: a syntax that can write a base directive
+///    gets the base; one that cannot gets `None` and emits absolute IRIs. That is not the
+///    parameter being swallowed — it is the only answer those grammars admit, decided
+///    once from the registry rather than per codec.
+fn egress_base(
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+) -> Result<Option<BaseIri>, RdfDiagnostic> {
+    let base = base_iri
+        .map(|base| {
+            BaseIri::parse(base).map_err(|error| {
+                RdfDiagnostic::error(
+                    error.diagnostic_code(),
+                    format!("serialization base IRI `{base}` is unusable: {error}"),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(base.filter(|_| format.emits_base()))
 }
 
 /// Serialize JSON-LD or YAML-LD through the generic media-type surface under an
@@ -90,11 +126,32 @@ pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
     selection: SerializeGraph<'_>,
     options: &JsonLdSerializeOptions,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
+    serialize_dataset_with_jsonld_options_inner(dataset, media_type, selection, options, None)
+}
+
+/// The base-carrying seam beneath [`serialize_dataset_with_jsonld_options`].
+///
+/// The base is threaded through this ONE internal function rather than exposed as a
+/// second public `…_with_base` overload beside it: an overload is how a call site ends up
+/// silently NOT passing a base while its siblings do.
+fn serialize_dataset_with_jsonld_options_inner<D: DatasetView>(
+    dataset: &D,
+    media_type: &str,
+    selection: SerializeGraph<'_>,
+    options: &JsonLdSerializeOptions,
+    base_iri: Option<&str>,
+) -> Result<Vec<u8>, RdfDiagnostic> {
     let format = classify(media_type)?;
     if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
         return Err(jsonld_options_unused(format));
     }
-    let graph = build_ser_graph(dataset, format, selection, true)?;
+    let graph = build_ser_graph(
+        dataset,
+        format,
+        selection,
+        true,
+        egress_base(format, base_iri)?,
+    )?;
     let text = match format {
         NativeRdfFormat::JsonLd => {
             super::jsonld::serialize_ser_graph_with_options(&graph, options)?
@@ -121,7 +178,7 @@ pub fn serialize_dataset_base_only<D: DatasetView>(
     media_type: &str,
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
-    serialize_dataset_inner(dataset, media_type, selection, false)
+    serialize_dataset_inner(dataset, media_type, selection, false, None)
 }
 
 fn serialize_dataset_inner<D: DatasetView>(
@@ -129,9 +186,16 @@ fn serialize_dataset_inner<D: DatasetView>(
     media_type: &str,
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
+    base_iri: Option<&str>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
     let format = classify(media_type)?;
-    let graph = build_ser_graph(dataset, format, selection, include_statement_layer)?;
+    let graph = build_ser_graph(
+        dataset,
+        format,
+        selection,
+        include_statement_layer,
+        egress_base(format, base_iri)?,
+    )?;
     // Dispatch to the format's codec (the single `codec_for` chokepoint): the line/Turtle
     // family walks the shared `ser_model` writers, and RDF/XML, TriX and HexTuples walk
     // the SAME `SerGraph` through their in-repo emitters (the star layer is declared loss
@@ -141,13 +205,19 @@ fn serialize_dataset_inner<D: DatasetView>(
 }
 
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer.
+///
+/// `base_iri` is the egress base and is honored exactly as on every other seam: a format
+/// whose registry row can express a base emits it and relativizes against it; one that
+/// cannot emits absolute IRIs. A base that is not an absolute IRI is a hard failure here,
+/// not a silent fall back to absolute output.
 pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
+    base_iri: Option<&str>,
     mut output: W,
 ) -> Result<(), RdfDiagnostic> {
-    let bytes = serialize_dataset(dataset, media_type, selection)?;
+    let bytes = serialize_dataset_inner(dataset, media_type, selection, true, base_iri)?;
     output
         .write_all(&bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
@@ -179,8 +249,25 @@ pub struct SerializeOutcome {
 /// (RDF/XML) emit only the base quads and report the dropped statement-row count —
 /// the caller records this as declared loss against the loss ledger.
 ///
-/// `base_iri` is accepted for call-site compatibility with the former oxigraph
-/// serializer; the native codecs emit absolute IRIs, so it is currently unused.
+/// # `base_iri` is the EGRESS base, and the registry decides who applies it
+///
+/// `base_iri` is the document base the output is written under. Whether it is applied is
+/// the [`emits_base`](NativeRdfFormat::emits_base) column's decision, made once for the
+/// whole workspace, and it is the exact mirror of the ingress rule keyed on
+/// [`admits_relative_iri`](NativeRdfFormat::admits_relative_iri):
+///
+/// * a syntax that CAN express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) emits the
+///   base directive and relativizes its IRIs against it;
+/// * a syntax that CANNOT (N-Triples, N-Quads, TriX, HexTuples) never applies it and
+///   emits absolute IRIs — exactly as, on ingress, those grammars never apply a base to a
+///   relative reference.
+///
+/// The second case is NOT the parameter being swallowed. The base is still read, still
+/// validated (a non-absolute one is a hard failure, code
+/// [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code)), and still
+/// answered — with the only spelling those grammars admit. That is why `--base` paired
+/// with `--to ntriples` succeeds and emits absolute IRIs rather than erroring: one flag
+/// serves both legs, and the format's own capability decides what each leg does with it.
 ///
 /// Graph selection follows [`SerializeGraph::Dataset`]: dataset-capable formats
 /// (N-Quads, TriG) emit all named graphs; the single-graph syntaxes (Turtle,
@@ -188,7 +275,7 @@ pub struct SerializeOutcome {
 pub fn serialize_dataset_to_format<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
-    _base_iri: Option<&str>,
+    base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
     let media_type = format.media_type();
     // A base direction is dropped independently of the star layer: RDF/XML is
@@ -200,14 +287,21 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
         count_directional_object_literals(dataset)
     };
     if format.carries_star() {
-        let bytes = serialize_dataset(dataset, media_type, SerializeGraph::Dataset)?;
+        let bytes =
+            serialize_dataset_inner(dataset, media_type, SerializeGraph::Dataset, true, base_iri)?;
         Ok(SerializeOutcome {
             bytes,
             statement_rows_dropped: 0,
             directional_literals_dropped,
         })
     } else {
-        let bytes = serialize_dataset_base_only(dataset, media_type, SerializeGraph::Dataset)?;
+        let bytes = serialize_dataset_inner(
+            dataset,
+            media_type,
+            SerializeGraph::Dataset,
+            false,
+            base_iri,
+        )?;
         let statement_rows_dropped =
             dataset.reifier_quads().count() + dataset.annotation_quads().count();
         Ok(SerializeOutcome {
@@ -223,20 +317,28 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
 ///
 /// The function accepts only the two JSON-LD family formats and reports zero loss for
 /// their RDF 1.2-capable carrier. Passing another format is a stable hard failure.
+///
+/// `base_iri` is the egress base, honored exactly as in [`serialize_dataset_to_format`].
+/// Both formats' registry rows set `emits_base`, so the base reaches the emitted
+/// `@context` as `@base` and document-position `@id`s are compacted against it — through
+/// the JSON-LD 1.1 §4.1.4 candidate-selection layer the context compiler already owns. A
+/// base already declared by the caller's own context WINS, matching the ingress
+/// precedence where an in-document `@context.@base` overrides the caller's.
 pub fn serialize_dataset_to_format_with_jsonld_options<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
-    _base_iri: Option<&str>,
+    base_iri: Option<&str>,
     options: &JsonLdSerializeOptions,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
     if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
         return Err(jsonld_options_unused(format));
     }
-    let bytes = serialize_dataset_with_jsonld_options(
+    let bytes = serialize_dataset_with_jsonld_options_inner(
         dataset,
         format.media_type(),
         SerializeGraph::Dataset,
         options,
+        base_iri,
     )?;
     Ok(SerializeOutcome {
         bytes,
@@ -280,11 +382,21 @@ fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> usize {
 /// `pub(crate)` so the JSON-LD / YAML-LD codec ([`super::jsonld`]) can build the same
 /// first-party graph shape it walks (a dataset-capable `format` such as
 /// [`NativeRdfFormat::NQuads`] preserves named graphs).
+///
+/// `base` is stored verbatim on the graph and is what every writer relativizes against.
+/// It arrives already decided by [`egress_base`], which is where the registry's
+/// `emits_base()` column is consulted — deliberately NOT here, because `format` on this
+/// function is the graph-SHAPE selector (the JSON-LD codec passes
+/// [`NativeRdfFormat::NQuads`] to keep named graphs) and is not always the format the
+/// document is written as. Gating on it here would silently drop a JSON-LD base.
+/// A format with `emits_base: false` therefore reaches its writer with `None` and emits
+/// absolute IRIs, structurally rather than by a per-codec convention.
 pub(crate) fn build_ser_graph<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
+    base: Option<BaseIri>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let mut interner =
         SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
@@ -296,6 +408,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
         quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
         reifiers: Vec::new(),
         annotations: Vec::new(),
+        base,
     };
 
     match selection {
