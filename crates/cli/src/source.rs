@@ -204,22 +204,6 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
     }
 }
 
-/// Read an RDF text source at `path` into a dataset, STREAMING it when its syntax
-/// allows.
-///
-/// This is the one seam every RDF-text input in the CLI passes through, so the decision
-/// "stream or buffer" is made once, from the format's own
-/// [`is_line_oriented`](NativeRdfFormat::is_line_oriented) property, rather than
-/// re-decided per subcommand.
-///
-/// The streaming arm sniffs the transport wrapper off the leading four bytes and puts
-/// them back (correct on a pipe, where seeking back is not available), then wraps the
-/// stream in the matching decoder and parses THROUGH it. A truncated or corrupt frame
-/// surfaces as a read failure part-way through and fails the whole parse: there is no
-/// partial success, and nothing is written, exactly as on the buffered lane.
-///
-/// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
-/// and is what every non-line-oriented syntax takes.
 /// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
 ///
 /// RFC-3986 §5.1.3 makes the retrieval URI the base of last resort, and the CLI is the
@@ -311,6 +295,25 @@ pub(crate) fn effective_base(
     retrieval_base_iri(path).map(Some)
 }
 
+/// Read an RDF text source at `path` into a dataset, STREAMING it when its syntax
+/// allows.
+///
+/// This is the one seam every RDF-text input in the CLI passes through, so the decision
+/// "stream or buffer" is made once, from the format's own
+/// [`is_line_oriented`](NativeRdfFormat::is_line_oriented) property, rather than
+/// re-decided per subcommand.
+///
+/// The streaming arm sniffs the transport wrapper off the leading four bytes and puts
+/// them back (correct on a pipe, where seeking back is not available), then wraps the
+/// stream in the matching decoder and parses THROUGH it. A truncated or corrupt frame
+/// surfaces as a read failure part-way through and fails the whole parse: there is no
+/// partial success, and nothing is written, exactly as on the buffered lane.
+///
+/// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
+/// and is what every non-line-oriented syntax takes.
+///
+/// The base the document parses under is [`effective_base`]'s answer, so an explicit
+/// `--base` and the derived retrieval IRI are decided in one place rather than per lane.
 fn load_native(
     path: &str,
     format: NativeRdfFormat,
