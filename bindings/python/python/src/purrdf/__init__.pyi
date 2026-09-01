@@ -1083,7 +1083,10 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str) -> None: ...
+    # `base` is the shapes document's own base IRI, resolving its relative IRI
+    # references. Omitted, only an in-document `@base` can establish one and a
+    # relative reference raises ValueError rather than being silently unresolved.
+    def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
 
@@ -1091,13 +1094,21 @@ class shapes:
     ValidationReport = _ValidationReport
     Shapes = _Shapes
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
+    #
+    # `shapes_base` is the base IRI the SHAPES document's relative IRI references
+    # resolve against; `data_nt` needs no counterpart because N-Triples admits no
+    # relative IRI by grammar.
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str) -> dict[str, builtins.object]: ...
+    def validate(
+        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+    ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
     # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base
     # graph plus every inferred triple) as a canonical N-Triples string.
     @staticmethod
-    def entail(shapes_ttl: str, data_nt: str) -> str: ...
+    def entail(
+        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+    ) -> str: ...
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes

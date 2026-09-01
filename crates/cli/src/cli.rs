@@ -699,8 +699,8 @@ pub(crate) enum Command {
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
-        /// graph is parsed by the shared boundary, which takes no base — a Turtle shapes
-        /// document resolves its own relative IRIs with `@base`.
+        /// graph is a separate document and resolves against its OWN `file://` retrieval
+        /// IRI (or its own `@base`), so this flag never silently retargets it.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
         /// How to serialize the validation report: an RDF syntax for the SHACL results

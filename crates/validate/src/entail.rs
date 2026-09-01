@@ -59,11 +59,15 @@ use purrdf_shapes::engine;
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, data).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data).expect("entailment produced");
 /// assert!(nt.contains("<http://example.org/adult>"));
 /// ```
-pub fn entail_to_ntriples_string(shapes_ttl: &str, data_nt: &str) -> Result<String, String> {
-    let dataset = engine::entail_graphs(data_nt, shapes_ttl)?;
+pub fn entail_to_ntriples_string(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+) -> Result<String, String> {
+    let dataset = engine::entail_graphs(data_nt, shapes_ttl, shapes_base)?;
     purrdf_rdf::canonical_flat_nquads(dataset.as_ref())
 }
 
@@ -119,7 +123,7 @@ mod tests {
 
     #[test]
     fn entail_materializes_the_inferred_triple() {
-        let nt = entail_to_ntriples_string(SHAPES, DATA).expect("entailment produced");
+        let nt = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
         // The inferred head triple appears.
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> \
@@ -134,30 +138,33 @@ mod tests {
 
     #[test]
     fn entail_is_deterministic() {
-        let a = entail_to_ntriples_string(SHAPES, DATA).expect("entailment produced");
-        let b = entail_to_ntriples_string(SHAPES, DATA).expect("entailment produced");
+        let a = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
+        let b = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
         assert_eq!(a, b, "entailment serialization must be byte-stable");
     }
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_string("@@@ not turtle", DATA).is_err());
+        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA).is_err());
     }
 
     /// Re-pointing `purrdf-python`'s `shacl.entail` at this function changed no
     /// bytes.
     ///
     /// [`PYTHON_BINDING_GOLDEN`] was captured by running the binding's OLD inline
-    /// body — `purrdf_shapes::engine::entail_graphs(data, shapes)` followed by
+    /// body — `purrdf_shapes::engine::entail_graphs(data, shapes, None)` followed by
     /// `purrdf_rdf::canonical_flat_nquads(dataset.as_ref())`, in that order —
     /// against these two fixtures before the edit. Asserting the shared function
     /// reproduces it is therefore a before/after equality, and it is the fixture
     /// a later refactor of either spelling has to keep satisfying.
     #[test]
     fn the_python_binding_repoint_is_byte_identical() {
-        let produced =
-            entail_to_ntriples_string(PYTHON_BINDING_GOLDEN_SHAPES, PYTHON_BINDING_GOLDEN_DATA)
-                .expect("entailment produced");
+        let produced = entail_to_ntriples_string(
+            PYTHON_BINDING_GOLDEN_SHAPES,
+            None,
+            PYTHON_BINDING_GOLDEN_DATA,
+        )
+        .expect("entailment produced");
         assert_eq!(produced, PYTHON_BINDING_GOLDEN);
         // The golden is not vacuous: the rule fired for both targets, and the
         // blank node really was canonically relabelled.

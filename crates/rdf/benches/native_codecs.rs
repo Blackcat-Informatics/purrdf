@@ -249,8 +249,11 @@ fn bench_jsonld_expanded(c: &mut Criterion) {
         );
         group.bench_with_input(BenchmarkId::new("parse", rows), &json, |bencher, text| {
             bencher.iter(|| {
+                // No base: the generated corpus spells every IRI absolutely, so
+                // resolution never runs and this measures expansion, not base
+                // arithmetic.
                 let dataset =
-                    parse_jsonld(black_box(text.as_bytes())).expect("expanded JSON-LD parse");
+                    parse_jsonld(black_box(text.as_bytes()), None).expect("expanded JSON-LD parse");
                 black_box(dataset);
             });
         });
@@ -317,8 +320,10 @@ fn bench_jsonld_configured(c: &mut Criterion) {
                 &prepared,
                 |bencher, text| {
                     bencher.iter(|| {
+                        // No base, as above: the corpus is absolute-only by
+                        // construction.
                         black_box(
-                            parse_jsonld(black_box(text.as_bytes()))
+                            parse_jsonld(black_box(text.as_bytes()), None)
                                 .expect("configured JSON-LD parse"),
                         );
                     });

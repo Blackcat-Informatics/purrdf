@@ -316,11 +316,16 @@ fn base_and_vocab_resolution_round_trip_exactly() {
     );
 }
 
-/// `@base: null` erases the base, and the document URL must not be silently
-/// resurrected in its place. The failure is the WORKSPACE-SHARED
-/// "relative reference, no base in scope" condition — the same `iri-relative-no-base`
-/// code Turtle, TriG, RDF/XML, SPARQL and ShEx report — not a JSON-LD-local spelling of
-/// it, so a consumer switching on the code sees one condition rather than five.
+/// `"@base": null` erases the base, and the document URL must not be silently
+/// resurrected in its place.
+///
+/// The refusal is asserted by its diagnostic CODE rather than by its prose. The
+/// condition — a relative reference with no base in scope — is the WORKSPACE-SHARED one,
+/// reported with the same `iri-relative-no-base` code Turtle, TriG, RDF/XML, SPARQL and
+/// ShEx report rather than a JSON-LD-local spelling of it, so a consumer switching on the
+/// code sees one condition rather than five. Pinning the code keeps this test on the
+/// contract rather than on a sentence; the two message assertions pin only the parts a
+/// user acts on — the reference named verbatim, and the remedy.
 #[test]
 fn null_base_is_not_resurrected_from_the_document_url() {
     for (relative_setting, reference) in [

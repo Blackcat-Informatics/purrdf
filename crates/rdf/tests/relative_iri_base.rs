@@ -23,6 +23,17 @@ use purrdf_rdf::{SerializeGraph, TermValue, serialize_dataset};
 const P: &str = "<http://example.org/p>";
 const O: &str = "<http://example.org/o>";
 
+/// A one-triple JSON-LD document whose `@id` is the relative reference `foo`.
+const JSONLD_RELATIVE_SUBJECT: &str =
+    "{\"@id\":\"foo\",\"http://example.org/p\":{\"@id\":\"http://example.org/o\"}}";
+
+/// The YAML-LD spelling of [`JSONLD_RELATIVE_SUBJECT`].
+const YAMLLD_RELATIVE_SUBJECT: &str = concat!(
+    "\"@id\": foo\n",
+    "\"http://example.org/p\":\n",
+    "  \"@id\": \"http://example.org/o\"\n",
+);
+
 /// Turtle source asserting `reference` in SUBJECT position, under `base` if given.
 fn turtle_with(base: Option<&str>, reference: &str) -> String {
     match base {
@@ -315,8 +326,12 @@ fn absolute_only_grammars_refuse_relative_references_with_and_without_a_base() {
 #[test]
 fn every_format_applies_the_policy_its_capability_column_declares() {
     for format in NativeRdfFormat::all() {
-        // Only the text syntaxes with a simple one-triple spelling are exercised here;
-        // the tree syntaxes have their own fixtures.
+        // Every format with a one-triple spelling is exercised, TREE SYNTAXES INCLUDED.
+        // JSON-LD and YAML-LD used to be skipped here, and that skip is why the dropped
+        // base survived: both declare `admits_relative_iri: true`, both codecs bound the
+        // base and threw it away, and the caller's `--base` was a silent no-op for
+        // exactly the two formats this loop had waived. A capability column is only a
+        // contract if the totality test reads it for every row it can spell.
         let text = match format {
             NativeRdfFormat::Turtle | NativeRdfFormat::TriG => {
                 format!("<foo> {P} {O} .\n")
@@ -324,6 +339,8 @@ fn every_format_applies_the_policy_its_capability_column_declares() {
             NativeRdfFormat::NTriples | NativeRdfFormat::NQuads => {
                 format!("<foo> {P} {O} .\n")
             }
+            NativeRdfFormat::JsonLd => JSONLD_RELATIVE_SUBJECT.to_owned(),
+            NativeRdfFormat::YamlLd => YAMLLD_RELATIVE_SUBJECT.to_owned(),
             _ => continue,
         };
         let result = parse_dataset(text.as_bytes(), format.media_type(), None);
@@ -537,4 +554,88 @@ fn rdfxml_with_no_base(reference: &str) -> String {
          <rdf:Description rdf:about=\"{reference}\"><ex:p>v</ex:p></rdf:Description>\
          </rdf:RDF>"
     )
+}
+
+// ── JSON-LD / YAML-LD ───────────────────────────────────────────────────────────
+//
+// Both declare `admits_relative_iri: true` in the format registry, and both codecs used
+// to bind the base parameter as `_base` and drop it — so `--base` was silently a no-op
+// and a relative `@id` failed with "requires an absolute base IRI" while the caller's
+// base sat unused one frame up. A parameter accepted and ignored is worse than one
+// absent: the seam looks threaded.
+
+/// A relative `@id` resolves against the caller-supplied base.
+#[test]
+fn jsonld_resolves_a_relative_id_against_the_caller_base() {
+    let subject = only_subject(
+        JSONLD_RELATIVE_SUBJECT,
+        "application/ld+json",
+        Some("http://example.org/dir/doc.jsonld"),
+    );
+    assert_eq!(subject, "http://example.org/dir/foo");
+}
+
+/// The base is READ, not merely accepted: a different base yields a different term.
+#[test]
+fn jsonld_base_is_read_rather_than_accepted_and_dropped() {
+    let a = only_subject(
+        JSONLD_RELATIVE_SUBJECT,
+        "application/ld+json",
+        Some("http://a.example/"),
+    );
+    let b = only_subject(
+        JSONLD_RELATIVE_SUBJECT,
+        "application/ld+json",
+        Some("http://b.example/"),
+    );
+    assert_eq!(a, "http://a.example/foo");
+    assert_eq!(b, "http://b.example/foo");
+    assert_ne!(a, b, "the resolved subject must move with the base");
+}
+
+/// YAML-LD bridges to the same expander and must agree with its JSON twin.
+#[test]
+fn yamlld_resolves_a_relative_id_identically_to_jsonld() {
+    let json = only_subject(
+        JSONLD_RELATIVE_SUBJECT,
+        "application/ld+json",
+        Some("http://example.org/dir/doc"),
+    );
+    let yaml = only_subject(
+        YAMLLD_RELATIVE_SUBJECT,
+        "application/ld+yaml",
+        Some("http://example.org/dir/doc"),
+    );
+    assert_eq!(json, yaml, "the two surfaces must resolve identically");
+}
+
+/// A document `@base` still wins over the caller-supplied one (JSON-LD 1.1 precedence,
+/// matching Turtle's `@base` overriding the caller).
+#[test]
+fn a_jsonld_context_base_overrides_the_caller_base() {
+    let doc = "{\"@context\":{\"@base\":\"http://inner.example/\"},\
+               \"@id\":\"foo\",\"http://example.org/p\":{\"@id\":\"http://example.org/o\"}}";
+    let subject = only_subject(doc, "application/ld+json", Some("http://outer.example/"));
+    assert_eq!(subject, "http://inner.example/foo");
+}
+
+/// With NO base at all a relative `@id` is still refused — the fix resolves, it does not
+/// invent.
+#[test]
+fn jsonld_without_a_base_still_refuses_a_relative_id() {
+    let error = parse_dataset(
+        JSONLD_RELATIVE_SUBJECT.as_bytes(),
+        "application/ld+json",
+        None,
+    )
+    .expect_err("a relative @id with no base must fail");
+    assert_eq!(
+        error.code, "iri-relative-no-base",
+        "the refusal is the workspace-shared condition, not a JSON-LD-local spelling"
+    );
+    assert!(
+        error.message.contains("\"foo\""),
+        "the refusal names the reference verbatim: {}",
+        error.message
+    );
 }

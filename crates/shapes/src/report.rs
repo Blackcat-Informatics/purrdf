@@ -689,7 +689,7 @@ mod tests {
             ex:ThingShape a sh:NodeShape ;\n\
                 sh:targetClass ex:Thing ;\n\
                 sh:property [ sh:path ex:required ; sh:minCount 1 ] .\n";
-        let shapes = crate::engine::parse_shapes(shapes_ttl).expect("shapes must parse");
+        let shapes = crate::engine::parse_shapes(shapes_ttl, None).expect("shapes must parse");
 
         let report = crate::engine::validate_dataset(data.as_ref(), &shapes)
             .expect("validation over a well-formed dataset must not hard-fail");

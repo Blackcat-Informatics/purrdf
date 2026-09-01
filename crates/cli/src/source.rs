@@ -297,7 +297,7 @@ fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
 /// and the message names `--base`. A syntax whose grammar admits no relative reference
 /// gets no derived base either: it could not use one, and deriving it would only pay a
 /// `canonicalize` to hand over a value that is never read.
-fn effective_base(
+pub(crate) fn effective_base(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,

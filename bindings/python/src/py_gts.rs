@@ -372,6 +372,12 @@ fn statement_vocab_from_dict(vocab: &Bound<'_, PyDict>) -> PyResult<[String; 5]>
 /// quoted triples in the output). Without it, star features round-trip as
 /// RDF 1.2 N-Quads (`rdf:reifies` + quoted-triple terms) — PurRDF mints no
 /// default vocabulary, so no vocabulary terms are ever fabricated.
+///
+/// The base is `None` on both arms. This surface takes JSON-LD as a `str` from the
+/// caller's memory: there is no retrieval IRI to derive one from, and PurRDF never
+/// fabricates a base. A document that needs one declares it in its own `@context`
+/// `@base`; one that needs one and declares none is refused with `iri-relative-no-base`
+/// rather than resolved against something invented here.
 #[pyfunction]
 #[pyo3(signature = (text, *, statement_vocab=None))]
 fn from_json_ld(
@@ -393,12 +399,13 @@ fn from_json_ld(
             };
             return crate::native_codecs::jsonld::jsonld_to_statement_metadata_nquads(
                 text.as_bytes(),
+                None,
                 Some(&vocab),
             )
             .map(String::into_bytes)
             .map_err(|e| PyValueError::new_err(format!("json-ld-star downcast error: {e}")));
         }
-        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes())
+        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes(), None)
             .map_err(|e| PyValueError::new_err(format!("json-ld-star parse error: {e}")))?;
         crate::serialize_dataset(
             &dataset,

@@ -1424,7 +1424,7 @@ mod tests {
     /// Parse Turtle into a frozen dataset (the in-crate tests historically used an
     /// oxigraph store; the name is kept so the call sites stay stable).
     fn load_store(ttl: &str) -> Arc<RdfDataset> {
-        crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse error")
+        crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse error")
     }
 
     /// Parse shapes from a test dataset (shim over [`from_dataset`]).
@@ -1759,7 +1759,7 @@ mod tests {
         "#;
         let ttl = format!("{core_set}\n{shape}");
 
-        let shapes = crate::engine::parse_shapes(&ttl)
+        let shapes = crate::engine::parse_shapes(&ttl, None)
             .expect("sh:prefixes meta:CorePrefixes must resolve registry-only prefixes");
         let select = shapes
             .node_shapes

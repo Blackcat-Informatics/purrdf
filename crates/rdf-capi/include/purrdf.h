@@ -2257,11 +2257,20 @@ int32_t purrdf_serialize(const PurrdfDataset *dataset,
  * Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
  * the SARIF 2.1.0 report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
  *
+ * `shapes_base_iri` is the base IRI the SHAPES document's relative IRI references
+ * resolve against, and may be NULL. It is a real parameter and is read: a C host was
+ * handed a string and has no retrieval IRI, so PurRDF will not invent one, and NULL
+ * leaves a relative reference a hard `iri-relative-no-base` rather than a silent
+ * mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
+ * grammar, so a base there could only be ignored.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+ * `shapes_base_iri` must be null or a NUL-terminated C string;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
+                                       const char *shapes_base_iri,
                                        const char *data_nt,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
@@ -2271,11 +2280,17 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * materialized dataset (base graph plus every inferred triple) as canonical
  * N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
  *
+ * `shapes_base_iri` carries the same meaning it does on
+ * `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
+ * and read rather than accepted-and-dropped.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+ * `shapes_base_iri` must be null or a NUL-terminated C string;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
+                                        const char *shapes_base_iri,
                                         const char *data_nt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfError **out_error);

@@ -433,7 +433,11 @@ pub(super) fn normalize_lifted_jsonld(
     let json = serialize_dataset_to_jsonld(dataset).map_err(|error| {
         ProjectionError::integrity(format!("normalize lifted research-object JSON-LD: {error}"))
     })?;
-    parse_jsonld(json.as_bytes()).map_err(|error| {
+    // No base: this re-parses JSON-LD that `serialize_dataset_to_jsonld` produced from a
+    // frozen dataset one line above, and that serializer emits every IRI absolute. There
+    // is no relative reference for a base to resolve, and inventing one here would make a
+    // round trip depend on a value the round trip never saw.
+    parse_jsonld(json.as_bytes(), None).map_err(|error| {
         ProjectionError::integrity(format!("reparse lifted research-object JSON-LD: {error}"))
     })
 }

@@ -47,7 +47,7 @@ fn fixture(
             );
         }
     }
-    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&shapes_turtle)
+    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&shapes_turtle, None)
         .expect("benchmark shapes Turtle");
     let shapes = from_dataset(&shapes_dataset).expect("benchmark shapes graph");
 
@@ -72,7 +72,7 @@ fn fixture(
             }
         }
     }
-    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&ontology_turtle)
+    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&ontology_turtle, None)
         .expect("benchmark ontology Turtle");
     let namespaces = Namespaces::new(
         "ex",

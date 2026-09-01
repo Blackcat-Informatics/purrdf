@@ -221,7 +221,7 @@ mod tests {
     use super::*;
 
     fn load(ttl: &str) -> std::sync::Arc<RdfDataset> {
-        crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse")
+        crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse")
     }
 
     const PREFIXES_TTL: &str = r"

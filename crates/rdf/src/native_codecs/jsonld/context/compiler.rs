@@ -1544,6 +1544,21 @@ fn resolve_reference(
     {
         return Ok(reference.to_owned());
     }
+    // The absent base is NOT decided here. `BaseScope::empty()` already owns "a relative
+    // reference with no base in scope is `IriError::NoBase`", so re-deriving that
+    // decision locally would be a second copy of it free to drift — and it is the drift,
+    // not the wording, that let the identical mistake answer to `jsonld-context-invalid`
+    // here and `iri-relative-no-base` everywhere else, so a caller grepping for the
+    // shared code believed JSON-LD had no such failure mode.
+    //
+    // Routing the empty case through the scope also keeps its ordering: the reference is
+    // parsed FIRST, so a MALFORMED relative reference reports its own syntax error rather
+    // than being misreported as "no base", which would send the author off to add a
+    // `@base` that cannot help.
+    //
+    // Only resolution is shared. JSON-LD's own absolute-reference passthrough above stays
+    // deliberately outside it, because `BaseIri::resolve` dot-normalizes and the W3C
+    // JSON-LD vectors pin the verbatim form.
     let scope = match base {
         None => purrdf_iri::BaseScope::empty(),
         Some(base) => {
@@ -1896,13 +1911,19 @@ fn reject_iri_confused_with_prefix(active: &ActiveContext, iri: &str) -> Result<
 /// the one relativization algorithm in the workspace. Merge and dot-segment arithmetic
 /// live in `purrdf-iri` and nowhere else.
 ///
-/// Candidates are enumerated in the JSON-LD 1.1 §4.1.4 preference order — the
-/// same-document reference, then the fragment-only and query-only spellings, then the
-/// absolute path, and finally the shared layer's canonical relative path — and EVERY one
-/// is verified by re-resolving it with [`purrdf_iri::BaseIri::resolve`] and comparing byte
-/// for byte against the target. A candidate that does not reproduce the target is
-/// discarded rather than emitted, so a spelling can never denote a different resource
-/// than the IRI it replaces.
+/// The JSON-LD 1.1 §4.1.4 candidate spellings are all constructed — the same-document
+/// reference, the fragment-only and query-only spellings, the absolute path, and the
+/// shared layer's canonical relative path — and EVERY one is then verified by
+/// re-resolving it with [`purrdf_iri::BaseIri::resolve`] and comparing byte for byte
+/// against the target. A candidate that does not reproduce the target is discarded rather
+/// than emitted, so a spelling can never denote a different resource than the IRI it
+/// replaces.
+///
+/// The survivor is chosen by SHORTEST-then-lexical, deliberately not by construction
+/// order. The absolute-path candidate always verifies, so an order-of-enumeration choice
+/// would hand it the win every time and no relative path could ever be selected — which
+/// is the whole point of §4.1.4. Length-then-lexical is also total and construction-order
+/// independent, so the emitted bytes cannot drift if a candidate is ever added.
 ///
 /// `None` means no relative spelling round-trips (a different scheme or authority, or a
 /// target outside the base's dot-normalized image); the caller then emits the absolute
