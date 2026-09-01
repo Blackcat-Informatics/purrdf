@@ -98,7 +98,7 @@ mod fallible;
 mod governed;
 pub mod governor;
 mod list_fn;
-pub mod modifier;
+mod modifier;
 pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;

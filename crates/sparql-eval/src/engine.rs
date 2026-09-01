@@ -1854,7 +1854,7 @@ pub struct QueryOptions<'a> {
     ///
     /// `None` — the default — means no such function can be called: the call is
     /// refused rather than answered from a graph it never read (see
-    /// [`crate::user_fn::eval_expr_function`]). Every other function kind is
+    /// `user_fn::eval_expr_function`). Every other function kind is
     /// unaffected.
     ///
     /// Supplied per QUERY rather than captured once when the registry was built, and

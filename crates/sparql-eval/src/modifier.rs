@@ -621,7 +621,7 @@ fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
 /// solution rows.
 ///
 /// `ORDER BY` over a one-column input is a total order over TERM VALUES, and this
-/// exposes exactly that: the same [`SortKey`] precomputation, the same
+/// exposes exactly that: the same `SortKey` precomputation, the same
 /// unbound-first / blank < IRI < literal < triple kind ranking, the same
 /// value-space literal comparison with its deterministic `(datatype, language,
 /// lexical)` fallback, and the same componentwise ordering of RDF 1.2 triple

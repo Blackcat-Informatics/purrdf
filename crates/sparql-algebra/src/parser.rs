@@ -5083,7 +5083,7 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
 /// This is the name-to-function seam a host uses when a *name* (rather than
 /// query text) identifies a SPARQL function — SHACL 1.2 Node Expressions §5's
 /// `sparql:<NAME>` call form is the motivating caller. It answers from the very
-/// table [`builtin_function`] resolves the grammar with, so a name is callable
+/// table `builtin_function` resolves the grammar with, so a name is callable
 /// here exactly when the parser would accept the keyword, and the two can never
 /// drift apart into "the resolver claims a function the parser then rejects".
 ///

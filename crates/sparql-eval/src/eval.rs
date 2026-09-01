@@ -645,7 +645,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph).
     ///
     /// `None` — the default, and every ordinary query — means no such function can be
-    /// called: [`crate::user_fn::eval_expr_function`] refuses the call rather than
+    /// called: `user_fn::eval_expr_function` refuses the call rather than
     /// answering it from a graph it never read. It is deliberately NOT derived from
     /// [`Self::dataset`]: `D: DatasetView` carries an associated `Id` type, so a
     /// generic view cannot be erased behind a trait object, and a backend that has no
@@ -1837,7 +1837,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// A context without one cannot call such a function at all: the call is refused
     /// rather than answered from a graph it never read (see
-    /// [`crate::user_fn::eval_expr_function`]).
+    /// `user_fn::eval_expr_function`).
     #[must_use]
     pub fn with_focus_graph(mut self, graph: &'d Arc<RdfDataset>) -> Self {
         self.focus_graph = Some(graph);

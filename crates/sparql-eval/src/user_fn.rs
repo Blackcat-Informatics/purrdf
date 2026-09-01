@@ -37,7 +37,7 @@
 //!   the body is a node expression evaluated against a focus graph rather than a
 //!   SPARQL query. See [`ExprFnCall::focus_graph`] for why the graph is a concrete
 //!   [`Arc<RdfDataset>`] rather than the context's own `D: DatasetView` (which is not
-//!   object-safe — it carries an associated `Id` type), and [`eval_expr_function`] for
+//!   object-safe — it carries an associated `Id` type), and `eval_expr_function` for
 //!   the re-entrancy bound.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -196,7 +196,7 @@ pub struct ExprFnCall<'a> {
     /// a trait object. The frozen dataset IS the erased handle — every backend that
     /// can supply a focus graph supplies exactly this, and one that cannot supplies
     /// none, in which case the call never reaches a body at all (see
-    /// [`eval_expr_function`]).
+    /// `eval_expr_function`).
     ///
     /// It is supplied per QUERY, through
     /// [`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph), never captured

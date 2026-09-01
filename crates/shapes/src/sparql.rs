@@ -764,7 +764,7 @@ pub fn current_aggregates() -> Option<Arc<AggregateRegistry>> {
 ///
 /// Installed around every custom-function body evaluation, so a `sh:select` body
 /// inside that function starts its query at the depth the caller had reached rather
-/// than at zero. See [`CURRENT_CALL_DEPTH`] for why the counter has to survive the
+/// than at zero. See `CURRENT_CALL_DEPTH` for why the counter has to survive the
 /// trip out of this evaluator and back.
 #[must_use]
 #[derive(Debug)]
