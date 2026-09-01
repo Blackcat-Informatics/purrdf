@@ -72,9 +72,9 @@
 //!   fold over a [`TermValue`] of ANY kind (see each member's own doc
 //!   section above), gated by nothing numeric-specific — none of their
 //!   `step` implementations ever call `is_numeric_xsd`. `MODE`'s tie-break
-//!   and `TOPK`'s total order are both `crate::modifier::term_value_order`,
-//!   which already orders duration literals correctly (through
-//!   `literal_order`'s `parse_by_iri` + `value_cmp` path) — see the
+//!   and `TOPK`'s total order are both `crate::modifier`'s
+//!   `project`/`total_order` pair, which already orders duration literals
+//!   correctly (through its `parse_by_iri` + `value_cmp` path) — see the
 //!   ordering-policy paragraph below for the one difference between that
 //!   order and the one `MEDIAN`/`PERCENTILE` use.
 //! * `MEDIAN`/`PERCENTILE` (order statistics needing interpolation) widen
@@ -115,7 +115,7 @@
 //! (needed so duration pairs compare at all) keeps that SAME
 //! `.unwrap_or(Ordering::Equal)` policy unchanged — a deliberate
 //! CONSISTENCY choice, not the only possible one: `MIN`/`MAX`/`MODE`/`TOPK`
-//! (`crate::modifier::fold_extreme`/`term_value_order`) instead fall back to
+//! (`crate::modifier::fold_extreme`/`total_order`) instead fall back to
 //! a genuine total order (further tie-broken by `(datatype, language,
 //! lexical form)`), because THEIR existing policy, before durations, was
 //! already that total order, not "treat as equal" — each aggregate mirrors
@@ -162,7 +162,7 @@
 //! counted as two DIFFERENT terms, exactly as `DISTINCT`'s own dedup treats
 //! them). A tie among several terms with the same maximum count is broken by
 //! the smallest term under the SAME total order `MIN`/`ORDER BY` use
-//! (`crate::modifier::term_value_order`); a further tie (distinct terms
+//! (`crate::modifier::total_order`); a further tie (distinct terms
 //! that compare value-equal under that order, e.g. `"5"`/`"05"`) falls back to
 //! [`purrdf_core::TermValue`]'s own canonical structural order, so the choice
 //! is fully deterministic regardless of scan order.
@@ -307,7 +307,7 @@ use crate::agg_fn::{
 };
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::{is_numeric_xsd, lexical_of, term_value_order};
+use crate::modifier::{is_numeric_xsd, lexical_of, project, total_order};
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -975,7 +975,10 @@ impl AggregateAccumulator for ModeAccumulator {
                 Some((best_value, best_count)) => {
                     count > *best_count
                         || (count == *best_count
-                            && match term_value_order(&values[i], best_value) {
+                            && match total_order(
+                                &project(Some(&values[i])),
+                                &project(Some(best_value)),
+                            ) {
                                 Ordering::Less => true,
                                 Ordering::Greater => false,
                                 Ordering::Equal => values[i] < *best_value,
@@ -1166,7 +1169,7 @@ enum TopKState {
 }
 
 /// Insert `value` into the bounded top-`k` set, evicting the current smallest
-/// (under [`term_value_order`], natural [`TermValue`] `Ord` as final tie-break)
+/// (under [`total_order`], natural [`TermValue`] `Ord` as final tie-break)
 /// once the set exceeds `k` — keeps the accumulator's live state at `O(k)`
 /// elements at all times, never `O(group size)`.
 fn insert_bounded(values: &mut Vec<TermValue>, k: usize, value: TermValue) {
@@ -1177,7 +1180,8 @@ fn insert_bounded(values: &mut Vec<TermValue>, k: usize, value: TermValue) {
     if values.len() > k {
         let min_idx = (0..values.len())
             .min_by(|&a, &b| {
-                term_value_order(&values[a], &values[b]).then_with(|| values[a].cmp(&values[b]))
+                total_order(&project(Some(&values[a])), &project(Some(&values[b])))
+                    .then_with(|| values[a].cmp(&values[b]))
             })
             .expect("values is non-empty: just pushed one");
         values.remove(min_idx);
@@ -1249,8 +1253,10 @@ impl AggregateAccumulator for TopKAccumulator {
             return Ok(None);
         }
         let mut sorted = values;
-        // Descending: largest first — reverse-argument `term_value_order`/`Ord`.
-        sorted.sort_by(|a, b| term_value_order(b, a).then_with(|| b.cmp(a)));
+        // Descending: largest first — reverse-argument `total_order`/`Ord`.
+        sorted.sort_by(|a, b| {
+            total_order(&project(Some(b)), &project(Some(a))).then_with(|| b.cmp(a))
+        });
         let mut joined = String::new();
         for (i, v) in sorted.iter().enumerate() {
             let Some(lex) = lexical_of(v) else {
@@ -1837,7 +1843,7 @@ mod tests {
     }
 
     /// `TOPK` needed no code change to accept durations — its total order is
-    /// `crate::modifier::term_value_order`, which already orders duration
+    /// `crate::modifier::total_order`, which already orders duration
     /// literals correctly (see the module docs' "The `xsd:duration`
     /// extension" section).
     #[test]

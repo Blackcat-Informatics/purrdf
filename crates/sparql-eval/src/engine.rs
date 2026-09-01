@@ -4467,7 +4467,7 @@ mod tests {
     /// bound kind present) and `MAX` (descending) picks the triple term (the
     /// highest-ranked). See `crate::modifier`'s "Aggregate semantics" docs,
     /// `MIN`/`MAX` section, for the spec citation and why this crate's
-    /// `term_value_order` needs no change to match it.
+    /// `project`/`total_order` pair needs no change to match it.
     #[test]
     fn min_max_over_mixed_kind_group_follow_order_by_total_order() {
         let ds = numbers();
