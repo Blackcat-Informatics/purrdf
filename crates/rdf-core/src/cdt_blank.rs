@@ -87,7 +87,8 @@
 use std::borrow::Cow;
 
 use purrdf_cdt::{
-    CDT_LIST, CDT_MAP, CdtError, CdtTerm, CdtValue, MAX_NESTING_DEPTH, parse_cdt_by_iri,
+    CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, MAX_NESTING_DEPTH,
+    parse_cdt_by_iri,
 };
 
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
@@ -547,9 +548,9 @@ fn walk_value(value: &CdtValue, out: &mut Vec<String>, embedded: &mut Vec<(Strin
 /// never a blank node (`CdtKey` makes that unrepresentable), so only values are
 /// visited.
 fn push_children<'a>(stack: &mut Vec<&'a CdtTerm>, value: &'a CdtValue) {
-    match value {
-        CdtValue::List(items) => stack.extend(items.iter()),
-        CdtValue::Map(entries) => stack.extend(entries.iter().map(|entry| &entry.value)),
+    match value.contents() {
+        CdtContents::List(items) => stack.extend(items.iter()),
+        CdtContents::Map(entries) => stack.extend(entries.iter().map(|entry| &entry.value)),
     }
 }
 
