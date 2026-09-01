@@ -436,12 +436,16 @@ fn pack_input_is_reconstructed_and_reasoned() {
     );
 }
 
-/// `--base` resolves relative IRIs on parse and relativizes them on serialize; the
-/// native pack container stores fully-resolved terms and has no relative-IRI syntax,
-/// so `--base` combined with a pack `--from`/`--to` would otherwise be accepted by
-/// clap and silently do nothing (`source::load_dataset`'s and `sink::write_rdf`'s
-/// pack arms never read the base they are handed) — refused by name instead, on both
-/// sides.
+/// `--base` resolves relative IRIs on parse and is written as the document base — and
+/// relativized against — on serialize. It is refused by name exactly when NEITHER leg can
+/// spend it: the native pack container stores fully-resolved terms and has no relative-IRI
+/// syntax in either direction (`source::load_dataset`'s and `sink::write_rdf`'s pack arms
+/// never read the base they are handed), so a pack on BOTH ends, or a pack paired with a
+/// syntax that admits no relative IRI, would otherwise be accepted by clap and silently do
+/// nothing.
+///
+/// A pack `--to` beside a TURTLE `--from` is NOT refused: the parse leg spends the base
+/// there, and refusing it would reject a flag doing real work.
 #[test]
 fn base_with_pack_from_or_to_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -484,7 +488,39 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         stderr(&o)
     );
 
+    // A pack `--to` with a source that admits no relative IRI either: nothing can spend the
+    // base, so it is refused by name.
+    let nt = write_file(
+        dir,
+        "sub.nt",
+        "<http://example.org/s> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.org/Dog> .\n",
+    );
     let out_pack = path(dir, "out2.purrpck");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        &nt,
+        &out_pack,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --to target and an N-Triples source must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+
+    // The same pack `--to` with the TURTLE source is honoured: the parse leg spends it.
+    let out_pack = path(dir, "out3.purrpck");
     let o = run(&[
         "reason",
         "--regime",
@@ -497,13 +533,8 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         &out_pack,
     ]);
     assert!(
-        !o.status.success(),
-        "--base with a pack --to target must be refused"
-    );
-    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
-    assert!(
-        stderr(&o).contains("--base"),
-        "the refusal must name --base: {}",
+        o.status.success(),
+        "a base the parse leg spends must not be refused: {}",
         stderr(&o)
     );
 }

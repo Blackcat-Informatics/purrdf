@@ -114,8 +114,15 @@ pub(crate) fn run(
     // unresolvable OUT fails fast rather than after the description has been extracted.
     let source_format = format::resolve(options.from, options.input)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
-    format::refuse_base_with_container(source_format, options.base, "the --from source")?;
-    format::refuse_base_with_container(target_format, options.base, "the --to target")?;
+    // `--base` has two legs here — the source parse and the description's serialization —
+    // and is refused only when NEITHER can spend it.
+    format::refuse_unconsumable_base(
+        options.base,
+        &[
+            format::BaseUse::parse(source_format, "the --from source"),
+            format::BaseUse::serialize(target_format, "the --to target"),
+        ],
+    )?;
     sink::validate_jsonld_options(target_format, options.jsonld_options)?;
 
     let description = source::run_over_input(

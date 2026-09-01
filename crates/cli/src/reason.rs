@@ -174,8 +174,15 @@ pub(crate) fn run(
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve_target(to, output, "the --to target")?;
-    format::refuse_base_with_container(source_format, base, "the --from source")?;
-    format::refuse_base_with_container(target_format, base, "the --to target")?;
+    // `--base` has two legs here — the source parse and the closure's serialization — and
+    // is refused only when NEITHER can spend it.
+    format::refuse_unconsumable_base(
+        base,
+        &[
+            format::BaseUse::parse(source_format, "the --from source"),
+            format::BaseUse::serialize(target_format, "the --to target"),
+        ],
+    )?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,

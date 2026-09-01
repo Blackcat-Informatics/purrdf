@@ -299,6 +299,91 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
     assert!(turtle.contains("https://example.org/s"));
 }
 
+/// `lift --base` is refused by name on a `--to` that can express no base directive, and
+/// `project --base` on a `--from` whose grammar admits no relative IRI.
+///
+/// Each has exactly ONE leg — `lift` serializes and never parses RDF, `project` parses and
+/// writes a carrier archive — so when that leg cannot take the base there is nowhere else
+/// for it to go, and accepting it would be a flag read by nothing.
+#[test]
+fn a_base_neither_leg_can_spend_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("input.ttl"), TURTLE);
+    let config = write(&dir.path().join("config.json"), lpg_config());
+    let archive = dir.path().join("carrier.tar");
+    let archive_path = archive.to_str().expect("archive path");
+
+    let projected = run(&[
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        &input,
+        archive_path,
+    ]);
+    assert!(
+        projected.status.success(),
+        "seeding the carrier archive must succeed: {}",
+        String::from_utf8_lossy(&projected.stderr)
+    );
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--to",
+        "ntriples",
+        "--base",
+        "https://example.org/",
+        archive_path,
+        "-",
+    ]);
+    assert_eq!(
+        lifted.status.code(),
+        Some(2),
+        "lift --to ntriples --base must be a usage error: {}",
+        String::from_utf8_lossy(&lifted.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&lifted.stderr);
+    assert!(
+        stderr.contains("--base has no effect") && stderr.contains("the --to output"),
+        "the refusal names the flag and the leg: {stderr}"
+    );
+
+    // `project` from an N-Triples source: the parse leg cannot resolve a relative IRI, and
+    // a carrier archive has no base to write.
+    let ntriples = write(
+        &dir.path().join("input.nt"),
+        b"<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n",
+    );
+    let out = dir.path().join("out.tar");
+    let projected = run(&[
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--base",
+        "https://example.org/",
+        &ntriples,
+        out.to_str().expect("out path"),
+    ]);
+    assert_eq!(
+        projected.status.code(),
+        Some(2),
+        "project --from ntriples --base must be a usage error: {}",
+        String::from_utf8_lossy(&projected.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&projected.stderr);
+    assert!(
+        stderr.contains("--base has no effect") && stderr.contains("the --from source"),
+        "the refusal names the flag and the leg: {stderr}"
+    );
+}
+
 /// `lift --base` is a SERIALIZER base, and the help now says exactly that — so the claim is
 /// backed by an executable check rather than by prose.
 ///
