@@ -16,3 +16,17 @@ __pycache__/
 .goals
 .baseline
 .agents
+
+# coding-ethos generated runtime output
+.claude/settings.local.json
+.coding-ethos/cache/
+.coding-ethos/code-intel-v2/
+.coding-ethos/code-intel.duckdb
+.coding-ethos/code-intel.duckdb.wal
+.coding-ethos/events/
+.coding-ethos/hook-runs/
+.coding-ethos/lint-runs/
+.coding-ethos/prune-runs/
+.coding-ethos/state/
+.gemini/settings.json
+.mcp.json
