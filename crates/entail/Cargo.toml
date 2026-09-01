@@ -44,6 +44,12 @@ purrdf-datalog = { workspace = true }
 # transitive dependency of every artifact that ships this crate, so the edge costs
 # essentially nothing, and it stays wasm32-unknown-unknown-clean.
 purrdf-xsd = { workspace = true }
+# The IRI value space. RIF-in-XML is an XML dialect, so `xml:base` governs its
+# IRI-valued attributes and element content exactly as it governs RDF/XML; the RIF
+# parser carries `BaseScope` down the element walk and resolves through it rather than
+# growing a second copy of RFC-3986 §5.2. Zero-dependency, wasm32-unknown-unknown-clean
+# foundation crate, already a transitive dependency through purrdf-core.
+purrdf-iri = { workspace = true }
 roxmltree = { workspace = true }
 # The content digest a justification is IDENTIFIED by. PurRDF mints no vocabulary, so a
 # derivation is not named by a fabricated IRI: it is addressed by BLAKE3 over the canonical
