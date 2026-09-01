@@ -329,7 +329,14 @@ use sha2::{Digest, Sha256};
 
 use crate::error::EvalError;
 use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
+use crate::statement_layer::{self, StatementProbe};
 use crate::user_fn::Volatility;
+
+/// `rdf:reifies` — the RDF 1.2 indirection edge from a reifier resource to the triple term
+/// it reifies. A well-known RDF vocabulary IRI (PurRDF mints none of its own); it is named
+/// here only to decide whether a step alternative can draw edges from the reifier
+/// side-table at all, since every row of that table carries exactly this predicate.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 // ---------------------------------------------------------------------------
 // The step definition
@@ -685,6 +692,25 @@ impl PathGraph {
     /// that wants the traversal direction back reads it off the statement by comparing
     /// its subject to the node the hop left.
     ///
+    /// # The RDF 1.2 statement layer is edge data too
+    ///
+    /// Reifiers and statement annotations do NOT live in the quad table, so the scan above
+    /// cannot see them. Each alternative therefore ALSO drives the same probe through
+    /// [`crate::statement_layer`], which yields the two side-tables as the virtual triples
+    /// they denote — `(reifier, rdf:reifies, <<triple>>)` and
+    /// `(reifier, annotationPredicate, annotationObject)` — under the same graph scope and
+    /// the same predicate equality. The two layers are disjoint, so the rows are strictly
+    /// additive and no edge is recorded twice.
+    ///
+    /// This is not a completeness nicety. Omitting it makes a step over `rdf:reifies` — or
+    /// over any annotation predicate — snapshot ZERO edges and then answer every query
+    /// with zero rows, reported complete and with no diagnostic: the predicate passes the
+    /// interning check below (the builder interns `rdf:reifies` whenever a reifier is
+    /// pushed, and an annotation's predicate is in the term table by construction), finds
+    /// nothing in `quads`, and the emptiness is indistinguishable from an honest one. The
+    /// two layers form ONE traversable graph, and a walk crosses between them mid-route
+    /// wherever the data does.
+    ///
     /// # Errors
     ///
     /// [`EvalError::Data`] if a declared alternative's predicate IRI is not interned in
@@ -715,9 +741,10 @@ impl PathGraph {
                      empty adjacency"
                 )));
             };
-            for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
-                let subject = crate::scratch::term_id_to_value(dataset, quad.s);
-                let object = crate::scratch::term_id_to_value(dataset, quad.o);
+            // One recording rule for both layers: whichever table a `(subject, object)`
+            // pair came out of, the statement is the asserted triple and the direction
+            // decides which end the hop arrives at.
+            let mut record = |subject: TermValue, object: TermValue| {
                 let statement = TermValue::Triple {
                     s: Box::new(subject.clone()),
                     p: Box::new(predicate.clone()),
@@ -728,7 +755,33 @@ impl PathGraph {
                     PathDirection::Inverse => (object, subject),
                 };
                 raw.push((from, to, statement));
+            };
+            for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
+                record(
+                    crate::scratch::term_id_to_value(dataset, quad.s),
+                    crate::scratch::term_id_to_value(dataset, quad.o),
+                );
             }
+            // The statement layer, under the same probe. The reifier table is worth
+            // touching only when this alternative's predicate IS `rdf:reifies`, since
+            // every reifier row carries exactly that predicate; the annotation table is
+            // always narrowed by the predicate residually.
+            statement_layer::visit_quads(
+                dataset,
+                StatementProbe {
+                    s: None,
+                    p: Some(predicate_id),
+                    o: None,
+                    graph,
+                    scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
+                },
+                |quad| {
+                    record(
+                        crate::scratch::term_id_to_value(dataset, quad.s),
+                        crate::scratch::term_id_to_value(dataset, quad.o),
+                    );
+                },
+            );
         }
 
         let mut nodes: Vec<TermValue> = Vec::with_capacity(raw.len() * 2);

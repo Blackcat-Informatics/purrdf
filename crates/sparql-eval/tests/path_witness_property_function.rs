@@ -1276,3 +1276,155 @@ fn a19_the_expansion_budget_fails_a_fruitless_search_rather_than_answering_empty
         error.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// A20/A21 — the RDF 1.2 statement layer is edge data, not a separate world
+// ---------------------------------------------------------------------------
+
+/// `rdf:reifies` is a traversable predicate, so a statement term walks to its reifier.
+///
+/// The reifier side-table is NOT in the quad table. A snapshot that read only
+/// `quads_for_pattern` would find no edges for this step, build a zero-node graph, and
+/// then answer every query over it with zero rows, complete and undiagnosed — the exact
+/// silent emptiness A5 exists to forbid, reached through the RDF 1.2 layer this relation
+/// advertises as first class. `rdf:reifies` is always interned by the builder when a
+/// reifier is pushed, so the step would not even fail the "is this predicate known"
+/// check on its way to answering nothing.
+///
+/// The step is `Inverse`, so the walk runs from the reified STATEMENT to the reifier
+/// resource that names it — the direction a consumer asking "what is said about this
+/// hop" actually travels.
+#[test]
+fn a20_a_step_over_rdf_reifies_walks_a_statement_to_its_reifier() {
+    let mut builder = RdfDatasetBuilder::new();
+    let a = builder.intern_iri(&format!("{EX}a"));
+    let b = builder.intern_iri(&format!("{EX}b"));
+    let c = builder.intern_iri(&format!("{EX}c"));
+    let d = builder.intern_iri(&format!("{EX}d"));
+    let p = builder.intern_iri(&format!("{EX}p"));
+    let r1 = builder.intern_iri(&format!("{EX}r1"));
+    let r2 = builder.intern_iri(&format!("{EX}r2"));
+    builder.push_quad(a, p, b, None);
+    builder.push_quad(c, p, d, None);
+    let ab = builder.intern_triple(a, p, b);
+    let cd = builder.intern_triple(c, p, d);
+    builder.push_reifier(r1, ab);
+    builder.push_reifier(r2, cd);
+    let data = builder.freeze().expect("the fixture freezes");
+
+    let step = PathStep::new(vec![(TermValue::iri(RDF_REIFIES), PathDirection::Inverse)])
+        .expect("a well-formed step");
+    let graph = Arc::new(
+        PathGraph::from_dataset(&*data, &step, GraphMatch::Default).expect("the snapshot builds"),
+    );
+    assert_eq!(
+        graph.edge_count(),
+        2,
+        "both reifier bindings are edges of the snapshot"
+    );
+    let registry = walk_registry(graph, limits(1, 1));
+
+    let answers = solve(
+        &data,
+        &q("SELECT ?start ?end ?len ?step ?node ?edge WHERE { \
+            ?start <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
+            } ORDER BY ?end"),
+        &registry,
+    );
+
+    // The traversed statement is the reifier row itself, in asserted orientation:
+    // `ex:rN rdf:reifies <<( s p o )>>`.
+    let reifies_stmt = |reifier: &str, reified: TermValue| TermValue::Triple {
+        s: Box::new(iri(reifier)),
+        p: Box::new(TermValue::iri(RDF_REIFIES)),
+        o: Box::new(reified),
+    };
+    assert_eq!(
+        answers.project(&["start", "end", "len", "step", "node", "edge"]),
+        vec![
+            vec![
+                stmt("a", "p", "b"),
+                iri("r1"),
+                int(1),
+                int(1),
+                iri("r1"),
+                reifies_stmt("r1", stmt("a", "p", "b")),
+            ],
+            vec![
+                stmt("c", "p", "d"),
+                iri("r2"),
+                int(1),
+                int(1),
+                iri("r2"),
+                reifies_stmt("r2", stmt("c", "p", "d")),
+            ],
+        ],
+        "one hop per reifier binding, the statement term as the seed"
+    );
+}
+
+/// An annotation predicate is a traversable predicate, and the two layers form ONE graph.
+///
+/// `ex:source` here names both an RDF 1.2 statement annotation (`ex:r1 ex:source ex:doc1`,
+/// which lives in the annotation side-table) and an ordinary asserted quad
+/// (`ex:doc1 ex:source ex:doc2`, which lives in the quad table). A single step over
+/// `ex:source` must traverse BOTH, because they are both `ex:source` edges of the data —
+/// so the two-hop walk `ex:r1 → ex:doc1 → ex:doc2` exists and crosses the layer boundary
+/// mid-walk. A snapshot blind to the side-table would answer this with the single quad
+/// edge, reachable from no seed the query asks about, and so with zero rows.
+#[test]
+fn a21_a_step_over_an_annotation_predicate_crosses_both_layers_in_one_walk() {
+    let mut builder = RdfDatasetBuilder::new();
+    let a = builder.intern_iri(&format!("{EX}a"));
+    let b = builder.intern_iri(&format!("{EX}b"));
+    let p = builder.intern_iri(&format!("{EX}p"));
+    let source = builder.intern_iri(&format!("{EX}source"));
+    let r1 = builder.intern_iri(&format!("{EX}r1"));
+    let doc1 = builder.intern_iri(&format!("{EX}doc1"));
+    let doc2 = builder.intern_iri(&format!("{EX}doc2"));
+    builder.push_quad(a, p, b, None);
+    // The asserted half of the `ex:source` relation.
+    builder.push_quad(doc1, source, doc2, None);
+    // The statement-layer half: a reifier for `<<ex:a ex:p ex:b>>`, annotated with the
+    // very same predicate.
+    let ab = builder.intern_triple(a, p, b);
+    builder.push_reifier(r1, ab);
+    builder.push_annotation(r1, source, doc1);
+    let data = builder.freeze().expect("the fixture freezes");
+
+    let graph = snapshot(&data, &[("source", PathDirection::Forward)]);
+    assert_eq!(
+        graph.edge_count(),
+        2,
+        "one annotation edge and one asserted edge, in one snapshot"
+    );
+    let registry = walk_registry(graph, limits(1, 2));
+
+    let answers = solve(
+        &data,
+        &q("SELECT ?end ?len ?step ?node ?edge WHERE { \
+            ex:r1 <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
+            } ORDER BY ?len ?step"),
+        &registry,
+    );
+
+    let annotation_edge = stmt("r1", "source", "doc1");
+    let asserted_edge = stmt("doc1", "source", "doc2");
+    assert_eq!(
+        answers.project(&["end", "len", "step", "node", "edge"]),
+        vec![
+            // The one-hop walk that exists only in the annotation side-table.
+            vec![
+                iri("doc1"),
+                int(1),
+                int(1),
+                iri("doc1"),
+                annotation_edge.clone()
+            ],
+            // ...and its extension through an ordinary asserted quad.
+            vec![iri("doc2"), int(2), int(1), iri("doc1"), annotation_edge],
+            vec![iri("doc2"), int(2), int(2), iri("doc2"), asserted_edge],
+        ],
+        "the annotation edge and the asserted edge are one graph"
+    );
+}

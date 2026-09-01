@@ -116,6 +116,7 @@ mod row_ingest;
 pub mod scratch;
 pub mod solution;
 pub mod stat_agg;
+mod statement_layer;
 mod substitute;
 mod template;
 pub mod update;
