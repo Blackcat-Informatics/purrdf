@@ -145,10 +145,15 @@ pub(super) enum LineParseMode {
 /// on every earlier directive) and anonymous blank nodes / reifiers mint labels from a
 /// document-ordered counter, so a chunk cannot be parsed without the full prefix and
 /// counter state of everything before it.
+/// `base` is `&mut` because Turtle and TriG can MOVE it: `@base` / `BASE` rebinds the
+/// base for the rest of the document, so on return the scope holds the base actually in
+/// force at the END of the document — which is what the parse leg reports to its caller.
+/// N-Triples / N-Quads have no base directive and leave it untouched, so the answer there
+/// is the caller's base without those grammars having to say anything.
 pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
-    base: &BaseScope,
+    base: &mut BaseScope,
     mode: LineParseMode,
     collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
@@ -158,8 +163,8 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
         // arm matches the `admits_relative_iri = false` column for those two rows.
         NativeRdfFormat::NTriples => parse_lines(text, false, mode, collector)?,
         NativeRdfFormat::NQuads => parse_lines(text, true, mode, collector)?,
-        NativeRdfFormat::Turtle => DocParser::new(text, base.clone(), false, collector).parse()?,
-        NativeRdfFormat::TriG => DocParser::new(text, base.clone(), true, collector).parse()?,
+        NativeRdfFormat::Turtle => document_statements(text, base, false, collector)?,
+        NativeRdfFormat::TriG => document_statements(text, base, true, collector)?,
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
@@ -173,6 +178,25 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
         }
     };
     build_gts_graph(&statements)
+}
+
+/// Run the Turtle/TriG document parser over `text`, leaving `base` holding the base in
+/// force at the end of the document.
+///
+/// The write-back is the whole point: `@base` rebinding is document state, and a parser
+/// that swallowed it would leave the caller unable to re-serialize under the base the
+/// document itself declared without re-reading the text by hand. On an ERROR the scope is
+/// deliberately left untouched — a document that failed to parse declared nothing.
+fn document_statements<S: SpanCollector>(
+    text: &str,
+    base: &mut BaseScope,
+    allow_named_graphs: bool,
+    collector: &mut S,
+) -> Result<Vec<Statement>, RdfDiagnostic> {
+    let mut parser = DocParser::new(text, base.clone(), allow_named_graphs, collector);
+    let statements = parser.parse()?;
+    *base = parser.base;
+    Ok(statements)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -872,7 +896,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             .unwrap_or(0)
     }
 
-    fn parse(mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
+    /// Takes `&mut self` rather than `self` so the caller keeps the parser afterwards and
+    /// can read the [`base`](Self::base) the document's `@base` directives left in force.
+    fn parse(&mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
         // Turtle/TriG admit a bare `/` in a prefixed-name local part (e.g.
         // `purrdf:report/shacl/sarif`), matching oxigraph/purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
@@ -922,7 +948,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 self.statement_after_subject(&first, None)?;
             }
         }
-        Ok(self.statements)
+        Ok(std::mem::take(&mut self.statements))
     }
 
     /// Consume a `@prefix`/`@base`/`@version` or `PREFIX`/`BASE`/`VERSION` directive

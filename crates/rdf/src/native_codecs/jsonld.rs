@@ -232,10 +232,10 @@ impl RdfCodec for JsonLdCodec {
     fn parse(
         &self,
         text: &str,
-        base: &purrdf_iri::BaseScope,
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        parse_jsonld(text.as_bytes(), scope_base(base))
+        parse_jsonld_into_scope(text.as_bytes(), base)
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -265,11 +265,11 @@ impl RdfCodec for YamlLdCodec {
     fn parse(
         &self,
         text: &str,
-        base: &purrdf_iri::BaseScope,
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let json = yamlld_to_jsonld(text.as_bytes())?;
-        parse_jsonld(json.as_bytes(), scope_base(base))
+        parse_jsonld_into_scope(json.as_bytes(), base)
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -1684,8 +1684,46 @@ pub fn parse_jsonld(
     json_bytes: &[u8],
     base: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context = CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), base)?;
-    parse_jsonld_with_context(json_bytes, &context)
+    let mut scope = super::parse::base_scope_for(base)?;
+    parse_jsonld_into_scope(json_bytes, &mut scope)
+}
+
+/// [`parse_jsonld`] against a live [`BaseScope`], leaving it holding the base in force at
+/// the END of the document.
+///
+/// This is the ONE JSON-LD parse body; [`parse_jsonld`] is the `Option<&str>` convenience
+/// over it, not a second path. The write-back is what lets the parse leg answer "what base
+/// did this document end up under?" — a document's `@context` `@base` can establish one,
+/// replace the caller's, or (`null`) clear it, and all three now reach the caller instead
+/// of dying inside the expander.
+pub(super) fn parse_jsonld_into_scope(
+    json_bytes: &[u8],
+    base: &mut purrdf_iri::BaseScope,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let context =
+        CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), scope_base(base))?;
+    let value = context::parse_document(json_bytes)?;
+    let in_force = expand::document_base(&value, &context)?;
+    let dataset = expand_to_dataset(&value, &context)?;
+    // Only a document that MOVED the base rewrites the scope. When the two agree, the
+    // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
+    // truthful one; overwriting it would claim the document said something it did not.
+    if in_force.as_deref() != scope_base(base) {
+        match in_force {
+            // `BaseOrigin::Enclosing` is the JSON-LD context frame — serde_json carries no
+            // source position, so `Directive { line, column }` could only be invented.
+            Some(iri) => base
+                .rebind(&iri, purrdf_iri::BaseOrigin::Enclosing)
+                .map_err(|source| {
+                    RdfDiagnostic::error(
+                        source.diagnostic_code(),
+                        format!("invalid JSON-LD document base `{iri}`: {source}"),
+                    )
+                })?,
+            None => *base = purrdf_iri::BaseScope::empty(),
+        }
+    }
+    Ok(dataset)
 }
 
 /// Parse JSON-LD-star bytes through a reusable compiled active context.
@@ -1699,7 +1737,18 @@ pub fn parse_jsonld_with_context(
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let value = context::parse_document(json_bytes)?;
-    let carrier = expand::expand_document(&value, context)?;
+    expand_to_dataset(&value, context)
+}
+
+/// Expand a parsed JSON-LD value under `context` and lower it into the frozen IR.
+///
+/// The single expansion body both public parse entry points and the codec seam share, so
+/// the base-reporting path cannot expand a document differently from the base-less one.
+fn expand_to_dataset(
+    value: &Value,
+    context: &CompiledJsonLdContext,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let carrier = expand::expand_document(value, context)?;
     expand::carrier_to_dataset(&carrier)
 }
 

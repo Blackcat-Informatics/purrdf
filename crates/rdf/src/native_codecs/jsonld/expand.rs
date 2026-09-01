@@ -41,6 +41,42 @@ pub(super) fn expand_document(
     Ok(builder.finish())
 }
 
+/// The base in force at the END of `document`.
+///
+/// A JSON-LD document moves the base with its own top-level `@context` `@base`, which may
+/// establish one, replace the caller's, or (with `null`) clear it — all three are answers
+/// the parse leg has to be able to report, and `None` here means "no base in force", never
+/// "not asked".
+///
+/// This asks the SAME [`object_context`] the expander applies, not a second reading of
+/// `@base`, so the answer cannot drift from the base expansion actually resolved against;
+/// and it only pays for that application when the document really carries a top-level
+/// `@context` (`@context` is the one JSON-LD keyword that cannot be aliased, so the key
+/// test is exact). Nested contexts are deliberately out of reach: a `@context` inside a
+/// `@graph` member governs that member, never the document.
+pub(super) fn document_base(
+    document: &JsonValue,
+    context: &CompiledJsonLdContext,
+) -> Result<Option<String>, RdfDiagnostic> {
+    let entries: &[JsonValue] = match document {
+        JsonValue::Array(entries) => entries,
+        other => std::slice::from_ref(other),
+    };
+    let mut base = context.base_iri().map(str::to_owned);
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        if !object.contains_key("@context") {
+            continue;
+        }
+        base = object_context(context, object)?
+            .base_iri()
+            .map(str::to_owned);
+    }
+    Ok(base)
+}
+
 pub(super) fn carrier_to_dataset(document: &Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut lowerer = Lowerer::new(document);
     for node in &document.default_nodes {

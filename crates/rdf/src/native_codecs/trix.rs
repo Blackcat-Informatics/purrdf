@@ -40,7 +40,10 @@ impl RdfCodec for TriXCodec {
     fn parse(
         &self,
         text: &str,
-        _base: &purrdf_iri::BaseScope,
+        // TriX has no base directive, so the scope is left EXACTLY as handed in: the base
+        // in force at the end of a TriX document is the caller's, and this codec says so
+        // by touching nothing.
+        _base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text))
