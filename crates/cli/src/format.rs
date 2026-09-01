@@ -28,6 +28,21 @@
 //! COMPRESS: a `--to` target named `out.nt.gz` would be inferred as N-Triples and then
 //! written as plain N-Triples under a name promising gzip. [`refuse_transport_target`]
 //! refuses that by name rather than emitting a file whose name lies about its bytes.
+//!
+//! ## `--base` has two legs, and is refused when neither can take it
+//!
+//! A base is spent in exactly two places, and each is a column of the format registry: on
+//! PARSE a relative IRI reference resolves against it (`admits_relative_iri`), and on
+//! SERIALIZE it is written as the output document's base directive and relativized against
+//! (`emits_base`). Both are live — Turtle, TriG, RDF/XML, JSON-LD and YAML-LD carry a base
+//! either way; N-Triples, N-Quads, TriX, HexTuples and both native containers carry it
+//! neither way.
+//!
+//! [`refuse_unconsumable_base`] is the one decision that reads those two columns, over the
+//! legs a subcommand actually has. A base ANY leg can spend is honoured (so `--base X --to
+//! ntriples` still resolves the input); a base NO leg can spend is a usage error naming
+//! each leg and why it cannot take the value, rather than a parameter accepted and never
+//! read.
 
 use std::path::Path;
 
@@ -248,9 +263,9 @@ impl<'a> BaseUse<'a> {
 /// base consumed by ANY ONE of them is honoured, which is what keeps `--base X --to
 /// ntriples` working from a relative-admitting source.
 ///
-/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text,
-/// a ShEx schema, a shape map) has a leg this list cannot name and does not call this: for
-/// those the base is never inert.
+/// A subcommand whose base ALSO reaches a non-RDF consumer (a SPARQL query or update text, a
+/// shape map) has a leg this list cannot name and does not call this: for those the base is
+/// never inert, whatever the RDF legs' rows say.
 pub(crate) fn refuse_unconsumable_base(
     base: Option<&str>,
     legs: &[BaseUse<'_>],
@@ -278,22 +293,4 @@ fn base_carrying_syntaxes() -> String {
         .map(purrdf_rdf::NativeRdfFormat::id)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Refuse `--base` when it is paired with a CONTAINER format.
-///
-/// The container case of [`refuse_unconsumable_base`], sharing its predicate and its
-/// message, for the one lane whose base has a consumer no [`BaseUse`] can name: `shex`
-/// resolves relative IRIs in the SCHEMA and the SHAPE MAP as well as in the data graph, so
-/// the data source's syntax alone never makes the base inert. A container source still
-/// does — it stores fully-resolved terms — and that is exactly what this refuses.
-pub(crate) fn refuse_base_with_container(
-    format: SourceFormat,
-    base: Option<&str>,
-    role: &str,
-) -> Result<(), CliError> {
-    if format.is_container() {
-        return refuse_unconsumable_base(base, &[BaseUse::parse(format, role)]);
-    }
-    Ok(())
 }

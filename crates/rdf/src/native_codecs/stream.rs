@@ -113,31 +113,39 @@ pub fn parse_dataset_from_reader<R: Read>(
             .map_err(|error| read_error(&error))?;
         return super::parse_dataset(&bytes, media_type, base_iri);
     }
+    // The caller's base reaches the streaming lane too. Every line-oriented grammar here
+    // admits NO relative reference, so the base is never applied — but a refusal that
+    // cannot see it can only say "no base IRI is in scope", which is false for a caller
+    // who supplied one. The scope is built through the SAME `base_scope_for` the buffered
+    // lane uses, so an invalid base is refused identically on both.
+    let base = super::parse::base_scope_for(base_iri)?;
     // Panic-guarded like every other codec entry point, so a codec unwind becomes a
     // structured diagnostic rather than tearing down the caller.
-    catch_unwind(AssertUnwindSafe(|| stream_line_format(reader, format))).unwrap_or_else(
-        |payload| {
-            Err(RdfDiagnostic::error(
-                "native-codec-panic",
-                format!(
-                    "native RDF text parser panicked while streaming {}: {}",
-                    format.media_type(),
-                    super::parse::panic_payload_message(payload.as_ref()),
-                ),
-            ))
-        },
-    )
+    catch_unwind(AssertUnwindSafe(|| {
+        stream_line_format(reader, format, base)
+    }))
+    .unwrap_or_else(|payload| {
+        Err(RdfDiagnostic::error(
+            "native-codec-panic",
+            format!(
+                "native RDF text parser panicked while streaming {}: {}",
+                format.media_type(),
+                super::parse::panic_payload_message(payload.as_ref()),
+            ),
+        ))
+    })
 }
 
 /// Drive one line-oriented format's streaming parser to exhaustion.
 fn stream_line_format<R: Read>(
     reader: R,
     format: NativeRdfFormat,
+    base: purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut lines = LineReader::new(reader);
     match format {
         NativeRdfFormat::HexTuples => {
-            let mut parser = HexTuplesStreamParser::new();
+            let mut parser = HexTuplesStreamParser::new(base);
             while let Some(line) = lines.next_line()? {
                 parser.push_line(line)?;
             }
@@ -146,7 +154,7 @@ fn stream_line_format<R: Read>(
         // N-Triples / N-Quads: `LineStreamParser::new` re-checks the format and rejects
         // anything else, so the line family cannot be entered by the wrong door.
         other => {
-            let mut parser = LineStreamParser::new(other)?;
+            let mut parser = LineStreamParser::new(other, base)?;
             while let Some(line) = lines.next_line()? {
                 parser.push_line(line)?;
             }

@@ -96,15 +96,22 @@
 //! rebind `@prefix` / `@base` mid-document, and RDF/XML, TriX, JSON-LD and YAML-LD are
 //! tree syntaxes with no line structure. Those take [`read_bytes`] exactly as before.
 //!
-//! ## The retrieval IRI is derived for EVERY platform
+//! ## The retrieval IRI is derived ONCE, for every platform, and not here
 //!
 //! [`retrieval_base_iri`] turns a filesystem path into the RFC-8089 `file://` IRI RFC-3986
-//! §5.1.3 makes the base of last resort. A POSIX path is already an IRI path, so it is
-//! percent-encoded and used verbatim; a Windows path is a different language and is
+//! §5.1.3 makes the base of last resort — but it does not IMPLEMENT that turn. The
+//! derivation is `purrdf::slice::retrieval_base_iri`, the workspace's single
+//! implementation, shared with the slice catalogue and the SHACL shape-union loader, which
+//! read their own on-disk documents through the same function.
+//!
+//! That sharing is the point, not an economy. A POSIX path is already an IRI path, so it
+//! is percent-encoded and used verbatim; a Windows path is a different language and is
 //! translated — the extended-length `\\?\` / `\\?\UNC\` prefix `std::fs::canonicalize`
-//! returns is stripped, a UNC host becomes the IRI's AUTHORITY, and `\` becomes `/`. The
-//! translation is a pure function compiled on every target (selected with `cfg!`, not
-//! `#[cfg]`), so a Linux-only CI still tests the Windows derivation.
+//! returns is stripped, a UNC host becomes the IRI's AUTHORITY, and `\` becomes `/`. A
+//! second transcription of that in this crate is precisely how one surface would come to
+//! emit `file://%5C%5C%3F%5CC%3A%5C…` while another emitted the right thing. What stays
+//! here is only the CLI's diagnostic: the path as the operator spelled it, plus the
+//! `--base` escape hatch a library error cannot know about.
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -216,35 +223,29 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
 
 /// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
 ///
-/// RFC-3986 §5.1.3 makes the retrieval URI the base of last resort, and the CLI is the
-/// one surface in this project that HAS one. The library crates are handed bytes and
-/// must hard-fail instead (§5.1.4): a library that invented a base would break byte
-/// determinism, diverge across surfaces with no retrieval IRI (stdin, wasm, the C ABI),
-/// and leak local filesystem paths into published RDF. So this derivation lives here,
-/// in `purrdf-cli`, and nothing filesystem-shaped crosses into `purrdf-rdf`.
+/// RFC-3986 §5.1.3 makes the retrieval URI the base of last resort, and this is one of the
+/// three surfaces in this project that HAS one. The derivation itself is NOT here: it is
+/// [`purrdf::slice::retrieval_base_iri`], the workspace's single implementation, which
+/// `purrdf-slice` (the slice catalogue) and `purrdf-shapes` (the shape-union loader) read
+/// their own documents through. A second transcription here is exactly how a platform
+/// divergence hides — the Windows extended-length and UNC translation lives with the
+/// derivation, so every surface gets it or none does.
 ///
-/// The path is canonicalized first, so the base does not depend on the working
-/// directory or on `..` segments in the argument. A path that cannot be expressed as a
-/// `file://` IRI is a hard error, never a silent fall back to "no base".
+/// What this function adds is the CLI's own diagnostic: the path as the operator spelled
+/// it, and the `--base` escape hatch, which the library error cannot know about.
+///
+/// The path is canonicalized (by the shared derivation), so the base does not depend on
+/// the working directory or on `..` segments in the argument. A path that cannot be
+/// expressed as a `file://` IRI is a hard error, never a silent fall back to "no base".
 pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
-    let absolute = std::fs::canonicalize(path)
-        .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
-    let text = absolute.to_str().ok_or_else(|| {
-        CliError::Runtime(format!(
-            "{}: the input path is not valid UTF-8, so it has no file:// IRI; \
-             pass --base explicitly",
-            display_path(path)
-        ))
-    })?;
-
-    let iri = file_iri_for_absolute_path(text);
-    purrdf_iri::BaseIri::parse(&iri).map_err(|error| {
-        CliError::Runtime(format!(
-            "{}: the input path has no usable file:// IRI ({error}); pass --base explicitly",
-            display_path(path)
-        ))
-    })?;
-    Ok(iri)
+    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
+        .map(|base| base.as_str().to_owned())
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "{}: {error}; pass --base explicitly",
+                display_path(path)
+            ))
+        })
 }
 
 /// [`retrieval_base_iri`] for a consumer outside this crate — the integration tests, which
@@ -263,127 +264,11 @@ pub fn file_retrieval_iri(path: &str) -> Result<String, String> {
 
 /// The RFC-8089 `file://` IRI of an ALREADY-ABSOLUTE platform path, touching no filesystem.
 ///
-/// Split from [`retrieval_base_iri`] because two callers need the string transformation
-/// without the canonicalization: this module (after canonicalizing) and
-/// [`crate::cli`]'s `--base` diagnostic, which must name the spelling that would have worked
-/// for a path that does not exist yet.
-pub(crate) fn file_iri_for_absolute_path(text: &str) -> String {
-    // Windows' path syntax is a different language from an RFC-8089 IRI path, and POSIX's
-    // is the same language: on POSIX `\` is an ordinary filename byte, so rewriting it as a
-    // separator would corrupt a legal path. The split is therefore by TARGET, not by
-    // guessing from the string's shape, and `cfg!` (not `#[cfg]`) keeps both arms COMPILED
-    // everywhere so the Windows derivation is unit-tested on a Linux-only CI.
-    let (authority, path) = if cfg!(windows) {
-        windows_file_iri_parts(text)
-    } else {
-        (String::new(), text.to_owned())
-    };
-    file_iri_from_parts(&authority, &path)
-}
-
-/// Assemble the two halves into a `file://` IRI, percent-encoding each under its own
-/// RFC-3986 rule.
-///
-/// An EMPTY authority is the RFC-8089 local-file form (`file:///path`); a non-empty one is
-/// the UNC host (`file://host/share/x`).
-fn file_iri_from_parts(authority: &str, path: &str) -> String {
-    format!(
-        "file://{}{}",
-        percent_encode(authority, b""),
-        percent_encode(path, b":@/")
-    )
-}
-
-/// Split a canonicalized WINDOWS path into the `(authority, path)` halves of its RFC-8089
-/// `file://` IRI.
-///
-/// `std::fs::canonicalize` returns the EXTENDED-LENGTH form on Windows — `\\?\C:\dir\x.ttl`
-/// for a drive path and `\\?\UNC\host\share\x.ttl` for a share — and neither prefix is part
-/// of the name the IRI denotes. Left in place they percent-encode into one opaque authority
-/// component (`file://%5C%5C%3F%5CC%3A%5C…`), which is not a local-file IRI at all and
-/// against which a relative reference resolves under a fabricated authority. So the prefix
-/// is stripped, a UNC host becomes the IRI's authority, and `\` becomes `/`.
-///
-/// A drive path's IRI path is `/C:/dir/x.ttl`: the leading `/` is required (RFC-3986
-/// `path-abempty` after an authority), and the drive letter is an ordinary first segment.
-fn windows_file_iri_parts(text: &str) -> (String, String) {
-    let unc = text
-        .strip_prefix(r"\\?\UNC\")
-        .or_else(|| text.strip_prefix(r"\\.\UNC\"));
-    if let Some(share) = unc {
-        return split_unc_share(share);
-    }
-    let stripped = text
-        .strip_prefix(r"\\?\")
-        .or_else(|| text.strip_prefix(r"\\.\"));
-    if let Some(local) = stripped {
-        return (String::new(), absolute_iri_path(local));
-    }
-    // A UNC path that never went through `canonicalize` keeps its `\\host\share` spelling.
-    if let Some(share) = text.strip_prefix(r"\\") {
-        return split_unc_share(share);
-    }
-    (String::new(), absolute_iri_path(text))
-}
-
-/// Split `host\share\rest` into the IRI's authority and its path.
-///
-/// A share with no path component (`\\host\share`) yields `/share`, which is the whole IRI
-/// path — never an empty one, which would make the IRI name the host rather than the file.
-fn split_unc_share(share: &str) -> (String, String) {
-    let end = share.find(['\\', '/']).unwrap_or(share.len());
-    let (host, rest) = share.split_at(end);
-    (host.to_owned(), absolute_iri_path(rest))
-}
-
-/// Rewrite a Windows path tail as an ABSOLUTE, slash-separated IRI path.
-fn absolute_iri_path(text: &str) -> String {
-    let slashed = text.replace('\\', "/");
-    if slashed.starts_with('/') {
-        slashed
-    } else {
-        format!("/{slashed}")
-    }
-}
-
-/// Percent-encode one component of a `file://` IRI.
-///
-/// RFC-3986 §2.3 `unreserved` and §2.2 `sub-delims` survive verbatim in every component;
-/// `extra` names what this component additionally keeps (`path-abempty` keeps `:`, `@` and
-/// the `/` separators, a `reg-name` authority keeps neither). Everything else — space, `#`,
-/// `?`, `%` and every non-ASCII byte — is percent-encoded, so the result round-trips as a
-/// URI rather than re-parsing as a query or a fragment.
-fn percent_encode(text: &str, extra: &[u8]) -> String {
-    let mut encoded = String::with_capacity(text.len() + 8);
-    for &byte in text.as_bytes() {
-        let keep = byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-            )
-            || extra.contains(&byte);
-        if keep {
-            encoded.push(byte as char);
-        } else {
-            use std::fmt::Write as _;
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
-}
+/// Re-exported from the shared derivation rather than reimplemented: [`crate::cli`]'s
+/// `--base` diagnostic must name the spelling that would have worked for a path that does
+/// not exist yet, and it must name the SAME spelling the pipeline would have derived —
+/// including the Windows extended-length and UNC translation.
+pub(crate) use purrdf::slice::file_iri_for_absolute_path;
 
 /// The base to parse `path` under: an explicit `--base` always wins, otherwise the
 /// input's own retrieval IRI.
@@ -731,10 +616,12 @@ pub(crate) fn serialize_input_to_nquads(
         type Output = SerializeOutcome;
 
         fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-            // No EGRESS base: `base` is the ingress base and `run_over_input` has
-            // already applied it while parsing, and N-Quads' registry row says its
-            // grammar can express no base directive, so there is nothing for one to do
-            // here. This boundary decides over absolute N-Quads by design.
+            // No EGRESS base, and `None` is the right value rather than an omission:
+            // `base` is the INGRESS base, which `run_over_input` has already applied
+            // while parsing, and N-Quads' `emits_base` registry column is `false`, so
+            // `serialize_dataset_to_format` would discard anything passed here anyway
+            // (its `resolve_base` filters on exactly that column). This boundary decides
+            // over absolute N-Quads by design.
             Ok(serialize_dataset_to_format(
                 view,
                 NativeRdfFormat::NQuads,
@@ -744,77 +631,4 @@ pub(crate) fn serialize_input_to_nquads(
     }
 
     run_over_input(path, format, base, NQuadsOp)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{file_iri_from_parts, percent_encode, windows_file_iri_parts};
-
-    /// The extended-length DRIVE form `canonicalize` returns on Windows becomes an
-    /// RFC-8089 local-file IRI, not one opaque authority component.
-    #[test]
-    fn an_extended_length_drive_path_becomes_a_local_file_iri() {
-        let (authority, path) = windows_file_iri_parts(r"\\?\C:\dir\x.ttl");
-        assert_eq!(authority, "");
-        assert_eq!(path, "/C:/dir/x.ttl");
-        assert_eq!(
-            file_iri_from_parts(&authority, &path),
-            "file:///C:/dir/x.ttl"
-        );
-    }
-
-    /// A plain drive path (one that never went through `canonicalize`) resolves the same way.
-    #[test]
-    fn a_plain_drive_path_becomes_the_same_local_file_iri() {
-        let (authority, path) = windows_file_iri_parts(r"C:\dir\x.ttl");
-        assert_eq!(
-            file_iri_from_parts(&authority, &path),
-            "file:///C:/dir/x.ttl"
-        );
-    }
-
-    /// A UNC share becomes an AUTHORITY-bearing IRI: the host is the authority and the share
-    /// is the first path segment.
-    #[test]
-    fn a_unc_share_puts_the_host_in_the_authority() {
-        for text in [r"\\?\UNC\host\share\x.ttl", r"\\host\share\x.ttl"] {
-            let (authority, path) = windows_file_iri_parts(text);
-            assert_eq!(authority, "host", "{text}");
-            assert_eq!(path, "/share/x.ttl", "{text}");
-            assert_eq!(
-                file_iri_from_parts(&authority, &path),
-                "file://host/share/x.ttl",
-                "{text}"
-            );
-        }
-    }
-
-    /// A share named with no further path still denotes the share, never the bare host.
-    #[test]
-    fn a_bare_unc_share_keeps_the_share_as_the_path() {
-        let (authority, path) = windows_file_iri_parts(r"\\?\UNC\host\share");
-        assert_eq!(file_iri_from_parts(&authority, &path), "file://host/share");
-    }
-
-    /// The backslash is a SEPARATOR only on the Windows derivation. A POSIX path carrying one
-    /// is an ordinary filename byte, and the POSIX arm never calls the Windows split — so the
-    /// byte percent-encodes rather than splitting the path.
-    #[test]
-    fn a_posix_path_encodes_a_backslash_rather_than_splitting_on_it() {
-        assert_eq!(
-            file_iri_from_parts("", r"/home/a\b.ttl"),
-            "file:///home/a%5Cb.ttl"
-        );
-    }
-
-    /// Every byte a `file://` IRI cannot carry literally is percent-encoded, in both halves,
-    /// and the authority keeps LESS than the path (no `:`, `@` or `/`).
-    #[test]
-    fn each_component_encodes_under_its_own_rule() {
-        assert_eq!(
-            percent_encode("a b#c?d%e\u{e9}/f:g@h", b":@/"),
-            "a%20b%23c%3Fd%25e%C3%A9/f:g@h"
-        );
-        assert_eq!(percent_encode("a/b:c", b""), "a%2Fb%3Ac");
-    }
 }

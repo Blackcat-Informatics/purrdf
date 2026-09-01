@@ -103,6 +103,41 @@ called out below with what a consumer must do.
   a syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) now emits it and
   relativizes against a supplied base; one that cannot (N-Triples, N-Quads, TriX, HexTuples) keeps
   writing absolute IRIs. See "Base IRIs & Relative References" in The PurRDF Book.
+- **BREAKING** **capi:** The C ABI moves `0.6.0` → `0.7.0`, an **incompatible** bump.
+  `purrdf_shacl_validate_to_sarif` and `purrdf_shacl_entail_to_ntriples` each gained a
+  `shapes_base_iri` parameter **in the middle** of the existing list, between `shapes_ttl` and
+  `data_nt` — a host compiled against `0.6.x` and run against `0.7.0` without recompiling passes
+  `data_nt` into the `shapes_base_iri` slot and its `PurrdfBuffer **` out-pointer into `data_nt`,
+  which the boundary then reads as a NUL-terminated C string. That silent, unguardable misread is
+  the whole reason the version moved; the parameter is positional rather than appended because it
+  belongs beside the document it qualifies. `purrdf_serialize_jsonld_configured` likewise gained
+  `base_iri` after `media_type`, the slot it holds on `purrdf_serialize`. Both breaks ride the one
+  bump because `0.7.0` is unreleased, so a consumer recompiles once rather than twice for one
+  reason. Every C host must recompile against the new `purrdf.h`. Signature drift is now caught at
+  test time: `crates/rdf-capi/tests/abi_signatures.rs` pins the complete exported prototype list
+  against a committed snapshot and against the version triple, so a future incompatible change
+  cannot reach a release without an author deliberately moving the version.
+- **BREAKING** **shex,cli:** A shape map naming a shape label the schema does not declare — and
+  `START` against a schema that declares no start shape — is now a hard refusal
+  (`ShexError::UnknownShape`; CLI exit **1**) instead of a `"status":"nonconformant"` result at
+  exit **0**.
+  Scripts that parsed the JSON result and ignored the exit code will now see a failure where they
+  previously saw a definite negative about the data; that is the point, since the old answer spent
+  the format's one word for a finding about the DATA on a mistake the data had no part in — a typo
+  in a shell's own argument read back as a validation verdict. Labels reachable through the import
+  closure count as declared. The refusal happens before selector expansion, so a selector matching
+  no node is refused identically to one matching many. The ShEx specification's ShapeMap status
+  vocabulary has no value meaning "not evaluated", so this was resolved on the project's
+  hard-fail doctrine rather than on anything the specification requires.
+- **BREAKING** **cli:** `--base` is now refused by name when NEITHER leg of the operation can
+  spend it, instead of being accepted and silently never read. A base is spent on parse (the
+  source syntax admits a relative reference) or on serialize (the target syntax can write a base
+  directive); `convert --from ntriples --to ntriples --base http://example.org/` satisfies
+  neither and previously exited 0 having done nothing and said nothing. It is now a usage error
+  (exit **2**) naming each leg and why it cannot take the value. A base ANY leg can spend is still
+  honoured, so `--base X --to ntriples` continues to resolve the input. The same refusal covers a
+  pack `--from`/`--to`, which carries no document base at all. Scripts passing `--base`
+  unconditionally across format pairs must drop it on the pairs that cannot use it.
 - **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
   views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
   clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the

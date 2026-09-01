@@ -51,7 +51,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 17 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
-| ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
+| ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 646 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
@@ -76,7 +76,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
-| Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps |
+| Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
 | CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |

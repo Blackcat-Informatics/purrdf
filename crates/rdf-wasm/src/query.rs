@@ -1382,7 +1382,13 @@ impl QueryEngine {
             SparqlResult::Graph(graph) => Dataset {
                 inner: MutableDataset::new(graph),
             }
-            .serialize_with_options(format, options),
+            // No egress base, and `base` above is deliberately NOT reused as one. That
+            // parameter is the SPARQL *query* base: it resolves relative IRI references
+            // inside the query TEXT. The document base a result is WRITTEN under is a
+            // different thing, and a query that happened to need one to parse is no
+            // evidence about how its answer should be spelled. Passing it here would
+            // silently relativize the result against the query's base.
+            .serialize_with_options(format, options, None),
             other => Err(kind_mismatch(
                 "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
                 &other,

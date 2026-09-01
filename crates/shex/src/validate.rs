@@ -177,7 +177,7 @@ fn node_term_string(value: &TermValue) -> String {
 }
 
 /// A shape label in the shape-map syntax (`START` / `<label>` / `_:label`).
-fn shape_term_string(shape: &ShapeSelector) -> String {
+pub(crate) fn shape_term_string(shape: &ShapeSelector) -> String {
     match shape {
         ShapeSelector::Start => "START".to_owned(),
         ShapeSelector::Label(label) if label.starts_with("_:") => label.clone(),

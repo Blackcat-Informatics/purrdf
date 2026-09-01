@@ -26,7 +26,7 @@
 //! nonconformant N`) so stdout stays a well-formed JSON document. There is no exit **3**
 //! here — the ShEx engine takes no execution governors, so there is no budget to trip.
 //!
-//! # Three refusals, because three kinds of "unavailable semantics" otherwise become verdicts
+//! # Four refusals, because four kinds of "unavailable semantics" otherwise become verdicts
 //!
 //! `purrdf-shex` is honest about what it cannot decide, and each of its honest fallbacks
 //! becomes a LIE the moment it is printed as a conformance verdict rather than acted on:
@@ -47,9 +47,19 @@
 //!   "and this custom check also passes" would report `conformant` without the check ever
 //!   running. Extensions are host closures too, so this is refused by name for the same
 //!   reason.
+//! * a **`MAP` naming a shape the schema does not declare** has nothing to decide against.
+//!   Neither the ShapeMap specification nor ShEx 2.1 defines the case — §5.7's reference
+//!   requirement binds a `shapeExprRef` written inside a SCHEMA (which `check_structure`
+//!   enforces above), and `satisfies` is defined only where the label resolves to a shape
+//!   expression — and the result shape map's `status` vocabulary is `conformant` /
+//!   `nonconformant` with no third value meaning "not evaluated". So `nonconformant` would
+//!   spend the one word the format has for a finding about the DATA on a mistake the data had
+//!   no part in. Refused by name, against the schema that was searched.
 //!
-//! All three are exit **1** and name the construct, never a weaker answer labelled as the one
-//! that was asked for.
+//! All four are exit **1** and name the construct, never a weaker answer labelled as the one
+//! that was asked for. Exit **1** rather than **2** because each is a property of the
+//! DOCUMENTS, discovered by reading them, rather than of the command line — which is what
+//! exit **2** is for in this binary.
 //!
 //! # What "RDF 1.2" means to a ShEx neighbourhood
 //!
@@ -96,6 +106,23 @@
 //!
 //! `--schema -` keeps the hard error: a piped schema has no retrieval IRI, so a relative
 //! reference in it is the RFC-3986 §5.1.4 failure naming `BASE`, never a vacuous constraint.
+//!
+//! ## `--base` is never inert here, so it is never refused
+//!
+//! Every other subcommand refuses a `--base` no leg of the run can spend
+//! ([`crate::format::refuse_unconsumable_base`], decided off the format registry's
+//! `admits_relative_iri` / `emits_base` columns). `shex` does not, because its base has a
+//! consumer no format row can name and that consumer is always present: `MAP` is a REQUIRED
+//! argument, it is command-line text with no retrieval IRI, and the ShapeMap grammar admits
+//! relative IRI references (`<alice>@<UserShape>`). So a base handed to this command always
+//! has somewhere to be spent, whatever `--data`'s syntax is.
+//!
+//! That includes a **pack or GTS** data graph. A container stores fully-resolved terms and
+//! cannot use a base, but the shape map still can — the same one-live-leg reasoning that
+//! keeps `convert --base X --to ntriples` working from a relative-admitting source. This lane
+//! used to refuse that pairing on the data source's syntax alone, which rejected the entirely
+//! legitimate "verified pack plus a relative shape map" and was justified by a base reaching
+//! the SCHEMA — a leg that no longer exists now that the schema carries its own retrieval IRI.
 //!
 //! # No ledger, and nothing transcoded
 //!
@@ -150,7 +177,8 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     refuse_two_stdins(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
-    format::refuse_base_with_container(data_format, options.base, "the --data source")?;
+    // No `--base` refusal here, unlike every other subcommand: see the module documentation
+    // for why this run's base can never be inert.
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
     let schema_base = schema_base(options.schema)?;
@@ -179,7 +207,18 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
         options.base,
         &ValidationOptions::default(),
     )
-    .map_err(|error| CliError::Runtime(format!("MAP: {error}")))?;
+    .map_err(|error| match error {
+        // The one map failure that is about the PAIRING of two documents rather
+        // than about the map's own syntax, so the refusal names the other one.
+        ShexError::UnknownShape(_) => CliError::Runtime(format!(
+            "MAP: {error} (--schema {}). A shape map is validated AGAINST a schema, so a label \
+             neither the schema nor its import closure declares names nothing to decide. \
+             Reporting it as `nonconformant` would spend the result shape map's one word for a \
+             data finding on a mistake the data had no part in",
+            options.schema
+        )),
+        other => CliError::Runtime(format!("MAP: {other}")),
+    })?;
 
     let mut json = result.to_result_json();
     json.push('\n');

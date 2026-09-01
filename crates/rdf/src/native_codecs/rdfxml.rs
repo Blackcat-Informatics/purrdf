@@ -59,7 +59,7 @@ impl RdfCodec for RdfXmlCodec {
     fn parse(
         &self,
         text: &str,
-        base: &purrdf_iri::BaseScope,
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         super::parse::parse_rdfxml_without_panicking(text, base)
@@ -174,9 +174,14 @@ struct XmlRow {
 /// reification as plain quads, and RDF-1.2 reifiers as `rdf:reifies` rows — then interns
 /// each into a [`RdfDatasetBuilder`] and folds them through the shared
 /// [`fold_statement_layer`], identically to the line/Turtle-family path.
+///
+/// `base` is `&mut`: `xml:base` on the ROOT element establishes the document base, so on
+/// return the scope holds the base in force at the end of the document. `xml:base` deeper
+/// in the tree is subtree-scoped and has popped by then, which is exactly right — a base
+/// that governed one element never governed the document.
 pub(super) fn parse_rdfxml_to_dataset(
     text: &str,
-    base: &purrdf_iri::BaseScope,
+    base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
     // nested document, so the nesting is measured on the SOURCE and refused here. This is
@@ -197,7 +202,7 @@ pub(super) fn parse_rdfxml_to_dataset(
         base: base.clone(),
         ..Default::default()
     };
-    parser.parse_document(document.root_element(), &context)?;
+    *base = parser.parse_document(document.root_element(), &context)?;
     parser.freeze()
 }
 
@@ -285,11 +290,14 @@ impl RdfXmlParser {
         builder.freeze()
     }
 
+    /// Returns the base scope the ROOT element left in force — the document base, after
+    /// any `xml:base` the root itself carries. Child elements get their own cloned
+    /// context, so a subtree's `xml:base` never reaches this answer.
     fn parse_document(
         &mut self,
         root: Node<'_, '_>,
         context: &ParseContext,
-    ) -> Result<(), RdfDiagnostic> {
+    ) -> Result<purrdf_iri::BaseScope, RdfDiagnostic> {
         let context = context.for_child(root)?;
         if is_rdf(root, "RDF") {
             for child in element_children(root) {
@@ -298,7 +306,7 @@ impl RdfXmlParser {
         } else {
             self.parse_node_element(root, &context)?;
         }
-        Ok(())
+        Ok(context.base)
     }
 
     fn parse_node_element(
@@ -313,7 +321,7 @@ impl RdfXmlParser {
             self.insert_statement(
                 subject.clone().into(),
                 rdf_iri(RDF_TYPE)?,
-                XmlTerm::Iri(element_iri(element)?),
+                XmlTerm::Iri(element_iri(element, &context.base)?),
                 None,
                 None,
             )?;
@@ -329,7 +337,7 @@ impl RdfXmlParser {
         }
 
         for attr in property_attrs(element) {
-            let predicate = name_iri(attr.namespace(), attr.name())?;
+            let predicate = name_iri(attr.namespace(), attr.name(), &context.base)?;
             let literal = self.context_literal(attr.value(), None, &context)?;
             self.insert_statement(
                 subject.clone().into(),
@@ -353,7 +361,7 @@ impl RdfXmlParser {
         parent_context: &ParseContext,
     ) -> Result<(), RdfDiagnostic> {
         let context = parent_context.for_child(element)?;
-        let predicate = element_iri(element)?;
+        let predicate = element_iri(element, &context.base)?;
         let reifier = attr_rdf(element, RDF_ID)
             .map(|id| self.rdf_id_iri(id, &context).map(XmlNode::Iri))
             .transpose()?;
@@ -517,7 +525,7 @@ impl RdfXmlParser {
             let literal = self.context_literal(attr.value(), None, context)?;
             self.insert_statement(
                 subject.clone().into(),
-                name_iri(attr.namespace(), attr.name())?,
+                name_iri(attr.namespace(), attr.name(), &context.base)?,
                 XmlTerm::Literal(literal),
                 None,
                 None,
@@ -599,12 +607,12 @@ impl RdfXmlParser {
             )
         } else if let Some(attr) = prop_attrs.first() {
             (
-                name_iri(attr.namespace(), attr.name())?,
+                name_iri(attr.namespace(), attr.name(), &node_ctx.base)?,
                 XmlTerm::Literal(self.context_literal(attr.value(), None, &node_ctx)?),
             )
         } else {
             (
-                element_iri(child_props[0])?,
+                element_iri(child_props[0], &node_ctx.base)?,
                 self.triple_object(child_props[0], context)?,
             )
         };
@@ -852,13 +860,24 @@ fn is_rdf(element: Node<'_, '_>, local: &str) -> bool {
 }
 
 /// The IRI of a node element / property element: `namespace + local`.
-fn element_iri(element: Node<'_, '_>) -> Result<String, RdfDiagnostic> {
-    name_iri(element.tag_name().namespace(), element.tag_name().name())
+fn element_iri(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+) -> Result<String, RdfDiagnostic> {
+    name_iri(
+        element.tag_name().namespace(),
+        element.tag_name().name(),
+        base,
+    )
 }
 
-fn name_iri(namespace: Option<&str>, local: &str) -> Result<String, RdfDiagnostic> {
+fn name_iri(
+    namespace: Option<&str>,
+    local: &str,
+    base: &purrdf_iri::BaseScope,
+) -> Result<String, RdfDiagnostic> {
     let iri = format!("{}{local}", namespace.unwrap_or_default());
-    validate_iri(&iri)?;
+    validate_iri(&iri, base)?;
     Ok(iri)
 }
 
@@ -925,7 +944,11 @@ fn element_text(element: Node<'_, '_>) -> String {
 
 fn rdf_iri(local: &str) -> Result<String, RdfDiagnostic> {
     let iri = format!("{RDF_NS}{local}");
-    validate_iri(&iri)?;
+    // The one IRI position with no document text in it at all: both halves are crate
+    // constants, so no caller base could bear on it and the empty scope is the literal
+    // truth rather than a stand-in for a scope that was thrown away. The check stays
+    // because a constant can be mistyped; it cannot fire on user input.
+    validate_iri(&iri, &purrdf_iri::BaseScope::empty())?;
     Ok(iri)
 }
 
@@ -948,9 +971,15 @@ fn blank_label(label: &str) -> Result<String, RdfDiagnostic> {
 /// like `xmlns:ex="urn"` composed to `urnLocal`, which has no colon and was rejected for
 /// the right reason by accident, while `xmlns:ex="a:b"` composed to `a:bLocal` and was
 /// accepted as "absolute" when it is a `path-noscheme` relative reference.
-fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    purrdf_iri::BaseScope::empty()
-        .resolve_absolute_only(value)
+///
+/// The scope handed in is the CALLER'S, not a locally minted empty one. It is still never
+/// applied — an `xmlns:` namespace is not a reference and resolves against nothing — but
+/// the refusal can now name the base in scope and say it does not apply here. The empty
+/// stand-in could only say "no base IRI is in scope", which was false for anyone who had
+/// passed `--base` and sent them hunting for a dropped parameter rather than at the
+/// relative `xmlns:` declaration that actually caused it.
+fn validate_iri(value: &str, base: &purrdf_iri::BaseScope) -> Result<(), RdfDiagnostic> {
+    base.resolve_absolute_only(value)
         .map(|_| ())
         .map_err(|error| {
             RdfDiagnostic::error(
@@ -1498,7 +1527,7 @@ mod tests {
 
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
-        parse_rdfxml_to_dataset(text, &scope(base)).expect("parse rdf/xml")
+        parse_rdfxml_to_dataset(text, &mut scope(base)).expect("parse rdf/xml")
     }
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
@@ -1533,7 +1562,7 @@ mod tests {
         );
 
         for (name, text) in [("node striping", &striped), ("XML literal", &xml_literal)] {
-            let error = parse_rdfxml_to_dataset(text, &scope(None))
+            let error = parse_rdfxml_to_dataset(text, &mut scope(None))
                 .err()
                 .unwrap_or_else(|| panic!("{name}: a 20 000-deep document must be refused"));
             assert!(

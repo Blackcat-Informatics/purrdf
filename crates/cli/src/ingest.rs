@@ -26,8 +26,10 @@
 //! `--from`, when given, applies to EVERY source in the list: it is one flag and a
 //! per-source override would need a per-source flag. When it is absent each source is
 //! classified from its own extension, so a mixed `a.ttl` + `b.nq` + `c.gts` list needs no
-//! flag at all. `--base` and `--transport` apply list-wide for the same reason, and
-//! `--base` is refused against any container source exactly as it is for one source.
+//! flag at all. `--base` and `--transport` apply list-wide for the same reason. Whether
+//! `--base` can be spent at all is decided once, in [`crate::convert`], over EVERY source's
+//! parse leg together with the target's serialize leg — a base one source resolves against
+//! is a base the run is using, so no single source can condemn it.
 //!
 //! # What the union guarantees, and the one thing it costs
 //!

@@ -26,12 +26,14 @@
 //! ingress one drives every format off `admits_relative_iri` — a capability column is
 //! only a contract if every row is read.
 
+use purrdf_iri::BaseOrigin;
 use purrdf_rdf::native_codecs::{
     NativeRdfFormat, parse_dataset, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_to_format_with_jsonld_options, transcode_under_document_base,
 };
 use purrdf_rdf::{
-    JsonLdSerializeOptions, SerializeGraph, TermValue, datasets_isomorphic, serialize_dataset,
+    JsonLdSerializeOptions, ParseOptions, SerializeGraph, TermValue, datasets_isomorphic,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset,
 };
 
 const P: &str = "<http://example.org/p>";
@@ -1221,4 +1223,482 @@ fn jsonld_without_a_base_still_refuses_a_relative_id() {
         "the refusal names the reference verbatim: {}",
         error.message
     );
+}
+
+// ── The parse leg reports the base the DOCUMENT ended up under ───────────────────
+//
+// The third leg of the base contract, and the one that was missing. A caller could
+// supply a base on the way IN and (since the serializer base leg) a base on the way OUT,
+// but could not ask what base the DOCUMENT ended up under — so a round trip that
+// preserves a document's own `@base` could not be written without re-reading the source
+// text by hand, which is a second, drifting base parser in every consumer.
+//
+// `ParseOutcome::document_base` is that answer, carrying `BaseOrigin` so the caller can
+// tell "the document said so" from "you said so" from "nobody said so".
+
+/// An absolute-IRI TriX document, for the base-less-grammar sweep below.
+const TRIX_ABSOLUTE: &str = concat!(
+    "<TriX xmlns=\"http://www.w3.org/2004/03/trix/trix-1/\"><graph><triple>",
+    "<uri>http://example.org/s</uri><uri>http://example.org/p</uri>",
+    "<uri>http://example.org/o</uri>",
+    "</triple></graph></TriX>",
+);
+
+/// The `HexTuples` spelling of [`TRIX_ABSOLUTE`].
+const HEXTUPLES_ABSOLUTE: &str = concat!(
+    "[\"http://example.org/s\",\"http://example.org/p\",",
+    "\"http://example.org/o\",\"globalId\",\"\",\"\"]\n",
+);
+
+/// The document base and its provenance, for a document of `media_type`.
+fn document_base(text: &str, media_type: &str, base: Option<&str>) -> Option<(String, BaseOrigin)> {
+    parse_dataset_with(text.as_bytes(), media_type, base, &ParseOptions::default())
+        .unwrap_or_else(|e| panic!("parse {media_type} failed: {e}"))
+        .document_base
+        .map(|scoped| (scoped.iri().as_str().to_owned(), scoped.origin()))
+}
+
+/// A Turtle `@base` is reported, as a DIRECTIVE, at the position it was written.
+#[test]
+fn turtle_reports_its_own_base_directive_with_provenance() {
+    let text = "@base <http://document.example/> .\n<foo> <http://example.org/p> <#o> .\n";
+    let (iri, origin) = document_base(text, "text/turtle", None).expect("a base is in force");
+    assert_eq!(iri, "http://document.example/");
+    assert_eq!(
+        origin,
+        // Column 7 is the IRI token, not the `@` — the directive's position is where the
+        // base VALUE was written, which is what a diagnostic wants to point at.
+        BaseOrigin::Directive { line: 1, column: 7 },
+        "the document declared it, and says where",
+    );
+}
+
+/// `@base` rebinds, so the base in force at the END of the document is the LAST one — not
+/// the first, and not a merge of the two.
+#[test]
+fn the_reported_base_is_the_one_in_force_at_the_end_of_the_document() {
+    let text = concat!(
+        "@base <http://first.example/> .\n",
+        "<a> <http://example.org/p> <http://example.org/o> .\n",
+        "@base <http://second.example/> .\n",
+        "<b> <http://example.org/p> <http://example.org/o> .\n",
+    );
+    let (iri, origin) = document_base(text, "text/turtle", None).expect("a base is in force");
+    assert_eq!(iri, "http://second.example/");
+    assert_eq!(origin, BaseOrigin::Directive { line: 3, column: 7 });
+}
+
+/// A relative `@base` composes against the caller's, and the REPORTED base is the
+/// composed one — the base references actually resolved against, not the raw directive.
+#[test]
+fn a_relative_base_directive_is_reported_already_composed() {
+    let text = "@base <sub/> .\n<x> <http://example.org/p> <http://example.org/o> .\n";
+    let (iri, _) = document_base(text, "text/turtle", Some("http://example.org/dir/"))
+        .expect("a base is in force");
+    assert_eq!(iri, "http://example.org/dir/sub/");
+}
+
+/// With no directive the caller's base is what is in force, and the origin says so — the
+/// value is not `None` merely because the document stayed silent.
+#[test]
+fn a_caller_base_is_reported_as_the_callers() {
+    let text = "<x> <http://example.org/p> <http://example.org/o> .\n";
+    let (iri, origin) =
+        document_base(text, "text/turtle", Some("http://caller.example/")).expect("caller base");
+    assert_eq!(iri, "http://caller.example/");
+    assert_eq!(origin, BaseOrigin::Caller);
+}
+
+/// `None` is reserved for a document that truly ended under no base at all.
+#[test]
+fn no_base_anywhere_is_reported_as_none() {
+    let text = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+    assert_eq!(document_base(text, "application/n-triples", None), None);
+}
+
+/// A syntax with no base directive reports the caller's base unchanged — its silence is
+/// an answer, not a gap.
+#[test]
+fn a_base_less_grammar_still_reports_the_caller_base() {
+    let lines = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+    let cases: &[(&str, &str)] = &[
+        ("application/n-triples", lines),
+        ("application/n-quads", lines),
+        ("application/trix", TRIX_ABSOLUTE),
+        ("application/x-hextuples", HEXTUPLES_ABSOLUTE),
+    ];
+    for (media_type, document) in cases {
+        assert_eq!(
+            document_base(document, media_type, Some("http://caller.example/")),
+            Some(("http://caller.example/".to_owned(), BaseOrigin::Caller)),
+            "{media_type} must pass the caller base through untouched",
+        );
+    }
+}
+
+/// RDF/XML reports the ROOT `xml:base`, which is the document base.
+#[test]
+fn rdfxml_reports_the_root_xml_base() {
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\" xml:base=\"http://document.example/\">",
+        "<rdf:Description rdf:about=\"foo\"><ex:p rdf:resource=\"http://example.org/o\"/>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    let (iri, origin) =
+        document_base(text, "application/rdf+xml", None).expect("a base is in force");
+    assert_eq!(iri, "http://document.example/");
+    assert_eq!(origin, BaseOrigin::Enclosing);
+}
+
+/// An `xml:base` on an inner element governs that SUBTREE, never the document, so it must
+/// not be reported as the document base. Reporting it would hand a round trip a base that
+/// never applied to most of the file.
+#[test]
+fn rdfxml_does_not_report_a_subtree_xml_base_as_the_documents() {
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"http://example.org/\" xml:base=\"http://outer.example/\">",
+        "<rdf:Description rdf:about=\"a\" xml:base=\"http://inner.example/\">",
+        "<ex:p rdf:resource=\"http://example.org/o\"/>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    // The inner base really is applied to the subtree it governs...
+    assert_eq!(
+        only_subject(text, "application/rdf+xml", None),
+        "http://inner.example/a"
+    );
+    // ...and the DOCUMENT base is still the root's.
+    let (iri, _) = document_base(text, "application/rdf+xml", None).expect("a base is in force");
+    assert_eq!(iri, "http://outer.example/");
+}
+
+/// A JSON-LD `@context` `@base` is the document's own word on the matter, reported as the
+/// context frame it is.
+#[test]
+fn jsonld_reports_its_context_base() {
+    let (iri, origin) = document_base(
+        JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+        "application/ld+json",
+        Some("http://caller.example/"),
+    )
+    .expect("a base is in force");
+    assert_eq!(iri, "http://inner.example/", "the document's base wins");
+    assert_eq!(origin, BaseOrigin::Enclosing);
+}
+
+/// YAML-LD bridges to the same expander and must report identically.
+#[test]
+fn yamlld_reports_its_context_base_identically_to_jsonld() {
+    assert_eq!(
+        document_base(
+            YAMLLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+            "application/ld+yaml",
+            Some("http://caller.example/"),
+        ),
+        document_base(
+            JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+            "application/ld+json",
+            Some("http://caller.example/"),
+        ),
+    );
+}
+
+/// A JSON-LD `"@base": null` CLEARS the caller's base, and the report says so with `None`
+/// rather than echoing a base that is no longer in force.
+#[test]
+fn a_jsonld_null_base_clears_the_caller_base_in_the_report() {
+    let document = concat!(
+        "{\"@context\":{\"@base\":null},\"@id\":\"http://example.org/x\",",
+        "\"http://example.org/p\":\"v\"}",
+    );
+    assert_eq!(
+        document_base(
+            document,
+            "application/ld+json",
+            Some("http://caller.example/")
+        ),
+        None,
+        "`@base: null` is the document saying there is no base",
+    );
+}
+
+/// A document that declares nothing leaves the caller's base — and its `Caller`
+/// provenance — untouched.
+#[test]
+fn a_jsonld_document_without_a_context_base_keeps_the_callers_provenance() {
+    assert_eq!(
+        document_base(
+            JSONLD_RELATIVE_SUBJECT,
+            "application/ld+json",
+            Some("http://caller.example/"),
+        ),
+        Some(("http://caller.example/".to_owned(), BaseOrigin::Caller)),
+    );
+}
+
+// ── The consumer: a round trip under the document's own base ────────────────────
+//
+// A producer with no consumer is not done. `transcode_under_document_base` is the join:
+// the parse leg's answer becomes the serialize leg's base, so a document's own declared
+// base survives a transcode instead of being flattened to absolute IRIs.
+
+/// A Turtle document declaring its own `@base` comes back out under that same base — the
+/// directive is re-emitted and the references stay relative — with NO base supplied by
+/// the caller anywhere in the round trip.
+#[test]
+fn a_document_declared_base_survives_a_transcode_with_no_caller_base() {
+    let source = concat!(
+        "@base <http://document.example/dir/> .\n",
+        "<a> <http://example.org/p> <b> .\n",
+    );
+    let bytes = transcode_under_document_base(
+        source.as_bytes(),
+        "text/turtle",
+        NativeRdfFormat::Turtle,
+        None,
+    )
+    .expect("transcode")
+    .bytes;
+    let text = String::from_utf8(bytes).expect("utf-8");
+    assert!(
+        text.contains("@base <http://document.example/dir/>"),
+        "the document's own base must be re-declared: {text}",
+    );
+    assert!(
+        text.contains("<a>") && text.contains("<b>"),
+        "and the references must be relative to it again: {text}",
+    );
+
+    // The re-emitted document denotes the SAME graph, read back with no base at all.
+    let original = parse_dataset(source.as_bytes(), "text/turtle", None).expect("original");
+    let round_tripped = parse_dataset(text.as_bytes(), "text/turtle", None).expect("round trip");
+    assert!(
+        datasets_isomorphic(&original, &round_tripped),
+        "a base-preserving transcode must not change what the document denotes",
+    );
+}
+
+/// The base crosses SYNTAXES: a Turtle `@base` becomes a TriG `@base`, and a JSON-LD
+/// `@context` `@base` becomes a Turtle `@base`. Neither is a special case in the
+/// consumer — both come from the one `document_base` answer.
+#[test]
+fn the_document_base_crosses_syntaxes() {
+    let turtle = concat!(
+        "@base <http://document.example/dir/> .\n",
+        "<a> <http://example.org/p> <b> .\n",
+    );
+    let trig = transcode_under_document_base(
+        turtle.as_bytes(),
+        "text/turtle",
+        NativeRdfFormat::TriG,
+        None,
+    )
+    .expect("turtle to trig")
+    .bytes;
+    assert!(
+        String::from_utf8(trig)
+            .expect("utf-8")
+            .contains("@base <http://document.example/dir/>")
+    );
+
+    let jsonld = concat!(
+        "{\"@context\":{\"@base\":\"http://document.example/dir/\"},",
+        "\"@id\":\"a\",\"http://example.org/p\":{\"@id\":\"b\"}}",
+    );
+    let out = transcode_under_document_base(
+        jsonld.as_bytes(),
+        "application/ld+json",
+        NativeRdfFormat::Turtle,
+        None,
+    )
+    .expect("jsonld to turtle")
+    .bytes;
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(
+        text.contains("@base <http://document.example/dir/>"),
+        "the JSON-LD context base must reach the Turtle directive: {text}",
+    );
+}
+
+/// Without the document's base the same transcode emits ABSOLUTE IRIs — which is what
+/// makes the test above a real difference rather than a coincidence of the fixture.
+#[test]
+fn the_same_transcode_without_the_document_base_emits_absolute_iris() {
+    let source = concat!(
+        "@base <http://document.example/dir/> .\n",
+        "<a> <http://example.org/p> <b> .\n",
+    );
+    let dataset = parse_dataset(source.as_bytes(), "text/turtle", None).expect("parse");
+    let plain = serialize_dataset_to_format(&dataset, NativeRdfFormat::Turtle, None)
+        .expect("serialize with no base")
+        .bytes;
+    let plain = String::from_utf8(plain).expect("utf-8");
+    assert!(
+        !plain.contains("@base"),
+        "no base means no directive: {plain}",
+    );
+    assert!(
+        plain.contains("<http://document.example/dir/a>"),
+        "and absolute IRIs: {plain}",
+    );
+}
+
+/// A caller base is a FALLBACK, not an override: a document that declares its own base
+/// still comes back out under the document's.
+#[test]
+fn the_document_base_beats_the_caller_base_through_the_transcode() {
+    let source = "@base <http://document.example/> .\n<a> <http://example.org/p> <b> .\n";
+    let text = String::from_utf8(
+        transcode_under_document_base(
+            source.as_bytes(),
+            "text/turtle",
+            NativeRdfFormat::Turtle,
+            Some("http://caller.example/"),
+        )
+        .expect("transcode")
+        .bytes,
+    )
+    .expect("utf-8");
+    assert!(text.contains("@base <http://document.example/>"), "{text}");
+    assert!(!text.contains("caller.example"), "{text}");
+}
+
+/// With no base anywhere the transcode is exactly an ordinary one — the seam adds no
+/// base of its own.
+#[test]
+fn a_transcode_with_no_base_anywhere_invents_none() {
+    let source = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+    let text = String::from_utf8(
+        transcode_under_document_base(
+            source.as_bytes(),
+            "application/n-triples",
+            NativeRdfFormat::Turtle,
+            None,
+        )
+        .expect("transcode")
+        .bytes,
+    )
+    .expect("utf-8");
+    assert!(!text.contains("@base"), "no base was ever in force: {text}");
+}
+
+// ── The refusal must not lie about the base ─────────────────────────────────────
+//
+// `iri-not-absolute-by-grammar` says "supplying a base will not help", which is true —
+// but the codecs raising it built a LOCAL `BaseScope::empty()` at the call site instead
+// of passing the caller's scope down, so the message also said "no base IRI is in scope"
+// to a user who had just run `--base http://example.org/dir/`. A diagnostic that denies
+// the state of the world sends the reader hunting for a dropped parameter instead of at
+// the relative IRI in their document. The base is still never APPLIED; it is now VISIBLE.
+
+/// The one-triple document each absolute-only grammar spells with a relative subject.
+const RELATIVE_SUBJECT_BY_FORMAT: &[(&str, &str)] = &[
+    (
+        "application/n-triples",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    (
+        "application/n-quads",
+        "<foo> <http://example.org/p> <http://example.org/o> .\n",
+    ),
+    ("application/trix", TRIX_RELATIVE_SUBJECT),
+    ("application/x-hextuples", HEXTUPLES_RELATIVE_SUBJECT),
+];
+
+#[test]
+fn an_absolute_only_refusal_names_the_base_in_scope_instead_of_denying_it() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, Some("http://example.org/dir/"))
+            .expect_err("a relative reference is refused whatever the base");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("<http://example.org/dir/>"),
+            "{media_type} must name the base in scope: {}",
+            error.message,
+        );
+        assert!(
+            error.message.contains("is never applied here"),
+            "{media_type} must say the base is deliberately not applied: {}",
+            error.message,
+        );
+        assert!(
+            !error.message.contains("no base IRI is in scope"),
+            "{media_type} must not deny a base the caller supplied: {}",
+            error.message,
+        );
+    }
+}
+
+/// With NO base the same refusal says so — the fix makes the message TRACK the scope, it
+/// does not simply delete the "absent" wording.
+#[test]
+fn an_absolute_only_refusal_still_reports_an_absent_base_as_absent() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        let error = parse_dataset(text.as_bytes(), media_type, None)
+            .expect_err("a relative reference is refused with no base either");
+        assert_eq!(error.code, "iri-not-absolute-by-grammar", "{media_type}");
+        assert!(
+            error.message.contains("no base IRI is in scope"),
+            "{media_type} with nothing in scope must say so: {}",
+            error.message,
+        );
+    }
+}
+
+/// RDF/XML's one non-reference IRI position — an element name built from a RELATIVE
+/// `xmlns:` namespace — refused with the same denial. It resolves against nothing, which
+/// is exactly why the message has to name the base rather than claim there is none.
+#[test]
+fn an_rdfxml_qualified_name_refusal_names_the_base_in_scope() {
+    let text = concat!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+        "xmlns:ex=\"foo/\">",
+        "<rdf:Description rdf:about=\"http://example.org/s\"><ex:p>v</ex:p>",
+        "</rdf:Description></rdf:RDF>",
+    );
+    let error = parse_dataset(
+        text.as_bytes(),
+        "application/rdf+xml",
+        Some("http://example.org/dir/"),
+    )
+    .expect_err("a relative xmlns namespace yields a relative element IRI");
+    assert_eq!(error.code, "iri-not-absolute-by-grammar");
+    assert!(
+        error.message.contains("<http://example.org/dir/>")
+            && !error.message.contains("no base IRI is in scope"),
+        "the refusal must name the base in scope: {}",
+        error.message,
+    );
+}
+
+/// The STREAMING lane carried the same defect twice over: `parse_dataset_from_reader`
+/// took a base and never built a scope from it at all, so every line-oriented refusal
+/// reported "no base IRI is in scope" no matter what the caller passed. The streamed
+/// message must be the buffered message, byte for byte — that is the whole contract
+/// between the two lanes.
+#[test]
+fn the_streaming_lane_reports_the_same_base_as_the_buffered_lane() {
+    for (media_type, text) in RELATIVE_SUBJECT_BY_FORMAT {
+        if !matches!(
+            *media_type,
+            "application/n-triples" | "application/n-quads" | "application/x-hextuples"
+        ) {
+            continue; // only the line-oriented grammars stream
+        }
+        for base in [None, Some("http://example.org/dir/")] {
+            let streamed = parse_dataset_from_reader(text.as_bytes(), media_type, base)
+                .expect_err("the streamed parse refuses it too");
+            let buffered = parse_dataset(text.as_bytes(), media_type, base)
+                .expect_err("the buffered parse refuses it");
+            assert_eq!(
+                streamed.code, buffered.code,
+                "{media_type} with base = {base:?}"
+            );
+            assert_eq!(
+                streamed.message, buffered.message,
+                "{media_type} with base = {base:?}: the two lanes must say the same thing"
+            );
+        }
+    }
 }

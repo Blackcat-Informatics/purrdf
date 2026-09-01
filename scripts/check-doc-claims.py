@@ -4476,8 +4476,8 @@ def build_claims(
             {
                 "passed": codec_pass,
                 "total": codec_pass,
-                # The per-format split must account for the whole suite.
-                "nq": 27,
+                # Only the TOTAL reaches the matrix block, so four formats are
+                "nq": 27,  # anchored here and turtle is the remainder.
                 "nt": 29,
                 "rx": 31,
                 "tg": 67,

@@ -161,14 +161,14 @@ fn bench_parse_nquads_span_tracking(c: &mut Criterion) {
             let options = ParseOptions {
                 track_source_spans: false,
             };
-            let (dataset, table) = parse_dataset_with(
+            let outcome = parse_dataset_with(
                 black_box(text.as_bytes()),
                 "application/n-quads",
                 None,
                 black_box(&options),
             )
             .expect("parse");
-            black_box((dataset, table));
+            black_box(outcome);
         });
     });
     group.bench_function("nquads_2k_spans_on", |bencher| {
@@ -176,14 +176,14 @@ fn bench_parse_nquads_span_tracking(c: &mut Criterion) {
             let options = ParseOptions {
                 track_source_spans: true,
             };
-            let (dataset, table) = parse_dataset_with(
+            let outcome = parse_dataset_with(
                 black_box(text.as_bytes()),
                 "application/n-quads",
                 None,
                 black_box(&options),
             )
             .expect("parse");
-            black_box((dataset, table));
+            black_box(outcome);
         });
     });
     group.finish();

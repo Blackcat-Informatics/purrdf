@@ -600,12 +600,34 @@ export class Dataset implements Iterable<Quad> {
   visualModel(options?: VisualizationOptions | null): VisualModel;
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
+  /**
+   * Serialize to any of the nine RDF formats.
+   *
+   * This leg takes NO document base, unlike `parse` and `serializeConfigured`. It
+   * reaches the star-incapable formats (RDF/XML, TriX, HexTuples), and the core's
+   * only base-carrying serializer drops the RDF 1.2 statement layer for exactly
+   * those — a base here would silently trade this dataset's reifier and annotation
+   * rows for a base declaration. Use `serializeConfigured` for a base-carrying
+   * JSON-LD/YAML-LD document.
+   */
   serialize(format: string): string;
-  serializeConfigured(format: "jsonld" | "yamlld" | string, optionsJson: string): string;
+  /**
+   * `base` is the document base the output is written under: both JSON-LD and
+   * YAML-LD can express one, so it reaches the emitted `@context` as `@base` and
+   * document-position `@id`s are compacted against it. A base the supplied context
+   * already declares wins. A base that is not an absolute IRI throws; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
+   */
+  serializeConfigured(
+    format: "jsonld" | "yamlld" | string,
+    optionsJson: string,
+    base?: string | null,
+  ): string;
   serializeWithContext(
     format: "jsonld" | "yamlld" | string,
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
+    base?: string | null,
   ): string;
   query(sparql: string, base?: string | null): string;
   canonicalize(): string;
