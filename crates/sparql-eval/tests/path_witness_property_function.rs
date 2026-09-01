@@ -1428,3 +1428,56 @@ fn a21_a_step_over_an_annotation_predicate_crosses_both_layers_in_one_walk() {
         "the annotation edge and the asserted edge are one graph"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A22 — a fixed step vocabulary over a dataset that carries half of it
+// ---------------------------------------------------------------------------
+
+/// An alternation member the dataset never mentions contributes nothing, and the query
+/// still answers.
+///
+/// This is the shape a host with a FIXED step vocabulary has: one `PathStep`, many
+/// datasets. `ex:narrower` appears nowhere in this dataset — not as a predicate, not as a
+/// subject, not as an object — so it is not interned at all, while `ex:broader` carries
+/// two edges. The correct answer is the `ex:broader` walks, because an alternation is an
+/// alternation: `p|q` in the core grammar does not fail when `q` matches nothing, and
+/// neither does this. Refusing the snapshot would key a hard failure on whether an IRI
+/// happens to appear in the term table, which is an interning detail no host can predict.
+#[test]
+fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step() {
+    let data = dataset(&[("t1", "broader", "t2"), ("t2", "broader", "t3")]);
+    let step = PathStep::new(vec![
+        (iri("broader"), PathDirection::Forward),
+        (iri("narrower"), PathDirection::Inverse),
+    ])
+    .expect("a well-formed step");
+    let graph = Arc::new(
+        PathGraph::from_dataset(&*data, &step, GraphMatch::Default)
+            .expect("one empty alternative does not invalidate the step"),
+    );
+    assert_eq!(
+        graph.edge_count(),
+        2,
+        "the ex:broader edges, and only those"
+    );
+    let registry = walk_registry(graph, limits(1, 2));
+
+    let answers = solve(
+        &data,
+        &q("SELECT ?end ?len ?step ?node ?edge WHERE { \
+            ex:t1 <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
+            } ORDER BY ?len ?step"),
+        &registry,
+    );
+    let hop1 = stmt("t1", "broader", "t2");
+    let hop2 = stmt("t2", "broader", "t3");
+    assert_eq!(
+        answers.project(&["end", "len", "step", "node", "edge"]),
+        vec![
+            vec![iri("t2"), int(1), int(1), iri("t2"), hop1.clone()],
+            vec![iri("t3"), int(2), int(1), iri("t2"), hop1],
+            vec![iri("t3"), int(2), int(2), iri("t3"), hop2],
+        ],
+        "exactly the walks the present alternative admits"
+    );
+}

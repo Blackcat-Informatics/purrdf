@@ -711,17 +711,34 @@ impl PathGraph {
     /// two layers form ONE traversable graph, and a walk crosses between them mid-route
     /// wherever the data does.
     ///
-    /// # Errors
+    /// # An alternative with no edges contributes nothing, and that is not an error
     ///
-    /// [`EvalError::Data`] if a declared alternative's predicate IRI is not interned in
-    /// `dataset` at all. This follows the precedent
+    /// An alternation is an alternation. `(ex:p, Forward) | (ex:q, Inverse)` admits a hop
+    /// over `ex:p` OR over `ex:q`, exactly as the core grammar's `p|q` does — and `p|q`
+    /// does not fail when `q` matches no statement. A host with a FIXED step vocabulary
+    /// (`skos:broader` / `skos:narrower`, say) snapshotting across many datasets is
+    /// supplying valid configuration every time; a dataset that happens to carry only
+    /// `broader` edges has a correct answer, and it is the broader-only walks.
+    ///
+    /// So a predicate that the dataset has never interned contributes ZERO edges, which is
+    /// what a predicate that IS interned but participates in no in-scope quad has always
+    /// contributed. Those two inputs have identical observable graph content — no edges for
+    /// that predicate — and keying a hard failure on which of them holds keys it on an
+    /// INTERNING DETAIL: whether the IRI happens to appear somewhere in the term table, as
+    /// a subject, as an object, in an unrelated named graph, or purely because
+    /// `push_reifier` interned it. That is not a distinction a host can predict, so it is
+    /// not a distinction this constructor can refuse on.
+    ///
+    /// The genuinely-wrong configurations are the ones that are wrong INDEPENDENTLY of any
+    /// dataset — an empty alternation, a non-IRI predicate, a repeated
+    /// `(predicate, direction)` pair — and they are all refused by [`PathStep::new`], which
+    /// is where a caller commits them. (The
     /// [`MemoryRelation::from_graph`](crate::property_fn::MemoryRelation::from_graph)
-    /// sets for an absent list head: a name that the dataset has never seen is a
-    /// configuration pointing at nothing, and reporting it as an empty adjacency would
-    /// convert a host's typo into a silently empty answer that no query text can
-    /// distinguish from an honest one. A predicate that IS interned but participates in no
-    /// quad within `graph` is a different thing entirely — that is a real, observable
-    /// emptiness, and it is accepted.
+    /// precedent for an absent list head does not carry here: an absent head means the
+    /// table has neither rows NOR shape, whereas one empty alternative out of several
+    /// leaves the step's shape entirely intact.)
+    ///
+    /// # Errors
     ///
     /// [`EvalError::Data`] if the step's edges span more than [`u32::MAX`] distinct nodes
     /// or statements, which the dense index space cannot address.
@@ -734,12 +751,12 @@ impl PathGraph {
         // reaches an emitted row.
         let mut raw: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
         for (predicate, direction) in &step.alternatives {
+            // A predicate the dataset never interned names no statement in it, so this
+            // alternative contributes no edges — indistinguishable, in the snapshot, from
+            // an interned predicate with no in-scope quad. See the type-level note above
+            // for why the two must not be told apart here.
             let Some(predicate_id) = dataset.term_id_by_value(predicate) else {
-                return Err(EvalError::data(format!(
-                    "path step predicate {predicate:?} is not present in the dataset; a \
-                     predicate naming nothing is a configuration pointing at nothing, not an \
-                     empty adjacency"
-                )));
+                continue;
             };
             // One recording rule for both layers: whichever table a `(subject, object)`
             // pair came out of, the statement is the asserted triple and the direction
@@ -2409,18 +2426,12 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_predicate_is_a_data_error_not_an_empty_adjacency() {
-        let data = dataset(&[("a", "p", "b")]);
-        let step = PathStep::new(vec![(iri("nowhere"), PathDirection::Forward)]).expect("step");
-        let error = PathGraph::from_dataset(&*data, &step, GraphMatch::Default)
-            .expect_err("a predicate naming nothing is a configuration pointing at nothing");
-        assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
-    }
-
-    #[test]
-    fn an_interned_predicate_with_no_quads_in_scope_is_simply_empty() {
-        // The other side of the same coin: `ex:q` IS interned, so its absence from the
-        // default graph is a real, observable emptiness rather than a misconfiguration.
+    fn the_two_zero_edge_predicates_are_indistinguishable() {
+        // The property that was violated: an UN-INTERNED predicate and an INTERNED one
+        // with no in-scope quad have identical observable graph content — zero edges for
+        // that predicate — so the snapshot must treat them identically. Keying a hard
+        // failure on which of them holds keys it on whether the IRI happens to appear
+        // anywhere in the term table, which is an interning detail no host can predict.
         let mut builder = RdfDatasetBuilder::new();
         let a = builder.intern_iri("http://example.org/a");
         let p = builder.intern_iri("http://example.org/p");
@@ -2428,13 +2439,75 @@ mod tests {
         let b = builder.intern_iri("http://example.org/b");
         let g = builder.intern_iri("http://example.org/g");
         builder.push_quad(a, p, b, None);
+        // `ex:q` IS interned, but only in a named graph the snapshot below does not read.
         builder.push_quad(a, q, b, Some(g));
         let data = builder.freeze().expect("freeze");
-        let step = PathStep::new(vec![(iri("q"), PathDirection::Forward)]).expect("step");
-        let graph =
-            PathGraph::from_dataset(&*data, &step, GraphMatch::Default).expect("interned is fine");
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.edge_count(), 0);
+
+        // `ex:nowhere` is not interned at all; `ex:q` is interned and out of scope.
+        for local in ["nowhere", "q"] {
+            let step = PathStep::new(vec![(iri(local), PathDirection::Forward)]).expect("step");
+            let graph = PathGraph::from_dataset(&*data, &step, GraphMatch::Default)
+                .unwrap_or_else(|error| panic!("ex:{local} must snapshot cleanly: {error}"));
+            assert_eq!(graph.node_count(), 0, "ex:{local}");
+            assert_eq!(graph.edge_count(), 0, "ex:{local}");
+        }
+    }
+
+    #[test]
+    fn an_alternation_member_with_no_edges_contributes_nothing_and_the_rest_still_walks() {
+        // The legitimate input the old hard failure refused: a host with a fixed step
+        // vocabulary snapshotting across datasets, one of which carries only half of it.
+        // An alternation is an alternation — `p|q` in the core grammar does not error when
+        // `q` matches nothing — so the answer here is the ex:p-only walks, in full.
+        let data = dataset(&[("a", "p", "b"), ("b", "p", "c")]);
+        let step = PathStep::new(vec![
+            (iri("p"), PathDirection::Forward),
+            (iri("absent"), PathDirection::Inverse),
+        ])
+        .expect("step");
+        let graph = Arc::new(
+            PathGraph::from_dataset(&*data, &step, GraphMatch::Default)
+                .expect("one empty alternative does not invalidate the step"),
+        );
+        assert_eq!(graph.edge_count(), 2, "the ex:p edges, and only those");
+
+        let relation = PathWitnessRelation::new(graph, limits(1, 2));
+        let mut bound = free();
+        bound[POS_START] = Some(iri("a"));
+        let rows = drained(&relation, &bound);
+        assert_eq!(
+            rows,
+            vec![
+                vec![
+                    iri("a"),
+                    iri("b"),
+                    rows[0][POS_PATH_ID].clone(),
+                    int(1),
+                    int(1),
+                    iri("b"),
+                    stmt("a", "p", "b"),
+                ],
+                vec![
+                    iri("a"),
+                    iri("c"),
+                    rows[1][POS_PATH_ID].clone(),
+                    int(2),
+                    int(1),
+                    iri("b"),
+                    stmt("a", "p", "b"),
+                ],
+                vec![
+                    iri("a"),
+                    iri("c"),
+                    rows[2][POS_PATH_ID].clone(),
+                    int(2),
+                    int(2),
+                    iri("c"),
+                    stmt("b", "p", "c"),
+                ],
+            ],
+            "a→b and a→b→c, exactly as if the absent alternative had not been declared"
+        );
     }
 
     #[test]
