@@ -562,7 +562,7 @@ impl TermValue {
     ///
     /// - Every variant opens with a distinct `u8` tag, so a byte string can be
     ///   attributed to at most one variant before any field is read.
-    /// - Every variable-length field is written by [`push_framed`]: an eight-byte
+    /// - Every variable-length field is written framed by `push_framed`: an eight-byte
     ///   little-endian length, then exactly that many bytes. The reader therefore
     ///   always knows where a field ends without scanning for a delimiter — which
     ///   matters because RDF strings are arbitrary UTF-8 and no byte is reserved.
