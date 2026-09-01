@@ -373,8 +373,8 @@ impl CdtFn {
 ///   becomes an error: inside `BIND` the variable stays unbound, inside `FILTER` the
 ///   solution is dropped. This is the outcome the corpus writes as
 ///   `FILTER(!BOUND(?x))`, and it is emphatically **not** "false".
-/// * [`CdtOutcome::Bound`] — one of [`MAX_NESTING_DEPTH`], [`MAX_ELEMENTS`] or
-///   [`MAX_LEXICAL_BYTES`] would have been exceeded by the value the function was
+/// * [`CdtOutcome::Bound`] — one of [`crate::MAX_NESTING_DEPTH`],
+///   [`crate::MAX_ELEMENTS`] or [`crate::MAX_LEXICAL_BYTES`] would have been exceeded by the value the function was
 ///   asked to mint. This is a **hard failure of the query**, not an expression
 ///   error: degrading it to an unbound variable would let a hostile query silently
 ///   change a result set instead of being refused, so a consumer must propagate it
@@ -889,7 +889,7 @@ pub fn list_subseq(
 /// unbound.
 ///
 /// A non-list argument is a SPARQL error (`concat-error-01.rq`, and
-/// `concat-error-02.rq` for the single-argument case); that is [`concat`]'s dispatch,
+/// `concat-error-02.rq` for the single-argument case); that is [`concat()`]'s dispatch,
 /// since this function is reached with lists in hand.
 ///
 /// # Examples
@@ -954,7 +954,7 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
 /// be found. Membership therefore compares blank nodes by identity, which is *not*
 /// what SEP-0009's `=` does — `list-equals-06.rq` requires `[_:b1] = [_:b2]` to be
 /// unbound. The two relations are asking different questions, and
-/// [`crate::ops::membership_equal`] is where the difference lives.
+/// `crate::ops::membership_equal` is where the difference lives.
 ///
 /// **The corpus does not exercise searching for `null` itself** — a SPARQL argument
 /// is never the null element, since an unbound argument raises before the call. If a

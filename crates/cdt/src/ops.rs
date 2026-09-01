@@ -884,8 +884,8 @@ pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
 
 /// SEP-0009 `cdt:list-less-than` over two lists' elements.
 ///
-/// See [`sequence_less_than`] for the exact rules, including what happens when `<`
-/// raises at the first unequal position.
+/// See `sequence_less_than` for the exact rules, each with the corpus test that
+/// pins it, including what happens when `<` raises at the first unequal position.
 ///
 /// # Examples
 ///

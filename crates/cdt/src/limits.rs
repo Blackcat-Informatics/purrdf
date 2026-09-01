@@ -1,36 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The three resource bounds **every** [`crate::CdtValue`] satisfies, and the machinery that
-//! establishes them.
+//! The three resource bounds **every** [`crate::CdtValue`] satisfies, and the
+//! machinery that establishes them.
 //!
 //! # The bounds are an invariant of the type, not a property of one code path
 //!
-//! There is no way to obtain a [`crate::CdtValue`] except through a constructor in this
-//! crate, and every one of them either checks all three bounds here or is reached only
-//! from a caller that just did. Concretely:
+//! There is no way to obtain a [`crate::CdtValue`] except through a constructor in
+//! this crate, and every one of them either checks all three bounds here or is
+//! reached only from a caller that just did. Concretely:
 //!
-//! * [`crate::CdtValue::list`] and [`crate::CdtValue::map`] measure the prospective value and refuse
-//!   before returning it;
+//! * [`crate::CdtValue::list`] and [`crate::CdtValue::map`] measure the prospective
+//!   value and refuse before returning it;
 //! * [`crate::parse_cdt`] enforces the depth and element bounds *as it scans* — before
 //!   the offending element is allocated — and the byte bound both on the input it is
 //!   offered and on the canonical form the result would have;
 //! * [`crate::functions`] measures each prospective result from borrowed inputs and
 //!   refuses before cloning anything;
-//! * [`crate::CdtValue::empty_list`] and [`crate::CdtValue::empty_map`] are within every bound by
-//!   inspection.
+//! * [`crate::CdtValue::empty_list`] and [`crate::CdtValue::empty_map`] are within
+//!   every bound by inspection.
 //!
 //! That is why the crate's public constructors return `Result` rather than the value:
 //! a bound is not advice a caller may decline. A consumer that only ever *reads* a
-//! [`crate::CdtValue`] can rely on the invariant without re-checking it, which is what makes
-//! the recursive `Drop`, `Clone` and `Debug` glue on this owning tree safe.
+//! [`crate::CdtValue`] can rely on the invariant without re-checking it, which is what
+//! makes the recursive `Drop`, `Clone` and `Debug` glue on this owning tree safe.
 //!
 //! # Every check here is iterative
 //!
-//! [`term_extent`], [`list_extent`] and [`map_extent`] walk with an
-//! explicit heap worklist and never recurse. A bound check that could itself overflow
-//! the stack would be checking for the very thing it caused, and in Rust a stack
-//! overflow is an `abort` no caller can catch.
+//! Measuring a composite — one that exists, or one that does not exist yet — walks
+//! with an explicit heap worklist and never recurses. A bound check that could itself
+//! overflow the stack would be checking for the very thing it caused, and in Rust a
+//! stack overflow is an `abort` no caller can catch.
 //!
 //! # Why this crate owns its own bounds
 //!
@@ -113,7 +113,7 @@ pub const MAX_ELEMENTS: usize = 1 << 20;
 /// bytes in and forty-eight out, because the canonical form spells every shorthand —
 /// so checking only the input would let a value into the type whose own lexical form
 /// no host could hold. [`crate::parse_cdt`] therefore checks both, and the
-/// [`crate::functions`] that mint check the canonical length they are about to create.
+/// [`crate::functions`] that mint check the canonical length they will create.
 pub const MAX_LEXICAL_BYTES: usize = 64 * 1024 * 1024;
 
 // ── Measuring a value, or a value that does not exist yet ───────────────────────
@@ -125,11 +125,11 @@ pub const MAX_LEXICAL_BYTES: usize = 64 * 1024 * 1024;
 /// application, and a query of twenty-one lines could otherwise ask for a value no
 /// host can hold.
 pub(crate) struct Extent {
-    /// Elements at every level, counted the way [`crate::CdtValue::element_count`] counts
-    /// them.
+    /// Elements at every level, counted the way
+    /// [`crate::CdtValue::element_count`] counts them.
     pub(crate) elements: usize,
-    /// Nesting depth, counted the way [`crate::CdtValue::depth`] counts it: the composite
-    /// itself is 1.
+    /// Nesting depth, counted the way [`crate::CdtValue::depth`] counts it: the
+    /// composite itself is 1.
     pub(crate) depth: usize,
     /// The exact byte length of the canonical lexical form the composite would have.
     pub(crate) bytes: usize,

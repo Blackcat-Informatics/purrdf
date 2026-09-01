@@ -41,7 +41,7 @@
 //!
 //! [`canonical_lexical_len`] answers "how many bytes would that be?" without
 //! allocating them. It is not a second, parallel spelling of the form — it drives
-//! the **same** walker through a different [`Sink`], so the two can never drift.
+//! the **same** walker through a different output sink, so the two can never drift.
 //! [`crate::functions`] needs it: a minted composite must be refused *before* it is
 //! built when its canonical form would exceed [`crate::MAX_LEXICAL_BYTES`], and
 //! rendering the very thing you are trying not to allocate is not a bound check.
@@ -140,7 +140,7 @@ pub fn canonical_lexical(value: &CdtValue) -> String {
 /// The **byte length** of [`canonical_lexical`], computed without allocating it.
 ///
 /// Exactly equal to `canonical_lexical(value).len()` for every value, because both
-/// drive the same walker (see the [`Sink`] trait); this one just never keeps the
+/// drive the same walker (see the `Sink` trait); this one just never keeps the
 /// bytes. That is what lets [`crate::functions`] check a prospective composite
 /// against [`crate::MAX_LEXICAL_BYTES`] *before* deciding to build it.
 ///
