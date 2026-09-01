@@ -87,6 +87,22 @@ called out below with what a consumer must do.
   registered aggregate's resolution depend on the number of focus nodes). Callers constructing
   `Shapes` via struct literal must now supply `aggregates`, or use `Shapes::default()` / the
   parser's constructor, both of which populate it with an empty registry.
+- **BREAKING** **iri,rdf,cli:** A relative IRI reference with no base IRI in scope is now a hard
+  error instead of being interned verbatim. Documents that previously "worked" this way were
+  emitting N-Triples no conformant parser accepts, so the failure surfaces an existing defect
+  rather than introducing one. Reference resolution is now a single layer, `purrdf-iri`, shared by
+  every codec: the RFC 3986 §5.1 precedence chain is an in-document directive
+  (`@base`/`BASE`/`xml:base`/`@context.@base`), else a caller-supplied base, else the document's
+  retrieval IRI, else the §5.1.4 failure. The stable codes are `iri-relative-no-base` (fixable by
+  supplying a base), `iri-not-absolute-by-grammar` (N-Triples, N-Quads, TriX and HexTuples admit no
+  relative reference at all, so a base cannot help) and `iri-non-absolute-base` (the supplied base
+  has no scheme). Only `purrdf-cli` has a retrieval IRI — it derives each filesystem input's
+  RFC 8089 `file://` IRI, so a file input needs no flag; the library, wasm, C ABI, Python and CLI
+  stdin are handed bytes, have no retrieval IRI, and hard-fail as §5.1.4 specifies. Callers on
+  those surfaces must give the document a base directive or pass one to the API. On the way out,
+  a syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) now emits it and
+  relativizes against a supplied base; one that cannot (N-Triples, N-Quads, TriX, HexTuples) keeps
+  writing absolute IRIs. See "Base IRIs & Relative References" in The PurRDF Book.
 - **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
   views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
   clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the

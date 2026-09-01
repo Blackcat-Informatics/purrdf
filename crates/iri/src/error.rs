@@ -60,10 +60,13 @@ pub enum IriError {
     /// reference verbatim.
     ///
     /// This is fixable by supplying a base (an in-document `@base`/`BASE`/`xml:base`
-    /// directive, or a base passed to the API). PurRDF never invents one: deriving a
-    /// base from a retrieval IRI would break byte determinism, diverge across
-    /// surfaces that have no retrieval IRI (stdin, wasm, the C ABI), and leak local
-    /// filesystem paths into published RDF.
+    /// directive, or a base passed to the API). No surface built on this crate
+    /// invents one instead: the library API, wasm, the C ABI, Python and CLI stdin
+    /// are all handed BYTES, so RFC-3986 §5.1.3's retrieval IRI does not exist for
+    /// them and §5.1.4 — this error — is the specified outcome. `purrdf-cli` is the
+    /// one surface that has a retrieval IRI; it derives a file input's RFC-8089
+    /// `file://` IRI and supplies it as a caller-supplied base like any other, only
+    /// when nothing of higher precedence was given.
     NoBase {
         /// The relative reference that could not be resolved.
         reference: String,
