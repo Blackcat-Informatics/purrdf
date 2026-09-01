@@ -223,7 +223,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
 
 /// A refused mint: the value the function was asked to build crosses one of
 /// `purrdf-cdt`'s three bounds. A hard failure, never an expression error.
-fn bound(error: &CdtError) -> EvalError {
+pub(crate) fn bound(error: &CdtError) -> EvalError {
     EvalError::composite_bound(error.to_string())
 }
 
@@ -276,7 +276,7 @@ fn bool_result<D: DatasetView + Sync>(
 /// A **constructor** argument: a failed one is the SEP-0009 `null` element rather
 /// than a failure of the call (`list-functions/list-constructor-null-01.rq`,
 /// `list-constructor-null-02.rq`, `map-functions/put-03.rq`).
-fn argument_element(value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
+pub(crate) fn argument_element(value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
     match value {
         None => Ok(CdtTerm::Null),
         Some(value) => to_cdt_term(value),
@@ -415,7 +415,7 @@ enum InJob<'a> {
 /// three components combine past one of the three bounds. That is a hard failure,
 /// not an expression error: the term exists, and there is no composite that can
 /// hold it.
-fn to_cdt_term(value: &TermValue) -> Result<CdtTerm, EvalError> {
+pub(crate) fn to_cdt_term(value: &TermValue) -> Result<CdtTerm, EvalError> {
     let mut jobs: Vec<InJob<'_>> = vec![InJob::Visit(value)];
     let mut done: Vec<CdtTerm> = Vec::new();
     while let Some(job) = jobs.pop() {

@@ -161,6 +161,27 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
             check_expression(expression, prebound)?;
             check_pattern(inner, prebound)
         }
+        // `UNFOLD` ASSIGNS its one or two targets exactly as `BIND` assigns its
+        // one, so §5.2.1s "must not assign a potentially pre-bound variable" rule
+        // applies to both, checked in declaration order.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            for variable in std::iter::once(element).chain(companion.as_ref()) {
+                if prebound.contains(&variable.as_str()) {
+                    return Err(format!(
+                        "assigning a potentially pre-bound variable (UNFOLD(... AS ?{})) is not \
+                         allowed (SHACL-SPARQL §5.2.1)",
+                        variable.as_str()
+                    ));
+                }
+            }
+            check_expression(expression, prebound)?;
+            check_pattern(inner, prebound)
+        }
         GraphPattern::OrderBy { inner, expression } => {
             for order in expression {
                 let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = order;

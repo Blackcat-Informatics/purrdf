@@ -84,10 +84,10 @@ pub mod substitute;
 
 pub use algebra::{
     AggregateArityError, AggregateExpression, AggregateExpressionError, AggregateFunction,
-    AggregateScalarvalError, CdtArity, CdtCall, CdtFn, Expression, Function, GraphPattern,
-    GraphTarget, GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
-    PropertyPathExpression, PurrdfCall, PurrdfFn, Query, QueryDataset, SparqlVersion, Update,
-    UsingClause,
+    AggregateOrderByError, AggregateParts, AggregateScalarvalError, CdtArity, CdtCall, CdtFn,
+    Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation, NegatedPathElement,
+    OrderExpression, PropertyFunctionCall, PropertyPathExpression, PurrdfCall, PurrdfFn, Query,
+    QueryDataset, SparqlVersion, Update, UsingClause,
 };
 pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,

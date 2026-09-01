@@ -104,8 +104,8 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, GraphMatch, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateFunction, GraphPattern, NamedNodePattern, OrderExpression,
-    Variable,
+    AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
+    OrderExpression, Variable,
 };
 use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
@@ -328,6 +328,31 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
+/// The expression a sort key sorts by, with its `ASC`/`DESC` direction set
+/// aside — the read half of the `(direction, expression)` pair
+/// [`OrderExpression`] is.
+///
+/// Every walk that treats a sort key as an ordinary expression (variable
+/// collection, substitution, prepare-time planning) wants exactly this and
+/// nothing else, and re-spelling the irrefutable
+/// `let (Asc(e) | Desc(e)) = oe;` binding at each of them is how one of them
+/// eventually diverges from the rest.
+pub(crate) const fn order_sort_key(order: &OrderExpression) -> &Expression {
+    match order {
+        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
+    }
+}
+
+/// [`order_sort_key`]'s write half: put a rewritten expression back under
+/// `order`'s ORIGINAL direction. Pairing the two is what keeps a rewrite from
+/// silently turning a `DESC` key into an `ASC` one.
+pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderExpression {
+    match order {
+        OrderExpression::Asc(_) => OrderExpression::Asc(expr),
+        OrderExpression::Desc(_) => OrderExpression::Desc(expr),
+    }
+}
+
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
 /// variable, every named graph in turn, binding the variable to each).
 pub(crate) fn eval_graph<D: DatasetView + Sync>(
@@ -482,7 +507,11 @@ fn eval_graph_var<D: DatasetView + Sync>(
 // ---------------------------------------------------------------------------
 
 /// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
-fn compare_keys(a: &[SortKey<'_>], b: &[SortKey<'_>], exprs: &[OrderExpression]) -> Ordering {
+pub(crate) fn compare_keys(
+    a: &[SortKey<'_>],
+    b: &[SortKey<'_>],
+    exprs: &[OrderExpression],
+) -> Ordering {
     for ((ka, kb), oe) in a.iter().zip(b).zip(exprs) {
         let mut ord = total_order(ka, kb);
         if matches!(oe, OrderExpression::Desc(_)) {
@@ -937,6 +966,18 @@ fn eval_aggregate<D: DatasetView + Sync>(
         return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
     }
 
+    // `FOLD` is dispatched away here for the same reason `Custom` is: its PHASE 1
+    // is not the one below. Every other built-in skips a row whose argument is
+    // unbound; `FOLD` RETAINS it as the SEP-0009 `null` element, takes a second
+    // argument in its `cdt:Map` form, and orders its survivors by its own
+    // `ORDER BY` before folding any of them. Its phase 2 is nonetheless the
+    // ordinary [`fold_builtin`] tail over an ordinary
+    // [`crate::agg_fn::AggregateAccumulator`] — one fold algebra, as the rest of
+    // this module's dispatch promises. See [`crate::cdt_agg`].
+    if matches!(agg.function(), AggregateFunction::Fold) {
+        return crate::cdt_agg::eval_fold(agg, idxs, rows, schema, ctx);
+    }
+
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
     // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
     // that can ever carry one — so dispatch reads `agg.function()` itself
@@ -1093,6 +1134,18 @@ fn eval_aggregate<D: DatasetView + Sync>(
                  short-circuit at the top of eval_aggregate should have already handled it",
             ));
         }
+        // Unreachable for exactly the same reason `Custom` is: `FOLD` was
+        // dispatched to `crate::cdt_agg::eval_fold` at the top of this function,
+        // before any row was consulted, because its phase 1 retains unbound rows
+        // that the loop above has already skipped. Reaching here would mean
+        // folding a `FOLD` over a survivor list its own semantics never built, so
+        // it is a typed internal error rather than a silently wrong answer.
+        AggregateFunction::Fold => {
+            return Err(EvalError::internal(
+                "AggregateFunction::Fold reached the built-in dispatch arm; the FOLD \
+                 short-circuit at the top of eval_aggregate should have already handled it",
+            ));
+        }
     };
     Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
@@ -1137,7 +1190,7 @@ fn acc_step_one<A: crate::agg_fn::AggregateAccumulator>(
 /// aggregate's accumulator does — reusing the identical, already-contained
 /// downcast machinery `crate::agg_fn`'s own doc comments describe for that
 /// case, at a strictly narrower and provably-safe use.
-fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
+pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
     survivors: &[T],
     init: impl Fn() -> A + Sync,
     step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
@@ -2553,8 +2606,14 @@ mod tests {
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -2602,6 +2661,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Count,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     true,
                 )
@@ -2656,8 +2716,14 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -2683,6 +2749,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Min,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2725,6 +2792,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2770,6 +2838,7 @@ mod tests {
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -2803,6 +2872,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2839,6 +2909,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2889,6 +2960,7 @@ mod tests {
                     AggregateFunction::Avg,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -2921,6 +2993,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Avg,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2967,6 +3040,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3323,6 +3397,7 @@ mod tests {
                 AggregateExpression::new(
                     function,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3949,6 +4024,7 @@ mod tests {
                         AggregateFunction::Count,
                         Vec::new(),
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -3959,6 +4035,7 @@ mod tests {
                         AggregateFunction::Avg,
                         vec![Expression::Variable(Variable::new("val"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -3968,6 +4045,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4048,6 +4126,7 @@ mod tests {
                             "separator".to_owned(),
                             purrdf_sparql_algebra::Literal::new_simple(","),
                         )],
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4057,6 +4136,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4149,6 +4229,7 @@ mod tests {
                         "separator".to_owned(),
                         purrdf_sparql_algebra::Literal::new_simple(","),
                     )],
+                    Vec::new(),
                     true,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4194,6 +4275,7 @@ mod tests {
                     AggregateFunction::Max,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4225,6 +4307,7 @@ mod tests {
                     AggregateFunction::Max,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4254,6 +4337,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sample,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4285,6 +4369,7 @@ mod tests {
                     AggregateFunction::Sample,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4314,6 +4399,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4345,6 +4431,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4389,6 +4476,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4464,6 +4552,7 @@ mod tests {
                         AggregateFunction::Count,
                         Vec::new(),
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4473,6 +4562,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Count,
                         vec![Expression::Variable(Variable::new("n"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4484,6 +4574,7 @@ mod tests {
                         AggregateFunction::Sum,
                         vec![Expression::Variable(Variable::new("n"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4494,6 +4585,7 @@ mod tests {
                         AggregateFunction::Min,
                         vec![Expression::Variable(Variable::new("n"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4503,6 +4595,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("n"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4702,6 +4795,7 @@ mod tests {
                     AggregateFunction::Custom(NamedNode::new_unchecked(LIST_COLLECTOR_IRI)),
                     vec![Expression::Variable(Variable::new("val"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4767,6 +4861,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}FIRST"))),
                     vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4839,6 +4934,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
                     vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -5109,6 +5205,7 @@ mod tests {
                             NamedNode::new_unchecked(XINT),
                         ),
                     )],
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),

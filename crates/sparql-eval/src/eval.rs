@@ -1327,6 +1327,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !agg.args().iter().all(|e| self.may_fork_row_loop(e)) {
             return false;
         }
+        // A `FOLD`'s own `ORDER BY` sort keys are evaluated per row in exactly the
+        // same loop its arguments are, so an unsafe builtin reachable through one
+        // (`RAND`, `BNODE`, an `EXISTS` re-entry) makes the group just as unsafe to
+        // fork. Empty for every other aggregate, so this costs nothing elsewhere.
+        if !agg
+            .order_by()
+            .iter()
+            .all(|order| self.may_fork_row_loop(crate::modifier::order_sort_key(order)))
+        {
+            return false;
+        }
         if let purrdf_sparql_algebra::AggregateFunction::Custom(iri) = agg.function() {
             return !crate::parallel::aggregate_is_unsafe(
                 iri.as_str(),
@@ -2298,6 +2309,19 @@ fn eval_node<D: DatasetView + Sync>(
             variable,
             expression,
         } => crate::expr::eval_extend(pattern, inner, variable, expression, ctx),
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => crate::cdt_unfold::eval_unfold(
+            pattern,
+            inner,
+            expression,
+            element,
+            companion.as_ref(),
+            ctx,
+        ),
         GraphPattern::Project { inner, variables } => {
             crate::modifier::eval_project(pattern, inner, variables, ctx)
         }
@@ -2421,6 +2445,22 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
             } => {
                 let mut schema = derive(inner);
                 schema.push(variable.clone());
+                schema
+            }
+            // `UNFOLD`'s columns are its inner pattern's plus its own one or two
+            // targets, in declaration order — the same rule `Extend` follows for
+            // its single target.
+            GraphPattern::Unfold {
+                inner,
+                expression: _,
+                element,
+                companion,
+            } => {
+                let mut schema = derive(inner);
+                schema.push(element.clone());
+                if let Some(companion) = companion {
+                    schema.push(companion.clone());
+                }
                 schema
             }
             GraphPattern::Values {

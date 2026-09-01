@@ -647,6 +647,9 @@ fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Graph { inner, .. }
         | GraphPattern::Extend { inner, .. }
+        // `UNFOLD` expands a composite value the solution already carries and
+        // matches no triple in any graph, so it is transparent to this walk.
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }

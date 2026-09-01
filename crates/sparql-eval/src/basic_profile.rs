@@ -248,6 +248,18 @@ fn check_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
             check_expression(expression)?;
             check_pattern(inner)
         }
+        // `UNFOLD` introduces no triple-term SYNTAX of its own — its targets are
+        // plain variables and its operand is an ordinary expression — so the
+        // Basic profile has nothing to gate at this node and it is transparent,
+        // exactly like `BIND`. (A composite VALUE may of course hold a triple
+        // term; the profile restricts syntax, not the values a query computes,
+        // the same way it leaves `cdt:List(…)` alone.)
+        GraphPattern::Unfold {
+            inner, expression, ..
+        } => {
+            check_expression(expression)?;
+            check_pattern(inner)
+        }
         GraphPattern::Values { bindings, .. } => {
             for row in bindings {
                 for cell in row.iter().flatten() {

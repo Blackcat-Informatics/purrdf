@@ -2204,6 +2204,62 @@ impl<'a> Parser<'a, '_> {
                     variable,
                     expression,
                 };
+            } else if self.eat_kw("UNFOLD") {
+                // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`
+                // — the SEP-0009 row expander. Structurally `BIND`'s twin (one
+                // expression, one or two newly bound variables, stacked ABOVE the
+                // pattern parsed so far so it can read what that pattern bound),
+                // so it reuses `BIND`'s §19.6 scope rule verbatim on BOTH targets.
+                self.expect(&Token::LParen)?;
+                let expression = self.parse_expression()?;
+                self.expect_kw("AS")?;
+                let element = self.expect_var()?;
+                let companion = if self.eat(&Token::Comma) {
+                    Some(self.expect_var()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::RParen)?;
+                for variable in std::iter::once(&element).chain(companion.as_ref()) {
+                    debug_assert_eq!(
+                        scope.contains(variable),
+                        visible_variables(&g).contains(variable),
+                        "the incremental UNFOLD-scope check drifted from a fresh \
+                         visible_variables walk"
+                    );
+                    if scope.contains(variable) {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "UNFOLD target ?{} is already in scope in the group graph pattern",
+                                variable.as_str()
+                            ),
+                            self.span(),
+                        ));
+                    }
+                }
+                // The two targets bind two DIFFERENT positions of one element
+                // (see `GraphPattern::Unfold`), so one variable in both slots
+                // would have to hold two values in one row. Refused here rather
+                // than resolved by a precedence rule nobody could guess.
+                if companion.as_ref() == Some(&element) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "UNFOLD binds ?{} twice; its two targets must be distinct variables",
+                            element.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
+                for variable in std::iter::once(&element).chain(companion.as_ref()) {
+                    scope.note(variable);
+                    self.note_exists_scope_var(variable);
+                }
+                g = GraphPattern::Unfold {
+                    inner: Box::new(g),
+                    expression,
+                    element,
+                    companion,
+                };
             } else if self.peek_kw("VALUES") {
                 let values = self.parse_inline_data()?;
                 collect_vars(&values, &mut scope);
@@ -2683,6 +2739,7 @@ impl<'a> Parser<'a, '_> {
             || self.peek_kw("BIND")
             || self.peek_kw("VALUES")
             || self.peek_kw("LATERAL")
+            || self.peek_kw("UNFOLD")
     }
 
     fn parse_predicate_object_list(
@@ -3861,8 +3918,10 @@ impl<'a> Parser<'a, '_> {
                     self.span(),
                 ));
             }
-            AggregateExpression::new(func, Vec::new(), Vec::new(), distinct)
+            AggregateExpression::new(func, Vec::new(), Vec::new(), Vec::new(), distinct)
                 .expect("COUNT accepts an empty exprlist")
+        } else if matches!(func, AggregateFunction::Fold) {
+            self.parse_fold_tail(distinct)?
         } else {
             // Marks any `EXISTS` reached while parsing THIS argument as
             // `ExistsScopeBasis::AggregateArgument` if it is later deferred
@@ -3884,13 +3943,91 @@ impl<'a> Parser<'a, '_> {
             {
                 scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
             }
-            AggregateExpression::new(func, vec![inner], scalarvals, distinct)
+            AggregateExpression::new(func, vec![inner], scalarvals, Vec::new(), distinct)
                 .expect("a one-element args list is always a valid AggregateExpression")
         };
         self.expect(&Token::RParen)?;
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
+    }
+
+    /// Parse everything inside `FOLD(` after an already-consumed `DISTINCT`,
+    /// up to but not including the closing `)`:
+    ///
+    /// ```text
+    /// Expression ( ',' Expression )? ( 'ORDER' 'BY' OrderCondition+ )?
+    /// ```
+    ///
+    /// One expression is the `cdt:List` form, two the `cdt:Map` form (first is
+    /// the key). The optional `ORDER BY` follows the LAST expression with NO
+    /// separating comma — a comma there would name a third exprlist entry,
+    /// which [`AggregateExpression::new`] refuses.
+    ///
+    /// The sort keys are the AGGREGATION's own (see
+    /// [`AggregateFunction::Fold`]); they order the rows this `FOLD` folds and
+    /// are unrelated to the query's solution modifier, so they are parsed here
+    /// rather than by [`Self::parse_solution_modifiers`]. An aggregate inside
+    /// one of them would be a nested aggregate, which
+    /// [`Self::parse_primary_expression`] and [`Self::parse_expression`] both
+    /// already refuse — `FOLD(?v ORDER BY SUM(?w))` is a hard syntax error, not
+    /// a silently-lifted second aggregate.
+    fn parse_fold_tail(&mut self, distinct: bool) -> Result<AggregateExpression> {
+        // Marks any `EXISTS` reached below as `ExistsScopeBasis::AggregateArgument`
+        // when `Parser::projection_scope_pending` postpones its scope check,
+        // exactly as the single-argument path does; the sort keys are aggregate
+        // arguments too, evaluated per row against the group's own solutions.
+        let saved_in_aggregate_argument = self.in_aggregate_argument;
+        self.in_aggregate_argument = true;
+        let parsed = self.parse_fold_parts();
+        self.in_aggregate_argument = saved_in_aggregate_argument;
+        let (args, order_by) = parsed?;
+        AggregateExpression::new(
+            AggregateFunction::Fold,
+            args,
+            Vec::new(),
+            order_by,
+            distinct,
+        )
+        .map_err(|error| ParseError::syntax(error.to_string(), self.span()))
+    }
+
+    /// [`Self::parse_fold_tail`]'s body, split out so the
+    /// `in_aggregate_argument` flag is restored on the error path too.
+    fn parse_fold_parts(&mut self) -> Result<(Vec<Expression>, Vec<OrderExpression>)> {
+        let mut args = vec![self.parse_expression()?];
+        if self.eat(&Token::Comma) {
+            args.push(self.parse_expression()?);
+        }
+        let mut order_by = Vec::new();
+        if self.eat_kw("ORDER") {
+            self.expect_kw("BY")?;
+            loop {
+                let cond = if self.eat_kw("ASC") {
+                    self.expect(&Token::LParen)?;
+                    let e = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    OrderExpression::Asc(e)
+                } else if self.eat_kw("DESC") {
+                    self.expect(&Token::LParen)?;
+                    let e = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    OrderExpression::Desc(e)
+                } else if self.order_key_ahead() {
+                    OrderExpression::Asc(self.parse_primary_expression()?)
+                } else {
+                    break;
+                };
+                order_by.push(cond);
+            }
+            if order_by.is_empty() {
+                return Err(ParseError::syntax(
+                    "FOLD's ORDER BY requires at least one sort condition",
+                    self.span(),
+                ));
+            }
+        }
+        Ok((args, order_by))
     }
 
     /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
@@ -3945,9 +4082,14 @@ impl<'a> Parser<'a, '_> {
         }
         let scalarvals = self.parse_agg_scalarvals()?;
         self.expect(&Token::RParen)?;
-        let agg =
-            AggregateExpression::new(AggregateFunction::Custom(iri), args, scalarvals, distinct)
-                .expect("the `args.push` loop above always runs at least once");
+        let agg = AggregateExpression::new(
+            AggregateFunction::Custom(iri),
+            args,
+            scalarvals,
+            Vec::new(),
+            distinct,
+        )
+        .expect("the `args.push` loop above always runs at least once");
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
@@ -4386,6 +4528,21 @@ fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
             collect_vars(inner, out);
             out.note(variable);
         }
+        // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
+        // enclosing group, exactly like `BIND`'s single one: `SELECT *`
+        // projects them and a later `FILTER` in the same group sees them.
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            collect_vars(inner, out);
+            out.note(element);
+            if let Some(companion) = companion {
+                out.note(companion);
+            }
+        }
         GraphPattern::Values { variables, .. } => {
             for v in variables {
                 out.note(v);
@@ -4478,6 +4635,10 @@ enum ScopeIntro {
     Bind,
     /// A `VALUES` block's column variable.
     Values,
+    /// An `UNFOLD(expr AS ?e, ?i)` target — either of the two. Its own label
+    /// rather than [`Self::Bind`]'s, because the offending text a reader must
+    /// go find says `UNFOLD`, not `BIND`.
+    Unfold,
 }
 
 impl ScopeIntro {
@@ -4485,6 +4646,7 @@ impl ScopeIntro {
         match self {
             Self::Bind => "BIND target",
             Self::Values => "VALUES variable",
+            Self::Unfold => "UNFOLD target",
         }
     }
 }
@@ -4752,6 +4914,25 @@ fn find_scope_conflict<'a>(
                 find_scope_conflict(scope, inner)
             }
         }
+        // `UNFOLD` introduces one or two fresh bindings at this scope level,
+        // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
+        // side that re-introduces an outer variable through `UNFOLD` is the
+        // same conflict, reported in declaration order (element, then
+        // companion). Its expression operand is never visited, for the reason
+        // stated for `Extend`'s above.
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            for variable in std::iter::once(element).chain(companion.as_ref()) {
+                if scope.contains(variable) {
+                    return Some((variable, ScopeIntro::Unfold));
+                }
+            }
+            find_scope_conflict(scope, inner)
+        }
         // `VALUES`: the first declared column that collides, in declaration
         // order.
         GraphPattern::Values { variables, .. } => {
@@ -4937,6 +5118,10 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
         "MAX" => AggregateFunction::Max,
         "SAMPLE" => AggregateFunction::Sample,
         "GROUP_CONCAT" => AggregateFunction::GroupConcat,
+        // A KEYWORD alternative of production `[127+] Aggregate`, not the
+        // `AGG(<iri>, …)` extension surface: `FOLD` names no IRI, so it belongs
+        // in this dispatch table beside the SPARQL 1.1 built-ins.
+        "FOLD" => AggregateFunction::Fold,
         _ => return None,
     })
 }

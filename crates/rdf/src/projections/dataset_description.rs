@@ -403,6 +403,13 @@ fn pattern_reaches_non_reproducible_builtin(
             inner, expression, ..
         } => expression_reaches_non_reproducible_builtin(expression)
             .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
+        // `UNFOLD` expands a value the solution already carries — a pure,
+        // deterministic function of that value — so it contributes no cause of its
+        // own and is transparent, exactly like `BIND`.
+        GraphPattern::Unfold {
+            inner, expression, ..
+        } => expression_reaches_non_reproducible_builtin(expression)
+            .or_else(|| pattern_reaches_non_reproducible_builtin(inner)),
         GraphPattern::LeftJoin {
             left,
             right,
@@ -439,9 +446,16 @@ fn pattern_reaches_non_reproducible_builtin(
                 if matches!(aggregate.function(), AggregateFunction::Custom(_)) {
                     Some(NonReproducibleCause::CustomAggregate)
                 } else {
+                    // A `FOLD`s own `ORDER BY` sort keys are per-row expressions
+                    // evaluated exactly as its arguments are, so a `RAND()` reachable
+                    // through one is the same non-reproducibility and is searched too.
                     aggregate
                         .args()
                         .iter()
+                        .chain(aggregate.order_by().iter().map(|order| match order {
+                            OrderExpression::Asc(expression)
+                            | OrderExpression::Desc(expression) => expression,
+                        }))
                         .find_map(expression_reaches_non_reproducible_builtin)
                 }
             })
