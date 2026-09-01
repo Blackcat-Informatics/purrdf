@@ -23,7 +23,7 @@ impl Parser<'_> {
     /// nor a `sh:SPARQLRule`, one that is ambiguously both, a `sh:TripleRule`
     /// missing one of `sh:subject`/`sh:predicate`/`sh:object`, a `sh:SPARQLRule`
     /// whose `sh:construct` is missing / unparsable / not a CONSTRUCT / violates
-    /// the pre-binding restrictions, or a non-numeric `sh:order`.
+    /// the pre-binding restrictions, or a non-numeric / non-finite `sh:order`.
     pub(crate) fn parse_rules(&mut self, id: &Term) -> Result<Vec<Rule>, String> {
         let mut rule_nodes: Vec<Term> = self.objects_of(id, sh::RULE);
         crate::term::sort_terms_canonical(&mut rule_nodes);
@@ -49,6 +49,18 @@ impl Parser<'_> {
                         lit.value()
                     )
                 })?;
+                // `sh:order` is decimal-valued, and the layered scheduler uses it
+                // to PARTITION execution into strata. `NaN` and `±INF` parse as
+                // `f64` but denote no decimal and no position in the stratum
+                // order (`NaN` is not even equal to itself, so "same stratum"
+                // would be undefined for it). Refuse rather than schedule a rule
+                // at an unresolvable position.
+                if !value.is_finite() {
+                    return Err(format!(
+                        "sh:order on rule {rule_node} must be a finite decimal, got \"{}\"",
+                        lit.value()
+                    ));
+                }
                 Some(OrderKey::new(value))
             }
             Some(other) => {

@@ -22,6 +22,63 @@ fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 0..4096)
 }
 
+const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+     @prefix ex: <http://example.org/ns#> .\n";
+
+/// A cyclic SHACL-AF node expression must be a hard `Err`, whatever node kind
+/// spells the cycle.
+///
+/// Rust stack exhaustion ABORTS the process and is not catchable, so an
+/// unguarded node-expression cycle is not a "panic" this suite could observe —
+/// the test binary reaching its own assertions is the proof that the parse
+/// terminated. Both cases below are reachable from ordinary Turtle: a named
+/// node referring to itself through `sh:union`, and a labelled blank node doing
+/// the same.
+#[test]
+fn cyclic_node_expression_graph_is_hard_error() {
+    let named = parse_shapes(&format!(
+        "{NODE_EXPR_PREFIXES}\
+         ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression ex:E .\n\
+         ex:E sh:union ( ex:E ) .\n"
+    ))
+    .expect_err("a named-node expression cycle must be rejected");
+    assert!(
+        named.contains("cyclic"),
+        "error must name the cycle, got: {named}"
+    );
+
+    let blank = parse_shapes(&format!(
+        "{NODE_EXPR_PREFIXES}\
+         ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression _:e .\n\
+         _:e sh:union ( _:e ) .\n"
+    ))
+    .expect_err("a blank-node expression cycle must be rejected");
+    assert!(
+        blank.contains("cyclic"),
+        "error must name the cycle, got: {blank}"
+    );
+}
+
+/// The cycle guard is a STACK of in-flight parses, not a visited set: a node
+/// expression DAG that reaches the same named sub-expression through two
+/// disjoint branches is not a cycle and must still parse.
+///
+/// This is the anti-regression guard for extending the guard beyond blank
+/// nodes — a visited-set implementation would wrongly reject this document.
+#[test]
+fn shared_named_sub_expression_is_not_a_cycle() {
+    let shapes = parse_shapes(&format!(
+        "{NODE_EXPR_PREFIXES}\
+         ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression ex:Top .\n\
+         ex:Top sh:union ( ex:Left ex:Right ) .\n\
+         ex:Left sh:union ( ex:Shared ) .\n\
+         ex:Right sh:union ( ex:Shared ) .\n\
+         ex:Shared sh:union ( ex:a ) .\n"
+    ))
+    .expect("a shared sub-expression reached twice is a DAG, not a cycle");
+    assert_eq!(shapes.node_shapes.len(), 1);
+}
+
 /// Structure-aware SHACL Turtle: real `sh:` shape fragments interleaved with
 /// noise, to reach the shape-graph interpreter, not just the Turtle lexer.
 fn structured_shapes() -> impl Strategy<Value = String> {

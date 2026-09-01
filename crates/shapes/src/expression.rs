@@ -173,10 +173,18 @@ pub enum FnCall {
 /// seeds each nested evaluation with the caller's depth and hard-fails past
 /// [`MAX_RECURSION_DEPTH`], so a mutually-recursive filter/exists cycle
 /// fails closed instead of overflowing the stack.
+///
+/// A third, independent counter bounds the STRUCTURAL nesting of one expression
+/// tree (every `NodeExpr` node on the path from the root), capped at
+/// [`MAX_NODE_EXPR_DEPTH`]. A shape-bearing cycle is not the only way to nest
+/// without bound — an authored tree of `sh:union` / `sh:if` / paging wrappers
+/// reaches the native stack directly, and a Rust stack overflow ABORTS the
+/// process rather than returning an error a caller could handle.
 #[derive(Debug, Default)]
 pub struct RecursionGuard {
     stack: FastSet<(String, String)>,
     depth: u32,
+    structural: u32,
 }
 
 /// Maximum nested `sh:filterShape` / `sh:exists` re-entry depth. Legitimate
@@ -184,6 +192,24 @@ pub struct RecursionGuard {
 /// grows without bound and trips this ceiling, fail-closed, well before the
 /// native stack is exhausted.
 pub const MAX_RECURSION_DEPTH: u32 = 64;
+
+/// Maximum STRUCTURAL nesting depth of a single node-expression tree — one unit
+/// per [`NodeExpr`] node on the path from the root to the node being evaluated.
+///
+/// This is a DIFFERENT quantity from [`MAX_RECURSION_DEPTH`], which counts full
+/// re-entries into the constraint engine (one unit = one `sh:filterShape` /
+/// `sh:exists` round trip through [`crate::constraints::conforms`]), and it
+/// deliberately does not share that ceiling. The shapes parser wraps EVERY
+/// authored node expression in `Limit(Offset(OrderBy(core)))` when it carries
+/// paging keys — three structural levels per authored node — and set combinators
+/// (`sh:union`, `sh:intersection`, `sh:if`, function-call arguments) add one
+/// level each. A ceiling of 64 would therefore reject a legitimate ~16-node
+/// authored expression, turning "fail closed on a cycle" into "reject a valid
+/// shape". At 256 the bound admits roughly 85 fully-paged authored levels — far
+/// past anything hand-authored — while still refusing an expression tree deep
+/// enough to threaten the native stack, which a Rust stack overflow would end by
+/// ABORTING the process rather than by returning an error.
+pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
 
 impl RecursionGuard {
     /// A fresh guard with no in-flight pairs, at depth zero.
@@ -200,6 +226,7 @@ impl RecursionGuard {
         Self {
             stack: FastSet::default(),
             depth,
+            structural: 0,
         }
     }
 
@@ -207,6 +234,30 @@ impl RecursionGuard {
     #[must_use]
     pub fn depth(&self) -> u32 {
         self.depth
+    }
+
+    /// Descend one structural level of the node-expression tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` naming [`MAX_NODE_EXPR_DEPTH`] once the tree nests
+    /// past the ceiling — a hard, catchable refusal in place of the uncatchable
+    /// process abort a native stack overflow would be.
+    fn enter_node_expr(&mut self) -> Result<(), String> {
+        if self.structural >= MAX_NODE_EXPR_DEPTH {
+            return Err(format!(
+                "node expression nesting depth exceeded ({} > {MAX_NODE_EXPR_DEPTH}): the \
+                 expression tree is nested past the structural limit",
+                self.structural.saturating_add(1)
+            ));
+        }
+        self.structural += 1;
+        Ok(())
+    }
+
+    /// Ascend one structural level, undoing an [`enter_node_expr`](Self::enter_node_expr).
+    fn exit_node_expr(&mut self) {
+        self.structural = self.structural.saturating_sub(1);
     }
 
     /// Record `(shape_id, focus)` as in-flight.
@@ -313,13 +364,34 @@ fn builtin_keyword(iri: &str) -> Option<&'static str> {
 /// re-enters the constraint engine under `guard`; a cyclic filter reference is a
 /// hard `Err` (see [`RecursionGuard`]).
 ///
+/// EVERY arm of the evaluator descends through this entry point, so the
+/// structural nesting of the expression tree is bounded by
+/// [`MAX_NODE_EXPR_DEPTH`] uniformly — there is no arm (`sh:union`,
+/// `sh:intersection`, `sh:if`, the paging wrappers, a function call's arguments)
+/// through which an over-deep tree can reach the native stack.
+///
 /// # Errors
 ///
-/// Returns `Err(String)` on a recursion cycle or depth-limit breach, or when a
-/// sub-expression errors (e.g. an unresolved function IRI). A function call over
-/// multi-valued arguments is the cartesian product of the argument value-sets,
-/// not an error.
+/// Returns `Err(String)` on a recursion cycle, a filter/exists depth-limit
+/// breach, a structural-depth breach, or when a sub-expression errors (e.g. an
+/// unresolved function IRI). A function call over multi-valued arguments is the
+/// cartesian product of the argument value-sets, not an error.
 pub fn eval_node_expr(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, String> {
+    guard.enter_node_expr()?;
+    // Capture, unwind one level, THEN propagate: an early `?` here would leave
+    // the structural counter permanently raised for the rest of the evaluation.
+    let result = eval_node_expr_at_depth(store, focus, expr, guard);
+    guard.exit_node_expr();
+    result
+}
+
+/// One structural level of [`eval_node_expr`], with the depth already charged.
+fn eval_node_expr_at_depth(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
@@ -1513,6 +1585,93 @@ mod tests {
         guard
             .enter("shapeA", "focusX")
             .expect("re-enter after exit ok");
+    }
+
+    /// A node-expression tree nested past [`MAX_NODE_EXPR_DEPTH`] must fail
+    /// CLOSED — a hard `Err` naming the structural limit — instead of recursing
+    /// into the native stack, whose exhaustion ABORTS the process uncatchably.
+    ///
+    /// The tree is built PROGRAMMATICALLY rather than authored as Turtle: a
+    /// deeply nested blank-node Turtle document would exercise the Turtle parser
+    /// in another crate, which is a different bound in a different place. The
+    /// wrapper alternates the paging and set combinators so the assertion covers
+    /// more than one arm of the evaluator.
+    #[test]
+    fn node_expression_deeper_than_the_structural_limit_fails_closed() {
+        // The evaluator's per-level frame (the wide `eval_node_expr_at_depth`
+        // match) is sizeable, so run on a generous stack: the point of the test
+        // is that the DEPTH GUARD — not a stack overflow — is what terminates
+        // the walk. Dropping the tree is also recursive, hence the same thread.
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let data = load_data(DATA);
+                let mut expr = NodeExpr::This;
+                for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
+                    expr = if i % 2 == 0 {
+                        NodeExpr::Union(vec![expr])
+                    } else {
+                        NodeExpr::Limit {
+                            of: Box::new(expr),
+                            n: 10,
+                        }
+                    };
+                }
+                let mut guard = RecursionGuard::new();
+                eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            })
+            .expect("spawn deep-stack thread");
+
+        let err = handle
+            .join()
+            .expect("deep-stack thread must not overflow — the depth guard terminates it")
+            .expect_err("an expression nested past the structural ceiling must be a hard error");
+        assert!(
+            err.contains("node expression nesting depth exceeded"),
+            "error should name the structural limit, got: {err}"
+        );
+        assert!(
+            err.contains(&MAX_NODE_EXPR_DEPTH.to_string()),
+            "error should name the ceiling value, got: {err}"
+        );
+    }
+
+    /// The anti-regression guard for the ceiling: a DEEP BUT VALID expression
+    /// still evaluates.
+    ///
+    /// `parse_node_expr_wrapped` always builds `Limit(Offset(OrderBy(core)))`
+    /// around an authored node carrying paging keys — three structural levels per
+    /// authored level — so 30 authored paging levels are 90+ structural levels.
+    /// Reusing the 64-deep filter/exists ceiling for structural nesting would
+    /// reject this perfectly legal shape, trading an abort for a conformance
+    /// regression.
+    #[test]
+    fn deep_but_valid_paged_expression_still_evaluates() {
+        const AUTHORED_LEVELS: usize = 30;
+        let data = load_data(DATA);
+        let mut expr = NodeExpr::This;
+        for _ in 0..AUTHORED_LEVELS {
+            expr = NodeExpr::Limit {
+                of: Box::new(NodeExpr::Offset {
+                    of: Box::new(NodeExpr::OrderBy {
+                        of: Box::new(expr),
+                        key: Box::new(NodeExpr::This),
+                        descending: false,
+                    }),
+                    n: 0,
+                }),
+                n: 10,
+            };
+        }
+        // 3 wrapper levels per authored level, plus the innermost `sh:this`:
+        // comfortably past 64, comfortably inside the structural ceiling.
+        assert!(AUTHORED_LEVELS * 3 + 1 > MAX_RECURSION_DEPTH as usize);
+        assert!(AUTHORED_LEVELS * 3 + 1 < MAX_NODE_EXPR_DEPTH as usize);
+
+        let mut guard = RecursionGuard::new();
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("a deep but legal paged expression must evaluate");
+        assert_eq!(result, vec![ex("a")]);
     }
 
     /// A `sh:filterShape` chain deeper than [`MAX_RECURSION_DEPTH`] re-enters the

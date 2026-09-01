@@ -51,12 +51,19 @@
 //! # Termination
 //!
 //! Run-once rules terminate by construction (one evaluation each). Value-preserving
-//! `general` rules over the finite term universe (base ∪ rules graph) reach a
-//! fixpoint with no artificial cap: each round strictly grows a set that is bounded
-//! by `terms³`. The remaining divergence mode is a `general` rule minting a fresh
-//! term each round (a value-growing expression, e.g. a CONSTRUCT that builds a
-//! longer IRI from the focus node every pass). The driver tracks the base∪rules
-//! term universe; if fresh-term-introducing rounds exceed a deterministic,
+//! `general` rules over the finite term universe reach a fixpoint with no artificial
+//! cap: each round strictly grows a set that is bounded by `terms³`. The remaining
+//! divergence mode is a `general` rule minting a fresh term each round (a
+//! value-growing expression, e.g. a CONSTRUCT that builds a longer IRI from the
+//! focus node every pass).
+//!
+//! The driver tracks that term universe, seeded from base ∪ rules graph and
+//! EXTENDED at each stratification-phase boundary with the terms the phase
+//! materialized. A run-once rule is by definition a blank-node minter, so its
+//! output would otherwise make every later stratum's propagation of those blanks
+//! look like divergence; once a term exists it is an ordinary graph term. Inside a
+//! `general` fixpoint loop the universe is frozen, so a genuinely value-GROWING
+//! rule still trips: if fresh-term-introducing rounds exceed a deterministic,
 //! input-derived bound, [`apply_rules`] returns `Err` naming the offending rule and
 //! term rather than looping forever.
 
@@ -115,19 +122,35 @@ pub enum RuleBody {
 ///
 /// Not `Ord` (it wraps an `f64`); the rules engine orders rules with
 /// [`OrderKey::value`] via `f64::total_cmp`, tie-broken by rule-node identity.
+///
+/// The stored value is CANONICAL: `-0.0` is normalized to `0.0` on construction.
+/// `sh:order` is a decimal-valued SHACL property, and since the layered scheduler
+/// makes equal orders mean "same stratum" (which PARTITIONS execution, so it
+/// changes the closure), two spellings of the same NUMBER must never land in
+/// different strata. `-0.0` is the only IEEE-754 value with two encodings that a
+/// decimal lexical form can produce, and `f64::total_cmp` — which the scheduler
+/// needs for its deterministic total order — distinguishes the encodings. The
+/// non-finite encodings (`NaN`, `INF`), which have no ordering value at all, are
+/// refused by the `sh:order` parser before reaching here.
 #[derive(Debug, Clone, Copy)]
 pub struct OrderKey {
     value: f64,
 }
 
 impl OrderKey {
-    /// Wrap a numeric `sh:order` value.
+    /// Wrap a numeric `sh:order` value, normalizing `-0.0` to `0.0` so the key
+    /// identifies the NUMBER rather than its IEEE-754 encoding.
     #[must_use]
     pub fn new(value: f64) -> Self {
-        Self { value }
+        Self {
+            // `+ 0.0` maps -0.0 to +0.0 and is the identity on every other
+            // finite value (and would propagate a NaN unchanged, which the
+            // parser has already refused).
+            value: value + 0.0,
+        }
     }
 
-    /// The numeric order value (lower runs first).
+    /// The canonical numeric order value (lower runs first).
     #[must_use]
     pub fn value(self) -> f64 {
         self.value
@@ -289,8 +312,21 @@ struct Absorbed {
     /// non-empty, which is what un-finishes a `general` loop pass).
     added: bool,
     /// The first freshly-minted term among the new triples — a term absent from
-    /// the base∪rules universe, i.e. the divergence signal.
+    /// the value-preserving universe, i.e. the divergence signal.
     fresh: Option<Term>,
+}
+
+/// Whether two prepared rules belong to the SAME stratum.
+///
+/// Stratum membership is a question about the effective `sh:order` NUMBER, never
+/// about the IEEE-754 encoding that spells it: strata partition execution, so
+/// `sh:order 0` and `sh:order -0.0` landing in different strata would silently
+/// change the closure. [`OrderKey::new`] normalizes `-0.0` to `0.0` and the
+/// `sh:order` parser refuses the non-finite spellings, so on that canonical
+/// domain `f64::total_cmp` IS numeric comparison — the same key that sorts the
+/// strata also delimits them.
+fn same_stratum(a: &PreparedRule<'_>, b: &PreparedRule<'_>) -> bool {
+    a.order.total_cmp(&b.order) == Ordering::Equal
 }
 
 /// SRL §6.5's `GE`: the accumulated fact set together with the frozen dataset the
@@ -311,6 +347,10 @@ struct Materialized {
     stale: bool,
     /// `None` once a rule has added a fact: the next reader re-materializes.
     view: Option<ShaclData>,
+    /// Terms minted since the value-preserving universe was last extended —
+    /// every term of a newly-derived fact that the universe did not yet contain.
+    /// Drained by [`Materialized::promote_minted_terms`] at each phase boundary.
+    minted: Vec<Term>,
 }
 
 impl Materialized {
@@ -345,10 +385,16 @@ impl Materialized {
             if self.facts.contains(&triple) {
                 continue;
             }
-            if out.fresh.is_none()
-                && let Some(term) = fresh_term(&triple, universe)
-            {
-                out.fresh = Some(term.clone());
+            // Record EVERY term the universe does not yet contain, not just the
+            // first: the first is the divergence signal reported to the caller,
+            // and the full set is what a phase boundary folds into the universe.
+            for term in &triple {
+                if !universe.contains(term) {
+                    if out.fresh.is_none() {
+                        out.fresh = Some(term.clone());
+                    }
+                    self.minted.push(term.clone());
+                }
             }
             self.facts.insert(triple);
             out.added = true;
@@ -360,6 +406,22 @@ impl Materialized {
             self.view = None;
         }
         out
+    }
+
+    /// Fold the terms minted so far into the value-preserving `universe`.
+    ///
+    /// Called at STRATIFICATION-PHASE boundaries only (after a stratum's
+    /// `SL.once` rules, and again at the end of the stratum). A run-once rule
+    /// legitimately mints blank nodes (SRL §4.4 defines `SL.once` as exactly the
+    /// rules that do), and once such a term EXISTS it is an ordinary term of the
+    /// graph the next phase reads: a later rule that merely propagates it is
+    /// value-preserving and must not be accused of diverging.
+    ///
+    /// Growth is deliberately confined to phase boundaries. Inside a `general`
+    /// fixpoint loop the universe is FROZEN, so a rule that mints a new term on
+    /// every round — the only genuine divergence mode — still trips the bound.
+    fn promote_minted_terms(&mut self, universe: &mut FastSet<Term>) {
+        universe.extend(self.minted.drain(..));
     }
 }
 
@@ -375,6 +437,11 @@ impl Materialized {
 /// The walk is ITERATIVE end to end — no stratum re-enters the scheduler — so no
 /// rule set can drive it into an uncatchable stack overflow.
 ///
+/// `universe` starts as the base∪rules term universe and GROWS at every
+/// stratification-phase boundary (see [`Materialized::promote_minted_terms`]):
+/// terms a lower phase legitimately minted are ordinary terms of the graph the
+/// next phase reads, so propagating them is value-preserving, not divergence.
+///
 /// # Errors
 ///
 /// Propagates a producer's firing-time error, and returns `Err` when a stratum's
@@ -382,7 +449,7 @@ impl Materialized {
 fn run_strata(
     prepared: &[PreparedRule<'_>],
     ctx: &RoundContext<'_>,
-    universe: &FastSet<Term>,
+    mut universe: FastSet<Term>,
     bound: usize,
 ) -> Result<FastSet<[Term; 3]>, String> {
     // `GE` starts at `G0` (there is no SRL DATA element in the SHACL-AF rule
@@ -393,10 +460,11 @@ fn run_strata(
         core: Arc::clone(ctx.base),
         stale: false,
         view: None,
+        minted: Vec::new(),
     };
     let mut fresh_rounds = 0usize;
 
-    for stratum in prepared.chunk_by(|a, b| a.order.total_cmp(&b.order) == Ordering::Equal) {
+    for stratum in prepared.chunk_by(same_stratum) {
         // SL.once: "these rules are each evaluated exactly once at the start"
         // (SRL §4.4). Each one's output is folded into `GE` before the next runs.
         // A run-once rule terminates by construction, so it is outside the
@@ -406,8 +474,12 @@ fn run_strata(
             .filter(|prep| prep.schedule == RuleSchedule::Once)
         {
             let produced = (prep.producer)(state.view(ctx)?)?;
-            state.absorb(produced, universe);
+            state.absorb(produced, &universe);
         }
+        // The run-once half is defined as the blank-node-MINTING half, and its
+        // output is the general half's input, so its minted terms join the
+        // value-preserving universe before the fixpoint loop starts.
+        state.promote_minted_terms(&mut universe);
 
         // SL.general: "evaluated repeatedly until no new triples are inferred".
         loop {
@@ -418,7 +490,7 @@ fn run_strata(
                 .filter(|prep| prep.schedule == RuleSchedule::General)
             {
                 let produced = (prep.producer)(state.view(ctx)?)?;
-                let absorbed = state.absorb(produced, universe);
+                let absorbed = state.absorb(produced, &universe);
                 if absorbed.added {
                     finished = false;
                 }
@@ -433,9 +505,10 @@ fn run_strata(
                 break;
             }
 
-            // Only a pass that introduced a term outside the base∪rules universe
-            // can diverge; value-preserving passes are bounded by `terms³` and
-            // never touch the counter.
+            // Only a pass that introduced a term outside the current universe can
+            // diverge; value-preserving passes are bounded by `terms³` and never
+            // touch the counter. The universe is frozen for the whole loop, so a
+            // rule minting a NEW term every round keeps tripping the counter.
             if let Some((rule_id, term)) = offender {
                 fresh_rounds += 1;
                 if fresh_rounds > bound {
@@ -447,6 +520,9 @@ fn run_strata(
                 }
             }
         }
+        // This stratum's derived terms exist now; the next stratum reads them as
+        // ordinary graph terms.
+        state.promote_minted_terms(&mut universe);
     }
 
     Ok(state.facts)
@@ -503,8 +579,9 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         shape_index.insert(shape.id.to_string(), shape);
     }
 
-    // The base∪rules term universe: any triple whose every term is drawn from here
-    // is value-preserving and cannot diverge. Used to detect fresh-term minting.
+    // The SEED of the value-preserving term universe: any triple whose every term
+    // is drawn from here is value-preserving and cannot diverge. `run_strata` grows
+    // it with each stratification phase's materialized output.
     let base_universe = build_term_universe(base.as_ref(), shapes.shapes_dataset.as_ref());
 
     // The base default-graph triples, so a rule re-deriving a base fact is not
@@ -550,7 +627,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         shapes_graph_iri: shapes_graph_iri.as_deref(),
         original: &original,
     };
-    let facts = run_strata(&prepared, &ctx, &base_universe, bound)?;
+    let facts = run_strata(&prepared, &ctx, base_universe, bound)?;
 
     // Materialize base ⊎ inferred, emitting inferred triples in a stable sorted
     // order (freeze canonicalizes quad order, but sorting keeps the builder input
@@ -859,7 +936,8 @@ fn base_triples(base: &RdfDataset) -> FastSet<[Term; 3]> {
 }
 
 /// The set of every term appearing in `base` (all graphs) or in the shapes graph
-/// `shapes_ds` — the value-preserving universe used for divergence detection.
+/// `shapes_ds` — the SEED of the value-preserving universe used for divergence
+/// detection, which the scheduler then grows per stratification phase.
 /// Terms are stored directly (`Term: Eq + Hash`), avoiding a per-term `String`.
 fn build_term_universe(base: &RdfDataset, shapes_ds: &RdfDataset) -> FastSet<Term> {
     let mut universe: FastSet<Term> = FastSet::default();
@@ -871,13 +949,6 @@ fn build_term_universe(base: &RdfDataset, shapes_ds: &RdfDataset) -> FastSet<Ter
         }
     }
     universe
-}
-
-/// The first term of `triple` absent from the value-preserving `universe` — a
-/// freshly minted term, if any. Membership is tested on the `Term` directly; the
-/// offending term is only stringified by the caller on the actual divergence path.
-fn fresh_term<'a>(triple: &'a [Term; 3], universe: &FastSet<Term>) -> Option<&'a Term> {
-    triple.iter().find(|term| !universe.contains(*term))
 }
 
 /// The deterministic total-order sort key for an inferred triple.
@@ -1687,6 +1758,104 @@ mod tests {
         triples(ds).into_iter().collect()
     }
 
+    /// The same gating pair as [`layered_gating_shapes`], but with NAMED rule
+    /// nodes so the within-stratum tie-break (rule-node identity) is fixed and
+    /// known: `ex:rGated` sorts before `ex:rTag`, so when the two rules share a
+    /// stratum the gated rule runs FIRST and its head IS derived.
+    fn same_stratum_probe_shapes(tag_order: &str, gated_order: &str) -> String {
+        format!(
+            r"
+            ex:Untagged a sh:NodeShape ; sh:property [ sh:path ex:tag ; sh:maxCount 0 ] .
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ; sh:rule ex:rTag, ex:rGated .
+            ex:rTag a sh:TripleRule ; sh:order {tag_order} ;
+                    sh:subject sh:this ; sh:predicate ex:tag ; sh:object ex:seen .
+            ex:rGated a sh:TripleRule ; sh:order {gated_order} ; sh:condition ex:Untagged ;
+                    sh:subject sh:this ; sh:predicate ex:untagged ; sh:object true ."
+        )
+    }
+
+    /// `sh:order -0.0` and `sh:order 0` are the SAME NUMBER, so the two rules
+    /// share a stratum and compute the same closure.
+    ///
+    /// `f64::total_cmp` — which the scheduler needs for its deterministic total
+    /// order — separates `-0.0` from `0.0`. Since a stratum PARTITIONS execution,
+    /// treating the two spellings as different orders would silently move a rule
+    /// into its own earlier layer and change the derived set. The probe makes
+    /// that observable: sharing a stratum lets `ex:rGated` fire (it runs first by
+    /// rule-node identity, before anything has tagged the focus node), whereas a
+    /// spurious `-0.0 < 0.0` split runs `ex:rTag` in an earlier layer and the
+    /// gated head disappears.
+    #[test]
+    fn negative_zero_order_shares_the_stratum_of_zero() {
+        let plain = entail(LAYERED_GATING_DATA, &same_stratum_probe_shapes("0", "0"));
+        let negative_zero = entail(LAYERED_GATING_DATA, &same_stratum_probe_shapes("-0.0", "0"));
+
+        let gated_head = (
+            ex("alice"),
+            ex("untagged"),
+            "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>".to_owned(),
+        );
+        assert!(
+            triple_set(&plain).contains(&gated_head),
+            "baseline: rules sharing a stratum let the gated rule fire first: {:?}",
+            triple_set(&plain)
+        );
+        assert!(
+            triple_set(&negative_zero).contains(&gated_head),
+            "sh:order -0.0 must share the stratum of sh:order 0: {:?}",
+            triple_set(&negative_zero)
+        );
+        assert_eq!(
+            canon(&plain),
+            canon(&negative_zero),
+            "sh:order -0.0 and sh:order 0 must produce the identical closure"
+        );
+    }
+
+    /// `sh:order -0.0` parses to the canonical `+0.0`, so nothing downstream can
+    /// observe the sign of the zero.
+    #[test]
+    fn negative_zero_order_is_normalized_at_parse_time() {
+        let shapes = parse_shapes(
+            r"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:TripleRule ; sh:order -0.0 ;
+                        sh:subject sh:this ; sh:predicate ex:p ; sh:object ex:o ] .",
+        );
+        let rule = shapes
+            .node_shapes
+            .iter()
+            .flat_map(|s| &s.rules)
+            .next()
+            .expect("a rule");
+        let value = rule.order.expect("order").value();
+        assert!(
+            value.is_sign_positive(),
+            "sh:order -0.0 must normalize to +0.0, got {value:?}"
+        );
+        assert_eq!(value.total_cmp(&0.0_f64), Ordering::Equal);
+    }
+
+    /// A non-finite `sh:order` has no position in the stratum order (`NaN` is not
+    /// even equal to itself), so it must be REFUSED rather than scheduled at an
+    /// unresolvable position. `"NaN"` and `"inf"` both parse as `f64`, which is
+    /// exactly why the check is explicit.
+    #[test]
+    fn non_finite_order_errors() {
+        for spelling in ["NaN", "inf", "-inf"] {
+            let err = parse_shapes_err(&format!(
+                r#"
+                ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+                  sh:rule [ a sh:TripleRule ; sh:order "{spelling}" ;
+                            sh:subject sh:this ; sh:predicate ex:p ; sh:object ex:o ] ."#
+            ));
+            assert!(
+                err.contains("finite decimal"),
+                "sh:order \"{spelling}\" must be refused, got: {err}"
+            );
+        }
+    }
+
     #[test]
     fn layered_execution_differs_from_flat_fixpoint() {
         let out = entail(LAYERED_GATING_DATA, &layered_gating_shapes(0, 1));
@@ -2018,6 +2187,71 @@ mod tests {
             counters.len(),
             2,
             "the base ex:c0 and exactly one minted Counter: {counters:?}"
+        );
+    }
+
+    /// A run-once rule's minted blank nodes become part of the value-preserving
+    /// term universe, so a LATER stratum that merely propagates them is not
+    /// mistaken for a diverging rule.
+    ///
+    /// SRL §4.4 defines `SL.once` as exactly the blank-node-minting rules, so a
+    /// stratum-0 run-once rule producing terms outside the base∪rules universe is
+    /// the NORMAL case, not the pathological one. Stratum 1 here is strictly
+    /// value-preserving over those minted terms: it only closes `ex:reaches`
+    /// transitively over the minted chain, deriving no term that does not already
+    /// exist. It nonetheless needs one fixpoint round per chain link — more rounds
+    /// than the divergence bound (`|universe| + rules + 1`, and the minted blanks
+    /// contribute nothing to `|universe|`) — so a universe frozen at the base
+    /// would flag every round and hard-fail this perfectly legitimate rule set.
+    ///
+    /// The guard itself stays live: `diverging_fresh_term_rule_errors` pins that a
+    /// rule minting a NEW term on every round still trips the bound, because the
+    /// universe is only ever extended at stratification-phase boundaries.
+    #[test]
+    fn minted_terms_join_the_universe_for_later_strata() {
+        use std::fmt::Write as _;
+
+        // One run-once firing mints a chain of M blank nodes, linked by ex:b and
+        // seeded on ex:reaches for every direct link.
+        const M: usize = 40;
+        let mut template = String::from("$this ex:head _:n0 .");
+        for i in 0..M - 1 {
+            let j = i + 1;
+            write!(template, " _:n{i} ex:b _:n{j} . _:n{i} ex:reaches _:n{j} .")
+                .expect("write to String");
+        }
+        let shapes = format!(
+            r#"
+            ex:Mint a sh:NodeShape ; sh:targetClass ex:Seed ;
+              sh:rule [ a sh:SPARQLRule ; sh:order 0 ; sh:construct
+                "CONSTRUCT {{ {template} }} WHERE {{ $this a ex:Seed }}" ] .
+            ex:Close a sh:NodeShape ; sh:targetSubjectsOf ex:b ;
+              sh:rule [ a sh:SPARQLRule ; sh:order 1 ; sh:construct
+                "CONSTRUCT {{ $this ex:reaches ?z }} WHERE {{ $this ex:b ?y . ?y ex:reaches ?z }}" ] ."#
+        );
+
+        // `entail` unwraps the `Ok`, so completing the call IS the assertion that no
+        // false divergence error was raised.
+        let out = entail("ex:s0 a ex:Seed .", &shapes);
+
+        // And the closure is EXACT: every i<j pair over the minted chain, no more.
+        let reaches: Vec<(String, String)> = triples(&out)
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("reaches"))
+            .map(|(s, _, o)| (s, o))
+            .collect();
+        let distinct: std::collections::BTreeSet<&(String, String)> = reaches.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            M * (M - 1) / 2,
+            "transitive closure over the minted chain must be exactly the i<j pairs"
+        );
+        // Every closure endpoint is a MINTED blank, not a base term.
+        assert!(
+            distinct
+                .iter()
+                .all(|(s, o)| s.starts_with("_:") && o.starts_with("_:")),
+            "the closure must run entirely over run-once-minted blank nodes"
         );
     }
 

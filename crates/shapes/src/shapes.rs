@@ -489,11 +489,28 @@ pub fn from_dataset_with_config_and_graph(
 
 // ── Internal parser ────────────────────────────────────────────────────────────
 
+/// A parse currently on the parser's stack.
+///
+/// The parser walks two DIFFERENT node vocabularies over the same shapes graph —
+/// shapes and SHACL-AF node expressions — and one node may legitimately be both.
+/// Distinguishing them by VARIANT (rather than by namespacing a rendered string)
+/// makes the two in-flight domains disjoint by construction, and keeps the node
+/// expression's key the term itself instead of a formatted rendering of it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum InFlight {
+    /// A shape node being parsed, keyed by its rendered node id (the parser
+    /// already carries that rendering for its error messages).
+    Shape(String),
+    /// A SHACL-AF node expression being parsed, keyed by its node term.
+    NodeExpr(Term),
+}
+
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
-    /// Tracks shape nodes currently being parsed to prevent infinite recursion
-    /// through `sh:node` or `sh:and/or/xone` cycles.
-    in_flight: FastSet<String>,
+    /// Tracks the shape nodes and node-expression nodes currently being parsed,
+    /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
+    /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
+    in_flight: FastSet<InFlight>,
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
@@ -861,7 +878,8 @@ impl<'s> Parser<'s> {
         let id_str = id.to_string();
 
         // Guard against recursive `sh:node` cycles
-        if self.in_flight.contains(&id_str) {
+        let key = InFlight::Shape(id_str);
+        if self.in_flight.contains(&key) {
             // Return a minimal stand-in to break the cycle; cyclic shapes are
             // unusual but not forbidden.
             return Ok(Shape {
@@ -876,9 +894,9 @@ impl<'s> Parser<'s> {
                 rules: vec![],
             });
         }
-        self.in_flight.insert(id_str.clone());
+        self.in_flight.insert(key.clone());
         let result = self.parse_shape_inner(&id);
-        self.in_flight.remove(&id_str);
+        self.in_flight.remove(&key);
         result
     }
 
@@ -1161,20 +1179,24 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut nested_nodes);
         let mut property_shapes: Vec<PropertyShape> = Vec::new();
         if !nested_nodes.is_empty() {
-            self.in_flight.insert(ps_str.clone());
+            let key = InFlight::Shape(ps_str.clone());
+            self.in_flight.insert(key.clone());
             for nested in nested_nodes {
-                if self.in_flight.contains(&nested.to_string()) {
+                if self
+                    .in_flight
+                    .contains(&InFlight::Shape(nested.to_string()))
+                {
                     continue;
                 }
                 match self.parse_property_shape(&nested) {
                     Ok(parsed) => property_shapes.push(parsed),
                     Err(e) => {
-                        self.in_flight.remove(&ps_str);
+                        self.in_flight.remove(&key);
                         return Err(e);
                     }
                 }
             }
-            self.in_flight.remove(&ps_str);
+            self.in_flight.remove(&key);
         }
 
         let box_roles = self.box_roles_of(ps_node);
@@ -1357,7 +1379,8 @@ impl<'s> Parser<'s> {
         let id_str = id.to_string();
 
         // Guard against cycles
-        if self.in_flight.contains(&id_str) {
+        let key = InFlight::Shape(id_str);
+        if self.in_flight.contains(&key) {
             return Ok(Shape {
                 id,
                 targets: vec![],
@@ -1373,9 +1396,9 @@ impl<'s> Parser<'s> {
 
         if self.first_object_of(&id, sh::PATH).is_some() {
             // Treat as an inline property shape
-            self.in_flight.insert(id_str.clone());
+            self.in_flight.insert(key.clone());
             let ps = self.parse_property_shape(&id);
-            self.in_flight.remove(&id_str);
+            self.in_flight.remove(&key);
             let ps = ps?;
             Ok(Shape {
                 id,

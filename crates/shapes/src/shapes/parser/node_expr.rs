@@ -14,7 +14,7 @@ use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, sh};
 use crate::term::{NamedNode, Term};
 
-use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Parser, Shape};
+use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Shape};
 
 impl Parser<'_> {
     /// Parse all constraints declared directly on a shape node.
@@ -613,9 +613,18 @@ impl Parser<'_> {
     /// pipeline order (`ORDER BY` → `OFFSET` → `LIMIT`, with `LIMIT` outermost);
     /// everything else dispatches through [`parse_node_expr_core`].
     ///
-    /// A blank node is guarded against cyclic self-reference (mirroring
-    /// [`parse_inline_shape`](super::Parser::parse_inline_shape)); the guard key is
-    /// namespaced so it never collides with the shape-parsing `in_flight` set.
+    /// EVERY node kind is guarded against cyclic self-reference (mirroring
+    /// [`parse_inline_shape`](super::Parser::parse_inline_shape)), keyed by the
+    /// node term under [`InFlight::NodeExpr`] so it can never collide with the
+    /// shape-parsing entries in the same set.
+    ///
+    /// The guard must NOT be restricted to blank nodes: a cycle spelled with
+    /// NAMED nodes (`ex:E sh:union ( ex:E )`) is just as reachable from a shapes
+    /// document, and unbounded Rust recursion aborts the process — an
+    /// uncatchable failure, not an error a caller can handle. The set is a
+    /// STACK of in-flight parses (each entry removed on the way out), not a
+    /// visited set, so a shared sub-expression referenced twice from disjoint
+    /// branches still parses normally.
     pub(crate) fn parse_node_expr(&mut self, node: &Term) -> Result<NodeExpr, String> {
         // NOTE: paging/ordering surface (`sh:limit`/`sh:offset`/`sh:orderby`) is
         // under-specified by SHACL-AF. Assumption pinned here (a later corpus
@@ -623,18 +632,13 @@ impl Parser<'_> {
         // the inner operand is this very node parsed with the paging keys
         // ignored, NOT a separate `sh:nodes` operand. A node carrying only paging
         // keys (no core expression) therefore hard-fails in `parse_node_expr_core`.
-        let guard_key = format!("nodeexpr:{node}");
-        let is_blank = matches!(node, Term::BlankNode(_));
-        if is_blank {
-            if self.in_flight.contains(&guard_key) {
-                return Err(format!("cyclic node expression on {node}"));
-            }
-            self.in_flight.insert(guard_key.clone());
+        let guard_key = InFlight::NodeExpr(node.clone());
+        if self.in_flight.contains(&guard_key) {
+            return Err(format!("cyclic node expression on {node}"));
         }
+        self.in_flight.insert(guard_key.clone());
         let result = self.parse_node_expr_wrapped(node);
-        if is_blank {
-            self.in_flight.remove(&guard_key);
-        }
+        self.in_flight.remove(&guard_key);
         result
     }
 
