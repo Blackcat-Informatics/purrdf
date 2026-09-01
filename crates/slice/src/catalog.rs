@@ -355,9 +355,20 @@ fn collect_artifacts(
         let role = classify_role(&logical_path);
         let media_type = infer_media_type(&logical_path);
 
-        // For RDF files, compute semantic digest via sorted N-Triples.
+        // For RDF files, compute the semantic digest via canonical N-Triples.
+        //
+        // This PROPAGATES. `None` is the documented discriminant for "not an RDF file"
+        // (see `ArtifactRecord::semantic_digest`), and `cache::phase_artifact_digest`
+        // reads it that way — an RDF artifact reaching a semantics-sensitive phase
+        // without a digest is a hard failure there. Swallowing the error with `.ok()`
+        // therefore did not degrade gracefully: it forged that discriminant, telling
+        // every later reader that a file named `.ttl` was not RDF, and deferred the
+        // complaint to a distant phase that could only report "none was computed" rather
+        // than the syntax error at the file. The parse is also the identical one
+        // `ownership::parse_rdf_artifact` performs, whose own doctrine is to fail loudly;
+        // the two now agree.
         let semantic_digest = if is_rdf_file(&logical_path) {
-            compute_semantic_digest(&content, &path).ok()
+            Some(compute_semantic_digest(&content, &path)?)
         } else {
             None
         };
@@ -383,6 +394,13 @@ fn parse_rdf_to_dataset(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError
     Dataset::parse_file(bytes, path)
 }
 
+/// The semantic (canonical N-Triples) digest of one RDF artifact.
+///
+/// # Errors
+///
+/// Every failure is propagated and names the artifact: a file the extension declares to
+/// be RDF that does not parse, has no derivable retrieval IRI, or does not canonicalize
+/// is a defect in the slice, not an artifact without a semantic identity.
 fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
     let dataset = parse_rdf_to_dataset(bytes, path)?;
 
@@ -396,7 +414,12 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
     // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
     // canonicalizes that flat set, byte-identical to the prior oxigraph-quad path.
-    let canonical = dataset.canonical_nquads_flat()?;
+    let canonical = dataset.canonical_nquads_flat().map_err(|error| {
+        SliceError::Parse(format!(
+            "canonicalize {} for its semantic digest: {error}",
+            path.display()
+        ))
+    })?;
     Ok(hex_sha256(canonical.as_bytes()))
 }
 
