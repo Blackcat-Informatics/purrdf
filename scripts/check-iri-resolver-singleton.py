@@ -144,6 +144,25 @@ def rust_sources() -> list[Path]:
     return sorted(found)
 
 
+def strip_comment_lines(source: str) -> str:
+    """Blank out whole-line comments, preserving every byte offset.
+
+    Prose is not an implementation: a doc comment that *names*
+    ``remove_dot_segments`` — which the ``purrdf-iri`` tests must, since that is
+    the operation under test — is not a second copy of it. Blanking rather than
+    deleting keeps line numbers and byte offsets exact, so findings still point
+    at the right place.
+    """
+    out = []
+    for line in source.split("\n"):
+        head = line.lstrip()
+        if head.startswith(("//", "/*", "*/", "*")):
+            out.append(" " * len(line))
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def function_body(source: str, start: int) -> str:
     """The brace-delimited body of the ``fn`` whose signature starts at *start*.
 
@@ -186,7 +205,7 @@ def scan() -> tuple[list[str], set[tuple[str, str]]]:
     matched: set[tuple[str, str]] = set()
 
     for path in rust_sources():
-        source = path.read_text(encoding="utf-8")
+        source = strip_comment_lines(path.read_text(encoding="utf-8"))
         rel = path.relative_to(REPO_ROOT).as_posix()
         lines = source.splitlines()
 
