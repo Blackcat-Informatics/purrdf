@@ -28,6 +28,21 @@
 //! COMPRESS: a `--to` target named `out.nt.gz` would be inferred as N-Triples and then
 //! written as plain N-Triples under a name promising gzip. [`refuse_transport_target`]
 //! refuses that by name rather than emitting a file whose name lies about its bytes.
+//!
+//! ## `--base` has two legs, and is refused when neither can take it
+//!
+//! A base is spent in exactly two places, and each is a column of the format registry: on
+//! PARSE a relative IRI reference resolves against it (`admits_relative_iri`), and on
+//! SERIALIZE it is written as the output document's base directive and relativized against
+//! (`emits_base`). Both are live — Turtle, TriG, RDF/XML, JSON-LD and YAML-LD carry a base
+//! either way; N-Triples, N-Quads, TriX, HexTuples and both native containers carry it
+//! neither way.
+//!
+//! [`refuse_unconsumable_base`] is the one decision that reads those two columns, over the
+//! legs a subcommand actually has. A base ANY leg can spend is honoured (so `--base X --to
+//! ntriples` still resolves the input); a base NO leg can spend is a usage error naming
+//! each leg and why it cannot take the value, rather than a parameter accepted and never
+//! read.
 
 use std::path::Path;
 

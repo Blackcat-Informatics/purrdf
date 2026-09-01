@@ -646,7 +646,10 @@ impl PagedDataset {
         let mut remap: HashMap<GlobalTermId, GlobalTermId> =
             HashMap::with_capacity(live_values.len());
         for (old, value) in &live_values {
-            remap.insert(*old, dictionary.intern(value));
+            // Every value here was read out of `self.dictionary`, where it passed
+            // `GlobalDictionary::intern_iri` on the way in, so compaction re-interns
+            // without re-parsing. See `GlobalDictionary::reintern_validated`.
+            remap.insert(*old, dictionary.reintern_validated(value));
         }
         // 3. Rebuild each page's translation through the remap; local spaces unchanged.
         let pages: Vec<PageSlot> = self

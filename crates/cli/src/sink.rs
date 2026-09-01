@@ -64,6 +64,14 @@ pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
 
 /// Serialize `view` to `target` and write it to `out`, returning the loss ledger.
 ///
+/// `base` is the EGRESS base: `serialize_dataset_to_format` writes it as the output
+/// document's base directive and relativizes against it on a syntax whose `emits_base`
+/// registry column is set (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD), and discards it on
+/// one whose column is clear — the filter lives there, in the serializer, so this sink
+/// does not re-decide it. The pack arm reads no base at all: the container stores
+/// fully-resolved terms. `crate::format::refuse_unconsumable_base` is what keeps a base
+/// that no leg can spend from reaching here in the first place.
+///
 /// `src_codec` is the source format's loss-ledger codec name when known (`None`
 /// for a pack source or a codec-less syntax); it seeds the contract-loss half of
 /// the returned ledger.
