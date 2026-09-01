@@ -3108,9 +3108,25 @@ mod tests {
         bound_step[POS_STEP] = Some(int(1));
         let mut bound_path_id = free();
         bound_path_id[POS_PATH_ID] = Some(sample_id.clone());
+        // `?end` is the position [`row_bound`] narrows with `max_in_degree`, and it is
+        // also the position that switches `ShortestPathWitnessRelation` to one walk per
+        // seed. Leaving it free left BOTH of those arms unreachable from this sweep — the
+        // very family whose over-declaration is what admission control refuses against.
+        // `ex:c` is a node of every fixture below, exactly as `ex:a` is.
+        let mut bound_end = free();
+        bound_end[POS_END] = Some(iri("c"));
+        let mut bound_start_end = free();
+        bound_start_end[POS_START] = Some(iri("a"));
+        bound_start_end[POS_END] = Some(iri("c"));
+        let mut bound_end_step = free();
+        bound_end_step[POS_END] = Some(iri("c"));
+        bound_end_step[POS_STEP] = Some(int(1));
         vec![
             ("all free", free()),
             ("bound start", bound_start),
+            ("bound end", bound_end),
+            ("bound start+end", bound_start_end),
+            ("bound end+step", bound_end_step),
             ("bound len", bound_len),
             ("bound step", bound_step),
             ("bound pathId", bound_path_id),
@@ -3182,6 +3198,21 @@ mod tests {
     /// Where they differ, the gap is entirely the seeds that realise LESS than the maximum
     /// (a chain's later nodes have shorter walks ahead of them) — which `rows_per_invocation`
     /// cannot see, because it is handed a mode and not a seed.
+    ///
+    /// # Which modes this actually reaches
+    ///
+    /// [`row_bound`] branches on three positions — `?start`, `?end` and `?step` — so the
+    /// sweep has to bind each of them, and combinations of them, or an arm goes unpinned.
+    /// `bound len` and `bound pathId` read positions `row_bound` does NOT branch on, so
+    /// they are deliberately kept as `all free` restated: they pin that binding a position
+    /// the bound ignores does not perturb it.
+    ///
+    /// `?end` was the gap. Until it was bound here, neither the `max_in_degree` narrowing
+    /// nor [`ShortestPathWitnessRelation`]'s collapse to one witness per `(seed, end)` pair
+    /// was reachable from any assertion in this crate — and those are exactly the arms
+    /// whose over-declaration is what admission control refuses against. An unpinned
+    /// cardinality arm is not a small gap: an over-statement there refuses a legitimate
+    /// query before it runs.
     #[test]
     fn the_row_bound_is_pinned_against_what_is_emitted() {
         let (_data, chain_graph) = chain();
@@ -3195,6 +3226,13 @@ mod tests {
                 ("all free", 24, 10),
                 // Seeded at ex:a, which IS the maximal seed: exact.
                 ("bound start", 6, 6),
+                // A bound `?end` buys NOTHING on a chain, and the equality is the proof:
+                // the narrowing is `branching_before × max_in_degree`, and a chain's
+                // in-degree is one, so it lands back on `branching`. The dense fixture is
+                // where this arm has to earn its keep.
+                ("bound end", 24, 3),
+                ("bound start+end", 6, 2),
+                ("bound end+step", 12, 2),
                 ("bound len", 24, 4),
                 // One row per walk: 4 seeds × 3 walk lengths, against 6 real walks.
                 ("bound step", 12, 6),
@@ -3208,6 +3246,12 @@ mod tests {
             vec![
                 ("all free", 24, 10),
                 ("bound start", 6, 6),
+                // HALF the exhaustive relation's 24: with `?end` pinned, this relation
+                // keeps at most ONE witness per seed, so its per-seed cap collapses to 1.
+                // That arm was unreachable from this sweep until `?end` was bound here.
+                ("bound end", 12, 3),
+                ("bound start+end", 3, 2),
+                ("bound end+step", 4, 2),
                 ("bound len", 24, 4),
                 ("bound step", 12, 6),
                 ("bound pathId", 3, 1),
@@ -3226,6 +3270,9 @@ mod tests {
                 // is set, and every seed of a cycle realises the same three walks.
                 ("all free", 18, 18),
                 ("bound start", 6, 6),
+                ("bound end", 18, 6),
+                ("bound start+end", 6, 2),
+                ("bound end+step", 9, 3),
                 ("bound len", 18, 6),
                 ("bound step", 9, 9),
                 ("bound pathId", 8, 1),
@@ -3237,6 +3284,10 @@ mod tests {
             vec![
                 ("all free", 18, 18),
                 ("bound start", 6, 6),
+                ("bound end", 18, 6),
+                ("bound start+end", 6, 2),
+                // Exact: one witness per seed to ex:c, each contributing its step-1 row.
+                ("bound end+step", 3, 3),
                 ("bound len", 18, 6),
                 ("bound step", 9, 9),
                 ("bound pathId", 8, 1),
@@ -3253,6 +3304,14 @@ mod tests {
             vec![
                 ("all free", 9, 4),
                 ("bound start", 3, 3),
+                // The sweep pins `?end` to ex:c, which is NOT a node of this fixture, so
+                // these three rows pin an honest over-declaration against an empty answer
+                // and nothing about tightness. They are kept because a mode that emits
+                // nothing must still declare a bound it does not violate; read the dense
+                // fixture for the tightness claim.
+                ("bound end", 9, 0),
+                ("bound start+end", 3, 0),
+                ("bound end+step", 6, 0),
                 ("bound len", 9, 2),
                 ("bound step", 6, 3),
                 ("bound pathId", 2, 1),
@@ -3267,6 +3326,9 @@ mod tests {
             vec![
                 ("all free", 9, 4),
                 ("bound start", 3, 3),
+                ("bound end", 6, 0),
+                ("bound start+end", 2, 0),
+                ("bound end+step", 3, 0),
                 ("bound len", 9, 2),
                 ("bound step", 6, 3),
                 ("bound pathId", 2, 1),
@@ -3297,6 +3359,13 @@ mod tests {
                 // itself grows as `3^k`. The guard-derived bound declared 49,152 here.
                 ("all free", 1704, 588),
                 ("bound start", 426, 147),
+                // Equal to the free-`?end` declaration, and that is CORRECT rather than a
+                // missed narrowing: this fixture is a regular digraph, so in-degree equals
+                // out-degree and `branching_before × max_in_degree` is exactly `branching`.
+                // A bound `?end` can only narrow where in-degree is the smaller of the two.
+                ("bound end", 1704, 147),
+                ("bound start+end", 426, 33),
+                ("bound end+step", 480, 48),
                 // The widest ratio, and for a stated reason: a bound `?len` pins the walk
                 // length exactly, but `rows_per_invocation` is handed a MODE and never the
                 // value, so it cannot narrow to that one length.
@@ -3313,6 +3382,13 @@ mod tests {
                 // exhaustive relation declares 1704 for the same graph and the same mode.
                 ("all free", 64, 20),
                 ("bound start", 16, 5),
+                // A quarter of the free-`?end` declaration on a four-node graph: one
+                // endpoint instead of four, because this relation keeps one witness per
+                // (seed, end) pair. This is the arm the exhaustive relation cannot have.
+                ("bound end", 16, 5),
+                ("bound start+end", 4, 1),
+                // Exact: every witness here is one hop, so each has a row at step 1.
+                ("bound end+step", 4, 4),
                 ("bound len", 64, 8),
                 // Exact: every witness is one hop here, so every one of them has a row at
                 // step 1 and no other.
