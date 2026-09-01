@@ -20,6 +20,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-events
   purrdf-iri
   purrdf-xsd
+  purrdf-cdt
   purrdf-gts
   purrdf-core
   purrdf-columnar

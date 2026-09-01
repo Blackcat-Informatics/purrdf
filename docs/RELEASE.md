@@ -79,6 +79,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-events`
 - `purrdf-iri`
 - `purrdf-xsd`
+- `purrdf-cdt`
 - `purrdf-gts`
 - `purrdf-core`
 - `purrdf-columnar`

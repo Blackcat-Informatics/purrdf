@@ -1292,6 +1292,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-cdt"
+version = "0.12.0"
+dependencies = [
+ "pretty_assertions",
+ "proptest",
+ "purrdf-iri",
+ "purrdf-xsd",
+]
+
+[[package]]
 name = "purrdf-cli"
 version = "0.12.0"
 dependencies = [

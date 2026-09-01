@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-cdt"
+description = "Native SPARQL composite datatypes (SEP-0009 cdt:List / cdt:Map): iterative bounded lexical scanner, canonical lexical mapping, spec equality/ordering and a total order, for the RDF 1.2 query stack"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-cdt"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["sparql", "rdf", "rdf-12", "cdt", "value-space"]
+categories = ["parser-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only CLOSED LEAF: `purrdf-iri` and `purrdf-xsd` are the ONLY permitted
+# runtime dependencies. There is no dependency on `purrdf-core` in either
+# direction — that is exactly what lets `purrdf-core` depend on this crate later
+# without a cycle. `#![no_std]` + `alloc`, so it stays wasm-clean.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_cdt"
+
+[dependencies]
+# Absolute-IRI validation for every IRIREF the grammar admits.
+purrdf-iri = { workspace = true }
+# The XSD value space the numeric/boolean shorthands and `parse_literal` resolve into.
+purrdf-xsd = { workspace = true }
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
+pretty_assertions = { workspace = true }
+# Round-trip / injectivity property tests (canonical -> value -> canonical).
+proptest = { workspace = true }

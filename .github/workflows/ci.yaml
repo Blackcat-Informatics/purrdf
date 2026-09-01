@@ -178,6 +178,7 @@ jobs:
             -p purrdf-events \
             -p purrdf-iri \
             -p purrdf-xsd \
+            -p purrdf-cdt \
             -p purrdf-gts \
             -p purrdf-core \
             -p purrdf-columnar \
