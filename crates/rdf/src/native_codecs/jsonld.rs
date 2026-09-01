@@ -214,19 +214,21 @@ fn to_json_object(map: BTreeMap<String, Value>) -> Value {
 ///
 /// Both `serialize` and `parse` route through the SAME cores the public free functions
 /// use ([`serialize_ser_graph`] / [`parse_jsonld`]), so generic dispatch and the
-/// side-door API are one code path, two entry points. Base IRI / parse mode are ignored:
-/// JSON-LD derives its base from the document's own `@context`, and it has no
-/// line/Turtle-family tokenizer toggle.
+/// side-door API are one code path, two entry points. The parse mode is ignored — there
+/// is no line/Turtle-family tokenizer toggle here — but the BASE is not: this format's
+/// row in `FORMATS` sets `admits_relative_iri: true`, so the scope in force is threaded
+/// into the active context. It previously bound `_base` and dropped it, which made
+/// `--base` a no-op for the one pair of formats whose table entry promised otherwise.
 pub(super) struct JsonLdCodec;
 
 impl RdfCodec for JsonLdCodec {
     fn parse(
         &self,
         text: &str,
-        _base: &purrdf_iri::BaseScope,
+        base: &purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        parse_jsonld(text.as_bytes())
+        parse_jsonld(text.as_bytes(), scope_base(base))
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -253,11 +255,11 @@ impl RdfCodec for YamlLdCodec {
     fn parse(
         &self,
         text: &str,
-        _base: &purrdf_iri::BaseScope,
+        base: &purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let json = yamlld_to_jsonld(text.as_bytes())?;
-        parse_jsonld(json.as_bytes())
+        parse_jsonld(json.as_bytes(), scope_base(base))
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -1541,9 +1543,21 @@ fn absolute_iri(iri: &str) -> String {
     iri.to_string()
 }
 
+/// The base IRI in force in `scope`, as the `Option<&str>` the JSON-LD active context
+/// seeds its `@base` from.
+///
+/// JSON-LD's base is a single value per context frame, and the context compiler already
+/// owns the frame stack, so only the innermost base crosses this boundary. `None` is the
+/// honest "no base in scope": the JSON-LD expander then reports its own
+/// `jsonld-context-invalid` for a relative reference rather than inventing one.
+fn scope_base(scope: &purrdf_iri::BaseScope) -> Option<&str> {
+    scope.current().map(|scoped| scoped.iri().as_str())
+}
+
 // ── parse side: JSON-LD-star → native carrier ───────────────────────────────────────
 
-/// Parse JSON-LD-star bytes into the native carrier [`RdfDataset`].
+/// Parse JSON-LD-star bytes into the native carrier [`RdfDataset`], resolving relative
+/// IRI references against `base`.
 ///
 /// This is the inverse of [`serialize_dataset_to_jsonld`]: it interprets the
 /// `@annotation` idiom produced by the PurRDF JSON-LD-star emitter and reconstructs RDF
@@ -1551,8 +1565,20 @@ fn absolute_iri(iri: &str) -> String {
 /// annotation triples. Those rows are folded into the dataset's RDF 1.2 statement layer
 /// at freeze time. Named graphs and directional language strings are preserved; a shape
 /// that cannot be represented by the RDF dataset fails before data is discarded.
-pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context = CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), None)?;
+///
+/// # The base
+///
+/// JSON-LD admits relative IRI references (JSON-LD 1.1 §3.2), and PurRDF's format table
+/// says so — `NativeRdfFormat::JsonLd.admits_relative_iri()` is `true`. `base` is
+/// therefore the caller-supplied base (RFC-3986 §5.1.2) and seeds the active context's
+/// `@base`, exactly as a `document_iri` would. A document's own `@context` `@base` still
+/// wins over it, which is JSON-LD's own precedence and matches Turtle's `@base`
+/// overriding the caller's.
+pub fn parse_jsonld(
+    json_bytes: &[u8],
+    base: Option<&str>,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let context = CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), base)?;
     parse_jsonld_with_context(json_bytes, &context)
 }
 
@@ -1603,11 +1629,16 @@ fn validated_iri_term(iri: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// PurRDF mints no vocabulary of its own, so there is NO default vocabulary:
 /// input carrying quoted triples / reifier annotations hard-fails when `vocab`
 /// is `None`, while star-free input downcasts fine unconfigured.
+///
+/// `base` is the input document's base, threaded to [`parse_jsonld`] on the way in: this
+/// is a downcast of CALLER JSON-LD, so it resolves relative references exactly as the
+/// same bytes would through any other JSON-LD ingress.
 pub fn jsonld_to_statement_metadata_nquads(
     json_bytes: &[u8],
+    base: Option<&str>,
     vocab: Option<&StatementMetadataVocab<'_>>,
 ) -> Result<String, RdfDiagnostic> {
-    let dataset = parse_jsonld(json_bytes)?;
+    let dataset = parse_jsonld(json_bytes, base)?;
 
     // Flatten the carrier back to the source-faithful quad stream, re-materializing the
     // RDF 1.2 statement overlay as un-folded `rdf:reifies` reifier rows + annotation
@@ -1785,9 +1816,10 @@ fn block_mapping_value(s: &str) -> Option<&str> {
 /// vocabulary: star input hard-fails when `vocab` is `None`.
 pub fn yamlld_to_statement_metadata_nquads(
     yaml_bytes: &[u8],
+    base: Option<&str>,
     vocab: Option<&StatementMetadataVocab<'_>>,
 ) -> Result<String, RdfDiagnostic> {
-    jsonld_to_statement_metadata_nquads(yamlld_to_jsonld(yaml_bytes)?.as_bytes(), vocab)
+    jsonld_to_statement_metadata_nquads(yamlld_to_jsonld(yaml_bytes)?.as_bytes(), base, vocab)
 }
 
 // ── diagnostic constructors ─────────────────────────────────────────────────────────

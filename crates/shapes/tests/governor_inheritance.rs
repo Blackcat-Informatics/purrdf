@@ -80,7 +80,7 @@ fn people(count: usize) -> Arc<RdfDataset> {
 }
 
 fn shapes() -> purrdf_shapes::shapes::Shapes {
-    purrdf_shapes::engine::parse_shapes(&sparql_constraint_shapes()).expect("parse shapes")
+    purrdf_shapes::engine::parse_shapes(&sparql_constraint_shapes(), None).expect("parse shapes")
 }
 
 /// Validate `data` under `governors`.

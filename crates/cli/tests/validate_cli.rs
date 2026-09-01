@@ -956,3 +956,184 @@ fn shapes_are_required() {
         stderr(&out)
     );
 }
+
+// ── The shapes graph's own base ────────────────────────────────────────────────
+//
+// A shapes graph is RDF, and its author may write `<PersonShape>` exactly as they would
+// in any other Turtle document. The Turtle route used to reach a `parse_shapes` that took
+// no base at all, so relative IRIs in a shapes graph could not resolve while the data
+// graph in the same invocation resolved fine. These pin that the two routes agree.
+
+/// A shapes graph whose shape node and constrained path are RELATIVE IRI references.
+///
+/// `<PersonShape>` and `<name>` only mean something once resolved against a base.
+const RELATIVE_SHAPES: &str = concat!(
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "<PersonShape> a sh:NodeShape ;\n",
+    "  sh:targetClass <http://example.org/Person> ;\n",
+    "  sh:property [ sh:path <http://example.org/name> ; sh:minCount 1 ] .\n",
+);
+
+/// One `ex:Person` with no `ex:name`: exactly one violation, but ONLY if the shape's
+/// relative IRIs resolved and the target therefore selected a focus node.
+const RELATIVE_SHAPES_DATA: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:alice a ex:Person .\n",
+);
+
+/// A Turtle shapes graph resolves its relative IRIs against its own `file://` retrieval IRI.
+///
+/// This is the reproduction: before the base reached `parse_shapes`, this exact command
+/// failed outright with `iri-relative-no-base` because the Turtle fast path had no base
+/// parameter to receive the derived retrieval IRI, while the identical bytes read as any
+/// other syntax resolved through the shared seam.
+#[test]
+fn a_turtle_shapes_graph_resolves_relative_iris_against_its_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", RELATIVE_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("shacl results 1\n"),
+        "the resolved shape must select a focus node and find the violation: {}",
+        stderr(&out)
+    );
+
+    // The source shape is named by its RESOLVED IRI — the shapes file's own `file://`
+    // IRI with the last segment replaced — not by the bare `PersonShape` token.
+    let resolved = std::fs::canonicalize(&shapes)
+        .expect("fixture canonicalizes")
+        .to_str()
+        .expect("temp path is UTF-8")
+        .replace("/shapes.ttl", "/PersonShape");
+    assert!(
+        stdout(&out).contains(&format!("<file://{resolved}>")),
+        "the source shape must be the resolved absolute IRI:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stdout(&out).contains("<PersonShape>"),
+        "a bare relative reference must never reach the report:\n{}",
+        stdout(&out)
+    );
+}
+
+/// The Turtle route and the native-codec route resolve the SAME bytes identically.
+///
+/// The two arms differ only in the SHACL-AF prefix fallback, which this fixture does not
+/// use, so their reports must be byte-for-byte equal. They were not: Turtle hard-failed
+/// while TriG resolved, over one file copied under two names.
+#[test]
+fn the_turtle_and_non_turtle_shapes_routes_resolve_a_relative_iri_identically() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
+    let as_turtle = write_file(dir.path(), "shapes.ttl", RELATIVE_SHAPES);
+    let as_trig = write_file(dir.path(), "shapes.trig", RELATIVE_SHAPES);
+
+    let turtle = run(&["validate", "--shapes", &as_turtle, &data]);
+    let trig = run(&["validate", "--shapes", &as_trig, &data]);
+    assert_eq!(code(&turtle), 0, "{}", stderr(&turtle));
+    assert_eq!(code(&trig), 0, "{}", stderr(&trig));
+
+    // Each resolves against its OWN file name, so compare with that difference removed.
+    let normalize = |text: String, name: &str| text.replace(name, "SHAPES");
+    assert_eq!(
+        normalize(stdout(&turtle), "shapes.ttl"),
+        normalize(stdout(&trig), "shapes.trig"),
+        "the two shapes routes must produce the identical report"
+    );
+    assert_eq!(stderr(&turtle), stderr(&trig), "and the identical verdict");
+}
+
+/// A shapes graph on stdin has no retrieval IRI, so a relative IRI there is REFUSED.
+///
+/// The negative control, and the one that matters most: with no base derivable, the shape
+/// cannot be resolved, no target selects a focus node, and a validator that carried on
+/// would emit `conforms true` over a constraint it never evaluated. It must refuse
+/// instead, and the refusal must name the condition.
+#[test]
+fn a_shapes_graph_on_stdin_with_a_relative_iri_is_refused_not_vacuously_passed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
+
+    let out = pipe(
+        &[
+            "validate",
+            "--shapes",
+            "-",
+            "--shapes-from",
+            "turtle",
+            &data,
+        ],
+        RELATIVE_SHAPES,
+    );
+    assert_eq!(
+        code(&out),
+        1,
+        "a shapes graph that cannot resolve must fail: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("iri-relative-no-base"),
+        "the refusal carries the actionable code: {}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("shacl conforms"),
+        "no conformance verdict may be reported over an unresolved shape: {}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).trim().is_empty(),
+        "nothing partial is emitted:\n{}",
+        stdout(&out)
+    );
+}
+
+/// An in-document `@base` wins over the derived retrieval IRI, and works on stdin.
+///
+/// RFC-3986 5.1.1 puts the document's own base above the retrieval URI (5.1.3), so a
+/// shapes graph that declares one is self-contained — which is what makes the stdin case
+/// usable at all.
+#[test]
+fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", RELATIVE_SHAPES_DATA);
+    let based = format!("@base <http://example.org/shapes/> .\n{RELATIVE_SHAPES}");
+
+    // From a FILE: the `@base` overrides the file's own retrieval IRI.
+    let shapes = write_file(dir.path(), "shapes.ttl", &based);
+    let from_file = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&from_file), 0, "{}", stderr(&from_file));
+    assert!(
+        stdout(&from_file).contains("<http://example.org/shapes/PersonShape>"),
+        "the in-document base must win over the retrieval IRI:\n{}",
+        stdout(&from_file)
+    );
+    assert!(
+        !stdout(&from_file).contains("file://"),
+        "the retrieval IRI must not appear once `@base` is declared:\n{}",
+        stdout(&from_file)
+    );
+
+    // From STDIN, where there is no retrieval IRI at all, the same document resolves.
+    let from_stdin = pipe(
+        &[
+            "validate",
+            "--shapes",
+            "-",
+            "--shapes-from",
+            "turtle",
+            &data,
+        ],
+        &based,
+    );
+    assert_eq!(code(&from_stdin), 0, "{}", stderr(&from_stdin));
+    assert!(
+        stdout(&from_stdin).contains("<http://example.org/shapes/PersonShape>"),
+        "a self-contained shapes graph needs no retrieval IRI:\n{}",
+        stdout(&from_stdin)
+    );
+}

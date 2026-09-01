@@ -139,7 +139,7 @@ fn probe(rows: usize) {
     );
 
     let before = reset_peak();
-    let parsed = parse_jsonld(json.as_bytes()).expect("expanded JSON-LD parse");
+    let parsed = parse_jsonld(json.as_bytes(), None).expect("expanded JSON-LD parse");
     let after = snapshot();
     report(
         &format!("parse_expanded_rows_{rows}"),
@@ -174,7 +174,7 @@ fn probe(rows: usize) {
         );
 
         let before = reset_peak();
-        let parsed = parse_jsonld(json.as_bytes()).expect("configured JSON-LD parse");
+        let parsed = parse_jsonld(json.as_bytes(), None).expect("configured JSON-LD parse");
         let after = snapshot();
         report(
             &format!("parse_{mode}_rows_{rows}"),

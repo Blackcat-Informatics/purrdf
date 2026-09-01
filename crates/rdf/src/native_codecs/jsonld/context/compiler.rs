@@ -1535,10 +1535,24 @@ fn resolve_reference(
     {
         return Ok(reference.to_owned());
     }
+    // "A relative reference and no base in scope" is one condition with one name across
+    // this workspace, so the diagnostic comes from the shared `IriError` rather than
+    // being re-worded here. It used to be reported as `jsonld-context-invalid`, which
+    // made the identical mistake answer to a different code depending on which syntax
+    // the author happened to write the document in — and let a caller grepping for
+    // `iri-relative-no-base` believe JSON-LD had no such failure mode.
+    //
+    // Only the error is shared. Resolution itself deliberately keeps JSON-LD's own
+    // absolute-reference passthrough above, because `BaseIri::resolve` dot-normalizes
+    // and the W3C JSON-LD vectors pin the verbatim form.
     let base = base.ok_or_else(|| {
-        context_error(format!(
-            "relative {description} `{reference}` requires an absolute base IRI"
-        ))
+        let error = purrdf_iri::IriError::NoBase {
+            reference: reference.to_owned(),
+        };
+        RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("relative {description}: {error}"),
+        )
     })?;
     let base = purrdf_iri::parse(base)
         .map_err(|source| context_error(format!("invalid base IRI `{base}`: {source}")))?;

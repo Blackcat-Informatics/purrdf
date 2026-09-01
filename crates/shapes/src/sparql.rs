@@ -1274,7 +1274,7 @@ mod tests {
             """ .
         "#;
         let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
         let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
         let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
             .expect("parse shapes");
@@ -1335,7 +1335,7 @@ mod tests {
             """ .
         "#;
         let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
         let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
         let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
             .expect("parse shapes");
@@ -1378,7 +1378,7 @@ mod tests {
             """ .
         "#;
         let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, None).expect("valid shapes");
         let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
         let shapes = crate::shapes::from_dataset_with_config_and_graph(
             &shapes_dataset,

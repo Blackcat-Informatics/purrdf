@@ -2351,7 +2351,7 @@ mod tests {
             {body}
             "
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse");
         let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
         crate::json_schema::compile(&shapes, import_config().namespaces())
     }
@@ -3002,7 +3002,8 @@ mod tests {
                     sh:minLength 1
                 ] .
         ";
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(turtle).expect("parse SHACL");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(turtle, None).expect("parse SHACL");
         let shapes = crate::shapes::from_dataset(&dataset).expect("type SHACL");
         let namespaces = Namespaces::new(
             "ex",

@@ -250,7 +250,7 @@ fn bench_jsonld_expanded(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("parse", rows), &json, |bencher, text| {
             bencher.iter(|| {
                 let dataset =
-                    parse_jsonld(black_box(text.as_bytes())).expect("expanded JSON-LD parse");
+                    parse_jsonld(black_box(text.as_bytes()), None).expect("expanded JSON-LD parse");
                 black_box(dataset);
             });
         });
@@ -318,7 +318,7 @@ fn bench_jsonld_configured(c: &mut Criterion) {
                 |bencher, text| {
                     bencher.iter(|| {
                         black_box(
-                            parse_jsonld(black_box(text.as_bytes()))
+                            parse_jsonld(black_box(text.as_bytes()), None)
                                 .expect("configured JSON-LD parse"),
                         );
                     });

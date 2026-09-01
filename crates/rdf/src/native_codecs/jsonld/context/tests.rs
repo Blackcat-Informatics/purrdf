@@ -316,6 +316,14 @@ fn base_and_vocab_resolution_round_trip_exactly() {
     );
 }
 
+/// `"@base": null` clears the base, and a later RELATIVE setting must not silently fall
+/// back to the document URL.
+///
+/// The refusal is asserted by its diagnostic CODE rather than by its prose. The
+/// condition — a relative reference with no base in scope — is shared with every other
+/// syntax in this workspace, so it now reports the shared `iri-relative-no-base` instead
+/// of a JSON-LD-only wording; pinning the code keeps this test on the contract rather
+/// than on a sentence.
 #[test]
 fn null_base_is_not_resurrected_from_the_document_url() {
     for relative_setting in [json!({"@base": "later"}), json!({"@vocab": "later/"})] {
@@ -324,7 +332,12 @@ fn null_base_is_not_resurrected_from_the_document_url() {
             Some("https://example.org/document"),
         )
         .expect_err("relative setting after null @base");
-        assert!(error.message.contains("requires an absolute base IRI"));
+        assert_eq!(error.code, "iri-relative-no-base");
+        assert!(
+            error.message.contains("later"),
+            "the refusal names the unresolvable reference: {}",
+            error.message
+        );
     }
 
     let error = CompiledJsonLdContext::compile(
@@ -332,7 +345,7 @@ fn null_base_is_not_resurrected_from_the_document_url() {
         Some("https://example.org/document"),
     )
     .expect_err("relative term after null @base");
-    assert!(error.message.contains("requires an absolute base IRI"));
+    assert_eq!(error.code, "iri-relative-no-base");
 }
 
 #[test]

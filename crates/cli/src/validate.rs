@@ -72,6 +72,13 @@
 //! [`purrdf_shapes::shapes::from_dataset`], which carries no document-prefix fallback because
 //! that fallback is a recovery from Turtle SOURCE TEXT and there is none to recover from. That
 //! difference is stated on `--shapes-from`'s help rather than discovered.
+//!
+//! The prefix fallback is the ONLY difference between the two routes. Both derive the
+//! shapes document's own `file://` retrieval IRI and resolve relative IRI references
+//! against it, so `<PersonShape>` in a shapes graph means the same term whether the file
+//! is read as Turtle or as TriG. It did not always: the Turtle route reached a
+//! `parse_shapes` that took no base at all, so the one document in this command that
+//! could not resolve a relative IRI was the one describing the constraints.
 
 use std::sync::Arc;
 
@@ -213,17 +220,38 @@ fn emit(
 ///
 /// See the module documentation for why Turtle takes a different (and privileged) route than
 /// the other syntaxes.
+///
+/// # Both routes resolve relative IRIs against the same base
+///
+/// A shapes graph is an RDF document like any other, and its author may write
+/// `<PersonShape>`. Both arms therefore derive the shapes document's own RFC-8089
+/// `file://` retrieval IRI through [`source::effective_base`] — the SAME derivation the
+/// data graph gets — so identical bytes resolve identically whichever syntax they are
+/// labelled with. `--shapes -` has no retrieval IRI, so a relative reference there is a
+/// hard `iri-relative-no-base` naming the remedy, never a vacuous pass.
+///
+/// The Turtle arm used to call `parse_shapes` with no base at all while the non-Turtle
+/// arm passed a literal `None`, so the shapes graph was the one input in this binary that
+/// could not resolve a relative IRI. Threading the base is what deletes that asymmetry;
+/// `--base` is deliberately NOT used here, because it names the base of the DATA graph
+/// and the two documents are independent.
 fn load_shapes(path: &str, format: SourceFormat) -> Result<Shapes, CliError> {
+    let base = match format {
+        SourceFormat::Native(native) => source::effective_base(path, native, None)?,
+        // A pack/GTS container stores resolved IRIs; there is no document base to derive.
+        SourceFormat::Pack | SourceFormat::Gts => None,
+    };
+
     if format == SourceFormat::Native(NativeRdfFormat::Turtle) {
         let bytes = source::read_bytes(path)?;
         let text = String::from_utf8(bytes).map_err(|error| {
             CliError::Runtime(format!("--shapes {path}: not UTF-8 text: {error}"))
         })?;
-        return engine::parse_shapes(&text)
+        return engine::parse_shapes(&text, base.as_deref())
             .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")));
     }
 
-    let dataset = source::load_dataset(path, format, None)?;
+    let dataset = source::load_dataset(path, format, base.as_deref())?;
     purrdf::shapes::shapes::from_dataset(&dataset)
         .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
 }

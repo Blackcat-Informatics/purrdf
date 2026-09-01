@@ -393,12 +393,13 @@ fn from_json_ld(
             };
             return crate::native_codecs::jsonld::jsonld_to_statement_metadata_nquads(
                 text.as_bytes(),
+                None,
                 Some(&vocab),
             )
             .map(String::into_bytes)
             .map_err(|e| PyValueError::new_err(format!("json-ld-star downcast error: {e}")));
         }
-        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes())
+        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes(), None)
             .map_err(|e| PyValueError::new_err(format!("json-ld-star parse error: {e}")))?;
         crate::serialize_dataset(
             &dataset,

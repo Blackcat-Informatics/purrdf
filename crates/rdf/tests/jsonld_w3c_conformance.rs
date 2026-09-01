@@ -136,7 +136,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
             vector.id
         );
 
-        let actual = match parse_jsonld(vector.input.as_bytes()) {
+        let actual = match parse_jsonld(vector.input.as_bytes(), None) {
             Ok(dataset) => dataset,
             Err(error) => {
                 failures.push(format!("{} ({}): {error}", vector.id, vector.name));
@@ -220,7 +220,7 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
             );
         }
 
-        let dataset = match parse_jsonld(vector.input.as_bytes()) {
+        let dataset = match parse_jsonld(vector.input.as_bytes(), None) {
             Ok(dataset) => dataset,
             Err(error) => {
                 failures.push(format!("{} ({}): {error}", vector.id, vector.name));

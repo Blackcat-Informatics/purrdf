@@ -14,21 +14,39 @@ use wasm_bindgen::prelude::*;
 /// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
 /// native build — constructing a `JsError` calls a wasm-only import that panics
 /// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
-pub(crate) fn validate_to_sarif_impl(shapes_ttl: &str, data_nt: &str) -> Result<String, String> {
+pub(crate) fn validate_to_sarif_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+) -> Result<String, String> {
     purrdf_validate::validate_to_sarif_string(
         shapes_ttl,
+        shapes_base,
         data_nt,
         &purrdf_validate::SarifOptions::default(),
     )
 }
 
-/// `shaclValidateToSarif(shapesTtl, dataNt)` → a SARIF 2.1.0 JSON string.
+/// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` → a SARIF 2.1.0 JSON string.
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse.
+///
+/// `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
+/// against. A browser or Node host has no retrieval IRI of its own — it was handed a
+/// string — so PurRDF will not invent one; omit it and a relative reference is a hard
+/// `iri-relative-no-base` naming the remedy. Passing the document's own URL is what makes
+/// `<PersonShape>` in a fetched shapes graph mean what its author wrote. `dataNt` needs
+/// no such parameter: N-Triples admits no relative IRI by grammar.
 #[wasm_bindgen(js_name = shaclValidateToSarif)]
-pub fn shacl_validate_to_sarif(shapes_ttl: &str, data_nt: &str) -> Result<String, JsError> {
-    validate_to_sarif_impl(shapes_ttl, data_nt).map_err(|e| JsError::new(&e))
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_validate_to_sarif(
+    shapes_ttl: &str,
+    data_nt: &str,
+    shapes_base: Option<String>,
+) -> Result<String, JsError> {
+    validate_to_sarif_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
+        .map_err(|e| JsError::new(&e))
 }
 
 /// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base
@@ -37,18 +55,32 @@ pub fn shacl_validate_to_sarif(shapes_ttl: &str, data_nt: &str) -> Result<String
 /// The entailment twin of [`validate_to_sarif_impl`]: returns a plain `String`
 /// error (NOT a `JsError`) so it is unit-testable on the native build; the
 /// `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
-pub(crate) fn entail_to_ntriples_impl(shapes_ttl: &str, data_nt: &str) -> Result<String, String> {
-    purrdf_validate::entail_to_ntriples_string(shapes_ttl, data_nt)
+pub(crate) fn entail_to_ntriples_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+) -> Result<String, String> {
+    purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt)
 }
 
-/// `shaclEntail(shapesTtl, dataNt)` → the materialized dataset as an N-Triples
-/// string (the base graph plus every inferred triple).
+/// `shaclEntail(shapesTtl, dataNt, shapesBase?)` → the materialized dataset as an
+/// N-Triples string (the base graph plus every inferred triple).
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse or if rule application fails.
+///
+/// `shapesBase` carries the same meaning it does on
+/// [`shacl_validate_to_sarif`] — the shapes document's own base IRI, supplied by the
+/// host because a wasm guest has no retrieval IRI to derive one from.
 #[wasm_bindgen(js_name = shaclEntail)]
-pub fn shacl_entail(shapes_ttl: &str, data_nt: &str) -> Result<String, JsError> {
-    entail_to_ntriples_impl(shapes_ttl, data_nt).map_err(|e| JsError::new(&e))
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_entail(
+    shapes_ttl: &str,
+    data_nt: &str,
+    shapes_base: Option<String>,
+) -> Result<String, JsError> {
+    entail_to_ntriples_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
+        .map_err(|e| JsError::new(&e))
 }
 
 #[cfg(test)]
@@ -67,14 +99,14 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_2_1_0() {
-        let sarif = validate_to_sarif_impl(SHAPES, DATA).expect("sarif produced");
+        let sarif = validate_to_sarif_impl(SHAPES, None, DATA).expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
     }
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_impl("@@@ not turtle", DATA).is_err());
+        assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA).is_err());
     }
 
     // A shapes graph with a `sh:TripleRule` that types every `ex:Person` as an
@@ -91,7 +123,8 @@ mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt = entail_to_ntriples_impl(RULE_SHAPES, RULE_DATA).expect("entailment produced");
+        let nt =
+            entail_to_ntriples_impl(RULE_SHAPES, None, RULE_DATA).expect("entailment produced");
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -104,6 +137,6 @@ mod tests {
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_impl("@@@ not turtle", RULE_DATA).is_err());
+        assert!(entail_to_ntriples_impl("@@@ not turtle", None, RULE_DATA).is_err());
     }
 }

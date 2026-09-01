@@ -1286,6 +1286,20 @@ export function entailVerifyEntailment(
   importDocuments: readonly string[],
 ): ReasoningAnswer;
 
-export function shaclEntail(shapesTtl: string, dataNt: string): string;
-export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
+/**
+ * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
+ * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
+ * invent one: omit it and a relative reference throws rather than being mis-parsed.
+ * `dataNt` needs no counterpart — N-Triples admits no relative IRI by grammar.
+ */
+export function shaclEntail(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string,
+): string;
+export function shaclValidateToSarif(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string,
+): string;
 export function version(): string;
