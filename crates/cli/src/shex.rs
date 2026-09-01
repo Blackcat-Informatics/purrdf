@@ -179,8 +179,10 @@ fn surface_verdict(result: &ResultShapeMap) {
 ///
 /// The syntax is resolved the way every other format in this binary is: an explicit
 /// `--schema-from` wins, otherwise the path's extension classifies it, and `-` (stdin) has no
-/// extension so it REQUIRES the override. `base` reaches ShExC's `BASE` resolution; ShExJ has
-/// no relative-IRI syntax to resolve, so it takes none.
+/// extension so it REQUIRES the override. `base` reaches BOTH syntaxes: ShExC resolves its
+/// IRIREFs against the `BASE` in force, and ShExJ is a JSON-LD dialect whose IRI-valued
+/// members are document-relative in exactly the same way, so one base decides one schema
+/// whichever spelling it arrived in.
 fn read_schema(
     path: &str,
     explicit: Option<CliShexFormat>,
@@ -190,7 +192,7 @@ fn read_schema(
     let text = read_text(path, "--schema")?;
     match syntax {
         CliShexFormat::Shexc => parse_shexc(&text, base),
-        CliShexFormat::Shexj => parse_shexj(&text),
+        CliShexFormat::Shexj => parse_shexj(&text, base),
     }
     .map_err(|error| CliError::Runtime(format!("--schema {path}: {error}")))
 }
@@ -311,7 +313,7 @@ fn read_import_table(options: &ShexOptions<'_>) -> Result<Vec<(String, Schema)>,
         let text = read_text(path, &what)?;
         let schema = match syntax {
             CliShexFormat::Shexc => parse_shexc(&text, Some(iri)),
-            CliShexFormat::Shexj => parse_shexj(&text),
+            CliShexFormat::Shexj => parse_shexj(&text, Some(iri)),
         }
         .map_err(|error| CliError::Runtime(format!("{what} {path}: {error}")))?;
         table.push((iri.to_owned(), schema));

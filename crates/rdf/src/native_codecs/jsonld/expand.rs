@@ -246,8 +246,13 @@ impl Builder {
                             .and_then(JsonValue::as_str)
                     })
                     .ok_or_else(|| decode("@type value must be an IRI string"))?;
+                // Expansion §13.4.4 expands `@type` with BOTH vocab and documentRelative
+                // set. Passing `false` for the second flag made `@type` the one IRI
+                // position in the codec that could not see a base the document itself
+                // declared: `{"@context":{"@base":"http://example.org/"},"@type":"Thing"}`
+                // failed while the sibling `@id` in the same document resolved.
                 node.types
-                    .push(expand_required(&active, compact, true, false)?);
+                    .push(expand_required(&active, compact, true, true)?);
             }
         }
 
@@ -937,7 +942,10 @@ fn expand_value_object(
                 .value
                 .as_str()
                 .ok_or_else(|| decode("@type in a value object must be a string"))
-                .and_then(|value| expand_required(context, value, true, false))
+                // Same §13.4.4 step: a value object's `@type` is not a separate position,
+                // so a relative datatype resolves against the document base exactly as a
+                // node object's `@type` does.
+                .and_then(|value| expand_required(context, value, true, true))
         })
         .transpose()?;
     let json_keyword = expanded_type.as_deref() == Some("@json");

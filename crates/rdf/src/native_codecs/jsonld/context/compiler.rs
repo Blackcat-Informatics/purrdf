@@ -1198,9 +1198,7 @@ impl Compiler<'_> {
         if document_relative {
             return resolve_reference(value, active.base_iri.as_deref(), "IRI");
         }
-        Err(context_error(format!(
-            "relative IRI `{value}` has no applicable @vocab or @base"
-        )))
+        Err(no_vocab_expansion(value))
     }
 
     #[allow(
@@ -1578,6 +1576,28 @@ fn resolve_reference(
         })
 }
 
+/// The ONE remaining vocabulary-position failure: a value that is not a keyword, not a
+/// defined term, not a compact IRI, and not absolute, in a position JSON-LD expands with
+/// `vocab` but NOT `documentRelative` (a term definition's `@id`, `@reverse`, `@index`, or
+/// `@type` coercion).
+///
+/// It deliberately does NOT mention `@base`. The old wording — "relative IRI `x` has no
+/// applicable @vocab or @base" — was an eighth private spelling of "this relative IRI could
+/// not be resolved", and in this position it was actively misleading twice over: it named a
+/// `@base` the algorithm never consults here, sending an author off to add a base that
+/// cannot help, and it hid the fact that the document-relative positions had the same
+/// wording while resolving through an entirely different path. Every position that DOES
+/// consult the base now routes through [`resolve_reference`] and therefore reports the
+/// workspace-shared `iri-relative-no-base`; what is left over is a genuinely JSON-LD-local
+/// context failure with a genuinely JSON-LD-local remedy, and it says so.
+fn no_vocab_expansion(value: &str) -> RdfDiagnostic {
+    context_error(format!(
+        "`{value}` is not a keyword, a defined term, a compact IRI, or an absolute IRI, and \
+         this position expands against @vocab only; define a term, add an @vocab, or write \
+         the IRI in absolute form (a @base does not apply here)"
+    ))
+}
+
 fn build_inverse_context(active: &ActiveContext) -> InverseContext {
     let mut inverse = InverseContext::new();
     let mut terms: Vec<(&String, &JsonLdTermDefinition)> = active.terms.iter().collect();
@@ -1762,9 +1782,7 @@ pub(super) fn expand_iri(
     if document_relative {
         return resolve_reference(value, active.base_iri.as_deref(), "IRI").map(Some);
     }
-    Err(context_error(format!(
-        "relative IRI `{value}` has no applicable @vocab or @base"
-    )))
+    Err(no_vocab_expansion(value))
 }
 
 pub(super) fn compact_iri(
