@@ -13,7 +13,9 @@
 //!
 //! # Two CONSTRUCT result types, chosen by what the result carries
 //!
-//! A SPARQL 1.2 CONSTRUCT template names a graph per statement, so one result may span
+//! A quad-template CONSTRUCT (`CONSTRUCT { GRAPH ?g { … } }` — a first-party
+//! extension, NOT defined by SPARQL 1.2) names a graph per statement, so one result
+//! may span
 //! several named graphs and may mix them with default-graph triples. `Triple` has no
 //! graph slot, so a default-graph result stays a `QueryTriples` (unchanged, for every
 //! SPARQL 1.1 CONSTRUCT and every DESCRIBE) while a graph-carrying one is a
@@ -478,7 +480,9 @@ impl PyQueryTriples {
 ///
 /// # Why a second result type rather than a graph slot on `QueryTriples`
 ///
-/// A SPARQL 1.2 CONSTRUCT template carries a graph per STATEMENT: one template may
+/// A quad-template CONSTRUCT (`CONSTRUCT { GRAPH ?g { … } }` — a first-party
+/// extension, NOT defined by SPARQL 1.2) carries a graph per STATEMENT: one template
+/// may
 /// write several named graphs, and may mix default-graph triples with named-graph
 /// quads. `Triple` has no graph slot, so a `QueryTriples` cannot represent that result
 /// — flattening it into one triple stream silently deletes exactly the graph names the
@@ -488,8 +492,8 @@ impl PyQueryTriples {
 ///
 /// A result whose statements are ALL default-graph is unchanged: it is still a
 /// `QueryTriples` of `Triple`s, byte-identical on every format. Only a query that
-/// actually asks for a named graph — which SPARQL 1.1 had no syntax to ask for — can
-/// produce this type, so no pre-existing query changes shape.
+/// actually asks for a named graph — which neither SPARQL 1.1 nor SPARQL 1.2 has any
+/// syntax to ask for — can produce this type, so no pre-existing query changes shape.
 #[pyclass(name = "QueryQuads")]
 #[derive(Debug)]
 pub struct PyQueryQuads {

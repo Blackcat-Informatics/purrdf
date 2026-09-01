@@ -13,7 +13,8 @@
 //!
 //! # Why N-Quads and not N-Triples
 //!
-//! SPARQL 1.2's `CONSTRUCT { GRAPH ?g { … } }` is a quad template: the graph name
+//! `CONSTRUCT { GRAPH ?g { … } }` — a first-party extension, NOT defined by SPARQL
+//! 1.2 — is a quad template: the graph name
 //! is in the query the caller wrote, one token at a time, so it is among the most
 //! explicit things in the request. Rendering that result through a triple-only
 //! writer produced a well-formed document that silently omitted exactly what was

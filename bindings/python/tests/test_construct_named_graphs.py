@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """A quad-template CONSTRUCT keeps its graph names all the way into Python.
 
-SPARQL 1.2 lets a CONSTRUCT template name a graph per statement, so one result may
+A quad template (`CONSTRUCT { GRAPH ?g { ... } }` — a first-party extension, NOT
+defined by SPARQL 1.2) lets a CONSTRUCT template name a graph per statement, so one
+result may
 write several named graphs and may mix them with default-graph triples. `Triple` has
 no graph slot, so the Python egress splits by what the result CARRIES:
 
