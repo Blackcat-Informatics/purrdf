@@ -450,8 +450,17 @@ fn is_json_path(path: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
 }
 
+/// Resolve a corpus-relative reference against the suite base — through the same checked
+/// [`BaseIri`](purrdf_iri::BaseIri) the CSVW reader itself uses.
+///
+/// The harness previously took the base through `purrdf_iri::parse`, which accepts a
+/// RELATIVE base and so silently skipped RFC-3986 §5.1's precondition: a base that was not
+/// absolute produced a "resolved" reference that was not absolute either, and the harness
+/// compared it against the reader's answer as if the two had been computed the same way.
+/// They had not been. Taking `BaseIri` makes the harness and the implementation agree by
+/// construction rather than by coincidence.
 fn resolve(base: &str, reference: &str) -> Result<String, String> {
-    purrdf_iri::parse(base)
+    purrdf_iri::BaseIri::parse(base)
         .map_err(|error| error.to_string())?
         .resolve(reference)
         .map(|iri| iri.as_str().to_owned())
