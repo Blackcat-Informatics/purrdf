@@ -48,6 +48,13 @@ runs:
         found="$(wasm-bindgen --version | awk '{print $2}')"
         test "$found" = "$ver" || { echo "wasm-bindgen version mismatch: got $found, expected $ver"; exit 1; }
         echo "wasm-bindgen $found installed"
+        # The test runner ships in the SAME archive, so `make wasm-test` — which
+        # executes the cross-target determinism tests on wasm32 in Node — is held to
+        # the one wasm-bindgen pin rather than to a second, independently drifting one.
+        install -Dm0755 /tmp/wb/wasm-bindgen-test-runner "$HOME/.cargo/bin/wasm-bindgen-test-runner"
+        found_runner="$(wasm-bindgen-test-runner --version | awk '{print $2}')"
+        test "$found_runner" = "$ver" || { echo "wasm-bindgen-test-runner version mismatch: got $found_runner, expected $ver"; exit 1; }
+        echo "wasm-bindgen-test-runner $found_runner installed"
 
     - name: Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD
       shell: bash

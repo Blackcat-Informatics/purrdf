@@ -1282,14 +1282,46 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// budget sized against v6 for such a query buys exactly the same execution under v7. The
 /// number moves anyway, because the schedule moved and the schedule is what the digest
 /// describes.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 7;
+///
+/// # v8
+///
+/// [`CHARGE_SCHEDULE`] gains one point,
+/// [`ChargePoint::PropertyFunctionWork`], because v5 priced a host relation by the two
+/// quantities the *engine* can see — how many times it was asked, and how many rows it
+/// handed back — and for a whole class of relation neither of those is where the work is.
+/// A nearest-neighbour search over a million vectors that returns the five closest costs
+/// one `property-function-invocation` and five `property-function-row`s: six units for a
+/// million distance computations, priced identically to a six-row table scan. A budget is
+/// then a number about the answer's size rather than about the execution, which is the
+/// thing a governor exists to bound.
+///
+/// The point is charged from the quantity the relation itself reports through
+/// [`PfCursor::take_work`](crate::property_fn::PfCursor::take_work) — the only party that
+/// can see inside its own search. Three properties keep that from being a budget-evasion
+/// channel or a budget-fabrication one:
+///
+/// - It is charged, not trusted-and-ignored: the engine multiplies the reported count by
+///   this point's cost and spends it, so a relation that over-reports exhausts its
+///   caller's budget and a relation that under-reports is still bounded by every other
+///   ceiling in force (the invocation point, the row point, the intermediate-cell peak,
+///   the wall deadline). Under-reporting can make a query *cheaper* than it should be; it
+///   cannot make one *unsound*, and no engine-side measure can see inside host code to do
+///   better.
+/// - It is read after every pull, including the terminating one, so a cursor that does its
+///   work lazily and a cursor that does it all in `open` are charged the same total.
+/// - It defaults to zero. Every relation written against v5's seam — including
+///   [`MemoryRelation`](crate::property_fn::MemoryRelation) — reports no work and charges
+///   nothing, so a budget sized against v7 for such a query buys exactly the same
+///   execution under v8. The number moves anyway, because the schedule moved and the
+///   schedule is what the digest describes.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 8;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
 /// Byte-identical from v1 through v3; v4 appends `update-mutated-quad`, v5 appends the two
-/// property-function points, v6 appends the two aggregate points, and v7 appends the three
-/// `EXISTS`-strategy evidence points — see [`GOVERNOR_PROFILE_VERSION`] for what each
-/// version moved and why.
+/// property-function points, v6 appends the two aggregate points, v7 appends the three
+/// `EXISTS`-strategy evidence points, and v8 appends `property-function-work` — see
+/// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
@@ -1307,8 +1339,13 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 7;
 /// `aggregate-accumulation` (one value folded into a group's running aggregate state),
 /// `exists-probe-answered` (one memoized-probe evaluation), `exists-definition-answered`
 /// (one per-row-definition evaluation), and `exists-inner-solutions-consumed` (one row the
-/// definition path's inner materialized).
-pub const CHARGE_SCHEDULE: [(&str, u64); 16] = [
+/// definition path's inner materialized). So is `property-function-work` — one unit of
+/// internal work a relation performed and reported, in whatever unit that relation's own
+/// documentation names (a distance computation, a posting scanned). The engine cannot
+/// define that unit for host code, so it prices it at one and lets the relation say how
+/// many; what makes the number comparable across relations is that each one documents its
+/// unit, not that the engine imposed one.
+pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1325,6 +1362,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 16] = [
     ("exists-probe-answered", 1),
     ("exists-definition-answered", 1),
     ("exists-inner-solutions-consumed", 1),
+    ("property-function-work", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1437,6 +1475,28 @@ pub enum ChargePoint {
     /// actually materialized, charged once per row for each [`Self::ExistsDefinitionAnswered`]
     /// evaluation — see [`GOVERNOR_PROFILE_VERSION`]'s v7 note for the production bound of 1.
     ExistsInnerSolutionsConsumed,
+    /// One unit of **internal work** a property-function relation performed and reported
+    /// through [`PfCursor::take_work`](crate::property_fn::PfCursor::take_work).
+    ///
+    /// This is the one charge point whose count comes from host code rather than from a
+    /// site in this evaluator, and it exists because for a *generator* relation neither of
+    /// the two engine-visible quantities is where the cost is: a nearest-neighbour search
+    /// that examines a million vectors to return five rows charges one
+    /// [`Self::PropertyFunctionInvocation`] and five [`Self::PropertyFunctionRow`]s, which
+    /// prices a million distance computations exactly as it prices a six-row table scan.
+    ///
+    /// The unit is whatever the relation's own documentation says it is — a candidate
+    /// examined, a posting decoded — because the engine cannot see inside host code to
+    /// define one. What makes the number meaningful is that the relation states its unit;
+    /// what keeps it from being a budget-evasion channel is that the reported count is
+    /// *spent*, and that every other ceiling stays in force regardless of what a relation
+    /// reports. See [`GOVERNOR_PROFILE_VERSION`]'s v8 note.
+    ///
+    /// The reported count is read after **every** pull, including the terminating one that
+    /// returns no row, so a cursor that searches lazily on first `next` and one that
+    /// searches eagerly in `open` are charged the same total. A relation that does not
+    /// override `take_work` reports zero and charges nothing.
+    PropertyFunctionWork,
 }
 
 impl ChargePoint {
@@ -1458,6 +1518,7 @@ impl ChargePoint {
         Self::ExistsProbeAnswered,
         Self::ExistsDefinitionAnswered,
         Self::ExistsInnerSolutionsConsumed,
+        Self::PropertyFunctionWork,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1485,6 +1546,7 @@ impl ChargePoint {
             Self::ExistsProbeAnswered => 13,
             Self::ExistsDefinitionAnswered => 14,
             Self::ExistsInnerSolutionsConsumed => 15,
+            Self::PropertyFunctionWork => 16,
         }
     }
 
@@ -1620,7 +1682,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "5bd8735ca1e96104b84c8939958bc065469435db8ad9dfc6de4bbd37c31e38e9";
+    "b20fbee8919cfaa3f8b831effd8d68d16b51b0b51ee8466ede4d1d3499720978";
 
 #[cfg(test)]
 mod tests {

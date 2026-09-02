@@ -475,7 +475,8 @@ fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
 }
 
 /// The relation's three rows come back through `query_governed`, and the execution
-/// charges the two property-function points on the way.
+/// charges the two engine-observed property-function points on the way. (The third,
+/// `property-function-work`, is reported by the relation; this fixture reports none.)
 #[test]
 fn a_governed_query_answers_from_the_relation_and_charges_it() {
     let engine = NativeSparqlEngine::new();

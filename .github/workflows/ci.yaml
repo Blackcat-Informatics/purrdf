@@ -217,6 +217,14 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: Execute the cross-target determinism tests on wasm32 (Node)
+        # The build step above proves the crates COMPILE for wasm32. This one proves
+        # they ANSWER the same way there: the embedding kNN surface ranks by binary64
+        # arithmetic, and a reassociated sum or a fused multiply-add would swap two
+        # near-tied neighbours rather than merely shift a last digit. Same test body,
+        # same pinned expectations, executed on both targets.
+        run: make wasm-test
+
       - name: TypeScript emitter schema oracle
         run: node crates/shapes/tests/typescript_oracle.mjs
 

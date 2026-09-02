@@ -1439,6 +1439,57 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// Charge `occurrences` occurrences of `point` in one call — the scaled twin of
+    /// [`Self::charge`], for a site that learns after the fact how many times a countable
+    /// event happened rather than observing each one as it happens.
+    ///
+    /// `occurrences` is a *count of events*, not an amount of fuel: it is multiplied by the
+    /// point's own schedule cost exactly as a loop of single charges would be, so the two
+    /// spellings price identically and the ledger records the same decomposition. Charging
+    /// in one call rather than in a loop matters for the same reason
+    /// `crate::update`'s mutation charge does it: a relation that reports a million units
+    /// of work should cost one atomic add, not a million of them, and the trip decision is
+    /// the same either way because the fuel ceiling is a running sum.
+    ///
+    /// Zero occurrences short-circuits to `Ok` without touching the governor at all — a
+    /// relation that did no work must not be able to trip a zero-fuel ceiling that a
+    /// relation which was never asked would not have tripped.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub(crate) fn charge_occurrences(
+        &self,
+        point: crate::governor::ChargePoint,
+        occurrences: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if occurrences == 0 {
+            return Ok(());
+        }
+        let units = occurrences.saturating_mul(point.cost());
+        match self.governors.as_ref() {
+            None => Ok(()),
+            Some(state) => {
+                // The same stop-signal independence `charge` documents: a caller who
+                // selected only a deadline still gets a checkpoint here.
+                if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
+                    && let Some(tripped) = self.stop_check()
+                {
+                    return Err(tripped);
+                }
+                let result = state.charge_if_engaged(purrdf_core::ResourceDimension::Fuel, units);
+                if result.is_ok()
+                    && self.ledger.is_some()
+                    && state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
+                {
+                    self.note_fuel(point, units);
+                }
+                result
+            }
+        }
+    }
+
     /// Charge `amount` against `dimension`. See [`Self::charge`] for the short-circuits.
     ///
     /// # Errors
