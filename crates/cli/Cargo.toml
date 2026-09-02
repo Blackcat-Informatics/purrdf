@@ -27,11 +27,14 @@ path = "src/main.rs"
 # authority the CLI's `--from`/`--to` routing resolves against.
 purrdf-rdf = { workspace = true }
 # The IRI value space, for the one thing this surface does that the library layers
-# cannot: validating `--base` at the ARGUMENT boundary, so a malformed base is refused
-# where the operator typed it. The RFC-8089 `file://` retrieval IRI (RFC-3986 5.1.3) is
-# NOT derived here — that is `purrdf::slice::retrieval_base_iri`, shared with the slice
-# catalogue and the shape-union loader, so the Windows/UNC translation cannot diverge
-# between surfaces.
+# cannot: validating an IRI at the ARGUMENT boundary, so a malformed one is refused
+# where the operator typed it. That is `--base`, and it is also every IRI position in
+# `--path-relation`'s value grammar, which must be ABSOLUTE and is checked through the
+# same `parse`/`has_scheme` pair `ProvenanceNamespace::new` uses rather than through a
+# second opinion about what an absolute IRI is. The RFC-8089 `file://` retrieval IRI
+# (RFC-3986 5.1.3) is NOT derived here — that is `purrdf::slice::retrieval_base_iri`,
+# shared with the slice catalogue and the shape-union loader, so the Windows/UNC
+# translation cannot diverge between surfaces.
 purrdf-iri = { workspace = true }
 # The oxigraph-free kernel: the frozen `RdfDataset`/`DatasetView` model, the
 # pack container (`PackBuilder`/`PackView`/`verify_pack`/`dataset_from_view`),

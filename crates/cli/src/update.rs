@@ -11,6 +11,7 @@ use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
+use crate::path_relation::{self, PathRelationSpec};
 use crate::query::build_aggregate_registry;
 use crate::{ledger, sink, source};
 
@@ -29,6 +30,11 @@ pub(crate) struct UpdateOptions<'a> {
     /// through a nested `SELECT … GROUP BY`. `None` leaves the set unregistered,
     /// exactly as before this flag existed.
     pub(crate) aggregate_namespace: Option<&'a str>,
+    /// `--path-relation`, repeatable: the path-witness relations this request registers,
+    /// reachable from a `DELETE`/`INSERT … WHERE` clause. Empty leaves
+    /// `QueryOptions::property_functions` at its `EMPTY` value, exactly as before this
+    /// flag existed.
+    pub(crate) path_relations: &'a [PathRelationSpec],
 }
 
 /// Apply the request and emit the new dataset only after the whole request commits.
@@ -49,15 +55,25 @@ pub(crate) fn run(
     // string; `None` here reproduces `QueryOptions::EMPTY` byte-for-byte, so an
     // omitted `--aggregate-namespace` changes nothing about existing behaviour.
     let aggregates = build_aggregate_registry(options.aggregate_namespace);
-    // `QueryOptions::EMPTY` for every axis but `aggregates`: the CLI wires no SHACL-AF
-    // function table and no property-function registry.
+    // The path-witness relations `--path-relation` declares, snapshotted from the
+    // PRE-update dataset — the same state the request's `WHERE` clause matches, and the
+    // only state that exists before the mutation is computed. A duplicate IRI across
+    // repeated flags is refused first: `PropertyFunctionRegistry::register` PANICS on one,
+    // and a command line is a host misconfiguration rather than an abort.
+    path_relation::refuse_duplicate_iris(options.path_relations)?;
+    let relations = path_relation::build_registry(&*dataset, options.path_relations)?;
+    // `QueryOptions::EMPTY` for every axis but `aggregates` and `property_functions`: the
+    // CLI wires no SHACL-AF function table.
     // `static`, not a bare `&AggregateRegistry::EMPTY` temporary: `query_options` below
     // outlives this statement, and a `HashMap`-backed registry's drop glue blocks Rust's
     // rvalue static promotion for a reference that must live that long.
     static EMPTY_AGGREGATES: purrdf_sparql_eval::AggregateRegistry =
         purrdf_sparql_eval::AggregateRegistry::EMPTY;
+    static EMPTY_RELATIONS: purrdf_sparql_eval::PropertyFunctionRegistry =
+        purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY;
     let query_options = QueryOptions {
         aggregates: aggregates.as_ref().unwrap_or(&EMPTY_AGGREGATES),
+        property_functions: relations.as_ref().unwrap_or(&EMPTY_RELATIONS),
         ..QueryOptions::EMPTY
     };
 
