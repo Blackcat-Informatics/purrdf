@@ -679,7 +679,7 @@ keep English, gloss on first use.
 | 29 | governor / budget | governor（执行调控器）/ 预算 | K / E | no settled rendering for "governor" in this sense; 预算 is established for resource budgets |
 | 30 | ledgered (`xfail` ledger) | 台账（预期失败台账） | E, qualified | 台账 is the engineering register word; 账本 reads as blockchain |
 | 31 | walk vs. path | 游走 vs. 路径 | E | the pair maps cleanly (随机游走 is standard); keep the distinction the code makes |
-| 32 | out-of-core | 核外 | E (HPC) | 核外计算 is standard |
+| 32 | out-of-core (outside `purrdf-core`) | 核心之外 | C | the English is a pun on the `purrdf-core` crate, not the HPC sense; 核外 (核外计算, data larger than RAM) reads as a contradiction beside 「内存倒排索引」 and is rejected by the glossary gate — see `docs/book/po/glossary-zh-Hans.md` row 32, which supersedes this row |
 | 33 | interned / interner | 驻留 / 驻留表 | E (Python community) | |
 | 34 | fixpoint, semi-naive | 不动点, 半朴素 | E | |
 | 35 | embedding, kNN, full-text search | 嵌入（向量嵌入）, k 近邻, 全文检索 | E | the audience's core vocabulary |
