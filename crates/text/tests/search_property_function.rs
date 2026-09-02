@@ -221,6 +221,39 @@ fn answer(
     solutions(&result)
 }
 
+/// Evaluate `query` on an engine configured with `options` — the success-side
+/// counterpart of [`refusal`].
+///
+/// It exists so that a test which proves a parser-option configuration REFUSES
+/// something can, in the same breath, prove that it still ANSWERS the thing it
+/// is supposed to. Without it no test in this file ever evaluated a successful
+/// query under non-default parser options, and a declaration that over-refused
+/// every IRI beneath it — including registered ones — would have left the whole
+/// suite green.
+fn answer_with_options(
+    dataset: &RdfDataset,
+    registry: &PropertyFunctionRegistry,
+    options: ParserOptions,
+    query: &str,
+) -> Vec<Vec<String>> {
+    let result = NativeSparqlEngine::new()
+        .with_parser_options(options)
+        .query_with_options_view(
+            dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                property_functions: registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
+    solutions(&result)
+}
+
 /// The diagnostic message of a query that must NOT evaluate, on an engine
 /// configured with `options`.
 fn refusal(
@@ -657,6 +690,49 @@ fn a_namespace_declared_with_an_unregistered_iri_is_a_hard_error() {
     assert!(
         message.contains("no property function is registered"),
         "a declared namespace turns an unregistered spelling into a refusal: {message}"
+    );
+
+    // The neighbouring valid case, under the SAME declaration: the REGISTERED
+    // IRI in that namespace must still answer. A declaration that refused every
+    // IRI beneath it would satisfy the assertions above exactly as well as a
+    // correct one does, and would break every host that declares a namespace.
+    assert!(
+        SEARCH.starts_with("http://example.org/pf#"),
+        "the registered IRI must be inside the declared namespace, or this proves nothing"
+    );
+    assert_eq!(
+        answer_with_options(
+            &dataset,
+            &registry,
+            ParserOptions {
+                property_fn_namespaces: vec!["http://example.org/pf#".to_owned()],
+                ..nothing_declared()
+            },
+            &format!(
+                "SELECT ?doc WHERE {{ \
+                 ?doc <{SEARCH}> ( \"quick brown\" ?score ?rank ?lang ?matched ) }}"
+            ),
+        ),
+        vec![vec![subject("d1")], vec![subject("d2")]],
+        "declaring the namespace must not disturb the registered IRI's own answer"
+    );
+
+    // And the same under an explicit IRI declaration rather than a namespace
+    // one, which is the other configuration a host can write.
+    assert_eq!(
+        answer_with_options(
+            &dataset,
+            &registry,
+            ParserOptions {
+                property_fn_iris: vec![SEARCH.to_owned()],
+                ..nothing_declared()
+            },
+            &format!(
+                "SELECT ?doc WHERE {{ \
+                 ?doc <{SEARCH}> ( \"quick brown\" ?score ?rank ?lang ?matched ) }}"
+            ),
+        ),
+        vec![vec![subject("d1")], vec![subject("d2")]]
     );
 }
 

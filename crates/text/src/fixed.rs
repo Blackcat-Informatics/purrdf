@@ -284,8 +284,30 @@ impl Fixed {
 /// [`Fixed::ln`]'s range reduction.
 const INTERNAL_TO_SCALE_U: u128 = INTERNAL_TO_SCALE as u128;
 
+/// The magnitude of [`i128::MIN`] — `2^127`, the one magnitude that is
+/// representable negative and not positive.
+///
+/// Two's complement is asymmetric, and a magnitude-plus-sign reassembly that
+/// forgets it refuses a value the range does hold. Named rather than spelled
+/// inline so the asymmetry is visible at the one place it matters.
+const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
+
 /// Reassemble a magnitude and a sign into a [`Fixed`], or report the overflow.
+///
+/// The `negative` branch is not symmetric with the positive one, and cannot be.
+/// `i128` spans `-2^127 ..= 2^127 - 1`, so the magnitude `2^127` is
+/// representable *only* with a negative sign. Deciding representability with
+/// `i128::try_from` alone — which is a positive-range test — refuses that one
+/// value, and it refuses it for a computation whose exact answer is
+/// [`i128::MIN`]: `Fixed::from_raw(i128::MIN).checked_mul(Fixed::ONE)` is a
+/// multiplication by one, and it came back an overflow. That is an over-refusal
+/// rather than a rounding detail — the arithmetic's usable range depended on the
+/// sign of the operands rather than on the answer — so the negative extreme is
+/// admitted here explicitly.
 fn signed(magnitude: u128, negative: bool) -> Result<Fixed, TextError> {
+    if negative && magnitude == NEGATIVE_LIMIT_MAGNITUDE {
+        return Ok(Fixed::from_raw(i128::MIN));
+    }
     let raw = i128::try_from(magnitude)
         .map_err(|_| TextError::overflow("result left the fixed-point range"))?;
     Ok(Fixed::from_raw(if negative { -raw } else { raw }))

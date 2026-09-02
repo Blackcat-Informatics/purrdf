@@ -2211,6 +2211,33 @@ mod tests {
             error.to_string().contains("ONE term per invocation"),
             "the message must say what the contract is: {error}"
         );
+
+        // The neighbouring valid case, and the one that is easy to get wrong:
+        // the refusal counts ANALYZED terms, not words, so a needle that looks
+        // like one word to a caller and segments into several is refused while a
+        // needle that looks like several and segments into one is not. `中文` is
+        // two ideographs and analyzes to exactly one bigram, so it must be
+        // accepted and must retrieve.
+        let cjk = Arc::new(index_of(&[("cjk", "中文全文検索", None)]));
+        let relation = TermOccurrenceRelation::new(cjk);
+        assert_eq!(
+            invoke(&relation, &occurrence_args("中文"), None)
+                .expect("two adjacent ideographs analyze to ONE bigram"),
+            vec![vec![iri("cjk"), string("中文"), string(""), integer(0)]],
+            "a CJK term that analyzes to one bigram is a single-term needle"
+        );
+
+        // Three ideographs analyze to two bigrams and are refused, which is the
+        // other side of the same boundary.
+        let error = invoke(&relation, &occurrence_args("中文全"), None)
+            .expect_err("three ideographs are two bigrams");
+        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+
+        // A hyphenated compound is the Latin-script form of the same boundary.
+        assert!(
+            invoke(&relation, &occurrence_args("e-mail"), None).is_err(),
+            "`e-mail` segments into two words under UAX #29, so it is two calls"
+        );
     }
 
     /// A bound `?position` is a plain equality filter, which is exactly what

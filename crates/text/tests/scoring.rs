@@ -272,6 +272,16 @@ fn order_by_score_and_order_by_rank_can_disagree_under_rounding() {
         rows[0].partition_rank, rows[1].partition_rank,
         "but the ranks are still distinct"
     );
+    // At every rendering width, not only the full one: an exact tie agrees
+    // however many fractional digits a consumer keeps, so `ORDER BY DESC(?score)`
+    // cannot separate these two rows at any precision.
+    for digits in [0, 1, 6, 12] {
+        assert_eq!(
+            rendered(rows[0].score, digits),
+            rendered(rows[1].score, digits),
+            "an exact tie must agree at {digits} fractional digits too"
+        );
+    }
 
     let golden = golden_index();
     let rows = rank_partition(&golden, &plain(), &needle("alpha beta"), None).expect("scores");
@@ -403,6 +413,23 @@ fn statistics_are_not_pooled_across_partitions() {
         english_idf > french_idf,
         "the rarer term must weigh more: {english_idf:?} vs {french_idf:?}"
     );
+    // And the two values themselves, digit for digit, hand-computed from each
+    // partition's own `N` and `df`. An ordering assertion is satisfied by two
+    // wrong numbers that happen to be ordered, and this file's contract is
+    // exactness rather than plausibility.
+    //
+    // English: N = 4, df = 1, so IDF = ln(1 + 3.5/1.5) = ln(10/3)
+    //          = 1.2039728043259361… → 1.203972804325 truncated.
+    // French:  N = 4, df = 3, so IDF = ln(1 + 1.5/3.5) = ln(10/7)
+    //          = 0.3566749439387324… → 0.356674943938 truncated.
+    assert_eq!(
+        (
+            english_idf.to_decimal_lexical(),
+            french_idf.to_decimal_lexical()
+        ),
+        ("1.203972804325".to_owned(), "0.356674943938".to_owned()),
+        "each partition's inverse document frequency is computed from its own corpus"
+    );
 }
 
 // ── selection ────────────────────────────────────────────────────────────────
@@ -422,6 +449,15 @@ impl Lcg {
         (self.0 >> 33) % bound
     }
 }
+
+/// How many of [`spread_index`]'s documents hold at least one of
+/// `"alpha beta gamma"`.
+///
+/// A constant, because the fixture is: [`Lcg`] is a seeded integer recurrence
+/// with no floating point in it, so the corpus — and therefore this count — is a
+/// pure function of the seed and the vocabulary. Asserting a floor instead would
+/// be satisfied by a sweep that had quietly shrunk.
+const SPREAD_MATCHES: usize = 50;
 
 /// Sixty documents of varying length over a small vocabulary, in one partition.
 fn spread_index() -> TextIndex {
@@ -458,10 +494,11 @@ fn bounded_heap_equals_the_full_sort_prefix() {
     let index = spread_index();
     let query = needle("alpha beta gamma");
     let full = select(&index, &query, &everything(), None, None).expect("scores");
-    assert!(
-        full.len() > 20,
-        "the fixture must be big enough for the sweep to mean something, got {}",
-        full.len()
+    assert_eq!(
+        full.len(),
+        SPREAD_MATCHES,
+        "the fixture is a seeded generator with no float in it, so its match count is knowable \
+         exactly; a floor here would be satisfied by a sweep that had shrunk to two rows"
     );
 
     for k in 0..=(full.len() as u64 + 5) {
@@ -539,10 +576,14 @@ fn a_bound_rank_applies_to_every_admitted_partition() {
 
     let ceiling =
         select(&index, &needle("alpha"), &everything(), Some(1), Some(1)).expect("scores");
+    // WHICH row survives, not merely how many: a ceiling that truncated from
+    // the wrong end would emit the French partition's rank one and still be one
+    // row long. Emission is `(partition key ASC, rank ASC)`, so the surviving
+    // row is the English partition's.
     assert_eq!(
-        ceiling.len(),
-        1,
-        "a ceiling still limits how many of those rows are emitted"
+        ceiling.iter().map(|row| row.document).collect::<Vec<_>>(),
+        vec![0],
+        "a ceiling keeps the PREFIX of the emission order, not an arbitrary row of it"
     );
 }
 
@@ -557,7 +598,12 @@ fn explain_contributions_sum_exactly_to_the_score() {
     let index = spread_index();
     let query = needle("alpha beta gamma");
     let rows = select(&index, &query, &everything(), None, None).expect("scores");
-    assert!(!rows.is_empty());
+    assert_eq!(
+        rows.len(),
+        SPREAD_MATCHES,
+        "the loop below carries the real claim, so a collapse to one row must fail here rather \
+         than pass vacuously"
+    );
 
     for row in rows {
         let contributions = explain(&index, row.document, &query).expect("the document exists");
@@ -604,6 +650,22 @@ fn explaining_an_unknown_document_is_a_data_error() {
     let index = golden_index();
     let error = explain(&index, 999, &needle("alpha")).expect_err("there is no document 999");
     assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+
+    // One past the end is the boundary that matters, and 999 is nowhere near
+    // it: a bound written `id >= count - 1` would refuse the LAST document of
+    // every partition and this test would still pass. So the neighbouring valid
+    // case is the highest id the index holds, and the first id past it.
+    let last = u32::try_from(index.document_count() - 1).expect("a small fixture");
+    explain(&index, last, &needle("alpha"))
+        .unwrap_or_else(|error| panic!("document {last} is the last one the index holds: {error}"));
+    let past = last + 1;
+    assert!(
+        matches!(
+            explain(&index, past, &needle("alpha")),
+            Err(TextError::Data(_))
+        ),
+        "document {past} is one past the end and must be refused"
+    );
 }
 
 // ── the needle ───────────────────────────────────────────────────────────────
@@ -743,8 +805,19 @@ fn two_independently_built_indexes_rank_identically() {
 
     assert_eq!(forward.fingerprint(), backward.fingerprint());
     let query = needle("alpha beta");
+    let ranked = select(&forward, &query, &everything(), None, None).expect("scores");
+    // Two empty answers agree, and equal fingerprints do not imply retrieval,
+    // so the shape of the answer is pinned before the two are compared.
     assert_eq!(
-        select(&forward, &query, &everything(), None, None).expect("scores"),
-        select(&backward, &query, &everything(), None, None).expect("scores")
+        ranked
+            .iter()
+            .map(|row| (row.document, row.partition_rank, row.matched))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 2), (1, 2, 2), (2, 3, 1)],
+        "all three documents hold a needle term, in this rank order"
+    );
+    assert_eq!(
+        select(&backward, &query, &everything(), None, None).expect("scores"),
+        ranked
     );
 }
