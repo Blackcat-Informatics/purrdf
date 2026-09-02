@@ -103,7 +103,7 @@ RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)�
 
 - **仅限内存。** SPARQL 查询在内存数据集上运行；本包不提供网络解析器，因此远程
   `SERVICE` 与 `LOAD` 会显式失败。
-- `serialize` 是写入器原生通道：它发出目标写入器有表面承载的一切，并拒绝其没有的。
+- **各格式的三元组项。**`serialize` 是写入器原生通道：它发出目标写入器有表面承载的一切，并拒绝其没有的。
   因此宾语位置的引用三元组项与 RDF 1.2 陈述层在 Turtle、N-Triples、N-Quads 与 TriG
   （写作 `<<( … )>>`）、RDF/XML（写作 `rdf:parseType="Triple"`）以及 JSON-LD /
   YAML-LD（写作 `@triple`）中都得以保留。TriX 与 HexTuples 没有三元组项表面，因此把
