@@ -4695,7 +4695,7 @@ mod tests {
     #[test]
     fn the_golden_vector_is_well_formed() {
         let cases = regime_golden_vectors().expect("the artifact parses");
-        assert!(!cases.is_empty());
+        assert_ne!(cases, [] as [_; 0]);
         for case in &cases {
             parse_regime(case.regime()).expect("a case names a real regime");
             assert!(!case.input().is_empty(), "{}", case.name());
@@ -5180,10 +5180,10 @@ mod tests {
             .lines()
             .filter_map(|line| line.strip_prefix("boundary "))
             .collect();
-        assert!(!boundaries.is_empty());
+        assert_ne!(boundaries, [] as [&str; 0]);
         for boundary in boundaries {
             let (construct, reason) = boundary.split_once(' ').expect("a construct and a reason");
-            assert!(!construct.is_empty());
+            assert_ne!(construct, "");
             assert!(reason.len() > construct.len(), "{boundary}");
         }
         // `simple` copies faithfully, so it names none — and is therefore the one

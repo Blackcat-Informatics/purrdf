@@ -2359,7 +2359,7 @@ mod tests {
                 );
             }
         }
-        assert!(split_line_chunks("", 8).is_empty());
+        assert_eq!(split_line_chunks("", 8), [] as [&str; 0]);
     }
 
     /// Error semantics: with an invalid line in an EARLY chunk and a different invalid

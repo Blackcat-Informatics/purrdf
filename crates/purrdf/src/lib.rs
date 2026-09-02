@@ -442,7 +442,7 @@ mod tests {
 
         // gts: the container engine (its `model`) and the rdf-level adapter
         // (`read_graph`) are both reachable under the one `gts` module.
-        assert!(!format!("{:?}", gts::model::TermKind::Iri).is_empty());
+        assert_ne!(format!("{:?}", gts::model::TermKind::Iri), "");
         let adapter: fn(&[u8], bool) -> _ = gts::read_graph;
         assert!(
             adapter(&[], false).is_err(),
@@ -450,11 +450,11 @@ mod tests {
         );
 
         // sparql: parser (algebra) + engine (eval) + results.
-        assert!(!format!("{:?}", sparql::SparqlResultsFormat::Json).is_empty());
+        assert_ne!(format!("{:?}", sparql::SparqlResultsFormat::Json), "");
 
         // foundations.
         assert!(iri::parse("https://example.org/x").is_ok());
-        assert!(!format!("{:?}", events::TextDirection::Ltr).is_empty());
+        assert_ne!(format!("{:?}", events::TextDirection::Ltr), "");
 
         // entail: the entailment regimes are reachable through the facade.
         assert_eq!(

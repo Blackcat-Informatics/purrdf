@@ -117,6 +117,9 @@ pub mod remote;
 pub mod remote_http;
 mod row_ingest;
 pub mod scratch;
+// Per-service context for the SERVICE seam: the capability/credential/header policy a
+// host attaches to individual endpoints, and the two resolvers built on it.
+pub mod service;
 pub mod solution;
 pub mod stat_agg;
 mod statement_layer;
@@ -150,6 +153,11 @@ pub use governor::{
     ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
     QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
+// The value-level entry points to the ORDER BY comparator and the built-in
+// aggregate accumulators, for a host that holds a bag of `TermValue`s (SHACL-AF's
+// `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating
+// caller) and must get exactly the answer a query would have computed.
+pub use modifier::{ValueAggregate, compare_values, fold_values, order_values};
 // The kernel's governor vocabulary, re-exported so a host that governs queries through
 // this crate can NAME what it gets back — the ceilings it set, what was spent, and which
 // governor stopped the execution — without also depending on `purrdf-core` directly. A
@@ -183,14 +191,21 @@ pub use path_relation::{
     MAX_HOPS_CAP, PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep,
     PathWitnessRelation, ShortestPathWitnessRelation,
 };
-pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
+pub use remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
+// The per-service policy surface: what a resolver may do for one endpoint, what it
+// sends, and the two resolvers that consume it. Re-exported so a host configures
+// federation without naming the module path.
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
+pub use service::{
+    InProcessServiceResolver, ServiceCapabilities, ServiceCapability, ServiceCatalog,
+    ServiceCredential, ServiceDenial, ServiceProfile, ServiceRouter,
+};
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, NativeFnBody, NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
-    UserFunction, UserFunctionRegistry, Volatility,
+    Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
+    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).

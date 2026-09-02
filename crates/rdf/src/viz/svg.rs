@@ -1287,7 +1287,7 @@ mod tests {
             .expect("table");
         assert!(document.svg.contains("class=\"statement-table\""));
         assert!(!document.svg.contains("class=\"edge-path\""));
-        assert!(document.export.scene.nodes.is_empty());
+        assert_eq!(document.export.scene.nodes, [] as [_; 0]);
         assert!(document.export.layout.table.is_some());
     }
 
@@ -1307,9 +1307,9 @@ mod tests {
         .expect("second");
         assert_eq!(first, second);
         assert_eq!(first.export.schema_version, VIZ_EXPORT_SCHEMA_VERSION);
-        assert!(!first.export.spec_hash.is_empty());
-        assert!(!first.export.model_hash.is_empty());
-        assert!(!first.export.scene_hash.is_empty());
+        assert_ne!(first.export.spec_hash, "");
+        assert_ne!(first.export.model_hash, "");
+        assert_ne!(first.export.scene_hash, "");
     }
 
     #[test]

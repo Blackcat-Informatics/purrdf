@@ -128,6 +128,26 @@ pub struct PlanCache {
 }
 
 impl PlanCache {
+    /// The number of memoized plans held.
+    ///
+    /// The cache is keyed on query TEXT and is never evicted, which is right for
+    /// a static query corpus (one entry per distinct query a host issues) and
+    /// wrong for any caller that would splice operand DATA into the text it
+    /// prepares — each such call is a distinct key, so the cache would grow with
+    /// the input rather than with the program. This makes that growth OBSERVABLE,
+    /// so a caller can pin "my evaluation path does not manufacture query text"
+    /// as a test rather than as a comment.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no plan is memoized.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// A fresh, empty cache.
     pub fn new() -> Self {
         Self::default()
@@ -297,6 +317,13 @@ impl std::fmt::Debug for NativeSparqlEngine {
 }
 
 impl NativeSparqlEngine {
+    /// The number of plans this engine's cache currently memoizes — see
+    /// [`PlanCache::len`] for what a growing count means.
+    #[must_use]
+    pub fn cached_plan_count(&self) -> usize {
+        self.cache.borrow().len()
+    }
+
     /// Parse a query through this engine's memoizing plan cache.
     ///
     /// Callers that inspect query algebra before evaluation can retain the
@@ -595,7 +622,7 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
-        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         check_plan_matches_relations(prepared, options)?;
@@ -629,7 +656,7 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_governed`] with a
-    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected, so `SERVICE`
+    /// [`ServiceResolver`](crate::remote::ServiceResolver) injected, so `SERVICE`
     /// clauses resolve through it.
     ///
     /// The governed sibling of [`Self::query_with_source`], and the entry a federated
@@ -647,7 +674,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &(dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
@@ -665,7 +692,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
@@ -803,7 +830,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
@@ -821,7 +848,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
@@ -1533,7 +1560,7 @@ impl NativeSparqlEngine {
     }
 
     /// Like [`SparqlEngine::query`], but with a
-    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
+    /// [`ServiceResolver`](crate::remote::ServiceResolver) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
     /// [`SparqlEngine::query`] path has no source and a non-silent `SERVICE`
     /// hard-fails. This is the public entry the conformance harness and
@@ -1550,7 +1577,7 @@ impl NativeSparqlEngine {
     /// query's OUTER pattern resolves against `options.property_functions` exactly
     /// as [`Self::query_with_options_view`] resolves it; a call node inside the
     /// `SERVICE` body itself is refused at forwarding regardless (see
-    /// [`crate::remote::RemoteQuerySource`]).
+    /// [`crate::remote::ServiceResolver`]).
     ///
     /// # Errors
     ///
@@ -1559,7 +1586,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &(dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_with_source_view(&**dataset, request, source, options)
@@ -1575,7 +1602,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared = self.prepare_for(
@@ -1821,18 +1848,43 @@ pub struct QueryOptions<'a> {
     /// per-focus-node identity tag — and must never be derived from time, RNG,
     /// or iteration order.
     pub bnode_mint_prefix: Option<&'a str>,
+    /// The frozen graph a dataset-aware (expression-bodied) user function's body is
+    /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3
+    /// "Evaluation of Custom SPARQL Functions".
+    ///
+    /// `None` — the default — means no such function can be called: the call is
+    /// refused rather than answered from a graph it never read (see
+    /// `user_fn::eval_expr_function`). Every other function kind is
+    /// unaffected.
+    ///
+    /// Supplied per QUERY rather than captured once when the registry was built, and
+    /// that is the whole point: a caller iterating a fixpoint rebuilds its graph every
+    /// round and passes the round's graph here, so a function called during round *n*
+    /// reads round *n*'s facts. A registry that had captured a graph at build time
+    /// would read the round-zero graph forever.
+    pub focus_graph: Option<&'a Arc<RdfDataset>>,
+    /// The user-function call depth this evaluation starts at (see
+    /// [`EvalCtx::with_call_depth`](crate::eval::EvalCtx::with_call_depth)).
+    ///
+    /// `0` — the default — is a top-level query. A caller that is itself running
+    /// inside an expression-bodied function's body passes that function's
+    /// [`ExprFnCall::depth`](crate::ExprFnCall::depth) here, so a recursion that
+    /// leaves the evaluator and re-enters it through a fresh query is still bounded.
+    pub call_depth: u32,
 }
 
 impl QueryOptions<'_> {
     /// Configure nothing: the ordinary substitution rewrite, every registry the
-    /// canonical empty value, unprefixed blank mints. What every entry did before
-    /// it took options.
+    /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
+    /// depth. What every entry did before it took options.
     pub const EMPTY: Self = Self {
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
         property_functions: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
         aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
         bnode_mint_prefix: None,
+        focus_graph: None,
+        call_depth: 0,
     };
 }
 
@@ -1968,7 +2020,11 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     ctx = ctx
         .with_user_functions(options.functions)
         .with_property_functions(options.property_functions)
-        .with_aggregates(options.aggregates);
+        .with_aggregates(options.aggregates)
+        .with_call_depth(options.call_depth);
+    if let Some(graph) = options.focus_graph {
+        ctx = ctx.with_focus_graph(graph);
+    }
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx
             .with_bnode_mint_prefix(prefix)
@@ -2668,7 +2724,7 @@ mod tests {
         assert_eq!(first.subject_arity, 1);
         assert_eq!(first.object_arity, 1);
         assert_eq!(first.volatility, crate::Volatility::Stable);
-        assert!(!first.modes.is_empty());
+        assert_ne!(first.modes, [] as [_; 0]);
 
         assert_ne!(
             left_receipt.render(),
@@ -2686,8 +2742,8 @@ mod tests {
         // With no registry EITHER block is present and empty — "nothing was in scope",
         // not "this build does not report what was".
         let bare = engine.explain_query(&ds, query, None).expect("explain");
-        assert!(bare.relations().is_empty());
-        assert!(bare.aggregates().is_empty());
+        assert_eq!(bare.relations(), []);
+        assert_eq!(bare.aggregates(), []);
         assert!(bare.render().contains("relations\naggregates\njoin-orders"));
     }
 
@@ -2811,7 +2867,7 @@ mod tests {
             receipt.render()
         );
         // The `relations` block is unaffected — this seam is aggregates-only.
-        assert!(receipt.relations().is_empty());
+        assert_eq!(receipt.relations(), []);
     }
 
     /// A query that needs BOTH a registered relation and a registered custom aggregate

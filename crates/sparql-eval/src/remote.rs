@@ -2,24 +2,29 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! SPARQL `SERVICE` federation: the `eval_service` handler and the
-//! [`RemoteQuerySource`] seam.
+//! [`ServiceResolver`] seam.
 //!
 //! `SERVICE [SILENT] <endpoint> { pattern }` evaluates `pattern` at a remote
 //! endpoint and joins the result into the surrounding query. The evaluator stays
 //! transport-agnostic: it forwards the inner pattern (serialized to a `SELECT *`
 //! query via [`purrdf_sparql_algebra::pattern_to_select_query`]) to an injected
-//! [`RemoteQuerySource`] and interns the returned bindings into a
+//! [`ServiceResolver`] and interns the returned bindings into a
 //! [`SolutionSeq`]. The parser wraps `SERVICE` in `Join(left, Service)`, so
 //! `eval_service` returns *only* the remote bag — the existing hash join performs
 //! the federation join.
 //!
 //! # Seam, not a baked client
 //!
-//! [`RemoteQuerySource`] is the dependency-inversion seam:
+//! [`ServiceResolver`] is the dependency-inversion seam:
 //! [`crate::remote_http::HttpRemoteQuerySource`] builds/decodes SPARQL Protocol
-//! requests through a caller-supplied HTTP transport, and [`LocalRemoteQuerySource`]
-//! dog-foods the local engine in memory. This keeps the core query path wasm-clean
-//! and makes `SERVICE` deterministically testable offline.
+//! requests through a caller-supplied HTTP transport, and
+//! [`InProcessServiceResolver`](crate::service::InProcessServiceResolver) dog-foods the
+//! local engine in memory. This keeps the core query path wasm-clean and makes `SERVICE`
+//! deterministically testable offline.
+//!
+//! It takes the whole request as one [`ServiceRequest`] value, which is what gives
+//! per-service context — headers, credentials, capabilities — somewhere to live other
+//! than the service IRI. That context and the policy over it are in [`crate::service`].
 //!
 //! # Hard-fail vs SILENT
 //!
@@ -27,6 +32,12 @@
 //! undecodable response: a **non-silent** `SERVICE` raises [`EvalError::Remote`]
 //! (the query aborts), while `SERVICE SILENT` swallows the failure to the join
 //! identity (one empty row) so the surrounding query proceeds unchanged.
+//!
+//! A [`RemoteError::Denied`] is the exception, and belongs with the governors below
+//! rather than with the endpoint failures above: it is a refusal decided on *this* side
+//! of the seam, so `SILENT` never swallows it — at any nesting depth, which is why it
+//! travels as the structured [`EvalError::ServiceDenied`] rather than as message text.
+//! See [`crate::service`] for the full contract table.
 //!
 //! # `SILENT` is about the endpoint, never about this engine's budget
 //!
@@ -50,7 +61,7 @@
 //! of it is interned, so a response arriving from outside the dataset cannot walk past
 //! ceilings that bound everything computed inside it.
 
-use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
@@ -60,6 +71,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, materialize_solutions};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::governor::{GovernorState, QueryGovernors, StopSignal};
+use crate::service::ServiceDenial;
 use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]
@@ -88,12 +100,30 @@ pub enum RemoteError {
     Decode(String),
     /// Federation is disabled for this source.
     Disabled,
+    /// A [`ServiceResolver`] refused the service because its per-service policy withheld
+    /// a capability — see [`crate::service`].
+    ///
+    /// **Not silenceable**, and grouped here with the governors rather than with the
+    /// endpoint failures above for the same reason they are: a denial is a decision this
+    /// host took, deterministically, before any endpoint was consulted. `SILENT` promises
+    /// to tolerate an endpoint that does not answer; it does not promise to hide a
+    /// refusal to ask one. Swallowing a denial would make the surrounding join a no-op
+    /// and the final result indistinguishable from a complete one — identically on every
+    /// run, so nothing would ever surface a symptom.
+    ///
+    /// Unlike [`Self::Governed`] this is not a budget outcome and carries no partial
+    /// answer to certify, so it surfaces as the structured
+    /// [`EvalError::ServiceDenied`] rather than as a truncation — structured, not a
+    /// formatted [`EvalError::Remote`], so that a denial raised by a nested `SERVICE`
+    /// inside a forwarded body can be recognized and re-raised as this variant instead of
+    /// decaying into a silenceable endpoint failure.
+    Denied(ServiceDenial),
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
     ///
     /// Not an endpoint failure and therefore not silenceable — see the module
     /// documentation. A source returns this only for a governor it was handed (the stop
-    /// signal threaded into [`RemoteQuerySource::query`]); an endpoint's own overload,
+    /// signal threaded into [`ServiceResolver::resolve`]); an endpoint's own overload,
     /// throttling, or timeout is [`Self::Transport`], because that is the caller's
     /// endpoint misbehaving rather than the caller's budget running out.
     Governed(TrippedGovernor),
@@ -112,6 +142,7 @@ impl core::fmt::Display for RemoteError {
             Self::Transport(m) => write!(f, "transport: {m}"),
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
+            Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::Governed(governor) => write!(f, "governed: {governor}"),
             Self::GovernedAfterCompletion(governor) => {
                 write!(f, "governed after completed exchange: {governor}")
@@ -122,13 +153,114 @@ impl core::fmt::Display for RemoteError {
 
 impl std::error::Error for RemoteError {}
 
-/// A source that resolves a forwarded SPARQL `SELECT` query at a `SERVICE`
-/// endpoint. Object-safe so [`EvalCtx`] can hold a `&dyn RemoteQuerySource`.
-pub trait RemoteQuerySource {
-    /// Forward `query_text` (a complete `SELECT * WHERE { … }`) to `endpoint` and
-    /// return its bindings.
+impl From<ServiceDenial> for RemoteError {
+    fn from(denial: ServiceDenial) -> Self {
+        Self::Denied(denial)
+    }
+}
+
+/// The complete `SERVICE` request handed to a [`ServiceResolver`].
+///
+/// Grouping the request into one value rather than a positional argument list is what
+/// gives per-service context a place to live: a resolver keys its
+/// [`ServiceProfile`](crate::service::ServiceProfile) off [`Self::endpoint`], and a
+/// future field is additive for every implementation instead of a signature break for
+/// all of them.
+#[derive(Clone, Copy)]
+pub struct ServiceRequest<'a> {
+    /// The service IRI, exactly as written in the query. A resolver keys its per-service
+    /// context off this.
+    pub endpoint: &'a str,
+    /// The complete forwarded SPARQL `SELECT * WHERE { … }` text.
+    pub query_text: &'a str,
+    /// Whether the clause was written `SERVICE SILENT`.
     ///
-    /// `stop` is the executing query's [`StopSignal`], or `None` when the caller set no
+    /// **Informational, and never a licence to silence anything.** Which failures
+    /// `SILENT` swallows is decided by `eval_service` from the error a resolver
+    /// returns (see [`crate::service`]'s contract table); a resolver that swallowed its
+    /// own failure to an empty result because this flag was set would be reporting an
+    /// answer it never established, and the evaluator would have no way to tell.
+    ///
+    /// It is carried because a *policy* may legitimately depend on it: refusing
+    /// `SERVICE SILENT` against a credentialed service is a real, defensible rule — an
+    /// authentication failure swallowed to the join identity is a silent wrong answer —
+    /// and a resolver cannot state that rule without seeing the flag.
+    pub silent: bool,
+    /// The executing query's stop signal, or `None` when the caller set neither a
+    /// deadline nor a cancellation. See [`ServiceResolver::resolve`].
+    pub stop: Option<&'a Arc<dyn StopSignal>>,
+    /// The executing query's inclusive peak intermediate-cell ceiling, when one is
+    /// engaged. See [`ServiceResolver::resolve`].
+    pub max_intermediate_cells: Option<u64>,
+}
+
+impl fmt::Debug for ServiceRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceRequest")
+            .field("endpoint", &self.endpoint)
+            .field("query_text", &self.query_text)
+            .field("silent", &self.silent)
+            .field("stop", &self.stop.map(|_| "<signal>"))
+            .field("max_intermediate_cells", &self.max_intermediate_cells)
+            .finish()
+    }
+}
+
+impl<'a> ServiceRequest<'a> {
+    /// A non-silent, ungoverned request for `query_text` at `endpoint`.
+    #[must_use]
+    pub const fn new(endpoint: &'a str, query_text: &'a str) -> Self {
+        Self {
+            endpoint,
+            query_text,
+            silent: false,
+            stop: None,
+            max_intermediate_cells: None,
+        }
+    }
+
+    /// Mark the request as coming from a `SERVICE SILENT` clause.
+    #[must_use]
+    pub const fn silent(mut self, silent: bool) -> Self {
+        self.silent = silent;
+        self
+    }
+
+    /// Attach the executing query's stop signal.
+    #[must_use]
+    pub const fn with_stop(mut self, stop: Option<&'a Arc<dyn StopSignal>>) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// Attach the executing query's intermediate-cell ceiling.
+    #[must_use]
+    pub const fn with_max_intermediate_cells(mut self, cells: Option<u64>) -> Self {
+        self.max_intermediate_cells = cells;
+        self
+    }
+
+    /// The stop signal's decision as a [`RemoteError`], if it has already fired.
+    ///
+    /// Every [`ServiceResolver::resolve`] implementation calls this first: the contract
+    /// is that a signal which has already fired **prevents** the exchange rather than
+    /// being noticed once it has returned.
+    #[must_use]
+    pub fn stop_trip(&self) -> Option<RemoteError> {
+        self.stop
+            .and_then(|signal| signal.poll())
+            .map(|cause| RemoteError::Governed(TrippedGovernor::Stopped { cause }))
+    }
+}
+
+/// A source that resolves a forwarded SPARQL `SELECT` query at a `SERVICE`
+/// endpoint. Object-safe so [`EvalCtx`] can hold a `&dyn ServiceResolver`.
+pub trait ServiceResolver {
+    /// Forward [`ServiceRequest::query_text`] (a complete `SELECT * WHERE { … }`) to
+    /// [`ServiceRequest::endpoint`] and return its bindings.
+    ///
+    /// [`ServiceRequest::stop`] is the executing query's [`StopSignal`], or `None` when
+    /// the caller set no
     /// deadline and no cancellation. An implementation **must** poll it before it starts
     /// the exchange, and should poll it again anywhere it would otherwise wait: this is
     /// the only governor that can act while the evaluator is blocked inside this call, and
@@ -171,7 +303,8 @@ pub trait RemoteQuerySource {
     /// Both halves are worth stating plainly: honouring `stop` is not required for
     /// soundness, and it does buy the caller something concrete.
     ///
-    /// `max_intermediate_cells` is the executing query's inclusive peak-cell ceiling. A
+    /// [`ServiceRequest::max_intermediate_cells`] is the executing query's inclusive
+    /// peak-cell ceiling. A
     /// source that decodes or evaluates bindings itself must stop before materializing a
     /// response prefix wider than that bound and report the exact first refused size in
     /// [`ResolvedBindings::cell_limit_exceeded_at`]. The evaluator repeats the check during
@@ -181,14 +314,10 @@ pub trait RemoteQuerySource {
     /// # Errors
     ///
     /// Returns [`RemoteError`] on transport or decode failure, which `eval_service` may
-    /// swallow under `SILENT`, or [`RemoteError::Governed`], which it never swallows.
-    fn query(
-        &self,
-        endpoint: &str,
-        query_text: &str,
-        stop: Option<&Arc<dyn StopSignal>>,
-        max_intermediate_cells: Option<u64>,
-    ) -> Result<ResolvedBindings, RemoteError>;
+    /// swallow under `SILENT`; [`RemoteError::Denied`] when a per-service capability was
+    /// withheld; or [`RemoteError::Governed`]. Neither of the last two is ever swallowed
+    /// — see [`crate::service`]'s `SILENT` contract table.
+    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError>;
 }
 
 /// Whether `pattern` reaches a WRITTEN `LATERAL` keyword anywhere in the FULL
@@ -717,11 +846,11 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
             .is_engaged_in(dimension)
             .then(|| state.limits().get(dimension))
     });
-    let response = source.query(
-        &endpoint,
-        &query_text,
-        stop.as_ref(),
-        max_intermediate_cells,
+    let response = source.resolve(
+        ServiceRequest::new(&endpoint, &query_text)
+            .silent(silent)
+            .with_stop(stop.as_ref())
+            .with_max_intermediate_cells(max_intermediate_cells),
     );
     // Always inspect the signal immediately after control returns. A source is permitted
     // to be unable to abandon an in-flight request; without this checkpoint a terminal
@@ -753,6 +882,25 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
                 SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
                 ctx.record_trip(governor),
             )));
+        }
+        // A capability the resolver's own policy withheld. Decided on THIS side of the
+        // seam before any endpoint was consulted, so — exactly like the two governor arms
+        // above, and unlike every endpoint failure below — `SILENT` does not swallow it.
+        // It is not a budget outcome and carries no partial answer to certify, so it is a
+        // hard error rather than a truncation. Placed ahead of the generic arm so it also
+        // outranks a stop that fired during the same call: a denial is not erased under
+        // SILENT, so it survives to be the reported fact, which is the same precedence a
+        // non-silent endpoint failure already gets below.
+        //
+        // Raised as the STRUCTURED `EvalError::ServiceDenied` rather than as a formatted
+        // `EvalError::Remote`, because this error may not be at the end of its journey: an
+        // in-process resolver evaluates a forwarded body itself, so a denial raised by a
+        // clause NESTED in that body comes back out through this same return. Flattened to
+        // a message it would be indistinguishable from an endpoint failure by the time
+        // `evaluate_in_memory` reclassified it, and an enclosing `SERVICE SILENT` would
+        // swallow it to the join identity.
+        Err(RemoteError::Denied(denial)) => {
+            return Err(EvalError::ServiceDenied(denial));
         }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
@@ -858,119 +1006,94 @@ fn ingest<D: DatasetView + Sync>(
     (SolutionSeq { schema, rows }, tripped)
 }
 
-/// An in-memory [`RemoteQuerySource`] that **dog-foods the native engine**: each
-/// endpoint IRI maps to a local [`RdfDataset`], and a forwarded query is parsed
-/// and evaluated against it with [`NativeSparqlEngine`](crate::NativeSparqlEngine)
-/// semantics. Deterministic and network-free — the test/conformance vehicle for
-/// `SERVICE`.
-#[derive(Debug, Default)]
-pub struct LocalRemoteQuerySource {
-    datasets: HashMap<String, Arc<RdfDataset>>,
-}
-
-impl LocalRemoteQuerySource {
-    /// An empty source with no endpoints.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register `dataset` as the contents of `endpoint`.
-    #[must_use]
-    pub fn with_endpoint(mut self, endpoint: impl Into<String>, dataset: Arc<RdfDataset>) -> Self {
-        self.datasets.insert(endpoint.into(), dataset);
-        self
+/// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
+///
+/// Everything the inner evaluation can fail with is, from the OUTER query's point of view,
+/// this endpoint failing to produce a decodable answer — with exactly one exception. A
+/// nested `SERVICE` clause resolved through the same (gated) resolver raises
+/// [`EvalError::ServiceDenied`], and that is a refusal decided on this side of the seam,
+/// not an endpoint that did not answer. It must cross back as
+/// [`RemoteError::Denied`] so `eval_service` classifies it identically at every depth: a
+/// denial `SERVICE SILENT` never swallows. Mapping it to [`RemoteError::Decode`] would
+/// make a nested denial silenceable when the same denial one level up is not, and the
+/// resulting answer would look complete, be wrong, and be wrong the same way on every run.
+fn remote_error_for(error: EvalError) -> RemoteError {
+    match error {
+        EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
+        other => RemoteError::Decode(other.to_string()),
     }
 }
 
-impl RemoteQuerySource for LocalRemoteQuerySource {
-    /// # The forwarded evaluation is governed by the caller's signal
-    ///
-    /// The forwarded query is a whole evaluation of its own, and an in-memory endpoint is
-    /// not a bounded amount of work — a cyclic property path or a cross product costs the
-    /// same here as it does anywhere else. So the caller's [`StopSignal`] is installed on
-    /// the forwarded context, which polls it at every operator boundary, and a signal that
-    /// fires part-way through is reported as [`RemoteError::Governed`] rather than as a
-    /// decode failure. Reporting it as a failure would make it silenceable, which is
-    /// exactly the laundering `SILENT` must not perform.
-    ///
-    /// The forwarded evaluation carries the caller's intermediate-cell ceiling, so an
-    /// in-memory endpoint cannot materialize a bag the caller already bounded. It carries
-    /// no *charge* ceilings: fuel spent here is already charged at the calling seam, per
-    /// request and per ingested row, and charging it twice would make one query's budget
-    /// depend on how a federation happened to be split up.
-    fn query(
-        &self,
-        endpoint: &str,
-        query_text: &str,
-        stop: Option<&Arc<dyn StopSignal>>,
-        max_intermediate_cells: Option<u64>,
-    ) -> Result<ResolvedBindings, RemoteError> {
-        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
-            return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+/// Evaluate `request`'s forwarded query against the in-memory `dataset`, resolving any
+/// `SERVICE` nested inside the forwarded body through `nested`.
+///
+/// The engine half of [`InProcessServiceResolver`](crate::service::InProcessServiceResolver).
+/// `nested` is that resolver itself, which is what keeps a nested `SERVICE` subject to the
+/// same capability gate as the outer one: threading a bare dataset map instead would let a
+/// nested clause reach an endpoint the catalog refuses at the top level.
+pub(crate) fn evaluate_in_memory(
+    dataset: &RdfDataset,
+    request: ServiceRequest<'_>,
+    nested: &(dyn ServiceResolver + Sync),
+) -> Result<ResolvedBindings, RemoteError> {
+    let ServiceRequest {
+        query_text,
+        stop,
+        max_intermediate_cells,
+        ..
+    } = request;
+    let parsed = purrdf_sparql_algebra::SparqlParser::new()
+        .parse_query(query_text)
+        .map_err(|e| RemoteError::Decode(e.to_string()))?;
+    let mut ctx = EvalCtx::new(dataset).with_remote(nested);
+    if stop.is_some() || max_intermediate_cells.is_some() {
+        let mut governors = QueryGovernors::UNBOUNDED;
+        if let Some(signal) = stop {
+            governors = governors.with_stop_signal(Arc::clone(signal));
         }
-        let dataset = self
-            .datasets
-            .get(endpoint)
-            .ok_or_else(|| RemoteError::Transport(format!("no in-memory endpoint <{endpoint}>")))?;
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query(query_text)
-            .map_err(|e| RemoteError::Decode(e.to_string()))?;
-        // Thread this source into the forwarded evaluation so a nested SERVICE
-        // inside the forwarded query resolves against the same in-memory sources
-        // rather than hard-failing on a missing remote.
-        let mut ctx = EvalCtx::new(&**dataset).with_remote(self);
-        if stop.is_some() || max_intermediate_cells.is_some() {
-            let mut governors = QueryGovernors::UNBOUNDED;
-            if let Some(signal) = stop {
-                governors = governors.with_stop_signal(Arc::clone(signal));
-            }
-            if let Some(cells) = max_intermediate_cells {
-                governors = governors.with_max_intermediate_cells(cells);
-            }
-            ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
+        if let Some(cells) = max_intermediate_cells {
+            governors = governors.with_max_intermediate_cells(cells);
         }
-        match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx)
-            .map_err(|e| RemoteError::Decode(e.to_string()))?
+        ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
+    }
+    match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx).map_err(remote_error_for)? {
+        EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
+            let (variables, rows) = materialize_solutions(&seq, &ctx);
+            Ok(ResolvedBindings {
+                variables: variables.into_iter().map(Variable::new).collect(),
+                rows,
+                cell_limit_exceeded_at: None,
+            })
+        }
+        EvaluatedOutcome::Complete(_) => Err(RemoteError::Decode(
+            "SERVICE expects a SELECT query".to_owned(),
+        )),
+        EvaluatedOutcome::Truncated {
+            outcome: Outcome::Solutions(seq),
+            certificate,
+        } if matches!(
+            certificate.tripped(),
+            TrippedGovernor::Budget {
+                dimension: purrdf_core::ResourceDimension::IntermediateCells,
+                ..
+            }
+        ) =>
         {
-            EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
-                let (variables, rows) = materialize_solutions(&seq, &ctx);
-                Ok(ResolvedBindings {
-                    variables: variables.into_iter().map(Variable::new).collect(),
-                    rows,
-                    cell_limit_exceeded_at: None,
-                })
-            }
-            EvaluatedOutcome::Complete(_) => Err(RemoteError::Decode(
-                "SERVICE expects a SELECT query".to_owned(),
-            )),
-            EvaluatedOutcome::Truncated {
-                outcome: Outcome::Solutions(seq),
-                certificate,
-            } if matches!(
-                certificate.tripped(),
-                TrippedGovernor::Budget {
-                    dimension: purrdf_core::ResourceDimension::IntermediateCells,
-                    ..
-                }
-            ) =>
-            {
-                // The forwarded evaluator may have crossed its ceiling below a
-                // non-monotone operator, so do not promote its possibly-unknown rows to a
-                // remote prefix. The empty prefix is always a sound lower bound; the flag
-                // makes the outer evaluator record the same typed cell trip.
-                Ok(ResolvedBindings {
-                    variables: seq.schema.vars().to_vec(),
-                    rows: Vec::new(),
-                    cell_limit_exceeded_at: match certificate.tripped() {
-                        TrippedGovernor::Budget { consumed, .. } => Some(consumed),
-                        _ => None,
-                    },
-                })
-            }
-            EvaluatedOutcome::Truncated { certificate, .. } => {
-                Err(RemoteError::Governed(certificate.tripped()))
-            }
+            // The forwarded evaluator may have crossed its ceiling below a
+            // non-monotone operator, so do not promote its possibly-unknown rows to a
+            // remote prefix. The empty prefix is always a sound lower bound; the flag
+            // makes the outer evaluator record the same typed cell trip.
+            Ok(ResolvedBindings {
+                variables: seq.schema.vars().to_vec(),
+                rows: Vec::new(),
+                cell_limit_exceeded_at: match certificate.tripped() {
+                    TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+                    _ => None,
+                },
+            })
+        }
+        EvaluatedOutcome::Truncated { certificate, .. } => {
+            Err(RemoteError::Governed(certificate.tripped()))
         }
     }
 }
@@ -981,6 +1104,7 @@ mod tests {
     use crate::NativeSparqlEngine;
     use crate::governor::WallDeadline;
     use crate::remote_http::{HttpRemoteQuerySource, HttpRequest};
+    use crate::service::InProcessServiceResolver;
     use purrdf_core::{
         BlankScope, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
         SparqlResult, StopCause,
@@ -1016,7 +1140,7 @@ mod tests {
 
     fn run_with_source(
         ds: &Arc<RdfDataset>,
-        source: &(dyn RemoteQuerySource + Sync),
+        source: &(dyn ServiceResolver + Sync),
         query: &str,
     ) -> Result<SparqlResult, EvalError> {
         use crate::eval::evaluate_query;
@@ -1067,7 +1191,7 @@ mod tests {
 
     #[test]
     fn service_joins_remote_bindings_on_shared_var() {
-        let source = LocalRemoteQuerySource::new().with_endpoint("http://ep", endpoint());
+        let source = InProcessServiceResolver::new().with_endpoint("http://ep", endpoint());
         let result = run_with_source(
             &local(),
             &source,
@@ -1089,7 +1213,7 @@ mod tests {
     #[test]
     fn service_silent_unknown_endpoint_is_a_noop() {
         // SILENT against an unconfigured endpoint → identity → all left rows kept.
-        let source = LocalRemoteQuerySource::new(); // no endpoints registered
+        let source = InProcessServiceResolver::new(); // no endpoints registered
         let result = run_with_source(
             &local(),
             &source,
@@ -1130,7 +1254,7 @@ mod tests {
 
     #[test]
     fn custom_aggregate_inside_a_service_body_is_refused_at_the_forwarding_boundary() {
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let err = run_with_source(
             &local(),
             &source,
@@ -1149,7 +1273,7 @@ mod tests {
 
     #[test]
     fn custom_aggregate_inside_a_silent_service_body_is_refused_too() {
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let err = run_with_source(
             &local(),
             &source,
@@ -1177,7 +1301,7 @@ mod tests {
         // source (the source below has no registered endpoints, so a forwarded
         // attempt would surface as a transport error instead of this typed one):
         // the refusal is typed and happens before dispatch.
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
                       ?s <https://example.org/lateral-forward#knows> ?o \
                       LATERAL { ?o <https://example.org/lateral-forward#name> ?n } } }";
@@ -1243,7 +1367,7 @@ mod tests {
         // and never inspected the auto-wrapped `right`'s `Service::inner`. A
         // written LATERAL nested that way must still be found and refused under
         // `SERVICE SILENT`.
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let query = "SELECT ?s WHERE { SERVICE SILENT <https://example.org/lateral-forward#ep> { \
                       ?a <https://example.org/lateral-forward#hasEndpoint> ?g \
                       SERVICE ?g { ?c <https://example.org/lateral-forward#q> ?d \
@@ -1297,7 +1421,7 @@ mod tests {
 
     #[test]
     fn custom_function_inside_a_silent_service_body_is_refused_with_the_escape_named() {
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let err = run_with_source(
             &local(),
             &source,
@@ -1328,7 +1452,7 @@ mod tests {
         // custom call one level down; if the walk only inspected an expression's own
         // `Call` part and never descended into `FunctionCall` arguments, this query would
         // slip the guard and forward under `SILENT`.
-        let source = LocalRemoteQuerySource::new();
+        let source = InProcessServiceResolver::new();
         let err = run_with_source(
             &local(),
             &source,
@@ -1374,7 +1498,7 @@ mod tests {
 
     #[test]
     fn non_silent_unknown_endpoint_with_source_hard_fails() {
-        let source = LocalRemoteQuerySource::new(); // endpoint not registered
+        let source = InProcessServiceResolver::new(); // endpoint not registered
         let err = run_with_source(
             &local(),
             &source,
@@ -1410,22 +1534,22 @@ mod tests {
     }
 
     /// Register `n` distinct in-memory endpoints.
-    fn multi_source(n: usize) -> LocalRemoteQuerySource {
-        let mut src = LocalRemoteQuerySource::new();
+    fn multi_source(n: usize) -> InProcessServiceResolver {
+        let mut src = InProcessServiceResolver::new();
         for i in 0..n {
             src = src.with_endpoint(format!("http://ex/ep{i}"), multi_endpoint(i));
         }
         src
     }
 
-    /// A `RemoteQuerySource` wrapper that counts `query()` calls.
+    /// A `ServiceResolver` wrapper that counts `query()` calls.
     struct CountingSource<'a> {
-        inner: &'a (dyn RemoteQuerySource + Sync),
+        inner: &'a (dyn ServiceResolver + Sync),
         count: AtomicUsize,
     }
 
     impl<'a> CountingSource<'a> {
-        fn new(inner: &'a (dyn RemoteQuerySource + Sync)) -> Self {
+        fn new(inner: &'a (dyn ServiceResolver + Sync)) -> Self {
             Self {
                 inner,
                 count: AtomicUsize::new(0),
@@ -1436,17 +1560,10 @@ mod tests {
         }
     }
 
-    impl RemoteQuerySource for CountingSource<'_> {
-        fn query(
-            &self,
-            endpoint: &str,
-            query_text: &str,
-            stop: Option<&Arc<dyn StopSignal>>,
-            max_intermediate_cells: Option<u64>,
-        ) -> Result<ResolvedBindings, RemoteError> {
+    impl ServiceResolver for CountingSource<'_> {
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.inner
-                .query(endpoint, query_text, stop, max_intermediate_cells)
+            self.inner.resolve(request)
         }
     }
 
@@ -1508,19 +1625,14 @@ mod tests {
         }
     }
 
-    impl RemoteQuerySource for FixtureSource {
-        fn query(
-            &self,
-            _endpoint: &str,
-            _query_text: &str,
-            stop: Option<&Arc<dyn StopSignal>>,
-            max_intermediate_cells: Option<u64>,
-        ) -> Result<ResolvedBindings, RemoteError> {
+    impl ServiceResolver for FixtureSource {
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            if let Some(cause) = stop.and_then(|signal| signal.poll()) {
-                return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+            if let Some(trip) = request.stop_trip() {
+                return Err(trip);
             }
-            let admitted = max_intermediate_cells
+            let admitted = request
+                .max_intermediate_cells
                 .and_then(|cells| usize::try_from(cells).ok())
                 .unwrap_or(self.rows)
                 .min(self.rows);
@@ -1541,14 +1653,8 @@ mod tests {
     #[derive(Debug)]
     struct StoppedSource(StopCause);
 
-    impl RemoteQuerySource for StoppedSource {
-        fn query(
-            &self,
-            _endpoint: &str,
-            _query_text: &str,
-            _stop: Option<&Arc<dyn StopSignal>>,
-            _max_intermediate_cells: Option<u64>,
-        ) -> Result<ResolvedBindings, RemoteError> {
+    impl ServiceResolver for StoppedSource {
+        fn resolve(&self, _request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
             Err(RemoteError::Governed(TrippedGovernor::Stopped {
                 cause: self.0,
             }))
@@ -1613,7 +1719,7 @@ mod tests {
     /// Evaluate `pattern` over an empty dataset under `governors`, with `source` injected.
     fn run_governed(
         pattern: &GraphPattern,
-        source: &(dyn RemoteQuerySource + Sync),
+        source: &(dyn ServiceResolver + Sync),
         governors: &QueryGovernors,
     ) -> GovernedRun {
         let dataset = empty_dataset();
@@ -1744,11 +1850,9 @@ mod tests {
             Ok(Vec::new())
         });
         let err = source
-            .query(
-                &format!("{EX}sparql"),
-                "SELECT * WHERE { ?s ?p ?o }",
-                Some(&deadline),
-                None,
+            .resolve(
+                ServiceRequest::new(&format!("{EX}sparql"), "SELECT * WHERE { ?s ?p ?o }")
+                    .with_stop(Some(&deadline)),
             )
             .expect_err("an expired deadline refuses the request");
         assert_eq!(
@@ -1825,7 +1929,7 @@ mod tests {
         // The regression guard: `SILENT` is about the endpoint, and an unreachable
         // endpoint IS the endpoint. Governed or not, the behaviour is exactly what it was
         // before governors existed — one empty row, so the surrounding join is a no-op.
-        let source = LocalRemoteQuerySource::new(); // nothing registered
+        let source = InProcessServiceResolver::new(); // nothing registered
         for governors in [QueryGovernors::UNBOUNDED, QueryGovernors::METERED] {
             let run = run_governed(&service_pattern(true), &source, &governors);
             assert!(

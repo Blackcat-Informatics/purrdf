@@ -1852,7 +1852,7 @@ mod tests {
         let ChaseTermination::Unbounded { violations } = &termination else {
             panic!("expected an unbounded verdict: {termination:?}");
         };
-        assert!(!violations.is_empty());
+        assert_ne!(violations.as_slice(), [] as [String; 0]);
         let mut sorted = violations.clone();
         sorted.sort();
         sorted.dedup();
@@ -2265,7 +2265,7 @@ mod tests {
     #[test]
     fn an_empty_program_derives_nothing() {
         let outcome = run(&[], store_of(&[("a", TYPE, A)]));
-        assert!(outcome.derived().is_empty());
+        assert_eq!(outcome.derived(), []);
         assert!(outcome.witnesses().is_empty());
         assert_eq!(outcome.facts().row_count(), 1);
         assert_eq!(

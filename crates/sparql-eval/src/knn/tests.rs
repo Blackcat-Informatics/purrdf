@@ -866,14 +866,14 @@ fn a_negative_count_is_refused_and_zero_is_an_honest_empty_answer() {
 
     // Zero is the boundary a clamp-or-refuse rule gets wrong in both directions: it is a
     // well-formed request for nothing, answered with nothing.
-    assert!(
+    assert_eq!(
         invoke(
             &relation,
             &[None, Some(iri("a")), Some(count(0)), None],
             None
         )
-        .expect("k = 0 is a valid request")
-        .is_empty()
+        .expect("k = 0 is a valid request"),
+        [] as [Vec<TermValue>; 0]
     );
 }
 
@@ -911,14 +911,14 @@ fn a_seed_the_space_does_not_hold_is_empty_rather_than_an_error() {
         &DistanceMetric::SquaredEuclidean,
         &points(),
     )));
-    assert!(
+    assert_eq!(
         invoke(
             &relation,
             &[None, Some(iri("stranger")), Some(count(3)), None],
             None
         )
-        .expect("an unembedded seed is a question, not a mistake")
-        .is_empty()
+        .expect("an unembedded seed is a question, not a mistake"),
+        [] as [Vec<TermValue>; 0]
     );
     // And the neighbouring case still answers, so the emptiness above is about the seed.
     assert_eq!(

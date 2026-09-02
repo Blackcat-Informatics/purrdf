@@ -16,6 +16,26 @@ This directory holds a validation-only subset of the SHACL Advanced Features
   - `target/sparqlTarget-001.test.ttl`
   - `target/sparqlTargetType-001.test.ttl`
 
+## First-party cases (not vendored)
+
+Alongside the vendored DASH subset this directory carries FIRST-PARTY cases
+authored for PurRDF against W3C specifications that the DASH corpus predates.
+They are written in the same `sht:Validate` manifest format and are discovered by
+the same harness; each file names the specification and section it exercises in
+its header comment and uses `example.org` test IRIs.
+
+- `expression/node-expr-shnex-001.ttl` — "SHACL 1.2 Node Expressions" §4.5.3
+  (`shnex:conformsToShape`) over §4.1.2 (`shnex:var "focusNode"`).
+- `expression/node-expr-shnex-002.ttl` — "SHACL 1.2 Node Expressions" §4.3.1
+  (`shnex:flatMap`), §4.3.3 (`shnex:matchAll`) and §4.1.4
+  (`shnex:pathValues`).
+- `expression/node-by-expression-001.ttl` — "SHACL 1.2 Node Expressions" §7.2
+  (`sh:nodeByExpression` / `sh:NodeByExpressionConstraintComponent`).
+
+The "do not hand-edit" rule below applies to the VENDORED files only; first-party
+cases are ordinary source, and changing one still requires refreshing the frozen
+corpus checksums.
+
 ## License and attribution
 
 pySHACL is licensed under the Apache-2.0 license. The DASH test content is

@@ -220,7 +220,7 @@ fn a_consistent_ontology_is_reported_consistent_and_decided() {
     assert_eq!(*answer.answer(), Verdict::True);
     let certificate = honest(&answer);
     assert_eq!(certificate.completeness(), DlCompleteness::Decided);
-    assert!(certificate.boundaries().is_empty());
+    assert_eq!(certificate.boundaries(), []);
     assert_eq!(certificate.decisions(), 1, "consistency is ONE decision");
     assert!(certificate.steps() > 0, "a decision consumes steps");
 }
@@ -309,7 +309,7 @@ fn an_empty_datatype_range_is_reported_inconsistent_and_decided() {
     assert_eq!(*answer.answer(), Verdict::False);
     let certificate = honest(&answer);
     assert_eq!(certificate.completeness(), DlCompleteness::Decided);
-    assert!(certificate.boundaries().is_empty());
+    assert_eq!(certificate.boundaries(), []);
 }
 
 /// …and the class ITSELF is unsatisfiable, which is the narrower question and the one that
@@ -382,7 +382,7 @@ fn a_satisfiable_datatype_range_is_reported_consistent_and_decided() {
     assert_eq!(*answer.answer(), Verdict::True);
     let certificate = honest(&answer);
     assert_eq!(certificate.completeness(), DlCompleteness::Decided);
-    assert!(certificate.boundaries().is_empty());
+    assert_eq!(certificate.boundaries(), []);
 }
 
 /// THE RESIDUE IS NAMED. An `xsd:pattern` facet is a regular-language question this layer
@@ -518,7 +518,7 @@ fn instance_retrieval_reaches_a_class_nothing_asserts() {
     // A class the ontology never mentions is an unconstrained atomic name, which is a real
     // answer rather than a rejection.
     let unknown = reasoner.instances(&iri("Vegetable")).expect("consistent");
-    assert!(unknown.answer().is_empty());
+    assert_eq!(unknown.answer().as_slice(), []);
     honest(&unknown);
 }
 
@@ -787,7 +787,7 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     // Every aggregate service degrades the same way: an empty answer under an exhausted
     // certificate, rather than a confidently wrong one.
     let hierarchy = reasoner.classify().expect("not refused, just undecided");
-    assert!(hierarchy.answer().subsumptions().is_empty());
+    assert_eq!(hierarchy.answer().subsumptions(), []);
     assert_eq!(
         hierarchy.certificate().completeness(),
         DlCompleteness::BudgetExhausted
@@ -1465,7 +1465,7 @@ fn an_empty_seed_extracts_an_empty_module() {
         .expect("extract");
     assert_eq!(extracted.axioms(), 0);
     assert_eq!(extracted.module().quads().count(), 0);
-    assert!(extracted.conservative_keeps().is_empty());
+    assert_eq!(extracted.conservative_keeps(), []);
 }
 
 #[test]

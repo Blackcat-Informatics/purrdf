@@ -1,0 +1,77 @@
+# First-party PurRDF conformance case for the W3C "SHACL 1.2 Node Expressions"
+# specification, section 4.5.3 (ConformsToShape Expressions) and section 4.1.2
+# (Var Expressions).
+#
+# Modelled on the specification's own worked example, which writes
+#   shnex:conformsToShape ( [ shnex:var "focusNode" ] ex:HasDirectorShape )
+# to derive whether a company has a director.
+#
+# See vectors/shacl/af/README.md for the directory's provenance rules.
+
+@prefix ex:    <http://example.org/shacl12/node-expr/shnex-001#> .
+@prefix mf:    <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix sht:   <http://www.w3.org/ns/shacl-test#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries (
+      <node-expr-shnex-001>
+    ) ;
+.
+
+<node-expr-shnex-001>
+  rdf:type sht:Validate ;
+  rdfs:label "shnex:conformsToShape over shnex:var \"focusNode\" in a sh:expression constraint" ;
+  rdfs:comment """SHACL 1.2 Node Expressions section 4.5.3: the output nodes of a
+    conformsToShape expression are ( true ) if and only if the node conforms to the
+    shape, and ( false ) otherwise. Section 4.1.2: shnex:var "focusNode" resolves to
+    the focus node. ex:Good has a director and satisfies the constraint; ex:Bad does
+    not, so its expression yields false and a violation is reported.""" ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^xsd:boolean ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:Bad ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:ExpressionConstraintComponent ;
+          sh:sourceShape ex:CompanyShape ;
+          sh:value ex:Bad ;
+        ] ;
+    ] ;
+  mf:status sht:approved ;
+.
+
+ex:CompanyShape
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Company ;
+  sh:expression [
+      shnex:conformsToShape ( [ shnex:var "focusNode" ] ex:HasDirectorShape )
+    ] ;
+.
+
+ex:HasDirectorShape
+  rdf:type sh:NodeShape ;
+  sh:property [
+      sh:path ex:director ;
+      sh:minCount 1 ;
+    ] ;
+.
+
+ex:Good
+  rdf:type ex:Company ;
+  ex:director ex:Alice ;
+.
+
+ex:Bad
+  rdf:type ex:Company ;
+.

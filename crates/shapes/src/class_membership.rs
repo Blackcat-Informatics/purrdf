@@ -558,6 +558,21 @@ impl Iterator for DerivedPattern<'_> {
     }
 }
 
+impl crate::sparql::FocusGraphSource for ClassMembershipView {
+    /// The frozen asserted graph this view wraps — the `focusGraph` an
+    /// expression-bodied SPARQL function's body is evaluated against (SHACL 1.2
+    /// SPARQL Extensions §7.3).
+    ///
+    /// It is the ASSERTED base, not the view: the view's derived `rdf:type` closure
+    /// is a read-side convenience for class checks, while a node expression's own
+    /// `shnex:instancesOf` computes that closure for itself from the same base. A
+    /// caller building a fresh view over this graph therefore gets the same answers
+    /// this one gives.
+    fn focus_graph(&self) -> Option<&Arc<RdfDataset>> {
+        Some(&self.base)
+    }
+}
+
 impl DatasetView for ClassMembershipView {
     type Id = TermId;
     type ProbePlan = QuadProbePlan;

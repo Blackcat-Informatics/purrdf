@@ -207,7 +207,7 @@ impl SchemaSurface {
                     | OntologyPropertyKind::Annotation => {}
                 }
                 if property.functional {
-                    debug_assert!(!property.provenance.is_empty());
+                    debug_assert_ne!(property.provenance, [] as [_; 0]);
                 }
                 emitted += 1;
                 range_expressions += property.ranges.len();

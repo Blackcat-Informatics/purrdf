@@ -13,6 +13,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use ::purrdf::FastMap;
 use ::purrdf::FastSet;
 use ::purrdf::RdfDataset;
 
@@ -267,6 +268,34 @@ pub enum Constraint {
         /// expression node).
         severity: Option<Severity>,
     },
+    /// `sh:nodeByExpression <node expression>` — SHACL 1.2 Node Expressions §7.2.
+    ///
+    /// For each value node `v` the expression is evaluated with `v` as the focus
+    /// node and the EMPTY scope (the spec's own `evalExpr(expr, data graph, v,
+    /// {})`); every output node is a shape IRI, and `v` must conform to each of
+    /// them. This is the mirror image of [`Constraint::Expression`]: there the
+    /// expression computes a boolean about the value node, here it computes the
+    /// SHAPES the value node is judged against.
+    NodeByExpression {
+        /// The parsed node expression producing the node shapes to check against.
+        expr: NodeExpr,
+        /// The IRI-named shapes of the shapes graph, so an output shape IRI
+        /// resolves to a parsed shape at validation time.
+        ///
+        /// Shared by `Arc` across every `sh:nodeByExpression` constraint of one
+        /// shapes graph: the expression's output shape IRIs are only known during
+        /// evaluation, so the resolution table has to travel with the constraint,
+        /// and cloning the shapes per constraint would be pure waste. The
+        /// `OnceLock` is filled once, at the end of the shapes-graph parse, so a
+        /// shape carrying this constraint can itself appear in the table.
+        shapes: Arc<OnceLock<FastMap<String, Shape>>>,
+        /// Optional per-constraint message override (from `sh:message` on the
+        /// expression node).
+        message: Option<String>,
+        /// Optional per-constraint severity override (from `sh:severity` on the
+        /// expression node).
+        severity: Option<Severity>,
+    },
     /// A SHACL-SPARQL custom constraint component usage.
     ///
     /// Emitted when a shape node carries values for all required parameters of a
@@ -489,11 +518,28 @@ pub fn from_dataset_with_config_and_graph(
 
 // ── Internal parser ────────────────────────────────────────────────────────────
 
+/// A parse currently on the parser's stack.
+///
+/// The parser walks two DIFFERENT node vocabularies over the same shapes graph —
+/// shapes and SHACL-AF node expressions — and one node may legitimately be both.
+/// Distinguishing them by VARIANT (rather than by namespacing a rendered string)
+/// makes the two in-flight domains disjoint by construction, and keeps the node
+/// expression's key the term itself instead of a formatted rendering of it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum InFlight {
+    /// A shape node being parsed, keyed by its rendered node id (the parser
+    /// already carries that rendering for its error messages).
+    Shape(String),
+    /// A SHACL-AF node expression being parsed, keyed by its node term.
+    NodeExpr(Term),
+}
+
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
-    /// Tracks shape nodes currently being parsed to prevent infinite recursion
-    /// through `sh:node` or `sh:and/or/xone` cycles.
-    in_flight: FastSet<String>,
+    /// Tracks the shape nodes and node-expression nodes currently being parsed,
+    /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
+    /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
+    in_flight: FastSet<InFlight>,
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
@@ -512,6 +558,69 @@ pub(crate) struct Parser<'s> {
     /// shapes graph. Populated before shape parsing so target-type instances can
     /// be resolved during target parsing.
     target_types: std::collections::BTreeMap<String, SparqlTargetType>,
+    /// The shared top-level-shape index handed to every `sh:nodeByExpression`
+    /// constraint (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// A `sh:nodeByExpression` expression only yields its shape IRIs during
+    /// VALIDATION, so the constraint must carry a way to resolve them. The handle
+    /// is created empty here and filled exactly once, at the end of [`Self::parse`],
+    /// from the parsed top-level shapes — the same resolution domain
+    /// [`crate::rules`] already uses for `sh:condition`. Creating the handle before
+    /// any shape is parsed is what makes the arrangement re-entrant: a shape that
+    /// carries a `sh:nodeByExpression` is itself in the index, and a map built
+    /// eagerly during its own parse would recurse forever.
+    node_shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    /// Every custom node-expression function the shapes graph declares
+    /// (SHACL 1.2 Node Expressions §6), populated before any shape is parsed so a
+    /// call site inside a shape can resolve to the interned declaration.
+    ///
+    /// Bodies are installed after shape parsing, for the reason
+    /// [`crate::shapes::parser::custom_fn`] gives: a body may call any declared
+    /// function, itself included.
+    custom_fns: parser::custom_fn::CustomFnIndex,
+    /// Whether `sh:rule` is parsed on the shape currently being read.
+    ///
+    /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
+    /// and for exactly one reason: a condition is evaluated by
+    /// [`crate::constraints::conforms`], which reads a shape's CONSTRAINTS and
+    /// never its rules, so a condition shape's rules are dead weight — and
+    /// carrying them would make condition resolution non-terminating, because a
+    /// shape whose rule names that same shape as its condition (the W3C
+    /// `square-triple` case does exactly this) would re-enter its own rule parse
+    /// without bound. Dropping the one thing a condition cannot use is what makes
+    /// resolving conditions at LOAD time finite.
+    parse_rules_enabled: bool,
+    /// Every CONSTANT shape IRI a `sh:nodeByExpression` names, with the shape that
+    /// named it, checked against [`Self::node_shape_index`] once that index is
+    /// filled (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// `Constraint::NodeByExpression` resolves its produced shape IRIs at
+    /// VALIDATION time, per value node, because in general the expression only
+    /// yields them then. But when the expression IS a constant — the ordinary
+    /// `sh:nodeByExpression ex:MyShape` spelling — the answer is already decided at
+    /// load, and deferring it means a shape that happens to target nothing (or
+    /// whose path yields no value node) SHIPS the broken constraint: the shapes
+    /// graph loads green, validates green, and checks nothing. That is the same
+    /// resolve-at-firing-time defect `sh:condition` carried.
+    ///
+    /// The check runs against the very index the validator uses, so it can refuse
+    /// only what validation would have refused anyway — just at the moment the
+    /// author can act on it.
+    node_by_expr_constants: Vec<(Term, Term)>,
+    /// The shape whose constraints are being parsed, for `sh:prefixes` resolution
+    /// inside a node expression.
+    ///
+    /// SHACL-AF lets `sh:prefixes` sit on the SHAPE or on the constraint node, and
+    /// `sh:sparql` honours both (it builds its header from `&[id, &c_node]`). A
+    /// `sh:select` / `sh:sparqlExpr` NODE EXPRESSION honoured only its own node, so
+    /// the identical `sh:prefixes` declaration that works for `sh:sparql` produced
+    /// an "unparsable query" for a node expression — a refusal of a legal
+    /// document, reported as a syntax error in the author's SPARQL.
+    ///
+    /// Set and RESTORED around each shape's constraint parse (never simply
+    /// cleared), so an inline shape nested inside an expression cannot strip the
+    /// enclosing shape's prefixes from the expressions that follow it.
+    current_shape: Option<Term>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -605,6 +714,11 @@ impl<'s> Parser<'s> {
             shapes_dataset,
             shapes_graph,
             target_types: std::collections::BTreeMap::new(),
+            node_shape_index: Arc::new(OnceLock::new()),
+            custom_fns: parser::custom_fn::CustomFnIndex::default(),
+            parse_rules_enabled: true,
+            node_by_expr_constants: Vec::new(),
+            current_shape: None,
         }
     }
 
@@ -673,6 +787,12 @@ impl<'s> Parser<'s> {
         // `sh:target` blank nodes can be instantiated during shape target parsing.
         self.target_types = self.parse_sparql_target_types()?;
 
+        // SHACL 1.2 Node Expressions §6 custom function DECLARATIONS are discovered
+        // up front, before any shape is parsed, so a `[ ex:f ( … ) ]` call site
+        // inside a shape resolves to the interned declaration rather than to a
+        // builtin. Their bodies are installed after shape parsing (see below).
+        self.custom_fns = self.discover_custom_functions()?;
+
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
         // are wrapped in a single-property Shape carrying the node's targets.
@@ -688,7 +808,54 @@ impl<'s> Parser<'s> {
             node_shapes.push(shape);
         }
 
+        // The custom functions' own bodies. Deferred to here because a body is a
+        // node expression that may call any declared function — itself included —
+        // so it can only be parsed once every declaration is interned.
+        let custom_fns = self.custom_fns.clone();
+        self.install_custom_function_bodies(&custom_fns)?;
+
         let functions = self.parse_sparql_functions()?;
+
+        // Fill the shared `sh:nodeByExpression` resolution table (§7.2) now that
+        // every top-level shape is parsed. The handle was created before parsing
+        // began and every such constraint already holds a clone of it, so this one
+        // write makes the shapes visible to all of them at once.
+        //
+        // A shapes graph WITHOUT any `sh:nodeByExpression` never hands the handle
+        // out, so the extra reference count is exactly the "is anyone going to read
+        // this?" test — and the shape clones are skipped entirely in that (normal)
+        // case rather than being built and thrown away.
+        if Arc::strong_count(&self.node_shape_index) > 1 {
+            let index: FastMap<String, Shape> = node_shapes
+                .iter()
+                .map(|shape| (shape.id.to_string(), shape.clone()))
+                .collect();
+            if self.node_shape_index.set(index).is_err() {
+                return Err(
+                    "internal error: the sh:nodeByExpression shape index was already filled"
+                        .to_owned(),
+                );
+            }
+            // Resolve NOW every shape IRI a `sh:nodeByExpression` already names.
+            // The constraint otherwise resolves per value node during validation,
+            // so a shape that targets nothing — or whose path yields no value node
+            // — would ship a constraint naming a shape that does not exist: green
+            // load, green report, nothing checked. Against the very index the
+            // validator uses, so this refuses only what validation would refuse.
+            let index = self.node_shape_index.get().ok_or_else(|| {
+                "internal error: the shape index vanished after being set".to_owned()
+            })?;
+            for (shape_id, named) in &self.node_by_expr_constants {
+                if !index.contains_key(&named.to_string()) {
+                    return Err(format!(
+                        "sh:nodeByExpression on shape {shape_id} names {named}, which is not a \
+                         shape of this shapes graph; the constraint would resolve it only when a \
+                         value node reached it, so a shape with no targets would load and \
+                         validate green while checking nothing"
+                    ));
+                }
+            }
+        }
 
         Ok(Shapes {
             node_shapes,
@@ -699,6 +866,16 @@ impl<'s> Parser<'s> {
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
         })
+    }
+
+    /// A handle on the shared top-level-shape index for a `sh:nodeByExpression`
+    /// constraint (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// Taking a handle is also what tells [`Self::parse`] the index is wanted: a
+    /// shapes graph with no such constraint never calls this, so the index is never
+    /// built.
+    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<String, Shape>>> {
+        Arc::clone(&self.node_shape_index)
     }
 
     /// The first object of `(subject, predicate, ?)` as a string literal value.
@@ -861,7 +1038,8 @@ impl<'s> Parser<'s> {
         let id_str = id.to_string();
 
         // Guard against recursive `sh:node` cycles
-        if self.in_flight.contains(&id_str) {
+        let key = InFlight::Shape(id_str);
+        if self.in_flight.contains(&key) {
             // Return a minimal stand-in to break the cycle; cyclic shapes are
             // unusual but not forbidden.
             return Ok(Shape {
@@ -876,9 +1054,9 @@ impl<'s> Parser<'s> {
                 rules: vec![],
             });
         }
-        self.in_flight.insert(id_str.clone());
+        self.in_flight.insert(key.clone());
         let result = self.parse_shape_inner(&id);
-        self.in_flight.remove(&id_str);
+        self.in_flight.remove(&key);
         result
     }
 
@@ -1161,20 +1339,24 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut nested_nodes);
         let mut property_shapes: Vec<PropertyShape> = Vec::new();
         if !nested_nodes.is_empty() {
-            self.in_flight.insert(ps_str.clone());
+            let key = InFlight::Shape(ps_str.clone());
+            self.in_flight.insert(key.clone());
             for nested in nested_nodes {
-                if self.in_flight.contains(&nested.to_string()) {
+                if self
+                    .in_flight
+                    .contains(&InFlight::Shape(nested.to_string()))
+                {
                     continue;
                 }
                 match self.parse_property_shape(&nested) {
                     Ok(parsed) => property_shapes.push(parsed),
                     Err(e) => {
-                        self.in_flight.remove(&ps_str);
+                        self.in_flight.remove(&key);
                         return Err(e);
                     }
                 }
             }
-            self.in_flight.remove(&ps_str);
+            self.in_flight.remove(&key);
         }
 
         let box_roles = self.box_roles_of(ps_node);
@@ -1357,7 +1539,8 @@ impl<'s> Parser<'s> {
         let id_str = id.to_string();
 
         // Guard against cycles
-        if self.in_flight.contains(&id_str) {
+        let key = InFlight::Shape(id_str);
+        if self.in_flight.contains(&key) {
             return Ok(Shape {
                 id,
                 targets: vec![],
@@ -1373,9 +1556,9 @@ impl<'s> Parser<'s> {
 
         if self.first_object_of(&id, sh::PATH).is_some() {
             // Treat as an inline property shape
-            self.in_flight.insert(id_str.clone());
+            self.in_flight.insert(key.clone());
             let ps = self.parse_property_shape(&id);
-            self.in_flight.remove(&id_str);
+            self.in_flight.remove(&key);
             let ps = ps?;
             Ok(Shape {
                 id,
@@ -2671,8 +2854,11 @@ mod tests {
         let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:if sh:this ] .")).expect("parse");
         match expr {
             NodeExpr::If { then, els, .. } => {
-                assert!(matches!(*then, NodeExpr::Union(ref v) if v.is_empty()));
-                assert!(matches!(*els, NodeExpr::Union(ref v) if v.is_empty()));
+                // A missing branch is the SHACL 1.2 Node Expressions §4.1.1 empty
+                // expression, which is the arm that names "no output nodes"
+                // directly rather than encoding it as a zero-operand union.
+                assert!(matches!(*then, NodeExpr::Empty));
+                assert!(matches!(*els, NodeExpr::Empty));
             }
             other => panic!("expected If, got {other:?}"),
         }

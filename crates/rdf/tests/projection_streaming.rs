@@ -56,7 +56,7 @@ impl ProjectionArtifactSink for RecordingSink {
     }
 
     fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), ProjectionError> {
-        assert!(!chunk.is_empty());
+        assert_ne!(chunk, [] as [u8; 0]);
         assert!(chunk.len() <= SINK_CHUNK_BYTES);
         if self
             .fail_after_chunks

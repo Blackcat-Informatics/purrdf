@@ -1,9 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-# The workspace is stable-Rust clean (no nightly features); this pin keeps
-# local dev, CI, and the declared `rust-version` (MSRV) on the same channel.
+# The DEVELOPMENT/CI toolchain, deliberately a *dated* nightly. This is not a
+# licence to use nightly-only language features: the workspace contains zero
+# `#![feature(...)]` attributes and must keep it that way. What nightly buys is
+# a single, sharper lint surface — nightly clippy and rustdoc carry lints stable
+# does not — so a finding here is a real finding and never a channel artifact.
+#
+# The date is mandatory. A floating `nightly` would re-resolve to a different
+# compiler every day, which is incompatible with a workspace whose serializers,
+# GTS writer, frozen corpora, and content-addressed goldens are all
+# byte-deterministic contracts. Bump the date deliberately, in its own commit,
+# with the gates re-run.
+#
+# What consumers actually need is `rust-version` in the root `Cargo.toml` (the
+# MSRV), which is a *lower* floor on the stable channel and is enforced by the
+# dedicated `msrv` CI job. That job — not this file — is the guard proving no
+# nightly-only feature has crept in; it pins its own toolchain via
+# `RUSTUP_TOOLCHAIN` precisely so this file cannot override it.
 [toolchain]
-channel = "stable"
+channel = "nightly-2026-09-02"
 components = ["clippy", "rustfmt"]
 targets = ["wasm32-unknown-unknown"]

@@ -1,0 +1,44 @@
+# First-party SHACL Rules case: a RUN-ONCE rule inside a later stratum.
+#
+# SPARQL 1.2 RL §4.4 splits every stratification layer into (once, general).
+# `once` holds the rules that produce blank nodes in the rule head; each is
+# evaluated EXACTLY ONCE at the start of its layer. `general` holds the rest,
+# iterated to fixpoint.
+#
+#   sh:order 0 — a general sh:TripleRule typing every ex:Employee as an ex:Person.
+#   sh:order 1 — a run-once sh:SPARQLRule whose CONSTRUCT template carries a blank
+#                node, minting one address resource per ex:Person focus node.
+#
+# The run-once rule starts its OWN layer, not the run. Because the order-0 layer
+# is materialized first, `ex:alice rdf:type ex:Person` already holds when the
+# order-1 layer resolves its sh:targetClass focus nodes, so the mint fires for
+# ex:alice. A scheduler that hoisted every run-once rule to the start of the whole
+# run would find no ex:Person at all and derive nothing here.
+#
+# Exactly ONE address blank is minted per focus node: the rule is not re-evaluated
+# after its single firing.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Employee .
+
+ex:TypeRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Employee ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:order 0 ;
+      sh:subject sh:this ;
+      sh:predicate rdf:type ;
+      sh:object ex:Person ] .
+
+ex:AddrRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:SPARQLRule ;
+      sh:order 1 ;
+      sh:construct """CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis . }
+                      WHERE { $this a ex:Person }""" ] .

@@ -2272,6 +2272,18 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                         .to_owned(),
                 );
             }
+            Constraint::NodeByExpression { .. } => {
+                ctx.record(
+                    "sh:nodeByExpression",
+                    &shape_iri,
+                    "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:nodeByExpression constraint was dropped (no JSON Schema \
+                     equivalent)"
+                        .to_owned(),
+                );
+            }
             // Node-level value constraints (sh:class, sh:nodeKind, …) shape the
             // node identity rather than an object's JSON properties; for the
             // object-schema projection they are not expressed here.
@@ -2647,6 +2659,17 @@ fn compile_property(
                 );
                 comments.push(format!(
                     "a sh:expression constraint on property {key} was dropped (no JSON Schema equivalent)"
+                ));
+            }
+            Constraint::NodeByExpression { .. } => {
+                ctx.record(
+                    "sh:nodeByExpression",
+                    shape_iri,
+                    "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
+                );
+                comments.push(format!(
+                    "a sh:nodeByExpression constraint on property {key} was dropped (no JSON \
+                     Schema equivalent)"
                 ));
             }
             Constraint::Not(_) => {

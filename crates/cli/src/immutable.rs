@@ -385,7 +385,7 @@ mod tests {
     fn empty_disk_file_is_acquired_as_owned_empty() {
         let file = temp_with(&[]);
         let input = ImmutableInput::from_disk_path(path_of(&file)).expect("acquire");
-        assert!(input.as_bytes().is_empty());
+        assert_eq!(input.as_bytes(), [] as [u8; 0]);
         assert_eq!(input.tier(), InputTier::Owned);
     }
 

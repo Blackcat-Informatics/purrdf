@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(ranged.regime(), Regime::OwlRl);
         assert_eq!(ranged.containments().len(), 1);
         assert_eq!(ranged.containments()[0].declarations().len(), 1);
-        assert!(!ranged.containments()[0].to_string().is_empty());
+        assert_ne!(ranged.containments()[0].to_string(), "");
         assert!(verify(&warrant, &premise, &conclusion));
     }
 

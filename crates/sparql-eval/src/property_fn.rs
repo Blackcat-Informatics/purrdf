@@ -1163,7 +1163,10 @@ mod tests {
             vec![vec![iri(EX_A), iri(EX_ONE)]]
         );
         // bb — both bound, disagreeing: no row.
-        assert!(invoke(&relation, &[Some(iri(EX_A)), Some(iri(EX_TWO))]).is_empty());
+        assert_eq!(
+            invoke(&relation, &[Some(iri(EX_A)), Some(iri(EX_TWO))]),
+            [] as [Vec<TermValue>; 0]
+        );
     }
 
     #[test]
@@ -1211,7 +1214,10 @@ mod tests {
         );
 
         // A ceiling of zero emits nothing at all, without a first pull into the table.
-        assert!(invoke_under_ceiling(&relation, Some(0)).is_empty());
+        assert_eq!(
+            invoke_under_ceiling(&relation, Some(0)),
+            [] as [Vec<TermValue>; 0]
+        );
         // A ceiling above the table is simply never reached.
         assert_eq!(invoke_under_ceiling(&relation, Some(1_000)).len(), 100);
     }

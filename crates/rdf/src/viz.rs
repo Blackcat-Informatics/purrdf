@@ -1881,8 +1881,8 @@ mod tests {
         };
         let projection = project_graph_input(&input, &VizSpec::default()).expect("project");
         assert_eq!(projection.statements.len(), 1);
-        assert!(projection.assertions.is_empty());
-        assert!(projection.statements[0].asserted_in.is_empty());
+        assert_eq!(projection.assertions, [] as [_; 0]);
+        assert_eq!(projection.statements[0].asserted_in, [] as [_; 0]);
         assert!(
             !projection.statements[0]
                 .roles
@@ -2235,7 +2235,7 @@ mod tests {
         };
         let projection = project_graph_input(&input, &spec).expect("project");
         assert_eq!(projection.assertions.len(), 2);
-        assert!(projection.relations.is_empty());
+        assert_eq!(projection.relations, [] as [_; 0]);
         assert!(
             projection
                 .graphs

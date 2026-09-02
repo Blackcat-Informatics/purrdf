@@ -709,7 +709,7 @@ mod tests {
         }
         assert!(lowered > 0, "no constraint was exercised");
         // Two lanes declare constraints, and only two.
-        assert!(declared_constraints(Regime::Rdfs).is_empty());
+        assert_eq!(declared_constraints(Regime::Rdfs), [] as [_; 0]);
         assert_eq!(declared_constraints(Regime::OwlRl).len(), 17);
         assert_eq!(declared_constraints(Regime::D).len(), 1);
     }

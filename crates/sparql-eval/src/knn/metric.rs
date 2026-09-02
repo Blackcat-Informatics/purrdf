@@ -607,8 +607,8 @@ mod tests {
 
     #[test]
     fn selecting_from_nothing_is_empty_rather_than_an_error() {
-        assert!(best(5, Vec::new()).is_empty());
-        assert!(best(0, candidates()).is_empty());
+        assert_eq!(best(5, Vec::new()), [] as [_; 0]);
+        assert_eq!(best(0, candidates()), [] as [_; 0]);
     }
 
     #[test]

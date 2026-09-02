@@ -147,7 +147,7 @@ fn ungoverned(
     engine: &NativeSparqlEngine,
     dataset: &Arc<RdfDataset>,
     query: &str,
-    remote: Option<&purrdf_sparql_eval::LocalRemoteQuerySource>,
+    remote: Option<&purrdf_sparql_eval::InProcessServiceResolver>,
     aggregates: Option<&AggregateRegistry>,
 ) -> Result<SparqlResult, String> {
     let empty_aggregates = AggregateRegistry::EMPTY;

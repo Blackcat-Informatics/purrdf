@@ -1204,7 +1204,35 @@ fn fmt_expr_list_agg(s: &mut String, list: &[Expression], group: Option<GroupSpe
 
 /// Emit a SPARQL built-in or custom function name.
 fn fmt_function_name(s: &mut String, f: &Function) {
-    let name = match f {
+    match function_keyword(f) {
+        Some(name) => s.push_str(name),
+        // A PurRDF extension call and a host `Function::Custom` are both spelled
+        // by their ORIGINAL IRI (recorded in the AST node), never by a keyword.
+        // PurRDF mints no vocabulary of its own, so no namespace is ever
+        // fabricated on output; re-parsing with the same `ParserOptions`
+        // re-dispatches to the same function.
+        None => match f {
+            Function::Purrdf(call) => {
+                let _ = write!(s, "<{}>", call.iri);
+            }
+            Function::Custom(n) => {
+                let _ = write!(s, "<{}>", n.as_str());
+            }
+            // `function_keyword` answers `Some` for every other variant.
+            _ => s.push_str("<>"),
+        },
+    }
+}
+
+/// The canonical SPARQL grammar keyword for a built-in function, or `None` for
+/// the two IRI-spelled variants ([`Function::Purrdf`], [`Function::Custom`]).
+///
+/// The single source of truth for a built-in's spelling: the serializer above
+/// emits it, and `crate::parser::builtin_function_keyword` answers a
+/// name-to-function lookup from it, so a resolver can never name a spelling the
+/// serializer would not write.
+pub(crate) fn function_keyword(f: &Function) -> Option<&'static str> {
+    Some(match f {
         Function::Str => "STR",
         Function::Lang => "LANG",
         Function::LangMatches => "LANGMATCHES",
@@ -1267,20 +1295,8 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         Function::StrLangDir => "STRLANGDIR",
         Function::HasLang => "hasLANG",
         Function::HasLangDir => "hasLANGDIR",
-        Function::Purrdf(call) => {
-            // Emit the ORIGINAL IRI the call was parsed from (recorded in the AST
-            // node). PurRDF mints no vocabulary of its own, so no namespace is ever
-            // fabricated on output; re-parsing with the same ParserOptions
-            // re-dispatches to the same PurrdfFn.
-            let _ = write!(s, "<{}>", call.iri);
-            return;
-        }
-        Function::Custom(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
-            return;
-        }
-    };
-    s.push_str(name);
+        Function::Purrdf(_) | Function::Custom(_) => return None,
+    })
 }
 
 /// Emit a SPARQL aggregate expression: `COUNT(*)`, `FUNC([DISTINCT] expr

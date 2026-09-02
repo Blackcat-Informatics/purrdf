@@ -2457,7 +2457,7 @@ mod tests {
         let mut valid_reasons = Vec::new();
         let valid = sanitized_local("already_valid", &mut valid_reasons);
         assert!(matches!(valid, Cow::Borrowed("already_valid")));
-        assert!(valid_reasons.is_empty());
+        assert_eq!(valid_reasons, [] as [_; 0]);
 
         let mut invalid_reasons = Vec::new();
         let invalid = sanitized_local("9 bad", &mut invalid_reasons);
@@ -2983,7 +2983,7 @@ mod tests {
             renamed.slot_renames[0].disposition,
             LinkmlSlotDisposition::IdentityPreserved
         );
-        assert!(renamed.slot_diagnostics.is_empty());
+        assert_eq!(renamed.slot_diagnostics, [] as [_; 0]);
 
         let source = compiled(&schema);
         let source_bytes = source.schema_json.clone();
@@ -2998,7 +2998,7 @@ mod tests {
         let attributes = &skipped.document.as_value()["classes"]["Person"]["attributes"];
         assert!(attributes.get("ex:a_b").is_none());
         assert_eq!(attributes["ex:safe"]["slot_uri"], "ex:safe");
-        assert!(skipped.slot_renames.is_empty());
+        assert_eq!(skipped.slot_renames, [] as [_; 0]);
         assert_eq!(skipped.slot_diagnostics.len(), 1);
         assert_eq!(
             skipped.slot_diagnostics[0].source_path,
@@ -3329,8 +3329,8 @@ mod tests {
             }
         });
         let output = emit(&compiled(&schema), &config()).expect("safe fixture emits");
-        assert!(output.slot_renames.is_empty());
-        assert!(output.slot_diagnostics.is_empty());
+        assert_eq!(output.slot_renames, [] as [_; 0]);
+        assert_eq!(output.slot_diagnostics, [] as [_; 0]);
         assert!(output.losses.is_empty());
         assert_eq!(
             output.element_names,

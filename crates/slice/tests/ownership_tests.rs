@@ -936,7 +936,7 @@ fn every_rdf_artifact_carries_a_semantic_digest_and_no_other_kind_does() {
 
     let catalog = SliceCatalog::discover(root, test_vocab()).expect("a clean slice discovers");
     let record = catalog.records().first().expect("one slice");
-    assert!(!record.artifacts.is_empty());
+    assert_ne!(record.artifacts, [] as [_; 0]);
     for artifact in &record.artifacts {
         // Read the artifact's KIND off the record's own media type rather than re-typing
         // the extension list the catalogue classifies with — a second copy of that list
