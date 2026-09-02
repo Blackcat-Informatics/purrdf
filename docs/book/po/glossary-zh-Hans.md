@@ -91,7 +91,7 @@ found by running the gate over the first translated drafts, not guessed.
 | 39 | PurRDF | PurRDF | H | — | the brand is never translated or lower-cased in prose (`docs/BRAND.md`); `check-brand-casing.py` enforces it inside CJK text too |
 | 40 | Research Object (RO-Crate) | Research Object（RO） | K | `/研究对象(?!（Research Object）)/` | a proper noun; 研究对象 means "the object of study". Keep English on first use per page, or at minimum gloss it as 研究对象（Research Object） — the bare word is refused |
 | 41 | realization (DL, of an individual) | 实现（realization） on first use / 实例归类 | C | — | bare 实现 collides with 实现 = "implementation", the far commoner sense in this book; gloss it or use 实例归类. Not gated: 实现 in the implementation sense is everywhere |
-| 42 | surface (API surface) | 接口 / 表面 (API 表面 only when "surface" is the exact term) | E | `/表面(?!上)/` | technical, not literary: the English "surface" is the API surface. 表面上 ("ostensibly") is ordinary prose and spared; bare 表面 for an API is refused |
+| 42 | surface (API surface) | 接口 | E | `/表面(?!上)/` | technical, not literary: the English "surface" is the API surface. 表面上 ("ostensibly") is ordinary prose and spared; bare 表面 for an API is refused |
 | 43 | seam (extension seam) | 扩展点 | E | — | 接缝 is acceptable but 扩展点 reads naturally to the audience |
 | 44 | mint (an IRI, a witness, a blank node) | 生成 | E | 铸造 | technical, not literary: 铸造 ("cast, coin") is the English project idiom carried over and reads as metaphor in Chinese |
 | 45 | reach (a host, a surface) | 到达 | E | 抵达 | technical, not literary: 抵达 is the literary "arrive" |
