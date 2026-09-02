@@ -555,8 +555,8 @@ the version sources (`Cargo.toml`, `pyproject.toml`, `package.json`,
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
 `Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
 CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
-notable change recorded in the changelog and never ships in a patch release.
-The README MSRV badge is maintained by hand and must be bumped together with
+notable change recorded in the changelog; it rides a **minor** bump and never
+ships in a patch release. The README MSRV badge is maintained by hand and must be bumped together with
 `rust-version`.
 
 Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and

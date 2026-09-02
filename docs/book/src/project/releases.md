@@ -34,7 +34,7 @@ The supported minimum Rust is `rust-version` in the root `Cargo.toml` —
 currently **1.96** — on the **stable** channel, enforced by a dedicated CI
 MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it
 measured really is 1.96. Raising the MSRV is a notable change recorded in the
-changelog and never ships in a patch release.
+changelog; it rides a **minor** bump and never ships in a patch release.
 
 The MSRV is a promise to consumers; the development toolchain is a tool
 choice, and the two are orthogonal. `rust-toolchain.toml` pins a **dated
