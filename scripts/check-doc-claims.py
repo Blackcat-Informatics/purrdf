@@ -3750,6 +3750,8 @@ def build_claims(
     sparql_pass, sparql_xfail = matrix["SPARQL 1.1/1.2 evaluation (full corpus)"]
     shacl_pass, _ = matrix["SHACL Core + SHACL-SPARQL"]
     corpus_pass, _ = matrix["SHACL (first-party corpus)"]
+    rules_pass, _ = matrix["SHACL Rules"]
+    governor_pass, _ = matrix["SPARQL execution governors"]
     shex_pass, _ = matrix["ShEx 2.1 validation"]
     codec_pass, _ = matrix["Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)"]
     rdflib_pass, rdflib_x = matrix["rdflib LSP drop-in gate"]
@@ -4480,6 +4482,100 @@ def build_claims(
             _CONFORMANCE,
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* frozen expected reports",
             {"passed": corpus_pass, "total": corpus_pass},
+            mat,
+        ),
+        # --- the SAME matrix numbers restated on the two FRONT PAGES ----------
+        # The root README's scoreboard and the book's conformance chapter carry a
+        # hand-written copy of the matrix that `--write-doc` never rewrites, and
+        # they are the pages a reader actually meets first. Every row below was
+        # once stale simultaneously — SHACL 126, SHACL Rules 17, codecs 250,
+        # SPARQL 861, governors 49 — and nothing caught any of them, because the
+        # whole table was prose sitting ~200 lines from a generated block saying
+        # otherwise. Adding a corpus fixture must not be able to leave a front
+        # page contradicting the matrix, so each count is derived here.
+        Claim(
+            "the root README's W3C SHACL scoreboard row",
+            _README,
+            r"\| SHACL \| W3C data-shapes \(`vectors/shacl/`\) \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\*, (?P<ledgered>\d+) ledgered \|",
+            {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
+            mat,
+        ),
+        Claim(
+            "the root README's SHACL headline",
+            _README,
+            _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
+                  r"W3C test suite, zero ledgered"),
+            {"passed": shacl_pass, "total": shacl_pass},
+            mat,
+        ),
+        Claim(
+            "the root README's first-party SHACL corpus row",
+            _README,
+            r"\| SHACL \(first-party frozen corpus\) \| `crates/shapes/corpus/` \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* \|",
+            {"passed": corpus_pass, "total": corpus_pass},
+            mat,
+        ),
+        Claim(
+            "the root README's SHACL Rules row",
+            _README,
+            r"\| SHACL Rules \| DASH \+ first-party \(`vectors/shacl/af/rules/`\) \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* \|",
+            {"passed": rules_pass, "total": rules_pass},
+            mat,
+        ),
+        Claim(
+            "the root README's syntax-codec row",
+            _README,
+            r"\| Syntax codecs \| W3C rdf-tests round-trip \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* \|",
+            {"passed": codec_pass, "total": codec_pass},
+            mat,
+        ),
+        Claim(
+            "the root README's SPARQL 1.1/1.2 row",
+            _README,
+            r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) ledgered "
+            r"\(upstream errata\) \|",
+            {"passed": sparql_pass, "xfail": sparql_xfail},
+            mat,
+        ),
+        Claim(
+            "the root README's SPARQL headline",
+            _README,
+            _flow(r"\*\*(?P<passed>\d+) passing\*\*, (?P<xfail>\d+) ledgered"),
+            {"passed": sparql_pass, "xfail": sparql_xfail},
+            mat,
+        ),
+        Claim(
+            "the root README's SPARQL execution-governor row",
+            _README,
+            r"\| SPARQL execution governors \| first-party frozen corpus "
+            r"\(`vectors/sparql-governors/`\) \| \*\*(?P<passed>\d+) / "
+            r"(?P<total>\d+)\*\*, (?P<ledgered>\d+) ledgered \|",
+            {"passed": governor_pass, "total": governor_pass, "ledgered": 0},
+            mat,
+        ),
+        Claim(
+            "the SHACL and codec snapshot in the book's conformance chapter",
+            _BOOK_CONFORMANCE,
+            _flow(r"(?P<shacl>\d+)/(?P<shacl2>\d+) W3C SHACL, "
+                  r"(?P<codec>\d+)/(?P<codec2>\d+) codec"),
+            {
+                "shacl": shacl_pass,
+                "shacl2": shacl_pass,
+                "codec": codec_pass,
+                "codec2": codec_pass,
+            },
+            mat,
+        ),
+        Claim(
+            "the W3C SHACL count in the book's SHACL chapter",
+            _REPO / "docs" / "book" / "src" / "validation" / "shacl.md",
+            _flow(r"\((?P<passed>\d+)/(?P<total>\d+), zero ledgered gaps at the "
+                  r"time of writing"),
+            {"passed": shacl_pass, "total": shacl_pass},
             mat,
         ),
         Claim(

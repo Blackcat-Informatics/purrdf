@@ -61,9 +61,15 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
 [Ledger discipline](#ledger-discipline)); the live `XFail/Skip` must equal it.
-The RDFC, SHACL-corpus, and ShEx-syntax rows count harness test functions
-(each fans out over its fixtures internally); the fixture-level totals are in
-the per-engine scoreboard below. The XFail/Skip column is always a **ledgered**
+Four rows count harness test functions rather than fixtures, because each test
+fans out over its vectors internally: `IRI (RFC 3987 / RFC 3986 resolution)`,
+`RDFC-1.0 canonicalization`, `RDF 1.2 canonicalization profile`, and
+`ShEx syntax + ShExC/ShExJ round-trip`. Their fixture-level totals live in the
+`Source` column's companion detail and in the per-engine scoreboard below. Every
+other row is already fixture-level — in particular the two SHACL first-party
+rows, which scrape the harness's own per-fixture scoreboard (`SHAPES-CORPUS:`
+and the rules tally) precisely so the matrix never reports a test-function
+count. The XFail/Skip column is always a **ledgered**
 number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 [Known gaps](#known-gaps)).
 
