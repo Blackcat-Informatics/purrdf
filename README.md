@@ -477,3 +477,5 @@ Licensed under either of [Apache License 2.0](./LICENSE-APACHE) or
 [`LICENSING.md`](./LICENSING.md).
 
 If you use PurRDF in research, please cite it — see [`CITATION.cff`](./CITATION.cff).
+
+This sentence is a throwaway gate probe: purrdf is written bare in prose here so the brand-casing CI step must refuse it.
