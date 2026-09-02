@@ -620,6 +620,34 @@ impl ValueClass {
         let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
         (class, ordered.then_some(value))
     }
+
+    /// The class of a value held OUTSIDE a term, where there is no lexical form
+    /// to read a timezone off.
+    ///
+    /// `MEDIAN`/`PERCENTILE` hold a `Vec<XsdValue>`, not terms, and their sort
+    /// needs the SAME block ranking `ORDER BY` uses or it inherits the very
+    /// cycles this partition exists to break: within one numeric series a `NaN`
+    /// compares to nothing, and within one duration series a `yearMonthDuration`
+    /// compares to no `dayTimeDuration` — either way an incomparable pair read as
+    /// "equal" sits between two values that are not equal, and Rust's sorts may
+    /// panic on that. Ranking the block first breaks both.
+    ///
+    /// The temporal blocks split on whether the lexical carries a timezone, which
+    /// is unknowable from a bare value, so a temporal value answers [`Self::Opaque`]
+    /// here. That is the fail-CLOSED answer, not a wrong one: `Opaque` is a
+    /// value-less block whose members tie, so it can introduce no cycle. It is
+    /// also unreachable today — both callers gate their input through
+    /// `is_numeric_or_duration_xsd` — and exists so a future caller gets a tie
+    /// rather than a silently-merged pair of indeterminate instants.
+    pub(crate) fn of_value(value: &XsdValue) -> Self {
+        if matches!(
+            value,
+            XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_)
+        ) {
+            return Self::Opaque;
+        }
+        Self::of(Some(value.clone()), "").0
+    }
 }
 
 /// The literal arm of [`SortKey`]: its comparability class, the value that class

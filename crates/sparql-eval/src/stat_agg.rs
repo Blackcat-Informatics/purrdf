@@ -298,7 +298,7 @@ use purrdf_core::TermValue;
 use purrdf_xsd::numeric::numeric_cmp;
 use purrdf_xsd::{
     XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
-    value_add, value_cmp, value_mul, value_sub,
+    value_add, value_mul, value_sub, value_total_cmp,
 };
 
 use crate::agg_fn::{
@@ -307,7 +307,7 @@ use crate::agg_fn::{
 };
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::{is_numeric_xsd, lexical_of, project, total_order};
+use crate::modifier::{ValueClass, is_numeric_xsd, lexical_of, project, total_order};
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -433,6 +433,50 @@ fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
 /// `numeric_mul`/`numeric_add`, so numeric behavior is unchanged) and the
 /// `xsd:duration` group (see the module docs' "The `xsd:duration`
 /// extension" section).
+/// Sort a `MEDIAN`/`PERCENTILE` series into the order `percentile_of` reads,
+/// with a comparator that is a **total order** rather than merely a plausible one.
+///
+/// # Why this is not a `sort_by(value_cmp(..).unwrap_or(Equal))`
+///
+/// It used to be, and that comparator can make `slice::sort_by` PANIC — Rust's
+/// sorts are allowed to, and do, when handed a comparator that is not a total
+/// order. Two independent cycles are reachable from ordinary data, and neither
+/// needs a mixed series to appear, because both live INSIDE one admitted family:
+///
+/// * numeric: `value_cmp` is §17.3's promotion lattice, which compares
+///   `integer`/`decimal` exactly but routes anything touching a `float`/`double`
+///   through IEEE. Mixing an exact sub-relation with a lossy one is not
+///   transitive — see [`purrdf_xsd::numeric_total_cmp`]. A `NaN` compares to
+///   nothing, so `unwrap_or(Equal)` seats it between every pair of unequal
+///   numbers.
+/// * duration: the general `xsd:duration` is partially ordered on
+///   `(months, seconds)`, and a `yearMonthDuration` compares to no
+///   `dayTimeDuration` — yet the two are the SAME family here and never poison
+///   the group, so one series holds both. `P1M ≈ P1D ≈ P2M` while `P1M < P2M`.
+///
+/// Both are fixed the way `ORDER BY` fixes them, through the same two pieces:
+/// rank the comparability [`ValueClass`] FIRST, so the fallback tie only ever
+/// runs between two values whose class does order them, and compare inside the
+/// class with [`value_total_cmp`] — identical to `value_cmp` everywhere except
+/// the numeric tower, where it is exact. Nothing about the documented policy for
+/// genuinely incomparable operands changes: they still tie. They now tie only
+/// with each other.
+///
+/// The class is computed ONCE per element rather than inside the comparator, so
+/// the `O(n log n)` comparisons pay no repeated classification.
+fn sort_series(values: Vec<XsdValue>) -> Vec<XsdValue> {
+    let mut keyed: Vec<(ValueClass, XsdValue)> = values
+        .into_iter()
+        .map(|value| (ValueClass::of_value(&value), value))
+        .collect();
+    keyed.sort_by(|(class_a, a), (class_b, b)| {
+        class_a
+            .cmp(class_b)
+            .then_with(|| value_total_cmp(a, b).unwrap_or(Ordering::Equal))
+    });
+    keyed.into_iter().map(|(_, value)| value).collect()
+}
+
 fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
     let zero = XsdValue::Integer {
         value: 0,
@@ -548,14 +592,14 @@ impl AggregateAccumulator for MedianAccumulator {
         let Self { state } = *self;
         match state {
             ValueSeries::Empty | ValueSeries::Poisoned => Ok(None),
-            ValueSeries::Ok(mut values) => {
-                // `value_cmp` (not `numeric_cmp`): the sort must also order
-                // durations. An incomparable pair (e.g. `P1M` vs `P30D`)
-                // sorts as EQUAL — the SAME policy this comparator already
-                // used for an incomparable numeric pair, widened in SOURCE
-                // only; see the module docs' "Ordering policy for
-                // incomparable duration pairs" section.
-                values.sort_by(|a, b| value_cmp(a, b).unwrap_or(Ordering::Equal));
+            ValueSeries::Ok(values) => {
+                // The sort must also order durations, and it must be a TOTAL
+                // order or `sort_by` may panic. An incomparable pair (e.g. `P1M`
+                // vs `P30D`) still sorts as EQUAL — the SAME policy this
+                // comparator always used — but only against another member of
+                // its own comparability class; see `sort_series` and the module
+                // docs' "Ordering policy for incomparable duration pairs".
+                let values = sort_series(values);
                 Ok(percentile_of(&values, &half())
                     .as_ref()
                     .map(xsd_value_to_term))
@@ -669,12 +713,12 @@ impl AggregateAccumulator for PercentileAccumulator {
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         let Self { p, state } = *self;
-        let (Some(p), ValueSeries::Ok(mut values)) = (p, state) else {
+        let (Some(p), ValueSeries::Ok(values)) = (p, state) else {
             return Ok(None);
         };
-        // See `MedianAccumulator::finish`'s identical comment on the
-        // `value_cmp`-sourced, `.unwrap_or(Ordering::Equal)` sort policy.
-        values.sort_by(|a, b| value_cmp(a, b).unwrap_or(Ordering::Equal));
+        // The same total-order sort `MedianAccumulator::finish` uses — one
+        // function, so the two cannot drift.
+        let values = sort_series(values);
         Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
     }
 }
@@ -1610,6 +1654,86 @@ mod tests {
         let rows = vec![vec![ym_dur("P0M")], vec![dt_dur("P100D")]];
         let v = fold_with(PERCENTILE, &scalarval(PERCENTILE_P, dec("1")), &rows).expect("bound");
         assert_eq!(lex(&v), "P100D");
+    }
+
+    /// The comparator `MEDIAN`/`PERCENTILE` hands `sort_by` must be a TOTAL
+    /// order, exhibited on the two cycles that are reachable from data a query
+    /// can actually supply — one per admitted family, both INSIDE a single
+    /// family so neither needs a mixed series to appear.
+    ///
+    /// This is the regression test for a real defect: the sort was
+    /// `sort_by(|a, b| value_cmp(a, b).unwrap_or(Equal))`, and Rust's sorts are
+    /// permitted to panic on a comparator that is not a total order. Both cycles
+    /// below produce `Equal` from an incomparable pair that straddles a genuinely
+    /// unequal one.
+    ///
+    /// Transitivity is checked directly rather than inferred from a sorted
+    /// output: a sort can happen to produce a plausible sequence from an
+    /// intransitive comparator, so the sequence proves nothing. The relation
+    /// itself is what has to hold.
+    #[test]
+    fn the_series_comparator_is_transitive_on_both_reachable_cycles() {
+        fn cmp(a: &XsdValue, b: &XsdValue) -> Ordering {
+            ValueClass::of_value(a)
+                .cmp(&ValueClass::of_value(b))
+                .then_with(|| value_total_cmp(a, b).unwrap_or(Ordering::Equal))
+        }
+        fn parse(lexical: &str, datatype: XsdDatatype) -> XsdValue {
+            purrdf_xsd::parse(lexical, datatype).expect("the fixture parses")
+        }
+
+        // Cycle 1 — numeric. `NaN` compares to nothing, so `unwrap_or(Equal)`
+        // once seated it between two unequal numbers: 1 ≈ NaN ≈ 2, yet 1 < 2.
+        let one = parse("1", XsdDatatype::Integer);
+        let two = parse("2", XsdDatatype::Integer);
+        let nan = parse("NaN", XsdDatatype::Double);
+        assert_eq!(cmp(&one, &two), Ordering::Less);
+        assert_ne!(
+            (cmp(&one, &nan), cmp(&nan, &two)),
+            (Ordering::Equal, Ordering::Equal),
+            "1 ≈ NaN ≈ 2 while 1 < 2 is the cycle; NaN must rank into its own block"
+        );
+        // Every numeric orders BEFORE the value-less `NaN` block, so the
+        // fallback tie never runs across the two.
+        assert_eq!(cmp(&one, &nan), Ordering::Less);
+        assert_eq!(cmp(&two, &nan), Ordering::Less);
+
+        // Cycle 2 — duration. A `yearMonthDuration` compares to no
+        // `dayTimeDuration`, yet the two are the same FAMILY here and never
+        // poison the group, so one series holds both: P1M ≈ P1D ≈ P2M while
+        // P1M < P2M.
+        let p1m = parse("P1M", XsdDatatype::YearMonthDuration);
+        let p2m = parse("P2M", XsdDatatype::YearMonthDuration);
+        let p1d = parse("P1D", XsdDatatype::DayTimeDuration);
+        assert_eq!(cmp(&p1m, &p2m), Ordering::Less);
+        assert_ne!(
+            (cmp(&p1m, &p1d), cmp(&p1d, &p2m)),
+            (Ordering::Equal, Ordering::Equal),
+            "P1M ≈ P1D ≈ P2M while P1M < P2M is the cycle; the two duration \
+             subtypes must rank into separate blocks"
+        );
+
+        // The neighbouring VALID case: separating the blocks must not have cost
+        // the orders that DO hold. Within one subtype the order is unchanged,
+        // and the exact numeric relation still decides a pair the promotion
+        // lattice rounds together.
+        assert_eq!(
+            cmp(&p1d, &parse("P2D", XsdDatatype::DayTimeDuration)),
+            Ordering::Less
+        );
+        assert_eq!(
+            cmp(
+                &parse("1.000000000000000001", XsdDatatype::Decimal),
+                &parse("1.0E0", XsdDatatype::Double)
+            ),
+            Ordering::Greater,
+            "value_total_cmp decides exactly inside the numeric block"
+        );
+
+        // And the whole series sorts without panicking, which the old
+        // comparator was not entitled to.
+        let sorted = sort_series(vec![two, nan, one, p2m, p1d, p1m]);
+        assert_eq!(sorted.len(), 6);
     }
 
     /// A group mixing a plain numeric value and a duration POISONS — mirrors
