@@ -1147,7 +1147,7 @@ mod tests {
         assert!(matches!(shape.rules[0].body, RuleBody::Triple { .. }));
         assert!(!shape.rules[0].deactivated);
         assert!(shape.rules[0].order.is_none());
-        assert_eq!(shape.rules[0].conditions, [] as [_; 0]);
+        assert!(shape.rules[0].conditions.is_empty());
     }
 
     #[test]
