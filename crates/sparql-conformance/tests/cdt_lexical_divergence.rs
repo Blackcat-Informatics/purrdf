@@ -48,6 +48,29 @@
 //! perfectly. [`the_grader_fires_on_each_extended_production`] runs one literal
 //! per widened form through the SAME recovery-and-grade path and requires
 //! `PurrdfSuperset`, so the scan is known to be capable of failing.
+//!
+//! # Exactly what this does and does NOT establish
+//!
+//! The mitigation was originally specified as "no upstream NEGATIVE-SYNTAX entry
+//! contains either new production". Stated that way it is **vacuous**, and the
+//! honest thing is to say so here rather than let a reader take it for more than
+//! it is: the vendored SEP-0009 corpus declares 658 entries and every single one
+//! is an `mf:QueryEvaluationTest` — it ships **no** negative-syntax entry at all,
+//! for the extended productions or for anything else. Upstream publishes nothing
+//! that could observe the divergence in either direction.
+//!
+//! So the scan asserts the broader statement that is not vacuous, over every
+//! corpus this workspace ships rather than over one test kind in one of them:
+//! **no composite literal anywhere needs either superset.** That is a real,
+//! mechanically re-checked claim — it fails on a re-vendor that introduces one —
+//! and it is what licenses the extension being called unobservable.
+//!
+//! What it still does not do is compare PurRDF against another implementation.
+//! A conformant SEP-0009 reader handed one of PurRDF's extended literals *will*
+//! call it ill-formed; nothing here changes that, and the divergence is stated
+//! as such in `docs/CONFORMANCE.md`, in `CHANGELOG.md`, and in `purrdf-cdt`'s
+//! own crate documentation. This file bounds the blast radius; it does not
+//! eliminate it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -180,17 +203,32 @@ fn recover_composites(file: &Path, tokens: &[Spanned<'_>]) -> Vec<Recovered> {
     found
 }
 
-/// Recover every composite literal across every corpus root, plus the count of
-/// files actually tokenized.
-fn scan_corpora() -> (Vec<Recovered>, usize) {
+/// What one sweep of the corpora found.
+struct Scan {
+    /// Every composite literal recovered from a file the lexer accepted.
+    recovered: Vec<Recovered>,
+    /// Files of a scannable kind that were read and handed to a lexer.
+    tokenized: usize,
+    /// Of those, the ones the lexer REFUSED — the scan's one blind spot, so it
+    /// is counted rather than swallowed. See
+    /// [`corpus_cdt_literals_are_all_inside_sep0009`] for what is asserted about
+    /// them.
+    lex_refused: Vec<PathBuf>,
+}
+
+/// Recover every composite literal across every corpus root.
+fn scan_corpora() -> Scan {
     let root = workspace_root();
     let mut files = Vec::new();
     for corpus in CORPUS_ROOTS {
         walk(&root.join(corpus), &mut files);
     }
 
-    let mut recovered = Vec::new();
-    let mut tokenized = 0usize;
+    let mut scan = Scan {
+        recovered: Vec::new(),
+        tokenized: 0,
+        lex_refused: Vec::new(),
+    };
     for file in files {
         let Some(lexer) = lexer_for(&file) else {
             continue;
@@ -198,18 +236,26 @@ fn scan_corpora() -> (Vec<Recovered>, usize) {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };
-        tokenized += 1;
+        scan.tokenized += 1;
+        let relative = file.strip_prefix(&root).unwrap_or(&file).to_path_buf();
         // A corpus deliberately carries syntactically INVALID files (every
-        // negative-syntax vector is one). A file the lexer refuses carries no
-        // recoverable literal, and its refusal is the other suites' business,
-        // not this scan's.
+        // negative-syntax vector is one), and the lexer refuses them. Recovery
+        // needs tokens, so nothing can be GRADED in such a file — but a `continue`
+        // here on its own would be a silent skip of exactly the file class this
+        // mitigation is named after, and the pinned `tokenized` count cannot
+        // detect it because the file was still counted as visited.
+        //
+        // So the refusal is RECORDED, its count is pinned, and the file is still
+        // text-checked below. The scan's coverage claim survives only while no
+        // un-lexable file mentions the SEP-0009 namespace at all.
         let Ok(tokens) = lexer(&source) else {
+            scan.lex_refused.push(relative);
             continue;
         };
-        let relative = file.strip_prefix(&root).unwrap_or(&file).to_path_buf();
-        recovered.extend(recover_composites(&relative, &tokens));
+        scan.recovered
+            .extend(recover_composites(&relative, &tokens));
     }
-    (recovered, tokenized)
+    scan
 }
 
 /// **The mitigation.** No composite literal anywhere in any corpus this
@@ -226,12 +272,44 @@ fn scan_corpora() -> (Vec<Recovered>, usize) {
 /// nothing.
 #[test]
 fn corpus_cdt_literals_are_all_inside_sep0009() {
-    let (recovered, tokenized) = scan_corpora();
+    let Scan {
+        recovered,
+        tokenized,
+        lex_refused,
+    } = scan_corpora();
 
     assert_eq!(
         tokenized, EXPECTED_TOKENIZED_FILES,
         "the scan tokenized {tokenized} corpus files, not the pinned \
          {EXPECTED_TOKENIZED_FILES} — the corpus moved, or the file-kind filter did"
+    );
+
+    // The blind spot, closed. A file the lexer refuses yields no tokens, so no
+    // literal in it can be recovered or graded; the scan's coverage claim
+    // therefore rests on no such file carrying a composite literal at all. That
+    // is checked directly, on the raw bytes, rather than assumed — and the count
+    // is pinned so a lexer regression that starts refusing hundreds of files
+    // cannot quietly shrink what is graded while every other pin still matches.
+    let root = workspace_root();
+    for file in &lex_refused {
+        let source = std::fs::read_to_string(root.join(file))
+            .unwrap_or_else(|e| panic!("{}: re-read for the text check: {e}", file.display()));
+        assert!(
+            !source.contains("SPARQL-CDTs"),
+            "{}: the lexer refuses this file, so no literal in it can be graded, \
+             yet it mentions the SEP-0009 namespace — the lexical-space scan has a \
+             hole exactly where the negative-syntax vectors live. Grow the recovery \
+             to read it rather than leaving it unmeasured",
+            file.display()
+        );
+    }
+    assert_eq!(
+        lex_refused.len(),
+        EXPECTED_LEX_REFUSED,
+        "{} corpus files were refused by their lexer, not the pinned \
+         {EXPECTED_LEX_REFUSED}: {:?}",
+        lex_refused.len(),
+        lex_refused
     );
     assert_eq!(
         recovered.len(),
@@ -441,6 +519,18 @@ fn the_recovery_resolves_datatypes_the_way_the_parser_does() {
 /// Files the scan tokenizes — every `.rq`/`.ru`/`.ttl`/`.trig`/`.nt`/`.nq`/`.n3`
 /// under [`CORPUS_ROOTS`].
 const EXPECTED_TOKENIZED_FILES: usize = 2885;
+/// Of those, how many the lexer REFUSED. Every one is text-checked for the
+/// SEP-0009 namespace instead of being graded, so this number is the exact size
+/// of the scan's ungraded remainder.
+///
+/// All thirteen are bad-syntax vectors that fail in the LEXER rather than the
+/// parser — one bad prefixed name (`syn-bad-pname-06`) and twelve malformed or
+/// surrogate `\u`/`\U` codepoint escapes across the SPARQL 1.1 and 1.2 syntax
+/// groups. None mentions the SEP-0009 namespace. That they are negative-syntax
+/// vectors is the whole point of naming them: they are precisely the file class
+/// the mitigation was specified against, and until this count existed they were
+/// dropped by a bare `continue` while every other pin in this file still matched.
+const EXPECTED_LEX_REFUSED: usize = 13;
 /// Composite literals recovered across all of them.
 const EXPECTED_COMPOSITE_LITERALS: usize = 959;
 /// How many of those parse to a value (the rest are the corpus's deliberately
