@@ -451,6 +451,68 @@ fn a_catalogued_profile_that_adds_nothing_also_sends_nothing_extra() {
     assert!(spy.headers().is_empty(), "got {:?}", spy.headers());
 }
 
+#[test]
+fn an_outer_silent_service_does_not_swallow_a_nested_capability_denial() {
+    // The nested counterpart of the row-two contract, and the one place it can be lost:
+    // an in-process resolver evaluates the forwarded body ITSELF, so a nested denial
+    // travels back out through that inner evaluation's error channel. If it arrives as an
+    // ordinary endpoint failure, the OUTER `SERVICE SILENT` is entitled to swallow it to
+    // the join identity — and the query answers, completely and wrongly, on every run.
+    let inner_ep = "https://example.org/in-process/inner";
+    let in_process = InProcessServiceResolver::new()
+        .with_endpoint(LOCAL_EP, service_dataset())
+        .with_endpoint(inner_ep, service_dataset())
+        // Only the OUTER service is listed; the inner one has a dataset but no profile.
+        .with_catalog(
+            ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
+        );
+    let nested = format!(
+        "SELECT ?o ?n WHERE {{ ?s <https://example.org/vocab#knows> ?o \
+         SERVICE SILENT <{LOCAL_EP}> {{ \
+         SERVICE <{inner_ep}> {{ ?x <https://example.org/vocab#name> ?n }} }} }}"
+    );
+    let err = run(&in_process, &nested)
+        .expect_err("a nested denial survives an outer SILENT rather than being swallowed");
+    assert!(
+        err.message.contains("withholds the query capability"),
+        "the surviving fact must still name the withheld capability: {}",
+        err.message
+    );
+
+    // The neighbouring VALID case: list the inner service and the identical SILENT-outer
+    // query answers. Without this, the refusal above could be an outer `SERVICE SILENT`
+    // that simply never resolves a nested clause at all.
+    let in_process = InProcessServiceResolver::new()
+        .with_endpoint(LOCAL_EP, service_dataset())
+        .with_endpoint(inner_ep, service_dataset())
+        .with_catalog(
+            ServiceCatalog::new()
+                .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
+                .with_service(inner_ep, profile(&[ServiceCapability::Query])),
+        );
+    assert_eq!(
+        rows(&run(&in_process, &nested).expect("a fully catalogued nested query answers")),
+        1
+    );
+
+    // …and the row-one neighbour, which must still behave the OPPOSITE way: an inner
+    // endpoint that is catalogued but simply absent is an endpoint failure, so the outer
+    // SILENT does swallow it to the join identity. This is what keeps the assertion above
+    // a statement about denials rather than about nesting.
+    let in_process = InProcessServiceResolver::new()
+        .with_endpoint(LOCAL_EP, service_dataset())
+        .with_catalog(
+            ServiceCatalog::new()
+                .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
+                .with_service(inner_ep, profile(&[ServiceCapability::Query])),
+        );
+    assert_eq!(
+        rows(&run(&in_process, &nested).expect("an unreachable nested endpoint is silenceable")),
+        1,
+        "the join identity leaves the surrounding query's one row untouched"
+    );
+}
+
 // ── A service IRI is resolved by the workspace's one base layer ──────────────────
 
 /// A resolver that records every endpoint it is handed and resolves nothing.

@@ -35,8 +35,9 @@
 //!
 //! A [`RemoteError::Denied`] is the exception, and belongs with the governors below
 //! rather than with the endpoint failures above: it is a refusal decided on *this* side
-//! of the seam, so `SILENT` never swallows it. See [`crate::service`] for the full
-//! contract table.
+//! of the seam, so `SILENT` never swallows it — at any nesting depth, which is why it
+//! travels as the structured [`EvalError::ServiceDenied`] rather than as message text.
+//! See [`crate::service`] for the full contract table.
 //!
 //! # `SILENT` is about the endpoint, never about this engine's budget
 //!
@@ -111,8 +112,11 @@ pub enum RemoteError {
     /// run, so nothing would ever surface a symptom.
     ///
     /// Unlike [`Self::Governed`] this is not a budget outcome and carries no partial
-    /// answer to certify, so it surfaces as [`EvalError::Remote`] rather than as a
-    /// truncation.
+    /// answer to certify, so it surfaces as the structured
+    /// [`EvalError::ServiceDenied`] rather than as a truncation — structured, not a
+    /// formatted [`EvalError::Remote`], so that a denial raised by a nested `SERVICE`
+    /// inside a forwarded body can be recognized and re-raised as this variant instead of
+    /// decaying into a silenceable endpoint failure.
     Denied(ServiceDenial),
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
@@ -887,8 +891,16 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         // outranks a stop that fired during the same call: a denial is not erased under
         // SILENT, so it survives to be the reported fact, which is the same precedence a
         // non-silent endpoint failure already gets below.
-        Err(e @ RemoteError::Denied(_)) => {
-            return Err(EvalError::remote(format!("SERVICE <{endpoint}>: {e}")));
+        //
+        // Raised as the STRUCTURED `EvalError::ServiceDenied` rather than as a formatted
+        // `EvalError::Remote`, because this error may not be at the end of its journey: an
+        // in-process resolver evaluates a forwarded body itself, so a denial raised by a
+        // clause NESTED in that body comes back out through this same return. Flattened to
+        // a message it would be indistinguishable from an endpoint failure by the time
+        // `evaluate_in_memory` reclassified it, and an enclosing `SERVICE SILENT` would
+        // swallow it to the join identity.
+        Err(RemoteError::Denied(denial)) => {
+            return Err(EvalError::ServiceDenied(denial));
         }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
@@ -994,6 +1006,24 @@ fn ingest<D: DatasetView + Sync>(
     (SolutionSeq { schema, rows }, tripped)
 }
 
+/// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
+///
+/// Everything the inner evaluation can fail with is, from the OUTER query's point of view,
+/// this endpoint failing to produce a decodable answer — with exactly one exception. A
+/// nested `SERVICE` clause resolved through the same (gated) resolver raises
+/// [`EvalError::ServiceDenied`], and that is a refusal decided on this side of the seam,
+/// not an endpoint that did not answer. It must cross back as
+/// [`RemoteError::Denied`] so `eval_service` classifies it identically at every depth: a
+/// denial `SERVICE SILENT` never swallows. Mapping it to [`RemoteError::Decode`] would
+/// make a nested denial silenceable when the same denial one level up is not, and the
+/// resulting answer would look complete, be wrong, and be wrong the same way on every run.
+fn remote_error_for(error: EvalError) -> RemoteError {
+    match error {
+        EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
+        other => RemoteError::Decode(other.to_string()),
+    }
+}
+
 /// Evaluate `request`'s forwarded query against the in-memory `dataset`, resolving any
 /// `SERVICE` nested inside the forwarded body through `nested`.
 ///
@@ -1026,9 +1056,7 @@ pub(crate) fn evaluate_in_memory(
         }
         ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
     }
-    match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx)
-        .map_err(|e| RemoteError::Decode(e.to_string()))?
-    {
+    match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx).map_err(remote_error_for)? {
         EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
             let (variables, rows) = materialize_solutions(&seq, &ctx);
             Ok(ResolvedBindings {

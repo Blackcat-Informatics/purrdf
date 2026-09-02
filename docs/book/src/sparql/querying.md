@@ -556,6 +556,13 @@ answer that looks complete and is wrong; and because a denial is permanent
 rather than transient, it would be wrong identically on every run, so nothing
 would ever surface a symptom.
 
+That row holds at every nesting depth. `InProcessServiceResolver` evaluates a
+forwarded body itself, so a denial raised by a `SERVICE` nested inside one
+travels back out through that inner evaluation — as a structured denial, never
+flattened into a message. Flattening it would make a nested denial silenceable
+by an enclosing `SERVICE SILENT` while the identical denial one level up is not,
+which is the same look-complete-and-be-wrong outcome the row exists to prevent.
+
 There is deliberately no knob that softens this. A host that genuinely wants a
 blocked service to behave like an unreachable one already has an exact way to
 say so: return a transport error from its own resolver. That is an honest claim

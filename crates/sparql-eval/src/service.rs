@@ -51,7 +51,7 @@
 //! | Outcome | Non-silent `SERVICE` | `SERVICE SILENT` |
 //! |---|---|---|
 //! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
-//! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::Remote`](crate::EvalError) | [`EvalError::Remote`](crate::EvalError) |
+//! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
 //! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |
 //!
 //! The first and last rows are the pre-existing rule, unchanged: `SILENT` is a statement
@@ -76,6 +76,13 @@
 //! reach — only a second way to spell an existing one, and with it the possibility of two
 //! callers running the same query over the same data through the same resolver and
 //! getting different answers.
+//!
+//! The denial row holds at **every depth**. An [`InProcessServiceResolver`] evaluates a
+//! forwarded body itself, so a denial raised by a `SERVICE` nested inside one travels back
+//! out through that inner evaluation's error channel; it is carried as the structured
+//! [`EvalError::ServiceDenied`](crate::EvalError) and reclassified as
+//! [`RemoteError::Denied`] on the way out, never flattened into a message. Flattening it
+//! would make a nested denial silenceable while the identical denial one level up is not.
 
 use std::fmt;
 use std::sync::Arc;
@@ -366,6 +373,22 @@ fn assert_header_safe(kind: &str, text: &str) {
     );
 }
 
+/// Reject credential material that could forge a second header, **without echoing it**.
+///
+/// The same three bytes [`assert_header_safe`] refuses, and for the same reason — but the
+/// message names only `part`, never the text. A credential's whole design is that its
+/// secret does not reach a log ([`ServiceCredential`]'s [`Debug`] redacts it), and a panic
+/// message is a log: quoting the offending token here would leak on the one path
+/// specifically built not to.
+fn assert_credential_safe(part: &str, text: &str) {
+    assert!(
+        !text.contains(['\r', '\n', '\0']),
+        "a service credential's {part} may not contain CR, LF or NUL — that would forge a \
+         second header on the wire (the value is withheld from this message because it is \
+         credential material)"
+    );
+}
+
 /// The per-service context a [`ServiceResolver`] applies to one endpoint: what it may do,
 /// and what it sends.
 #[derive(Debug, Clone)]
@@ -417,8 +440,39 @@ impl ServiceProfile {
     }
 
     /// Attach this service's credential.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the credential carries bytes that would forge a second header, or if a
+    /// [`ServiceCredential::Basic`] user id contains the colon RFC 7617 §2 forbids. Both
+    /// are checked **here**, at configuration time, rather than only where the header is
+    /// rendered: rendering happens inside [`ServiceResolver::resolve`] while a query is
+    /// running, and on `wasm32-unknown-unknown` a panic there takes the whole instance
+    /// down mid-evaluation. The message never quotes the credential.
+    ///
+    /// Only the parts that reach the wire **verbatim** are checked for CR/LF/NUL —
+    /// a bearer token and an arbitrary header's name and value. A
+    /// [`ServiceCredential::Basic`] username and password are deliberately *not*:
+    /// [`ServiceCredential::header`] base64-encodes them, whose output cannot contain any
+    /// of those bytes, so refusing them would reject working credentials for no gain.
     #[must_use]
     pub fn with_credential(mut self, credential: ServiceCredential) -> Self {
+        match &credential {
+            ServiceCredential::Bearer(token) => assert_credential_safe("bearer token", token),
+            ServiceCredential::Header { name, value } => {
+                // The NAME is not secret — `Debug` prints it — but it is echoed through
+                // the header-safety message rather than this one only because that
+                // message is the more useful of the two; the value never is.
+                assert_header_safe("name", name);
+                assert_credential_safe("header value", value);
+            }
+            ServiceCredential::Basic { username, .. } => assert!(
+                !username.contains(':'),
+                "an HTTP Basic user id may not contain a colon (RFC 7617 §2): the colon is \
+                 the field separator, so encoding one would move part of the user id into \
+                 the password"
+            ),
+        }
         self.credential = Some(credential);
         self
     }
@@ -1047,6 +1101,93 @@ mod tests {
             3,
             "a narrow injection guard must not become a header allow-list"
         );
+    }
+
+    #[test]
+    fn a_credential_that_could_forge_a_second_header_is_refused_at_configuration_time() {
+        // The higher-privilege sibling of `with_header`'s guard, and the one that mattered
+        // more: a credential is appended to the very same header list, so leaving it
+        // unchecked let the ONE field a host is most careful about be the one that could
+        // forge a header. Checked in `with_credential` rather than only in `header()`
+        // because `header()` runs inside `resolve` while a query is executing.
+        for credential in [
+            ServiceCredential::Bearer("t\r\nX-Injected: 1".to_owned()),
+            ServiceCredential::Bearer("t\0".to_owned()),
+            ServiceCredential::Header {
+                name: "X-Api-Key".to_owned(),
+                value: "k\r\nX-Injected: 1".to_owned(),
+            },
+            ServiceCredential::Header {
+                name: "X-Api-Key\r\nX-Injected".to_owned(),
+                value: "k".to_owned(),
+            },
+        ] {
+            let outcome = std::panic::catch_unwind(|| {
+                ServiceProfile::new(ServiceCapabilities::NONE).with_credential(credential.clone())
+            });
+            let payload = outcome.expect_err("the credential must be refused");
+            // The refusal must not become the leak: a panic message is a log, and this is
+            // the one type whose whole design is that its secret never reaches one.
+            let rendered = payload
+                .downcast_ref::<String>()
+                .map_or_else(String::new, Clone::clone);
+            for secret in ["t\r\nX-Injected: 1", "k\r\nX-Injected: 1", "t\0"] {
+                assert!(
+                    !rendered.contains(secret),
+                    "the panic message quoted credential material: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_and_awkward_but_legal_credentials_are_not_rejected() {
+        // The over-refusal guard for the check above. A bearer token is base64url-ish in
+        // practice but is not required to be, and a Basic password may legally contain
+        // ANY byte — including the CR/LF that the verbatim paths refuse — because
+        // `header()` base64-encodes it, and base64 output cannot forge a header.
+        let profile = ServiceProfile::new(ServiceCapabilities::granting([
+            ServiceCapability::Query,
+            ServiceCapability::Credentials,
+        ]))
+        .with_credential(ServiceCredential::Bearer(
+            "eyJhbGciOiJIUzI1NiJ9.e30.abc-_~+/=".to_owned(),
+        ));
+        assert_eq!(profile.request_headers().len(), 1);
+
+        let profile = ServiceProfile::new(ServiceCapabilities::granting([
+            ServiceCapability::Query,
+            ServiceCapability::Credentials,
+        ]))
+        .with_credential(ServiceCredential::Basic {
+            username: "user".to_owned(),
+            password: "p\r\nass\0word — café".to_owned(),
+        });
+        let (name, value) = profile.request_headers().remove(0);
+        assert_eq!(name, "Authorization");
+        assert!(
+            !value.contains(['\r', '\n', '\0']),
+            "base64 cannot forge a header, which is why the bytes are allowed: {value}"
+        );
+        assert_eq!(
+            value,
+            format!(
+                "Basic {}",
+                base64_standard("user:p\r\nass\0word — café".as_bytes())
+            )
+        );
+
+        // A credential-bearing header with RFC 9110 token punctuation and a non-ASCII
+        // value is legal and in use, and must survive.
+        let profile = ServiceProfile::new(ServiceCapabilities::granting([
+            ServiceCapability::Query,
+            ServiceCapability::Credentials,
+        ]))
+        .with_credential(ServiceCredential::Header {
+            name: "X-Api-Key!#$%&'*+-.^_`|~".to_owned(),
+            value: "a b=c;d,e/f+g café".to_owned(),
+        });
+        assert_eq!(profile.request_headers().len(), 1);
     }
 
     #[test]

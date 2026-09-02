@@ -148,6 +148,22 @@ pub enum EvalError {
     /// instead swallows the failure to the join identity.
     Remote(String),
 
+    /// A [`ServiceResolver`](crate::ServiceResolver)'s per-service policy withheld a
+    /// capability, so the `SERVICE` step was refused before any endpoint was consulted.
+    ///
+    /// Structurally distinct from [`Self::Remote`] rather than folded into its string,
+    /// because the two are classified oppositely and the difference has to survive being
+    /// carried. An in-process resolver evaluates a forwarded `SERVICE` body *itself*, so a
+    /// denial raised by a **nested** clause travels back out through that inner
+    /// evaluation's error channel; flattened to a message it would be indistinguishable
+    /// from an endpoint failure, and an enclosing `SERVICE SILENT` — entitled to swallow
+    /// endpoint failures — would reduce it to the join identity. The surrounding join
+    /// would become a no-op and the query would answer completely and wrongly, identically
+    /// on every run. Keeping the [`ServiceDenial`](crate::ServiceDenial) whole is what lets
+    /// `crate::remote::evaluate_in_memory` hand it back as
+    /// [`RemoteError::Denied`](crate::RemoteError::Denied), which `SILENT` never swallows.
+    ServiceDenied(crate::service::ServiceDenial),
+
     /// The dataset carries structurally malformed RDF that a builtin cannot
     /// interpret — e.g. a cyclic `rdf:List` (a cell reachable from itself) or a
     /// list cell missing its `rdf:first`/`rdf:rest` edge. Distinct from
@@ -245,6 +261,7 @@ impl EvalError {
             Self::Parse(_)
             | Self::Internal(_)
             | Self::Remote(_)
+            | Self::ServiceDenied(_)
             | Self::Data(_)
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
@@ -298,6 +315,9 @@ impl core::fmt::Display for EvalError {
             }
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
+            Self::ServiceDenied(denial) => {
+                write!(f, "SERVICE federation denied: {denial}")
+            }
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
             Self::ExistsScopeCollision { variable, intro } => write!(
                 f,

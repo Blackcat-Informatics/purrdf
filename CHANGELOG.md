@@ -379,7 +379,15 @@ called out below with what a consumer must do.
   `SILENT` swallows an unreachable or undecodable endpoint to the join identity, and never
   swallows a capability denial or a governor trip, both of which are decisions taken on this
   side of the seam. There is deliberately no knob softening that — a host wanting a blocked
-  service to read as unreachable returns a transport error from its own resolver.
+  service to read as unreachable returns a transport error from its own resolver. The
+  denial holds at every nesting depth: `EvalError` gains a structured `ServiceDenied`
+  variant (the enum is `#[non_exhaustive]`, so this is additive) so that a denial raised by
+  a `SERVICE` nested inside a forwarded body is re-raised as a denial rather than decaying
+  into a silenceable endpoint failure that an enclosing `SERVICE SILENT` would swallow to
+  the join identity. A credential is also validated when it is attached rather than when it
+  is rendered — CR/LF/NUL in a bearer token or an arbitrary credential header is refused at
+  configuration time, with the credential withheld from the message, while a Basic password
+  may still contain any byte because it is base64-encoded before it reaches the wire.
 - **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
   timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
   arithmetic with month-end clamping, instant subtraction, and duration add/subtract/
