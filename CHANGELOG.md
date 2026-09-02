@@ -755,6 +755,44 @@ called out below with what a consumer must do.
   bullet and Direction list move `EXISTS`'s SEP-0007 semantics out of "near-term direction" and
   into what SPARQL 1.1/1.2 already ships.
 
+- **conformance:** The embedding kNN lane (PURREMB nearest-neighbour retrieval) and the
+  `purrdf-geo` GeoSPARQL 1.1 lane now have conformance-matrix rows, ratchet budgets and
+  per-engine scoreboard entries. Both shipped with no matrix representation at all — the only
+  trace of either was a forward reference inside the governor row — so the umbrella gate could
+  not see a regression in either lane. Both are declared `_suite_cargo` rows counting test
+  functions rather than fixtures, because neither grades a corpus, and the scoreboard says so:
+  the GeoSPARQL row additionally records that **no OGC conformance suite is vendored and none is
+  claimed**, its SHACL shapes being first-party `example.org` mirrors of the shipped OGC
+  22-047r1 validator (PurRDF mints no vocabulary IRIs), so those cases grade the implementation
+  against its own reading of the specification.
+- **release:** Correct `docs/RELEASE.md`'s outstanding-bootstrap section, which named **four**
+  crates as having no crates.io record. `purrdf-datalog` has had one since 2026-07-31 and
+  answers 200; the genuinely unpublished set is `purrdf-cdt`, `purrdf-geo` and `purrdf-text`,
+  and the heading, the body, the publish-order ordinals and the in-page anchor all said
+  otherwise. The bootstrap examples drop their pinned version literal in favour of the
+  argumentless form, which reads the workspace version from `cargo metadata` and cannot rot.
+  The `make doc` / CI "N publishable crates" comments are corrected 20 → 21.
+
+### Testing
+
+- **conformance:** Bring `scripts/conformance-baseline.json`'s free-text `note:` prose under the
+  same gate as its `ledgered` integer. Only the integer was ever machine-checked, and the OWL 2
+  DL note rotted a full generation behind it — claiming 261 vendored cases, 30 non-terminating
+  and 12 withheld exclusions against a measured 262, 0 and 25, with every gate green the whole
+  time. `scripts/check-doc-claims.py` gains `baseline_note_claim`, which checks that the
+  baseline's suite names and the generated matrix block's suite names are the same set, that
+  every `ledgered` budget equals its matrix row's XFail/Skip column, and that every
+  matrix-derivable integer any note restates equals the column that measures it — with the DL
+  note's subset/exclusion tally sourced from the same frozen `census.tsv` the three
+  `docs/CONFORMANCE.md` restatements already are. A reworded note that stops matching its
+  pattern fails as loudly as a wrong number, so the gate cannot be silenced by rewriting prose.
+- **release:** `scripts/check-doc-claims.py` gains `outstanding_bootstrap_claim` and
+  `publishable_crate_count_claim`, holding `docs/RELEASE.md`'s bootstrap heading, body crate
+  count, per-crate publish-order ordinals and in-page anchor — and the `Makefile` / CI
+  publishable-crate counts — to `scripts/release-crates.sh`. Membership is deliberately left to
+  `scripts/check-crates-io-records.sh`, since whether a crate record exists is a fact about
+  crates.io rather than about this tree.
+
 ## [0.12.0] - 2026-08-02
 
 ### Bug Fixes

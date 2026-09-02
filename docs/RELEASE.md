@@ -103,19 +103,30 @@ be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
-### Outstanding bootstrap: `purrdf-cdt`, `purrdf-datalog`, `purrdf-geo`, `purrdf-text`
+### Outstanding bootstrap: `purrdf-cdt`, `purrdf-geo`, `purrdf-text`
 
-Four crates are in the release set above but **have no crates.io record**
+Three crates are in the release set above but **have no crates.io record**
 (`https://crates.io/api/v1/crates/<name>` answers 404 for each while every
 sibling answers 200). `purrdf-cdt` is the **fourth** crate in publish order,
-`purrdf-datalog` the eighth, and `purrdf-geo` and `purrdf-text` the thirteenth
-and fourteenth; all but `purrdf-datalog` are new crates whose records have never
-been created. A `rust-v*` tag pushed before they are bootstrapped would
-irreversibly publish the three crates ahead of `purrdf-cdt` and then fail;
-`cargo publish` cannot be undone. `purrdf-cdt` moved that failure point EARLIER
-than any previous new crate did: it is a leaf over `purrdf-iri` + `purrdf-xsd`,
-so it sorts near the front of the dependency order, and a release now stops after
-three crates rather than after six.
+`purrdf-geo` the **thirteenth** and `purrdf-text` the **fourteenth**; all three
+are new crates whose records have never been created. A `rust-v*` tag pushed
+before they are bootstrapped would irreversibly publish the three crates ahead of
+`purrdf-cdt` and then fail; `cargo publish` cannot be undone. `purrdf-cdt` moved
+that failure point EARLIER than any previous new crate did: it is a leaf over
+`purrdf-iri` + `purrdf-xsd`, so it sorts near the front of the dependency order,
+and a release now stops after three crates rather than after six.
+
+This list previously also named `purrdf-datalog`, which has had a crates.io
+record since 2026-07-31 and answers 200. That was a stale entry, not a missing
+record, and it is the reason `outstanding_bootstrap_claim` in
+[`scripts/check-doc-claims.py`](../scripts/check-doc-claims.py) now holds this
+section to the publish order: the ordinals, the heading, the crate names and the
+anchor that links here are derived from
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) on every `make check`,
+so a crate that moves in the release set cannot leave a wrong ordinal behind. What
+that gate cannot decide is *membership* — whether a record exists is a fact about
+crates.io, not about this tree — which is what the preflight below measures, and
+why this list must never be read in place of running it.
 
 That is now a refusal instead of a partial publish. The release job runs
 [`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
@@ -138,8 +149,12 @@ is not permitted to perform. Do it once, from a clean local checkout, before the
 next `rust-v*` tag:
 
 ```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.10.0
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
 ```
+
+The version argument is optional and deliberately omitted here: with none given
+the script reads the workspace version out of `cargo metadata`, so this command
+cannot go stale the way a pinned literal in a document does.
 
 The bootstrap script prints its full plan — which crates it will skip, publish,
 and **create a record for** — before it runs any gate, so the irreversible part
@@ -158,7 +173,7 @@ is shipped.
 For the bootstrap publish from a clean local checkout:
 
 ```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.1.1
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
 ```
 
 The script states its crates.io plan first (skip / publish / **create record**,
@@ -217,7 +232,7 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-datalog-purrdf-geo-purrdf-text)); that check runs before
+bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-geo-purrdf-text)); that check runs before
 packaging, so a missing record costs a red job rather than a half-published
 release. It then publishes crates in dependency order and skips any
 crate/version that already exists on crates.io, which keeps reruns safe after a

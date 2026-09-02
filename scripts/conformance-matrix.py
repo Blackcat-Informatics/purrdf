@@ -906,6 +906,49 @@ def native_suites() -> list[SuiteResult]:
         _suite_describe_corpus(),
         _suite_cdt_corpus(),
         _suite_governor_corpus(),
+        # The two lanes below are `_suite_cargo` rows for the same reason the
+        # four above/below them are: neither grades a CORPUS. Each is a
+        # first-party test lane over inline fixtures and pinned literals, so the
+        # only per-case unit that exists is the test function, and the row says
+        # so rather than inventing a fixture count. Both shipped without a matrix
+        # row at all, which is strictly worse: a lane nothing reports is a lane
+        # whose regression the umbrella gate cannot see.
+        _suite_cargo(
+            "SPARQL embedding kNN (first-party)",
+            "purrdf-embedding-knn (first-party)",
+            ["cargo", "test", "-p", "purrdf-sparql-eval", "--locked",
+             "--test", "embedding_knn_e2e", "--test", "knn_wasm_determinism"],
+            detail=(
+                "the PURREMB kNN property-function seam end to end — rank order, "
+                "join-back, the LIMIT prefix law, cross-artifact byte identity, and "
+                "the `property-function-work` governor charge point the governor "
+                "corpus deliberately does not band (its relations report zero work). "
+                "The `knn_wasm_determinism` case pins five neighbours and their exact "
+                "`xsd:double` distance lexicals as a literal, so a reassociated sum or "
+                "a fused multiply-add that swaps two near-tied neighbours fails here; "
+                "its wasm32 half is a separate gate (`make wasm-test`), so this row "
+                "measures the native target only"
+            ),
+        ),
+        _suite_cargo(
+            "GeoSPARQL 1.1 (first-party)",
+            "purrdf-geo (first-party; OGC 22-047r1)",
+            ["cargo", "test", "-p", "purrdf-geo", "--locked",
+             "--test", "determinism", "--test", "layout",
+             "--test", "query_rewrite_e2e", "--test", "scalar_functions_e2e",
+             "--test", "shacl_shapes"],
+            detail=(
+                "the two evaluator seams (scalar `geof:` functions; the four `geo:` "
+                "relation rewrite branches) plus GeoSPARQL's own SHACL shape surface, "
+                "and a pinned u64 digest folded over the SERIALIZED bytes of a "
+                "20-geometry corpus. NO OGC suite is vendored and none is claimed: "
+                "the shapes are first-party in `example.org` space, structurally "
+                "mirroring the shipped OGC validator, because PurRDF mints no "
+                "vocabulary IRIs. The digest's cross-target half (native ≡ wasm32 ≡ "
+                "the pinned golden) is a separate gate, `make geo-determinism`; the "
+                "crate's lib unit tests are graded by `make check`, not here"
+            ),
+        ),
         _suite_entailment(),
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
@@ -1078,7 +1121,7 @@ def _noise(line: str) -> tuple[str, bool]:
     return (line, False)
 
 
-# (row name, scraper, specimen lines). One entry per SCRAPED suite; the four
+# (row name, scraper, specimen lines). One entry per SCRAPED suite; the six
 # `_suite_cargo` rows in `native_suites` scrape nothing and have no scoreboard
 # line to withhold, and the two Python rows already fail closed on a missing
 # scoreboard by construction.
