@@ -1077,3 +1077,115 @@ fn node_by_expression_still_loads_for_named_shapes_and_computed_expressions() {
         ));
     }
 }
+
+// ── §4.5.3 the shape argument is a node EXPRESSION ──────────────────────────────
+
+/// §4.5.3's second argument is a NODE EXPRESSION constrained to produce "the IRI
+/// of a well-formed shape" — *produce* being the node-expression verb. So the
+/// shape may be COMPUTED out of the data graph, and this is the specification's
+/// own shape: the node under test carries a property whose value names the shape
+/// it must conform to.
+///
+/// Requiring the argument to BE an IRI refused this outright, at shapes-load, with
+/// "requires its second argument to be the IRI of a shape".
+#[test]
+fn conforms_to_shape_accepts_a_computed_shape_argument() {
+    let shapes = "ex:HasDirectorShape a sh:NodeShape ;
+             sh:property [ sh:path ex:director ; sh:minCount 1 ] .
+         ex:S a sh:NodeShape ;
+             sh:expression [ shnex:conformsToShape (
+                 [ shnex:var \"focusNode\" ]
+                 [ shnex:pathValues ex:kind ] ) ] .";
+    // `ex:withDirector` has a director, so it conforms to the shape its own
+    // `ex:kind` names.
+    assert_eq!(
+        outputs(
+            "ex:withDirector ex:director ex:d ; ex:kind ex:HasDirectorShape .",
+            shapes,
+            "withDirector",
+        ),
+        vec![bool_lit(true)]
+    );
+    // The SAME shapes graph must answer `false` for a node that does not conform —
+    // otherwise the test would pass on a stub that always says `true`, which is
+    // exactly the vacuous answer an unresolved shape used to give.
+    assert_eq!(
+        outputs(
+            "ex:noDirector ex:kind ex:HasDirectorShape .",
+            shapes,
+            "noDirector",
+        ),
+        vec![bool_lit(false)]
+    );
+}
+
+/// A computed shape argument that produces an IRI which is NOT a shape of the
+/// shapes graph is a hard error at evaluation — the only moment it can be known,
+/// since the IRI came out of the data.
+#[test]
+fn a_computed_shape_argument_that_names_no_shape_is_an_error() {
+    let expr = expression_of(
+        "ex:Real a sh:NodeShape ; sh:nodeKind sh:IRI .
+         ex:S a sh:NodeShape ;
+             sh:expression [ shnex:conformsToShape (
+                 [ shnex:var \"focusNode\" ] [ shnex:pathValues ex:kind ] ) ] .",
+    );
+    let data: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:kind ex:NotAShape ."))
+        .expect("data parse");
+    let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
+    let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
+        "http://example.org/ns#a",
+    ));
+    let mut guard = RecursionGuard::new();
+    let err = eval_node_expr(&store, &focus, &expr, &mut guard)
+        .expect_err("an unresolvable computed shape must be an error, never a vacuous true");
+    assert!(
+        err.contains("is not a shape of this shapes graph"),
+        "got: {err}"
+    );
+}
+
+/// The NAMED spelling keeps its LOAD-time refusal: a bare IRI the shapes graph
+/// never described as a shape is a constant that evaluates to itself, so deferring
+/// it would only reach the same answer later. Admitting computed arguments must
+/// not turn every typo into one.
+#[test]
+fn conforms_to_shape_still_refuses_a_named_shape_that_does_not_exist() {
+    let err = load_error(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:expression [ shnex:conformsToShape (
+                 [ shnex:var \"focusNode\" ] ex:NotAShape ) ] .",
+    );
+    assert!(err.contains("does not describe as a shape"), "got: {err}");
+    assert!(err.contains("vacuously"), "got: {err}");
+}
+
+/// A computed shape argument producing more than one IRI has no single shape to
+/// check against, and one producing none has no shape at all.
+#[test]
+fn a_computed_shape_argument_must_produce_exactly_one_iri() {
+    let expr = expression_of(
+        "ex:Real a sh:NodeShape ; sh:nodeKind sh:IRI .
+         ex:S a sh:NodeShape ;
+             sh:expression [ shnex:conformsToShape (
+                 [ shnex:var \"focusNode\" ] [ shnex:pathValues ex:kind ] ) ] .",
+    );
+    for (data_ttl, count) in [
+        ("ex:a ex:kind ex:Real, ex:Other .", 2),
+        ("ex:a ex:p ex:b .", 0),
+    ] {
+        let data: Arc<_> =
+            parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}")).expect("data parse");
+        let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
+        let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
+            "http://example.org/ns#a",
+        ));
+        let mut guard = RecursionGuard::new();
+        let err = eval_node_expr(&store, &focus, &expr, &mut guard)
+            .expect_err("a shape argument that is not exactly one IRI must be an error");
+        assert!(
+            err.contains("must produce exactly one shape IRI"),
+            "at {count} produced IRIs, got: {err}"
+        );
+    }
+}

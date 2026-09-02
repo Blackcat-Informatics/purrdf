@@ -14,7 +14,7 @@ use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
-use crate::expression::{FnCall, NodeExpr};
+use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::report::ValidationReport;
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
@@ -248,7 +248,17 @@ fn collect_expression_classes(expr: &NodeExpr, scan: &mut ClassScan) {
         NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, scan),
         NodeExpr::ConformsToShape { node, shape } => {
             collect_expression_classes(node, scan);
-            collect_shape_classes(shape, scan);
+            match shape {
+                // A NAMED shape argument is only reachable through this
+                // expression, so the classes its constraints mention have to be
+                // collected here or they would go unresolved in the plan.
+                ShapeArg::Named(shape) => collect_shape_classes(shape, scan),
+                // A COMPUTED one resolves, at evaluation, to a shape out of the
+                // shapes graph's own top-level index — and every shape in that
+                // index is walked by this scan already, from the shape list. What
+                // does need collecting is the expression that computes the IRI.
+                ShapeArg::Computed { expr, .. } => collect_expression_classes(expr, scan),
+            }
         }
         NodeExpr::Remove { nodes, remove } => {
             collect_expression_classes(nodes, scan);

@@ -678,3 +678,95 @@ fn strip(rendered: &str) -> String {
         .and_then(|(_, rest)| rest.split_once('"'))
         .map_or_else(|| rendered.to_owned(), |(iri, _)| iri.to_owned())
 }
+
+// ── §6.2 optional list parameters (the arity RANGE) ───────────────────────────
+
+/// A `sh:ListParameterExpressionFunction` whose trailing parameter is
+/// `sh:optional true` is callable with OR without that argument.
+///
+/// The arity check refuses a call outside `required..=params.len()`, which is a
+/// RANGE, but no fixture anywhere declared `sh:optional`, so the range never had a
+/// width: every test exercised `required == params.len()`. The whole optional-
+/// parameter surface — the width of that range and the "required after optional"
+/// refusal that guards it — was carried by code no test reached.
+#[test]
+fn an_optional_trailing_parameter_may_be_omitted_or_supplied() {
+    const FN: &str = r"
+        ex:sumOrPlusOne a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:sum [ shnex:concat (
+              [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] .
+        ";
+    // Both arguments supplied: the body sums them.
+    assert_eq!(
+        outputs(
+            "ex:alice ex:p ex:b .",
+            &format!(
+                "{FN}
+                 ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
+                     sh:expression [ ex:sumOrPlusOne ( 4 38 ) ] ."
+            ),
+            "alice",
+        ),
+        vec![int("42")],
+        "a two-argument call must supply both parameters"
+    );
+    // The optional argument OMITTED: `shnex:arg 1` is unbound, contributes
+    // nothing, and the call is still legal.
+    assert_eq!(
+        outputs(
+            "ex:alice ex:p ex:b .",
+            &format!(
+                "{FN}
+                 ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
+                     sh:expression [ ex:sumOrPlusOne ( 4 ) ] ."
+            ),
+            "alice",
+        ),
+        vec![int("4")],
+        "omitting the sh:optional parameter must be legal, not an arity error"
+    );
+}
+
+/// The NEIGHBOURING INVALID cases: the range is bounded on BOTH sides. Below
+/// `required` and above `params.len()` are still arity errors, so declaring a
+/// parameter optional widened the range rather than removing the check.
+#[test]
+fn an_optional_parameter_widens_the_arity_range_without_removing_its_bounds() {
+    const FN: &str = r"
+        ex:sumOrPlusOne a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:sum [ shnex:concat (
+              [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] .
+        ";
+    for call in ["( )", "( 1 2 3 )"] {
+        let err = load_error(&format!(
+            "{FN}
+             ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
+                 sh:expression [ ex:sumOrPlusOne {call} ] ."
+        ));
+        assert!(
+            err.contains("but it declares 1..=2"),
+            "the call {call} must be refused against the declared range, got: {err}"
+        );
+    }
+}
+
+/// A REQUIRED parameter declared after an optional one leaves the arity
+/// ambiguous, and is refused at load. The refusal existed but nothing reached it,
+/// because no fixture declared `sh:optional` at all.
+#[test]
+fn a_required_parameter_after_an_optional_one_is_a_load_error() {
+    let err = load_error(
+        r"
+        ex:f a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:arg 0 ] ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] ;
+          sh:parameter [ sh:path shnex:arg2 ] .
+        ",
+    );
+    assert!(err.contains("after an optional one"), "got: {err}");
+}

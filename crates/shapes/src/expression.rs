@@ -307,7 +307,7 @@ pub enum NodeExpr {
         /// The node expression producing the node under test (at most one node).
         node: Box<Self>,
         /// The shape the node is validated against.
-        shape: Box<Shape>,
+        shape: ShapeArg,
     },
 
     // ── SHACL 1.2 SPARQL Extensions (`sh:select` / `sh:sparqlExpr`) ────────────
@@ -330,6 +330,43 @@ pub enum NodeExpr {
         /// The authored key (`sh:select` / `sh:sparqlExpr`), quoted in diagnostics
         /// so a writer is told about the property they actually wrote.
         key: &'static str,
+    },
+}
+
+/// The shape argument of `shnex:conformsToShape` (SHACL 1.2 Node Expressions
+/// §4.5.3).
+///
+/// §4.5.3 makes that argument a NODE EXPRESSION — the spec constrains it with
+/// `sh:nodeKind sh:IRI` and the words "Must produce the IRI of a well-formed
+/// shape", where *produce* is the node-expression verb. So both of these are
+/// legal, and the second is why this is an enum rather than a `Shape`:
+///
+/// ```turtle
+/// # named: the shape IRI is written into the shapes graph
+/// [ shnex:conformsToShape ( [ shnex:var "focusNode" ] ex:HasDirectorShape ) ]
+/// # computed: the shape IRI comes out of the DATA graph
+/// [ shnex:conformsToShape ( [ shnex:var "focusNode" ] [ shnex:pathValues ex:kind ] ) ]
+/// ```
+///
+/// The two are not two features. A named argument is resolved ONCE, at load,
+/// which is what lets an undefined shape IRI be refused there rather than holding
+/// vacuously; a computed one cannot be, because its answer is in the data, so it
+/// resolves per evaluation against the same shape index `sh:nodeByExpression`
+/// (§7.2) uses — the shapes graph's own top-level shapes.
+#[derive(Debug, Clone)]
+pub enum ShapeArg {
+    /// The argument NAMED the shape (an IRI, or an inline anonymous shape), so it
+    /// was resolved and parsed at shapes-load time.
+    Named(Box<Shape>),
+    /// The argument COMPUTES the shape IRI, so it is resolved per evaluation.
+    Computed {
+        /// The node expression producing the shape IRI (exactly one node).
+        expr: Box<NodeExpr>,
+        /// The shapes graph's shape index, filled at the end of the shapes parse.
+        /// The same handle `Constraint::NodeByExpression` carries, for the same
+        /// reason: a shape that names another shape cannot resolve it while it is
+        /// itself still being parsed.
+        shapes: Arc<OnceLock<FastMap<String, Shape>>>,
     },
 }
 
@@ -1523,9 +1560,41 @@ fn eval_node_expr_at_depth(
             let candidates = eval_node_expr_in_scope(store, focus, node, guard, scope)?;
             match candidates.as_slice() {
                 [] => Ok(Vec::new()),
-                [only] => Ok(vec![bool_literal(conforms_guarded(
-                    store, only, shape, guard,
-                )?)]),
+                [only] => {
+                    // The shape argument is resolved the way it was written: a
+                    // NAMED one was parsed at load, a COMPUTED one is evaluated
+                    // here against the shapes graph's own shape index.
+                    match shape {
+                        ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
+                            store, only, shape, guard,
+                        )?)]),
+                        ShapeArg::Computed { expr, shapes } => {
+                            let produced =
+                                eval_node_expr_in_scope(store, focus, expr, guard, scope)?;
+                            let [shape_iri] = produced.as_slice() else {
+                                return Err(format!(
+                                    "shnex:conformsToShape shape argument must produce exactly \
+                                     one shape IRI, got {}",
+                                    produced.len()
+                                ));
+                            };
+                            let index = shapes.get().ok_or_else(|| {
+                                "shnex:conformsToShape: the shapes graph's shape index was never \
+                                 filled"
+                                    .to_owned()
+                            })?;
+                            let shape = index.get(&shape_iri.to_string()).ok_or_else(|| {
+                                format!(
+                                    "shnex:conformsToShape shape argument produced {shape_iri}, \
+                                     which is not a shape of this shapes graph"
+                                )
+                            })?;
+                            Ok(vec![bool_literal(conforms_guarded(
+                                store, only, shape, guard,
+                            )?)])
+                        }
+                    }
+                }
                 more => Err(format!(
                     "shnex:conformsToShape node argument must yield at most one node, got {}",
                     more.len()

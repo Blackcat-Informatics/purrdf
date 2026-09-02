@@ -11,7 +11,7 @@ use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::{
-    ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, sparql_ns_lowering,
+    ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::term::{NamedNode, Term};
@@ -1377,19 +1377,48 @@ impl Parser<'_> {
                         members.len()
                     ));
                 };
-                let Term::NamedNode(_) = shape_arg else {
-                    return Err(format!(
-                        "shnex:conformsToShape on {node} requires its second argument to be the \
-                         IRI of a shape, got {shape_arg}"
-                    ));
-                };
-                Ok(NodeExpr::ConformsToShape {
-                    node: Box::new(self.parse_node_expr(node_arg)?),
-                    shape: Box::new(self.parse_shape_operand(
+                // §4.5.3's second argument is a NODE EXPRESSION constrained to
+                // produce "the IRI of a well-formed shape". Two spellings follow
+                // from that one definition, and both are read here:
+                //
+                // * The argument NAMES the shape — an IRI, or an inline anonymous
+                //   shape. The answer is fixed at load, so it is resolved at load,
+                //   which is what lets an undefined shape IRI be REFUSED there
+                //   instead of holding vacuously.
+                // * The argument COMPUTES the shape IRI (`[ shnex:pathValues
+                //   ex:kind ]`). Its answer is in the DATA graph, so no load-time
+                //   resolution is possible; it carries the shape index and
+                //   resolves per evaluation, exactly as `sh:nodeByExpression`
+                //   (§7.2) does.
+                //
+                // Requiring the argument to BE an IRI would refuse the second
+                // spelling, which the specification writes out.
+                let shape = if self.node_is_a_shape(shape_arg) {
+                    ShapeArg::Named(Box::new(self.parse_shape_operand(
                         shape_arg.clone(),
                         "shnex:conformsToShape",
                         node,
-                    )?),
+                    )?))
+                } else if matches!(shape_arg, Term::NamedNode(_)) {
+                    // A bare IRI the shapes graph never described as a shape is
+                    // not a computed expression — it is a constant that evaluates
+                    // to itself, and resolving it would fail with the same answer
+                    // at every focus node. Refuse it at load, with the reason.
+                    return Err(format!(
+                        "shnex:conformsToShape on {node} names {shape_arg}, which the shapes graph \
+                         does not describe as a shape; an undefined shape is EMPTY, and every node \
+                         conforms to an empty shape, so this check would hold vacuously rather \
+                         than fail"
+                    ));
+                } else {
+                    ShapeArg::Computed {
+                        expr: Box::new(self.parse_node_expr(shape_arg)?),
+                        shapes: self.share_node_shape_index(),
+                    }
+                };
+                Ok(NodeExpr::ConformsToShape {
+                    node: Box::new(self.parse_node_expr(node_arg)?),
+                    shape,
                 })
             }
         }
