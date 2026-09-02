@@ -783,16 +783,18 @@ and the `UNFOLD` graph pattern that takes one apart. SEP-0009 is a proposal,
 section is an extension, and a query using it
 [does not travel unchanged](#taking-a-composite-query-to-another-engine).
 
-The namespace is the SEP's own, recognized and never invented:
+The namespace is the SEP's own, recognized and never invented — every example
+below is written under this prologue:
 
-```sparql
+```text
 PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
 ```
 
 A composite is an ordinary RDF literal whose datatype is
-`cdt:List` or `cdt:Map` and whose lexical form spells the contents out:
+`cdt:List` or `cdt:Map` and whose lexical form spells the contents out. These
+are terms, not queries:
 
-```sparql
+```text
 "[1,2,3]"^^cdt:List
 "[1,null,<http://example.org/s>]"^^cdt:List
 "[[1,2],[3]]"^^cdt:List
@@ -862,12 +864,21 @@ last expression with **no comma** — this is the seam that makes `FOLD` the
 first order-dependent aggregate in the engine, and it is why `FOLD` carries an
 `ORDER BY` where every other aggregate rejects one.
 
+Accepted spellings, as a catalogue:
+
+```text
+FOLD(?v)                        FOLD(DISTINCT ?v)
+FOLD(?v ORDER BY DESC(?v))      FOLD(DISTINCT ?v ORDER BY ASC(?a) ASC(?b))
+FOLD(?k, ?v)                    FOLD(?k, ?v ORDER BY ?ord)
+```
+
+and one whole query:
+
 ```sparql
-SELECT (FOLD(?v) AS ?list)                       WHERE { VALUES ?v { 1 2 3 } }
-SELECT (FOLD(DISTINCT ?v) AS ?list)              WHERE { VALUES ?v { 1 1 2 } }
-SELECT (FOLD(?v ORDER BY DESC(?v)) AS ?list)     WHERE { VALUES ?v { 1 3 2 } }
-SELECT (FOLD(?k, ?v) AS ?map)                    WHERE { VALUES (?k ?v) { (1 2) } }
-SELECT ?g (FOLD(?v ORDER BY ?ord) AS ?list)      WHERE { … } GROUP BY ?g
+PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
+SELECT ?s (FOLD(?tag ORDER BY ?tag) AS ?tags)
+WHERE { ?s <http://example.org/tag> ?tag }
+GROUP BY ?s
 ```
 
 Four behaviours are worth knowing before you rely on one:
@@ -932,6 +943,7 @@ what you think:
 leaving the query language:
 
 ```sparql
+PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
 SELECT (FOLD(?e ORDER BY ?e) AS ?sorted)
 WHERE { BIND("[3,1,2]"^^cdt:List AS ?l) UNFOLD(?l AS ?e) }
 ```
