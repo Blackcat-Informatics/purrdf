@@ -34,6 +34,26 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 ---
 
+PurRDF is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit —
+primitives, codecs, SPARQL 1.1/1.2, SHACL, ShEx, entailment regimes, and the
+GTS graph transport — implemented once in Rust and carried verbatim into
+Python, WebAssembly/JavaScript, and C. Every published crate builds for
+`wasm32-unknown-unknown`, so the engine that answers a query on a server
+answers it, byte for byte, in a browser tab.
+
+**What it removes from your architecture.** The three jobs that usually keep
+a PostgreSQL instance running beside a triple store — ranked full-text search,
+spatial predicates, and vector similarity — are answered inside PurRDF:
+in-process, over the same dataset, from the same SPARQL query, with no second
+database, no sync job, and no question split between SPARQL and SQL. Each
+answer is exact and deterministic — the same rows, in the same order, with the
+same score lexicals, natively and on wasm32 — which is a guarantee a Postgres
+stack does not make across machines. This is not a projection: these query
+surfaces have already removed a whole PostgreSQL requirement from one RDF
+project. The verified capability table, the boundary of each surface, and an
+architectural before/after are in
+[One engine instead of three databases](#one-engine-instead-of-three-databases).
+
 ## Why does this exist?
 
 RDF tooling fragments along two axes.
@@ -57,6 +77,86 @@ byte-identical semantics.
 PurRDF is the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology)
 stack and the reference home of the [GTS](./docs/GTS-SPEC.md) graph-transport engine,
 but it assumes nothing about your ontology or application.
+
+## One engine instead of three databases
+
+An RDF project that needs ranked text search, spatial predicates, or
+nearest-neighbour search has usually run PostgreSQL beside its triple store for
+exactly those three jobs. PurRDF answers all three from SPARQL, over the
+dataset already in memory, through the evaluator's caller-keyed
+property-function and scalar-function seams. Every capability below is one you
+can open a crate and find; every boundary is one its tests pin.
+
+| You needed | Usually from | Now inside PurRDF | Where it stops |
+| --- | --- | --- | --- |
+| Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [`purrdf-text`](./crates/text/): an inverted index over RDF 1.2 literals (annotation layer included), Unicode case folding and word-boundary segmentation, and BM25 ranking in exact `i128` base-10 fixed point with **no floating point in the crate** (`#![deny(clippy::float_arithmetic)]`). Two relations: `?doc <iri> ( "needle" ?score ?rank ?lang ?matched )` for ranked retrieval and `?doc <iri> ( "term" ?lang ?position )` for term occurrence, from which phrase and proximity compose in plain SPARQL. | BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query dialect; `k1` and `b` are fixed constants; the index is in-memory and built once over a frozen dataset (`TextIndex::from_dataset`). |
+| Spatial predicates | PostGIS | [`purrdf-geo`](./crates/geo/): GeoSPARQL 1.1 (OGC 22-047r1) — WKT and GeoJSON literals read as exact rationals, every Simple Features, Egenhofer and RCC8 relation decided over an exact DE-9IM, the `geof:` functions on the scalar seam and the Query Rewrite relations (`?a geo:sfWithin ?b` between features) on the property-function seam. No GEOS, no PROJ, no float arithmetic; the one float boundary is the `xsd:double` result literal. | Topological predicates, accessors, and the exactly computable measures and constructors over vector geometry, not a PostGIS: `geof:transform` hard-errors by name (there is no CRS database), a `metric*` measure answers only in a CRS the caller declared in metres (there is no ellipsoidal geodesic), and `buffer`, `concaveHull`, `boundingCircle`, the overlay set operations (`intersection`/`union`/`difference`/`symDifference`) and the GML/KML/DGGS encodings are registered and hard-error by name. No raster, no persistent spatial index. |
+| Vector similarity | pgvector | Embedding kNN in [`purrdf-sparql-eval`](./crates/sparql-eval/): `?neighbour <space> ( ?seed k ?distance )` over a [PURREMB](./docs/PURREMB.md) embedding space (`EmbeddingSpace::from_artifact`, `EmbeddingKnnRelation`), exact top-k under the metric the artifact declares, in binary64 with a pinned accumulation order and no fused multiply-add, ties broken by content-derived row order. | Exact search — every candidate is scored, there is no pruning and no approximate index — bounded by a caller-supplied `KnnGuard` (largest space, largest `k`; refusals, not clamps). Three metrics: cosine, negative dot, squared Euclidean. PurRDF computes no embeddings and runs no ANN payload: the vectors arrive in a PURREMB artifact the caller produced. |
+
+Two more capabilities landed on the same seam in this release: **path
+witnesses**, a property function that binds a traversal hop by hop with every
+traversed statement as an RDF 1.2 triple term, and the **SEP-0009 composite
+datatypes** (`cdt:List`/`cdt:Map`, with `FOLD` and `UNFOLD`). One divergence in
+the latter is stated rather than hidden: PurRDF admits RDF 1.2 triple terms and
+directional language-tagged literals as composite elements, a lexical superset
+that a conformant SEP-0009 reader will call ill-formed, emitted only for values
+SEP-0009 cannot express at all.
+
+**Deterministic, and therefore portable.** A Postgres stack gives one answer
+per build: `ts_rank` and pgvector distances are floating point, and PostGIS
+predicates run on GEOS's floating-point geometry. PurRDF's three surfaces are pure
+functions of their input on every target — BM25 in `i128` fixed point with a
+fixed-iteration integer logarithm, geometry as exact rationals with integer
+DE-9IM decisions, kNN in binary64 with one sequential accumulation order — and
+every ordering is canonical: document ids are assigned after sorting on
+`(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
+and kNN ties break on the content-derived `TargetId`. The claim is executed,
+not argued: the text and kNN determinism tests are one body carrying both
+`#[test]` and `#[wasm_bindgen_test]`, run natively by `cargo test` and on
+`wasm32-unknown-unknown` by `make wasm-test`, and `make geo-determinism` runs
+the same corpus on both targets and compares bytes.
+
+**In the browser.** All three crates are `wasm32-unknown-unknown`-clean and
+their determinism tests execute there — which none of the three Postgres
+extensions can do at all. They are Rust-host seams: a host builds an index or
+opens a space and registers it under its own IRIs, and that host may itself be
+compiled to wasm32 (that is how the wasm tests run). The shipped
+`@blackcatinformatics/purrdf` npm package and the `purrdf` Python wheel do not
+yet expose these three relations; the data-shaped property functions (frozen
+tables, graph-backed tables, path witnesses) are what cross those boundaries
+today.
+
+**Illustrative before/after** (the project is real; it is not named here):
+
+- *Before* — a triple store for the graph, and a PostgreSQL instance beside it
+  for `tsvector`/`tsquery` over labels and abstracts, PostGIS
+  `ST_Within`/`ST_Intersects` over feature geometries, and pgvector `<->` over
+  document embeddings: three copies of the data, one sync job to keep them
+  aligned, and every question that spanned them written half in SPARQL and
+  half in SQL.
+- *After* — one PurRDF dataset; one `PropertyFunctionRegistry` holding a
+  `TextSearchRelation`, the `geo:` Query Rewrite relations, and an
+  `EmbeddingKnnRelation`, each under the project's own IRIs; one SPARQL query
+  joining all three through basic graph patterns; and no PostgreSQL. The answer
+  is the same on the server and in the browser.
+
+```sparql
+PREFIX ex:  <https://example.org/>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?doc ?score ?distance WHERE {
+  ?doc ex:search ( "harbour dredging" ?score ?rank ?lang ?matched ) .
+  ?doc ex:locatedIn ?feature .
+  ?feature geo:sfWithin ex:PortDistrict .
+  ?doc ex:nearest ( ex:doc-42 5 ?distance )
+}
+ORDER BY ?rank
+```
+
+Each predicate above is the caller's: PurRDF mints no vocabulary, so
+`ex:search`, `ex:nearest` and the CRS behind `geo:sfWithin` are registrations
+the host supplies, and a query naming an IRI nobody registered is an ordinary
+triple pattern.
 
 ## What's inside
 
@@ -133,9 +233,11 @@ but it assumes nothing about your ontology or application.
     exactly-computable measures and constructors, with no GEOS, no PROJ and no
     float arithmetic (the one float boundary is the `xsd:double` result
     literal). The `geof:` family lands on the scalar seam and the spatial
-    relations rewrite through the property-function seam; `geof:transform` and
-    the geodesic `metric*` family are registered but **hard-error by name**
-    rather than answering a default.
+    relations rewrite through the property-function seam; `geof:transform`,
+    the buffers, hulls, overlay set operations and GML/KML/DGGS encodings are
+    registered but **hard-error by name** rather than answering a default, and
+    a `metric*` measure answers only in a CRS the caller declared in metres
+    (there is no ellipsoidal geodesic).
   - **Embedding kNN** — nearest-neighbour search over a
     [PURREMB](./docs/PURREMB.md) embedding space as a property function
     (`?neighbour <space> ( ?seed k ?distance )`): an exact search under the
@@ -155,7 +257,7 @@ but it assumes nothing about your ontology or application.
   scratch bytes, remote requests, deadline) that trips with certified rows
   rather than a wrong answer, and `--explain` returns a per-algebra-node charge
   ledger beside the cost planner's estimates. The normative charge schedule and
-  the frozen 49-case governor corpus live in
+  the frozen 50-case governor corpus live in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md).
 - **SHACL validation** — a native validator with the complete SHACL Core feature
   set (all constraint components, full property paths, qualified value shapes,

@@ -8,10 +8,22 @@ SPDX-License-Identifier: CC-BY-4.0
 **PurRDF** is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit:
 primitives, codecs, SPARQL, SHACL, ShEx, entailment, and graph transport,
 implemented once in Rust and carried verbatim into Python, WebAssembly/JavaScript,
-and C. It is developed by Blackcat Informatics® Inc. and published under
+and C. Every published crate builds for `wasm32-unknown-unknown`, so the engine
+that answers a query on a server answers it, byte for byte, in a browser tab.
+It is developed by Blackcat Informatics® Inc. and published under
 MIT OR Apache-2.0.
 
 > **One RDF engine. One behavior. Every language.**
+
+**What it removes from your architecture.** The three jobs that usually keep a
+PostgreSQL instance running beside a triple store — ranked full-text search,
+spatial predicates, and vector similarity — are answered inside PurRDF:
+in-process, over the same dataset, from the same SPARQL query, with no second
+database and no sync job. Each answer is exact and deterministic, natively and
+on wasm32. This is not a projection: these query surfaces have already removed
+a whole PostgreSQL requirement from one RDF project. See
+[One engine instead of three databases](#one-engine-instead-of-three-databases)
+below.
 
 ## Why does PurRDF exist?
 
@@ -53,7 +65,10 @@ reimplemented per language.
   SHA-3 hash builtins (`SHA3-224`/`256`/`384`/`512`), quad templates that
   `CONSTRUCT` into named graphs (a first-party extension, not a SPARQL 1.2
   feature), the SEP-0009 composite datatypes (`cdt:List`/`cdt:Map`, `FOLD`,
-  `UNFOLD`), caller-registered aggregates and property functions (including
+  `UNFOLD` — with one stated divergence: PurRDF admits RDF 1.2 triple terms
+  and directional language-tagged literals as composite elements, a lexical
+  superset a conformant SEP-0009 reader will call ill-formed), caller-registered
+  aggregates and property functions (including
   path witnesses that bind a traversal hop by hop), governed execution with
   per-node explain receipts, and `SERVICE` federation through a host-injected
   resolver carrying per-service context, gated by the W3C conformance suites.
@@ -78,6 +93,29 @@ reimplemented per language.
   See [GTS Graph Transport](gts.md).
 - **Slices, mappings, and provenance** — a slice catalog, an explicit RDF↔GTS
   loss ledger, SSSOM, and FnO. See [Slices, Mappings & Provenance](slices.md).
+
+## One engine instead of three databases
+
+An RDF project that needs ranked text search, spatial predicates, or
+nearest-neighbour search has usually run PostgreSQL beside its triple store
+for exactly those three jobs. PurRDF answers all three from SPARQL, over the
+dataset already in memory, through the evaluator's caller-keyed extension seams
+— and each page below opens with what its surface replaces and where it stops.
+
+| You needed | Usually from | Now inside PurRDF | Where it stops |
+| --- | --- | --- | --- |
+| Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query dialect; an in-memory index built once over a frozen dataset. |
+| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, hulls, overlay set operations or raster — each unimplemented function hard-errors by name. |
+| Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors arrive in an artifact the caller produced. |
+
+All three are pure functions of their input on every target — fixed point,
+exact rationals, or a pinned binary64 order, with canonical tie-breaks — and
+the claim is executed rather than argued: the text and kNN determinism tests
+run the same body natively and on `wasm32-unknown-unknown`, and
+`make geo-determinism` compares the two targets byte for byte. They are
+Rust-host seams: a host registers an index or space under its own IRIs, and
+that host may itself be compiled to wasm32. The shipped npm package and Python
+wheel do not yet expose these three relations.
 
 ## Two design rules worth knowing on day one
 

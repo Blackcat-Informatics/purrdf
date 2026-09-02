@@ -100,8 +100,14 @@ More on the RDF/JS mapping in [RDF/JS in JavaScript](../interop/rdfjs.md).
 - **In-memory only.** SPARQL queries run over the in-memory dataset;
   this package provides no network resolver, so remote `SERVICE` and `LOAD`
   fail explicitly.
-- A quoted-triple term as a quad **object** currently round-trips only through
-  **N-Quads** (a current native serializer limitation for the other formats).
+- **Triple terms per format.** `serialize` is the writer-native lane: an
+  object-position quoted-triple term and the RDF 1.2 statement layer survive
+  Turtle, N-Triples, N-Quads and TriG (as `<<( … )>>`), RDF/XML (as
+  `rdf:parseType="Triple"`), and JSON-LD / YAML-LD (as `@triple`). TriX and
+  HexTuples have no triple-term surface, so serializing a dataset that carries
+  one to either of them **throws** rather than dropping the layer silently.
+  Single-graph targets (Turtle, N-Triples, RDF/XML) emit the default graph
+  alone.
 
 ## Building from source
 
