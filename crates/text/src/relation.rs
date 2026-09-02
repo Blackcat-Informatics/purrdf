@@ -1592,17 +1592,19 @@ mod tests {
     #[test]
     fn a_zero_term_needle_is_an_honest_empty_result() {
         let search = TextSearchRelation::new(golden());
-        assert!(
+        assert_eq!(
             invoke(&search, &search_args("---"), None)
-                .expect("a punctuation needle is well formed")
-                .is_empty()
+                .expect("a punctuation needle is well formed"),
+            Vec::<PfRow>::new(),
+            "a needle analyzing to no terms names nothing, so it retrieves nothing"
         );
 
         let occurrence = TermOccurrenceRelation::new(occurrences());
-        assert!(
+        assert_eq!(
             invoke(&occurrence, &occurrence_args("---"), None)
-                .expect("a punctuation term is well formed")
-                .is_empty()
+                .expect("a punctuation term is well formed"),
+            Vec::<PfRow>::new(),
+            "and the occurrence relation answers the same way for the same reason"
         );
     }
 
@@ -2007,10 +2009,11 @@ mod tests {
         // empty answer rather than a refusal or an unfiltered one.
         let mut bound = search_args("alpha");
         bound[0] = Some(iri("nowhere"));
-        assert!(
-            invoke(&search, &bound, None)
-                .expect("an absent subject is a well-formed request")
-                .is_empty()
+        assert_eq!(
+            invoke(&search, &bound, None).expect("an absent subject is a well-formed request"),
+            Vec::<PfRow>::new(),
+            "a subject the index holds no text for admits no partition, so the answer is \
+             empty — not refused, and not the unfiltered answer"
         );
 
         // The occurrence relation pushes the same restriction down, so it gets
@@ -2032,10 +2035,11 @@ mod tests {
         }
         let mut bound = occurrence_args("alpha");
         bound[0] = Some(iri("nowhere"));
-        assert!(
-            invoke(&occurrence, &bound, None)
-                .expect("an absent subject is a well-formed request")
-                .is_empty()
+        assert_eq!(
+            invoke(&occurrence, &bound, None).expect("an absent subject is a well-formed request"),
+            Vec::<PfRow>::new(),
+            "the occurrence relation pushes the same restriction down, so an absent \
+             subject reaches the same empty answer"
         );
     }
 
@@ -2255,10 +2259,11 @@ mod tests {
 
         let mut bound = occurrence_args("alpha");
         bound[3] = Some(integer(99));
-        assert!(
-            invoke(&relation, &bound, None)
-                .expect("a bound term")
-                .is_empty()
+        assert_eq!(
+            invoke(&relation, &bound, None).expect("a bound term"),
+            Vec::<PfRow>::new(),
+            "position 99 is past every occurrence the fixture holds, which is an empty \
+             answer within the domain rather than a domain error"
         );
     }
 

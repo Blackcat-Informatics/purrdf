@@ -49,15 +49,32 @@ unicode-normalization.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions.workspace = true
+# Solution-sequence shapes for the ranked-row tests.
+purrdf-sparql-results.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Native-only, both of them, because `make wasm-test` builds ONE test target of
+# this crate for wasm32 and cargo builds every declared dev-dependency for any
+# test target. Neither of these is wasm32-clean (both reach for processes,
+# terminals and wall-clock timing), and neither is wanted there: proptest drives
+# native-only harnesses and criterion drives benches, which the wasm lane never
+# runs.
+#
 # The report-only profiling harness in `benches/`. Never a gate: no measurement
 # here asserts a timing, and behaviour is fixed by the test suite instead.
 criterion.workspace = true
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions.workspace = true
 # Property tests: encoding injectivity, and the fixed-point arithmetic laws.
 proptest.workspace = true
-# Solution-sequence shapes for the ranked-row tests.
-purrdf-sparql-results.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
+# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile
+# for it. Ranking needs a natural logarithm, and "the same answer on every
+# target" is a claim no number of runs on ONE target can check. Run by
+# `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
 
 [[bench]]
 name = "search"

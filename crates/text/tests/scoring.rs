@@ -741,10 +741,12 @@ fn a_needle_analyzing_to_zero_terms() {
 fn an_unknown_partition_scores_nothing() {
     let index = golden_index();
     let absent = PartitionKey::new(None, Some("kl".to_owned()));
-    assert!(
+    assert_eq!(
         rank_partition(&index, &absent, &needle("alpha"), None)
-            .expect("an absent partition is not a failure")
-            .is_empty()
+            .expect("an absent partition is not a failure"),
+        Vec::new(),
+        "a partition the index does not hold contains no document, so it ranks none — \
+         the true answer rather than a refusal"
     );
 }
 
