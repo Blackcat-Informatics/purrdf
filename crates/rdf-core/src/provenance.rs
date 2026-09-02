@@ -612,10 +612,20 @@ pub enum ProvenanceError {
         /// The out-of-range artifact id.
         artifact: ArtifactId,
     },
-    /// A `QuadHandle` has zero occurrences but the gate was asked to enforce
-    /// full coverage (every semantic quad must have ≥1 occurrence).
+    /// A `QuadHandle` of the dataset has zero occurrences (every semantic quad
+    /// must have ≥1 occurrence).
     MissingOccurrence {
         /// The dense quad ordinal with no assertion occurrence.
+        quad_index: usize,
+    },
+    /// An occurrence references a `QuadHandle` that is not a quad of the
+    /// dataset — the sidecar describes an assertion the dataset does not hold.
+    /// The quad-axis mirror of [`UnknownUnit`](Self::UnknownUnit) and
+    /// [`UnknownArtifact`](Self::UnknownArtifact).
+    DanglingQuad {
+        /// The index of the offending occurrence in the occurrence table.
+        occurrence_index: usize,
+        /// The quad handle no dataset quad answers to.
         quad_index: usize,
     },
 }
@@ -643,20 +653,42 @@ impl fmt::Display for ProvenanceError {
                 "quad handle {quad_index} has no assertion occurrence \
                  (every semantic quad must have ≥1 occurrence)"
             ),
+            Self::DanglingQuad {
+                occurrence_index,
+                quad_index,
+            } => write!(
+                f,
+                "occurrence[{occurrence_index}] references quad handle {quad_index} \
+                 which is not a quad of the dataset"
+            ),
         }
     }
 }
 
 impl std::error::Error for ProvenanceError {}
 
-/// Validate the provenance sidecar against a set of expected quad handles.
+/// Validate the provenance sidecar against the dataset it describes.
 ///
-/// Enforces:
+/// `dataset_quads` is the dataset's **complete** quad-handle set — the sidecar
+/// is checked against it in both directions, so the gate always measures
+/// something:
+///
 /// 1. Every `AssertionOccurrence` references a `UnitId` with a registered kind
 ///    (no-optionality: there is no `Unknown` variant).
 /// 2. Every `AssertionOccurrence` references an `ArtifactId` in range.
-/// 3. If `expected_quads` is non-empty, every quad handle in that set has at
-///    least one occurrence.
+/// 3. Every quad in `dataset_quads` has at least one occurrence
+///    ([`MissingOccurrence`](ProvenanceError::MissingOccurrence)).
+/// 4. Every occurrence references a quad in `dataset_quads`
+///    ([`DanglingQuad`](ProvenanceError::DanglingQuad)).
+///
+/// An **empty** `dataset_quads` therefore means "the dataset is empty", not
+/// "check nothing": rule 3 has no quad to cover, and rule 4 then refuses every
+/// occurrence, because a sidecar with assertions for an empty dataset describes
+/// quads the dataset does not hold. An empty sidecar for an empty dataset
+/// passes — after every rule ran over zero elements, which is a checked pass,
+/// not a skipped one. There is no way to ask for rules 1–2 alone: a call that
+/// forgets to collect its quad handles fails loudly the moment the sidecar
+/// holds anything, rather than passing vacuously.
 ///
 /// Non-`Source` units (`RootOntology`, `Import`, `Generated`, `RuntimeInput`)
 /// are explicitly representable and pass the gate without error.
@@ -666,7 +698,7 @@ impl std::error::Error for ProvenanceError {}
 /// Returns all violations found (not just the first).
 pub fn check_provenance(
     prov: &DatasetProvenance,
-    expected_quads: &[QuadHandle],
+    dataset_quads: &[QuadHandle],
 ) -> Result<(), Vec<ProvenanceError>> {
     let mut errors: Vec<ProvenanceError> = Vec::new();
 
@@ -686,17 +718,29 @@ pub fn check_provenance(
         }
     }
 
-    // 3: every expected quad handle has ≥1 occurrence.
-    if !expected_quads.is_empty() {
-        // Build a set of handles that appear in at least one occurrence.
-        let covered: std::collections::HashSet<usize> =
-            prov.occurrences.iter().map(|o| o.quad.index()).collect();
-        for handle in expected_quads {
-            if !covered.contains(&handle.index()) {
-                errors.push(ProvenanceError::MissingOccurrence {
-                    quad_index: handle.index(),
-                });
-            }
+    // 3: every dataset quad has ≥1 occurrence. Runs unconditionally: an empty
+    // dataset simply has nothing to cover, and rule 4 is what gives that case
+    // teeth.
+    let covered: std::collections::HashSet<usize> =
+        prov.occurrences.iter().map(|o| o.quad.index()).collect();
+    for handle in dataset_quads {
+        if !covered.contains(&handle.index()) {
+            errors.push(ProvenanceError::MissingOccurrence {
+                quad_index: handle.index(),
+            });
+        }
+    }
+
+    // 4: every occurrence references a dataset quad — the mirror of rule 3, and
+    // the quad-axis twin of rules 1 and 2.
+    let dataset: std::collections::HashSet<usize> =
+        dataset_quads.iter().map(|h| h.index()).collect();
+    for (idx, occ) in prov.occurrences.iter().enumerate() {
+        if !dataset.contains(&occ.quad.index()) {
+            errors.push(ProvenanceError::DanglingQuad {
+                occurrence_index: idx,
+                quad_index: occ.quad.index(),
+            });
         }
     }
 
@@ -1039,14 +1083,74 @@ mod tests {
             location: None,
         });
 
-        let result = check_provenance(&prov, &[]);
+        let result = check_provenance(&prov, &[q]);
         assert!(result.is_err());
         let errs = result.unwrap_err();
-        assert!(
-            errs.iter().any(
-                |e| matches!(e, ProvenanceError::UnknownUnit { unit, .. } if unit.index() == 99)
-            ),
-            "expected UnknownUnit error for forged id"
+        assert_eq!(
+            errs,
+            vec![ProvenanceError::UnknownUnit {
+                occurrence_index: 0,
+                unit: bad_unit,
+            }],
+            "exactly the forged-unit error: the quad itself is covered and not dangling"
+        );
+    }
+
+    /// An empty `dataset_quads` means "the dataset is empty", and the gate must
+    /// still MEASURE that: a sidecar holding an occurrence for an empty dataset
+    /// describes a quad the dataset does not have. Against the pre-fix code this
+    /// call passed vacuously — rule 3 was skipped on an empty set, and nothing
+    /// looked at the occurrence.
+    #[test]
+    fn gate_rejects_occurrences_for_an_empty_dataset() {
+        let mut prov = DatasetProvenance::new();
+        let unit = prov.register_unit("slices/core/a", OriginKind::Source);
+        let artifact = prov.register_artifact("a/a.ttl");
+        prov.record_occurrence(qh(0), unit, artifact, None);
+
+        let errs = check_provenance(&prov, &[]).expect_err("an occurrence with no dataset quad");
+        assert_eq!(
+            errs,
+            vec![ProvenanceError::DanglingQuad {
+                occurrence_index: 0,
+                quad_index: 0,
+            }]
+        );
+        assert_eq!(
+            errs[0].to_string(),
+            "occurrence[0] references quad handle 0 which is not a quad of the dataset"
+        );
+    }
+
+    /// The neighbouring VALID case of the refusal above: an empty sidecar for an
+    /// empty dataset is a checked pass (every rule ran over zero elements).
+    #[test]
+    fn gate_passes_empty_sidecar_for_empty_dataset() {
+        let prov = DatasetProvenance::new();
+        assert_eq!(check_provenance(&prov, &[]), Ok(()));
+    }
+
+    /// Rule 4 is not special to the empty case: an occurrence for a quad OUTSIDE
+    /// a non-empty dataset is dangling too, and it is reported alongside — not
+    /// instead of — a missing occurrence for a quad inside it.
+    #[test]
+    fn gate_reports_dangling_and_missing_together() {
+        let mut prov = DatasetProvenance::new();
+        let unit = prov.register_unit("slices/core/a", OriginKind::Source);
+        let artifact = prov.register_artifact("a/a.ttl");
+        prov.record_occurrence(qh(0), unit, artifact, None);
+        prov.record_occurrence(qh(7), unit, artifact, None); // not a dataset quad
+
+        let errs = check_provenance(&prov, &[qh(0), qh(1)]).expect_err("two violations");
+        assert_eq!(
+            errs,
+            vec![
+                ProvenanceError::MissingOccurrence { quad_index: 1 },
+                ProvenanceError::DanglingQuad {
+                    occurrence_index: 1,
+                    quad_index: 7,
+                },
+            ]
         );
     }
 
