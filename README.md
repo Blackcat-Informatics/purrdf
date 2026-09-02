@@ -259,7 +259,7 @@ triple pattern.
   scratch bytes, remote requests, deadline) that trips with certified rows
   rather than a wrong answer, and `--explain` returns a per-algebra-node charge
   ledger beside the cost planner's estimates. The normative charge schedule and
-  the frozen 49-case governor corpus live in
+  the frozen 50-case governor corpus live in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md).
 - **SHACL validation** — a native validator with the complete SHACL Core feature
   set (all constraint components, full property paths, qualified value shapes,
