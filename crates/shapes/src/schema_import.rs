@@ -2272,7 +2272,8 @@ mod tests {
             {body}
             "
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse shape");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse shape");
         let shapes = crate::shapes::from_dataset(&dataset).expect("type shape");
         crate::json_schema::compile(&shapes, config().namespaces())
     }

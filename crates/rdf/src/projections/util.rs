@@ -96,14 +96,44 @@ pub fn stable_identifier(prefix: &str, key: &[u8]) -> Result<String, ProjectionE
 
 /// Validate a mandatory absolute IRI configuration field.
 ///
+/// This is the single gate every IRI-valued projection configuration field passes through —
+/// dataset identities, generated-resource bases, scheme IRIs, entity bases, document bases,
+/// graph names, vocabulary role tables, predicates and datatypes alike — so what "absolute
+/// IRI" means in a projection configuration is decided once rather than per profile.
+///
+/// It is [`purrdf_iri::BaseIri::parse`], the workspace's shared "a valid RFC-3987 IRI that
+/// has a scheme" primitive, and the failure carries
+/// [`purrdf_iri::IriError::diagnostic_code`] — the workspace's single owner of those
+/// spellings. It used to be `purrdf_sparql_algebra::NamedNode::new`, which reaches the same
+/// grammar but wraps it in a private reason of its own ("relative IRI reference in term
+/// position"), so a configuration field failed with a SPARQL term-position sentence and no
+/// shared code for a consumer to switch on.
+///
+/// The relative case gets a remedy written for the surface the value came from. The shared
+/// `iri-non-absolute-base` remedy names a BASE ("supply a base IRI that has a scheme"), and
+/// most fields checked here are not bases; and a configuration document is not an RDF
+/// document, so the `@base`/`xml:base` remedy could not be applied to it either. Naming a fix
+/// the caller cannot apply is worse than naming none.
+///
 /// # Errors
 ///
 /// Returns a configuration error naming `field` when `value` is not an absolute IRI.
 pub fn validate_absolute_iri(value: &str, field: &str) -> Result<(), ProjectionError> {
-    purrdf_sparql_algebra::NamedNode::new(value.to_owned()).map_err(|error| {
-        ProjectionError::configuration(format!("{field} must be an absolute IRI: {error}"))
-    })?;
-    Ok(())
+    let Err(error) = purrdf_iri::BaseIri::parse(value) else {
+        return Ok(());
+    };
+    let code = error.diagnostic_code();
+    if code == "iri-non-absolute-base" {
+        return Err(ProjectionError::configuration(format!(
+            "{field} must be an absolute IRI: {code}: `{value}` is a relative IRI reference. A \
+             projection configuration is not an RDF document and has no base of its own, so \
+             there is nothing to resolve it against: write the value in absolute form, with a \
+             scheme"
+        )));
+    }
+    Err(ProjectionError::configuration(format!(
+        "{field} must be an absolute IRI: {code}: {error}"
+    )))
 }
 
 /// Escape an openCypher backtick-delimited identifier body.
@@ -204,9 +234,48 @@ mod tests {
         assert!(escape_xml_text("bad\0value").is_err());
     }
 
+    /// Every failure names the FIELD and carries the shared `purrdf_iri` diagnostic code, so
+    /// a projection configuration failure groups with every other IRI failure in the
+    /// workspace instead of spelling a private reason of its own.
     #[test]
     fn absolute_iri_validation_fails_closed() {
+        // A fragment is part of an absolute IRI and must survive: nearly every vocabulary
+        // role in these profiles is a `…#term`.
         assert!(validate_absolute_iri("http://example.org/p", "predicate").is_ok());
-        assert!(validate_absolute_iri("relative", "predicate").is_err());
+        assert!(
+            validate_absolute_iri(
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                "predicate"
+            )
+            .is_ok()
+        );
+
+        // RELATIVE: the shared code, the field, the value, and a remedy that fits a
+        // configuration document rather than an RDF one.
+        let relative = validate_absolute_iri("relative", "predicate").expect_err("relative");
+        let text = relative.to_string();
+        assert!(text.contains("iri-non-absolute-base"), "{text}");
+        assert!(
+            text.contains("predicate") && text.contains("`relative`"),
+            "{text}"
+        );
+        assert!(text.contains("write the value in absolute form"), "{text}");
+        assert!(
+            !text.contains("@base") && !text.contains("term position"),
+            "no remedy the caller cannot apply, and no SPARQL term-position sentence: {text}"
+        );
+
+        // MALFORMED: the specific shared code for what is wrong with it.
+        let malformed = validate_absolute_iri("ht tp://example.org/p", "predicate")
+            .expect_err("malformed scheme");
+        assert!(
+            malformed.to_string().contains("iri-bad-scheme"),
+            "{malformed}"
+        );
+
+        // The EMPTY string gets its own shared code rather than being folded into the
+        // relative case: `iri-empty` says which of the two a caller actually wrote.
+        let empty = validate_absolute_iri("", "predicate").expect_err("empty");
+        assert!(empty.to_string().contains("iri-empty"), "{empty}");
     }
 }

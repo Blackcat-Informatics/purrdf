@@ -1996,7 +1996,7 @@ mod tests {
             {body}
             "
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse");
         let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
         crate::json_schema::compile(&shapes, import_config().namespaces())
     }

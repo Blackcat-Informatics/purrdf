@@ -641,7 +641,7 @@ mod tests {
         use purrdf_rdf::{ParseOptions, parse_dataset_with};
         // alice is asserted on line 2 (leading blank line).
         let data = "\n<http://example.org/alice> <http://example.org/age> \"x\" .\n";
-        let (_ds, spans) = parse_dataset_with(
+        let spans = parse_dataset_with(
             data.as_bytes(),
             "application/n-triples",
             None,
@@ -649,8 +649,9 @@ mod tests {
                 track_source_spans: true,
             },
         )
-        .expect("parse");
-        let spans = spans.expect("span table present when tracking");
+        .expect("parse")
+        .spans
+        .expect("span table present when tracking");
 
         let report = ValidationReport {
             conforms: false,
@@ -680,7 +681,7 @@ mod tests {
         // alice is asserted on the FIRST line, so its subject starts at document
         // byte offset 0. That 0 must be emitted as `byteOffset: 0`, not dropped.
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
-        let (_ds, spans) = parse_dataset_with(
+        let spans = parse_dataset_with(
             data.as_bytes(),
             "application/n-triples",
             None,
@@ -688,8 +689,9 @@ mod tests {
                 track_source_spans: true,
             },
         )
-        .expect("parse");
-        let spans = spans.expect("span table present when tracking");
+        .expect("parse")
+        .spans
+        .expect("span table present when tracking");
 
         let report = ValidationReport {
             conforms: false,
@@ -852,7 +854,7 @@ mod tests {
     fn source_root_uri_wires_base_id_and_original_uri_base_ids() {
         use purrdf_rdf::{ParseOptions, parse_dataset_with};
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
-        let (_ds, spans) = parse_dataset_with(
+        let spans = parse_dataset_with(
             data.as_bytes(),
             "application/n-triples",
             None,
@@ -860,8 +862,9 @@ mod tests {
                 track_source_spans: true,
             },
         )
-        .expect("parse");
-        let spans = spans.expect("span table present when tracking");
+        .expect("parse")
+        .spans
+        .expect("span table present when tracking");
 
         let report = ValidationReport {
             conforms: false,
@@ -906,7 +909,7 @@ mod tests {
     fn default_emits_no_base_id_and_no_original_uri_base_ids() {
         use purrdf_rdf::{ParseOptions, parse_dataset_with};
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
-        let (_ds, spans) = parse_dataset_with(
+        let spans = parse_dataset_with(
             data.as_bytes(),
             "application/n-triples",
             None,
@@ -914,8 +917,9 @@ mod tests {
                 track_source_spans: true,
             },
         )
-        .expect("parse");
-        let spans = spans.expect("span table present when tracking");
+        .expect("parse")
+        .spans
+        .expect("span table present when tracking");
 
         let report = ValidationReport {
             conforms: false,

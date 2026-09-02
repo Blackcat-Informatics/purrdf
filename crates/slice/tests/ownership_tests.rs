@@ -873,9 +873,17 @@ fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configur
 
 #[test]
 fn malformed_artifact_hard_fails_analysis() {
-    // A slice whose module.ttl is malformed RDF must make analyze() return Err,
-    // never silently drop the artifact (which would hide its terms from the
-    // one-validated-owner gate). No-optionality / hard-fail doctrine.
+    // A slice whose module.ttl is malformed RDF must hard-fail, never silently drop the
+    // artifact (which would hide its terms from the one-validated-owner gate).
+    // No-optionality / hard-fail doctrine.
+    //
+    // The failure now lands at DISCOVERY rather than at analysis, which is strictly
+    // stronger: the artifact's semantic digest is computed by parsing the same bytes, and
+    // that parse used to be `.ok()`-swallowed into `semantic_digest: None` — the
+    // documented discriminant for "not an RDF file". A malformed `.ttl` therefore
+    // travelled through the catalogue disguised as a non-RDF artifact and was only
+    // complained about later, by a phase that could say no more than "none was computed".
+    // Propagating it means a malformed ownership artifact cannot reach analysis at all.
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -892,10 +900,56 @@ fn malformed_artifact_hard_fails_analysis() {
          vocab:Broken a vocab:Class  <<< not turtle at all ;;;\n",
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
-    let result = OwnershipAnalyzer::new(&catalog).analyze();
+    let error = SliceCatalog::discover(root, test_vocab())
+        .expect_err("a malformed ownership artifact must hard-fail discovery");
+    let message = error.to_string();
     assert!(
-        result.is_err(),
-        "a malformed ownership artifact must hard-fail analysis, not be silently skipped"
+        message.contains("module.ttl"),
+        "the error must name the offending artifact, got: {message}"
     );
+    assert!(
+        message.contains("syntax error"),
+        "the error must report the syntax fault itself, not a missing digest, got: {message}"
+    );
+}
+
+/// The counterpart: a WELL-FORMED RDF artifact always carries `Some` digest, so `None`
+/// keeps its documented meaning of "not an RDF file" and never doubles as a swallowed
+/// failure.
+#[test]
+fn every_rdf_artifact_carries_a_semantic_digest_and_no_other_kind_does() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "slices/grpA/sliceA/manifest.ttl",
+        &manifest("sliceA", &[]),
+    );
+    write(
+        root,
+        "slices/grpA/sliceA/module.ttl",
+        "@prefix vocab: <https://example.org/vocab/> .\n\
+         vocab:Thing a vocab:Class .\n",
+    );
+    write(root, "slices/grpA/sliceA/docs.md", "# not rdf\n");
+
+    let catalog = SliceCatalog::discover(root, test_vocab()).expect("a clean slice discovers");
+    let record = catalog.records().first().expect("one slice");
+    assert!(!record.artifacts.is_empty());
+    for artifact in &record.artifacts {
+        // Read the artifact's KIND off the record's own media type rather than re-typing
+        // the extension list the catalogue classifies with — a second copy of that list
+        // here could drift from the one the digest decision is actually made on.
+        let is_rdf = matches!(
+            artifact.media_type.as_str(),
+            "text/turtle" | "application/n-triples" | "application/n-quads"
+        );
+        assert_eq!(
+            artifact.semantic_digest.is_some(),
+            is_rdf,
+            "`semantic_digest` must be Some exactly for RDF artifacts; {} broke that",
+            artifact.logical_path
+        );
+    }
 }

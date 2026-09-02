@@ -25,6 +25,7 @@ pub mod ownership;
 pub mod prefix_emit;
 pub mod prefix_lint;
 pub mod rdf_query;
+pub mod retrieval;
 pub mod standpoint_emit;
 pub mod standpoint_modality;
 pub mod vocab;
@@ -55,5 +56,6 @@ pub use prefix_lint::lint_prefix_consistency;
 /// (the property-function seam) without a direct `purrdf-sparql-algebra` dependency.
 pub use purrdf_sparql_algebra::ParserOptions;
 pub use rdf_query::NamedNode;
+pub use retrieval::{file_iri_for_absolute_path, retrieval_base_iri};
 pub use standpoint_emit::emit_standpoint_sets;
 pub use vocab::SliceVocab;

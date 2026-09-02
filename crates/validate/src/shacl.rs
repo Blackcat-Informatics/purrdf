@@ -48,16 +48,17 @@ use crate::{SarifOptions, report_to_sarif_string};
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
 ///     <http://example.org/alice> <http://example.org/age> \"nope\" .\n";
 ///
-/// let sarif = validate_to_sarif_string(shapes, data, &SarifOptions::default())
+/// let sarif = validate_to_sarif_string(shapes, None, data, &SarifOptions::default())
 ///     .expect("sarif produced");
 /// assert!(sarif.contains("\"version\": \"2.1.0\""));
 /// ```
 pub fn validate_to_sarif_string(
     shapes_ttl: &str,
+    shapes_base: Option<&str>,
     data_nt: &str,
     options: &SarifOptions,
 ) -> Result<String, String> {
-    let report = engine::validate_graphs(data_nt, shapes_ttl)?;
+    let report = engine::validate_graphs(data_nt, shapes_ttl, shapes_base)?;
     Ok(report_to_sarif_string(&report, options))
 }
 
@@ -77,7 +78,7 @@ mod tests {
 
     #[test]
     fn validate_to_sarif_string_emits_2_1_0_error() {
-        let sarif = validate_to_sarif_string(SHAPES, DATA, &SarifOptions::default())
+        let sarif = validate_to_sarif_string(SHAPES, None, DATA, &SarifOptions::default())
             .expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
@@ -87,7 +88,8 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(
-            validate_to_sarif_string("@@@ not turtle", DATA, &SarifOptions::default()).is_err()
+            validate_to_sarif_string("@@@ not turtle", None, DATA, &SarifOptions::default())
+                .is_err()
         );
     }
 }

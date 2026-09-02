@@ -55,6 +55,18 @@ pub enum ShexError {
     /// Two schemas in the same import closure declare the same shape label
     /// with conflicting definitions.
     ImportConflict(String),
+    /// A shape map names a shape the schema does not declare. Carries the
+    /// selector as the ShapeMap grammar writes it (`START` or `<label>`).
+    ///
+    /// Neither the ShapeMap specification nor ShEx 2.1 defines this case: §5.7's
+    /// Shape Expression Reference Requirement binds a `shapeExprRef` written
+    /// *inside* a schema (which [`crate::check_structure`] enforces), and
+    /// `satisfies` is defined only where "se2 is the shape expression having se
+    /// as id" — with no such expression the relation is undefined, not false.
+    /// The repository's no-optionality/hard-fail doctrine therefore refuses it
+    /// rather than answering `nonconformant`, which would state a finding about
+    /// the DATA that the data had no part in.
+    UnknownShape(String),
 }
 
 impl ShexError {
@@ -79,6 +91,32 @@ impl ShexError {
         Self::Shexj(reason.into())
     }
 
+    /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
+    /// reason with that crate's [`diagnostic_code`].
+    ///
+    /// Every IRI failure ShEx reports comes through here, so "a relative IRI
+    /// reference with no base in scope" is spelled `iri-relative-no-base` in a ShEx
+    /// diagnostic exactly as it is in an RDF or SPARQL one — ShEx does not get its
+    /// own vocabulary for a condition the whole workspace shares.
+    ///
+    /// [`diagnostic_code`]: purrdf_iri::IriError::diagnostic_code
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_shex::ShexError;
+    ///
+    /// let cause = purrdf_iri::BaseScope::empty().resolve("knows").unwrap_err();
+    /// let err = ShexError::iri("knows", &cause);
+    /// assert!(err.to_string().contains("iri-relative-no-base"));
+    /// ```
+    pub fn iri(lexical: impl Into<String>, cause: &purrdf_iri::IriError) -> Self {
+        Self::Iri {
+            lexical: lexical.into(),
+            reason: format!("{}: {cause}", cause.diagnostic_code()),
+        }
+    }
+
     /// Construct a [`ShexError::Import`] for an unresolvable import IRI,
     /// preserving the concrete `cause` the resolver reported.
     pub fn import(iri: impl Into<String>, cause: Self) -> Self {
@@ -93,6 +131,11 @@ impl ShexError {
         Self::ImportConflict(label.into())
     }
 
+    /// Construct a [`ShexError::UnknownShape`] from a rendered shape selector.
+    pub fn unknown_shape(selector: impl Into<String>) -> Self {
+        Self::UnknownShape(selector.into())
+    }
+
     /// The byte offset the failure was reported at, for the position-bearing
     /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)). `None` for the
     /// others — in particular [`Import`](Self::Import), whose offset (if any)
@@ -101,9 +144,11 @@ impl ShexError {
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
             Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
-            Self::Iri { .. } | Self::Shexj(_) | Self::Import { .. } | Self::ImportConflict(_) => {
-                None
-            }
+            Self::Iri { .. }
+            | Self::Shexj(_)
+            | Self::Import { .. }
+            | Self::ImportConflict(_)
+            | Self::UnknownShape(_) => None,
         }
     }
 
@@ -137,6 +182,10 @@ impl fmt::Display for ShexError {
             Self::ImportConflict(label) => {
                 write!(f, "conflicting redefinition of shape {label}")
             }
+            Self::UnknownShape(selector) => write!(
+                f,
+                "the shape map names the shape {selector}, which the schema does not declare"
+            ),
         }
     }
 }

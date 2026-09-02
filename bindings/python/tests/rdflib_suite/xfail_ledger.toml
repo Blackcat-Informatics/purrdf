@@ -13,9 +13,12 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 85 passed / 1 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 1/1 applied, 0 stale). This ledger
-# only shrinks: as gaps close, keys are pruned here and the pass count rises.
+# Current scoreboard (reconciled to the live suite): 81 passed / 5 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 5/5 applied, 0 stale). This ledger
+# only shrinks as GAPS close; it grew once, deliberately, when the IR-boundary
+# absoluteness invariant made a relative IRI unrepresentable as an RDF term. Those
+# four entries record a permanent semantic divergence from rdflib rather than a
+# purrdf gap, and are marked as such in their theme below.
 # Grouped by theme in the comments below.
 
 [xfail]
@@ -52,6 +55,24 @@
 # aggregate); rdflib leniently accepts it and returns ?pWHERE unbound. Vendored
 # verbatim, so the upstream typo is preserved and our correct rejection ledgered.
 "test_having.py::test_group_by" = "upstream test typo 'SELECT ?p' 'WHERE ...' concatenates to 'SELECT ?pWHERE ...', projecting the non-group-key variable ?pWHERE under GROUP BY; purrdf correctly rejects per SPARQL 1.1 §11.3 while rdflib leniently returns it unbound"
+
+# --- Theme: relative IRIs cannot be RDF terms (purrdf is stricter than rdflib) ---
+# These upstream tests use bare relative references — `URIRef("a")`, `URIRef("b0")`
+# — as throwaway term names, because rdflib's URIRef is an unvalidated str subclass
+# and its in-memory store will hold anything. purrdf's IR cannot: an IRI term
+# carries no base, so a relative reference there has no knowable identity and would
+# serialize as invalid N-Triples. The refusal is `iri-relative-no-base`, raised at
+# the `add` that supplies it.
+#
+# This is a genuine, permanent semantic divergence, not a gap to close: closing it
+# would mean either inventing a base (forbidden — it would differ per machine and
+# leak into published RDF) or admitting unrepresentable terms into the store. The
+# tests exercise BatchAddGraph's batching, which purrdf implements correctly; only
+# their choice of term spelling is unusable here.
+"test_batch_add.py::TestBatchAddGraph::test_exit_submits_partial_batch" = "upstream uses relative URIRef('a')/('b')/('c') as throwaway names; purrdf refuses a relative IRI as an RDF term (iri-relative-no-base) because the IR carries no base to resolve it against, while rdflib's URIRef is an unvalidated str subclass"
+"test_batch_add.py::TestBatchAddGraph::test_add_more_than_batch_size" = "upstream uses relative URIRef('a')/('b%d')/('c%d') as throwaway names; purrdf refuses a relative IRI as an RDF term (iri-relative-no-base) because the IR carries no base to resolve it against, while rdflib's URIRef is an unvalidated str subclass"
+"test_batch_add.py::TestBatchAddGraph::test_add_quad_for_non_conjunctive_pass_on_context_matches" = "upstream uses relative URIRef('a')/('b')/('c') as throwaway names; purrdf refuses a relative IRI as an RDF term (iri-relative-no-base) because the IR carries no base to resolve it against, while rdflib's URIRef is an unvalidated str subclass"
+"test_batch_add.py::TestBatchAddGraph::test_no_addN_on_exception" = "upstream uses relative URIRef('a')/('b%d')/('c%d') as throwaway names; purrdf refuses a relative IRI as an RDF term (iri-relative-no-base) because the IR carries no base to resolve it against, while rdflib's URIRef is an unvalidated str subclass"
 
 # --- Theme: ConjunctiveGraph legacy semantics ---
 # (resolved: ConjunctiveGraph now emits the rdflib 7.x deprecation warning,

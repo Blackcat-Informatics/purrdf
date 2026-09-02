@@ -66,10 +66,17 @@ smallvec = { workspace = true }
 # Deterministic indexed focus-node scheduling. Rayon is always-on and
 # wasm32-clean; on single-threaded wasm it executes the same indexed work inline.
 rayon = { workspace = true }
+# The workspace's ONE RFC-8089 `file://` retrieval-IRI derivation
+# (`retrieval_base_iri`, RFC-3986 §5.1.3): `shape_union::load_shapes` reads shape files
+# off disk, so each parses under its own document base rather than under none. The
+# derivation lives in `purrdf-slice` because that is the only library crate here that
+# opens files, which is what keeps `purrdf-iri` and `purrdf-rdf` filesystem-free; this is
+# a consumer edge, not a second copy. `purrdf-slice` already published before
+# `purrdf-shapes` in the release order, and was already a dev-dependency here.
+purrdf-slice = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
-purrdf-slice = { workspace = true }
 proptest = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
