@@ -1147,7 +1147,11 @@ mod tests {
         assert!(matches!(shape.rules[0].body, RuleBody::Triple { .. }));
         assert!(!shape.rules[0].deactivated);
         assert!(shape.rules[0].order.is_none());
-        assert_eq!(shape.rules[0].conditions, [] as [_; 0]);
+        // `conditions` is `Vec<Shape>` — conditions resolve to parsed shapes at
+        // shapes-load, not to IRI strings — and `Shape` is not `PartialEq`, so the
+        // `[] as [_; 0]` spelling the rest of the workspace uses does not compile
+        // here. Asserting the length is the same claim and is equally lint-clean.
+        assert_eq!(shape.rules[0].conditions.len(), 0);
     }
 
     #[test]
