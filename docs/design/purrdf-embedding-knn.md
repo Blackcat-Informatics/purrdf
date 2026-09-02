@@ -53,6 +53,25 @@ to `1` left-to-right and `0` right-to-left — and pins which one the kernel pro
 A test that only checked "the same input gives the same output twice" would pass on
 a kernel with no fixed order at all.
 
+### The cross-target claim is executed, not argued
+
+Everything above is a reason to *expect* agreement between x86-64 and
+`wasm32-unknown-unknown`. Two runs on one target cannot check it: they cannot tell a
+kernel that is target-independent from one that is merely self-consistent wherever it
+was last compiled. `make wasm` has the same limit in the other direction — it proves
+the release crates *build* for wasm32, never that they *answer* the same way there.
+
+So `crates/sparql-eval/tests/knn_wasm_determinism.rs` is one test body carrying two
+attributes: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32. It runs
+a real SPARQL kNN query over a real PURREMB artifact whose components are deliberately
+*not* exactly representable in binary64 — every product, every partial sum and both
+norms round — and asserts five pinned `xsd:double` lexicals, in order. `cargo test`
+executes it on the host; the new `make wasm-test` lane compiles it to wasm32 and runs it
+in Node through `wasm-bindgen-test-runner` (which ships in the wasm-bindgen archive the
+wasm lane already installs, so there is no second pin to keep in step). CI's wasm job
+runs that lane. A target that computes a different last bit renders a different lexical
+and fails there, rather than surfacing later as an unexplained reordering.
+
 ### The limit of the claim, stated
 
 Cosine self-distance is **not exactly zero**. `dot(v, v)` and `|v| · |v|` are two
@@ -98,6 +117,13 @@ true `k` nearest. There is no candidate pruning anywhere. That is what lets
 tested for rather than a property of a tuning parameter, and it is what makes the
 engine's row-ceiling pushdown sound here: emission order *is* rank order, so the
 first `n` rows are the `n` nearest for every `n ≤ k`.
+
+Exactness is checked where it could plausibly stop holding rather than only on the
+three-point fixture the rest of the suite uses: a 192-point space is searched at five
+values of `k` against a brute-force oracle written out longhand in the test, and both
+halves are asserted — the count exactly (`k-1` neighbours reported as complete is the
+failure this surface is most likely to hide) and the emitted distances row for row
+against the oracle's prefix.
 
 `KnnGuard` is therefore an admission bound on work, caller-supplied with no default:
 

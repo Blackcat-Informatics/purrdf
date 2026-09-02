@@ -579,8 +579,14 @@ corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost
 harness re-measures under `METERED` and re-derives that relation on every run rather
 than trusting the numbers in the file.
 
-Three of the band lanes exist to separate the two property-function charge points from
-each other rather than to cover a dimension: one drives many invocations of a relation
+Three of the band lanes exist to separate the two *engine-observed* property-function
+charge points — `property-function-invocation` and `property-function-row`, the two the
+evaluator counts for itself — from each other rather than to cover a dimension. (v8's
+`property-function-work` is the third point and is not banded here: it is *reported* by
+the relation, and every relation in this corpus is a scripted fixture that reports
+nothing, so each of these bands carries `property-function-work 0`. The point that does
+report it is exercised where a relation with real internal work lives — the embedding
+kNN surface's own charge tests.) One lane drives many invocations of a relation
 that emits nothing (so its band carries zero row charges), one drives a single
 invocation emitting many rows, and one drives 1200 rows — above the evaluator's fork
 threshold. That last one is where the parallel-invariance claim of §1 becomes a
