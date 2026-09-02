@@ -434,6 +434,64 @@ fn every_format_applies_the_policy_its_capability_column_declares() {
     }
 }
 
+/// A `UCHAR` escape lifts the LEXER's raw-byte restriction, not the IRI grammar's.
+///
+/// The N-Triples IRIREF production admits `UCHAR` where the raw byte is forbidden, so a
+/// reader can conclude "escaped therefore legal" and skip validating the DECODED value.
+/// `origin/main` did exactly that here — its `validate_iri` checked only that the value
+/// had a scheme — so `<urn:ex: >` interned a term carrying a SPACE that no
+/// serializer can emit. The check now runs the RFC-3987 grammar over the decoded string.
+///
+/// That is a TIGHTENED refusal, so both sides are executed here, because the two look
+/// alike and are not:
+///
+/// * VALID and must still pass: ` ` (NO-BREAK SPACE) and `∞` (INFINITY) are
+///   RFC-3987 `ucschar`. These are the real IRIs in W3C RDFC-1.0 `test060`, whose
+///   canonical form keeps the decoded character. ` ` renders as a space and is not
+///   one; mistaking it for U+0020 is what makes this pair look self-contradictory.
+/// * INVALID and must fail: ` ` (SPACE) and `<` (`<`) are outside the IRI
+///   grammar whatever spelling introduced them.
+#[test]
+fn uchar_escapes_are_validated_against_the_decoded_iri() {
+    // The neighbouring VALID cases — the W3C test060 IRIs — round-trip with the decoded
+    // character intact, in both absolute-only grammars.
+    for media_type in ["application/n-triples", "application/n-quads"] {
+        for (escaped, decoded) in [("\\u00a0", '\u{a0}'), ("\\u221e", '\u{221e}')] {
+            let text = format!("<urn:ex:{escaped}> {P} {O} .\n");
+            let dataset = parse_dataset(text.as_bytes(), media_type, None)
+                .unwrap_or_else(|e| panic!("{media_type}: <urn:ex:{escaped}> is a legal IRI: {e}"));
+            let out = String::from_utf8(
+                serialize_dataset(&dataset, "application/n-triples", SerializeGraph::Dataset)
+                    .expect("serialize"),
+            )
+            .expect("utf-8");
+            assert!(
+                out.starts_with(&format!("<urn:ex:{decoded}> ")),
+                "{media_type}: the decoded character must survive: {out:?}"
+            );
+        }
+    }
+
+    // The INVALID cases: a decoded code point outside the RFC-3987 grammar is refused,
+    // with the character-level code and not the scheme-level one.
+    for media_type in ["application/n-triples", "application/n-quads"] {
+        for escaped in ["\\u0020", "\\u003c"] {
+            let text = format!("<urn:ex:{escaped}> {P} {O} .\n");
+            let error = parse_dataset(text.as_bytes(), media_type, None).unwrap_err();
+            assert_eq!(
+                error.code, "iri-disallowed-char",
+                "{media_type}: <urn:ex:{escaped}> decodes to a character no IRI admits"
+            );
+        }
+    }
+
+    // And the plain ASCII neighbour is untouched — the tightening did not swallow the
+    // ordinary case.
+    let plain = format!("<urn:ex:s> {P} {O} .\n");
+    parse_dataset(plain.as_bytes(), "application/n-triples", None)
+        .expect("<urn:ex:s> still parses");
+}
+
 // ── Egress: the `emits_base` column, over every registered format ───────────────
 //
 // The parse leg resolved a relative reference against a base and the serialize leg threw

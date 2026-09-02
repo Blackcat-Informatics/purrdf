@@ -23,6 +23,18 @@ const RELATIVE_TURTLE = "<rel> <https://example.org/p> <https://example.org/o> .
 const NO_BASE_CODE = "iri-relative-no-base";
 
 const EXPANDED = JSON.stringify({ version: 1, mode: "expanded" });
+
+// Read the document base out of the PARSED JSON-LD rather than substring-matching the
+// serialized text. `text.includes(BASE)` is not the assertion we mean: it also passes
+// for a document that wrote `https://example.org/base/../elsewhere/`, or that merely
+// mentioned the base inside an unrelated IRI — a URL is a structure, not a substring
+// (CodeQL `js/incomplete-url-substring-sanitization`). The base lands at
+// `@context.@base`, so compare that key exactly.
+const documentBaseOf = (text) => {
+  const parsed = JSON.parse(text);
+  const context = parsed["@context"];
+  return context === undefined || context === null ? undefined : context["@base"];
+};
 // `CompiledJsonLdContext` compiles only `mode: "context"` options.
 const CONTEXT_OPTIONS = JSON.stringify({
   version: 1,
@@ -59,7 +71,11 @@ test("an in-document base wins over the supplied one", () => {
 test("serializeConfigured carries the document base into JSON-LD", () => {
   const dataset = Dataset.parse(RELATIVE_TURTLE, "turtle", BASE);
   const text = dataset.serializeConfigured("jsonld", EXPANDED, BASE);
-  assert.ok(text.includes(BASE), `the JSON-LD document must carry the base: ${text}`);
+  assert.equal(
+    documentBaseOf(text),
+    BASE,
+    `the JSON-LD document must carry the base at @context.@base: ${text}`,
+  );
 });
 
 test("serializeWithContext carries the same document base", () => {
@@ -72,7 +88,11 @@ test("serializeWithContext carries the same document base", () => {
     withContext,
     dataset.serializeConfigured("jsonld", CONTEXT_OPTIONS, BASE),
   );
-  assert.ok(withContext.includes(BASE), `the base must survive: ${withContext}`);
+  assert.equal(
+    documentBaseOf(withContext),
+    BASE,
+    `the base must survive at @context.@base: ${withContext}`,
+  );
 });
 
 test("serializeConfigured rejects a base that is not an absolute IRI", () => {

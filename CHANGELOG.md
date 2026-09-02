@@ -96,9 +96,12 @@ called out below with what a consumer must do.
   retrieval IRI, else the §5.1.4 failure. The stable codes are `iri-relative-no-base` (fixable by
   supplying a base), `iri-not-absolute-by-grammar` (N-Triples, N-Quads, TriX and HexTuples admit no
   relative reference at all, so a base cannot help) and `iri-non-absolute-base` (the supplied base
-  has no scheme). Only `purrdf-cli` has a retrieval IRI — it derives each filesystem input's
-  RFC 8089 `file://` IRI, so a file input needs no flag; the library, wasm, C ABI, Python and CLI
-  stdin are handed bytes, have no retrieval IRI, and hard-fail as §5.1.4 specifies. Callers on
+  has no scheme). Three surfaces have a retrieval IRI, all of them ones that opened the file
+  themselves: `purrdf-slice` derives it (the workspace's single RFC 8089 `file://` derivation),
+  and `purrdf-shapes`' shape-union loader and `purrdf-cli` consume that derivation rather than
+  repeating it — so a file input needs no flag on any of the three. Every surface handed BYTES —
+  the `purrdf-rdf`/`purrdf-iri` library APIs, wasm, the C ABI, Python and CLI stdin — has no
+  retrieval IRI and hard-fails as §5.1.4 specifies. Callers on
   those surfaces must give the document a base directive or pass one to the API. On the way out,
   a syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) now emits it and
   relativizes against a supplied base; one that cannot (N-Triples, N-Quads, TriX, HexTuples) keeps
@@ -155,6 +158,21 @@ called out below with what a consumer must do.
   honoured, so `--base X --to ntriples` continues to resolve the input. The same refusal covers a
   pack `--from`/`--to`, which carries no document base at all. Scripts passing `--base`
   unconditionally across format pairs must drop it on the pairs that cannot use it.
+- **BREAKING** **rdf:** `GtsFoldView::new` and `GtsFoldView::with_config` now return
+  `Result<Self, RdfDiagnostic>` instead of `Self`. They refuse a graph whose term table lets a
+  term resolve through itself, with the code `gts-self-reaching-term`. The view's accessors —
+  `nq_token`, `public_value` and everything built on them — walk a quoted triple's resolved
+  components down to the leaves, so a self-reaching term recursed without bound and aborted the
+  process; the view now refuses to EXIST rather than hand back an object whose every renderer is
+  a process kill (the fold-time refusal GTS-SPEC §7.3 permits, applied once at construction
+  instead of as a guard inside every walk). A graph read off the wire cannot contain one — the
+  reader already refuses the row that would close the loop — so this reaches only callers who
+  assemble a term table themselves. Rust callers must handle or propagate the `Result`; `?` is
+  usually the whole change.
+- **BREAKING** **python:** `GtsFoldViewNative.from_bytes` and `GtsFoldViewNative.from_parts` now
+  raise `ValueError` carrying `gts-self-reaching-term`, for the reason above. `from_parts` is the
+  reachable one: it is handed a caller-assembled term table, which `from_bytes`' reader validates
+  on its own. Python callers constructing a fold view from parts must handle `ValueError`.
 - **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
   views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
   clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the

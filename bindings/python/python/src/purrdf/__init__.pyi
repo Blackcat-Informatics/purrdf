@@ -1026,6 +1026,13 @@ class GtsRelationalRows(TypedDict):
     blobs: list[_BlobExportRow]
 
 class GtsFoldViewNative:
+    # Both constructors raise ValueError carrying `gts-self-reaching-term` when the
+    # term table lets a term resolve through itself. The view's accessors walk a
+    # quoted triple's resolved components to the leaves, so such a term would recurse
+    # without bound and abort the process; the view refuses to EXIST rather than hand
+    # back an object whose every renderer is a process kill. `from_bytes` cannot
+    # normally hit it (the GTS reader refuses the row that closes the loop), but a
+    # term table assembled by the caller and handed to `from_parts` can.
     @staticmethod
     def from_bytes(data: bytes) -> GtsFoldViewNative: ...
     @staticmethod

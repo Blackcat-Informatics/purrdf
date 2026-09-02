@@ -494,3 +494,69 @@ fn a_document_base_iri_is_gated_when_the_configuration_document_sets_it() {
         }
     }
 }
+
+/// `package_profile` is the ONE excluded leaf that must still be gated on its own terms —
+/// and the registry-identifier form it is excluded FOR had no test at all.
+///
+/// The sweep above skips this leaf by name because Data Package v1 specifies `profile` as
+/// "a URL **or** a registry identifier", so gating it as an IRI would make PurRDF unable to
+/// emit the spec's own canonical value, `tabular-data-package`. That exclusion is a
+/// judgement about what is VALID, and until now nothing executed the valid case: a
+/// `grep -r tabular-data-package` over the tree returned nothing, so an IRI gate could have
+/// been (re-)applied to this field and every test would still have passed while the
+/// commonest real-world `datapackage.json` became unemittable.
+///
+/// So both sides run here. The registry identifier and the URL form are both accepted, and
+/// the identities the field genuinely refuses are still refused — the exclusion is "not an
+/// IRI", not "not checked".
+#[test]
+fn a_frictionless_package_profile_accepts_a_registry_identifier_and_a_url() {
+    let pristine: Value = serde_json::from_str(include_str!(
+        "fixtures/research-objects/carrier/frictionless-data-package-1.json"
+    ))
+    .expect("the fixture is JSON");
+
+    // VALID — the two forms Data Package v1 names, including the registry identifier the
+    // exclusion exists for.
+    for good in [
+        "tabular-data-package",
+        "data-package",
+        "fiscal-data-package",
+        "https://example.org/profiles/data-package-v1",
+    ] {
+        let mut document = pristine.clone();
+        document["config"]["package_profile"] = Value::String(good.to_owned());
+        assert!(
+            refusal(&document).is_none(),
+            "package_profile must accept the registry identifier {good:?}: it is a \
+             spec-valid Data Package v1 profile and refusing it would make a conformant \
+             datapackage.json unemittable"
+        );
+    }
+
+    // And the accepted value reaches the config verbatim, rather than being normalized
+    // into something else on the way through.
+    let mut document = pristine.clone();
+    document["config"]["package_profile"] = Value::String("tabular-data-package".to_owned());
+    let bytes = serde_json::to_vec(&document).expect("re-serialize");
+    let config = ProjectionConfig::from_json(&bytes).expect("the registry identifier parses");
+    let round_tripped = config.to_json().expect("re-serialize the parsed config");
+    let seen: Value = serde_json::from_slice(&round_tripped).expect("valid JSON");
+    assert_eq!(
+        seen["config"]["package_profile"],
+        Value::String("tabular-data-package".to_owned()),
+        "the profile identity is carried verbatim"
+    );
+
+    // INVALID — the field is excluded from the IRI sweep, NOT from validation.
+    for bad in ["", "has a space", "tabular\tdata\tpackage"] {
+        let mut document = pristine.clone();
+        document["config"]["package_profile"] = Value::String(bad.to_owned());
+        let error =
+            refusal(&document).unwrap_or_else(|| panic!("package_profile must refuse {bad:?}"));
+        assert!(
+            error.contains("profile"),
+            "the refusal must name the field: {error}"
+        );
+    }
+}

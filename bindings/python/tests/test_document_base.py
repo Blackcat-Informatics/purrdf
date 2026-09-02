@@ -448,3 +448,59 @@ def test_the_empty_iri_is_refused_before_it_can_reach_the_store() -> None:
     with pytest.raises(ValueError) as excinfo:
         purrdf.NamedNode("")
     assert "must not be empty" in str(excinfo.value)
+
+
+def test_dataset_add_refuses_a_relative_iri_like_store_add_does() -> None:
+    """`Dataset` is not a `Store`, and that was the leak.
+
+    `Store` interns into a term table, and the table is what enforces the
+    absoluteness invariant. `Dataset` is a plain quad list with set semantics and no
+    term table, so it inherited nothing: `Dataset().add(Quad(NamedNode("rel"), ...))`
+    was accepted, and `Dataset.canonicalize` would then hash it and hand back a
+    stable RDFC-1.0 label for a term whose identity is unknowable.
+
+    "Nothing invalid escapes, because a Dataset has no serializer" is not the
+    invariant the rest of the toolkit states. Unrepresentable from EVERY ingress is.
+    """
+    dataset = purrdf.Dataset()
+    with pytest.raises(ValueError) as excinfo:
+        dataset.add(_quad(purrdf.NamedNode("rel"), _abs("p"), _abs("o")))
+    assert NO_BASE_CODE in str(excinfo.value)
+    # The refused quad did not land, and the dataset is still usable.
+    assert len(dataset) == 0
+    dataset.add(_quad(_abs("s"), _abs("p"), _abs("o")))
+    assert len(dataset) == 1
+
+
+def test_dataset_checks_every_iri_position_and_the_constructor_too() -> None:
+    good = _quad(_abs("s"), _abs("p"), _abs("o"))
+    cases = {
+        "subject": _quad(purrdf.NamedNode("relSubject"), _abs("p"), _abs("o")),
+        "predicate": _quad(_abs("s"), purrdf.NamedNode("relPredicate"), _abs("o")),
+        "object": _quad(_abs("s"), _abs("p"), purrdf.NamedNode("relObject")),
+        "datatype": _quad(
+            _abs("s"),
+            _abs("p"),
+            purrdf.Literal("42", datatype=purrdf.NamedNode("relDatatype")),
+        ),
+    }
+    for position, quad in cases.items():
+        # The seeding constructor is an ingress too, so it gets the same answer.
+        with pytest.raises(ValueError) as excinfo:
+            purrdf.Dataset([good, quad])
+        assert NO_BASE_CODE in str(excinfo.value), position
+
+        dataset = purrdf.Dataset()
+        with pytest.raises(ValueError) as excinfo:
+            dataset.add(quad)
+        assert NO_BASE_CODE in str(excinfo.value), position
+        assert len(dataset) == 0
+
+    # The neighbouring VALID cases still pass. Only IRIs are IRIs: a blank label or a
+    # literal lexical form may be any string, including one shaped like a reference.
+    seeded = purrdf.Dataset([good])
+    assert len(seeded) == 1
+    seeded.add(_quad(purrdf.BlankNode("notAbsolute"), _abs("p"), purrdf.Literal("../x")))
+    assert len(seeded) == 2
+    seeded.canonicalize(purrdf.CanonicalizationAlgorithm.UNSTABLE)
+    assert len(seeded) == 2

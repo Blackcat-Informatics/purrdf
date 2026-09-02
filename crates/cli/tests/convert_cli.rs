@@ -1758,13 +1758,85 @@ fn the_same_document_on_stdin_is_refused_and_names_the_remedy() {
     );
     let err = stderr(&out);
     assert!(err.contains("iri-relative-no-base"), "{err}");
+    // NOT `contains("pass a base IRI") || contains("--base")`. That disjunction is how
+    // the claim drifted: the library half alone satisfied it, so the message could stop
+    // at "pass a base IRI to the API" — which names no action an operator running a
+    // COMMAND can take — while this test and `source::effective_base`'s doc both went on
+    // saying the message named `--base`. The CLI is the layer that knows the flag exists,
+    // so require it by name.
     assert!(
-        err.contains("pass a base IRI") || err.contains("--base"),
-        "the refusal must point at the remedy: {err}"
+        err.contains("--base"),
+        "the refusal must name the CLI's remedy by flag: {err}"
     );
     assert!(
         convert_stdout(&out).trim().is_empty(),
         "nothing partial is emitted"
+    );
+}
+
+/// The neighbouring VALID cases for the refusal above: the same relative reference must
+/// still parse whenever a base genuinely IS in scope.
+///
+/// The hint is appended by `source::with_cli_base_hint`, which is a refusal-shaping path,
+/// so both sides get executed — a hint that fired where a base was available would mean
+/// the CLI had stopped applying one.
+#[test]
+fn a_base_in_scope_still_resolves_the_same_reference() {
+    // 1. Explicitly supplied on the command line.
+    let mut child = purrdf()
+        .args([
+            "convert",
+            "--to",
+            "ntriples",
+            "--from",
+            "turtle",
+            "--base",
+            "http://example.org/dir/",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn purrdf");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(b"<rel> a <http://example.org/test> .\n")
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait for purrdf");
+    assert!(
+        out.status.success(),
+        "--base must resolve it: {}",
+        stderr(&out)
+    );
+    assert!(
+        convert_stdout(&out).contains("<http://example.org/dir/rel>"),
+        "resolved against --base: {}",
+        convert_stdout(&out)
+    );
+
+    // 2. Derived from the input file's own retrieval IRI, with no flag at all.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "rel.ttl",
+        "<rel> a <http://example.org/test> .\n",
+    );
+    let out = purrdf()
+        .args(["convert", &input, "--to", "ntriples", "--from", "turtle"])
+        .output()
+        .expect("run purrdf");
+    assert!(
+        out.status.success(),
+        "a file input carries its own base: {}",
+        stderr(&out)
+    );
+    assert!(
+        convert_stdout(&out).contains("rel>"),
+        "resolved against the retrieval IRI: {}",
+        convert_stdout(&out)
     );
 }
 

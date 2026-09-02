@@ -687,15 +687,29 @@ fn split_lang_direction(
 /// UCHAR-decoding.
 ///
 /// The N-Triples/N-Quads IRIREF grammar is `'<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'`:
-/// a character is forbidden as a RAW byte but PERMITTED when introduced by a `UCHAR`
-/// escape. The lexer ([`tokenize`]) already enforces the raw-byte restriction — its
-/// IRIREF scan STOPS at a raw whitespace / `< " { } | ^ \`` — and decodes every
-/// `\u`/`\U` escape, so by the time the value reaches here any otherwise-forbidden
-/// character can ONLY have come from a (legal) UCHAR. Validation therefore runs
-/// against the RFC-3987 IRI grammar, which keeps a decoded non-ASCII character legal —
-/// rejecting the decoded special characters would wrongly fail legal UCHAR IRIs such as
-/// `<urn:ex: >` (W3C test060), whose canonical form keeps the decoded character.
-/// (W3C `test060`), whose canonical form keeps the decoded character.
+/// a character is forbidden as a RAW byte but PERMITTED by the production when spelled
+/// as a `UCHAR` escape. The lexer ([`tokenize`]) enforces the raw-byte half — its IRIREF
+/// scan STOPS at a raw whitespace / `< " { } | ^ \`` — and decodes every `\u`/`\U`
+/// escape, so by the time a value reaches here every otherwise-forbidden character it
+/// carries came from a UCHAR.
+///
+/// A UCHAR lifts the LEXER's restriction, not the IRI's. RDF Concepts §3.2 requires the
+/// term to be an RFC-3987 IRI, and an escape is a SPELLING of a code point rather than a
+/// licence for one, so validation runs the RFC-3987 grammar over the DECODED value. That
+/// splits the escapes in two, and the split is the whole point of doing it here:
+///
+/// * A `ucschar` code point is legal in an IRI and must SURVIVE, however it was spelled.
+///   W3C RDFC-1.0 `test060` (`tests/fixtures/rdfc/test060-in.nq`) carries `<urn:ex:\u00a0>`
+///   (NO-BREAK SPACE) and `<urn:ex:\u221e>` (INFINITY), and its canonical form keeps the
+///   decoded character — so this check must NOT reject them. Note `\u00a0` is NOT U+0020;
+///   reading it as one is what makes this pair look like a contradiction.
+/// * A code point OUTSIDE that grammar stays illegal however it was spelled. `\u0020`
+///   (SPACE) and `\u003c` (`<`) decode to characters the IRI grammar does not admit, and
+///   are refused with `iri-disallowed-char` exactly as their raw forms are — the prior
+///   scheme-only check let both through and interned an un-serializable term.
+///
+/// Both directions are pinned by `uchar_escapes_are_validated_against_the_decoded_iri`
+/// in `crates/rdf/tests/relative_iri_base.rs`; neither may drift without reddening it.
 ///
 /// This routes through [`BaseScope::resolve_absolute_only`], so a relative reference
 /// reports `iri-not-absolute-by-grammar` — the code that says "supplying a base will

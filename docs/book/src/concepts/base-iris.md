@@ -39,29 +39,35 @@ real, specified outcome, not a gap.
 
 ### Which surfaces have a retrieval IRI
 
-Step 3 needs a retrieval IRI, and only one surface has one.
+Step 3 needs a retrieval IRI, and only a surface that opened the file itself has
+one. **Three** do. The derivation lives in exactly one of them, and the other two
+consume it rather than re-deriving one.
 
 | Surface | Retrieval IRI? | Consequence |
 | --- | --- | --- |
-| `purrdf` CLI, per input **file** | yes — the file's RFC 8089 `file://` IRI | a relative IRI resolves with no flags |
+| `purrdf-slice` (slice tree, catalog, dependency fixes) | yes — **derives** it; the workspace's one implementation of §5.1.3 | a relative IRI in an on-disk slice document resolves with no flags |
+| `purrdf-shapes` shape-union loader | yes — **consumes** `purrdf-slice`'s | each shape file parses under its own `file://` IRI |
+| `purrdf` CLI, per input **file** | yes — **consumes** `purrdf-slice`'s | a relative IRI resolves with no flags |
 | `purrdf` CLI, stdin (`-`) | no | a relative IRI is `iri-relative-no-base`; pass `--base` |
-| Rust library (`parse_dataset`, …) | no | pass a base, or the document must carry one |
+| Rust byte APIs (`parse_dataset`, `purrdf-rdf`, `purrdf-iri`) | no | pass a base, or the document must carry one |
 | WebAssembly | no | as above |
 | C ABI | no | as above |
 | Python | no | as above |
 
-Every surface except the CLI's file inputs is handed **bytes**. Bytes have no
-retrieval IRI, so §5.1.3 is vacuous there and §5.1.4 — the hard failure — is
-the specified answer. This is deliberate rather than an omission: a base
-invented from the local filesystem would differ per machine and leak local paths
-into published RDF, which would break the byte determinism the whole toolkit
-rests on.
+Every surface that is handed **bytes** rather than a path is in the second group.
+Bytes have no retrieval IRI, so §5.1.3 is vacuous there and §5.1.4 — the hard
+failure — is the specified answer. This is deliberate rather than an omission: a
+base invented from the local filesystem would differ per machine and leak local
+paths into published RDF, which would break the byte determinism the whole toolkit
+rests on. It is also why `purrdf-iri` and `purrdf-rdf` never touch the filesystem
+at all — that is what keeps them wasm32-clean.
 
-The CLI derives the retrieval IRI from the **canonicalized** path, translating
-Windows paths (including UNC hosts and the extended-length `\\?\` prefix) into
-RFC 8089 form and percent-encoding each component. It applies it only when
-nothing of higher precedence was given, and a path with no usable `file://` IRI
-is a hard error naming `--base`, never a silent fall back to "no base".
+`purrdf-slice` derives the retrieval IRI from the **canonicalized** path,
+translating Windows paths (including UNC hosts and the extended-length `\\?\`
+prefix) into RFC 8089 form and percent-encoding each component. Its consumers
+apply it only when nothing of higher precedence was given, and a path with no
+usable `file://` IRI is a hard error naming `--base`, never a silent fall back to
+"no base".
 
 ## Two grammar families
 
@@ -143,8 +149,29 @@ Python and wasm report the same code for the same condition.
 | Code | Condition | What to do |
 | --- | --- | --- |
 | `iri-relative-no-base` | a relative reference in a syntax that admits one, with no base in scope | add `@base`/`BASE`/`xml:base`/`@context.@base` to the document, or pass a base to the API (`--base` on the CLI) |
-| `iri-not-absolute-by-grammar` | a relative reference in N-Triples, N-Quads, TriX or HexTuples | write the IRI in absolute form; **a base cannot help** — this syntax admits no relative reference |
+| `iri-not-absolute-by-grammar` | a relative reference — including the empty reference `<>` — in N-Triples, N-Quads, TriX or HexTuples; **or** an RDF/XML element or attribute QName whose `xmlns:` namespace is itself relative | write the IRI in absolute form; **a base cannot help** — this position admits no relative reference |
 | `iri-non-absolute-base` | the base *itself* has no scheme (RFC 3986 §5.1 requires an absolute base) | supply a base with a scheme, e.g. `http://example.org/dir/`. A filesystem path is a relative reference, not a base IRI — the CLI rejects one at the argument boundary and suggests the `file://` IRI you meant |
+
+RDF/XML appears in both grammar families for a reason, and the row above is the
+narrow half. Its `rdf:about` / `rdf:resource` / `rdf:ID` values *are* references
+and do resolve against `xml:base`, which is why the table further up lists it as
+admitting relative references. But an element or attribute *name* is composed from
+an `xmlns:` declaration plus a local name; it is not a reference, so nothing
+resolves it, and a relative `xmlns:ex="rel/"` composes to a relative IRI no base
+may rescue:
+
+```console
+$ purrdf convert data.rdf --from rdfxml --to ntriples
+purrdf: error iri-not-absolute-by-grammar: invalid IRI from an XML qualified name:
+relative IRI reference "rel/p" is not permitted by this syntax (the caller-supplied
+base, <file:///tmp/data.rdf>, is in scope but is never applied here); write the IRI
+in absolute form; this syntax admits no relative IRI reference, so supplying a base
+will not help
+```
+
+Note that the message names the base that *is* in scope and says it is deliberately
+not applied there, so a caller who passed one is not sent hunting for a dropped
+parameter.
 
 The message rendered for each already carries its remedy, so a consumer that
 prints the error alone still tells its user what to do.
@@ -164,7 +191,10 @@ against it:
 
 A format in the last row reaches its writer with no base and emits absolute
 IRIs. That is not a silent drop: the format simply has no base surface, so
-there is nothing to write, and the output stays valid for its grammar.
+there is nothing to write, and the output stays valid for its grammar. On the
+CLI there is one more step — if a `--base` was given and *neither* leg of the run
+can spend it, the command is refused outright rather than accepting an inert flag.
+See below.
 
 ## `--base` on the command line
 
@@ -172,10 +202,36 @@ there is nothing to write, and the output stays valid for its grammar.
 `--base <IRI>`, and it acts on **both legs**:
 
 * **Parsing** — it is the caller-supplied base (§5.1.2), so it outranks the
-  input's retrieval IRI but not an in-document directive.
+  input's retrieval IRI but not an in-document directive. A parse leg can spend
+  the base only if the source syntax admits a relative reference.
 * **Serializing** — if the target syntax can write a base, it is emitted as the
-  output document's base and the IRIs are relativized against it. If the target
-  cannot, absolute IRIs are written.
+  output document's base and the IRIs are relativized against it. A serialize leg
+  can spend the base only if the target syntax emits a base directive.
+* **Neither leg can spend it — a usage error, exit 2.** A base spent by *any one*
+  leg is honoured, so `--from turtle --to ntriples --base …` is fine (the parse
+  leg spends it) and so is `--from ntriples --to turtle --base …` (the serialize
+  leg does). But `--from ntriples --to ntriples --base …` has nowhere to put it.
+  Rather than exit 0 having silently ignored the flag, the CLI names both legs and
+  refuses:
+
+  ```console
+  $ purrdf convert data.nt --from ntriples --to ntriples --base http://example.org/dir/
+  purrdf: --base has no effect on this run: on the source `data.nt`, ntriples's
+  grammar admits no relative IRI reference, so nothing in the document resolves
+  against a base; and on the --to target, ntriples can express no base directive,
+  so nothing is written under one or relativized against it. Drop --base, or name
+  a syntax that carries one (turtle, trig, rdfxml, jsonld, yamlld)
+  $ echo $?
+  2
+  ```
+
+  The verdict is read off the format registry's `admits_relative_iri` and
+  `emits_base` columns, so a newly registered syntax is classified by its own row
+  rather than by a hand list. It applies to `convert`, `validate`, `reason`,
+  `entails`, `consistency` and `project`. `query`, `update`, `shex`'s shape map and
+  `describe --iri` are deliberately exempt: each has a command-line-text IRI
+  surface with no document of its own, so `--base` is never inert there whatever
+  the format rows say.
 
 ```bash
 # A file input needs no flag: its own file:// retrieval IRI is the base.

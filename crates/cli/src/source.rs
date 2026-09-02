@@ -118,8 +118,8 @@ use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, PackView, RdfDataset, RdfLookaside, dataset_from_view,
-    verify_pack,
+    DatasetView, LossEntry, LossLedger, PackView, RdfDataset, RdfDiagnostic, RdfLookaside,
+    dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
     NativeRdfFormat, SerializeOutcome, SourceFormat, TransportEncoding, decode_transport,
@@ -274,10 +274,12 @@ pub(crate) use purrdf::slice::file_iri_for_absolute_path;
 /// input's own retrieval IRI.
 ///
 /// `-` (stdin) gets NO base and keeps the hard error, because a piped document has no
-/// retrieval IRI to derive one from — there is no honest answer, so the parse refuses
-/// and the message names `--base`. A syntax whose grammar admits no relative reference
-/// gets no derived base either: it could not use one, and deriving it would only pay a
-/// `canonicalize` to hand over a value that is never read.
+/// retrieval IRI to derive one from — there is no honest answer, so the parse refuses.
+/// The refusal reaches the operator through [`with_cli_base_hint`], which is where the
+/// message gets to name `--base`; this function only decides that there is no base, and
+/// deliberately does not fabricate one. A syntax whose grammar admits no relative
+/// reference gets no derived base either: it could not use one, and deriving it would
+/// only pay a `canonicalize` to hand over a value that is never read.
 pub(crate) fn effective_base(
     path: &str,
     format: NativeRdfFormat,
@@ -321,7 +323,8 @@ fn load_native(
     let base = base.as_deref();
     if !format.is_line_oriented() {
         let bytes = read_bytes_with_transport(path, policy)?;
-        return Ok(parse_dataset(&bytes, format.media_type(), base)?);
+        return parse_dataset(&bytes, format.media_type(), base)
+            .map_err(|error| with_cli_base_hint(&error, base));
     }
 
     let stream = open_raw_stream(path)?;
@@ -339,11 +342,30 @@ fn load_native(
     };
     let decoded = transport_reader(stream, encoding)
         .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
-    Ok(parse_dataset_from_reader(
-        decoded,
-        format.media_type(),
-        base,
-    )?)
+    parse_dataset_from_reader(decoded, format.media_type(), base)
+        .map_err(|error| with_cli_base_hint(&error, base))
+}
+
+/// Close the sentence the library error cannot finish: name `--base`.
+///
+/// `purrdf-iri`'s `iri-relative-no-base` message ends at *"or pass a base IRI to the
+/// API"*, and that is the furthest a library can honestly go — it does not know it is
+/// being driven by a CLI, and it must read the same on the Rust, wasm, C and Python
+/// surfaces. `--base` IS that API here, and every subcommand that reads an RDF document
+/// carries the flag, so this layer is the one that can say so. Without this the operator
+/// was told to "pass a base IRI to the API" by a program they were invoking as a command,
+/// which names no action they can take.
+///
+/// The hint is appended ONLY for the base-less code, and only when no base was in force.
+/// A relative reference that failed *despite* a base is a different fact — the base was
+/// applied and did not cover the reference — and telling that user to pass `--base` would
+/// send them to re-supply what they already gave. Every other diagnostic passes through
+/// untouched, so an unrelated parse error never grows a suggestion that cannot help it.
+fn with_cli_base_hint(error: &RdfDiagnostic, base: Option<&str>) -> CliError {
+    if error.code == "iri-relative-no-base" && base.is_none() {
+        return CliError::Runtime(format!("{error}; on this command that is `--base <IRI>`"));
+    }
+    CliError::Runtime(error.to_string())
 }
 
 /// Put a stream into the same shape [`sniff_transport`] returns without looking at a

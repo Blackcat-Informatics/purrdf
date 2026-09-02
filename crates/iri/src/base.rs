@@ -25,7 +25,8 @@
 //! W3C JSON-LD REC vectors, which require `<http://a/bb/ccc/../d;p?q>` to survive
 //! intact. Resolving it under a base and not without one would mean identical
 //! document bytes denoting two different graphs with two different RDFC-1.0 digests,
-//! so the rule lives in ONE place ([`Reference`]) that all three entry points share.
+//! so the rule lives in ONE place (this module's private `Reference` classifier) that
+//! all three entry points share.
 //!
 //! # Where the base comes from (RFC-3986 §5.1)
 //!
@@ -141,8 +142,10 @@ impl BaseIri {
     ///
     /// Whether a reference is resolved *at all* is a separate question, and not this
     /// method's to answer: the RDF grammars resolve **relative** references only, so
-    /// [`BaseScope`] decides it once, for every grammar family, in [`Reference`]. An
-    /// absolute reference never reaches here from that layer.
+    /// [`BaseScope::resolve`] and [`BaseScope::resolve_absolute_only`] decide it once,
+    /// for every grammar family, through the private `Reference` classifier this module
+    /// keeps as that rule's single owner. An absolute reference never reaches here from
+    /// that layer.
     pub fn resolve(&self, reference: &str) -> Result<Iri> {
         self.0.resolve(reference)
     }

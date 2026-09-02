@@ -790,6 +790,39 @@ impl QuadValues {
             g: Some(g),
         }
     }
+
+    /// Enforce the IR-boundary absoluteness invariant over this quad WITHOUT interning
+    /// it: every IRI in all four positions, each literal's datatype, and — recursively —
+    /// the components of any triple term.
+    ///
+    /// # Why this is public
+    ///
+    /// [`DatasetMut::insert`] already applies it, so a caller building a dataset needs
+    /// nothing here. This exists for the container that holds quads but is NOT a store —
+    /// the Python `Dataset`, which is a plain quad list with set semantics and no term
+    /// table to intern into. Without a seam it would have had to re-spell "parse, then
+    /// test for a scheme", and a second spelling of the rule is exactly how the codecs
+    /// and the IR boundary would drift apart. It delegates to the same
+    /// [`super::absolute::check_absolute`] every other ingress reaches, so there is still
+    /// exactly one owner of the rule.
+    ///
+    /// Blank-node labels and literal lexical forms are arbitrary strings and are
+    /// deliberately untouched — only IRIs are IRIs.
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] naming the first non-absolute IRI found, carrying the workspace's
+    /// shared [`IriError::diagnostic_code`] spelling (`iri-relative-no-base` for a
+    /// scheme-less reference).
+    pub fn check_absolute_iris(&self) -> Result<(), IriError> {
+        check_value_absolute(&self.s)?;
+        check_value_absolute(&self.p)?;
+        check_value_absolute(&self.o)?;
+        match &self.g {
+            Some(g) => check_value_absolute(g),
+            None => Ok(()),
+        }
+    }
 }
 
 impl DatasetMut for MutableDataset {

@@ -850,6 +850,22 @@ impl PyStore {
 
 /// An in-memory quad set supporting RDFC-1.0 canonicalization. Mirrors
 /// the oxigraph Python `Dataset`.
+///
+/// # Absoluteness holds here too
+///
+/// A `Dataset` is a plain quad list rather than a store, so it has no term table whose
+/// interner would enforce the IR-boundary absoluteness invariant for it. It enforces the
+/// invariant itself, at both ingresses ([`add`](PyDataset::add) and the constructor),
+/// through [`QuadValues::check_absolute_iris`] — the SAME
+/// `purrdf_core::ir::absolute::check_absolute` every other ingress reaches, not a second
+/// spelling of the rule.
+///
+/// That is deliberate rather than incidental. `NamedNode("foo")` is constructible — the
+/// term constructors are string carriers and do not resolve anything — so without this
+/// check a relative IRI could reach `canonicalize`, which would hash it and hand back a
+/// stable RDFC-1.0 label for a term whose identity is unknowable. "Nothing invalid
+/// escapes because there is no serializer here" is not the invariant; being
+/// unrepresentable from every ingress is.
 #[pyclass(name = "Dataset")]
 #[derive(Debug)]
 pub struct PyDataset {
@@ -860,6 +876,10 @@ pub struct PyDataset {
 #[pymethods]
 impl PyDataset {
     /// Build a dataset, optionally seeding it from an iterable of `Quad`.
+    ///
+    /// Raises `ValueError` on the first seed quad carrying a relative IRI, for the same
+    /// reason `add` does. The dataset is not partially built: the constructor fails and
+    /// no object is returned.
     #[new]
     #[pyo3(signature = (quads=None))]
     fn new(quads: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
@@ -870,15 +890,23 @@ impl PyDataset {
                 let quad = item
                     .cast::<PyQuad>()
                     .map_err(|_| PyTypeError::new_err("Dataset accepts an iterable of Quad"))?;
-                out.insert(quad.get().inner.clone());
+                out.checked_insert(quad.get().inner.clone())?;
             }
         }
         Ok(out)
     }
 
     /// Add a single quad.
-    fn add(&mut self, quad: &PyQuad) {
-        self.insert(quad.inner.clone());
+    ///
+    /// Raises `ValueError` if the quad carries a relative IRI in any position — its own
+    /// terms, a literal's datatype, or one nested in a quoted triple — with the shared
+    /// `iri-relative-no-base` diagnostic code leading the message, exactly as `Store.add`
+    /// does. A `Dataset` is handed terms, never a document, so there is no base in scope
+    /// to resolve a relative reference against and PurRDF invents none.
+    ///
+    /// The refused quad does not land: the dataset is unchanged and still usable.
+    fn add(&mut self, quad: &PyQuad) -> PyResult<()> {
+        self.checked_insert(quad.inner.clone())
     }
 
     /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
@@ -899,6 +927,18 @@ impl PyDataset {
 }
 
 impl PyDataset {
+    /// Enforce the absoluteness invariant, then insert with set semantics.
+    ///
+    /// The check runs BEFORE the push, so a refusal leaves the dataset byte-identical to
+    /// what it was — `Store.add`'s contract, kept here.
+    fn checked_insert(&mut self, quad: RdfQuad) -> PyResult<()> {
+        rdf_quad_to_values(&quad)
+            .check_absolute_iris()
+            .map_err(|e| iri_value_error(&e))?;
+        self.insert(quad);
+        Ok(())
+    }
+
     /// Insert a quad with set semantics (no duplicate content).
     fn insert(&mut self, quad: RdfQuad) {
         if !self.quads.contains(&quad) {
