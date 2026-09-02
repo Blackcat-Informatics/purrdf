@@ -128,9 +128,12 @@ fn admits_empty_path(path: &Path) -> bool {
 }
 
 /// Resolve a predicate IRI to its interned id, if present in `ds`.
+///
+/// Direct IRI lookup — exactly `resolve_id`'s `Term::NamedNode` arm — without
+/// cloning the predicate into a temporary owned `Term` per path step.
 #[inline]
 fn resolve_pred(ds: &RdfDataset, predicate: &NamedNode) -> Option<TermId> {
-    resolve_id(ds, &Term::NamedNode(predicate.clone()))
+    ds.term_id_by_iri(predicate.as_str())
 }
 
 /// Convert a [`Path`] to its term representation for use in `result_path`.
