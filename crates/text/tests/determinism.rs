@@ -355,3 +355,143 @@ fn blank_node_labels_are_the_documented_limit() {
         "the label itself is what reaches the answer: {first_json} / {second_json}"
     );
 }
+
+// ── the no-float invariant, at the source ────────────────────────────────────
+
+/// Every line of `text` that mentions a float width, as `(line number, the
+/// line)` — once per width, since a gate cares that a line offends, not how
+/// many times.
+///
+/// A **token** scan, not a substring one, and the two boundaries are deliberately
+/// asymmetric:
+///
+/// * the character **after** must not continue an identifier, so `f64x` and
+///   `f32_of` are not float mentions;
+/// * the character **before** must not be a letter or `_`, so `buf64` and
+///   `my_f64_helper` are not either — but a **digit** may precede, because that
+///   is exactly how a suffixed float literal is spelled (`1.0f64`, `3f32`), and
+///   those are the mentions this gate most needs to see.
+///
+/// Erring toward admission on the identifier cases is the safe direction: the
+/// crate-root `deny(clippy::float_arithmetic)` still refuses any arithmetic
+/// performed on whatever such a name holds. This scan exists for what that lint
+/// cannot see.
+fn float_mentions(text: &str) -> Vec<(usize, String)> {
+    /// Is `c` a character that would continue an identifier to the right?
+    fn continues_right(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
+    /// Is `c` a character that would continue an identifier to the left,
+    /// **excluding** digits — a digit before `f64` is a literal suffix.
+    fn continues_left(c: char) -> bool {
+        c.is_ascii_alphabetic() || c == '_'
+    }
+
+    let mut found = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        for width in ["f32", "f64"] {
+            let mut from = 0;
+            while let Some(offset) = line.get(from..).and_then(|rest| rest.find(width)) {
+                let at = from + offset;
+                let before = line[..at].chars().next_back();
+                let after = line[at + width.len()..].chars().next();
+                if !before.is_some_and(continues_left) && !after.is_some_and(continues_right) {
+                    found.push((number + 1, line.trim().to_owned()));
+                    break;
+                }
+                from = at + width.len();
+            }
+        }
+    }
+    found
+}
+
+/// The scan discriminates rather than merely refusing.
+///
+/// The repository's own rule about refusals: run the case that must be refused
+/// **and** the neighbouring one that must be admitted. A gate that flagged every
+/// line containing the letters `f64` would pass a test that only checked the
+/// first half, and would then reject the crate's own prose the moment someone
+/// wrote about a float in a doc comment.
+#[test]
+fn the_float_scan_refuses_floats_and_admits_their_neighbours() {
+    // Refused: a type annotation, a cast, a suffixed literal, a return type.
+    for refused in [
+        "let x: f64 = 1.0;",
+        "let y = count as f64;",
+        "let z = 1.0f64;",
+        "let w = 3f32;",
+        "fn average(&self) -> f64 {",
+        "    idf: f32,",
+    ] {
+        assert_eq!(
+            float_mentions(refused).len(),
+            1,
+            "must be seen as a float mention: {refused}"
+        );
+    }
+
+    // Admitted: the same letters inside an identifier, and in prose. These are
+    // the neighbours an over-broad substring scan would wrongly refuse.
+    for admitted in [
+        "let buf64 = [0u8; 64];",
+        "let my_f64_helper = 1;",
+        "/// No floating-point value enters this crate.",
+        "//! `Fixed::ln` replaces a libm ln, which may differ by an ulp.",
+        "let f64x = 1;",
+        "struct Off32Bit;",
+    ] {
+        assert_eq!(
+            float_mentions(admitted),
+            Vec::new(),
+            "must NOT be seen as a float mention: {admitted}"
+        );
+    }
+}
+
+/// **No floating point reaches this crate's sources.**
+///
+/// `#![deny(clippy::float_arithmetic)]` at the crate root refuses `+ - * /` on a
+/// float, and that is the enforcement the crate documentation cites. It is not
+/// the whole of the claim: the lint says nothing about `as f64`, about a float
+/// **comparison**, or about a float **method** — and `f64::ln` is a method. A
+/// single `x.ln()` on an inferred `f64` would restore exactly the native/wasm
+/// answer divergence [`purrdf_text::Fixed::ln`] exists to make impossible, and
+/// would do it without tripping a single lint.
+///
+/// So the second half of the enforcement is this scan over the crate's own
+/// sources — including the `#[cfg(test)]` modules inside them, because a float
+/// reached for in a test is a float that compiled.
+#[test]
+fn no_source_file_mentions_a_float_width() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0_usize;
+    let mut offences = Vec::new();
+
+    let entries = std::fs::read_dir(&src).expect("the crate's src directory is readable");
+    for entry in entries {
+        let path = entry.expect("a readable directory entry").path();
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a readable Rust source file");
+        scanned += 1;
+        for (line, content) in float_mentions(&text) {
+            offences.push(format!("{}:{line}: {content}", path.display()));
+        }
+    }
+
+    // The scan is only a gate if it actually read the sources; a rename that
+    // emptied the directory would otherwise pass silently.
+    assert_eq!(
+        scanned, 8,
+        "expected to scan every module of the crate, scanned {scanned}"
+    );
+    assert_eq!(
+        offences,
+        Vec::<String>::new(),
+        "this crate is exact fixed point on every target; a float width in its \
+         sources breaks native/wasm answer identity"
+    );
+}
