@@ -87,6 +87,28 @@ called out below with what a consumer must do.
   registered aggregate's resolution depend on the number of focus nodes). Callers constructing
   `Shapes` via struct literal must now supply `aggregates`, or use `Shapes::default()` / the
   parser's constructor, both of which populate it with an empty registry.
+- **BREAKING** **cli,python,purrdf:** A dataset-derived property function combined with an
+  entailment regime returned a SHORT answer, reported complete, at a success exit and with no
+  diagnostic. The registry is built by the caller, before the call, and therefore before the
+  closure exists — so a `--path-relation` walk (or a `path_relations` / `relations_from_graph`
+  registration) read the SOURCE data while every other pattern in the same query read the
+  closure. Over `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .` under
+  `rdfs`, `SELECT ?end WHERE { ex:a ex:p+ ?end }` answered `ex:b, ex:c` and the equivalent walk
+  answered `ex:b` alone. Both entry points now materialize the closure FIRST and register the
+  relations against it, so the two halves of one query read one dataset: `query_with_entailment`
+  and `query_with_entailment_governed` take a new `relations: &ClosureRelations<'_>` argument
+  (after `options`, before `governors`). Rust callers whose relations are dataset-independent —
+  an in-memory table, an empty registry — pass `ClosureRelations::NONE` and keep their present
+  behaviour byte for byte; a caller with a dataset-derived relation passes
+  `ClosureRelations::rebuilt_by(&f)`, where `f` is handed the materialized closure and returns
+  the registry to answer with. The CLI and Python surfaces are unchanged in shape and now supply
+  the rebuilder themselves; the C ABI and WebAssembly surfaces register no relation and pass
+  `NONE`. One pairing is refused rather than answered: a rebuilder combined with an OWL
+  Direct-Semantics run whose restricted chase MINTED existential witnesses, because a walk over
+  that closure could return a minted blank node as an observable binding and the regime's witness
+  filtration cannot reach a property function's output. It carries the stable code
+  `reasoning-closure-relation-witness` (exit 2 from the CLI, `ValueError` from Python) and names
+  the regimes that accept the pairing; an `owl-direct` run that mints no witness is not refused.
 - **BREAKING** **iri,rdf,cli:** A relative IRI reference with no base IRI in scope is now a hard
   error instead of being interned verbatim. Documents that previously "worked" this way were
   emitting N-Triples no conformant parser accepts, so the failure surfaces an existing defect
@@ -352,6 +374,35 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **sparql-eval:** Add path-WITNESS property functions, which answer the derivation question the
+  core grammar's property paths cannot: `?s ex:p+ ?o` reports that some route exists and binds only
+  the endpoint pair, while a call to `?start <caller-iri> ( ?end ?pathId ?len ?step ?node ?edge )`
+  binds the route itself — one row per hop, with `?edge` the traversed STATEMENT as a first-class
+  RDF 1.2 term that joins straight back into the dataset by an ordinary basic graph pattern.
+  `GROUP BY ?pathId` with `ORDER BY ?step` reassembles a whole walk inside the query language, so a
+  caller can weight, filter, or re-join a route without host code and without a list term. Two
+  relations, not one with a mode flag, because the planner reads cardinality off the registration:
+  `PathWitnessRelation` enumerates every simple-prefix walk (exponential in the worst case) and
+  `ShortestPathWitnessRelation` yields one shortest witness per reachable pair (polynomial).
+  Enumeration terminates structurally on cyclic input, and its endpoint projection equals `p+`.
+- **cli:** Add `purrdf query --path-relation` and `purrdf update --path-relation`, the binary's
+  first property-function registration surface — before it, `QueryOptions::property_functions`
+  stayed empty on every call. Repeatable; the value is semicolon-separated `key=value` pairs
+  (`iri`, repeatable `forward`/`inverse`, `min-hops`, `max-hops`, `max-paths-per-seed`,
+  `max-expansions`, `mode=walk|shortest`). Every key is mandatory and none has a default: PurRDF
+  mints no vocabulary IRIs, so the relation IRI is caller-supplied with no default namespace, and
+  a traversal envelope the binary invented would be a limit the operator never read. Each
+  malformed spelling names the offending token. The flag reaches the ungoverned, governed,
+  `--explain`, and `--entailment` lanes of `query` and the `WHERE` clause of `update`; the
+  `--explain` receipt's `relations` block now names what was registered.
+- **python:** Add the `path_relations` keyword beside `relations` / `relations_from_graph` on
+  every `Store` and `MutableDataset` query and update entry, registering a path-witness relation
+  over the store's own edges as `{iri: (steps, min_hops, max_hops, max_paths_per_seed,
+  max_expansions_per_invocation, mode)}`. It crosses the boundary as pure data — a specification
+  of which directed predicates a hop may follow, never a Python callable — so the evaluation still
+  runs with the GIL released. Every envelope field is mandatory; an unknown direction or mode
+  string, an empty or duplicated step alternation, a non-IRI predicate, and an unbuildable
+  envelope each raise `ValueError` carrying the engine's own diagnostic.
 - **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
   timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
   arithmetic with month-end clamping, instant subtraction, and duration add/subtract/

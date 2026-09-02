@@ -7,8 +7,8 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{
-    GovernedEntailment, QueryEntailmentPlan, SparqlEngine, SparqlRequest, SparqlResult,
-    query_with_entailment_governed,
+    ClosureRelations, GovernedEntailment, QueryEntailmentPlan, SparqlEngine, SparqlRequest,
+    SparqlResult, query_with_entailment_governed,
 };
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
@@ -710,6 +710,9 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                     aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                     ..QueryOptions::EMPTY
                 },
+                // This surface registers no relation at all, so there is none to re-derive
+                // over the closure — `NONE` is the accurate claim here, not a default.
+                &ClosureRelations::NONE,
                 &governors,
             )
             .map_err(|error| match error {
