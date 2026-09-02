@@ -49,8 +49,11 @@ use std::io::Write;
 use super::jsonld::JsonLdSerializeOptions;
 use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
+use crate::dataset_view::ViewTermId;
 use crate::ir::TermRef;
-use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
+use crate::{
+    DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue,
+};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_iri::BaseIri;
 
@@ -675,7 +678,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
 /// interning their terms. The reifier bindings land in `interner.reifiers`; the
 /// annotation triples in `interner.annotations`.
 fn push_statement_rows<D: DatasetView>(
-    interner: &mut SerGraphInterner,
+    interner: &mut SerGraphInterner<D::Id>,
     dataset: &D,
     _graph: &mut SerGraph,
     default_graph_only: bool,
@@ -712,7 +715,7 @@ fn push_statement_rows<D: DatasetView>(
 
 /// Builds the first-party term table from the frozen IR, deduplicating terms by value
 /// and materializing literal datatypes + quoted-triple reifier bindings.
-struct SerGraphInterner {
+struct SerGraphInterner<I: ViewTermId> {
     terms: Vec<SerTerm>,
     /// Reifier-id → `(s, p, o)` bindings. Carries both the statement-layer reifiers
     /// (a resource reifying a statement) and the self-reifier sentinels of inline
@@ -722,6 +725,13 @@ struct SerGraphInterner {
     /// Value → term-id memo so equal terms collapse to one term, matching the fold the
     /// reader produces.
     memo: HashMap<TermValue, usize>,
+    /// IR-id → term-id memo probed BEFORE the value memo. `resolve(id)` is a pure
+    /// function of the (frozen, immutable) view for the whole build, so an id seen
+    /// once maps to the same value — and thus the same term-id — every time. Without
+    /// this, every OCCURRENCE of a term (a predicate repeated on 10k quads, say) built
+    /// an owned `TermValue` just to probe `memo`. Fixed-key hasher, lookup-only, never
+    /// iterated: it cannot influence emitted order.
+    id_memo: FastMap<I, usize>,
     /// The TARGET codec's blank-node label alphabet ([`blank_label_alphabet`]).
     /// Every blank node's `(label, scope)` pair is encoded into it at intern
     /// time, so no downstream emitter can write a label illegal in its syntax
@@ -729,21 +739,32 @@ struct SerGraphInterner {
     alphabet: LabelAlphabet,
 }
 
-impl SerGraphInterner {
+impl<I: ViewTermId> SerGraphInterner<I> {
     fn with_capacity(term_count: usize, alphabet: LabelAlphabet) -> Self {
         Self {
             terms: Vec::with_capacity(term_count),
             reifiers: Vec::new(),
             annotations: Vec::new(),
             memo: HashMap::with_capacity(term_count),
+            id_memo: FastMap::with_capacity_and_hasher(term_count, FastHasher::default()),
             alphabet,
         }
     }
 
     /// Intern an IR term id into the first-party term table, returning its index.
-    fn intern<D: DatasetView>(&mut self, dataset: &D, id: D::Id) -> Result<usize, RdfDiagnostic> {
+    fn intern<D: DatasetView<Id = I>>(
+        &mut self,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<usize, RdfDiagnostic> {
+        // Repeat occurrences of an id are answered here without materializing the
+        // term's value (see `id_memo`).
+        if let Some(&idx) = self.id_memo.get(&id) {
+            return Ok(idx);
+        }
         let value = term_value(dataset, id);
         if let Some(&idx) = self.memo.get(&value) {
+            self.id_memo.insert(id, idx);
             return Ok(idx);
         }
         let idx = match dataset.resolve(id) {
@@ -777,14 +798,16 @@ impl SerGraphInterner {
                 language,
                 direction,
             } => {
-                let datatype_iri = iri_of(dataset, datatype)?;
+                // Borrowed twin of `iri_of`: the comparison and the intern both read
+                // the IRI, neither keeps it, so no owned copy is needed here.
+                let datatype_iri = iri_str_of(dataset, datatype)?;
                 // A plain literal (xsd:string, no language) and a language-tagged
                 // literal carry no explicit datatype term — the serializer defaults
                 // them, so emitting one would change the round-trip text.
                 let datatype_slot = if language.is_some() || datatype_iri == XSD_STRING {
                     None
                 } else {
-                    Some(self.intern_iri_string(&datatype_iri))
+                    Some(self.intern_iri_string(datatype_iri))
                 };
                 self.push_term(SerTerm {
                     kind: SerTermKind::Literal,
@@ -818,6 +841,7 @@ impl SerGraphInterner {
             }
         };
         self.memo.insert(value, idx);
+        self.id_memo.insert(id, idx);
         Ok(idx)
     }
 
@@ -842,7 +866,7 @@ impl SerGraphInterner {
 
     /// Resolve a triple-term id to the `(s, p, o)` term indices of its components
     /// (interning each), for a statement-layer reifier binding.
-    fn intern_triple_components<D: DatasetView>(
+    fn intern_triple_components<D: DatasetView<Id = I>>(
         &mut self,
         dataset: &D,
         triple: D::Id,
@@ -897,8 +921,14 @@ fn term_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
 
 /// Resolve an IR term id known to be an IRI (a literal datatype) to its IRI string.
 fn iri_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<String, RdfDiagnostic> {
+    iri_str_of(dataset, id).map(str::to_owned)
+}
+
+/// Borrowing twin of [`iri_of`]: the IRI straight out of the view, for callers that
+/// only compare or copy it into the term table (no intermediate `String`).
+fn iri_str_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<&str, RdfDiagnostic> {
     match dataset.resolve(id) {
-        TermRef::Iri(iri) => Ok(iri.to_owned()),
+        TermRef::Iri(iri) => Ok(iri),
         other => Err(RdfDiagnostic::error(
             "native-codec-datatype-not-iri",
             format!("a literal datatype must be an IRI, got {other:?}"),

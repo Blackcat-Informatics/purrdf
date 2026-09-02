@@ -329,8 +329,9 @@ fn parse_lines_parallel_with_chunk_size(
     let mut next_line = 1u32;
     for chunk in &chunks {
         base_lines.push(next_line);
+        // SIMD newline scan (memchr) rather than a per-byte filter over the chunk.
         let newlines =
-            u32::try_from(chunk.bytes().filter(|&b| b == b'\n').count()).unwrap_or(u32::MAX);
+            u32::try_from(memchr::memchr_iter(b'\n', chunk.as_bytes()).count()).unwrap_or(u32::MAX);
         next_line = next_line.saturating_add(newlines);
     }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
@@ -442,7 +443,8 @@ fn parse_one_line(
         err_at(e.to_string(), lineno, col)
     })?;
     let mut cursor = TokenCursor::new(tokens, raw, lineno, base);
-    let mut nodes = Vec::new();
+    // A well-formed line holds three or four terms: reserve once, no regrowth.
+    let mut nodes = Vec::with_capacity(4);
     while !cursor.at_statement_end() {
         nodes.push(cursor.term(0)?);
     }
@@ -1356,15 +1358,21 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             return Ok(Node::Iri(self.rdf_nil.clone()));
         }
         let cells: Vec<Node> = (0..items.len()).map(|_| self.next_bnode()).collect();
+        // The three vocabulary nodes are built once per collection, not once per item,
+        // and the cells are borrowed from the local `cells` rather than cloned — `emit`
+        // takes references and copies what it keeps.
+        let rdf_first = Node::Iri(self.rdf_first.clone());
+        let rdf_rest = Node::Iri(self.rdf_rest.clone());
+        let rdf_nil = Node::Iri(self.rdf_nil.clone());
         for (index, item) in items.into_iter().enumerate() {
-            let current = cells[index].clone();
+            let current = &cells[index];
             let rest = if index + 1 == cells.len() {
-                Node::Iri(self.rdf_nil.clone())
+                &rdf_nil
             } else {
-                cells[index + 1].clone()
+                &cells[index + 1]
             };
-            self.emit(&current, &Node::Iri(self.rdf_first.clone()), &item, graph);
-            self.emit(&current, &Node::Iri(self.rdf_rest.clone()), &rest, graph);
+            self.emit(current, &rdf_first, &item, graph);
+            self.emit(current, &rdf_rest, rest, graph);
         }
         Ok(cells.into_iter().next().expect("non-empty collection"))
     }
@@ -1630,7 +1638,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     fn emit(&mut self, subject: &Node, predicate: &Node, object: &Node, graph: Option<&Node>) {
-        let mut nodes = vec![subject.clone(), predicate.clone(), object.clone()];
+        // Exact-size reservation: three terms plus the optional graph, never regrown.
+        let mut nodes = Vec::with_capacity(3 + usize::from(graph.is_some()));
+        nodes.push(subject.clone());
+        nodes.push(predicate.clone());
+        nodes.push(object.clone());
         if let Some(graph) = graph {
             nodes.push(graph.clone());
         }

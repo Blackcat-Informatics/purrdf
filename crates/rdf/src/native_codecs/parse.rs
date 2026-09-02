@@ -19,6 +19,7 @@
 //! [`rdfxml`](super::rdfxml) codec's `ParseContext`; N-Triples/N-Quads require
 //! absolute IRIs and ignore the base (N/A by syntax).
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -643,10 +644,12 @@ impl SerInterner<'_> {
                 Ok(FoldNode::Term(builder.intern_iri(iri)))
             }
             SerTermKind::Bnode => {
-                let label = term
+                // The label is only ever read through `&label`: borrow the table's
+                // string and build a fresh one solely for the missing-value fallback.
+                let label: Cow<'_, str> = term
                     .value
-                    .clone()
-                    .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
+                    .as_deref()
+                    .map_or_else(|| Cow::Owned(format!("gts_bnode_{gts_id}")), Cow::Borrowed);
                 Ok(FoldNode::Term(match self.blanks {
                     BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT),
                     BlankIngress::TextDecoded(alphabet) => {

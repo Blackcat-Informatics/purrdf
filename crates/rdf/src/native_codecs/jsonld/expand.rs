@@ -3,6 +3,7 @@
 
 //! Context-aware expansion from compact JSON-LD-star into the typed carrier.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -1106,13 +1107,16 @@ fn effective_direction(
     }
 }
 
-fn object_context(
-    parent: &CompiledJsonLdContext,
+/// The context in force for `object`: the parent's, BORROWED, when the object declares no
+/// `@context` of its own — the common case, which used to deep-clone the whole compiled
+/// context (term map, inverse index) for every node, value and graph object visited.
+fn object_context<'a>(
+    parent: &'a CompiledJsonLdContext,
     object: &Map<String, JsonValue>,
-) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+) -> Result<Cow<'a, CompiledJsonLdContext>, RdfDiagnostic> {
     object.get("@context").map_or_else(
-        || Ok(parent.clone()),
-        |local| parent.apply_local_context(local),
+        || Ok(Cow::Borrowed(parent)),
+        |local| parent.apply_local_context(local).map(Cow::Owned),
     )
 }
 
