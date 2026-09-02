@@ -824,7 +824,15 @@ impl PyStore {
     /// frozen `Arc` taken now, a later `add`/`remove`/`update` on this `Store` leaves
     /// the snapshot a consumer already holds untouched (snapshot-vs-mutation aliasing
     /// safety).
-    fn _store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
+    /// The leading underscore belongs to the PYTHON name, not the Rust one: it is
+    /// the cross-package protocol `purrdf_shapes` calls by string
+    /// (`data.call_method0("_store_capsule")`), and Python spells "internal" with
+    /// an underscore. Naming the Rust item `_store_capsule` too would make it an
+    /// underscore-prefixed item that the crate then uses — the convention for
+    /// "deliberately unused" — so the Python spelling is carried by
+    /// `#[pyo3(name = ...)]` and the Rust item keeps an ordinary name.
+    #[pyo3(name = "_store_capsule")]
+    fn store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
         let py = slf.py();
         let guard = slf.borrow();
         let inner = &guard.inner;

@@ -81,7 +81,7 @@ fn successful_and_empty_results_are_explicitly_complete() {
         )
         .expect("a genuinely empty answer is complete");
     match empty.result {
-        SparqlResult::Solutions { rows, .. } => assert!(rows.is_empty()),
+        SparqlResult::Solutions { rows, .. } => assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]),
         other => panic!("expected empty SELECT solutions, got: {other:?}"),
     }
     assert!(
@@ -223,7 +223,7 @@ fn parse_failure_remains_an_ordinary_query_error_with_evidence() {
             evidence,
         } => {
             assert_eq!(diagnostic.code, "native-sparql-query-parse");
-            assert!(evidence.requested_pages.is_empty());
+            assert_eq!(evidence.requested_pages, [] as [_; 0]);
             assert_eq!(evidence.consumed_pages, 0);
         }
         FallibleSparqlError::Operational { error, .. } => {
@@ -575,7 +575,10 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
             QueryOptions::EMPTY,
         )
         .expect("genuinely empty query is complete");
-    assert!(solution_parts(empty.result).1.is_empty());
+    assert_eq!(
+        solution_parts(empty.result).1,
+        [] as [Vec<Option<TermValue>>; 0]
+    );
 }
 
 #[test]
@@ -671,7 +674,7 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
             .query_fallible_view(&view, query, QueryOptions::EMPTY)
             .expect("complete empty execution");
         let (_, rows) = solution_parts(complete.result);
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
         assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
         assert_eq!(complete.evidence.consumed_pages, 1);
         assert_eq!(complete.evidence.consumed_bytes, 20);

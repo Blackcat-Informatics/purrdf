@@ -411,7 +411,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = Term::Literal(Literal::new_simple_literal("hello"));
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        assert!(eval(&data, &focus, &path).is_empty());
+        assert_eq!(eval(&data, &focus, &path), [] as [_; 0]);
     }
 
     #[test]

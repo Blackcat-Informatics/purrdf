@@ -313,7 +313,7 @@ fn every_native_source_format_reaches_the_same_description() {
     ]);
     assert_eq!(code(&baseline), 0, "{}", stderr(&baseline));
     let expected = stdout(&baseline);
-    assert!(!expected.is_empty());
+    assert_ne!(expected, "");
 
     for (token, extension) in [
         ("turtle", "ttl"),
@@ -1050,5 +1050,5 @@ fn a_named_graph_description_is_refused_by_a_single_graph_target() {
         &plain,
     ]);
     assert_eq!(code(&flat), 0, "{}", stderr(&flat));
-    assert!(!stdout(&flat).is_empty());
+    assert_ne!(stdout(&flat), "");
 }

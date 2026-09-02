@@ -2180,7 +2180,7 @@ mod tests {
         builder.declare_named_graph(graph);
         let dataset = builder.freeze().expect("empty named graph dataset");
         let projection = project_obo_graphs(dataset.as_ref(), &config(100)).expect("projection");
-        assert!(projection.document.graphs[0].nodes.is_empty());
+        assert_eq!(projection.document.graphs[0].nodes, [] as [_; 0]);
         assert_ledger_complete(&projection.loss_ledger, &[LOSS_OBO_NAMED_GRAPH_DROPPED]);
         assert_eq!(projection.loss_ledger.entries().len(), 1);
         assert_eq!(

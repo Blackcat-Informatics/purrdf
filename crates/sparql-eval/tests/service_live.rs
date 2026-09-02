@@ -185,7 +185,7 @@ fn missing_named_graph_does_not_execute_its_inner_service() {
         panic!("SELECT must return a solution sequence");
     };
     assert_eq!(variables, ["x"]);
-    assert!(rows.is_empty());
+    assert_eq!(rows, [] as [Vec<Option<purrdf_core::TermValue>>; 0]);
     assert_eq!(posts.load(Ordering::Relaxed), 0);
 }
 

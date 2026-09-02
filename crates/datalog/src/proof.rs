@@ -1764,7 +1764,7 @@ mod tests {
         let proofs = EvaluationProofs::of(&evaluation);
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
-        assert!(!proofs.roots().is_empty());
+        assert_ne!(proofs.roots(), []);
         for (derived, root) in proofs.roots() {
             assert_eq!(proofs.arena().check(*root, &ctx).as_ref(), Ok(derived));
         }
@@ -1806,7 +1806,7 @@ mod tests {
         let premise = arena.premises(root)[0];
         assert!(arena.is_axiom(premise));
         assert_eq!(arena.rule(premise), None);
-        assert!(arena.premises(premise).is_empty());
+        assert_eq!(arena.premises(premise), []);
         assert_eq!(arena.goal(premise), &fact("a", P, "b"));
     }
 

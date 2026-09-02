@@ -2668,7 +2668,7 @@ mod tests {
         assert_eq!(first.subject_arity, 1);
         assert_eq!(first.object_arity, 1);
         assert_eq!(first.volatility, crate::Volatility::Stable);
-        assert!(!first.modes.is_empty());
+        assert_ne!(first.modes, [] as [_; 0]);
 
         assert_ne!(
             left_receipt.render(),
@@ -2686,8 +2686,8 @@ mod tests {
         // With no registry EITHER block is present and empty — "nothing was in scope",
         // not "this build does not report what was".
         let bare = engine.explain_query(&ds, query, None).expect("explain");
-        assert!(bare.relations().is_empty());
-        assert!(bare.aggregates().is_empty());
+        assert_eq!(bare.relations(), []);
+        assert_eq!(bare.aggregates(), []);
         assert!(bare.render().contains("relations\naggregates\njoin-orders"));
     }
 
@@ -2811,7 +2811,7 @@ mod tests {
             receipt.render()
         );
         // The `relations` block is unaffected — this seam is aggregates-only.
-        assert!(receipt.relations().is_empty());
+        assert_eq!(receipt.relations(), []);
     }
 
     /// A query that needs BOTH a registered relation and a registered custom aggregate

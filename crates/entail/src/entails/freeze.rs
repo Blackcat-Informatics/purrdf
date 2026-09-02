@@ -1288,7 +1288,7 @@ mod tests {
         let conclusion = graph(&[(A, RDF_TYPE, OWL_CLASS)]);
         let reading = read(&default_graph_triples(&conclusion), &all_of(&conclusion));
         assert!(reading.axioms.is_empty());
-        assert!(reading.declined.is_empty());
+        assert_eq!(reading.declined, [] as [String; 0]);
     }
 
     // ── The table, and the inventory ───────────────────────────────────────────────────

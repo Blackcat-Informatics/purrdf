@@ -551,7 +551,7 @@ mod tests {
         let mut index = ListIndex::default();
         index.observe(EX_L0, &s(RDF_FIRST), EX_A);
         // No rdf:rest at all, and no head points here.
-        assert!(index.materialize().expect("not walked").is_empty());
+        assert_eq!(index.materialize().expect("not walked"), [] as [_; 0]);
     }
 
     /// A CYCLE terminates with a refusal naming the cell, rather than running forever.

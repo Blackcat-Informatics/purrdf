@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn schema_uses_only_the_closed_physical_type_set() {
         for table in Table::ALL {
-            assert!(!table.schema().columns.is_empty());
+            assert_ne!(table.schema().columns, []);
             for column in table.schema().columns {
                 assert!(matches!(
                     column.physical_type,

@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(g5, [pair("a", "o005")].into());
         // An interned term that is never an object of p selects nothing.
         let a = s.term_id(&iri("a")).expect("a interned");
-        assert!(drain(select(&s, P, Bound::Object(a))).is_empty());
+        assert_eq!(drain(select(&s, P, Bound::Object(a))), [] as [_; 0]);
     }
 
     #[test]
@@ -708,7 +708,10 @@ mod tests {
     #[test]
     fn cursor_unknown_predicate_is_an_empty_cursor() {
         let s = big_store();
-        assert!(drain(select(&s, "<https://example.org/absent>", Bound::Any)).is_empty());
+        assert_eq!(
+            drain(select(&s, "<https://example.org/absent>", Bound::Any)),
+            [] as [_; 0]
+        );
         assert_eq!(
             partition_of(&s, "<https://example.org/absent>")
                 .map_or(0, |p| p.values_subject(None).count()),
@@ -792,7 +795,7 @@ mod tests {
             .values_object(None);
         cursor.seek(target);
         let rows: Vec<_> = cursor.collect();
-        assert!(!rows.is_empty());
+        assert_ne!(rows, [] as [_; 0]);
         assert!(rows.iter().all(|&(value, _)| value >= target));
         assert_eq!(rows[0].0, target);
     }

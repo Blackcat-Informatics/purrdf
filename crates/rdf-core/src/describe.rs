@@ -432,7 +432,7 @@ mod tests {
             vec!["https://e/o1".to_string(), "https://e/o2".to_string()]
         );
         // The unrelated OTHER subject's triple must NOT be pulled in.
-        assert!(objects_for(&scbd, OTHER, "https://e/p").is_empty());
+        assert_eq!(objects_for(&scbd, OTHER, "https://e/p"), [] as [String; 0]);
     }
 
     #[test]
@@ -456,7 +456,10 @@ mod tests {
         ]);
         let scbd = describe(&ds, S).unwrap();
         // The N -> deep triple is neither outgoing-from nor incoming-to S, so absent.
-        assert!(objects_for(&scbd, "https://e/n", "https://e/p").is_empty());
+        assert_eq!(
+            objects_for(&scbd, "https://e/n", "https://e/p"),
+            [] as [String; 0]
+        );
         assert_eq!(
             objects_for(&scbd, S, "https://e/p"),
             vec!["https://e/n".to_string()]

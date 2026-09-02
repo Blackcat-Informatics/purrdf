@@ -804,7 +804,7 @@ mod tests {
             clause.head_atoms().collect::<Vec<_>>(),
             [&atom("?X", R, "?Y")]
         );
-        assert!(clause.existentials().is_empty());
+        assert_eq!(clause.existentials(), [] as [String; 0]);
         assert_eq!(clause.body().len(), 2);
         assert!(!clause.body()[0].is_negated());
         assert!(clause.body()[1].is_negated());
@@ -888,7 +888,7 @@ mod tests {
         ]);
         assert_eq!(clause.head_form(), HeadForm::Inconsistency);
         assert!(!clause.head_form().is_datalog());
-        assert!(clause.head_disjuncts().is_empty());
+        assert_eq!(clause.head_disjuncts(), []);
         assert_eq!(clause.head_atoms().count(), 0);
         assert_eq!(clause.datalog_head(), None);
         assert_eq!(clause.body().len(), 2);
@@ -1037,11 +1037,9 @@ mod tests {
         assert_eq!(default.iri_value(), None);
         assert!(!ClauseTerm::iri("https://example.org/g").is_default_graph());
         // Every other constant's surface is non-empty, so nothing can alias it.
-        assert!(
-            !ClauseTerm::iri("")
-                .surface()
-                .expect("an IRI has a surface")
-                .is_empty()
+        assert_ne!(
+            ClauseTerm::iri("").surface().expect("an IRI has a surface"),
+            ""
         );
     }
 

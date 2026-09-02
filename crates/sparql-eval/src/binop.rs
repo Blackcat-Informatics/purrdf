@@ -1573,7 +1573,7 @@ mod tests {
             rows: vec![smallvec::smallvec![t(1)], smallvec::smallvec![t(2)]],
         };
         let (keyed2, wild2) = build_index(&inner2, &shared);
-        assert!(wild2.is_empty());
+        assert_eq!(wild2, [] as [_; 0]);
         assert!(
             !probe_has_match(&[t(9), None], &shared, &keyed2, &wild2, &inner2.rows),
             "bound probe with no keyed bucket and no wild row does not match"

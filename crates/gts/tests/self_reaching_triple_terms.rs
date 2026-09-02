@@ -249,7 +249,7 @@ fn a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused() {
         "{:?}",
         graph.diagnostics,
     );
-    assert!(graph.reifiers.is_empty());
+    assert_eq!(graph.reifiers, [] as [_; 0]);
     assert_eq!(graph.triple_of(2), None);
     assert_no_term_reaches_itself(&graph);
 }

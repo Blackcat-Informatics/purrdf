@@ -166,7 +166,7 @@ fn provider_failure_after_seal_is_sticky_and_never_panics() {
         "planning uses only seal-time metadata"
     );
     let planning_evidence = ready_evidence(view.operation_status());
-    assert!(planning_evidence.requested_pages.is_empty());
+    assert_eq!(planning_evidence.requested_pages, [] as [_; 0]);
     assert_eq!(planning_evidence.consumed_pages, 0);
     assert_eq!(planning_evidence.consumed_bytes, 0);
 
@@ -280,7 +280,7 @@ fn status_checkpoint_detects_drift_without_a_page_read() {
             actual: PageGeneration(15),
         }
     );
-    assert!(evidence.requested_pages.is_empty());
+    assert_eq!(evidence.requested_pages, [] as [_; 0]);
     assert_eq!(evidence.consumed_pages, 0);
     assert_eq!(evidence.consumed_bytes, 0);
     assert_eq!(
@@ -371,7 +371,7 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
         1
     );
     let planning_evidence = ready_evidence(view.operation_status());
-    assert!(planning_evidence.requested_pages.is_empty());
+    assert_eq!(planning_evidence.requested_pages, [] as [_; 0]);
     assert_eq!(planning_evidence.consumed_pages, 0);
     assert_eq!(planning_evidence.consumed_bytes, 0);
     assert_eq!(view.quads().count(), 1);

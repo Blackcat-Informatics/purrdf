@@ -241,7 +241,7 @@ mod tests {
         let a = raw_content_dict(&corpus, 4096).expect("build");
         let b = raw_content_dict(&corpus, 4096).expect("build");
         assert_eq!(a, b, "raw-content dict must be byte-reproducible");
-        assert!(!a.is_empty());
+        assert_ne!(a, [] as [_; 0]);
         assert!(a.len() <= 4096, "must respect the target length bound");
         assert_is_valid_finalized_dict(&a);
     }
@@ -266,7 +266,7 @@ mod tests {
         let a = trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("training should succeed");
         let b = trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("training should succeed");
         assert_eq!(a, b, "seeded FastCOVER must be byte-reproducible");
-        assert!(!a.is_empty());
+        assert_ne!(a, [] as [_; 0]);
         assert_is_valid_finalized_dict(&a);
     }
 

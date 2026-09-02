@@ -992,7 +992,7 @@ mod tests {
             results: vec![],
         };
         let none = build_report_sarif(&report, &SarifOptions::default());
-        assert!(none.runs[0].invocations.is_empty());
+        assert_eq!(none.runs[0].invocations, [] as [_; 0]);
 
         let timed = build_report_sarif(
             &report,

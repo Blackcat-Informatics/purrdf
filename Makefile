@@ -41,6 +41,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
+	python3 scripts/check-toolchain-pin.py
 	python3 scripts/check-iri-resolver-singleton.py
 	python3 scripts/check-licenses.py
 	python3 scripts/check-corpus-frozen.py

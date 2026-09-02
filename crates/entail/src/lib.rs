@@ -1049,7 +1049,7 @@ mod tests {
         // and the report makes both of them.
         let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
         assert_eq!(simple.completeness(), Completeness::Exact);
-        assert!(rules(Regime::Simple).is_empty());
+        assert_eq!(rules(Regime::Simple), []);
         let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert_eq!(
             owl.completeness(),
@@ -1058,7 +1058,7 @@ mod tests {
              not `Exact` either"
         );
         assert!(owl.completeness().is_exact());
-        assert!(!owl.boundaries().is_empty());
+        assert_ne!(owl.boundaries(), []);
     }
 
     /// The named missing rules are the right ones, not merely the right count — and for
@@ -1092,7 +1092,7 @@ mod tests {
         // not reach the answer, so the run is `ExactWithinBoundaries` and names the
         // `surrogate` boundary rather than saying `Exact`.
         let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
-        assert!(rdfs.completeness().missing().is_empty());
+        assert_eq!(rdfs.completeness().missing(), []);
         assert_eq!(rdfs.completeness(), Completeness::ExactWithinBoundaries);
         for rule in [
             RuleId::RdfD1,
@@ -1214,7 +1214,7 @@ mod tests {
         // Everything else a caller needs to act on the refusal, measured rather than
         // stubbed: the calculus that refused, the constructs the run met, and the cost.
         assert_eq!(report.regime(), Regime::OwlRl);
-        assert!(!report.boundaries().is_empty());
+        assert_ne!(report.boundaries(), []);
         assert!(report.budget().join_steps() > 0, "the evaluation did work");
         // A consistent run over the same shape reports the absence, so `None` is a
         // finding rather than the only state the field has.
@@ -1316,7 +1316,7 @@ mod tests {
         // And no other lane gets it: `RDFS` says nothing about `owl:differentFrom`.
         let (rdfs, rdfs_report) = materialize(&ds, Materialization::Rdfs).expect("a closure");
         assert!(!has(&rdfs, Y, OWL_DIFFERENTFROM, X));
-        assert!(rdfs_report.extensions().is_empty());
+        assert_eq!(rdfs_report.extensions(), []);
     }
 
     /// THE EXTENSION REFUSES NOTHING THE TABLE DID NOT ALREADY REFUSE.
@@ -1518,13 +1518,13 @@ mod tests {
         // `Simple` copies faithfully, so it meets none of them — which is what makes its
         // `Exact` honest.
         let (_, simple) = materialize(&quoted, Materialization::Simple).expect("simple");
-        assert!(simple.boundaries().is_empty());
+        assert_eq!(simple.boundaries(), []);
 
         // Every boundary carries a technical reason naming what it blocks.
         let (_, report) = materialize(&quoted, Materialization::Rdfs).expect("rdfs");
-        assert!(!report.boundaries().is_empty());
+        assert_ne!(report.boundaries(), []);
         for boundary in report.boundaries() {
-            assert!(!boundary.reason().is_empty());
+            assert_ne!(boundary.reason(), "");
             assert_eq!(boundary.reason(), boundary.construct().reason());
         }
         // In `Construct` declaration order, deduplicated.
@@ -1581,7 +1581,7 @@ mod tests {
 
         // `Simple` infers nothing, so nothing fired — an empty list, not a zeroed one.
         let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
-        assert!(simple.rules_fired().is_empty());
+        assert_eq!(simple.rules_fired(), []);
 
         // The OWL-RL lane really does credit the three RDFS-shaped rules by their RDFS
         // names, which is the honest reading of what it fires.

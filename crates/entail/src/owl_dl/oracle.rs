@@ -960,8 +960,12 @@ impl Case {
         };
         for role_code in 0..relation_codes.pow(self.sig.roles as u32) {
             let mut rest = role_code;
-            for slot in 0..self.sig.roles {
-                i.roles[slot] = Relation::decode(rest % relation_codes, size);
+            // `take(..)` rather than an index range: the arrays are sized by the
+            // full name tables, but only the signature's first `sig.roles` slots
+            // are live for this case. Iterating the live prefix directly keeps
+            // that bound in one place and drops the bounds check per write.
+            for role in i.roles.iter_mut().take(self.sig.roles) {
+                *role = Relation::decode(rest % relation_codes, size);
                 rest /= relation_codes;
             }
             if !self.role_axioms_hold(&i) {
@@ -969,14 +973,14 @@ impl Case {
             }
             for concept_code in 0..concept_codes.pow(self.sig.concepts as u32) {
                 let mut rest = concept_code;
-                for slot in 0..self.sig.concepts {
-                    i.concepts[slot] = (rest % concept_codes) as u32;
+                for concept in i.concepts.iter_mut().take(self.sig.concepts) {
+                    *concept = (rest % concept_codes) as u32;
                     rest /= concept_codes;
                 }
                 for individual_code in 0..elements.pow(self.sig.individuals as u32) {
                     let mut rest = individual_code;
-                    for slot in 0..self.sig.individuals {
-                        i.individuals[slot] = (rest % elements) as usize;
+                    for individual in i.individuals.iter_mut().take(self.sig.individuals) {
+                        *individual = (rest % elements) as usize;
                         rest /= elements;
                     }
                     if self.models(&i) {

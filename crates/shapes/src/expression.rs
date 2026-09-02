@@ -804,7 +804,7 @@ mod tests {
         let expr = NodeExpr::Intersection(vec![]);
         let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
             .expect("empty intersection evals");
-        assert!(result.is_empty());
+        assert_eq!(result, [] as [_; 0]);
     }
 
     #[test]

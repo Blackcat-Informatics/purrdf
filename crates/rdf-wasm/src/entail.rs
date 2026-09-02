@@ -1447,8 +1447,11 @@ mod tests {
             .count();
         assert_eq!(missing, defined.len() - implemented.len());
         // An empty table is an empty array, not a one-element array of "".
-        assert!(rules_impl("simple").expect("known").is_empty());
-        assert!(implemented_rules_impl("simple").expect("known").is_empty());
+        assert_eq!(rules_impl("simple").expect("known"), [] as [String; 0]);
+        assert_eq!(
+            implemented_rules_impl("simple").expect("known"),
+            [] as [String; 0]
+        );
     }
 
     // ── The Description-Logic reasoning services ────────────────────────────

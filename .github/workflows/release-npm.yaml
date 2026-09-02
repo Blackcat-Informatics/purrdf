@@ -29,6 +29,15 @@ permissions:
   id-token: write
   attestations: write
 
+# Release artifacts are built on STABLE, not on the dated nightly that
+# `rust-toolchain.toml` pins for development and CI gates. This env var is load
+# bearing: the `dtolnay/rust-toolchain` action selects with `rustup default`,
+# which ranks BELOW `rust-toolchain.toml` in rustup's precedence order, so
+# without `RUSTUP_TOOLCHAIN` every cargo invocation here would silently use the
+# nightly pin no matter what the install step says.
+env:
+  RUSTUP_TOOLCHAIN: stable
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -49,9 +58,13 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Stable, not the dated nightly in rust-toolchain.toml: this step builds
+      # the wasm artifact that ships to npm consumers. See the workflow-level
+      # `env` above for why RUSTUP_TOOLCHAIN, not this input, selects it.
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache

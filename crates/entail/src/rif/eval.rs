@@ -786,7 +786,7 @@ mod tests {
             "silver rule must not fire"
         );
         // A default-graph-only input met no construct this lane could not handle.
-        assert!(report.boundaries().is_empty());
+        assert_eq!(report.boundaries(), []);
         assert_eq!(report.completeness(), crate::Completeness::Exact);
     }
 
@@ -833,7 +833,7 @@ mod tests {
             .map(|boundary| boundary.construct())
             .collect();
         assert_eq!(constructs, vec![Construct::NamedGraph]);
-        assert!(!report.boundaries()[0].reason().is_empty());
+        assert_ne!(report.boundaries()[0].reason(), "");
         // A boundary beside a rule table that has nothing missing is
         // `ExactWithinBoundaries`, never plain `Exact`: the completeness is DERIVED from
         // this very boundary list, so the two cannot come apart.
@@ -861,7 +861,7 @@ mod tests {
             rules: Vec::new(),
         };
         let (_, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
-        assert!(report.boundaries().is_empty());
+        assert_eq!(report.boundaries(), []);
     }
 
     #[test]
