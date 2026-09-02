@@ -556,9 +556,32 @@ fn node_by_expression_reports_its_own_constraint_component() {
 /// evaluation path behind both surfaces.
 #[test]
 fn sh_and_shnex_spellings_produce_identical_results() {
-    let data = "ex:a ex:p ex:b, ex:c, ex:d . ex:b ex:ok true . ex:c ex:ok true .";
-    let pairs: [(&str, &str); 6] = [
+    let data = "ex:a ex:p ex:b, ex:c, ex:d ; ex:n 1, 2, 3 .
+                ex:b ex:ok true . ex:c ex:ok true .";
+    // One pair per DUAL-SPELLED kind. The set is not a judgement call: the unit
+    // test `the_dual_spelled_kinds_are_exactly_these` (in
+    // `crates/shapes/src/shapes/parser/node_expr.rs`) reads `PRIMARY_KEYS` and
+    // pins the ten names below EXACTLY, so an eleventh kind fails there rather
+    // than quietly going uncovered here.
+    let pairs: [(&str, &str); 10] = [
         ("[ sh:path ex:p ]", "[ shnex:pathValues ex:p ]"),
+        (
+            "[ sh:min [ sh:path ex:n ] ]",
+            "[ shnex:min [ shnex:pathValues ex:n ] ]",
+        ),
+        (
+            "[ sh:max [ sh:path ex:n ] ]",
+            "[ shnex:max [ shnex:pathValues ex:n ] ]",
+        ),
+        (
+            "[ sh:sum [ sh:path ex:n ] ]",
+            "[ shnex:sum [ shnex:pathValues ex:n ] ]",
+        ),
+        (
+            "[ sh:filterShape [ sh:nodeKind sh:IRI ] ; sh:nodes [ sh:path ex:p ] ]",
+            "[ shnex:filterShape [ sh:nodeKind sh:IRI ] ; \
+              shnex:nodes [ shnex:pathValues ex:p ] ]",
+        ),
         (
             "[ sh:count [ sh:path ex:p ] ]",
             "[ shnex:count [ shnex:pathValues ex:p ] ]",
@@ -625,6 +648,53 @@ fn sh_and_shnex_paging_spellings_agree() {
     );
     assert_eq!(af, vec![ex("c"), ex("d")]);
     assert_eq!(af, ne, "paging must agree across the two spellings");
+}
+
+/// The ORDERING half of the paging surface: `sh:orderby` + `sh:desc` (wrappers)
+/// and `shnex:orderBy` + `shnex:desc` (a named-parameter core) must agree.
+///
+/// Ordering was the half of the paging surface no test reached, in either
+/// spelling — and it is the half where a dropped key is invisible, because a
+/// mis-read `desc` does not fail, it silently returns the sequence reversed.
+#[test]
+fn sh_and_shnex_ordering_spellings_agree() {
+    let data = "ex:a ex:n 1, 2, 3 .";
+    let ascending = vec![
+        r#""1"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned(),
+        r#""2"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned(),
+        r#""3"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned(),
+    ];
+    let descending: Vec<String> = ascending.iter().rev().cloned().collect();
+
+    for (desc, expected) in [(false, &ascending), (true, &descending)] {
+        let af = outputs(
+            data,
+            &format!(
+                "ex:S a sh:NodeShape ;
+                     sh:expression [ sh:path ex:n ; sh:orderby sh:this ; sh:desc {desc} ] ."
+            ),
+            "a",
+        );
+        let ne = outputs(
+            data,
+            &format!(
+                "ex:S a sh:NodeShape ;
+                     sh:expression [ shnex:orderBy sh:this ;
+                                     shnex:nodes [ shnex:pathValues ex:n ] ;
+                                     shnex:desc {desc} ] ."
+            ),
+            "a",
+        );
+        assert_eq!(&af, expected, "sh:orderby with sh:desc {desc}");
+        assert_eq!(
+            af, ne,
+            "the two ordering spellings must agree at sh:desc {desc}"
+        );
+    }
+    assert_ne!(
+        ascending, descending,
+        "the fixture must actually distinguish the two directions"
+    );
 }
 
 /// A node carrying BOTH the `sh:` and the `shnex:` spelling of the same kind is

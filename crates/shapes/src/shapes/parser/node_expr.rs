@@ -1831,3 +1831,94 @@ fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ExprKind, NON_FUNCTION_KEYS, PRIMARY_KEYS};
+    use crate::model::{sh, shnex};
+    use std::collections::BTreeSet;
+
+    /// The kinds `PRIMARY_KEYS` gives BOTH a `sh:` and a `shnex:` spelling, as
+    /// the table itself defines them.
+    fn dual_spelled() -> BTreeSet<&'static str> {
+        // (kind, has a `sh:` spelling, the `shnex:` local name if it has one).
+        // `ExprKind` is deliberately neither `Ord` nor `Hash`, so the grouping is
+        // a linear scan over a table of ~35 entries rather than a map.
+        let mut surfaces: Vec<(ExprKind, bool, Option<&'static str>)> = Vec::new();
+        for &(iri, kind) in PRIMARY_KEYS {
+            let slot = match surfaces.iter_mut().find(|(k, _, _)| *k == kind) {
+                Some(slot) => slot,
+                None => {
+                    surfaces.push((kind, false, None));
+                    surfaces
+                        .last_mut()
+                        .expect("just pushed a surface entry for this kind")
+                }
+            };
+            if iri.starts_with(sh::NS) {
+                slot.1 = true;
+            } else if let Some(local) = iri.strip_prefix(shnex::NS) {
+                slot.2 = Some(local);
+            }
+        }
+        surfaces
+            .into_iter()
+            .filter_map(|(_, has_af, shnex_local)| shnex_local.filter(|_| has_af))
+            .collect()
+    }
+
+    /// The set of DUAL-SPELLED kinds is pinned EXACTLY, so a new one cannot be
+    /// added without also being added to the integration test that proves the two
+    /// spellings agree.
+    ///
+    /// `sh_and_shnex_spellings_produce_identical_results` (in
+    /// `tests/node_expressions.rs`) is a hand-written array of fixture pairs; a
+    /// twelfth dual-spelled kind would simply not appear in it and nothing would
+    /// notice. This is the binding: the array covers exactly the names below, and
+    /// growing the table without growing the array fails HERE, naming the kind.
+    #[test]
+    fn the_dual_spelled_kinds_are_exactly_these() {
+        let expected: BTreeSet<&str> = [
+            "count",
+            "distinct",
+            "exists",
+            "filterShape",
+            "if",
+            "intersection",
+            "max",
+            "min",
+            "pathValues",
+            "sum",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            dual_spelled(),
+            expected,
+            "the dual-spelled kinds changed — add the new one to \
+             `sh_and_shnex_spellings_produce_identical_results` in \
+             tests/node_expressions.rs, then update this list"
+        );
+    }
+
+    /// Every IRI in `PRIMARY_KEYS` is also in `NON_FUNCTION_KEYS`.
+    ///
+    /// `parse_call_or_constant` decides "is this a function call?" by subtracting
+    /// `NON_FUNCTION_KEYS` from the node's predicates, and `check_expression_keys`
+    /// decides "is this key vocabulary?" the same way. A primary key missing from
+    /// that table would therefore be read as a FUNCTION IRI — a structural key
+    /// silently reinterpreted as a call.
+    #[test]
+    fn every_primary_key_is_node_expression_vocabulary() {
+        let non_function: BTreeSet<&str> = NON_FUNCTION_KEYS.iter().copied().collect();
+        let missing: Vec<&str> = PRIMARY_KEYS
+            .iter()
+            .map(|&(iri, _)| iri)
+            .filter(|iri| !non_function.contains(iri))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these expression keys would be mistaken for function IRIs: {missing:?}"
+        );
+    }
+}

@@ -61,15 +61,17 @@ cases are converted from the pySHACL DASH rules tests.
 - Original test namespaces (`http://datashapes.org/shasf/tests/rules/...` and
   `http://schema.org/`) are preserved for provenance fidelity.
 
-### Known divergence (harness XFAIL)
+### Multi-valued function-call arguments (resolved; no XFAIL)
 
-`functions-permutations` is ledgered XFAIL. SHACL-AF §5 (node expressions) does
-not define the semantics of a function-call argument node expression that
-evaluates to more than one value. TopBraid/DASH (and pySHACL) treat multi-valued
-arguments as a **cartesian product**; PurRDF's expression evaluator makes the
-opposite, equally spec-compatible choice — each function-call argument must
-collapse to exactly one value, else `apply_rules` errors. The case is retained to
-document this genuinely-underspecified divergence for the conformance matrix.
+SHACL-AF §5 (node expressions) does not define the semantics of a function-call
+argument node expression that evaluates to more than one value. TopBraid/DASH
+(and pySHACL) treat multi-valued arguments as a **cartesian product**, and
+`functions-permutations` is the case that measures it. PurRDF once diverged here
+and carried the case as a ledgered XFAIL; it now evaluates the cartesian product
+too, so the case **passes** and the harness's `XFAIL` ledger is EMPTY
+(`const XFAIL: &[(&str, &str)] = &[]` in
+`crates/shapes/tests/rules_conformance.rs`, which additionally asserts
+`passed + xfailed == TOTAL_CASES`). Nothing in this corpus is ledgered.
 
 ## First-party cases
 

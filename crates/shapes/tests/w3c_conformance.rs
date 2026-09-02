@@ -45,7 +45,7 @@
 //! Run with `--nocapture` for the per-manifest-section scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture`
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,7 +65,9 @@ const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/sh
 /// Note: the corpus ships 121 files with a `sht:Validate` entry in `core/` +
 /// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
 /// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
-/// The vendored SHACL-AF seam at `af/` adds 6 more `sht:Validate` entries.
+/// The SHACL-AF seam at `af/` adds 9 more `sht:Validate` entries — 6 vendored
+/// from pySHACL's DASH tests and 3 first-party (no W3C SHACL-AF conformance
+/// suite exists; see `vectors/shacl/af/README.md`).
 const TOTAL_TESTS: usize = 129;
 
 mod mf {
@@ -467,6 +469,92 @@ fn multiset_diff(expected: &Multiset, produced: &Multiset) -> String {
     lines.join("\n")
 }
 
+/// Prove every `.ttl` under `af/` is REACHED by a manifest, so the corpus on disk
+/// and the corpus the harness runs are the same corpus.
+///
+/// `TOTAL_TESTS` alone cannot say this. Discovery under `af/` is by `mf:include`
+/// only — nothing reads the directory — so a case file added without a manifest
+/// entry runs nowhere, leaves the count untouched, and reddens nothing. It would
+/// look exactly like a case that passes. (The sibling rules harness has no such
+/// gap: it discovers by `read_dir`.) The byte-freeze manifest is not a backstop
+/// either, because refreshing it is the documented step for adding a case.
+///
+/// Both directions matter and both are checked: an unreferenced file, and a
+/// manifest that names a file that does not exist.
+fn af_case_files_are_all_reachable_from_a_manifest(af_root: &Path) {
+    let mut on_disk: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut referenced: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut manifests: Vec<PathBuf> = vec![af_root.join("manifest.ttl")];
+    let mut seen_manifests: BTreeSet<PathBuf> = BTreeSet::new();
+
+    // Every `.ttl` beneath `af/`, manifests included — except `af/rules/`, which
+    // is a different corpus with a different, already-tight discovery: the SHACL
+    // Rules harness (`crates/shapes/tests/rules_conformance.rs`) walks it with
+    // `read_dir` and asserts an exact `TOTAL_CASES`, so an unwired case there
+    // already fails. It has no manifest and must not be measured against one.
+    let mut dirs = vec![af_root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        if dir.file_name().is_some_and(|n| n == "rules") {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).expect("af corpus directory must be readable") {
+            let path = entry.expect("af corpus entry must be readable").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "ttl") {
+                on_disk.insert(path);
+            }
+        }
+    }
+
+    // Every `mf:include` target, transitively.
+    while let Some(manifest) = manifests.pop() {
+        if !seen_manifests.insert(manifest.clone()) {
+            continue;
+        }
+        let text = fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("manifest {} must be readable: {e}", manifest.display()));
+        let parent = manifest
+            .parent()
+            .expect("a manifest always has a parent directory")
+            .to_path_buf();
+        for line in text.lines() {
+            let Some(rest) = line.split("mf:include").nth(1) else {
+                continue;
+            };
+            let Some(open) = rest.find('<') else { continue };
+            let Some(close) = rest[open + 1..].find('>') else {
+                continue;
+            };
+            let target = parent.join(&rest[open + 1..open + 1 + close]);
+            let target = target.canonicalize().unwrap_or_else(|e| {
+                panic!(
+                    "manifest {} includes {}, which does not exist: {e}",
+                    manifest.display(),
+                    target.display()
+                )
+            });
+            referenced.insert(target.clone());
+            if target.file_name().is_some_and(|n| n == "manifest.ttl") {
+                manifests.push(target);
+            }
+        }
+    }
+    // A manifest is reached by being walked, not by being included.
+    referenced.extend(seen_manifests.iter().cloned());
+
+    let orphans: Vec<String> = on_disk
+        .iter()
+        .filter(|p| !referenced.contains(*p))
+        .map(|p| p.display().to_string())
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "these af/ case files are on disk but no manifest includes them, so they run \
+         nowhere and no gate would notice: {orphans:?}"
+    );
+}
+
 // ── The harness ───────────────────────────────────────────────────────────────
 
 #[test]
@@ -486,6 +574,7 @@ fn w3c_shacl_conformance() {
     let af = root.join("af/manifest.ttl");
     if af.exists() {
         collect_manifest(&af, &root, &mut tests);
+        af_case_files_are_all_reachable_from_a_manifest(&root.join("af"));
     }
 
     assert_eq!(

@@ -49,9 +49,9 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SPARQL execution governors | purrdf-sparql-governors (first-party) | 50 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 258 | 4 | 4 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
-| SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
+| SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
-| SHACL Rules | DASH + first-party | 17 | 0 | 0 | 0 | GREEN |
+| SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
@@ -76,7 +76,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx schemas (ShExC ∥ ShExJ) | shexTest v2.1.0, `schemas/` | **425/425** ShExC parse · **420/420** ShExJ round-trip · 419/420 ShExC≡ShExJ AST (1 upstream corpus bug, documented) |
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
-| SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
+| SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
@@ -471,13 +471,18 @@ issue, so the matrix stays honest:
      normative conclusions can tell. Both facts are still true at once, which is
      why the scoreboard reports rule-table coverage and entailment conformance
      as separate rows.
-- **SHACL** — the W3C `core/` and `sparql/` suites now pass **126 / 126**
-  with **0 ledgered xfails**. A validation-only SHACL-AF corpus is vendored from
-  pySHACL's DASH tests under `vectors/shacl/af/` and is discovered and gated by
-  `crates/shapes/tests/w3c_conformance.rs`. `sh:expression`, custom SPARQL
-  constraint components, pre-binding semantics, and user-defined
-  `sh:SPARQLFunction` calls are implemented and exercised; `sh:SPARQLTargetType`
-  is implemented. **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and
+- **SHACL** — the harness discovers **129 / 129** `sht:Validate` entries with
+  **0 ledgered xfails**: **120** from the W3C `core/` and `sparql/` suites, plus
+  **9** under `vectors/shacl/af/`. Of those 9, **6 are vendored** from pySHACL's
+  DASH tests and **3 are first-party** cases authored for PurRDF against the W3C
+  "SHACL 1.2 Node Expressions" draft, which the DASH corpus predates — there is
+  **no W3C SHACL-AF conformance suite**, so no vendored suite grades that surface
+  and none is claimed to. Both kinds are written in the same `sht:Validate`
+  manifest format and are discovered and gated by
+  `crates/shapes/tests/w3c_conformance.rs`; `vectors/shacl/af/README.md` says
+  which files are which. `sh:expression`, custom SPARQL constraint components,
+  pre-binding semantics, and user-defined `sh:SPARQLFunction` calls are
+  implemented and exercised; `sh:SPARQLTargetType` is implemented. **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and
   `sh:SPARQLRule`, with `sh:condition`, `sh:order`, and `sh:deactivated`) are now
   implemented: rules fire in an iterative fixpoint and the derivation is
   materialized as a new dataset (`base ⊎ derived`), leaving the input graph
