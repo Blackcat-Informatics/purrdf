@@ -43,8 +43,20 @@
 //! `wasm32-unknown-unknown` build of the same engine: an answer divergence, and
 //! one nothing downstream could detect. [`Fixed::ln`] is instead a fixed-length
 //! integer series — a fixed iteration count, never a convergence test — so its
-//! result is a pure function of its input on every target, and a ranking is
-//! reproducible byte for byte.
+//! result is a pure function of its input on every target.
+//!
+//! The two halves of what that buys are proven in different places, so they are
+//! claimed separately rather than as one sentence. The **ranking** — the row
+//! order together with every score's decimal lexical — is pinned by a single
+//! test body carrying both `#[test]` and `#[wasm_bindgen_test]`, so `make
+//! wasm-test` executes it on `wasm32-unknown-unknown` against the very
+//! expectations `cargo test` asserts natively. That is the half a divergent
+//! `ln` could actually move, and it is proven on both targets. Byte identity of
+//! the **serialized** answer — two independently built indexes, queried through
+//! the property-function seam and compared as SPARQL-JSON strings — is asserted
+//! natively. Neither the seam nor the serializer holds a target-dependent
+//! quantity, but only the ranking claim is executed on both targets, so only it
+//! is stated for both.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

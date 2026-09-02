@@ -407,6 +407,87 @@ fn float_mentions(text: &str) -> Vec<(usize, String)> {
     found
 }
 
+/// Every `.rs` file under `root`, subdirectories included, in a fixed order.
+///
+/// A bare [`std::fs::read_dir`] walks one level. Today every module of this
+/// crate is a single file directly under `src/`, so a shallow walk and this one
+/// read the same eight files — but the difference is not cosmetic. The moment a
+/// module grew into a directory (`src/score/mod.rs` beside a new
+/// `src/score/helper.rs`) a shallow walk would stop seeing the new file while
+/// the count below still found its eight top-level entries and passed. That is
+/// the one direction in which this gate could go quiet without anything looking
+/// wrong, so the walk reads the whole tree rather than the part that happens to
+/// be flat today.
+///
+/// The result is sorted because `read_dir` yields in unspecified filesystem
+/// order: sorting makes a failure name the same file first on every run and on
+/// every machine.
+fn rust_sources(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).expect("a readable source directory");
+        for entry in entries {
+            let path = entry.expect("a readable directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    found.sort();
+    found
+}
+
+/// The walk is executed against a nested tree, not merely asserted to descend.
+///
+/// The claim [`rust_sources`] makes is about a file that does not exist yet, so
+/// no test over the crate's own flat `src/` can distinguish a descending walk
+/// from a shallow one — both return the same eight paths. A walk that quietly
+/// stopped at the top level would therefore pass every other test in this file.
+/// It is pointed at a tree built for the purpose instead, with a float planted
+/// two levels down where only a descending walk reaches it.
+#[test]
+fn the_source_walk_descends_into_subdirectories() {
+    let root = std::env::temp_dir().join(format!("purrdf-text-source-walk-{}", std::process::id()));
+    // A tree left behind by an interrupted run would make this test read files
+    // it did not write, so the slate is cleared rather than assumed clean.
+    drop(std::fs::remove_dir_all(&root));
+    let nested = root.join("score").join("inner");
+    std::fs::create_dir_all(&nested).expect("the scratch tree is creatable");
+
+    std::fs::write(root.join("top.rs"), "// flat and clean\n").expect("a writable scratch file");
+    // Not a Rust file: its float must be ignored, or the gate would start
+    // failing on prose that merely says `f64`.
+    std::fs::write(root.join("notes.txt"), "let x: f64 = 1.0;\n").expect("a writable scratch file");
+    std::fs::write(nested.join("buried.rs"), "let x = 1.0f64;\n").expect("a writable scratch file");
+
+    let found = rust_sources(&root);
+
+    // A shallow walk would return `top.rs` alone and fail here. Sorted, so the
+    // nested path comes first: `score` precedes `top`.
+    assert_eq!(
+        found,
+        vec![nested.join("buried.rs"), root.join("top.rs")],
+        "the walk must descend into subdirectories, and must ignore the non-Rust file \
+         sitting beside the flat one"
+    );
+
+    // Descending is only worth anything if the scan then reads what it found,
+    // so the planted float is run through the gate's own scan.
+    let buried = std::fs::read_to_string(&found[0]).expect("a readable scratch file");
+    assert_eq!(
+        float_mentions(&buried).len(),
+        1,
+        "the float planted two levels down must be visible to the scan itself"
+    );
+
+    std::fs::remove_dir_all(&root).expect("the scratch tree is removable");
+}
+
 /// The scan discriminates rather than merely refusing.
 ///
 /// The repository's own rule about refusals: run the case that must be refused
@@ -466,27 +547,24 @@ fn the_float_scan_refuses_floats_and_admits_their_neighbours() {
 #[test]
 fn no_source_file_mentions_a_float_width() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut scanned = 0_usize;
+    let sources = rust_sources(&src);
     let mut offences = Vec::new();
 
-    let entries = std::fs::read_dir(&src).expect("the crate's src directory is readable");
-    for entry in entries {
-        let path = entry.expect("a readable directory entry").path();
-        if path.extension().is_none_or(|extension| extension != "rs") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("a readable Rust source file");
-        scanned += 1;
+    for path in &sources {
+        let text = std::fs::read_to_string(path).expect("a readable Rust source file");
         for (line, content) in float_mentions(&text) {
             offences.push(format!("{}:{line}: {content}", path.display()));
         }
     }
 
     // The scan is only a gate if it actually read the sources; a rename that
-    // emptied the directory would otherwise pass silently.
+    // emptied the directory would otherwise pass silently. Because the walk is
+    // recursive, a module added under a new subdirectory raises this count and
+    // is scanned, rather than passing the count while never being read.
     assert_eq!(
-        scanned, 8,
-        "expected to scan every module of the crate, scanned {scanned}"
+        sources.len(),
+        8,
+        "expected to scan every module of the crate, scanned {sources:?}"
     );
     assert_eq!(
         offences,

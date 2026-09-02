@@ -43,7 +43,18 @@ near-tied documents, so the same query over the same data could return rows in a
 different order on a native build than in a WebAssembly build of the same
 engine. The logarithm here is a fixed-length series over integers — a fixed
 iteration count, never a convergence test — so its result is a pure function of
-its input on every target, and a ranking is reproducible byte for byte.
+its input on every target.
+
+The two halves of what that buys are proven in different places, so they are
+claimed separately. The **ranking** — row order together with every score's
+decimal lexical — is pinned by a single test body carrying both `#[test]` and
+`#[wasm_bindgen_test]`, so `make wasm-test` executes it on
+`wasm32-unknown-unknown` against the same expectations `cargo test` asserts
+natively; that is the half a divergent `ln` could actually move. Byte identity
+of the **serialized** answer — two independently built indexes queried through
+the property-function seam, compared as SPARQL-JSON strings — is asserted
+natively. Only the ranking claim is executed on both targets, so only it is
+stated for both.
 
 ## BM25 without knobs, ranked within a partition
 
