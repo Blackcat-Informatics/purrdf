@@ -474,7 +474,8 @@ impl GlobalDictionary {
     ///
     /// # Errors
     ///
-    /// [`IriError`] when `iri` is not an absolute IRI; see [`crate::ir::absolute`].
+    /// [`IriError`] when `iri` is not an absolute IRI. The rule has one owner, the
+    /// crate-private `ir::absolute` module, which every ingress reaches.
     pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriError> {
         let lookup = GlobalTermLookup::Iri(iri);
         let hash = hash_lookup_value(&lookup);

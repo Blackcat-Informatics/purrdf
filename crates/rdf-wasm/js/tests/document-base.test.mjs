@@ -30,10 +30,21 @@ const EXPANDED = JSON.stringify({ version: 1, mode: "expanded" });
 // mentioned the base inside an unrelated IRI — a URL is a structure, not a substring
 // (CodeQL `js/incomplete-url-substring-sanitization`). The base lands at
 // `@context.@base`, so compare that key exactly.
+//
+// `@context` is an object OR an array of them (JSON-LD 1.1 §4.1), and the two spellings
+// are BOTH produced here: `serializeConfigured` emits the bare object, while
+// `serializeWithContext` emits `[{…prefixes}, {"@base": …}]` because the compiled
+// context and the base are separate entries. `includes()` could not see that difference
+// at all, which is the other half of why it was the wrong assertion.
 const documentBaseOf = (text) => {
-  const parsed = JSON.parse(text);
-  const context = parsed["@context"];
-  return context === undefined || context === null ? undefined : context["@base"];
+  const context = JSON.parse(text)["@context"];
+  const entries = Array.isArray(context) ? context : [context];
+  for (const entry of entries) {
+    if (entry !== null && typeof entry === "object" && "@base" in entry) {
+      return entry["@base"];
+    }
+  }
+  return undefined;
 };
 // `CompiledJsonLdContext` compiles only `mode: "context"` options.
 const CONTEXT_OPTIONS = JSON.stringify({

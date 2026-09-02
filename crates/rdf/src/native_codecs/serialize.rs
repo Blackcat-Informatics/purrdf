@@ -208,7 +208,8 @@ pub struct SerializeOptions<'a> {
 ///   EVERY format (a non-absolute base is a hard failure with the shared
 ///   [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code)) and APPLIED
 ///   only where the registry's [`emits_base`](NativeRdfFormat::emits_base) column says
-///   the syntax can express one — see [`egress_base`], the single decision point.
+///   the syntax can express one, in one private decision point (`egress_base`) this module
+///   keeps as that rule's only owner.
 /// * `options.selection` — which graph(s) to emit.
 /// * `options.statement_layer` — see [`StatementLayer`].
 ///

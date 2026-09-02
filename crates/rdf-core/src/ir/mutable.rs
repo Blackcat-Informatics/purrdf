@@ -803,7 +803,7 @@ impl QuadValues {
     /// table to intern into. Without a seam it would have had to re-spell "parse, then
     /// test for a scheme", and a second spelling of the rule is exactly how the codecs
     /// and the IR boundary would drift apart. It delegates to the same
-    /// [`super::absolute::check_absolute`] every other ingress reaches, so there is still
+    /// crate-private `super::absolute::check_absolute` every other ingress reaches, so there is
     /// exactly one owner of the rule.
     ///
     /// Blank-node labels and literal lexical forms are arbitrary strings and are

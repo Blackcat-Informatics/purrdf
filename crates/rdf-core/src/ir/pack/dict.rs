@@ -114,7 +114,7 @@ pub enum PackDictError {
     /// record failed to reconstruct.
     Malformed(&'static str),
     /// A decoded IRI record is not an absolute IRI, so it violates the IR-boundary
-    /// absoluteness invariant (see [`crate::ir::absolute`]).
+    /// absoluteness invariant enforced by the crate-private `ir::absolute` module.
     ///
     /// Pack bytes are a genuine ingress — they may come from another writer, an
     /// older version, or a corrupted file — so the invariant is enforced on decode
