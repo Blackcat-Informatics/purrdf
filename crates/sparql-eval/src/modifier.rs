@@ -814,7 +814,7 @@ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
 /// solution rows.
 ///
 /// `ORDER BY` over a one-column input is a total order over TERM VALUES, and this
-/// exposes exactly that: the same [`project`] precomputation, the same
+/// exposes exactly that: the same `SortKey` precomputation, the same
 /// unbound < blank < IRI < literal < composite < triple kind ranking, the same
 /// value-space literal comparison with its deterministic `(datatype, language,
 /// lexical)` fallback, and the same componentwise ordering of RDF 1.2 triple
@@ -886,7 +886,7 @@ pub enum ValueAggregate {
 /// the aggregate's answer is a property of the VALUES, so a caller holding them
 /// should not have to reach the fold by writing a query whose text embeds the
 /// data. It runs the identical accumulators `eval_aggregate` runs — the exact
-/// `NumericFold` promotion ladder for `SUM`/`AVG`, the [`total_order`] running
+/// `NumericFold` promotion ladder for `SUM`/`AVG`, the same total order's running
 /// extreme with its earlier-occurrence tie-break for `MIN`/`MAX` — so a
 /// value-level fold and a `GROUP BY` fold over the same bag are the same number,
 /// by construction rather than by two implementations agreeing.
