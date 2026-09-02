@@ -2236,7 +2236,7 @@ mod tests {
         // A hyphenated compound is the Latin-script form of the same boundary.
         assert!(
             invoke(&relation, &occurrence_args("e-mail"), None).is_err(),
-            "`e-mail` segments into two words under UAX #29, so it is two calls"
+            "`e-mail` segments into two words at Unicode word boundaries, so it is two calls"
         );
     }
 
