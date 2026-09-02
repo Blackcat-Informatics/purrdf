@@ -45,7 +45,7 @@ Scanned surface: every TRACKED ``.rs``, ``.py``, ``.pyi``, ``.md``, ``.mjs``,
 ``scripts/``, plus root ``*.md`` — enumerated by ``git ls-files``, exactly as
 ``check-brand-casing.py`` and ``check-issue-refs.py`` enumerate, so the four
 prose gates agree on what "the tree" is. This one used to walk the
-filesystem, and so scanned ``docs/book/book/searchindex.js`` after any local
+filesystem, and so scanned ``docs/book/book/searchindex-<hash>.js`` after any local
 ``mdbook build``: mdBook's search index flattens a page's text, putting the
 book's own CONSTRUCT-template sentence beside "SPARQL 1.1" with the
 disclaimer out of the window, and the gate failed on a clean commit. The
@@ -73,7 +73,7 @@ caught — so a future edit that guts the pattern fails here instead of passing
 silently and letting the seventh recurrence ship. It does the same for the
 Chinese pairs (a translated page with its disclaimer passes; the same page
 without it is caught), and it builds a throwaway git repository holding a
-tracked violation and an untracked ``book/searchindex.js`` carrying the same
+tracked violation and an untracked ``book/searchindex-<hash>.js`` carrying the same
 text, asserting the first is enumerated and caught and the second is not
 enumerated — the enumeration rule, proven rather than described.
 """
@@ -170,7 +170,17 @@ DISCLAIMERS: tuple[str, ...] = (
     "purrdf 的扩展",  # "an extension of PurRDF"
     "没有相应的语法",  # "has no syntax (for it)"
     "并无相应的语法",  # "has no syntax (for it)", formal register
+    "不属于 sparql",  # "does not belong to / is not part of SPARQL"
+    "没有四元组模板",  # "(SPARQL 1.2) has no quad template"
+    "非 sparql 1.2 标准",  # "not a SPARQL 1.2 standard (feature)"
+    "自有的扩展",  # "(PurRDF's) own extension"
 )
+# Every entry above, English or Chinese, is an EXACT substring, and a disclaimer is
+# recognized anywhere in the window whatever it is about: an unrelated 「并未定义」 (or
+# "does not define") near a real attribution masks it, and an honest paraphrase the list
+# does not carry is refused. Both are the English gate's own properties, kept on purpose —
+# the gate steers a new site onto an agreed wording rather than judging prose — so a
+# refused paraphrase is answered by adding the wording here, with a self-test line.
 
 # A non-ASCII character (in practice a CJK character or full-width punctuation)
 # with ASCII whitespace on one side of it. The house typography puts a
@@ -426,6 +436,19 @@ _MUST_PASS: tuple[tuple[str, str], ...] = (
         "a Chinese page: an unrelated SPARQL 1.2 mention with no extension phrasing",
         "SPARQL 1.2 新增了三元组项、具体化节点与注解语法。",
     ),
+    # Three paraphrases a reviewer wrote and the first list refused.
+    (
+        "a Chinese page: 'not part of SPARQL 1.2, PurRDF's own extension'",
+        "四元组模板（`CONSTRUCT { GRAPH ?g { ... } }`）不属于 SPARQL 1.2，是 PurRDF 自有的扩展。",
+    ),
+    (
+        "a Chinese page: 'SPARQL 1.2 has no quad template'",
+        "SPARQL 1.2 中没有四元组模板；这是 PurRDF 提供的能力。",
+    ),
+    (
+        "a Chinese page: 'not a SPARQL 1.2 standard feature'",
+        "四元组模板非 SPARQL 1.2 标准，属 PurRDF。",
+    ),
 )
 
 # The translated page WITHOUT its disclaimer: the same false claim the four
@@ -451,8 +474,9 @@ _MUST_CATCH_ZH: tuple[tuple[str, str], ...] = (
 )
 
 # A file name mdBook writes into the (untracked) build output, carrying the
-# flattened text that made the filesystem walk fail on a clean commit.
-_UNTRACKED_BUILD_OUTPUT = "docs/book/book/searchindex.js"
+# flattened text that made the filesystem walk fail on a clean commit (mdBook
+# 0.5 hashes the name; the hash here is only a shape).
+_UNTRACKED_BUILD_OUTPUT = "docs/book/book/searchindex-ef3e7a03.js"
 
 
 def enumeration_self_test(report: bool) -> list[str]:

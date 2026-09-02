@@ -39,9 +39,12 @@ directory, and then runs over that tree:
    entry: the English paragraph changed, the catalogue was not re-merged, and a
    hand-edited ``msgid`` no longer exists in the source.
 
-It also asserts the pinned tool: ``mdbook-i18n-helpers`` is installed at exactly
+It also asserts BOTH pinned tools: ``mdbook-i18n-helpers`` is installed at exactly
 ``MDBOOK_I18N_HELPERS_VERSION`` from the Makefile, read from ``cargo install --list``
-because the binaries themselves report no version. And it reports (report-only, by
+because the binaries themselves report no version; and ``mdbook`` on PATH reports exactly
+``MDBOOK_VERSION`` from ``.github/workflows/docs.yaml`` — the version CI builds with,
+whose Markdown re-serialization and search index are what the measurements in
+``book.toml`` were taken on. And it reports (report-only, by
 design) the catalogue's translated/fuzzy/untranslated counts and how far its msgids have
 drifted from a freshly extracted template — the per-release lag numbers the translation
 owner reads.
@@ -86,6 +89,7 @@ _BOOK = _REPO / "docs" / "book"
 _PO_DIR = _BOOK / "po"
 _PO = _PO_DIR / "zh-Hans.po"
 _MAKEFILE = _REPO / "Makefile"
+_DOCS_WORKFLOW = _REPO / ".github" / "workflows" / "docs.yaml"
 LANGUAGE = "zh-Hans"
 
 # The four prose gates, each with a `--rendered-tree` mode, in the order the
@@ -120,9 +124,17 @@ def pinned_version() -> str:
     return match.group(1)
 
 
+def pinned_mdbook_version() -> str:
+    match = re.search(r"^\s*MDBOOK_VERSION:\s*(\S+)\s*$", _DOCS_WORKFLOW.read_text(), re.M)
+    if not match:
+        raise SystemExit("check-i18n-render: MDBOOK_VERSION is not in .github/workflows/docs.yaml")
+    return match.group(1)
+
+
 def require_tools() -> str:
-    """mdbook and the pinned mdbook-i18n-helpers on PATH; returns the pin."""
+    """mdbook and mdbook-i18n-helpers on PATH, both at their pins; returns the helpers pin."""
     pin = pinned_version()
+    mdbook_pin = pinned_mdbook_version()
     install = f"cargo install mdbook-i18n-helpers --version {pin} --locked"
     for binary in ("mdbook", "mdbook-gettext", "mdbook-xgettext", "cargo"):
         if shutil.which(binary) is None:
@@ -130,6 +142,15 @@ def require_tools() -> str:
                 f"check-i18n-render: `{binary}` is not on PATH — install mdBook and the "
                 f"pinned helpers:\n  {install}"
             )
+    reported = subprocess.run(["mdbook", "--version"], check=True, capture_output=True, text=True).stdout
+    found_mdbook = re.search(r"v?(\d+\.\d+\.\d+)", reported)
+    if found_mdbook is None or found_mdbook.group(1) != mdbook_pin:
+        raise SystemExit(
+            f"check-i18n-render: mdbook version mismatch — `mdbook --version` says "
+            f"{reported.strip()!r}, docs.yaml pins {mdbook_pin}. Install the pin, e.g.\n  "
+            f"curl -sSfL https://github.com/rust-lang/mdBook/releases/download/v{mdbook_pin}/"
+            f"mdbook-v{mdbook_pin}-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.local/bin"
+        )
     listed = subprocess.run(
         ["cargo", "install", "--list"], check=True, capture_output=True, text=True
     ).stdout
@@ -426,7 +447,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     pin = require_tools()
-    print(f"check-i18n-render: mdbook-i18n-helpers {pin} (pinned), mdbook on PATH.")
+    print(f"check-i18n-render: mdbook {pinned_mdbook_version()} and mdbook-i18n-helpers {pin}, both at their pins.")
     if not _PO.is_file():
         raise SystemExit(f"check-i18n-render: no catalogue at {_PO}")
 

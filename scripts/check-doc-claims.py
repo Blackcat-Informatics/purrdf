@@ -101,6 +101,7 @@ import json
 import re
 import string
 import sys
+import subprocess
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -613,6 +614,24 @@ def _check_surface_landmarks(found: set[Path]) -> None:
             )
 
 
+@lru_cache(maxsize=1)
+def _tracked_paths() -> tuple[Path, ...]:
+    """Every path ``git ls-files`` reports, absolute, in path order.
+
+    ONE enumeration for every walk in this script, so the documented surface, the
+    registry manifests and the coverage-table candidates agree about what "the tree"
+    is, and all three agree with the other prose gates: committed first-party source,
+    never a build output, never an untracked file.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(_REPO), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return tuple(sorted(_REPO / rel for rel in out.split("\0") if rel))
+
+
 def _documented_surface() -> list[Path]:
     """Every file in this repository's own documented surface, in path order.
 
@@ -636,11 +655,14 @@ def _documented_surface() -> list[Path]:
         only one of its fields is published. See :func:`_registry_prose`, which the
         entailment-overclaim ban sweeps alongside this walk's Markdown.
       * ``.html`` is deliberately out. Two HTML files are tracked (one vendored RO-Crate
-        fixture and the playground shell), and ``docs/book/book`` holds hundreds more that
-        are mdBook OUTPUT — a re-rendering of Markdown this walk already reads. Including
-        the suffix would sweep the same prose twice and make the gate's answer depend on
-        whether ``make book`` had been run on the machine. The suffix set is what keeps
-        this walk independent of the build.
+        fixture and the playground shell); a re-rendering of Markdown this walk already
+        reads would sweep the same prose twice.
+      * UNTRACKED files are out, whatever their suffix: the walk enumerates ``git
+        ls-files`` — the convention the three sibling prose gates follow — so a build
+        output under ``docs/book/book`` or a developer's scratch notes under ``docs/``
+        never reach it. The first version walked the filesystem, and a stray untracked
+        ``.md`` reddened this gate while the other three could not see it. ``git add``
+        before running the gates.
       * ``.sh``, ``.yml`` and the ``Makefile`` are deliberately out: their comments are build
         mechanics addressed to whoever edits the build, published to no reader. The
         ``scripts`` arm takes ``.py``/``.json`` because those two carry the conformance
@@ -649,17 +671,18 @@ def _documented_surface() -> list[Path]:
         statements this project makes.
     """
     found: list[Path] = []
-    for root in ("crates", "bindings", "docs"):
-        for path in sorted((_REPO / root).rglob("*")):
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if parts[0] in ("crates", "bindings", "docs"):
             if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
                 continue
-            if _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
+            if _UNDOCUMENTED_SEGMENTS.intersection(parts):
                 continue
             found.append(path)
-    for path in sorted((_REPO / "scripts").rglob("*")):
-        if path.suffix in {".py", ".json"}:
+        elif parts[0] == "scripts" and path.suffix in {".py", ".json"}:
             found.append(path)
-    found.extend(sorted(_REPO.glob("*.md")))
+        elif len(parts) == 1 and path.suffix == ".md":
+            found.append(path)
     # Subsumes "the walk returned nothing": every arm must reach its landmark, so a walk
     # that returns nothing fails by naming the first arm that stopped running rather than
     # by reporting a zero that says nothing about which arm produced it.
@@ -720,12 +743,14 @@ def _registry_manifest_paths() -> tuple[Path, ...]:
         )
     names = sorted({name for name, _ in _REGISTRY_DESCRIPTION})
     found: list[Path] = []
-    for root in ("crates", "bindings"):
-        for name in names:
-            for path in (_REPO / root).rglob(name):
-                if not _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
-                    found.append(path)
-    found.extend(_REPO / name for name in names if (_REPO / name).is_file())
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if path.name not in names:
+            continue
+        if parts[0] in ("crates", "bindings") and not _UNDOCUMENTED_SEGMENTS.intersection(parts):
+            found.append(path)
+        elif len(parts) == 1:
+            found.append(path)
     reached = set(found)
     members = (
         tomllib.loads(_read(_REPO / "Cargo.toml")).get("workspace", {}).get("members", [])
@@ -3841,14 +3866,16 @@ _COVERAGE_HEADER = "| Regime | Rule table | Defined | Implemented |"
 # binding READMEs, and the repository front page. Every `.md` under `docs/` is
 # swept, so a new chapter is covered without an edit here.
 def _coverage_candidates() -> list[Path]:
-    return sorted(
-        {
-            _REPO / "README.md",
-            *(_REPO / "crates").glob("*/README.md"),
-            *(_REPO / "bindings").glob("*/README.md"),
-            *(_REPO / "docs").rglob("*.md"),
-        }
-    )
+    found = {_REPO / "README.md"}
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if path.suffix != ".md":
+            continue
+        if parts[0] == "docs" or (
+            parts[0] in ("crates", "bindings") and len(parts) == 3 and path.name == "README.md"
+        ):
+            found.add(path)
+    return sorted(found)
 
 
 def rule_coverage_documents() -> list[Path]:

@@ -2,42 +2,60 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Reject a translated unit that renders a glossary term the way the glossary says not to.
+"""Reject a translated unit that renders a glossary term the way the glossary says not to,
+and a translation that drops a keep-English term.
 
 The zh-Hans glossary (``docs/book/po/glossary-zh-Hans.md``) is a gate input, not a page.
 Roughly a third of the terms PurRDF's documentation turns on have no established mainland
 rendering, and for several of the rest two renderings circulate (蕴涵 and 蕴含 for
 *entailment*, 规范化 and 标准化 for *canonicalization*). A reader who meets both concludes
 they are two concepts. The glossary settles one rendering per term and lists, per term,
-the renderings that are WRONG wherever they appear; this gate refuses any translated unit
-that uses one.
+the renderings that are wrong FOR THAT TERM.
+
+A rejected rendering is wrong only when it renders the glossary's English term: 标准化
+is wrong for *canonicalization* and the only right word for *standardized* — which the
+English book says ("no standardized spelling exists"); 蕴含 is wrong for *entailment*
+and right as the ordinary verb *implies*. A substring test over a ``msgstr`` cannot tell
+those apart, and the first version of this gate refused all of them. So every rejection is
+ANCHORED: it is tested against a ``msgstr`` only when the ``msgid`` carries the row's
+English term (the **Anchor** column). The ``.po`` format gives that pairing for free. A
+row with no anchor is GLOBAL — its rejections apply wherever they appear — and only the
+zh-Hant-register words qualify; the row's note must say so.
+
+Two further rules, each the mirror of an over-refusal or a hole the first version had:
+
+* code spans and fenced blocks inside a ``msgstr`` are never matched (「不要写 `蕴含`」 is
+  prose about a spelling, not the spelling);
+* a **K** row (keep English) is enforced, not merely stated: when a ``msgid`` carries one
+  of its Anchor tokens (case-sensitively, at a word start), the ``msgstr`` must carry it
+  verbatim, so 研究物件 for *Research Object* or 吉猫协议 for *GMEOW* is refused although
+  no Rejected entry names it.
 
 Translated units are:
 
 * every ``msgstr`` in ``docs/book/po/zh-Hans.po`` that ``mdbook-gettext`` would render —
   non-empty, not fuzzy, not obsolete (a fuzzy or obsolete entry renders as English, so a
-  rejected rendering in it is not published and is not refused);
-* every line of every tracked Markdown file with ``zh-Hans`` in its path — a
-  ``README.zh-Hans.md`` sibling, a paragraph-aligned draft under
-  ``docs/book/po/zh-Hans/`` awaiting its pour into the catalogue — enumerated by
-  ``git ls-files`` like the other prose gates; the glossary itself excepted, since it
-  lists the rejected renderings by design.
-
-The glossary is read by its header row. A **Rejected** entry is a plain substring, or a
-``/…/`` regular expression where the wrong rendering is a substring of a right one (bare
-闭包 inside 推理闭包). The table is checked for self-consistency before it is applied: a
-rejected entry that appears inside any row's own rendering would make the glossary refuse
-itself, and is a hard error naming the two rows.
+  rejected rendering in it is not published and is not refused) — paired with its
+  ``msgid``;
+* every line of every tracked Markdown file with ``zh-Hans`` in its path (a
+  ``README.zh-Hans.md`` sibling, a paragraph-aligned draft under ``docs/book/po/zh-Hans/``
+  awaiting its pour into the catalogue), enumerated by ``git ls-files`` like the other
+  prose gates — the glossary itself excepted. A file has no ``msgid``, so it is checked
+  against the GLOBAL rows only; the pour is where the table is fully enforced.
 
     python3 scripts/check-i18n-glossary.py               # verify (exit 1 on a hit)
-    python3 scripts/check-i18n-glossary.py --self-test   # prove the rule bites both ways
+    python3 scripts/check-i18n-glossary.py --self-test   # prove every rule bites both ways
     python3 scripts/check-i18n-glossary.py --po PATH     # a different catalogue
 
-The self-test runs before every scan: each rejected rendering the glossary lists is
-injected into a ``msgstr`` and must be refused, and the glossary's own rendering for the
-same term, an untranslated entry, an English ``msgstr`` and a fuzzy entry carrying the
-rejected rendering must all pass. A glossary with no rejected entries at all is a
-self-test failure — the gate would then be proving nothing.
+The self-test runs before every scan. For every rejection it executes: the refused form
+under an anchored ``msgid`` (refused); the row's own rendering under the same ``msgid``
+(passes); the rejected word in its OTHER sense under an unrelated ``msgid`` — an ordinary
+Chinese sentence, kept in :data:`NEIGHBOURS` (passes); and the rejected word inside a code
+span under the anchored ``msgid`` (passes). For every K token: a translation that drops it
+(refused) and one that keeps it (passes). A rejection with no neighbour, a neighbour that
+does not actually contain the rejected form, a ``/regex/`` whose derived specimen it does
+not match, or a glossary that refuses one of its own renderings is a hard error — so the
+table cannot grow a refusal that is proven only one way.
 """
 
 from __future__ import annotations
@@ -49,22 +67,22 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import po_catalog  # noqa: E402 — the sibling module, found via the line above
+
 _REPO = Path(__file__).resolve().parent.parent
 PO_PATH = _REPO / "docs" / "book" / "po" / "zh-Hans.po"
 GLOSSARY_PATH = _REPO / "docs" / "book" / "po" / "glossary-zh-Hans.md"
 TRANSLATED_PATH_MARK = "zh-Hans"
 
-_HEADER_CELLS = ("#", "Term", "Rendering", "Basis", "Rejected", "Note")
+_HEADER_CELLS = ("#", "Term", "Anchor", "Rendering", "Basis", "Rejected", "Note")
 _NONE_MARKERS = {"", "—", "-", "–"}
-
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import po_catalog  # noqa: E402 — the sibling module, found via the line above
+_SEPARATOR = "、"
 
 
 @dataclass(frozen=True)
 class Rejection:
-    """One rendering the glossary refuses, and the row that refuses it."""
+    """One rendering the glossary refuses for one term."""
 
     term: str
     rendering: str
@@ -79,21 +97,48 @@ class Rejection:
 @dataclass(frozen=True)
 class Row:
     term: str
+    anchors: tuple[str, ...]
     rendering: str
+    basis: str
     rejected: tuple[Rejection, ...]
+    note: str
+
+    @property
+    def is_global(self) -> bool:
+        return not self.anchors
+
+    @property
+    def keep_english(self) -> bool:
+        return self.basis.strip().startswith("K")
+
+    def anchored_in(self, msgid: str) -> bool:
+        """Whether one of the row's anchors appears in ``msgid`` (case-insensitive, at a
+        word start, as a prefix — ``entail`` covers ``entailment``)."""
+        return any(_anchor_re(a, case_sensitive=False).search(msgid) for a in self.anchors)
+
+
+def _anchor_re(anchor: str, *, case_sensitive: bool) -> re.Pattern[str]:
+    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(anchor), 0 if case_sensitive else re.I)
 
 
 def split_cells(line: str) -> list[str]:
-    """The cells of a Markdown table row, honouring backtick spans.
+    """The cells of a Markdown table row, honouring backtick spans and ``\\|``.
 
-    ``|`` inside a code span is content (the annotation syntax ``{| |}`` sits in
-    one cell of the glossary), so the split tracks backtick state.
+    ``|`` inside a code span is content (the annotation syntax ``{| |}`` sits in one cell
+    of the glossary), and ``\\|`` is a literal pipe inside a cell (the regex alternation in
+    a Rejected entry), so the split tracks both.
     """
     cells: list[str] = []
     buf: list[str] = []
     in_code = False
+    escaped = False
     for c in line.strip():
-        if c == "`":
+        if escaped:
+            buf.append(c)
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        elif c == "`":
             in_code = not in_code
             buf.append(c)
         elif c == "|" and not in_code:
@@ -102,7 +147,6 @@ def split_cells(line: str) -> list[str]:
         else:
             buf.append(c)
     cells.append("".join(buf).strip())
-    # A row is written `| a | b |`, so the first and last cells are empty.
     if cells and cells[0] == "":
         cells = cells[1:]
     if cells and cells[-1] == "":
@@ -117,14 +161,15 @@ def _strip_code(cell: str) -> str:
     return cell
 
 
-def parse_rejected(term: str, rendering: str, cell: str) -> tuple[Rejection, ...]:
+def _list_cell(cell: str) -> tuple[str, ...]:
     if cell.strip() in _NONE_MARKERS:
         return ()
+    return tuple(p for p in (_strip_code(x) for x in cell.split(_SEPARATOR)) if p not in _NONE_MARKERS)
+
+
+def parse_rejected(term: str, rendering: str, cell: str) -> tuple[Rejection, ...]:
     out: list[Rejection] = []
-    for piece in cell.split("、"):
-        spelled = _strip_code(piece)
-        if spelled in _NONE_MARKERS:
-            continue
+    for spelled in _list_cell(cell):
         if len(spelled) >= 2 and spelled[0] == "/" and spelled[-1] == "/":
             pattern = re.compile(spelled[1:-1])
         else:
@@ -140,8 +185,7 @@ def parse_glossary(text: str) -> list[Row]:
         (
             i
             for i, line in enumerate(lines)
-            if line.lstrip().startswith("|")
-            and tuple(split_cells(line)) == _HEADER_CELLS
+            if line.lstrip().startswith("|") and tuple(split_cells(line)) == _HEADER_CELLS
         ),
         None,
     )
@@ -160,23 +204,25 @@ def parse_glossary(text: str) -> list[Row]:
                 f"check-i18n-glossary: glossary row has {len(cells)} cells, expected "
                 f"{len(_HEADER_CELLS)}: {line.strip()!r}"
             )
-        _, term, rendering, _basis, rejected, _note = cells
+        _, term, anchor, rendering, basis, rejected, note = cells
         if not term or not rendering:
             raise SystemExit(
                 f"check-i18n-glossary: glossary row with an empty term or rendering: "
                 f"{line.strip()!r}"
             )
-        rows.append(Row(term, rendering, parse_rejected(term, rendering, rejected)))
+        rows.append(
+            Row(term, _list_cell(anchor), rendering, basis, parse_rejected(term, rendering, rejected), note)
+        )
     if not rows:
         raise SystemExit("check-i18n-glossary: the glossary table has no rows")
     return rows
 
 
-# How a self-test specimen is derived from a ``/regex/`` rejection: the
-# lookarounds are removed and the two quantified classes the glossary uses are
-# given a concrete value. ``check_consistency`` asserts the derived specimen
-# really matches its regex, so a regex this table cannot derive a specimen for
-# is a hard error rather than a rejection the self-test never exercises.
+# How a self-test specimen is derived from a ``/regex/`` rejection: the lookarounds are
+# removed and the quantified classes the glossary uses are given a concrete value.
+# ``check_consistency`` asserts the derived specimen really matches its regex, so a regex
+# this table cannot derive a specimen for is a hard error rather than a rejection the
+# self-test never exercises.
 _SPECIMEN_SUBSTITUTIONS = (
     (re.compile(r"\(\?<?[!=].*?\)"), ""),
     (re.compile(r"\\d\+"), "0"),
@@ -198,16 +244,25 @@ def specimen(rule: Rejection) -> str:
 
 
 def check_consistency(rows: list[Row]) -> None:
-    """A rejected rendering may not appear inside ANY row's rendering, and every
-    ``/regex/`` rejection must match the specimen derived for it."""
+    """The table's own invariants, each a hard error."""
     for row in rows:
+        if row.rejected and row.is_global and "global" not in row.note.lower():
+            raise SystemExit(
+                f"check-i18n-glossary: row {row.term!r} has rejections and no Anchor, which "
+                f"makes them GLOBAL, but its Note does not say so or why"
+            )
+        if row.keep_english and row.is_global:
+            raise SystemExit(
+                f"check-i18n-glossary: row {row.term!r} is K (keep English) but names no "
+                f"Anchor token to keep"
+            )
         for rejection in row.rejected:
             probe = specimen(rejection)
             if rejection.find(probe) is None:
                 raise SystemExit(
                     f"check-i18n-glossary: row {row.term!r} rejects {rejection.spelled!r}, "
-                    f"but the specimen derived for it ({probe!r}) does not match it, so "
-                    f"the self-test could never prove it bites. Spell the regex with the "
+                    f"but the specimen derived for it ({probe!r}) does not match it, so the "
+                    f"self-test could never prove it bites. Spell the regex with the "
                     f"constructs the specimen derivation knows (lookarounds, \\d, \\s)"
                 )
             for other in rows:
@@ -215,35 +270,101 @@ def check_consistency(rows: list[Row]) -> None:
                 if hit:
                     raise SystemExit(
                         f"check-i18n-glossary: the glossary refuses itself — row "
-                        f"{row.term!r} rejects {rejection.spelled!r}, which matches "
-                        f"{hit!r} inside row {other.term!r}'s rendering "
-                        f"{other.rendering!r}. Spell the rejection as a /regex/ that "
-                        f"excludes the right rendering, or drop it"
+                        f"{row.term!r} rejects {rejection.spelled!r}, which matches {hit!r} "
+                        f"inside row {other.term!r}'s rendering {other.rendering!r}. Spell "
+                        f"the rejection as a /regex/ that excludes the right rendering, or "
+                        f"drop it"
                     )
 
 
-def rejections(rows: list[Row]) -> list[Rejection]:
-    return [r for row in rows for r in row.rejected]
+# ── Markdown code, which is never prose ───────────────────────────────────────
 
 
-def offences(label: str, text: str, rules: list[Rejection]) -> list[str]:
-    out: list[str] = []
-    for rule in rules:
-        hit = rule.find(text)
-        if hit is None:
+def _inline_code_spans(line: str) -> list[tuple[int, int]]:
+    """``(start, end)`` of every inline code span: a backtick run of N opens a span,
+    closed by the next run of exactly N (the same rule the other prose gates apply)."""
+    spans: list[tuple[int, int]] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] != "`":
+            i += 1
             continue
-        out.append(
-            f"{label}: {hit!r} is a rejected rendering of {rule.term!r} — the glossary "
-            f"says {rule.rendering!r} (docs/book/po/glossary-zh-Hans.md)"
-        )
+        j = i
+        while j < n and line[j] == "`":
+            j += 1
+        run = j - i
+        k = j
+        while k < n:
+            if line[k] != "`":
+                k += 1
+                continue
+            m = k
+            while m < n and line[m] == "`":
+                m += 1
+            if m - k == run:
+                spans.append((i, m))
+                i = m
+                break
+            k = m
+        else:
+            i = j
+    return spans
+
+
+def strip_code(text: str) -> str:
+    """``text`` with fenced blocks and inline code spans removed."""
+    out: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if re.match(r"\s*(?:```+|~~~+)", line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        kept = []
+        last = 0
+        for start, end in _inline_code_spans(line):
+            kept.append(line[last:start])
+            last = end
+        kept.append(line[last:])
+        out.append("".join(kept))
+    return "\n".join(out)
+
+
+# ── The rule ──────────────────────────────────────────────────────────────────
+
+
+def offences(label: str, msgid: str | None, msgstr: str, rows: list[Row]) -> list[str]:
+    """Every way ``msgstr`` breaks the glossary for ``msgid`` (``None`` for a file line)."""
+    out: list[str] = []
+    prose = strip_code(msgstr)
+    for row in rows:
+        applies = row.is_global or (msgid is not None and row.anchored_in(msgid))
+        if applies:
+            for rule in row.rejected:
+                hit = rule.find(prose)
+                if hit is not None:
+                    out.append(
+                        f"{label}: {hit!r} is a rejected rendering of {rule.term!r} — the "
+                        f"glossary says {rule.rendering!r} (docs/book/po/glossary-zh-Hans.md)"
+                    )
+        if row.keep_english and msgid is not None:
+            for token in row.anchors:
+                if _anchor_re(token, case_sensitive=True).search(msgid) and token not in msgstr:
+                    out.append(
+                        f"{label}: the keep-English term {token!r} in the msgid does not "
+                        f"survive into the msgstr — glossary row {row.term!r} keeps it "
+                        f"verbatim (docs/book/po/glossary-zh-Hans.md)"
+                    )
     return out
 
 
-def po_units(po_path: Path) -> list[tuple[str, str]]:
+def po_units(po_path: Path) -> list[tuple[str, str | None, str]]:
     entries = po_catalog.messages(po_catalog.parse_po(po_path.read_text(encoding="utf-8")))
     rel = po_path.relative_to(_REPO) if po_path.is_relative_to(_REPO) else po_path
     return [
-        (f"{rel}:{e.line} (msgid {e.msgid[:48]!r})", e.msgstr)
+        (f"{rel}:{e.line} (msgid {e.msgid[:48]!r})", e.msgid, e.msgstr)
         for e in entries
         if e.translated
     ]
@@ -267,40 +388,80 @@ def tracked_translated_files() -> list[Path]:
     return paths
 
 
-def file_units(path: Path) -> list[tuple[str, str]]:
+def file_units(path: Path) -> list[tuple[str, str | None, str]]:
     rel = path.relative_to(_REPO)
     return [
-        (f"{rel}:{number}", line)
+        (f"{rel}:{number}", None, line)
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
     ]
 
 
 # ── This gate's own falsifiability ────────────────────────────────────────────
 
+# For every rejected rendering, an ordinary Chinese sentence that uses the rejected word
+# in its OTHER sense — the sentence a translator writes on a page about something else,
+# which the gate must not refuse. Keyed by the Rejected cell's spelling. A global row's
+# neighbour is a near miss instead (it must NOT contain the rejected form), because a
+# global rejection is wrong wherever it appears and has no other sense to spare.
+NEIGHBOURS: dict[str, str] = {
+    "具名图": "作者具名发表了这篇文章。",  # global near miss: 具名 alone
+    "资料集": "参考资料见附录。",  # global near miss: 资料 alone
+    "资料类型": "参考资料见附录。",  # global near miss
+    "空白节点": "网页模板中的空白节点会被忽略。",  # an empty DOM node
+    "字面值": "该常量的字面值为 42。",  # a constant's literal value
+    "语言标记": "编辑器根据语言标记进行语法高亮。",  # an editor's language marker
+    "本体论": "本体论是哲学的一个分支。",  # philosophy
+    "/知识图(?!谱)/": "这张知识图示意了课程结构。",  # a knowledge diagram
+    "蕴含": "这一设计蕴含着一个假设。",  # implies
+    "实体化": "该抽象概念被实体化为一个类。",  # reified into a class
+    "标准化": "RDF 1.2 已由 W3C 标准化。",  # standardized
+    "决定性": "这是决定性因素。",  # decisive
+    "出处": "引文出处见脚注。",  # a citation's source
+    "三元组术语": "本节解释三元组术语的由来。",  # the terminology of triples
+    "三元组词项": "三元组词项在逻辑学教材中另有含义。",
+    "基本方向": "设计的基本方向是确定性。",  # basic direction
+    "组合数据类型": "C 语言中的结构体是一种组合数据类型。",  # an aggregate type in C
+    "/(?<!台)账本/": "区块链是一种分布式账本。",  # a blockchain ledger
+    "核外": "核外电子决定了元素的化学性质。",  # extranuclear electrons
+    "/研究对象(?![（(]Research Object)/": "本研究的研究对象为大学生。",  # the object of study
+    "/表面(?!上|看来|来看)/": "水的表面张力很大。",  # surface tension
+    "铸造": "青铜器由铸造而成。",  # bronze casting
+    "抵达": "列车准时抵达车站。",  # a train arriving
+    "大声": "请勿大声喧哗。",  # loudly
+    "全文搜索": "本站提供全文搜索功能。",  # a website's search box
+    "校验报告": "文件校验报告显示哈希一致。",  # a checksum verification report
+}
 
-def _po_with(msgstr: str, *, fuzzy: bool = False, obsolete: bool = False) -> str:
+# A msgid no row anchors — asserted, not assumed, in ``self_test``.
+_UNRELATED_MSGID = "The weather was fine today."
+
+
+def _po_text(msgid: str, msgstr: str, *, fuzzy: bool = False, obsolete: bool = False) -> str:
     prefix = "#~ " if obsolete else ""
     flag = "#, fuzzy\n" if fuzzy else ""
     return (
         'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n\n'
-        f"{flag}{prefix}msgid \"Entailment regimes\"\n"
-        f"{prefix}msgstr \"{po_catalog.escape(msgstr)}\"\n"
+        f'{flag}{prefix}msgid "{po_catalog.escape(msgid)}"\n'
+        f'{prefix}msgstr "{po_catalog.escape(msgstr)}"\n'
     )
 
 
+def _units_of(po_text: str) -> list[tuple[str, str | None, str]]:
+    entries = po_catalog.messages(po_catalog.parse_po(po_text))
+    return [("probe", e.msgid, e.msgstr) for e in entries if e.translated]
+
+
 def self_test(rows: list[Row], report: bool) -> list[str]:
-    """Every rejected rendering must be refused; every right one must pass."""
-    rules = rejections(rows)
+    """Every rule, both ways, executed through :func:`offences`. Empty is the only pass."""
     problems: list[str] = []
+    rules = [r for row in rows for r in row.rejected]
     if not rules:
         return ["the glossary lists no rejected rendering, so this gate refuses nothing"]
-
-    def units_of(po_text: str) -> list[tuple[str, str]]:
-        entries = po_catalog.messages(po_catalog.parse_po(po_text))
-        return [("probe", e.msgstr) for e in entries if e.translated]
+    if any(row.anchored_in(_UNRELATED_MSGID) for row in rows):
+        return [f"the unrelated msgid {_UNRELATED_MSGID!r} is anchored by a row — pick another"]
 
     def verdict(what: str, po_text: str, must_refuse: bool) -> None:
-        found = [o for label, text in units_of(po_text) for o in offences(label, text, rules)]
+        found = [o for label, msgid, msgstr in _units_of(po_text) for o in offences(label, msgid, msgstr, rows)]
         ok = bool(found) is must_refuse
         if report:
             print(f"  {'ok' if ok else 'WRONG':5}  {'refused' if found else 'passes '}  {what}")
@@ -311,48 +472,140 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
             )
 
     for row in rows:
+        anchored = _UNRELATED_MSGID if row.is_global else f"This paragraph is about {row.anchors[0]}."
         for rule in row.rejected:
             probe = specimen(rule)
+            neighbour = NEIGHBOURS.get(rule.spelled)
+            if neighbour is None:
+                problems.append(
+                    f"NO NEIGHBOUR: {row.term} rejects {rule.spelled!r} and NEIGHBOURS has no "
+                    f"ordinary sentence for it — a refusal proven only one way"
+                )
+                continue
+            if row.is_global:
+                if rule.find(neighbour) is not None:
+                    problems.append(
+                        f"BAD NEIGHBOUR: {row.term} is global, so its neighbour must be a near "
+                        f"miss, but {neighbour!r} contains {rule.spelled!r}"
+                    )
+                    continue
+                verdict(
+                    f"{row.term} (GLOBAL): {probe!r} under an unrelated msgid",
+                    _po_text(_UNRELATED_MSGID, f"本页使用{probe}一词。"),
+                    True,
+                )
+                verdict(
+                    f"{row.term} (GLOBAL): the near miss {neighbour!r}",
+                    _po_text(_UNRELATED_MSGID, neighbour),
+                    False,
+                )
+            else:
+                if rule.find(neighbour) is None:
+                    problems.append(
+                        f"BAD NEIGHBOUR: {neighbour!r} does not contain {rule.spelled!r}, so it "
+                        f"proves nothing about {row.term}'s rejection"
+                    )
+                    continue
+                verdict(
+                    f"{row.term}: {probe!r} under an anchored msgid ({row.anchors[0]!r})",
+                    _po_text(anchored, f"本页使用{probe}一词。"),
+                    True,
+                )
+                verdict(
+                    f"{row.term}: the other sense — {neighbour!r} under an unrelated msgid",
+                    _po_text(_UNRELATED_MSGID, neighbour),
+                    False,
+                )
+            # A K row's probe keeps the invariant token beside the code span, so the
+            # survival arm has nothing to say and only the code-span rule is tested.
+            keep = f"（{row.anchors[0]}）" if row.keep_english else ""
             verdict(
-                f"{rule.term}: the rejected rendering {probe!r} in a msgstr",
-                _po_with(f"本页使用{probe}一词。"),
-                True,
+                f"{row.term}: {probe!r} inside a code span under the anchored msgid",
+                _po_text(anchored, f"不要写 `{probe}`{keep}。"),
+                False,
             )
-        rendering = _strip_code(row.rendering)
-        verdict(
-            f"{row.term}: the glossary rendering {rendering!r} in a msgstr",
-            _po_with(f"本页使用 {rendering} 一词。"),
-            False,
-        )
+        if row.rejected:
+            rendering = _strip_code(row.rendering)
+            if rendering != "as written":
+                verdict(
+                    f"{row.term}: the glossary rendering {rendering!r} under the anchored msgid",
+                    _po_text(anchored, f"本页使用 {rendering} 一词。"),
+                    False,
+                )
+        if row.keep_english:
+            for token in row.anchors:
+                verdict(
+                    f"{row.term}: {token!r} in the msgid, DROPPED from the msgstr",
+                    _po_text(f"The {token} toolkit is here.", "该工具包在此。"),
+                    True,
+                )
+                verdict(
+                    f"{row.term}: {token!r} in the msgid, kept in the msgstr",
+                    _po_text(f"The {token} toolkit is here.", f"该 {token} 工具包在此。"),
+                    False,
+                )
+            verdict(
+                f"{row.term}: no token in the msgid, nothing to keep",
+                _po_text("The toolkit is here.", "该工具包在此。"),
+                False,
+            )
+
     probe = specimen(rules[0])
-    verdict("an untranslated entry (empty msgstr)", _po_with(""), False)
-    verdict("an English msgstr", _po_with("Entailment regimes"), False)
+    anchored = f"This paragraph is about {next(r for r in rows if r.rejected and not r.is_global).anchors[0]}."
+    verdict("an untranslated entry (empty msgstr)", _po_text(anchored, ""), False)
+    verdict("an English msgstr", _po_text(anchored, anchored), False)
     verdict(
         f"a FUZZY entry carrying {probe!r} (not rendered, so not refused)",
-        _po_with(f"本页使用{probe}一词。", fuzzy=True),
+        _po_text(anchored, f"本页使用{probe}一词。", fuzzy=True),
         False,
     )
     verdict(
         f"an OBSOLETE entry carrying {probe!r} (not rendered, so not refused)",
-        _po_with(f"本页使用{probe}一词。", obsolete=True),
+        _po_text(anchored, f"本页使用{probe}一词。", obsolete=True),
         False,
     )
+    # The sentences from the review that the first version refused, and the book's own.
+    for what, msgid, msgstr in (
+        (
+            "the book's own sentence: 'no standardized spelling exists'",
+            "Other engines already ship a form of it, but no standardized spelling exists.",
+            "其他引擎已经提供了某种形式，但不存在标准化的拼写。",
+        ),
+        (
+            "a faithful sentence keeping every invariant",
+            "PurRDF is an RDF 1.2 toolkit in Rust with Python and WebAssembly bindings.",
+            "PurRDF 是一个用 Rust 编写的 RDF 1.2 工具包，提供 Python 与 WebAssembly 绑定。",
+        ),
+        (
+            "the gloss form with the acronym",
+            "Research Object projections",
+            "研究对象（Research Object，RO）投影",
+        ),
+    ):
+        verdict(what, _po_text(msgid, msgstr), False)
+    for what, msgid, msgstr in (
+        ("Research Object rendered as 研究物件", "Research Object projections", "研究物件（RO）投影"),
+        ("GMEOW translated", "The GMEOW ontology.", "吉猫协议本体。"),
+        ("IRI translated in running text", "Every IRI is absolute.", "每个国际化资源标识符都是绝对的。"),
+    ):
+        verdict(what, _po_text(msgid, msgstr), True)
     return problems
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--self-test", action="store_true", help="prove the rule, then stop")
+    ap.add_argument("--self-test", action="store_true", help="prove the rules, then stop")
     ap.add_argument("--po", type=Path, default=PO_PATH, help="the catalogue to check")
     ap.add_argument("--glossary", type=Path, default=GLOSSARY_PATH)
     args = ap.parse_args(argv)
 
     rows = parse_glossary(args.glossary.read_text(encoding="utf-8"))
     check_consistency(rows)
-    rules = rejections(rows)
+    rules = [r for row in rows for r in row.rejected]
+    tokens = [t for row in rows if row.keep_english for t in row.anchors]
 
     if args.self_test:
-        print("check-i18n-glossary: proving every rejected rendering is refused —")
+        print("check-i18n-glossary: proving every rule bites, and only bites —")
     problems = self_test(rows, report=args.self_test)
     if problems:
         print(
@@ -363,33 +616,34 @@ def main(argv: list[str]) -> int:
         return 1
     if args.self_test:
         print(
-            f"OK: {len(rules)} rejected rendering(s) across {len(rows)} glossary row(s), "
-            "each refused, each row's own rendering spared."
+            f"OK: {len(rules)} rejected rendering(s) across {len(rows)} glossary row(s) "
+            f"({sum(1 for r in rows if r.rejected and r.is_global)} global), each refused "
+            f"under its anchor and spared in its other sense; {len(tokens)} keep-English "
+            f"token(s), each refused when dropped."
         )
         return 0
 
-    units: list[tuple[str, str]] = []
-    if args.po.is_file():
-        units.extend(po_units(args.po))
-    else:
+    if not args.po.is_file():
         print(f"check-i18n-glossary: no catalogue at {args.po}", file=sys.stderr)
         return 1
+    units = po_units(args.po)
     files = tracked_translated_files()
     for path in files:
         units.extend(file_units(path))
 
-    found = [o for label, text in units for o in offences(label, text, rules)]
+    found = [o for label, msgid, msgstr in units for o in offences(label, msgid, msgstr, rows)]
     if found:
         print(
-            "check-i18n-glossary: translated text uses a rendering the glossary rejects:\n"
+            "check-i18n-glossary: translated text breaks the glossary:\n"
             + "\n".join(f"  - {o}" for o in found),
             file=sys.stderr,
         )
         return 1
+    po_label = args.po.relative_to(_REPO) if args.po.is_relative_to(_REPO) else args.po
     print(
-        f"OK: {len(rules)} rejected rendering(s) from {len(rows)} glossary row(s) absent "
-        f"from {len(units)} translated unit(s) ({args.po.relative_to(_REPO) if args.po.is_relative_to(_REPO) else args.po} "
-        f"plus {len(files)} tracked {TRANSLATED_PATH_MARK} Markdown file(s))."
+        f"OK: {len(rules)} rejected rendering(s) and {len(tokens)} keep-English token(s) from "
+        f"{len(rows)} glossary row(s) respected by {len(units)} translated unit(s) ({po_label} "
+        f"plus {len(files)} tracked {TRANSLATED_PATH_MARK} Markdown file(s), global rows only)."
     )
     return 0
 
