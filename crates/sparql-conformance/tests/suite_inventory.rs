@@ -218,13 +218,18 @@ fn suite_root() -> std::path::PathBuf {
 
 /// The vendored `vectors/sparql-cdt` root (SEP-0009, `awslabs/SPARQL-CDTs`).
 ///
-/// Deliberately NOT under `suite/`: the corpus is graded by no
-/// `purrdf-sparql-conformance` suite (no `datatest_stable` case, no
-/// `conformance-matrix.py` row) because the evaluator implements no CDT/FOLD/
-/// UNFOLD surface for it to grade, and a matrix row over an absent surface would
-/// report a permanently red suite rather than a measurement. The corpus, its
-/// aggregator manifest, and its per-group counts are still gated here and in
-/// `tests/manifest_include.rs`, so the vendored bytes cannot drift unnoticed.
+/// Deliberately NOT under `suite/`, and for the same reason the two first-party
+/// query-form corpora live under `corpus/`: `sparql_conformance.rs`'s
+/// `datatest_stable::harness!` is rooted at `suite/` and folds every manifest it
+/// finds into ONE matix row, and this corpus reports its OWN row. It is run by
+/// `tests/cdt_corpus.rs` through its `mf:include` aggregator.
+///
+/// What lives HERE is the inventory half: the per-group `mf:entries` and
+/// on-disk file counts below, which catch a re-sync that drops or duplicates a
+/// case even though every group manifest is still present and the aggregator
+/// still resolves. `tests/cdt_corpus.rs` separately pins the count the
+/// aggregator resolves, and `tests/manifest_include.rs` pins the include
+/// closure, so no one of the three can go quiet on its own.
 fn sparql_cdt_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -242,9 +247,9 @@ fn sparql_cdt_root() -> std::path::PathBuf {
 /// fixture files without changing the declared case count, e.g. a renamed `.rq`
 /// still referenced by the same `mf:entries` member count).
 ///
-/// This is corpus-inventory only: no evaluation runs against these manifests yet
-/// (no CDT/FOLD/UNFOLD support), so this test loads and counts but never executes
-/// a case.
+/// This test is corpus-inventory only — it loads and counts, and never executes
+/// a case. The cases themselves are RUN by `tests/cdt_corpus.rs`, which reports
+/// the corpus's own scoreboard row.
 #[test]
 fn sparql_cdt_inventory() {
     const GROUPS: &[(&str, usize, usize)] = &[

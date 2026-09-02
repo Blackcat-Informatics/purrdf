@@ -98,10 +98,12 @@ same posture as the ShEx namespace in `vectors/shexTest`.
 | `bnodes`         |           76 |   118 |
 | **Total**        |      **658** |       |
 
-Harness: this chunk lands the corpus only — no `purrdf-sparql-conformance`
-suite reads it yet (no `crates/sparql-conformance/suite/` entry, no
-`conformance-matrix.py` row); wiring in `FOLD`/`UNFOLD`/CDT evaluation is
-separate follow-on work.
+Harness: `crates/sparql-conformance/tests/cdt_corpus.rs` runs every case here
+through `manifest-all.ttl`'s `mf:include` aggregator and reports the
+`SPARQL CDT (SEP-0009, vendored corpus)` row of `conformance-matrix.py`. The
+corpus deliberately stays OUTSIDE `crates/sparql-conformance/suite/`, whose
+`datatest_stable` root folds every manifest it finds into the one full-corpus
+row; keeping it here is what gives it a row of its own.
 """
 
 

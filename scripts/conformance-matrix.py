@@ -447,6 +447,49 @@ def _suite_describe_corpus() -> SuiteResult:
     )
 
 
+def _suite_cdt_corpus() -> SuiteResult:
+    """Vendored SEP-0009 SPARQL Composite Datatypes corpus (`vectors/sparql-cdt/`).
+
+    The INDEPENDENT oracle for `cdt:List`/`cdt:Map`, `FOLD` and `UNFOLD`. Its own
+    row rather than a fold into the SPARQL row for the reason the CONSTRUCT and
+    DESCRIBE corpora have theirs: a consumer asking whether this engine does
+    SEP-0009 must be able to read the answer off the scoreboard instead of out of
+    a four-digit total, and the answer here carries a documented lexical-space
+    divergence that a merged number would bury.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "cdt_corpus", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"SPARQL-CDT-CORPUS: passed (\d+) xfail (\d+) total (\d+)", out)
+    if m:
+        passed, xfail, total = (int(m.group(i)) for i in (1, 2, 3))
+        detail = (
+            f"{passed}/{total} vendored upstream cases (awslabs/SPARQL-CDTs, commit "
+            "e0a7465) across six groups: the list and map function libraries, the "
+            "FOLD aggregate and the UNFOLD graph pattern, ORDER BY over composite "
+            "values, and blank-node identity inside composite lexical forms. "
+            "PurRDF reads TWO forms outside the published lexical space — an RDF "
+            "1.2 triple term and a directional language-tagged literal as list "
+            "elements or map values — which a conformant SEP-0009 reader calls "
+            "ill-formed; `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` "
+            "grades every composite literal in every corpus this workspace ships "
+            "and proves not one of them needs either"
+        )
+        return SuiteResult(
+            "SPARQL CDT (SEP-0009, vendored corpus)", "awslabs/SPARQL-CDTs",
+            passed=passed, xskip=xfail, failed=(total - passed - xfail),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed + xfail == total),
+            log=out,
+        )
+    return _no_scoreboard(
+        "SPARQL CDT (SEP-0009, vendored corpus)", "awslabs/SPARQL-CDTs",
+        "`SPARQL-CDT-CORPUS: passed N xfail X total M`", cmd, out,
+    )
+
+
 def _suite_governor_corpus() -> SuiteResult:
     """First-party frozen execution-governor corpus.
 
@@ -861,6 +904,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_sparql(),
         _suite_construct_corpus(),
         _suite_describe_corpus(),
+        _suite_cdt_corpus(),
         _suite_governor_corpus(),
         _suite_entailment(),
         _suite_entailment_rl(),
@@ -1082,6 +1126,15 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("running 1 test"),
             _board("DESCRIBE-CORPUS: passed 7 total 7"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SPARQL CDT (SEP-0009, vendored corpus)",
+        _suite_cdt_corpus,
+        (
+            _noise("running 2 tests"),
+            _board("SPARQL-CDT-CORPUS: passed 9 xfail 1 total 10"),
             _noise(_CARGO_OK),
         ),
     ),
