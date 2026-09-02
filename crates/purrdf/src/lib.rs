@@ -19,6 +19,7 @@
 //! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
 //! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
 //! | [`datalog`] | [`purrdf_datalog`] (the semi-naive engine [`entail`]'s public types carry) |
+//! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
@@ -230,6 +231,13 @@ pub mod datalog {
     pub use purrdf_datalog::*;
 }
 
+/// Deterministic full-text search over RDF 1.2 literals ([`purrdf_text`]): an
+/// in-memory inverted index, exact fixed-point BM25 ranking, and the relations a
+/// caller registers on [`sparql`]'s property-function seam under its own IRIs.
+pub mod text {
+    pub use purrdf_text::*;
+}
+
 /// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
 /// shapes+data pair to a source-traced, byte-deterministic SARIF log.
 pub mod validate {
@@ -256,6 +264,50 @@ mod tests {
         };
         let _ = shex::parse_shexc("PREFIX ex: <https://example.org/>\nex:S { ex:p . }", None)
             .expect("shex facade parses");
+    }
+
+    /// The `text` module is reachable from the facade and answers, so the
+    /// module map's completeness claim ("anything a consumer legitimately
+    /// imports is reachable from `purrdf` alone") covers it.
+    ///
+    /// A re-export that compiles but exposes nothing usable is the failure this
+    /// catches, so the test builds a real index and retrieves from it rather
+    /// than merely naming a type.
+    #[test]
+    fn facade_exposes_full_text_search() {
+        let mut builder = RdfDatasetBuilder::new();
+        let note = builder.intern_iri("https://example.org/note");
+        let subject = builder.intern_iri("https://example.org/a");
+        let literal = builder.intern_literal(RdfLiteral::simple("the quick brown fox"));
+        builder.push_quad(subject, note, literal, None);
+        let dataset = builder.freeze().expect("the facade fixture validates");
+
+        let config = text::TextIndexConfig::new(
+            vec![TermValue::iri("https://example.org/note")],
+            text::GraphSelector::Any,
+        )
+        .expect("one IRI predicate is a well-formed configuration");
+        let index =
+            text::TextIndex::from_dataset(&*dataset, &config).expect("the facade index builds");
+        assert_eq!(index.document_count(), 1);
+
+        let needle = vec!["quick".to_owned()];
+        let ranked = text::select(
+            &index,
+            &needle,
+            &text::PartitionFilter::unconstrained(),
+            None,
+            None,
+        )
+        .expect("the facade ranks");
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|row| (row.document, row.partition_rank))
+                .collect::<Vec<_>>(),
+            vec![(0, 1)],
+            "the one document holding the needle is its partition's rank one"
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ members = [
     "crates/sparql-conformance",
     "crates/sparql-eval",
     "crates/sparql-results",
+    "crates/text",
     "crates/validate",
     "crates/xsd",
 ]
@@ -61,6 +62,7 @@ purrdf-slice = { path = "crates/slice", version = "0.12.0" }
 purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.12.0" }
 purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.12.0" }
 purrdf-sparql-results = { path = "crates/sparql-results", version = "0.12.0" }
+purrdf-text = { path = "crates/text", version = "0.12.0" }
 purrdf-validate = { path = "crates/validate", version = "0.12.0" }
 purrdf-xsd = { path = "crates/xsd", version = "0.12.0" }
 
@@ -76,6 +78,14 @@ blake3 = { version = "1", features = ["rayon"] }
 # dependency, so the wasm gate is unaffected (`make wasm` builds `--lib` only).
 boon = "0.6"
 camino = "1"
+# Full Unicode case folding (the `CaseFolding.txt` table, Unicode Annex UAX 21).
+# The text analyzer folds before it segments, and folding is NOT lowercasing:
+# `str::to_lowercase` leaves `ß` alone, so "STRASSE" and "Straße" would index as
+# different terms and a query for one would never retrieve the other. Full case
+# folding maps both to `strasse`. Pure Rust, table-driven, no syscalls and no
+# ambient state; its only dependency is unicode-normalization, already a
+# workspace dependency, so it is wasm32-unknown-unknown-clean.
+caseless = "0.2"
 ciborium = "0.2"
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
@@ -147,6 +157,22 @@ structured-zstd = "0.0.49"
 fastrand = "2"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
+# Unicode normalization (Unicode Annex UAX 15). The text index normalizes every
+# literal BEFORE it segments it: a decomposed combining mark is its own scalar,
+# and the word-boundary rules of UAX 29 would otherwise split it off the base
+# character it modifies, so `é` written as `e` + U+0301 would tokenize as a
+# different word than the precomposed spelling of the same text. The analyzer
+# uses the NFD/NFKD/NFC steps of the compatibility caseless form (see `caseless`
+# above). Pure Rust, table-driven, no syscalls and no ambient state, so it is
+# wasm32-unknown-unknown-clean.
+unicode-normalization = "0.1"
+# Unicode Annex UAX 29 word boundaries — the Unicode-standard tokenization the
+# text index uses in place of an ad-hoc alphanumeric run. A run of
+# `char::is_alphanumeric` is correct only for the scripts whoever wrote it had in
+# mind; UAX 29 is correct across every script, which is the difference between a
+# text index that retrieves Thai or Devanagari and one that silently does not.
+# Pure Rust, table-driven, wasm32-unknown-unknown-clean.
+unicode-segmentation = "1"
 visual-hashing = "0.1.3"
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg` and

@@ -137,7 +137,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 18 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 19 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -162,7 +162,7 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
@@ -228,6 +228,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf-text \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
@@ -237,12 +238,15 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
-	@# ANSWER the same way there, and for the embedding kNN surface — which ranks by
-	@# binary64 arithmetic — that is the claim that matters: a reassociated sum or a
-	@# fused multiply-add changes a last bit, two near-tied neighbours swap, and the
-	@# browser returns a different ANSWER than the host. So this lane compiles the
-	@# tagged test to wasm32 and runs it in Node, against the same pinned expectations
-	@# the native `cargo test` run asserts.
+	@# ANSWER the same way there, and for the two ranking surfaces that is the claim
+	@# that matters. The embedding kNN surface ranks by binary64 arithmetic: a
+	@# reassociated sum or a fused multiply-add changes a last bit, two near-tied
+	@# neighbours swap, and the browser returns a different ANSWER than the host.
+	@# `purrdf-text` ranks by BM25, which needs a natural logarithm — the same hazard
+	@# in the other direction, and the reason its arithmetic is exact i128 fixed point
+	@# with a fixed-iteration integer `ln` instead of a libm call. So this lane
+	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
+	@# pinned expectations the native `cargo test` run asserts.
 	@#
 	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
 	@# wasm lane already installs, so there is no second version to keep in step.
@@ -258,7 +262,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	else \
 		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism; \
+			-p purrdf-sparql-eval --test knn_wasm_determinism \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-text --test wasm_determinism; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
