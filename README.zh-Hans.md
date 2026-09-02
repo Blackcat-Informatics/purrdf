@@ -163,6 +163,22 @@ ORDER BY ?rank
   SKOS 视图、原生的 DCAT/VoID 数据集描述，以及 RO-Crate 1.3 / Croissant 1.1 /
   DataCite 4.6 / DCAT 3 / Frictionless 载体——每个有损步骤都经由定位到具体位置的损失
   台账报告——外加 `purrdf-columnar` 中五表结构、字节级确定的 Parquet 编解码器。
+- **RDF 1.2 可视化**——一个以陈述为中心的投影（`purrdf::viz`），为数据集做布局并渲染
+  静态 SVG，并把 RDF 1.2 画成 RDF 1.2 本来的样子：三元组项是一个有边界的陈述图元
+  （glyph）而不是一条箭头，具体化节点是一个经由 `reifies` 边与其所具体化的陈述相连的
+  节点、其注解就在旁边，已断言的出现与被引用的出现保持区分，命名图上下文与方言诊断
+  （dialect diagnostics，广义或对称位置）得以保留而不是被压平。同一模型之上有三种
+  模式——`compact`（资源图）、`incidence`（精确的陈述/关联图）与 `table`（陈述行）。
+  布局是确定的：id 由陈述键生成，每一种排序都是对陈述键的排序，破环方式固定，而绘图
+  所依据的完整带版本号导出 JSON（`purrdf-viz-export-1`）内嵌在 SVG 的 `<metadata>`
+  中，因此该文件既是一幅图，也是陈述模型的机器可读导出；`make check` 会重新渲染本书
+  的十五幅示例 SVG，任何一个字节的漂移都会失败。止步于何处：仅限静态 SVG，没有交互式
+  布局；一个由调用方设定的上限（`VizSpec::max_statements`，默认 500，以及
+  `max_terms`，默认 1,500），超出上限的输入以 `VizError::TooLarge` 拒绝而不是截断；
+  可从 Rust 与 JavaScript/wasm 包（`visualModel`、`visualExport`、`visualSvg`）访问，
+  尚不能从 Python、C 或 CLI 访问。参见
+  [RDF 1.2 可视化](./docs/book/src/concepts/visualization.md) 及其示例，例如
+  [asserted-reified-compact](./docs/book/src/assets/visualization/purrdf-viz2-asserted-reified-compact.svg)。
 - **SPARQL 1.1/1.2**——原生解析器 → 代数 → 驻留 IR 上的多重集求值器：全部四种查询
   形式加完整的 SPARQL Update、属性路径、基于代价的 BGP 规划，以及强制的 `VERSION`
   声明（含 `1.2-basic` profile）。`EXISTS`/`NOT EXISTS` 运行在 SEP-0007 可辩护的
@@ -471,15 +487,22 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 
 ## 版本与 MSRV
 
-**1.0 之前的 semver 政策。**版本为 `0.x` 期间，**次版本**升级（`0.x` → `0.(x+1)`）
-可以包含破坏性的 API 变更；**修订版**升级（`0.x.y` → `0.x.(y+1)`）只含缺陷修复且 API
-兼容。全部三个已发布的包——crates.io 的 crate 套件、PyPI 的 `purrdf` 包与 npm 的
-`@blackcatinformatics/purrdf` 包——共享**同一个**工作区版本并同步发布。这一一致性在
-CI 中强制执行：三个版本来源不一致时，版本一致性检查会让构建失败。
+**自 1.0.0 起的 semver。**自 1.0.0 起，本套件完整遵循语义化版本：**破坏性**变更提升
+**主版本**——携带 `!` 或 `BREAKING CHANGE:` 的提交是主版本提升的触发条件，变更日志会把
+每一条这样的条目标记为 **BREAKING**——**次版本**提升只做加法且 API 兼容，**修订版**提升
+只含缺陷修复。这是版本号所承诺的内容；它并不是超出 semver 含义之外的稳定性声称。全部
+三个已发布的包——crates.io 的 crate 套件、PyPI 的 `purrdf` 包与 npm 的
+`@blackcatinformatics/purrdf` 包——共享**同一个**工作区版本并同步发布，CI 中的版本
+一致性检查会在各版本来源（`Cargo.toml`、`pyproject.toml`、`package.json`、
+`CITATION.cff`）不一致时让构建失败。唯一的例外是 C ABI。`libpurrdf` 的
+[`purrdf.h`](./crates/rdf-capi/include/purrdf.h) 携带自己的
+`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.7**），在每次导出签名变更时提升，由
+`crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时经由 `purrdf_abi_version`
+读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
 
 **MSRV 政策。**支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`（当前为
 **1.96**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
-上构建。提高 MSRV 是一项记入变更日志的显著变更，并在 1.0 之前随次版本升级进行。
+上构建。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。
 README 中的 MSRV 徽章由人工维护，必须与 `rust-version` 一同更新。
 
 贡献者使用一个带日期的 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与
