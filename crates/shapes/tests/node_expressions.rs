@@ -659,3 +659,278 @@ fn bool_lit(b: bool) -> String {
     let lexical = if b { "true" } else { "false" };
     format!(r#""{lexical}"^^<http://www.w3.org/2001/XMLSchema#boolean>"#)
 }
+
+// ── Shape-valued operands must name a shape (silent-vacuous-success guard) ──────
+
+/// Parse `shapes_ttl` and return the load error, asserting the load FAILED.
+fn load_error(shapes_ttl: &str) -> String {
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"))
+        .expect_err("this shapes graph must fail to load")
+}
+
+/// Parse `shapes_ttl` and assert it LOADS, returning nothing but the proof.
+fn loads(shapes_ttl: &str) {
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}")).expect("this shapes graph must load");
+}
+
+/// A node expression whose SHAPE operand names a node the shapes graph never
+/// described as a shape must be a LOAD error at every one of the five shape-valued
+/// kinds — never a green load.
+///
+/// This is the `sh:condition` defect generalised. `parse_inline_shape` answers an
+/// undescribed node with an EMPTY shape and every node conforms to an empty shape,
+/// so `shnex:matchAll ex:Typo` does not fail, it reports `true`; `shnex:findFirst`
+/// returns the first input node; `sh:filterShape` filters nothing out;
+/// `shnex:conformsToShape` reports `true`; `shnex:nodesMatching` matches
+/// everything. Each is a silent success the author never earned.
+#[test]
+fn a_shape_operand_that_is_not_a_shape_fails_the_load_at_every_kind() {
+    // (fixture, the operand's owner as the diagnostic must name it)
+    let cases: [(&str, &str); 5] = [
+        (
+            "sh:expression [ shnex:matchAll ex:NotAShape ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+            "shnex:matchAll",
+        ),
+        (
+            "sh:expression [ shnex:findFirst ex:NotAShape ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+            "shnex:findFirst",
+        ),
+        (
+            "sh:expression [ shnex:filterShape ex:NotAShape ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+            "shnex:filterShape",
+        ),
+        (
+            "sh:expression [ shnex:conformsToShape ( [ shnex:var \"focusNode\" ] ex:NotAShape ) ]",
+            "shnex:conformsToShape",
+        ),
+        (
+            "sh:expression [ shnex:nodesMatching ex:NotAShape ]",
+            "shnex:nodesMatching",
+        ),
+    ];
+    for (body, owner) in cases {
+        let err = load_error(&format!(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; {body} ."
+        ));
+        assert!(
+            err.contains("does not describe as a shape"),
+            "{owner} must refuse an undefined shape operand, got: {err}"
+        );
+        assert!(
+            err.contains("vacuously"),
+            "the diagnostic must say WHY silence is the danger, got: {err}"
+        );
+        assert!(
+            err.contains(owner),
+            "the diagnostic must name the operand's owner {owner}, got: {err}"
+        );
+    }
+}
+
+/// The NEIGHBOURING VALID case for every one of the five: the very same fixtures
+/// with a shape operand the shapes graph really does describe must still LOAD.
+///
+/// Three spellings of "is a shape" are exercised, because
+/// [`Parser::node_is_a_shape`] accepts all three and narrowing it to `a
+/// sh:NodeShape` would reject legal SHACL: an explicitly typed node shape, an
+/// UNTYPED node the shapes graph makes a SHACL statement about (`sh:nodeKind`),
+/// and an ANONYMOUS inline shape.
+#[test]
+fn the_same_five_kinds_still_load_when_the_operand_really_is_a_shape() {
+    let declarations = [
+        // Explicitly typed.
+        "ex:Op a sh:NodeShape ; sh:nodeKind sh:IRI .",
+        // Untyped, but the shapes graph makes a SHACL statement about it.
+        "ex:Op sh:nodeKind sh:IRI .",
+        // A top-level sh:PropertyShape.
+        "ex:Op a sh:PropertyShape ; sh:path ex:name ; sh:minCount 1 .",
+    ];
+    let bodies = [
+        "sh:expression [ shnex:matchAll ex:Op ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+        "sh:expression [ shnex:findFirst ex:Op ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+        "sh:expression [ shnex:filterShape ex:Op ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+        "sh:expression [ shnex:conformsToShape ( [ shnex:var \"focusNode\" ] ex:Op ) ]",
+        "sh:expression [ shnex:nodesMatching ex:Op ]",
+    ];
+    for declaration in declarations {
+        for body in bodies {
+            loads(&format!(
+                "{declaration}\n ex:S a sh:NodeShape ; sh:targetNode ex:a ; {body} ."
+            ));
+        }
+    }
+    // And the ANONYMOUS inline shape, which has no IRI to declare.
+    loads(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:expression [ shnex:matchAll [ sh:nodeKind sh:IRI ] ;
+                             shnex:nodes [ shnex:pathValues ex:p ] ] .",
+    );
+}
+
+/// The refusal changes the ANSWER, not just the diagnostic: with the operand
+/// declared as a shape, `shnex:matchAll` over literal value nodes reports `false`.
+/// Before the guard, the identical shapes graph with an undefined operand reported
+/// `true` — the "all clear" reading — which is the reason silence here is a bug
+/// and not a nicety.
+#[test]
+fn match_all_against_a_declared_shape_still_answers_false_for_non_conforming_nodes() {
+    let shapes = "ex:MustBeIri a sh:NodeShape ; sh:nodeKind sh:IRI .
+         ex:S a sh:NodeShape ;
+             sh:expression [ shnex:matchAll ex:MustBeIri ;
+                             shnex:nodes [ shnex:pathValues ex:score ] ] .";
+    assert_eq!(
+        outputs("ex:a ex:score 1, 2, 3 .", shapes, "a"),
+        vec![bool_lit(false)],
+        "literal value nodes are not IRIs, so matchAll must answer false"
+    );
+}
+
+// ── Every authored key must be one the selected kind reads ──────────────────────
+
+/// A node-expression key the SELECTED kind does not read is a LOAD error, not a
+/// silently discarded operand.
+///
+/// Each pair below is the SAME expression written with one key spelled for the
+/// other surface. Before this check the mis-spelled key was accepted and dropped,
+/// and the drop CHANGED THE ANSWER: the `shnex:nodes` operand fell back to the
+/// focus node, both `if` branches became the empty expression, and the `desc` flag
+/// silently reverted to ascending.
+#[test]
+fn a_key_the_selected_kind_does_not_read_is_refused_rather_than_dropped() {
+    let cases: [(&str, &str); 5] = [
+        // `shnex:matchAll` reads `shnex:nodes`; `sh:nodes` is the other surface.
+        (
+            "sh:expression [ shnex:matchAll ex:Op ; sh:nodes [ shnex:pathValues ex:p ] ]",
+            "http://www.w3.org/ns/shacl#nodes",
+        ),
+        // `shnex:if` reads `shnex:then`/`shnex:else`.
+        (
+            "sh:expression [ shnex:if true ; sh:then true ; shnex:else false ]",
+            "http://www.w3.org/ns/shacl#then",
+        ),
+        // `sh:if` reads `sh:then`/`sh:else`.
+        (
+            "sh:expression [ sh:if true ; shnex:then true ; sh:else false ]",
+            "http://www.w3.org/ns/shacl-node-expr#then",
+        ),
+        // `shnex:orderBy` reads `shnex:desc`; `sh:desc` modifies the `sh:orderby`
+        // WRAPPER, which this node does not carry.
+        (
+            "sh:expression [ shnex:orderBy sh:this ; shnex:nodes [ shnex:pathValues ex:p ] ;
+                             sh:desc true ]",
+            "http://www.w3.org/ns/shacl#desc",
+        ),
+        // A path expression has no `shnex:nodes` operand at all.
+        (
+            "sh:expression [ shnex:pathValues ex:p ; shnex:nodes [ shnex:pathValues ex:q ] ]",
+            "http://www.w3.org/ns/shacl-node-expr#nodes",
+        ),
+    ];
+    for (body, dropped) in cases {
+        let err = load_error(&format!(
+            "ex:Op a sh:NodeShape ; sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ; {body} ."
+        ));
+        assert!(
+            err.contains(dropped),
+            "the diagnostic must name the key that would have been dropped ({dropped}), got: {err}"
+        );
+        assert!(
+            err.contains("silently discarded"),
+            "the diagnostic must say the key would have been dropped, got: {err}"
+        );
+    }
+}
+
+/// The NEIGHBOURING VALID case for each of the five: spelled consistently, every
+/// one of those expressions loads.
+#[test]
+fn the_same_five_expressions_load_when_the_keys_are_spelled_consistently() {
+    let bodies = [
+        "sh:expression [ shnex:matchAll ex:Op ; shnex:nodes [ shnex:pathValues ex:p ] ]",
+        "sh:expression [ shnex:if true ; shnex:then true ; shnex:else false ]",
+        "sh:expression [ sh:if true ; sh:then true ; sh:else false ]",
+        "sh:expression [ shnex:orderBy sh:this ; shnex:nodes [ shnex:pathValues ex:p ] ;
+                         shnex:desc true ]",
+        "sh:expression [ shnex:pathValues ex:p ]",
+    ];
+    for body in bodies {
+        loads(&format!(
+            "ex:Op a sh:NodeShape ; sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ; {body} ."
+        ));
+    }
+    // `sh:desc` IS accepted when the `sh:orderby` wrapper it modifies is present —
+    // the check is about a dropped key, not about the `sh:` spelling.
+    loads(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:expression [ shnex:pathValues ex:p ; sh:orderby sh:this ; sh:desc true ] .",
+    );
+}
+
+/// An unrecognised term in the `shnex:` namespace is a misspelling, not an
+/// extension point: that namespace is entirely node-expression vocabulary, so a
+/// typo is refused rather than accepted and ignored.
+#[test]
+fn an_unrecognised_shnex_term_on_an_expression_node_is_refused() {
+    let err = load_error(
+        "ex:Op a sh:NodeShape ; sh:nodeKind sh:IRI .
+         ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:expression [ shnex:matchAll ex:Op ; shnex:nodez [ shnex:pathValues ex:p ] ] .",
+    );
+    assert!(
+        err.contains("shnex:nodez") || err.contains("shacl-node-expr#nodez"),
+        "the diagnostic must name the misspelled term, got: {err}"
+    );
+    assert!(
+        err.contains("not a term of the SHACL 1.2 Node Expressions vocabulary"),
+        "the diagnostic must say the term is not vocabulary, got: {err}"
+    );
+}
+
+/// The check is NOT a total key scan, and that is deliberate: the annotations an
+/// expression constraint legitimately carries (`sh:message`, `sh:severity`),
+/// `rdf:type`, and any application vocabulary hung off the node must all still
+/// load. A total scan here would be the mirror bug — refusing valid documents.
+#[test]
+fn annotations_and_application_vocabulary_on_an_expression_node_still_load() {
+    loads(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:expression [ a ex:MyAnnotation ;
+                             shnex:pathValues ex:p ;
+                             sh:message \"the path must yield an IRI\" ;
+                             sh:severity sh:Warning ;
+                             ex:authoredBy \"someone\" ] .",
+    );
+}
+
+/// A `shnex:ListExpression` member may be an RDF 1.2 TRIPLE TERM.
+///
+/// §3.1.3 makes a triple term a first-class constant expression, a bare one
+/// parses as exactly that, and `shnex:concat` carries triple terms through the
+/// sequence-valued kinds — so refusing one only inside a list would make a triple
+/// term legal everywhere in the language EXCEPT there.
+#[test]
+fn a_list_expression_member_may_be_a_triple_term() {
+    let shapes = "ex:S a sh:NodeShape ; sh:expression ( ex:c <<( ex:s ex:p ex:o )>> ) .";
+    assert_eq!(
+        outputs("ex:a ex:p ex:b .", shapes, "a"),
+        vec![
+            ex("c"),
+            format!("<<( {} {} {} )>>", ex("s"), ex("p"), ex("o")),
+        ],
+        "a triple term must survive a list expression in authored order"
+    );
+}
+
+/// The NEIGHBOURING INVALID case: a BLANK NODE member is still refused. The
+/// widening admitted triple terms, which are values; it did not admit an
+/// unevaluated structure smuggled in as one.
+#[test]
+fn a_list_expression_member_may_still_not_be_a_blank_node() {
+    let err = load_error("ex:S a sh:NodeShape ; sh:expression ( ex:c [ sh:path ex:p ] ) .");
+    assert!(
+        err.contains("must be an IRI, a literal or a triple term"),
+        "got: {err}"
+    );
+}

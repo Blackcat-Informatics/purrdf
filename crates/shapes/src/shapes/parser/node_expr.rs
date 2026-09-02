@@ -770,6 +770,10 @@ impl Parser<'_> {
         }
 
         if let Some(&(iri, kind)) = present.first() {
+            // Prove every OTHER node-expression key on the node is one this kind
+            // actually reads, before the arm reads the ones it knows about and
+            // leaves the rest on the floor.
+            self.check_expression_keys(node, iri, kind)?;
             return self.parse_structural_node_expr(node, iri, kind);
         }
 
@@ -817,6 +821,171 @@ impl Parser<'_> {
             .first_object_of(node, shnex::NODES)
             .ok_or_else(|| format!("{owner} node expression on {node} requires shnex:nodes"))?;
         self.parse_node_expr(&nodes)
+    }
+
+    /// Parse a SHAPE-VALUED operand of a node expression, having first PROVED the
+    /// shapes graph describes `shape_ref` as a shape.
+    ///
+    /// [`Parser::parse_inline_shape`](super::Parser::parse_inline_shape) answers an
+    /// undescribed node with an EMPTY shape, and an empty shape conforms to
+    /// everything. Every shape-valued node expression makes conformance its
+    /// answer, so an undefined shape IRI does not fail — it VACUOUSLY HOLDS, and
+    /// each of these returns the "all clear" reading:
+    ///
+    /// * `shnex:matchAll` — every node conforms to an empty shape, so `true`.
+    /// * `shnex:conformsToShape` — likewise `true`.
+    /// * `shnex:findFirst` — the FIRST input node is "the first conforming one".
+    /// * `sh:filterShape` / `shnex:filterShape` — no candidate is filtered out.
+    /// * `shnex:nodesMatching` — every node in the data graph matches.
+    ///
+    /// A shapes document with `shnex:matchAll ex:Typo` therefore loads green,
+    /// validates green, and checks nothing. That is the exact defect `sh:condition`
+    /// carried; this is the same answer applied at EVERY shape-valued operand
+    /// rather than at one of them.
+    ///
+    /// The test is [`Parser::node_is_a_shape`](super::Parser::node_is_a_shape), so
+    /// an inline anonymous shape (`[ sh:property [ … ] ]`), a top-level
+    /// `sh:PropertyShape`, and an untyped node the shapes graph makes SHACL
+    /// statements about are all still accepted — only a node the shapes graph never
+    /// described as a shape at all is refused.
+    fn parse_shape_operand(
+        &mut self,
+        shape_ref: Term,
+        owner: &str,
+        node: &Term,
+    ) -> Result<Shape, String> {
+        if !self.node_is_a_shape(&shape_ref) {
+            return Err(format!(
+                "{owner} node expression on {node} names {shape_ref}, which the shapes graph does \
+                 not describe as a shape; an undefined shape is EMPTY, and every node conforms to \
+                 an empty shape, so this check would hold vacuously rather than fail"
+            ));
+        }
+        self.parse_inline_shape(shape_ref)
+    }
+
+    /// Refuse a node-expression key that the SELECTED expression kind does not
+    /// read, so an authored operand is never silently discarded.
+    ///
+    /// `parse_node_expr_core` picks a kind from [`PRIMARY_KEYS`] and the arm for
+    /// that kind then reads its OWN operand keys by name. Every other
+    /// node-expression key on the node is, without this check, simply never
+    /// looked at — accepted and dropped. The failure is invisible and it changes
+    /// the answer:
+    ///
+    /// * `[ shnex:matchAll ex:S ; sh:nodes … ]` — `shnex:matchAll` reads
+    ///   `shnex:nodes`, so the operand vanishes and the default (the focus node)
+    ///   silently takes its place, checking a different node than the author wrote.
+    /// * `[ shnex:if … ; sh:then … ; sh:else … ]` — `shnex:if` reads
+    ///   `shnex:then`/`shnex:else`, so BOTH branches become the empty expression.
+    /// * `[ shnex:orderBy … ; sh:desc true ]` — the direction flag is dropped and
+    ///   the sort silently runs ascending, which flips the answer of any
+    ///   `shnex:limit` above it.
+    /// * `[ shnex:pathValues ex:p ; shnex:nodes … ]` — a path expression has no
+    ///   `shnex:nodes` operand; the input is dropped and the path is walked from
+    ///   the ambient focus node instead.
+    ///
+    /// Two classes of predicate are refused: a key that IS node-expression
+    /// vocabulary ([`NON_FUNCTION_KEYS`]) but belongs to another kind or to the
+    /// other SPELLING of this one, and any unrecognised term in the `shnex:`
+    /// namespace — that namespace is entirely node-expression vocabulary and is
+    /// fully enumerated in [`crate::model::shnex`], so a term outside it is a
+    /// misspelling, not an extension point.
+    ///
+    /// Everything else on the node is left alone, which is what keeps this from
+    /// becoming an over-refusal: `rdf:type`, the `sh:message` / `sh:severity` an
+    /// expression constraint carries, and any application vocabulary an author
+    /// hangs off the node all pass through untouched.
+    fn check_expression_keys(&self, node: &Term, iri: &str, kind: ExprKind) -> Result<(), String> {
+        // The SHACL-AF paging wrappers are peeled by `parse_node_expr_wrapped`
+        // from ANY node, whatever core kind it carries, so they are always
+        // accepted. `sh:desc` is a modifier OF `sh:orderby`, so it is accepted
+        // only when the wrapper it modifies is actually present — otherwise it
+        // would itself be a silently-dropped key.
+        let mut accepted: Vec<&str> = vec![iri, sh::LIMIT, sh::OFFSET, sh::ORDERBY];
+        if self.first_object_of(node, sh::ORDERBY).is_some() {
+            accepted.push(sh::DESC);
+        }
+        match kind {
+            ExprKind::Path => accepted.push(shnex::FOCUS_NODE),
+            ExprKind::FilterShape => accepted.push(if iri == sh::FILTER_SHAPE {
+                sh::NODES
+            } else {
+                shnex::NODES
+            }),
+            ExprKind::If => {
+                if iri == sh::IF {
+                    accepted.extend([sh::THEN, sh::ELSE]);
+                } else {
+                    accepted.extend([shnex::THEN, shnex::ELSE]);
+                }
+            }
+            ExprKind::List => accepted.push(rdf::REST),
+            ExprKind::Remove
+            | ExprKind::Limit
+            | ExprKind::Offset
+            | ExprKind::FlatMap
+            | ExprKind::FindFirst
+            | ExprKind::MatchAll => accepted.push(shnex::NODES),
+            ExprKind::OrderBy => accepted.extend([shnex::NODES, shnex::DESC]),
+            ExprKind::Select => accepted.push(sh::PREFIXES),
+            ExprKind::Union
+            | ExprKind::Intersection
+            | ExprKind::Concat
+            | ExprKind::Count
+            | ExprKind::Distinct
+            | ExprKind::Min
+            | ExprKind::Max
+            | ExprKind::Sum
+            | ExprKind::Exists
+            | ExprKind::Var
+            | ExprKind::InstancesOf
+            | ExprKind::NodesMatching
+            | ExprKind::ConformsToShape
+            | ExprKind::Arg => {}
+        }
+
+        let owner = Self::key_label(iri);
+        for (_, predicate, _) in
+            native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
+        {
+            let p = predicate.as_str();
+            if accepted.contains(&p) {
+                continue;
+            }
+            if NON_FUNCTION_KEYS.contains(&p) {
+                return Err(format!(
+                    "{owner} node expression on {node} also carries <{p}>, which {owner} does not \
+                     read; it would be silently discarded. Spell the operand the way the \
+                     expression key is spelled, or remove it"
+                ));
+            }
+            // `shnex:arg0`, `shnex:arg1`, … are a custom function's own argument
+            // paths on a CALL site, not node-expression structure, so they are
+            // never a misspelling of one.
+            if p.starts_with(shnex::NS) && !p.starts_with(shnex::ARG) {
+                return Err(format!(
+                    "{owner} node expression on {node} carries <{p}>, which is not a term of the \
+                     SHACL 1.2 Node Expressions vocabulary"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The prefixed spelling of a node-expression key, for a diagnostic that quotes
+    /// the key the writer actually authored rather than its full IRI.
+    fn key_label(iri: &str) -> String {
+        if let Some(local) = iri.strip_prefix(shnex::NS) {
+            format!("shnex:{local}")
+        } else if let Some(local) = iri.strip_prefix(sh::NS) {
+            format!("sh:{local}")
+        } else if let Some(local) = iri.strip_prefix("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+        {
+            format!("rdf:{local}")
+        } else {
+            format!("<{iri}>")
+        }
     }
 
     /// The prefixed spelling of a `shnex:` key, for error messages that quote the
@@ -885,7 +1054,7 @@ impl Parser<'_> {
                     format!("{owner} node expression on {node} requires {nodes_label}")
                 })?;
                 let inner = self.parse_node_expr(&nodes_obj)?;
-                let shape = self.parse_inline_shape(shape_ref)?;
+                let shape = self.parse_shape_operand(shape_ref, owner, node)?;
                 Ok(NodeExpr::Filter {
                     nodes: Box::new(inner),
                     shape: Box::new(shape),
@@ -969,10 +1138,20 @@ impl Parser<'_> {
             ExprKind::List => {
                 let members = self.walk_rdf_list(node, node)?;
                 for member in &members {
-                    if !matches!(member, Term::NamedNode(_) | Term::Literal(_)) {
+                    // A BLANK NODE member is refused: it would be an unevaluated
+                    // structure smuggled in as a value. An RDF 1.2 TRIPLE TERM is
+                    // not — §3.1.3 makes it a first-class constant expression, this
+                    // very file recognises a bare one as such, and `shnex:concat`
+                    // carries triple terms through the sequence-valued kinds, so
+                    // refusing one only here would make a triple term legal
+                    // everywhere in the language EXCEPT inside a list.
+                    if !matches!(
+                        member,
+                        Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_)
+                    ) {
                         return Err(format!(
-                            "shnex:ListExpression member on {node} must be an IRI or a literal, \
-                             got {member}"
+                            "shnex:ListExpression member on {node} must be an IRI, a literal or a \
+                             triple term, got {member}"
                         ));
                     }
                 }
@@ -1028,7 +1207,8 @@ impl Parser<'_> {
             // §4.3.2 / §4.3.3 FindFirst and MatchAll: a SHAPE operand plus an
             // optional `shnex:nodes` defaulting to the focus node.
             ExprKind::FindFirst | ExprKind::MatchAll => {
-                let shape = Box::new(self.parse_inline_shape(object)?);
+                let shape =
+                    Box::new(self.parse_shape_operand(object, &Self::key_label(iri), node)?);
                 let nodes = Box::new(self.parse_shnex_nodes_or_focus(node)?);
                 Ok(if matches!(kind, ExprKind::FindFirst) {
                     NodeExpr::FindFirst { nodes, shape }
@@ -1046,7 +1226,7 @@ impl Parser<'_> {
             },
             // §4.5.2 NodesMatching expression.
             ExprKind::NodesMatching => Ok(NodeExpr::NodesMatching(Box::new(
-                self.parse_inline_shape(object)?,
+                self.parse_shape_operand(object, "shnex:nodesMatching", node)?,
             ))),
             // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`, function name
             // `sh:SelectExpression`) and §6.2 (`sh:sparqlExpr`, function name
@@ -1139,7 +1319,11 @@ impl Parser<'_> {
                 };
                 Ok(NodeExpr::ConformsToShape {
                     node: Box::new(self.parse_node_expr(node_arg)?),
-                    shape: Box::new(self.parse_inline_shape(shape_arg.clone())?),
+                    shape: Box::new(self.parse_shape_operand(
+                        shape_arg.clone(),
+                        "shnex:conformsToShape",
+                        node,
+                    )?),
                 })
             }
         }
@@ -1247,11 +1431,15 @@ impl Parser<'_> {
             return Ok(NodeExpr::Empty);
         }
         // Gather the candidate (function IRI, arg-list head) triples, ignoring
-        // rdf:type (a classification triple) and every SHACL structural key.
+        // rdf:type (a classification triple), every SHACL structural key, and the
+        // ANNOTATIONS an expression node legitimately carries.
         let mut candidates: Vec<(NamedNode, Term)> = outgoing
             .into_iter()
             .filter(|(_, predicate, _)| {
-                predicate.as_str() != rdf::TYPE && !NON_FUNCTION_KEYS.contains(&predicate.as_str())
+                let p = predicate.as_str();
+                p != rdf::TYPE
+                    && !NON_FUNCTION_KEYS.contains(&p)
+                    && !CALL_SITE_ANNOTATIONS.contains(&p)
             })
             .map(|(_, predicate, object)| (predicate, object))
             .collect();
@@ -1285,17 +1473,28 @@ impl Parser<'_> {
             .into_iter()
             .next()
             .ok_or_else(|| format!("internal error: function-call candidate vanished on {node}"))?;
-        // The single object must be an RDF list of argument node expressions
-        // (`rdf:nil` is the empty argument list).
+        // SHACL 1.2 Node Expressions gives the object of a function-call predicate
+        // THREE forms, and all three are read here:
+        //
+        // 1. `rdf:nil` — the empty argument list (`[ sparql:now () ]`).
+        // 2. A well-formed SHACL list — the arguments in order
+        //    (`[ sparql:plus ( 38 4 ) ]`).
+        // 3. A single well-formed node expression given WITHOUT the list, which the
+        //    specification defines as "equivalent to a function call with a list of
+        //    one element" and prints as `[ sparql:abs -42 ]`.
+        //
+        // Form 3 is why this is not "must carry an RDF list": refusing it would
+        // reject a document copied verbatim out of the specification. A malformed
+        // object is still refused — it simply fails as the node expression it
+        // claims to be, with that parse's own diagnostic, rather than under a
+        // blanket rule about lists.
         let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
         let is_list = args_head == nil || self.first_object_of(&args_head, rdf::FIRST).is_some();
-        if !is_list {
-            return Err(format!(
-                "function-call node expression <{}> on {node} must carry an RDF list of arguments",
-                fn_iri.as_str()
-            ));
-        }
-        let items = self.walk_rdf_list(&args_head, node)?;
+        let items = if is_list {
+            self.walk_rdf_list(&args_head, node)?
+        } else {
+            vec![args_head]
+        };
         let mut args = Vec::with_capacity(items.len());
         for item in items {
             args.push(self.parse_node_expr(&item)?);
@@ -1601,6 +1800,24 @@ static NON_FUNCTION_KEYS: &[&str] = &[
     rdf::FIRST,
     rdf::REST,
 ];
+
+/// The SHACL annotations an expression node may carry ALONGSIDE its expression,
+/// which therefore never name a function.
+///
+/// `parse_constraints` reads `sh:message` and `sh:severity` off the expression
+/// node itself for both `sh:expression` and `sh:nodeByExpression`, so they are
+/// authored there routinely. Without this table they would be counted as
+/// candidate function predicates, and the entirely legal
+/// `[ sparql:strlen ( … ) ; sh:message "…" ]` would fail to load as an "ambiguous
+/// function-call node expression" — while the same annotation on a STRUCTURAL
+/// expression (`[ sh:count … ; sh:message "…" ]`) loads fine, because that path
+/// short-circuits before the candidate scan. That asymmetry was the bug.
+///
+/// They are deliberately NOT in [`NON_FUNCTION_KEYS`]: that table is the
+/// node-expression VOCABULARY, and `check_expression_keys` refuses a member of it
+/// that the selected kind does not read. An annotation is not vocabulary and must
+/// stay ignorable everywhere.
+static CALL_SITE_ANNOTATIONS: &[&str] = &[sh::MESSAGE, sh::SEVERITY, sh::DEACTIVATED];
 
 /// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
 fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {

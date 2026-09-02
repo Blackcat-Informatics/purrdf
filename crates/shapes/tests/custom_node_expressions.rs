@@ -248,12 +248,19 @@ fn a_declaration_without_a_body_is_a_load_error() {
 
 /// A body that names no node-expression kind cannot be evaluated, so the
 /// declaration is refused at load.
+///
+/// The body below carries `sh:then` — node-expression VOCABULARY — with no
+/// expression key to own it, so it names no kind and calls no function. (It is
+/// deliberately not `[ rdfs:label '…' ]`: SHACL 1.2 Node Expressions gives a
+/// one-argument call the list-free form `[ <fn> <arg> ]`, so an arbitrary
+/// predicate with an arbitrary object is a well-formed CALL, not a malformed
+/// expression — see `a_one_argument_call_may_omit_the_argument_list`.)
 #[test]
 fn an_unparsable_body_is_a_load_error() {
     let err = load_error(
         r"
         ex:f a sh:ListParameterExpressionFunction ;
-          sh:bodyExpression [ rdfs:label 'not a node expression' ] ;
+          sh:bodyExpression [ sh:then true ] ;
           sh:parameter [ sh:path shnex:arg0 ] .
         ",
     );

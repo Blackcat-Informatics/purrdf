@@ -504,3 +504,102 @@ fn a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error() {
     let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 1 2 3 ) ] .");
     assert!(err.contains("exactly 2 arguments"), "got: {err}");
 }
+
+// ── The list-free one-argument call form ────────────────────────────────────────
+
+/// SHACL 1.2 Node Expressions gives a function call's object THREE forms, and the
+/// third is the list-free abbreviation: "If the function call has one argument,
+/// and the argument is a well-formed node expression, then the argument can be
+/// given without the list … Example: `[ sparql:abs -42 ]`, which is equivalent to
+/// `[ sparql:abs ( -42 ) ]`."
+///
+/// This asserts the EQUIVALENCE the spec states, not merely that both parse: the
+/// abbreviated and the list form must produce the identical output. Refusing the
+/// abbreviation would reject a document copied verbatim out of the specification.
+#[test]
+fn a_one_argument_call_may_omit_the_argument_list() {
+    let abbreviated = "ex:S a sh:NodeShape ; sh:expression [ sparql:abs -42 ] .";
+    let listed = "ex:S a sh:NodeShape ; sh:expression [ sparql:abs ( -42 ) ] .";
+    let expected = vec![r#""42"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned()];
+    assert_eq!(
+        outputs("ex:a ex:p ex:b .", abbreviated, "a"),
+        expected,
+        "the spec's own `[ sparql:abs -42 ]` example must evaluate"
+    );
+    assert_eq!(
+        outputs("ex:a ex:p ex:b .", listed, "a"),
+        expected,
+        "the list form must agree with the abbreviation"
+    );
+}
+
+/// The abbreviation carries a STRUCTURED node expression too, not only a literal:
+/// the spec's condition is "the argument is a well-formed node expression", and a
+/// path expression is one.
+#[test]
+fn the_list_free_form_accepts_a_structured_argument() {
+    let shapes = "ex:S a sh:NodeShape ; sh:expression [ sparql:strlen [ sh:path ex:name ] ] .";
+    assert_eq!(
+        outputs(r#"ex:a ex:name "abcd" ."#, shapes, "a"),
+        vec![r#""4"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned()],
+        "a one-argument call over a path expression must work without the list"
+    );
+}
+
+/// The zero-argument and two-argument list forms are untouched by the
+/// abbreviation — `rdf:nil` is still the empty argument list, and a genuine list
+/// is still read as one rather than as a single blank-node argument.
+#[test]
+fn the_empty_and_multi_argument_list_forms_still_parse() {
+    let two = "ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 38 4 ) ] .";
+    assert_eq!(
+        outputs("ex:a ex:p ex:b .", two, "a"),
+        vec![r#""42"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned()],
+        "a two-argument list must not be read as one blank-node argument"
+    );
+    // `rdf:nil` — the empty argument list. `sparql:concat` of nothing is the empty
+    // string, which proves the list was read as EMPTY rather than as the single
+    // argument `rdf:nil`.
+    let none = "ex:S a sh:NodeShape ; sh:expression [ sparql:concat () ] .";
+    assert_eq!(
+        outputs("ex:a ex:p ex:b .", none, "a"),
+        vec![r#""""#.to_owned()],
+        "rdf:nil must stay the EMPTY argument list, not a one-element one"
+    );
+}
+
+/// A SHACL annotation authored alongside a function call is an annotation, not a
+/// second candidate function.
+///
+/// `parse_constraints` reads `sh:message` and `sh:severity` off the expression
+/// node itself, so authoring them there is routine — and the STRUCTURAL
+/// expressions have always accepted them, because that path short-circuits before
+/// the function-candidate scan. A call site refusing the very same annotation as
+/// "ambiguous" was an asymmetry, not a rule.
+#[test]
+fn a_call_site_may_carry_the_annotations_an_expression_constraint_reads() {
+    let shapes = r#"ex:S a sh:NodeShape ;
+        sh:expression [ sparql:strlen [ sh:path ex:name ] ;
+                        sh:message "the name length" ;
+                        sh:severity sh:Warning ] ."#;
+    assert_eq!(
+        outputs(r#"ex:a ex:name "abcd" ."#, shapes, "a"),
+        vec![r#""4"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned()],
+        "sh:message / sh:severity must not be mistaken for a function predicate"
+    );
+}
+
+/// The neighbouring INVALID case: two genuine function predicates on one node are
+/// still ambiguous. Ignoring the annotations narrowed the candidate set; it did
+/// not remove the check.
+#[test]
+fn two_real_function_predicates_on_one_node_are_still_ambiguous() {
+    let err = load_error(
+        "ex:S a sh:NodeShape ;
+             sh:expression [ sparql:strlen ( \"a\" ) ; sparql:abs ( -1 ) ] .",
+    );
+    assert!(
+        err.contains("ambiguous function-call node expression"),
+        "got: {err}"
+    );
+}

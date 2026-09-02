@@ -208,7 +208,12 @@ impl Parser<'_> {
     /// undescribed node with an EMPTY shape, and an empty shape conforms to
     /// everything: without this test, `sh:condition ex:NotAShape` would not fail,
     /// it would silently hold.
-    fn node_is_a_shape(&self, node: &Term) -> bool {
+    ///
+    /// `sh:condition` is not the only place that reasoning applies — every
+    /// SHAPE-VALUED node expression turns conformance into its answer too, so
+    /// [`Parser::parse_shape_operand`](super::Parser::parse_shape_operand) routes
+    /// all of them through this same test.
+    pub(super) fn node_is_a_shape(&self, node: &Term) -> bool {
         if self.has_type(node, sh::NODE_SHAPE) || self.has_type(node, sh::PROPERTY_SHAPE) {
             return true;
         }
