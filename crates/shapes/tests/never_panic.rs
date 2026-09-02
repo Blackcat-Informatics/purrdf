@@ -36,22 +36,28 @@ const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
 /// the same.
 #[test]
 fn cyclic_node_expression_graph_is_hard_error() {
-    let named = parse_shapes(&format!(
-        "{NODE_EXPR_PREFIXES}\
+    let named = parse_shapes(
+        &format!(
+            "{NODE_EXPR_PREFIXES}\
          ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression ex:E .\n\
          ex:E sh:union ( ex:E ) .\n"
-    ))
+        ),
+        None,
+    )
     .expect_err("a named-node expression cycle must be rejected");
     assert!(
         named.contains("cyclic"),
         "error must name the cycle, got: {named}"
     );
 
-    let blank = parse_shapes(&format!(
-        "{NODE_EXPR_PREFIXES}\
+    let blank = parse_shapes(
+        &format!(
+            "{NODE_EXPR_PREFIXES}\
          ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression _:e .\n\
          _:e sh:union ( _:e ) .\n"
-    ))
+        ),
+        None,
+    )
     .expect_err("a blank-node expression cycle must be rejected");
     assert!(
         blank.contains("cyclic"),
@@ -67,14 +73,17 @@ fn cyclic_node_expression_graph_is_hard_error() {
 /// nodes — a visited-set implementation would wrongly reject this document.
 #[test]
 fn shared_named_sub_expression_is_not_a_cycle() {
-    let shapes = parse_shapes(&format!(
-        "{NODE_EXPR_PREFIXES}\
+    let shapes = parse_shapes(
+        &format!(
+            "{NODE_EXPR_PREFIXES}\
          ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:expression ex:Top .\n\
          ex:Top sh:union ( ex:Left ex:Right ) .\n\
          ex:Left sh:union ( ex:Shared ) .\n\
          ex:Right sh:union ( ex:Shared ) .\n\
          ex:Shared sh:union ( ex:a ) .\n"
-    ))
+        ),
+        None,
+    )
     .expect("a shared sub-expression reached twice is a DAG, not a cycle");
     assert_eq!(shapes.node_shapes.len(), 1);
 }
@@ -144,13 +153,13 @@ proptest! {
     #[test]
     fn parse_shapes_never_panics_raw(data in arbitrary_bytes()) {
         if let Ok(text) = std::str::from_utf8(&data) {
-            let _ = parse_shapes(text);
+            let _ = parse_shapes(text, None);
         }
     }
 
     #[test]
     fn parse_shapes_never_panics_structured(text in structured_shapes()) {
-        let _ = parse_shapes(&text);
+        let _ = parse_shapes(&text, None);
     }
 
     #[test]

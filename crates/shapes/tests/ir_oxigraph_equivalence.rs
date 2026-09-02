@@ -49,10 +49,10 @@ fn assert_backends_agree(label: &str, shapes_ttl: &str, data_nt: &str) {
     };
 
     // Text path.
-    let text = validate_graphs(data_nt, shapes_ttl)
+    let text = validate_graphs(data_nt, shapes_ttl, None)
         .unwrap_or_else(|e| panic!("[{label}] validate_graphs: {e}"));
     // Dataset path.
-    let dataset_report = validate_dataset_graphs(dataset.as_ref(), shapes_ttl)
+    let dataset_report = validate_dataset_graphs(dataset.as_ref(), shapes_ttl, None)
         .unwrap_or_else(|e| panic!("[{label}] validate_dataset_graphs: {e}"));
 
     assert_reports_agree(label, &text, &dataset_report);
@@ -78,9 +78,9 @@ fn assert_backends_agree_store(label: &str, shapes_ttl: &str, dataset: &Arc<RdfD
     }
     let round_trip = builder.freeze().expect("dataset re-freezes");
 
-    let direct = validate_dataset_graphs(dataset.as_ref(), shapes_ttl)
+    let direct = validate_dataset_graphs(dataset.as_ref(), shapes_ttl, None)
         .unwrap_or_else(|e| panic!("[{label}] validate_dataset_graphs (direct): {e}"));
-    let re_frozen = validate_dataset_graphs(round_trip.as_ref(), shapes_ttl)
+    let re_frozen = validate_dataset_graphs(round_trip.as_ref(), shapes_ttl, None)
         .unwrap_or_else(|e| panic!("[{label}] validate_dataset_graphs (round-trip): {e}"));
 
     assert_reports_agree(label, &direct, &re_frozen);

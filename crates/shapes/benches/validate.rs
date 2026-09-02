@@ -190,7 +190,7 @@ fn bench_validate(c: &mut Criterion) {
             for (name, data, shapes) in &cases {
                 // Panic (don't silently skip) on a validation failure: a swallowed
                 // error would run instantly and report a false speedup (gemini review).
-                let report = validate_graphs(data, shapes)
+                let report = validate_graphs(data, shapes, None)
                     .unwrap_or_else(|e| panic!("validation failed for {name}: {e:?}"));
                 std::hint::black_box(report);
             }
@@ -242,8 +242,9 @@ fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     }
 
     let dataset = builder.freeze().expect("Core focus fixture must freeze");
-    let shapes = parse_shapes(&format!(
-        r#"
+    let shapes = parse_shapes(
+        &format!(
+            r#"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <{BENCH_EX}> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
@@ -264,7 +265,9 @@ ex:WholeBundleShape a sh:NodeShape ;
         sh:class ex:ValueClass0 ;
     ] .
 "#
-    ))
+        ),
+        None,
+    )
     .expect("Core focus shapes must parse");
     ValidationFixture {
         dataset,
@@ -302,7 +305,7 @@ ex:WholeBundleSparqlShape a sh:NodeShape ;
         sh:select "SELECT $this WHERE {{ $this <{BENCH_EX}amount> ?amount . FILTER(<{BENCH_EX}tripled>(?amount) > 100) }}" ;
     ] .
 "#
-    ))
+    ), None)
     .expect("SPARQL focus shapes must parse");
     ValidationFixture {
         dataset,
@@ -344,8 +347,9 @@ fn membership_fixture(focus_nodes: usize, variant: MembershipVariant) -> Members
     let dataset = builder
         .freeze()
         .expect("class-membership fixture must freeze");
-    let shapes = parse_shapes(&format!(
-        r"
+    let shapes = parse_shapes(
+        &format!(
+            r"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <{BENCH_EX}> .
 
@@ -353,7 +357,9 @@ ex:MembershipShape a sh:NodeShape ;
     sh:targetClass ex:MembershipClass0 ;
     sh:nodeKind sh:IRI .
 "
-    ))
+        ),
+        None,
+    )
     .expect("class-membership shapes must parse");
     MembershipFixture {
         dataset,
@@ -766,7 +772,7 @@ ex:MembershipRuleShape a sh:NodeShape ;
         sh:construct "CONSTRUCT {{ $this ex:marked ex:yes }} WHERE {{ $this a <{BENCH_EX}MembershipClass0> }}" ;
     ] .
 "#
-    ))
+    ), None)
     .expect("class-membership rule shapes must parse")
 }
 

@@ -8,12 +8,22 @@
 //! Every corpus document that parses is round-tripped (not just a sample);
 //! a named list of diverse must-pass documents guards against silent
 //! coverage loss if the corpus or the xfail ledger drifts.
+//!
+//! Each document is parsed under its own retrieval IRI, the base
+//! `syntax_conformance.rs` uses and the one RFC-3986 §5.1.3 names: nineteen
+//! corpus documents carry a relative `imports` entry, and ShExJ is a JSON-LD
+//! dialect whose IRI-valued members are document-relative. `to_shexj` emits only
+//! the resolved absolute IRIs, so the reparse leg would need no base at all —
+//! it is given the same one so the two legs differ in nothing but the bytes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
 use purrdf_shex::{parse_shexj, to_shexj};
+
+/// The URL prefix the vendored tree mirrors.
+const CORPUS_URL: &str = "https://raw.githubusercontent.com/shexSpec/shexTest/master/schemas/";
 
 /// Diverse documents that MUST parse and round-trip (one per feature
 /// family): plain shapes, refs, EachOf/OneOf, node kinds, datatypes, all
@@ -61,11 +71,18 @@ fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest/schemas")
 }
 
+/// The retrieval IRI of a vendored corpus document (RFC-3986 §5.1.3).
+fn document_url(name: &str) -> String {
+    format!("{CORPUS_URL}{name}.json")
+}
+
 fn round_trip(name: &str, source: &str) -> Result<(), String> {
-    let first = parse_shexj(source).map_err(|e| format!("{name}: initial parse: {e}"))?;
+    let url = document_url(name);
+    let first =
+        parse_shexj(source, Some(&url)).map_err(|e| format!("{name}: initial parse: {e}"))?;
     let serialized = to_shexj(&first);
-    let second =
-        parse_shexj(&serialized).map_err(|e| format!("{name}: reparse of to_shexj output: {e}"))?;
+    let second = parse_shexj(&serialized, Some(&url))
+        .map_err(|e| format!("{name}: reparse of to_shexj output: {e}"))?;
     if first == second {
         Ok(())
     } else {
@@ -130,9 +147,11 @@ fn diverse_documents_round_trip() {
         let path = dir.join(format!("{name}.json"));
         let source =
             fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let first = parse_shexj(&source).unwrap_or_else(|e| panic!("{name}: parse: {e}"));
-        let second =
-            parse_shexj(&to_shexj(&first)).unwrap_or_else(|e| panic!("{name}: reparse: {e}"));
+        let url = document_url(name);
+        let first =
+            parse_shexj(&source, Some(&url)).unwrap_or_else(|e| panic!("{name}: parse: {e}"));
+        let second = parse_shexj(&to_shexj(&first), Some(&url))
+            .unwrap_or_else(|e| panic!("{name}: reparse: {e}"));
         assert_eq!(first, second, "{name}: AST changed across round-trip");
     }
 }

@@ -115,6 +115,37 @@ let back = parse_dataset(&ttl, "text/turtle", None).unwrap();
 assert_eq!(back.quad_count(), 2);
 ```
 
+### The document base
+
+Both RDF legs take the same document base — the trailing `Option<&str>` of
+`parse_dataset` and of `serialize_dataset_to_format` — so the Rust surface is exactly
+as capable as the Python, WebAssembly, and C ones:
+
+```rust
+use purrdf::{parse_dataset, serialize_dataset_to_format, NativeRdfFormat};
+
+let base = "https://example.org/base/";
+
+// Ingress: a relative subject resolves against the base.
+let doc = "<rel> <https://example.org/p> <https://example.org/o> .\n";
+let ds = parse_dataset(doc.as_bytes(), "text/turtle", Some(base)).unwrap();
+assert_eq!(ds.quad_count(), 1);
+
+// Egress: Turtle can express a base, so it is written and relativized against.
+let out = serialize_dataset_to_format(&ds, NativeRdfFormat::Turtle, Some(base)).unwrap();
+let turtle = String::from_utf8(out.bytes).unwrap();
+assert!(turtle.contains("@base <https://example.org/base/> ."));
+
+// With no base in scope a relative reference hard-fails — none is ever fabricated.
+let err = parse_dataset(doc.as_bytes(), "text/turtle", None).unwrap_err();
+assert_eq!(err.code, "iri-relative-no-base");
+```
+
+A syntax that cannot express a base (N-Triples, N-Quads, TriX, HexTuples) emits
+absolute IRIs instead of erroring — the format registry decides, once, for the whole
+workspace. `purrdf::iri` carries `BaseIri`, `BaseScope`, `BaseOrigin`, and `IriError`
+for building and interpreting a base, so naming one never costs a second dependency.
+
 Every engine is reachable through the same facade — for example ShEx and IRI
 handling:
 

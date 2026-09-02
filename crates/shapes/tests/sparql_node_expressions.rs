@@ -37,7 +37,7 @@ const PREFIXES: &str = r"
 
 /// The single `sh:expression` node expression a fixture declares.
 fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}")).expect("shapes parse");
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
     let mut found: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
@@ -63,7 +63,7 @@ fn expression_of(shapes_ttl: &str) -> NodeExpr {
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
     let expr = expression_of(shapes_ttl);
     let data: Arc<_> =
-        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}")).expect("data parse");
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), data, None);
     let focus_term = Term::NamedNode(NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
@@ -78,7 +78,7 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
 
 /// The shapes-load error a malformed fixture produces.
 fn load_error(shapes_ttl: &str) -> String {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"))
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .expect_err("the fixture must be refused at shapes-load")
 }
 
@@ -274,7 +274,8 @@ fn a_sparql_based_expression_sees_the_value_node_in_its_scope() {
             ] .
         "#
     );
-    let report = purrdf_shapes::engine::validate_graphs(data, &shapes).expect("validation runs");
+    let report =
+        purrdf_shapes::engine::validate_graphs(data, &shapes, None).expect("validation runs");
     let offenders: Vec<String> = report
         .results
         .iter()
@@ -398,7 +399,7 @@ fn sparql_triple_constructs_an_rdf12_triple_term() {
     let expr = expression_of(
         r"ex:S a sh:NodeShape ; sh:expression [ sparql:triple ( ex:s ex:p ex:o ) ] .",
     );
-    let data: Arc<_> = parse_turtle_to_dataset(PREFIXES).expect("data parse");
+    let data: Arc<_> = parse_turtle_to_dataset(PREFIXES, None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), data, None);
     let focus = Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#a"));
     let mut guard = RecursionGuard::new();

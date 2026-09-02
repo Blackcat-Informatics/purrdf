@@ -137,7 +137,12 @@ impl EntailmentPlan {
 fn read_rule_set(path: &Path) -> Result<RuleSet, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| CliError::Runtime(format!("--rules {}: {error}", path.display())))?;
-    let parsed = parse_rif_xml(&text)
+    // The rule document was read from a named file, so it HAS a retrieval IRI (RFC-3986
+    // §5.1.3) and parses under it: a `rif:iri` Const becomes a rule predicate, and one
+    // spelled relative to the rule file must denote what the file says rather than fail
+    // for want of a base this seam is holding. An in-document `xml:base` still outranks it.
+    let base = crate::source::retrieval_base_iri(&path.display().to_string())?;
+    let parsed = parse_rif_xml(&text, Some(&base))
         .map_err(|error| CliError::Runtime(format!("--rules {}: {error}", path.display())))?;
     if let Some(import) = parsed.imports.first() {
         return Err(CliError::Runtime(format!(
@@ -174,8 +179,15 @@ pub(crate) fn run(
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve_target(to, output, "the --to target")?;
-    format::refuse_base_with_container(source_format, base, "the --from source")?;
-    format::refuse_base_with_container(target_format, base, "the --to target")?;
+    // `--base` has two legs here — the source parse and the closure's serialization — and
+    // is refused only when NEITHER can spend it.
+    format::refuse_unconsumable_base(
+        base,
+        &[
+            format::BaseUse::parse(source_format, "the --from source"),
+            format::BaseUse::serialize(target_format, "the --to target"),
+        ],
+    )?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,

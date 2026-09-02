@@ -1075,24 +1075,27 @@ mod tests {
     ";
 
     fn parse_shapes(body: &str) -> Shapes {
-        crate::engine::parse_shapes(&format!("{PREFIXES}\n{body}")).expect("shapes must parse")
+        crate::engine::parse_shapes(&format!("{PREFIXES}\n{body}"), None)
+            .expect("shapes must parse")
     }
 
     fn parse_shapes_err(body: &str) -> String {
-        crate::engine::parse_shapes(&format!("{PREFIXES}\n{body}"))
+        crate::engine::parse_shapes(&format!("{PREFIXES}\n{body}"), None)
             .expect_err("shapes must fail to parse")
     }
 
     fn entail(data_ttl: &str, shapes_body: &str) -> Arc<RdfDataset> {
-        let data = crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}\n{data_ttl}"))
-            .expect("data must parse");
+        let data =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}\n{data_ttl}"), None)
+                .expect("data must parse");
         let shapes = parse_shapes(shapes_body);
         entail_dataset(data.as_ref(), &shapes).expect("entailment must succeed")
     }
 
     fn entail_err(data_ttl: &str, shapes_body: &str) -> String {
-        let data = crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}\n{data_ttl}"))
-            .expect("data must parse");
+        let data =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}\n{data_ttl}"), None)
+                .expect("data must parse");
         let shapes = parse_shapes(shapes_body);
         entail_dataset(data.as_ref(), &shapes).expect_err("entailment must fail")
     }
@@ -1704,8 +1707,8 @@ mod tests {
                 "CONSTRUCT { $this ex:marked ?m } WHERE { GRAPH ?g { $currentShape ex:marker ?m } FILTER(?g = $shapesGraph) }" ] .
             "#
         );
-        let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(&shapes_ttl).expect("shapes must parse");
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&shapes_ttl, None)
+            .expect("shapes must parse");
         let prefixes = crate::text_ingest::extract_prefixes(&shapes_ttl);
         let shapes = crate::shapes::from_dataset_with_config_and_graph(
             &shapes_dataset,
@@ -1715,9 +1718,10 @@ mod tests {
         )
         .expect("shapes must parse");
 
-        let data = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}\n ex:alice a ex:Person ."
-        ))
+        let data = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}\n ex:alice a ex:Person ."),
+            None,
+        )
         .expect("data must parse");
         let projected = crate::engine::project_dataset(data.as_ref()).expect("project");
         let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);

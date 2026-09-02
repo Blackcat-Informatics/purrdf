@@ -66,7 +66,7 @@ ex:bob   ex:income 5 .
 
 /// The single `sh:expression` node expression a fixture declares.
 fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}")).expect("shapes parse");
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
     let mut found: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
@@ -113,18 +113,18 @@ fn store_of(data_ttl: &str) -> ShaclData {
 
 /// The frozen data graph for `data_ttl`.
 fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
-    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}")).expect("data parse")
+    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse")
 }
 
 /// Validate `data_ttl` against `shapes_ttl` through the production entry point.
 fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"))?;
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)?;
     validate_with(&store_of(data_ttl), &shapes)
 }
 
 /// The shapes-load error a malformed fixture produces.
 fn load_error(shapes_ttl: &str) -> String {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"))
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .expect_err("the fixture must be refused at shapes-load")
 }
 
@@ -420,7 +420,7 @@ fn a_named_parameter_function_has_no_positional_call_form() {
 /// keyed by argument index and the query's own graph as focus graph.
 #[test]
 fn a_list_parameter_function_resolves_from_sparql_query_text() {
-    let shapes = parse_shapes(&format!("{PREFIXES}{INCOME_TOTAL_FN}")).expect("shapes parse");
+    let shapes = parse_shapes(&format!("{PREFIXES}{INCOME_TOTAL_FN}"), None).expect("shapes parse");
     let data = data_of(INCOME_DATA);
     let engine = NativeSparqlEngine::new();
     let query = "PREFIX ex: <http://example.org/ns#> \
@@ -463,7 +463,7 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
 /// forbids.
 #[test]
 fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
-    let shapes = parse_shapes(&format!("{PREFIXES}{INCOME_TOTAL_FN}")).expect("shapes parse");
+    let shapes = parse_shapes(&format!("{PREFIXES}{INCOME_TOTAL_FN}"), None).expect("shapes parse");
     let data = data_of(INCOME_DATA);
     let engine = NativeSparqlEngine::new();
     let query = "PREFIX ex: <http://example.org/ns#> \
@@ -493,12 +493,15 @@ fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
 /// the engine passed in, and the assertion reads it directly.
 #[test]
 fn the_focus_node_of_a_sparql_call_is_the_function_s_own_iri() {
-    let shapes = parse_shapes(&format!(
-        "{PREFIXES}
+    let shapes = parse_shapes(
+        &format!(
+            "{PREFIXES}
         ex:whoAmI a sh:ListParameterExpressionFunction ;
           sh:bodyExpression sh:this ;
           sh:parameter [ sh:path shnex:arg0 ] ."
-    ))
+        ),
+        None,
+    )
     .expect("shapes parse");
     let data = data_of(INCOME_DATA);
     let engine = NativeSparqlEngine::new();
@@ -631,7 +634,7 @@ fn a_function_called_during_the_rules_fixpoint_sees_the_current_round_s_graph() 
                     sh:construct \"CONSTRUCT {{ $this ex:copied ?v }} \
                                   WHERE {{ BIND (ex:hasDerived($this) AS ?v) }}\" ] ."
     );
-    let shapes = parse_shapes(&shapes_ttl).expect("shapes parse");
+    let shapes = parse_shapes(&shapes_ttl, None).expect("shapes parse");
     let data = data_of("ex:a a ex:Thing .");
     let entailed = entail_dataset(&data, &shapes).expect("rules run");
 

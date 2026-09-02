@@ -17,12 +17,17 @@
 //! panics on any input, and nesting depth is bounded so hostile input
 //! cannot overflow the stack.
 //!
-//! Relative IRI references are resolved against the `BASE` in force (seeded
-//! from the caller's base, delegated to `purrdf-iri`); with no base in force,
-//! relative IRIs are preserved verbatim (matching the reference ShExJ
-//! conversions in the conformance suite).
+//! Relative IRI references are resolved against the `BASE` in force through the
+//! shared [`purrdf_iri::BaseScope`] — the one place in this workspace that owns
+//! RFC-3986 reference resolution. With **no** base in force a relative reference
+//! is a hard `iri-relative-no-base` failure, never a reference preserved verbatim:
+//! an unresolved reference in a schema silently denotes a different IRI than the
+//! absolute terms of the data it is validating, so it can only ever produce a
+//! wrong verdict.
 
 use std::collections::HashMap;
+
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 use crate::ast::{
     Annotation, NodeConstraint, NodeKind, NumericLiteral, ObjectLiteral, ObjectValue, Schema,
@@ -46,6 +51,10 @@ const MAX_DEPTH: usize = 96;
 /// Parse a ShExC document. `base` seeds relative-IRI resolution (a `BASE`
 /// directive inside the document overrides it from that point on).
 ///
+/// With `base = None` and no `BASE` directive, a relative IRI reference anywhere
+/// in the document is [`ShexError::Iri`] carrying the shared `iri-relative-no-base`
+/// diagnostic code — it is never admitted into the schema unresolved.
+///
 /// # Examples
 ///
 /// ```
@@ -62,24 +71,41 @@ const MAX_DEPTH: usize = 96;
 ///
 /// // Malformed input is a typed error, never a partial schema.
 /// assert!(parse_shexc("ex:Broken {", None).is_err());
+///
+/// // A relative reference with no base in scope is refused, not interned.
+/// let err = parse_shexc("<S1> { <p1> . }", None).unwrap_err();
+/// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
     let tokens = tokenize(input)?;
+    let scope = match base {
+        Some(iri) => BaseScope::rooted(
+            BaseIri::parse(iri).map_err(|e| ShexError::iri(iri, &e))?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
     let mut parser = Parser {
+        src: input,
         tokens,
         pos: 0,
         prefixes: HashMap::new(),
-        base: base.map(str::to_owned),
+        base: scope,
         depth: 0,
     };
     parser.parse_schema()
 }
 
-struct Parser {
+struct Parser<'a> {
+    /// The ShExC source, kept only so a `BASE` directive can report the 1-based
+    /// position it took effect at; the happy path stays on byte offsets.
+    src: &'a str,
     tokens: Vec<Spanned>,
     pos: usize,
+    /// Declared prefix → its namespace, ALREADY RESOLVED against the base that was
+    /// in force when the `PREFIX` directive was read (ShEx 2.1 §6, Turtle §4.4).
     prefixes: HashMap<String, String>,
-    base: Option<String>,
+    base: BaseScope,
     depth: usize,
 }
 
@@ -112,7 +138,7 @@ impl Conjunct {
     }
 }
 
-impl Parser {
+impl Parser<'_> {
     // ── token cursor ────────────────────────────────────────────────────────
 
     fn peek(&self) -> Option<&Token> {
@@ -178,28 +204,47 @@ impl Parser {
 
     // ── IRI plumbing ────────────────────────────────────────────────────────
 
-    /// Resolve an IRIREF against the base in force; with no base, keep the
-    /// reference verbatim (the conformance suite's convention).
+    /// Resolve an IRIREF against the base in force.
+    ///
+    /// ShExC admits relative references, so this is [`BaseScope::resolve`]. There
+    /// is deliberately no "no base in scope, keep the reference verbatim"
+    /// fallthrough: a relative reference left unresolved in a schema denotes
+    /// nothing the absolute terms of a data graph can match, so it silently turns
+    /// every constraint written with it into a vacuous one.
     fn resolve(&self, reference: &str) -> Result<String> {
-        let Some(base) = &self.base else {
-            return Ok(reference.to_owned());
-        };
-        let base = purrdf_iri::parse(base).map_err(|e| ShexError::Iri {
-            lexical: base.clone(),
-            reason: e.to_string(),
-        })?;
-        let resolved = base.resolve(reference).map_err(|e| ShexError::Iri {
-            lexical: reference.to_owned(),
-            reason: e.to_string(),
-        })?;
-        Ok(resolved.as_str().to_owned())
+        self.base
+            .resolve(reference)
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| ShexError::iri(reference, &e))
     }
 
+    /// Expand a prefixed name against the declared prefixes.
+    ///
+    /// The namespace was resolved to an absolute IRI when its `PREFIX` directive
+    /// was READ, so expansion is concatenation — NOT a second base resolution,
+    /// which would re-resolve against whatever base is in force HERE and let a
+    /// later `BASE` retroactively change what an earlier prefixed name denotes.
+    /// The concatenation is still validated: a local part can make it malformed.
     fn expand(&self, prefix: &str, local: &str) -> Result<String> {
-        self.prefixes.get(prefix).map_or_else(
-            || Err(self.err(format!("undeclared prefix {prefix:?}"))),
-            |ns| Ok(format!("{ns}{local}")),
-        )
+        let Some(namespace) = self.prefixes.get(prefix) else {
+            return Err(self.err(format!("undeclared prefix {prefix:?}")));
+        };
+        let expanded = format!("{namespace}{local}");
+        purrdf_iri::parse(&expanded).map_err(|e| ShexError::iri(&expanded, &e))?;
+        Ok(expanded)
+    }
+
+    /// The [`BaseOrigin`] of the `BASE` directive whose IRI is the current token.
+    ///
+    /// The line table is built here, on the directive path only — directives are
+    /// a handful per document, while IRI references are thousands.
+    fn directive_origin(&self) -> BaseOrigin {
+        let at = self.span();
+        let position = purrdf_iri::LineIndex::new(self.src).locate(self.src, at);
+        BaseOrigin::Directive {
+            line: position.line,
+            column: position.column,
+        }
     }
 
     /// An `iri` production: IRIREF or prefixed name (never `a`).
@@ -268,15 +313,15 @@ impl Parser {
                     let Some(Token::Iri(iri)) = self.peek().cloned() else {
                         return Err(self.err("expected IRI after BASE"));
                     };
+                    // A `BASE` directive may itself be RELATIVE, in which case it
+                    // resolves against the base already in force (RFC-3986 §5.1.1),
+                    // so a chain of directives composes. It stays an error only when
+                    // nothing is in force and the directive is not absolute.
+                    let origin = self.directive_origin();
                     self.pos += 1;
-                    let resolved = self.resolve(&iri)?;
-                    if purrdf_iri::parse(&resolved).is_err() {
-                        return Err(ShexError::Iri {
-                            lexical: resolved,
-                            reason: "BASE must be a valid IRI".to_owned(),
-                        });
-                    }
-                    self.base = Some(resolved);
+                    self.base
+                        .rebind(&iri, origin)
+                        .map_err(|e| ShexError::iri(&iri, &e))?;
                 }
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("import") => {
                     self.pos += 1;
@@ -1292,9 +1337,98 @@ mod tests {
         assert!(matches!(err, ShexError::Iri { .. }));
     }
 
+    /// A `PREFIX` whose namespace is a relative reference fails at the DIRECTIVE,
+    /// because that is where the namespace is resolved. The failure must not be
+    /// deferred to the first prefixed name: deferring it once let `PREFIX : <>`
+    /// expand `:knows` to the bare relative reference `knows`, which matched
+    /// nothing and reported nothing.
+    #[test]
+    fn relative_prefix_namespace_with_no_base_fails_at_the_directive() {
+        let err = parse_shexc("PREFIX : <>\n<http://a.example/S> { :knows . }", None).unwrap_err();
+        assert!(matches!(err, ShexError::Iri { .. }));
+        let text = err.to_string();
+        assert!(text.contains("iri-relative-no-base"), "{text}");
+        // Reported at the directive, so the offending prefixed name never appears.
+        assert!(!text.contains("knows"), "{text}");
+    }
+
+    /// The same document with a base in scope resolves the namespace against it.
+    #[test]
+    fn relative_prefix_namespace_resolves_against_the_base_in_scope() {
+        let schema = parse_shexc(
+            "PREFIX : <>\n<http://a.example/S> { :knows . }",
+            Some("http://a.example/"),
+        )
+        .expect("parse");
+        let ShapeExpr::Shape(shape) = &schema.shapes[0].expr else {
+            panic!("expected shape");
+        };
+        let Some(TripleExpr::TripleConstraint(tc)) = &shape.expression else {
+            panic!("expected triple constraint");
+        };
+        assert_eq!(tc.predicate, "http://a.example/knows");
+    }
+
+    /// A prefix namespace is fixed when its directive is READ, so a later `BASE`
+    /// cannot retroactively change what an already-declared prefix denotes — while
+    /// it does change what a subsequent bare IRIREF denotes.
+    #[test]
+    fn a_later_base_does_not_re_home_an_earlier_prefix() {
+        let schema = parse_shexc(
+            "BASE <http://a.example/dir/>\n\
+             PREFIX ex: <rel/>\n\
+             ex:x { ex:p . }\n\
+             BASE <http://other.example/>\n\
+             ex:y { ex:q . }\n\
+             <z> { ex:r . }",
+            None,
+        )
+        .expect("parse");
+        let ids: Vec<&str> = schema.shapes.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "http://a.example/dir/rel/x",
+                "http://a.example/dir/rel/y",
+                "http://other.example/z",
+            ]
+        );
+    }
+
+    /// A bare relative IRIREF inside a shape expression is refused, with the shared
+    /// code — not interned as a predicate no data term can ever match.
+    #[test]
+    fn relative_iriref_in_a_shape_expression_with_no_base_is_refused() {
+        let err = parse_shexc("<http://a.example/S> { <p> . }", None).unwrap_err();
+        assert!(matches!(err, ShexError::Iri { .. }));
+        assert!(err.to_string().contains("iri-relative-no-base"), "{err}");
+    }
+
+    /// The RFC-3986 §5.2 same-document corners, driven through a ShExC `BASE` whose
+    /// own IRI carries both a query and a fragment: `<>` keeps the query and drops
+    /// the fragment, `<#x>` replaces only the fragment, and `<?y=2>` replaces the
+    /// query and drops the fragment.
+    #[test]
+    fn same_document_references_follow_rfc_3986() {
+        let schema = parse_shexc(
+            "BASE <http://example.org/d?q=1#frag>\n<> {}\n<#x> {}\n<?y=2> {}",
+            None,
+        )
+        .expect("parse");
+        let ids: Vec<&str> = schema.shapes.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "http://example.org/d?q=1",
+                "http://example.org/d?q=1#x",
+                "http://example.org/d?y=2",
+            ]
+        );
+    }
+
     #[test]
     fn wildcard_value_expr_is_absent() {
-        let schema = parse_shexc("<S> { <p> . }", None).expect("parse");
+        let schema = parse_shexc("<S> { <p> . }", Some("http://a.example/")).expect("parse");
         let ShapeExpr::Shape(shape) = &schema.shapes[0].expr else {
             panic!("expected shape");
         };

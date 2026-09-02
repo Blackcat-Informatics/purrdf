@@ -34,6 +34,11 @@ pub(crate) const MAX_TERM_NESTING_DEPTH: usize = 16;
 pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
     let term_count = builder.term_count();
 
+    // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
+    //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
+    //    every positional check below would report a downstream symptom of it.
+    require_absolute_iris(builder)?;
+
     // 1. Every interned triple term references in-range ids, has an IRI predicate
     //    and a non-literal subject, and the whole nesting forest is acyclic and
     //    depth-bounded.
@@ -87,6 +92,34 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     }
 
     Ok(())
+}
+
+/// Enforce the IR-boundary absoluteness invariant: no interned IRI term may be a
+/// relative IRI reference.
+///
+/// The check itself already ran, once per DISTINCT IRI, on the miss path of the
+/// builder's store-once interner (`super::absolute::check_absolute`); this reads the
+/// recorded verdict rather than re-walking the term table, so freeze costs nothing
+/// extra for the overwhelmingly common case of a dataset with no violation.
+///
+/// The reported `code` is [`purrdf_iri::IriError::diagnostic_code`] verbatim — the
+/// workspace's single owner of these spellings — so a relative IRI reaching the IR
+/// through a non-codec ingress reports exactly the code the codecs report.
+///
+/// The remedy is carried by the MESSAGE and by nothing else. `IriError`'s
+/// [`Display`](core::fmt::Display) already ends with
+/// [`remedy_hint`](purrdf_iri::IriError::remedy_hint) — that is the contract its own
+/// rustdoc states — and [`RdfDiagnostic`]'s rendering appends `detail` after the
+/// message, so attaching the hint as `detail` here printed the same sentence twice in
+/// one diagnostic at every consumer that formats `{diagnostic}`.
+fn require_absolute_iris(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
+    let Some((iri, err)) = builder.relative_iri() else {
+        return Ok(());
+    };
+    Err(diag(
+        err.diagnostic_code(),
+        format!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
+    ))
 }
 
 /// Validate every interned triple term: in-range components, IRI predicate,

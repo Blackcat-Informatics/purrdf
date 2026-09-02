@@ -2452,7 +2452,7 @@ mod tests {
     }
 
     fn load_store(ttl: &str) -> Arc<RdfDataset> {
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse");
         // Apply the same SHACL projection `validate_dataset` uses, so RDF-1.2
         // reifier bindings are materialized as `rdf:reifies` quads the engine's
         // reifier-shape lookup can find (the IR keeps reifiers in a side table).

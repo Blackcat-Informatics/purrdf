@@ -34,7 +34,7 @@ const PREFIXES: &str = r"
 /// Parse `shapes_ttl` and return the single `sh:expression` node expression it
 /// declares — the production parse path, not a test-only constructor.
 fn expression_of(shapes_ttl: &str) -> NodeExpr {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}")).expect("shapes parse");
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
     let mut found: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
@@ -58,9 +58,9 @@ fn expression_of(shapes_ttl: &str) -> NodeExpr {
 fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
     let expr = expression_of(shapes_ttl);
     let data: Arc<_> =
-        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}")).expect("data parse");
-    let shapes_ds: Arc<_> =
-        parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}")).expect("shapes data parse");
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let shapes_ds: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}"), None)
+        .expect("shapes data parse");
     let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
     let focus_term = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(format!(
         "http://example.org/ns#{focus}"
@@ -89,7 +89,7 @@ fn ex(local: &str) -> String {
 fn triple_term_expression_yields_a_triple_term() {
     let shapes = "ex:S a sh:NodeShape ; sh:expression <<( ex:s ex:p ex:o )>> .";
     let expr = expression_of(shapes);
-    let data: Arc<_> = parse_turtle_to_dataset(PREFIXES).expect("data parse");
+    let data: Arc<_> = parse_turtle_to_dataset(PREFIXES, None).expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
@@ -119,9 +119,11 @@ fn a_triple_term_flows_through_the_expression_language_as_a_value() {
         "ex:S a sh:NodeShape ;
              sh:expression [ shnex:concat ( [ shnex:pathValues ex:says ] ex:tail ) ] .",
     );
-    let data: Arc<_> =
-        parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:says <<( ex:s ex:p ex:o )>> ."))
-            .expect("data parse");
+    let data: Arc<_> = parse_turtle_to_dataset(
+        &format!("{PREFIXES} ex:a ex:says <<( ex:s ex:p ex:o )>> ."),
+        None,
+    )
+    .expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
@@ -210,7 +212,7 @@ fn var_value_resolves_to_the_value_node_under_test() {
         ex:OkShape a sh:NodeShape ; sh:in ( ex:ok ) .
         "#
     );
-    let report = validate_graphs(data, &shapes).expect("validation runs");
+    let report = validate_graphs(data, &shapes, None).expect("validation runs");
     let offenders: Vec<String> = report
         .results
         .iter()
@@ -274,8 +276,8 @@ fn path_values_multi_valued_focus_is_a_failure() {
         "ex:S a sh:NodeShape ;
              sh:expression [ shnex:pathValues ex:q ; shnex:focusNode [ shnex:pathValues ex:p ] ] .",
     );
-    let data: Arc<_> =
-        parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:p ex:b, ex:c .")).expect("data parse");
+    let data: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:p ex:b, ex:c ."), None)
+        .expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
@@ -533,7 +535,7 @@ fn node_by_expression_reports_its_own_constraint_component() {
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
         "
     );
-    let report = validate_graphs(data, &shapes).expect("validation runs");
+    let report = validate_graphs(data, &shapes, None).expect("validation runs");
     assert!(!report.conforms, "the missing ex:name must be reported");
     assert_eq!(report.results.len(), 1, "exactly one violation");
     let result = &report.results[0];
@@ -702,11 +704,14 @@ fn sh_and_shnex_ordering_spellings_agree() {
 /// given one of them.
 #[test]
 fn both_spellings_of_one_kind_on_one_node_is_ambiguous() {
-    let err = parse_shapes(&format!(
-        "{PREFIXES}
+    let err = parse_shapes(
+        &format!(
+            "{PREFIXES}
          ex:S a sh:NodeShape ;
              sh:expression [ sh:count [ sh:path ex:p ] ; shnex:count [ shnex:pathValues ex:p ] ] ."
-    ))
+        ),
+        None,
+    )
     .expect_err("two spellings of one kind must hard-fail");
     assert!(err.contains("ambiguous node expression"), "got: {err}");
 }
@@ -715,11 +720,14 @@ fn both_spellings_of_one_kind_on_one_node_is_ambiguous() {
 /// untouched by the dual-spelling table.
 #[test]
 fn two_different_kinds_on_one_node_is_ambiguous() {
-    let err = parse_shapes(&format!(
-        "{PREFIXES}
+    let err = parse_shapes(
+        &format!(
+            "{PREFIXES}
          ex:S a sh:NodeShape ;
              sh:expression [ sh:count [ sh:path ex:p ] ; shnex:sum [ shnex:pathValues ex:p ] ] ."
-    ))
+        ),
+        None,
+    )
     .expect_err("two kinds on one node must hard-fail");
     assert!(err.contains("ambiguous node expression"), "got: {err}");
 }
@@ -734,13 +742,13 @@ fn bool_lit(b: bool) -> String {
 
 /// Parse `shapes_ttl` and return the load error, asserting the load FAILED.
 fn load_error(shapes_ttl: &str) -> String {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"))
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .expect_err("this shapes graph must fail to load")
 }
 
 /// Parse `shapes_ttl` and assert it LOADS, returning nothing but the proof.
 fn loads(shapes_ttl: &str) {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}")).expect("this shapes graph must load");
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("this shapes graph must load");
 }
 
 /// A node expression whose SHAPE operand names a node the shapes graph never
@@ -1130,8 +1138,9 @@ fn a_computed_shape_argument_that_names_no_shape_is_an_error() {
              sh:expression [ shnex:conformsToShape (
                  [ shnex:var \"focusNode\" ] [ shnex:pathValues ex:kind ] ) ] .",
     );
-    let data: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:kind ex:NotAShape ."))
-        .expect("data parse");
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:kind ex:NotAShape ."), None)
+            .expect("data parse");
     let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
     let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
         "http://example.org/ns#a",
@@ -1175,7 +1184,7 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
         ("ex:a ex:p ex:b .", 0),
     ] {
         let data: Arc<_> =
-            parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}")).expect("data parse");
+            parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
         let store = ShaclData::new(Arc::clone(&data), Arc::clone(&data), None);
         let focus = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(
             "http://example.org/ns#a",

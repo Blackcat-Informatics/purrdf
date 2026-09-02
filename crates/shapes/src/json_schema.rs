@@ -113,7 +113,7 @@ const BUILTIN_PREFIXES: &[(&str, &str)] = &[
 /// #         sh:targetClass gmeow:Cat ;
 /// #         sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
 /// # ";
-/// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl).unwrap();
+/// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl, None).unwrap();
 /// # let shapes = purrdf_shapes::shapes::from_dataset(&dataset).unwrap();
 /// let out = compile(&shapes, &ns);
 /// # assert!(out.schema_json.contains("gmeow:Cat"));
@@ -2988,7 +2988,8 @@ mod tests {
 
     fn compile_ttl(body: &str) -> CompiledSchema {
         let ttl = format!("{PREFIXES}{body}");
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         compile(&shapes, &fixture_ns())
     }
@@ -2998,14 +2999,16 @@ mod tests {
         ontology_body: &str,
         mode: SchemaSurfaceMode,
     ) -> SchemaCompilation {
-        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{shapes_body}"
-        ))
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{shapes_body}"),
+            None,
+        )
         .expect("shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
-        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{ontology_body}"
-        ))
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{ontology_body}"),
+            None,
+        )
         .expect("ontology Turtle");
         compile_schema(&SchemaCompileRequest::new(
             &shapes,
@@ -3100,14 +3103,17 @@ mod tests {
 
     #[test]
     fn ontology_request_returns_typed_target_key_errors_in_both_modes() {
-        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}@prefix und: <https://undeclared.example/> .
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix und: <https://undeclared.example/> .
              meta:Shape a sh:NodeShape ; sh:targetClass und:Person ."
-        ))
+            ),
+            None,
+        )
         .expect("shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
         let ontology =
-            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("ontology Turtle");
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None).expect("ontology Turtle");
 
         for mode in [
             SchemaSurfaceMode::ShapedOnly,
@@ -3277,13 +3283,14 @@ mod tests {
 
     #[test]
     fn schema_compilation_key_covers_every_request_input() {
-        let shapes_a_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ."
-        ))
+        let shapes_a_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ."),
+            None,
+        )
         .expect("shape graph A");
         let shapes_b_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
             "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ; sh:closed true ."
-        ))
+        ), None)
         .expect("shape graph B");
         let shapes_a = from_dataset(&shapes_a_dataset).expect("parse shape graph A");
         let shapes_b = from_dataset(&shapes_b_dataset).expect("parse shape graph B");
@@ -3294,6 +3301,7 @@ mod tests {
                 @prefix meta: <https://example.org/meta/> .
                 meta:p a owl:DatatypeProperty .
             ",
+            None,
         )
         .expect("ontology A");
         let ontology_a_shuffled = crate::text_ingest::parse_turtle_to_dataset(
@@ -3302,6 +3310,7 @@ mod tests {
                 @prefix owl: <http://www.w3.org/2002/07/owl#> .
                 meta:p a owl:DatatypeProperty .
             ",
+            None,
         )
         .expect("shuffled ontology A");
         let ontology_b = crate::text_ingest::parse_turtle_to_dataset(
@@ -3310,6 +3319,7 @@ mod tests {
                 @prefix meta: <https://example.org/meta/> .
                 meta:q a owl:DatatypeProperty .
             ",
+            None,
         )
         .expect("ontology B");
 
@@ -3529,16 +3539,22 @@ mod tests {
 
     #[test]
     fn ontology_request_shaped_only_is_legacy_byte_exact() {
-        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ; \
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ; \
              sh:property [ sh:path meta:name ; sh:datatype xsd:string ] ."
-        ))
+            ),
+            None,
+        )
         .expect("shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
-        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
              meta:extra a owl:DatatypeProperty ."
-        ))
+            ),
+            None,
+        )
         .expect("ontology Turtle");
         let legacy = compile(&shapes, &fixture_ns());
         let requested = compile_schema(&SchemaCompileRequest::new(
@@ -3708,13 +3724,16 @@ mod tests {
         // key ("Node") is a legitimate class, not a build failure: it is keyed by its
         // CURIE ("meta:Node") so the reserved definition survives. (Before the
         // reserved-key disambiguation this returned a DefinitionCollision typed error.)
-        let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None)
+            .expect("empty shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
-        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
              meta:Node a owl:Class ."
-        ))
+            ),
+            None,
+        )
         .expect("ontology Turtle");
         let compilation = compile_schema(&SchemaCompileRequest::new(
             &shapes,
@@ -3747,7 +3766,7 @@ mod tests {
                 sh:targetClass gmeow:Cat ;
                 sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
         ";
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         let ns = Namespaces::new(
             "gmeow",
@@ -3987,7 +4006,7 @@ mod tests {
                                sh:in ( meta:open meta:closed ) ] .\n\
              meta:s1 a meta:State ; meta:kind meta:open ."
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
         let shapes = from_dataset(&dataset).expect("shapes");
         let compiled = compile(&shapes, &fixture_ns());
         let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("s1"));
@@ -5550,7 +5569,8 @@ mod tests {
     fn compile_vocab(body: &str) -> CompiledSchema {
         let ttl =
             format!("{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}");
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         let vocab = ValueVocab::new(MARKER);
         let projection = ValueVocabProjection {
@@ -5717,7 +5737,8 @@ mod tests {
             logic:stable a logic:TermStability .
         "
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         let plain = compile(&shapes, &fixture_ns());
         let none = compile_with_value_vocab(&shapes, &fixture_ns(), None);
@@ -5838,17 +5859,20 @@ mod tests {
     fn ontology_request_returns_typed_value_vocab_key_errors_in_both_modes() {
         const MARKER_IRI: &str = "https://example.org/marker/AbstractIndividualType";
 
-        let shapes_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None)
+            .expect("empty shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
         let vocab = ValueVocab::new(MARKER_IRI);
 
-        let unknown = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}
+        let unknown = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}
              @prefix marker: <https://example.org/marker/> .
              @prefix und: <https://undeclared.example/> .
              und:Color a marker:AbstractIndividualType ."
-        ))
+            ),
+            None,
+        )
         .expect("unknown-namespace vocabulary Turtle");
         let unknown_projection = ValueVocabProjection {
             vocab: &vocab,
@@ -5872,13 +5896,16 @@ mod tests {
             ));
         }
 
-        let collision = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}
+        let collision = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}
              @prefix marker: <https://example.org/marker/> .
              @prefix aux: <https://example.org/aux/> .
              meta:Color a marker:AbstractIndividualType .
              aux:Color a marker:AbstractIndividualType ."
-        ))
+            ),
+            None,
+        )
         .expect("colliding vocabulary Turtle");
         let collision_namespaces = Namespaces::new(
             "meta",
@@ -5917,13 +5944,16 @@ mod tests {
     /// still resolves via the union scan.
     fn compile_split(ontology_body: &str, shapes_body: &str) -> CompiledSchema {
         let logic = "@prefix logic: <https://blackcatinformatics.ca/logic/> .\n";
-        let onto = crate::text_ingest::parse_turtle_to_dataset(&format!(
-            "{PREFIXES}{logic}{ontology_body}"
-        ))
+        let onto = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{logic}{ontology_body}"),
+            None,
+        )
         .expect("ontology Turtle parse");
-        let shapes_ds =
-            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{logic}{shapes_body}"))
-                .expect("shapes Turtle parse");
+        let shapes_ds = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{logic}{shapes_body}"),
+            None,
+        )
+        .expect("shapes Turtle parse");
         let shapes = from_dataset(&shapes_ds).expect("shape parse");
         let vocab = ValueVocab::new(MARKER);
         let projection = ValueVocabProjection {
@@ -6139,7 +6169,7 @@ mod tests {
                  meta:anchor a meta:Term ; meta:stability logic:stable .\n\
                  meta:offanchor a meta:Term ; meta:stability logic:bogus ."
             );
-            let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+            let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
             let anchor =
                 crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("anchor"));
             let off =
@@ -6171,7 +6201,7 @@ mod tests {
                  sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .\n\
              meta:t1 a meta:Term ; meta:stability logic:bogus ."
         );
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
         let shapes = from_dataset(&dataset).expect("shapes");
 
         // No sh:in was introduced anywhere in the validating shape IR.

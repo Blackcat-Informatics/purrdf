@@ -146,7 +146,7 @@ fn bench_mutate(c: &mut Criterion) {
         b.iter(|| {
             let mut m = MutableDataset::new(Arc::clone(&base));
             for q in &inserts {
-                m.insert(q.clone());
+                let _ = m.insert(q.clone()).expect("bench fixtures are absolute");
             }
             for q in &removes {
                 m.remove(q);
@@ -177,7 +177,7 @@ fn bench_query(c: &mut Criterion) {
     // post-mutation effective set.
     let mut cow = MutableDataset::new(Arc::clone(&base));
     for q in &inserts {
-        cow.insert(q.clone());
+        let _ = cow.insert(q.clone()).expect("bench fixtures are absolute");
     }
     for q in &removes {
         cow.remove(q);
@@ -213,7 +213,7 @@ fn bench_context(_c: &mut Criterion) {
     let (inserts, removes) = workload();
     let mut cow = MutableDataset::new(Arc::clone(&base));
     for q in &inserts {
-        cow.insert(q.clone());
+        let _ = cow.insert(q.clone()).expect("bench fixtures are absolute");
     }
     for q in &removes {
         cow.remove(q);

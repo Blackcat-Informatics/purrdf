@@ -139,7 +139,9 @@ fn probe(rows: usize) {
     );
 
     let before = reset_peak();
-    let parsed = parse_jsonld(json.as_bytes()).expect("expanded JSON-LD parse");
+    // No base: the generated corpus spells every IRI absolutely, so resolution never
+    // runs and the measurement stays on expansion rather than on base arithmetic.
+    let parsed = parse_jsonld(json.as_bytes(), None).expect("expanded JSON-LD parse");
     let after = snapshot();
     report(
         &format!("parse_expanded_rows_{rows}"),
@@ -174,7 +176,8 @@ fn probe(rows: usize) {
         );
 
         let before = reset_peak();
-        let parsed = parse_jsonld(json.as_bytes()).expect("configured JSON-LD parse");
+        // No base, as above: the corpus is absolute-only by construction.
+        let parsed = parse_jsonld(json.as_bytes(), None).expect("configured JSON-LD parse");
         let after = snapshot();
         report(
             &format!("parse_{mode}_rows_{rows}"),

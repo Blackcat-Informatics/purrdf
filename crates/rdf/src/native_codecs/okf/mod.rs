@@ -453,15 +453,22 @@ pub(super) fn validate_relative_markdown_path(path: &str) -> Result<(), OkfError
     Ok(())
 }
 
+/// Validate an IRI-valued OKF frontmatter field.
+///
+/// [`purrdf_iri::BaseIri::parse`] is the workspace's shared "a valid RFC-3987 IRI that has a
+/// scheme" primitive, and its [`diagnostic_code`](purrdf_iri::IriError::diagnostic_code) is
+/// carried verbatim — so an OKF document's IRI failure groups with every other IRI failure in
+/// this toolkit instead of spelling its own reason, exactly as the projection configuration
+/// layer's own gate does.
 pub(super) fn validate_absolute_iri(label: &str, value: &str) -> Result<(), OkfError> {
-    let iri = purrdf_iri::parse(value)
-        .map_err(|error| OkfError::new(format!("invalid {label} `{value}`: {error}")))?;
-    if !iri.has_scheme() {
-        return Err(OkfError::new(format!(
-            "{label} `{value}` must be an absolute IRI"
-        )));
-    }
-    Ok(())
+    purrdf_iri::BaseIri::parse(value)
+        .map(|_| ())
+        .map_err(|error| {
+            OkfError::new(format!(
+                "{label} `{value}` must be an absolute IRI: {}: {error}",
+                error.diagnostic_code()
+            ))
+        })
 }
 
 fn validate_join_base(label: &str, value: &str) -> Result<(), OkfError> {

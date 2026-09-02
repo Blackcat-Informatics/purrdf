@@ -1270,12 +1270,14 @@ mod tests {
         mode: SchemaSurfaceMode,
     ) -> Result<SchemaSurface, SchemaCompileError> {
         let shape_dataset =
-            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_body}"))
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_body}"), None)
                 .expect("shape Turtle");
         let shapes = from_dataset(&shape_dataset).expect("shape graph");
-        let ontology =
-            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{ontology_body}"))
-                .expect("ontology Turtle");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{ontology_body}"),
+            None,
+        )
+        .expect("ontology Turtle");
         build(&SchemaCompileRequest::new(
             &shapes,
             &namespaces(),

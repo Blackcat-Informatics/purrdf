@@ -22,6 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use hashbrown::HashTable;
+use purrdf_iri::IriError;
 
 use crate::blank_label::LabelAlphabet;
 use crate::{
@@ -218,6 +219,15 @@ struct Interner {
     /// [`Blake3ContentId`]. Empty while recognition is inactive; populated at
     /// intern time in the miss branch of [`Interner::intern`] (IRI arm only).
     content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+    /// The FIRST IRI that failed the IR-boundary absoluteness invariant, with the
+    /// typed reason. Recorded in the miss branch of [`Interner::intern`] (IRI arm
+    /// only) and turned into a hard `Err` by [`super::validate::validate`], which
+    /// [`RdfDatasetBuilder::freeze`] runs before any `RdfDataset` is materialized.
+    ///
+    /// Only the first is kept: `validate` reports the first violation for every
+    /// other structural invariant too, and once one is recorded the dataset can
+    /// never be frozen, so later ones cannot change the outcome.
+    relative_iri: Option<(String, IriError)>,
 }
 
 impl Interner {
@@ -228,6 +238,7 @@ impl Interner {
             index: HashTable::new(),
             content_scheme: None,
             content_ids: HashMap::default(),
+            relative_iri: None,
         }
     }
 
@@ -248,6 +259,13 @@ impl Interner {
     /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
     /// through the arena) and pushes the strings to the arena only on a MISS, so a
     /// duplicate value costs no arena bytes. Idempotent: equal values map to one id.
+    ///
+    /// # The absoluteness invariant is checked here, on the MISS path only
+    ///
+    /// The early return below is the HIT path: re-interning a string this table has
+    /// already stored is a hash lookup and nothing else, so an IRI is validated for
+    /// absoluteness exactly once — when it is first inserted — no matter how many
+    /// times it is subsequently interned. See [`super::absolute`].
     fn intern(&mut self, lookup: TermLookup<'_>) -> TermId {
         let hash = hash_lookup_value(&lookup);
         {
@@ -260,6 +278,19 @@ impl Interner {
             }
         }
         let i = u32::try_from(self.terms.len()).expect("term table exceeds u32::MAX entries");
+        // The IR-boundary absoluteness invariant (miss branch, IRI arm ONLY). A
+        // violation cannot be reported from this signature, so it is recorded and
+        // `super::validate::validate` turns it into the hard `Err` that
+        // `RdfDatasetBuilder::freeze` returns — before any `RdfDataset` exists.
+        // Skipped once a violation is already pending: the dataset can no longer be
+        // frozen, so re-validating later IRIs could not change the outcome and would
+        // only slow down the walk to the error.
+        if let TermLookup::Iri(iri) = lookup
+            && self.relative_iri.is_none()
+            && let Err(err) = super::absolute::check_absolute(iri)
+        {
+            self.relative_iri = Some((iri.to_owned(), err));
+        }
         // Content-id recognition (miss branch, IRI arm ONLY): gated first on
         // `content_scheme` so the check is a single `Option` branch — skipped
         // entirely, with zero further work, when recognition is inactive. Computed
@@ -841,6 +872,19 @@ impl RdfDatasetBuilder {
     /// bound) and as the frozen dataset's term count.
     pub(crate) fn term_count(&self) -> usize {
         self.interner.term_count()
+    }
+
+    /// The first IRI interned into this builder that violated the IR-boundary
+    /// absoluteness invariant, with the typed reason.
+    ///
+    /// Read by [`super::validate`], which converts it into the hard `Err` that
+    /// [`freeze`](Self::freeze) returns, so no `RdfDataset` can be materialized
+    /// carrying a relative IRI term.
+    pub(crate) fn relative_iri(&self) -> Option<(&str, &IriError)> {
+        self.interner
+            .relative_iri
+            .as_ref()
+            .map(|(iri, err)| (iri.as_str(), err))
     }
 
     /// Push a quad. Duplicate quads collapse to a single row (C0.5); `g == None`

@@ -770,6 +770,8 @@ where
 ///         sh:targetClass ex:Person ;
 ///         sh:property [ sh:path ex:required ; sh:minCount 1 ] .
 ///     "#,
+///     // No base: every IRI in this shapes graph is already absolute.
+///     None,
 /// )?);
 /// let validator = PreparedValidator::from_projected_dataset(
 ///     Arc::clone(&dataset),
@@ -1330,19 +1332,36 @@ pub(crate) fn shacl_dataset_from_dataset(data: &RdfDataset) -> Result<Arc<RdfDat
 /// quad table so SHACL's reifier-shape lookups can find them.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
-/// Parse a SHACL shapes graph from a Turtle string.
+/// Parse a SHACL shapes graph from a Turtle string, resolving its relative IRI
+/// references against `base`.
 ///
 /// Creates an in-memory store, loads the shapes graph with prefix extraction,
 /// and parses it into a reusable [`Shapes`] model. The parsed model can be
 /// shared across multiple data graphs via `validate`, eliminating the cost of
 /// re-parsing shapes for every validation phase.
 ///
+/// # `base` is required at the call, not defaulted
+///
+/// A shapes graph is RDF, and a SHACL author writes `<PersonShape>` in it exactly as
+/// they would in any other Turtle document. `base` is therefore the same
+/// caller-supplied base (RFC-3986 §5.1.2) [`parse_dataset`](::purrdf::parse_dataset)
+/// takes, threaded to the identical resolution layer — so a shapes document read
+/// through this boundary resolves byte-for-byte like the same document read through
+/// any other one.
+///
+/// It is a positional parameter rather than a defaulted convenience overload on
+/// purpose. The overload is what let this seam silently receive no base while every
+/// sibling seam got one, and the divergence was invisible precisely because nothing at
+/// a call site had to mention it. `None` remains a legitimate answer — an in-document
+/// `@base` can still establish one, and with neither, a relative reference is a hard
+/// `iri-relative-no-base` — but it is now an answer somebody gave.
+///
 /// # Errors
 ///
-/// Returns an error string if the shapes Turtle fails to parse or contains
-/// unsupported SHACL constructs.
-pub fn parse_shapes(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes_with_config(shapes_ttl, None)
+/// Returns an error string if the shapes Turtle fails to parse (including a relative
+/// IRI reference with no base in scope) or contains unsupported SHACL constructs.
+pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, String> {
+    parse_shapes_with_config(shapes_ttl, base, None)
 }
 
 /// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
@@ -1358,6 +1377,7 @@ pub fn parse_shapes(shapes_ttl: &str) -> Result<Shapes, String> {
 /// unsupported SHACL constructs.
 pub fn parse_shapes_with_config(
     shapes_ttl: &str,
+    base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<Shapes, String> {
     // Parse the shapes graph via the native purrdf codecs — no
@@ -1366,7 +1386,7 @@ pub fn parse_shapes_with_config(
     // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
     // names. Syntax failures are accumulated per independently recoverable
     // statement so a SHACL author sees the complete actionable set in one pass.
-    let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl)
+    let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, base)
         .map_err(|errors| errors.join("\n"))?;
     let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
@@ -1389,8 +1409,12 @@ pub fn parse_shapes_with_config(
 /// # Errors
 ///
 /// Returns an error string if either graph fails to parse.
-pub fn validate_graphs(data_nt: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
-    validate_graphs_with_config(data_nt, shapes_ttl, None)
+pub fn validate_graphs(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+) -> Result<ValidationReport, String> {
+    validate_graphs_with_config(data_nt, shapes_ttl, shapes_base, None)
 }
 
 /// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
@@ -1403,6 +1427,7 @@ pub fn validate_graphs(data_nt: &str, shapes_ttl: &str) -> Result<ValidationRepo
 pub fn validate_graphs_with_config(
     data_nt: &str,
     shapes_ttl: &str,
+    shapes_base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<ValidationReport, String> {
     // Parse the data graph via the native codecs. Every independently malformed
@@ -1411,7 +1436,7 @@ pub fn validate_graphs_with_config(
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
-    let shapes = parse_shapes_with_config(shapes_ttl, box_role_vocab)?;
+    let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab)?;
     validate_dataset(data.as_ref(), &shapes)
 }
 
@@ -1424,8 +1449,9 @@ pub fn validate_graphs_with_config(
 pub fn validate_dataset_graphs(
     data: &RdfDataset,
     shapes_ttl: &str,
+    shapes_base: Option<&str>,
 ) -> Result<ValidationReport, String> {
-    let shapes = parse_shapes(shapes_ttl)?;
+    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
     validate_dataset(data, &shapes)
 }
 
@@ -1444,10 +1470,14 @@ pub fn validate_dataset_graphs(
 /// Returns an error string if either graph fails to parse or if rule application
 /// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
 /// does not reach a fixpoint — see [`crate::apply_rules`]).
-pub fn entail_graphs(data_nt: &str, shapes_ttl: &str) -> Result<Arc<RdfDataset>, String> {
+pub fn entail_graphs(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+) -> Result<Arc<RdfDataset>, String> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
-    let shapes = parse_shapes(shapes_ttl)?;
+    let shapes = parse_shapes(shapes_ttl, shapes_base)?;
     crate::rules::entail_dataset(data.as_ref(), &shapes)
 }
 
@@ -1472,8 +1502,8 @@ mod tests {
     }
 
     fn load_shapes_ttl(ttl: &str) -> Shapes {
-        let dataset =
-            crate::text_ingest::parse_turtle_to_dataset(ttl).expect("shapes Turtle must parse");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None)
+            .expect("shapes Turtle must parse");
         crate::shapes::from_dataset(&dataset).expect("shapes parse must succeed")
     }
 
@@ -1501,7 +1531,7 @@ mod tests {
             "ex:b ex:q ex:c .\n",           // valid, between the two errors
             "ex:d ex:r ex:s ex:t ex:u .\n", // too many terms → recoverable error
         );
-        let err = parse_shapes(bad).expect_err("malformed Turtle must error");
+        let err = parse_shapes(bad, None).expect_err("malformed Turtle must error");
         let n = err.matches("Turtle parse error").count();
         assert!(
             n >= 2,
@@ -1518,7 +1548,7 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> .\n",
             "neither is this\n",
         );
-        let err = validate_graphs(bad_data, "").expect_err("malformed N-Triples must error");
+        let err = validate_graphs(bad_data, "", None).expect_err("malformed N-Triples must error");
         let n = err.matches("N-Triples parse error").count();
         assert!(
             n >= 2,
@@ -1530,14 +1560,98 @@ mod tests {
     fn parse_shapes_clean_input_still_succeeds() {
         // The accumulator must not turn a well-formed document into a failure.
         let ok = format!("{PREFIXES}\nex:Shape a sh:NodeShape ; sh:targetClass ex:Thing .\n");
-        parse_shapes(&ok).expect("well-formed shapes must parse");
+        parse_shapes(&ok, None).expect("well-formed shapes must parse");
+    }
+
+    // ── The shapes graph's base ────────────────────────────────────────────────
+
+    /// A shapes graph whose shape node is a RELATIVE IRI reference.
+    const RELATIVE_SHAPES: &str = concat!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+        "<PersonShape> a sh:NodeShape ;\n",
+        "  sh:targetClass <http://example.org/Person> ;\n",
+        "  sh:property [ sh:path <http://example.org/name> ; sh:minCount 1 ] .\n",
+    );
+
+    #[test]
+    fn parse_shapes_resolves_a_relative_iri_against_the_supplied_base() {
+        let shapes = parse_shapes(RELATIVE_SHAPES, Some("http://example.org/shapes.ttl"))
+            .expect("a based shapes graph parses");
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|s| s.id.to_string().contains("PersonShape"))
+            .expect("the shape is present");
+        // `Display` for a shape id renders the N-Triples term token, hence the brackets.
+        assert_eq!(
+            shape.id.to_string(),
+            "<http://example.org/PersonShape>",
+            "the shape node must be the RESOLVED absolute IRI, not the bare token"
+        );
+    }
+
+    #[test]
+    fn parse_shapes_without_a_base_refuses_a_relative_iri() {
+        // The negative control. A shapes graph whose terms cannot be resolved must not
+        // parse into shapes that quietly match nothing: a validator built from those
+        // would report `conforms true` over a constraint it never evaluated.
+        let err = parse_shapes(RELATIVE_SHAPES, None)
+            .expect_err("a relative IRI with no base must be refused");
+        assert!(
+            err.contains("iri-relative-no-base"),
+            "the refusal must name the actionable condition: {err}"
+        );
+    }
+
+    #[test]
+    fn an_in_document_base_overrides_the_supplied_base() {
+        // RFC-3986 5.1.1 over 5.1.2: the document's own `@base` wins.
+        let document = format!("@base <http://example.org/inner/> .\n{RELATIVE_SHAPES}");
+        let shapes = parse_shapes(&document, Some("http://caller.example/outer.ttl"))
+            .expect("the document base resolves it");
+        assert!(
+            shapes
+                .node_shapes
+                .iter()
+                .any(|s| s.id.to_string() == "<http://example.org/inner/PersonShape>"),
+            "the in-document `@base` must win over the caller-supplied base"
+        );
+    }
+
+    #[test]
+    fn the_shapes_base_is_read_and_changes_the_validation_outcome() {
+        // The base is not decorative: resolving the shape under a base the DATA graph
+        // shares is what makes the target select a focus node at all. Under a
+        // different base the same shapes text finds the same violation, because the
+        // target class here is absolute — so the discriminating assertion is on the
+        // reported source shape, which moves with the base.
+        let data = "<http://example.org/alice> \
+                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                    <http://example.org/Person> .\n";
+
+        let report = validate_graphs(data, RELATIVE_SHAPES, Some("http://a.example/s.ttl"))
+            .expect("validation runs under a base");
+        assert_eq!(report.results.len(), 1, "the shape applies");
+        assert_eq!(
+            report.results[0].source_shape.to_string(),
+            "<http://a.example/PersonShape>"
+        );
+
+        let other = validate_graphs(data, RELATIVE_SHAPES, Some("http://b.example/s.ttl"))
+            .expect("validation runs under a different base");
+        assert_eq!(
+            other.results[0].source_shape.to_string(),
+            "<http://b.example/PersonShape>",
+            "a different base must produce a different resolved shape IRI — proving the \
+             parameter is read rather than accepted and dropped"
+        );
     }
 
     // ── Pre-existing tests ─────────────────────────────────────────────────────
 
     #[test]
     fn empty_inputs_return_conforming_report() {
-        let report = validate_graphs("", "").expect("empty inputs must not error");
+        let report = validate_graphs("", "", None).expect("empty inputs must not error");
         assert!(report.conforms, "empty report must conform");
         assert!(
             report.results.is_empty(),
@@ -1569,7 +1683,7 @@ mod tests {
                     sh:minCount 1 ;
                 ] ."
         );
-        let report = validate_dataset_graphs(dataset.as_ref(), &shapes_ttl)
+        let report = validate_dataset_graphs(dataset.as_ref(), &shapes_ttl, None)
             .expect("GTS-backed store should validate");
         assert!(!report.conforms, "missing property must violate the shape");
         assert_eq!(report.results.len(), 1);
@@ -2185,7 +2299,7 @@ mod tests {
             "#,
         );
 
-        let text_report = validate_graphs(data_nt, &shapes_ttl).expect("text validation");
+        let text_report = validate_graphs(data_nt, &shapes_ttl, None).expect("text validation");
         assert_eq!(text_report.results.len(), 1);
         assert_eq!(
             text_report.results[0].focus_node,
@@ -2207,7 +2321,7 @@ mod tests {
 
         let reversed = data_nt.lines().rev().collect::<Vec<_>>().join("\n");
         let reversed_report =
-            validate_graphs(&reversed, &shapes_ttl).expect("permuted text validation");
+            validate_graphs(&reversed, &shapes_ttl, None).expect("permuted text validation");
         assert_eq!(text_report.to_ntriples(), reversed_report.to_ntriples());
     }
 
@@ -2245,7 +2359,7 @@ mod tests {
             "#,
         );
 
-        let report = validate_graphs(data_nt, &shapes_ttl).expect("component validation");
+        let report = validate_graphs(data_nt, &shapes_ttl, None).expect("component validation");
         assert_eq!(report.results.len(), 2, "only bob fails both validators");
         assert!(report.results.iter().all(|result| {
             result.focus_node == NamedNode::new_unchecked("http://example.org/ns#bob").into_term()
@@ -2281,7 +2395,7 @@ mod tests {
             "#,
         );
 
-        let report = validate_graphs(data_nt, &shapes_ttl).expect("function validation");
+        let report = validate_graphs(data_nt, &shapes_ttl, None).expect("function validation");
         assert_eq!(report.results.len(), 1);
         assert_eq!(
             report.results[0].focus_node,
@@ -2303,7 +2417,7 @@ mod tests {
                 sh:property [ sh:path rdf:type ; sh:hasValue ex:Person ] .
             ",
         );
-        let report = validate_graphs(data_nt, &shapes_ttl).expect("path validation");
+        let report = validate_graphs(data_nt, &shapes_ttl, None).expect("path validation");
         assert_eq!(report.results.len(), 1);
         assert!(
             report.results[0]
@@ -3078,6 +3192,7 @@ mod tests {
                 validate_graphs_with_config(
                     &data,
                     &shapes,
+                    None,
                     Some(crate::model::BoxRoleVocab::for_namespace(
                         "https://example.org/meta/",
                     )),

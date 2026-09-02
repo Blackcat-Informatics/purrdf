@@ -95,14 +95,31 @@
 //! Every other syntax is read whole, because its grammar requires it: Turtle and TriG
 //! rebind `@prefix` / `@base` mid-document, and RDF/XML, TriX, JSON-LD and YAML-LD are
 //! tree syntaxes with no line structure. Those take [`read_bytes`] exactly as before.
+//!
+//! ## The retrieval IRI is derived ONCE, for every platform, and not here
+//!
+//! [`retrieval_base_iri`] turns a filesystem path into the RFC-8089 `file://` IRI RFC-3986
+//! §5.1.3 makes the base of last resort — but it does not IMPLEMENT that turn. The
+//! derivation is `purrdf::slice::retrieval_base_iri`, the workspace's single
+//! implementation, shared with the slice catalogue and the SHACL shape-union loader, which
+//! read their own on-disk documents through the same function.
+//!
+//! That sharing is the point, not an economy. A POSIX path is already an IRI path, so it
+//! is percent-encoded and used verbatim; a Windows path is a different language and is
+//! translated — the extended-length `\\?\` / `\\?\UNC\` prefix `std::fs::canonicalize`
+//! returns is stripped, a UNC host becomes the IRI's AUTHORITY, and `\` becomes `/`. A
+//! second transcription of that in this crate is precisely how one surface would come to
+//! emit `file://%5C%5C%3F%5CC%3A%5C…` while another emitted the right thing. What stays
+//! here is only the CLI's diagnostic: the path as the operator spelled it, plus the
+//! `--base` escape hatch a library error cannot know about.
 
 use std::borrow::Cow;
 use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, PackView, RdfDataset, RdfLookaside, dataset_from_view,
-    verify_pack,
+    DatasetView, LossEntry, LossLedger, PackView, RdfDataset, RdfDiagnostic, RdfLookaside,
+    dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
     NativeRdfFormat, SerializeOutcome, SourceFormat, TransportEncoding, decode_transport,
@@ -204,6 +221,79 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
     }
 }
 
+/// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
+///
+/// RFC-3986 §5.1.3 makes the retrieval URI the base of last resort, and this is one of the
+/// three surfaces in this project that HAS one. The derivation itself is NOT here: it is
+/// [`purrdf::slice::retrieval_base_iri`], the workspace's single implementation, which
+/// `purrdf-slice` (the slice catalogue) and `purrdf-shapes` (the shape-union loader) read
+/// their own documents through. A second transcription here is exactly how a platform
+/// divergence hides — the Windows extended-length and UNC translation lives with the
+/// derivation, so every surface gets it or none does.
+///
+/// What this function adds is the CLI's own diagnostic: the path as the operator spelled
+/// it, and the `--base` escape hatch, which the library error cannot know about.
+///
+/// The path is canonicalized (by the shared derivation), so the base does not depend on
+/// the working directory or on `..` segments in the argument. A path that cannot be
+/// expressed as a `file://` IRI is a hard error, never a silent fall back to "no base".
+pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
+    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
+        .map(|base| base.as_str().to_owned())
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "{}: {error}; pass --base explicitly",
+                display_path(path)
+            ))
+        })
+}
+
+/// [`retrieval_base_iri`] for a consumer outside this crate — the integration tests, which
+/// assert against the pipeline's OWN derivation rather than a second transcription of it.
+///
+/// A second implementation in the test harness is exactly how a platform divergence hides:
+/// the tests agreed with themselves while the binary emitted something else. The error is
+/// flattened to a `String` because [`CliError`] is crate-internal.
+///
+/// # Errors
+///
+/// When `path` does not canonicalize, is not UTF-8, or has no usable `file://` IRI.
+pub fn file_retrieval_iri(path: &str) -> Result<String, String> {
+    retrieval_base_iri(path).map_err(|error| error.to_string())
+}
+
+/// The RFC-8089 `file://` IRI of an ALREADY-ABSOLUTE platform path, touching no filesystem.
+///
+/// Re-exported from the shared derivation rather than reimplemented: [`crate::cli`]'s
+/// `--base` diagnostic must name the spelling that would have worked for a path that does
+/// not exist yet, and it must name the SAME spelling the pipeline would have derived —
+/// including the Windows extended-length and UNC translation.
+pub(crate) use purrdf::slice::file_iri_for_absolute_path;
+
+/// The base to parse `path` under: an explicit `--base` always wins, otherwise the
+/// input's own retrieval IRI.
+///
+/// `-` (stdin) gets NO base and keeps the hard error, because a piped document has no
+/// retrieval IRI to derive one from — there is no honest answer, so the parse refuses.
+/// The refusal reaches the operator through [`with_cli_base_hint`], which is where the
+/// message gets to name `--base`; this function only decides that there is no base, and
+/// deliberately does not fabricate one. A syntax whose grammar admits no relative
+/// reference gets no derived base either: it could not use one, and deriving it would
+/// only pay a `canonicalize` to hand over a value that is never read.
+pub(crate) fn effective_base(
+    path: &str,
+    format: NativeRdfFormat,
+    base: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    if let Some(explicit) = base {
+        return Ok(Some(explicit.to_owned()));
+    }
+    if path == "-" || !format.admits_relative_iri() {
+        return Ok(None);
+    }
+    retrieval_base_iri(path).map(Some)
+}
+
 /// Read an RDF text source at `path` into a dataset, STREAMING it when its syntax
 /// allows.
 ///
@@ -220,15 +310,21 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
 ///
 /// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
 /// and is what every non-line-oriented syntax takes.
+///
+/// The base the document parses under is [`effective_base`]'s answer, so an explicit
+/// `--base` and the derived retrieval IRI are decided in one place rather than per lane.
 fn load_native(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
     policy: TransportPolicy,
 ) -> Result<Arc<RdfDataset>, CliError> {
+    let base = effective_base(path, format, base)?;
+    let base = base.as_deref();
     if !format.is_line_oriented() {
         let bytes = read_bytes_with_transport(path, policy)?;
-        return Ok(parse_dataset(&bytes, format.media_type(), base)?);
+        return parse_dataset(&bytes, format.media_type(), base)
+            .map_err(|error| with_cli_base_hint(&error, base));
     }
 
     let stream = open_raw_stream(path)?;
@@ -246,11 +342,30 @@ fn load_native(
     };
     let decoded = transport_reader(stream, encoding)
         .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
-    Ok(parse_dataset_from_reader(
-        decoded,
-        format.media_type(),
-        base,
-    )?)
+    parse_dataset_from_reader(decoded, format.media_type(), base)
+        .map_err(|error| with_cli_base_hint(&error, base))
+}
+
+/// Close the sentence the library error cannot finish: name `--base`.
+///
+/// `purrdf-iri`'s `iri-relative-no-base` message ends at *"or pass a base IRI to the
+/// API"*, and that is the furthest a library can honestly go — it does not know it is
+/// being driven by a CLI, and it must read the same on the Rust, wasm, C and Python
+/// surfaces. `--base` IS that API here, and every subcommand that reads an RDF document
+/// carries the flag, so this layer is the one that can say so. Without this the operator
+/// was told to "pass a base IRI to the API" by a program they were invoking as a command,
+/// which names no action they can take.
+///
+/// The hint is appended ONLY for the base-less code, and only when no base was in force.
+/// A relative reference that failed *despite* a base is a different fact — the base was
+/// applied and did not cover the reference — and telling that user to pass `--base` would
+/// send them to re-supply what they already gave. Every other diagnostic passes through
+/// untouched, so an unrelated parse error never grows a suggestion that cannot help it.
+fn with_cli_base_hint(error: &RdfDiagnostic, base: Option<&str>) -> CliError {
+    if error.code == "iri-relative-no-base" && base.is_none() {
+        return CliError::Runtime(format!("{error}; on this command that is `--base <IRI>`"));
+    }
+    CliError::Runtime(error.to_string())
 }
 
 /// Put a stream into the same shape [`sniff_transport`] returns without looking at a
@@ -523,6 +638,12 @@ pub(crate) fn serialize_input_to_nquads(
         type Output = SerializeOutcome;
 
         fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+            // No EGRESS base, and `None` is the right value rather than an omission:
+            // `base` is the INGRESS base, which `run_over_input` has already applied
+            // while parsing, and N-Quads' `emits_base` registry column is `false`, so
+            // `serialize_dataset_to_format` would discard anything passed here anyway
+            // (its `resolve_base` filters on exactly that column). This boundary decides
+            // over absolute N-Quads by design.
             Ok(serialize_dataset_to_format(
                 view,
                 NativeRdfFormat::NQuads,

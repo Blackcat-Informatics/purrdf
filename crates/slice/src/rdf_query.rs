@@ -295,11 +295,22 @@ impl Dataset {
             .predicate_objects_of(subject_iri)
     }
 
-    /// Parse RDF text `bytes` of `media_type` into a fresh dataset. `context` labels
-    /// parse errors. Lenient on PurRDF's `@x-purrdf-*` language tags (the native codecs
-    /// are fully lenient).
-    pub fn parse(bytes: &[u8], media_type: &str, context: &str) -> Result<Self, SliceError> {
-        let ds = parse_dataset(bytes, media_type, None)
+    /// Parse RDF text `bytes` of `media_type` into a fresh dataset, resolving relative
+    /// IRI references against `base`. `context` labels parse errors. Lenient on PurRDF's
+    /// `@x-purrdf-*` language tags (the native codecs are fully lenient).
+    ///
+    /// `base` is the RFC-3986 §5.1.2 caller-supplied base. It is `None` only for text
+    /// this process itself produced in memory, which has no retrieval IRI to fall back
+    /// on; a document read off disk is parsed through [`Self::parse_file`], which derives
+    /// its own §5.1.3 retrieval IRI. A relative reference with no base in scope is a hard
+    /// error either way — never a silently interned relative IRI.
+    pub fn parse(
+        bytes: &[u8],
+        media_type: &str,
+        base: Option<&str>,
+        context: &str,
+    ) -> Result<Self, SliceError> {
+        let ds = parse_dataset(bytes, media_type, base)
             .map_err(|e| SliceError::Parse(format!("syntax error in {context}: {e}")))?;
         // `parse_dataset` returns an `Arc<RdfDataset>`; unwrap the fresh, uniquely-owned
         // allocation into an owned dataset (no clone — it is the sole reference).
@@ -307,9 +318,33 @@ impl Dataset {
         Ok(Self { ds })
     }
 
-    /// Parse Turtle text into a fresh dataset.
-    pub fn parse_turtle(bytes: &[u8], context: &str) -> Result<Self, SliceError> {
-        Self::parse(bytes, NativeRdfFormat::Turtle.media_type(), context)
+    /// Parse the bytes of the on-disk document at `path` under **its own** retrieval IRI.
+    ///
+    /// This is the one seam every file-sourced parse in this crate goes through, so all
+    /// three answers a file gives — its media type (from the extension), its base (its
+    /// RFC-8089 `file://` retrieval IRI, RFC-3986 §5.1.3) and its diagnostic label — are
+    /// derived from the single `&Path` the caller already holds, in one place, rather
+    /// than re-decided per call site. `bytes` is passed separately because most callers
+    /// already have the content in hand (an [`ArtifactRecord`](crate::ArtifactRecord)'s
+    /// buffer, or freshly patched manifest text that is not yet on disk).
+    pub fn parse_file(bytes: &[u8], path: &Path) -> Result<Self, SliceError> {
+        let base = crate::retrieval::retrieval_base_iri(path)?;
+        Self::parse(
+            bytes,
+            media_type_for_path(path),
+            Some(base.as_str()),
+            &path.display().to_string(),
+        )
+    }
+
+    /// Parse Turtle text into a fresh dataset, resolving relative IRI references against
+    /// `base` (see [`Self::parse`]).
+    pub fn parse_turtle(
+        bytes: &[u8],
+        base: Option<&str>,
+        context: &str,
+    ) -> Result<Self, SliceError> {
+        Self::parse(bytes, NativeRdfFormat::Turtle.media_type(), base, context)
     }
 
     /// The IRI subjects of `?s a <type_iri>` in the default graph, in dataset order.
@@ -785,18 +820,42 @@ impl DatasetAccumulator {
         }
     }
 
-    /// Parse `bytes` of `media_type` and merge them in under a fresh blank scope.
-    /// `context` labels parse errors.
-    pub fn add(&mut self, bytes: &[u8], media_type: &str, context: &str) -> Result<(), SliceError> {
-        let parsed = parse_dataset(bytes, media_type, None)
+    /// Parse `bytes` of `media_type` under `base` and merge them in under a fresh blank
+    /// scope. `context` labels parse errors; `base` is the RFC-3986 §5.1.2 caller base
+    /// (see [`Dataset::parse`]).
+    pub fn add(
+        &mut self,
+        bytes: &[u8],
+        media_type: &str,
+        base: Option<&str>,
+        context: &str,
+    ) -> Result<(), SliceError> {
+        let parsed = parse_dataset(bytes, media_type, base)
             .map_err(|e| SliceError::Parse(format!("syntax error in {context}: {e}")))?;
         self.builder.push_dataset(&parsed);
         Ok(())
     }
 
-    /// Parse Turtle `bytes` and merge them in under a fresh blank scope.
-    pub fn add_turtle(&mut self, bytes: &[u8], context: &str) -> Result<(), SliceError> {
-        self.add(bytes, NativeRdfFormat::Turtle.media_type(), context)
+    /// Parse the on-disk document at `path` under **its own** retrieval IRI and merge it
+    /// in under a fresh blank scope — the accumulator's twin of [`Dataset::parse_file`].
+    pub fn add_file(&mut self, bytes: &[u8], path: &Path) -> Result<(), SliceError> {
+        let base = crate::retrieval::retrieval_base_iri(path)?;
+        self.add(
+            bytes,
+            media_type_for_path(path),
+            Some(base.as_str()),
+            &path.display().to_string(),
+        )
+    }
+
+    /// Parse Turtle `bytes` under `base` and merge them in under a fresh blank scope.
+    pub fn add_turtle(
+        &mut self,
+        bytes: &[u8],
+        base: Option<&str>,
+        context: &str,
+    ) -> Result<(), SliceError> {
+        self.add(bytes, NativeRdfFormat::Turtle.media_type(), base, context)
     }
 
     /// Merge an already-parsed [`Dataset`] in under a fresh blank scope.
@@ -857,7 +916,7 @@ mod tests {
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:a a ex:Thing .\n\
                    ex:b a ex:Thing .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let mut subjects = ds.subjects_of_type("https://example.org/Thing").unwrap();
         subjects.sort();
         assert_eq!(
@@ -873,7 +932,7 @@ mod tests {
     fn object_literal_reads_the_lexical_value() {
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:a ex:label \"hello\" .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         assert_eq!(
             ds.object_literal("https://example.org/a", "https://example.org/label")
                 .unwrap(),
@@ -888,8 +947,13 @@ mod tests {
                     @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
                     ex:s ex:p ex:o .\n\
                     ex:g { ex:ax owl:annotatedSource ex:s . }\n";
-        let ds =
-            Dataset::parse(trig.as_bytes(), NativeRdfFormat::TriG.media_type(), "test").unwrap();
+        let ds = Dataset::parse(
+            trig.as_bytes(),
+            NativeRdfFormat::TriG.media_type(),
+            None,
+            "test",
+        )
+        .unwrap();
 
         // The named-graph edge is visible only under GraphSel::Named / Any.
         let named = ds.graph(GraphSel::Named("https://example.org/g"));
@@ -958,8 +1022,13 @@ mod tests {
     fn unresolved_named_graph_is_empty_not_error() {
         let trig = "@prefix ex: <https://example.org/> .\n\
                     ex:s ex:p ex:o .\n";
-        let ds =
-            Dataset::parse(trig.as_bytes(), NativeRdfFormat::TriG.media_type(), "test").unwrap();
+        let ds = Dataset::parse(
+            trig.as_bytes(),
+            NativeRdfFormat::TriG.media_type(),
+            None,
+            "test",
+        )
+        .unwrap();
         let missing = ds.graph(GraphSel::Named("https://example.org/does-not-exist"));
         assert!(
             missing
@@ -977,7 +1046,7 @@ mod tests {
         // A quoted triple term in object position (RDF 1.2 `<<( … )>>`).
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:p <<( ex:a ex:b ex:c )>> .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let objects = ds
             .objects("https://example.org/s", "https://example.org/p")
             .unwrap();
@@ -996,7 +1065,7 @@ mod tests {
         // A triple term whose object is itself a triple term.
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:p <<( ex:a ex:b <<( ex:d ex:e ex:f )>> )>> .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let objects = ds
             .objects("https://example.org/s", "https://example.org/p")
             .unwrap();
@@ -1023,7 +1092,7 @@ mod tests {
                    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
                    ex:s ex:count \"5\"^^xsd:integer ;\n\
                         ex:greeting \"bonjour\"@fr .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
 
         let count = ds
             .first_object("https://example.org/s", "https://example.org/count")
@@ -1061,7 +1130,7 @@ mod tests {
     fn rdf_list_walks_a_collection_in_order() {
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:items ( ex:a ex:b ex:c ) .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = ds
             .first_object("https://example.org/s", "https://example.org/items")
             .unwrap()
@@ -1103,7 +1172,7 @@ mod tests {
         // acceptance 1: parse a `( … )` collection, feed its blank head back in.
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:list ( ex:a ex:b ex:c ) .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = head_subject(
             ds.first_object("https://example.org/s", "https://example.org/list")
                 .unwrap()
@@ -1132,7 +1201,7 @@ mod tests {
                    ex:I owl:intersectionOf ( ex:A ex:B ex:C ) .\n\
                    ex:M owl:members ( ex:x ex:y ) .\n\
                    ex:P owl:propertyChainAxiom ( ex:p1 ex:p2 ) .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
 
         let named = |n: &str| Object::Named(format!("https://example.org/{n}"));
         let members_of = |subject: &str, pred: &str| {
@@ -1165,7 +1234,7 @@ mod tests {
         // list. Order is preserved; both blank members surface as Object::Blank.
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:list ( [] ( ex:x ex:y ) ex:z ) .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = head_subject(
             ds.first_object("https://example.org/s", "https://example.org/list")
                 .unwrap()
@@ -1203,7 +1272,7 @@ mod tests {
                    ex:s ex:list _:c0 .\n\
                    _:c0 rdf:first ex:a ; rdf:rest _:c1 .\n\
                    _:c1 rdf:first ex:b ; rdf:rest _:c0 .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = head_subject(
             ds.first_object("https://example.org/s", "https://example.org/list")
                 .unwrap()
@@ -1226,7 +1295,7 @@ mod tests {
                    @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
                    ex:s ex:list _:c0 .\n\
                    _:c0 rdf:first ex:a ; rdf:first ex:b ; rdf:rest rdf:nil .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = head_subject(
             ds.first_object("https://example.org/s", "https://example.org/list")
                 .unwrap()
@@ -1245,7 +1314,7 @@ mod tests {
                    @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
                    ex:s ex:list _:c0 .\n\
                    _:c0 rdf:first ex:a ; rdf:rest ex:dangling .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
         let head = head_subject(
             ds.first_object("https://example.org/s", "https://example.org/list")
                 .unwrap()
@@ -1264,7 +1333,7 @@ mod tests {
         let ttl = "@prefix ex: <https://example.org/> .\n\
                    ex:s ex:list ( ex:a ) .\n\
                    ex:plain a ex:Thing .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
 
         let nil = Subject::Named("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil".to_owned());
         assert!(
@@ -1290,7 +1359,7 @@ mod tests {
                           rdf:_1 ex:x ;\n\
                           rdf:_3 ex:z .\n\
                    ex:s ex:list ( ex:a ex:b ) .\n";
-        let ds = Dataset::parse_turtle(ttl.as_bytes(), "test").unwrap();
+        let ds = Dataset::parse_turtle(ttl.as_bytes(), None, "test").unwrap();
 
         let seq = Subject::Named("https://example.org/seq".to_owned());
         assert_eq!(
@@ -1323,8 +1392,13 @@ mod tests {
         // GraphSel::Named — the default graph does not see its cons cells.
         let trig = "@prefix ex: <https://example.org/> .\n\
                     ex:g { ex:s ex:list ( ex:a ex:b ) . }\n";
-        let ds =
-            Dataset::parse(trig.as_bytes(), NativeRdfFormat::TriG.media_type(), "test").unwrap();
+        let ds = Dataset::parse(
+            trig.as_bytes(),
+            NativeRdfFormat::TriG.media_type(),
+            None,
+            "test",
+        )
+        .unwrap();
 
         let named = ds.graph(GraphSel::Named("https://example.org/g"));
         let head = head_subject(
@@ -1360,17 +1434,58 @@ mod tests {
         let mut acc = DatasetAccumulator::new();
         acc.add_turtle(
             b"@prefix ex: <https://example.org/> .\nex:a a ex:Thing .\n",
+            None,
             "f1",
         )
         .unwrap();
         // Same triple again from a different file dedups; a new triple is added.
         acc.add_turtle(
             b"@prefix ex: <https://example.org/> .\nex:a a ex:Thing .\nex:b a ex:Thing .\n",
+            None,
             "f2",
         )
         .unwrap();
         let ds = acc.freeze().unwrap();
         let subjects = ds.subjects_of_type("https://example.org/Thing").unwrap();
         assert_eq!(subjects.len(), 2, "the duplicate ex:a collapses");
+    }
+
+    /// A file-sourced document's relative IRIs RESOLVE against the file's own RFC-8089
+    /// retrieval IRI, rather than hard-failing with `iri-relative-no-base` while that
+    /// IRI sits unused in the caller's hand (RFC-3986 §5.1.3).
+    #[test]
+    fn parse_file_resolves_relative_iris_against_the_retrieval_iri() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("module.ttl");
+        // `<>` is the document itself; `<thing>` is a sibling of it.
+        std::fs::write(&path, b"<> <urn:example:declares> <thing> .\n").expect("write");
+        let bytes = std::fs::read(&path).expect("read");
+
+        let ds = Dataset::parse_file(&bytes, &path).expect("a file parses under its own base");
+        let base = crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI");
+        let sibling = base.resolve("thing").expect("resolve").as_str().to_owned();
+
+        assert_eq!(
+            ds.object_iris(base.as_str(), "urn:example:declares")
+                .unwrap(),
+            vec![sibling],
+            "both `<>` and `<thing>` must resolve against the document's retrieval IRI"
+        );
+    }
+
+    /// The same bytes with NO base still hard-fail: `parse_file` supplies a base, it does
+    /// not make the parser lenient.
+    #[test]
+    fn the_same_relative_iris_still_hard_fail_without_a_base() {
+        let err =
+            Dataset::parse_turtle(b"<> <urn:example:declares> <thing> .\n", None, "in-memory")
+                .expect_err("a relative IRI with no base in scope is a hard error");
+        let SliceError::Parse(message) = err else {
+            panic!("expected a parse error");
+        };
+        assert!(
+            message.contains("iri-relative-no-base") || message.contains("no base"),
+            "the diagnostic must name the missing base, got: {message}"
+        );
     }
 }

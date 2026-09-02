@@ -6,8 +6,12 @@
 //! on the AST.
 //!
 //! This is the inverse of `tests/shexj_roundtrip.rs` (which pins the JSON wire
-//! format). Because the serializer emits absolute `<…>` IRIs and declares no
-//! prefixes, the re-parse takes `base = None` and no `@prefix`/`BASE` context.
+//! format). The ORIGINAL parse takes the document's retrieval IRI as base, because
+//! nineteen corpus documents carry a relative `IMPORT` and no `BASE` directive. The
+//! **re-parse takes `base = None`**, and that asymmetry is the point: the serializer
+//! emits absolute `<…>` IRIs and declares no prefixes, so a round-tripped schema
+//! must contain no relative reference at all. A re-parse failure here means the
+//! ShExC serializer emitted one.
 //!
 //! A named list of diverse must-pass documents guards against silent coverage
 //! loss, and the whole corpus is round-tripped (not just a sample); the
@@ -19,6 +23,9 @@ use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
 use purrdf_shex::{parse_shexc, to_shexc};
+
+/// The URL prefix the vendored tree mirrors.
+const CORPUS_URL: &str = "https://raw.githubusercontent.com/shexSpec/shexTest/master/schemas/";
 
 /// Diverse documents that MUST parse and round-trip through ShExC (one per
 /// feature family): plain shapes, refs, EachOf/OneOf, node kinds, datatypes,
@@ -104,9 +111,10 @@ fn schemas_shexc_round_trip() {
         let name = stem(path);
         let source = fs::read_to_string(path).expect("read .shex");
         // Parse failures are owned by `syntax_conformance.rs`; skip here.
-        let Ok(original) = parse_shexc(&source, None) else {
+        let Ok(original) = parse_shexc(&source, Some(&format!("{CORPUS_URL}{name}.shex"))) else {
             continue;
         };
+        // No base for the re-parse: the serialized form must be self-contained.
         let reparsed = parse_shexc(&to_shexc(&original), None);
         let matches = reparsed.as_ref() == Ok(&original);
         if xfail.contains(name.as_str()) {
@@ -148,9 +156,10 @@ fn diverse_documents_round_trip() {
             missing.push((*name).to_owned());
             continue;
         };
-        let original = parse_shexc(&source, None)
+        let original = parse_shexc(&source, Some(&format!("{CORPUS_URL}{name}.shex")))
             .unwrap_or_else(|e| panic!("must-pass {name} failed to parse: {e}"));
         let serialized = to_shexc(&original);
+        // No base for the re-parse: the serialized form must be self-contained.
         match parse_shexc(&serialized, None) {
             Ok(reparsed) if reparsed == original => {}
             Ok(_) => failed.push((*name).to_owned()),

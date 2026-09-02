@@ -427,13 +427,37 @@ pub(super) fn ensure_sound(
     check_ledger_sound(ledger, from, to).map_err(ProjectionError::integrity)
 }
 
+/// Re-parse a lifted dataset's own JSON-LD serialization, so every profile adapter hands
+/// back a dataset in the one normalized shape.
+///
+/// # This is NOT the caller-facing ingress, and no base belongs here
+///
+/// RO-Crate metadata canonically spells `@id` relatively (`"./"`,
+/// `"ro-crate-metadata.json"`, `"data/train.csv"`), so it is reasonable to expect the
+/// RO-Crate lane's JSON-LD reader to need a document base. It does — but that reader is
+/// not this function, and this function is not on the read path from caller bytes.
+///
+/// The caller-facing ingress is [`read_ro_crate`](super::ro_crate::read_ro_crate) (and its
+/// siblings `read_croissant` / `read_datacite` / `read_dcat` / `read_frictionless`), which
+/// takes the package bytes through [`parse_strict_json`] — plain JSON, not JSON-LD — into
+/// each profile's own `decode_document`. A relative `@id` is resolved there, by
+/// [`ResearchObjectIdentity::resolve_relative`](super::ResearchObjectIdentity::resolve_relative),
+/// against the **caller-owned** `entity_base_iri` the configuration carries. That base is
+/// configuration with no fabricated default: a caller who supplies none gets no projection
+/// at all. `parse_jsonld` is never reached from caller bytes in this lane.
+///
+/// What reaches THIS function is JSON-LD that `serialize_dataset_to_jsonld` produced from
+/// a frozen dataset one line above, and that serializer emits every IRI absolute — which
+/// `serializer_emits_no_relative_id_for_a_base_to_resolve` asserts rather than assumes. So
+/// `None` is not a discarded base: there is no relative reference for one to resolve, and
+/// inventing one here would make a round trip depend on a value the round trip never saw.
 pub(super) fn normalize_lifted_jsonld(
     dataset: &RdfDataset,
 ) -> Result<Arc<RdfDataset>, ProjectionError> {
     let json = serialize_dataset_to_jsonld(dataset).map_err(|error| {
         ProjectionError::integrity(format!("normalize lifted research-object JSON-LD: {error}"))
     })?;
-    parse_jsonld(json.as_bytes()).map_err(|error| {
+    parse_jsonld(json.as_bytes(), None).map_err(|error| {
         ProjectionError::integrity(format!("reparse lifted research-object JSON-LD: {error}"))
     })
 }
@@ -517,6 +541,77 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The precondition [`normalize_lifted_jsonld`]'s `None` base rests on, asserted
+    /// instead of assumed: the serializer it re-parses emits no relative reference, so
+    /// there is nothing for a base to resolve on this internal round trip.
+    #[test]
+    fn serializer_emits_no_relative_id_for_a_base_to_resolve() {
+        let dataset = lifted_fixture();
+        let json = serialize_dataset_to_jsonld(&dataset)
+            .expect("the lifted dataset serializes to JSON-LD");
+        let value: Value = serde_json::from_str(&json).expect("serializer emits JSON");
+
+        let mut ids = Vec::new();
+        collect_ids(&value, &mut ids);
+        assert!(!ids.is_empty(), "the fixture must produce node identifiers");
+        for id in ids {
+            assert!(
+                purrdf_iri::parse(&id).is_ok_and(|iri| iri.has_scheme()),
+                "serialize_dataset_to_jsonld must emit only absolute IRIs, found {id:?}"
+            );
+        }
+    }
+
+    /// And the round trip is faithful: re-parsing under no base returns the same quads,
+    /// so the `None` is not quietly dropping anything either.
+    #[test]
+    fn the_internal_round_trip_preserves_every_quad() {
+        let dataset = lifted_fixture();
+        let normalized = normalize_lifted_jsonld(&dataset).expect("the round trip succeeds");
+        assert_eq!(normalized.quad_count(), dataset.quad_count());
+        let before: BTreeSet<String> = dataset.owned_quads().map(|q| format!("{q:?}")).collect();
+        let after: BTreeSet<String> = normalized.owned_quads().map(|q| format!("{q:?}")).collect();
+        assert_eq!(before, after);
+    }
+
+    /// A dataset shaped like a lifted research object: an absolute entity IRI carrying a
+    /// typed edge to another entity and a literal.
+    fn lifted_fixture() -> Arc<RdfDataset> {
+        use purrdf_core::TermFactory as _;
+
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/crate/");
+        let predicate = builder.intern_iri("https://example.org/vocab/hasPart");
+        let object = builder.intern_iri("https://example.org/crate/data/train.csv");
+        builder.push_quad(subject, predicate, object, None);
+        let label = builder.intern_iri("https://example.org/vocab/name");
+        let literal = builder.intern_value(&purrdf_core::TermValue::simple_literal("train"));
+        builder.push_quad(object, label, literal, None);
+        builder.freeze().expect("fixture freezes")
+    }
+
+    /// Every `@id` string anywhere in a JSON-LD document, in document order.
+    fn collect_ids(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(members) => {
+                for (key, member) in members {
+                    if key == "@id"
+                        && let Value::String(id) = member
+                    {
+                        out.push(id.clone());
+                    }
+                    collect_ids(member, out);
+                }
+            }
+            Value::Array(values) => {
+                for member in values {
+                    collect_ids(member, out);
+                }
+            }
+            _ => {}
+        }
     }
 
     #[test]
