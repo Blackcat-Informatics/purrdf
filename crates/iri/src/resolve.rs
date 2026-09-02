@@ -45,7 +45,14 @@ impl Parts {
 
     /// §5.3 component recomposition.
     fn recompose(&self) -> String {
-        let mut out = String::new();
+        // Exact-fit buffer from the known part lengths: one allocation per
+        // recompose instead of the amortized-doubling reallocs of `String::new()`.
+        let capacity = self.scheme.as_ref().map_or(0, |s| s.len() + 1)
+            + self.authority.as_ref().map_or(0, |a| a.len() + 2)
+            + self.path.len()
+            + self.query.as_ref().map_or(0, |q| q.len() + 1)
+            + self.fragment.as_ref().map_or(0, |f| f.len() + 1);
+        let mut out = String::with_capacity(capacity);
         if let Some(s) = &self.scheme {
             out.push_str(s);
             out.push(':');
@@ -191,35 +198,40 @@ fn merge(base: &Parts, ref_path: &str) -> String {
 }
 
 /// RFC-3986 §5.2.4 remove-dot-segments. The canonical iterative algorithm: a
-/// working `input` buffer (owned, because cases B/C rewrite its prefix) is drained
-/// segment-by-segment into `out`.
+/// working `input` cursor is drained segment-by-segment into `out`.
+///
+/// Borrowed cursor: every case-B/C rewrite (`"/./"++rest -> "/"++rest`,
+/// `"/../"++rest -> "/"++rest`) is a suffix of the input that already begins with
+/// `/`, so each transition is a slice — zero allocations per resolve where the
+/// owned-buffer form paid O(segments) `String` reallocs/`drain`s.
 pub(crate) fn remove_dot_segments(path: &str) -> String {
-    let mut input = path.to_owned();
+    let mut input: &str = path;
     let mut out = String::with_capacity(path.len());
     while !input.is_empty() {
         // A: leading "../" or "./" -> drop the prefix.
         if let Some(rest) = input.strip_prefix("../") {
-            input = rest.to_owned();
+            input = rest;
         } else if let Some(rest) = input.strip_prefix("./") {
-            input = rest.to_owned();
+            input = rest;
         }
-        // B: "/./" -> "/"; exact "/." -> "/".
-        else if let Some(rest) = input.strip_prefix("/./") {
-            input = format!("/{rest}");
+        // B: "/./" -> "/"; exact "/." -> "/". `"/" ++ rest` is `&input[2..]`.
+        else if input.starts_with("/./") {
+            input = &input[2..];
         } else if input == "/." {
-            "/".clone_into(&mut input);
+            input = "/";
         }
         // C: "/../" -> "/" and pop last output segment; exact "/.." likewise.
-        else if let Some(rest) = input.strip_prefix("/../") {
+        // `"/" ++ rest` is `&input[3..]`.
+        else if input.starts_with("/../") {
             pop_last_segment(&mut out);
-            input = format!("/{rest}");
+            input = &input[3..];
         } else if input == "/.." {
             pop_last_segment(&mut out);
-            "/".clone_into(&mut input);
+            input = "/";
         }
         // D: input is exactly "." or ".." -> drop.
         else if input == "." || input == ".." {
-            input.clear();
+            input = "";
         }
         // E: move the first path segment (incl. any leading '/') to output.
         else {
@@ -229,7 +241,7 @@ pub(crate) fn remove_dot_segments(path: &str) -> String {
                 None => input.len(),
             };
             out.push_str(&input[..seg_end]);
-            input.drain(..seg_end);
+            input = &input[seg_end..];
         }
     }
     out
@@ -247,7 +259,84 @@ fn pop_last_segment(out: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    use super::remove_dot_segments;
     use crate::parse::parse;
+
+    /// The pre-cursor owned-buffer form of §5.2.4, kept verbatim as the oracle
+    /// the borrowed-slice rewrite must match byte-for-byte.
+    fn remove_dot_segments_owned_reference(path: &str) -> String {
+        let mut input = path.to_owned();
+        let mut out = String::with_capacity(path.len());
+        while !input.is_empty() {
+            if let Some(rest) = input.strip_prefix("../") {
+                input = rest.to_owned();
+            } else if let Some(rest) = input.strip_prefix("./") {
+                input = rest.to_owned();
+            } else if let Some(rest) = input.strip_prefix("/./") {
+                input = format!("/{rest}");
+            } else if input == "/." {
+                "/".clone_into(&mut input);
+            } else if let Some(rest) = input.strip_prefix("/../") {
+                super::pop_last_segment(&mut out);
+                input = format!("/{rest}");
+            } else if input == "/.." {
+                super::pop_last_segment(&mut out);
+                "/".clone_into(&mut input);
+            } else if input == "." || input == ".." {
+                input.clear();
+            } else {
+                let start = usize::from(input.starts_with('/'));
+                let seg_end = match input[start..].find('/') {
+                    Some(i) => start + i,
+                    None => input.len(),
+                };
+                out.push_str(&input[..seg_end]);
+                input.drain(..seg_end);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn cursor_remove_dot_segments_matches_owned_reference() {
+        for path in [
+            "",
+            "/",
+            ".",
+            "..",
+            "/.",
+            "/..",
+            "./",
+            "../",
+            "/./",
+            "/../",
+            "a",
+            "/a",
+            "a/",
+            "/a/",
+            "/a/b/c/./../../g",
+            "mid/content=5/../6",
+            "/b/c/../../../g",
+            "../../a/./b/../c",
+            "/a/./b/./c/.",
+            "/a/../../b/..",
+            "a/b/c/..",
+            "./a/../b/./c/../d",
+            "/./a/./b/./",
+            "/../a",
+            "..a/b..",
+            "/.a/..b/.../a..",
+            "/a//b/../c",
+            "//a/../b",
+            "/ü/../ö/./ä",
+        ] {
+            assert_eq!(
+                remove_dot_segments(path),
+                remove_dot_segments_owned_reference(path),
+                "path = {path:?}"
+            );
+        }
+    }
 
     /// [`Iri::resolve_iri`] must be [`Iri::resolve`] minus the parse, or the base
     /// layer that calls it would be a second resolver free to drift.

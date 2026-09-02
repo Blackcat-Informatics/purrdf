@@ -315,6 +315,10 @@ jobs:
           cargo bench -p purrdf-geo --no-run --locked
           cargo bench -p purrdf-text --bench search --no-run --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
+          cargo bench -p purrdf-iri --no-run --locked
+          cargo bench -p purrdf-xsd --no-run --locked
+          cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
+          cargo bench -p purrdf-sparql-results --no-run --locked
 
       - name: Run native criterion suites
         run: |
@@ -328,6 +332,10 @@ jobs:
           cargo bench -p purrdf-geo --locked
           cargo bench -p purrdf-text --bench search --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
+          cargo bench -p purrdf-iri --locked
+          cargo bench -p purrdf-xsd --locked
+          cargo bench -p purrdf-sparql-algebra --bench tokenize --locked
+          cargo bench -p purrdf-sparql-results --locked
 
       - name: Run Python compat harness
         working-directory: bindings/python

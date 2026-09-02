@@ -148,30 +148,43 @@ impl Decimal {
     /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
+        // Two allocations (the digit string and the exact-fit output) where the
+        // split/pad/format form built three to four intermediate `String`s; the
+        // integer and fraction parts are slices of `digits`, and the zero padding
+        // is pushed directly. Byte-identical to the reference form in the tests.
         let neg = self.mantissa < 0;
         let digits = self.mantissa.unsigned_abs().to_string();
         let scale = usize::from(self.scale);
+        let mut out = String::with_capacity(digits.len() + scale + 3);
+        if neg {
+            out.push('-');
+        }
+        if scale == 0 {
+            out.push_str(&digits);
+            return out;
+        }
 
-        let (int_part, frac_part) = if scale == 0 {
-            (digits, String::new())
-        } else if digits.len() > scale {
+        let (int_part, frac_digits, pad) = if digits.len() > scale {
             let split = digits.len() - scale;
-            (digits[..split].to_string(), digits[split..].to_string())
+            (&digits[..split], &digits[split..], 0)
         } else {
             // value magnitude < 1: pad leading zeros in the fractional part.
-            let pad = "0".repeat(scale - digits.len());
-            ("0".to_string(), format!("{pad}{digits}"))
+            ("0", digits.as_str(), scale - digits.len())
         };
 
         // XSD 1.1 §3.3.3.2: an integer-valued decimal (an empty fractional part
-        // after trimming trailing zeros) has NO decimal point at all.
-        let frac_trimmed = frac_part.trim_end_matches('0');
-        let sign = if neg { "-" } else { "" };
-        if frac_trimmed.is_empty() {
-            format!("{sign}{int_part}")
-        } else {
-            format!("{sign}{int_part}.{frac_trimmed}")
+        // after trimming trailing zeros) has NO decimal point at all. The pad is
+        // all zeros, so the padded fraction trims to empty iff `frac_digits` does.
+        let frac_trimmed = frac_digits.trim_end_matches('0');
+        out.push_str(int_part);
+        if !frac_trimmed.is_empty() {
+            out.push('.');
+            for _ in 0..pad {
+                out.push('0');
+            }
+            out.push_str(frac_trimmed);
         }
+        out
     }
 }
 
@@ -247,7 +260,9 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
         Some((i, f)) => (i, f),
         None => (body, ""),
     };
-    if body.contains('.') && body.matches('.').count() > 1 {
+    // A second '.' can only live after the first one, i.e. inside `frac_str`:
+    // one scan of the tail replaces the `contains` + `matches().count()` pair.
+    if frac_str.contains('.') {
         return Err(invalid(dt, s, "more than one decimal point"));
     }
     if int_str.is_empty() && frac_str.is_empty() {
@@ -400,12 +415,16 @@ fn canonical_ieee(
     // `1.5e0`, `5e-3`). Normalize to the XSD canonical `mantissa.frac E exp`.
     let raw = sci();
     let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
-    let mantissa = if mantissa.contains('.') {
-        mantissa.to_string()
-    } else {
-        format!("{mantissa}.0")
-    };
-    format!("{mantissa}E{exp}")
+    // One exact-fit buffer instead of two `format!` intermediates; the mantissa
+    // and exponent digits come from `sci()` untouched.
+    let mut out = String::with_capacity(mantissa.len() + exp.len() + 3);
+    out.push_str(mantissa);
+    if !mantissa.contains('.') {
+        out.push_str(".0");
+    }
+    out.push('E');
+    out.push_str(exp);
+    out
 }
 
 /// SPARQL numeric promotion comparison. Promotes both operands to the least type
@@ -1504,6 +1523,72 @@ mod tests {
     use super::*;
     use crate::XsdDatatype as D;
     use pretty_assertions::assert_eq;
+
+    /// The pre-single-buffer `canonical_lexical` (split/pad/`format!` form), kept
+    /// verbatim as the byte-for-byte oracle for the exact-fit rewrite.
+    fn canonical_lexical_reference(d: &Decimal) -> String {
+        let neg = d.mantissa < 0;
+        let digits = d.mantissa.unsigned_abs().to_string();
+        let scale = usize::from(d.scale);
+
+        let (int_part, frac_part) = if scale == 0 {
+            (digits, String::new())
+        } else if digits.len() > scale {
+            let split = digits.len() - scale;
+            (digits[..split].to_string(), digits[split..].to_string())
+        } else {
+            let pad = "0".repeat(scale - digits.len());
+            ("0".to_string(), format!("{pad}{digits}"))
+        };
+
+        let frac_trimmed = frac_part.trim_end_matches('0');
+        let sign = if neg { "-" } else { "" };
+        if frac_trimmed.is_empty() {
+            format!("{sign}{int_part}")
+        } else {
+            format!("{sign}{int_part}.{frac_trimmed}")
+        }
+    }
+
+    #[test]
+    fn canonical_lexical_matches_reference_over_mantissa_scale_grid() {
+        let mantissas: [i128; 24] = [
+            0,
+            1,
+            -1,
+            5,
+            -5,
+            10,
+            -10,
+            100,
+            -100,
+            1_000_000,
+            -1_000_000,
+            123,
+            -123,
+            120,
+            -120,
+            102_030,
+            -102_030,
+            1_234_567_890_123_456_789,
+            -1_234_567_890_123_456_789,
+            10_000_000_000_000_000_000,
+            -10_000_000_000_000_000_000,
+            i128::MAX,
+            i128::MIN,
+            i128::MIN + 1,
+        ];
+        for &mantissa in &mantissas {
+            for scale in 0..=MAX_DECIMAL_SCALE {
+                let d = Decimal::from_parts(mantissa, scale);
+                assert_eq!(
+                    d.canonical_lexical(),
+                    canonical_lexical_reference(&d),
+                    "mantissa = {mantissa}, scale = {scale}"
+                );
+            }
+        }
+    }
 
     fn dec(s: &str) -> Decimal {
         parse_decimal(s).unwrap()
