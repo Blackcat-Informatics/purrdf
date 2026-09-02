@@ -475,3 +475,59 @@ fn an_over_deep_composite_literal_is_refused_not_truncated() {
         "an over-deep composite literal must be refused"
     );
 }
+
+// ── A composite lexical form has no base, whatever the document has ─────────
+
+/// The seam between the RFC 3986 base-resolution layer and a composite literal:
+/// an `IRIREF` written INSIDE a `cdt:List`/`cdt:Map` lexical form is not
+/// resolved against the enclosing document's base, and a relative one is refused
+/// **whether or not a base is in scope**.
+///
+/// This is worth pinning because the two rules look like they should meet and
+/// must not. A bare `<s>` in the document body resolves against `@base` (and,
+/// with no base in scope, is a hard `iri-relative-no-base` error). A `<s>` inside
+/// a composite literal is a different thing entirely: the literal's lexical form
+/// is its IDENTITY under C0.1, byte for byte, so resolving it against the
+/// document base would make one literal denote different values in different
+/// documents and would rewrite bytes the identity rule says are fixed. SEP-0009
+/// defines no base-resolution step for the form's interior, so there is no base
+/// to resolve against and the refusal is the honest answer.
+///
+/// Both sides are executed, because a refusal proves nothing on its own: the
+/// absolute spelling — the neighbouring VALID case — must still be admitted, and
+/// must survive with its bytes intact.
+#[test]
+fn a_relative_iri_inside_a_composite_literal_is_refused_with_and_without_a_base() {
+    let relative = format!("{PREFIXES}ex:s ex:p \"[<a>]\"^^cdt:List .\n");
+
+    for base in [None, Some("http://example.org/")] {
+        let error = parse_dataset(relative.as_bytes(), "text/turtle", base)
+            .expect_err("a relative IRIREF inside a composite lexical form must be refused");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("cdt-literal-malformed"),
+            "with base {base:?}: expected the composite refusal, got {rendered}"
+        );
+        assert!(
+            rendered.contains("no base to resolve against"),
+            "with base {base:?}: the refusal must say WHY — that a composite lexical \
+             form has no base — rather than read as a generic parse error: {rendered}"
+        );
+    }
+
+    // The neighbouring valid case, both ways: an ABSOLUTE IRIREF inside the same
+    // literal is admitted with or without a document base, and its lexical form
+    // is preserved byte for byte.
+    let absolute = format!("{PREFIXES}ex:s ex:p \"[<http://example.org/a>]\"^^cdt:List .\n");
+    for base in [None, Some("http://example.org/")] {
+        let dataset = parse_dataset(absolute.as_bytes(), "text/turtle", base)
+            .unwrap_or_else(|e| panic!("with base {base:?}: an absolute IRIREF must parse: {e}"));
+        assert_eq!(dataset.quad_count(), 1);
+        let nquads = serialize_dataset(&dataset, "application/n-quads", SerializeGraph::Dataset)
+            .expect("serialize");
+        assert!(
+            String::from_utf8_lossy(&nquads).contains("\"[<http://example.org/a>]\""),
+            "with base {base:?}: the composite lexical form must survive byte for byte"
+        );
+    }
+}
