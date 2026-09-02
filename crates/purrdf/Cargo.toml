@@ -48,6 +48,11 @@ purrdf-entail = { workspace = true }
 # umbrella alone, which is exactly the reach-into-a-sub-crate this crate forbids.
 purrdf-datalog = { workspace = true }
 # Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants GeoSPARQL registers this crate's functions and relations against the
+# evaluator's two extension seams, and must be able to name `Geometry`,
+# `GeoVocab` and `GeoRelation` while depending on `purrdf` alone.
+purrdf-geo = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
 # wants ranked full-text retrieval registers this crate's relations against the
 # evaluator's property-function seam, and must be able to name `TextIndex`,
 # `TextIndexConfig` and `Scored` while depending on `purrdf` alone.

@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# NOT a workspace member — see the root Cargo.toml's `exclude` list, and
+# `crates/gts/fuzz` for the same pattern. This directory exists to build ONE
+# function for `wasm32-unknown-unknown` as a `cdylib` so that a Node harness can
+# call it and compare the result with the native one. It is never published,
+# never a dependency of anything, and its output is never shipped.
+#
+# It has its own `[package]` version rather than inheriting the workspace's,
+# because a crate outside the workspace cannot inherit from it; nothing reads
+# this version, and `scripts/check-versions.py` looks only at the workspace,
+# the Python package and the npm package.
+# An empty workspace table: this directory is EXCLUDED from the root workspace
+# (see its `exclude` list) and is built standalone by
+# scripts/check-geo-determinism.sh, so it needs to declare that it is its own
+# workspace root rather than inheriting one it is not a member of.
+[workspace]
+
+[package]
+name = "purrdf-geo-determinism"
+description = "Not published: the wasm32 half of purrdf-geo's cross-target determinism check"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+# `cdylib`, because the point is to produce a `.wasm` module with an exported
+# function that a WebAssembly host can call. An `rlib` would produce nothing a
+# Node harness could run.
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+purrdf-geo = { path = ".." }
+
+[profile.release]
+opt-level = 3

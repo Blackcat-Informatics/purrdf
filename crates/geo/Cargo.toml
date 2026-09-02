@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-geo"
+description = "PurRDF GeoSPARQL 1.1: exact, float-free WKT/GeoJSON geometry and the geof: function family over the SPARQL extension seams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-geo"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["geosparql", "rdf", "sparql", "wkt", "geojson"]
+categories = ["science::geo", "parser-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# `TermValue` — the dataset-independent term space both extension seams speak.
+# A geometry literal arrives as `TermValue::Literal { lexical_form, datatype }`
+# and leaves the same way, so this crate never sees a dataset-local `TermId`.
+purrdf-core = { workspace = true }
+# The scalar-function seam (`UserFunctionRegistry::register_native`), the
+# relation seam (`PropertyFunction`/`PropertyFunctionRegistry`) and `EvalError`.
+purrdf-sparql-eval = { workspace = true }
+# `BaseIri::parse` — the workspace's single RFC 3987 layer — so the coordinate
+# reference system a literal names is validated as an absolute IRI here rather
+# than by a local predicate that could drift from the resolver. Zero-dependency
+# leaf, so this edge adds nothing to the wasm surface.
+purrdf-iri = { workspace = true }
+# `canonical_double` for the xsd:double lexical forms the numeric `geof:`
+# functions return, and `XSD_NS`/`XsdDatatype` for the datatype IRIs they carry.
+# Zero-dependency leaf, so this edge adds nothing to the wasm surface.
+purrdf-xsd = { workspace = true }
+# Inline coordinate and limb storage. DEFAULT FEATURES ONLY (`union` and
+# `serde` stay off): a `Coord` is four exact rationals and a ring is a
+# variable-length vector of them, so the inline capacity is what keeps a small
+# geometry off the allocator on the per-row predicate path.
+smallvec = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+purrdf-sparql-algebra = { workspace = true }
+purrdf-rdf = { workspace = true }
+purrdf-shapes = { workspace = true }
+
+[[bench]]
+# The two costs a geometry predicate actually has: parsing a WKT literal into
+# the exact model (per row, unavoidable) and deciding a DE-9IM relate over
+# rings of growing vertex count (the quadratic the noder has to beat).
+# Report-only.
+name = "relate"
+harness = false

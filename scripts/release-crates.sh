@@ -28,6 +28,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-sparql-algebra
   purrdf-sparql-results
   purrdf-sparql-eval
+  purrdf-geo
   purrdf-text
   purrdf-rdf
   purrdf-slice

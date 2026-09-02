@@ -19,6 +19,7 @@
 //! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
 //! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
 //! | [`datalog`] | [`purrdf_datalog`] (the semi-naive engine [`entail`]'s public types carry) |
+//! | [`geo`] | [`purrdf_geo`] (GeoSPARQL 1.1 geometry, `geof:` functions, query rewrite) |
 //! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
@@ -229,6 +230,14 @@ pub mod entail {
 /// second dependency on `purrdf-datalog`.
 pub mod datalog {
     pub use purrdf_datalog::*;
+}
+
+/// GeoSPARQL 1.1 ([`purrdf_geo`]): exact, float-free WKT and GeoJSON geometry,
+/// the `geof:` function family registered on [`sparql`]'s scalar seam, and
+/// feature-level query rewrite registered on its property-function seam — every
+/// IRI supplied by the caller.
+pub mod geo {
+    pub use purrdf_geo::*;
 }
 
 /// Deterministic full-text search over RDF 1.2 literals ([`purrdf_text`]): an
