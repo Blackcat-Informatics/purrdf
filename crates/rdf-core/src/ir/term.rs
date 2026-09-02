@@ -476,6 +476,16 @@ impl PartialOrd for TermValue {
 // `term_id_by_value` round-trip tests fail if they diverge. `String`/`Box<str>`/
 // `&str` all hash via `str`, so the by-value datatype here matches the resolved IRI
 // string there.
+//
+// `Hash` is the second of THREE hand-written encodings of this type — [`Ord`] above,
+// this `Hash`, and [`TermValue::canonical_bytes`] below. All three enumerate the
+// variants and their fields by hand, and all three MUST stay in sync with the enum
+// definition: adding a variant or a field means visiting every one of them. `Hash`
+// and `canonical_bytes` additionally share ONE discriminant numbering (`Iri` = 0,
+// `Blank` = 1, `Literal` = 2, `Triple` = 3) so there is never a second, conflicting
+// tag space to reconcile. (Note this numbering is deliberately NOT
+// [`canonical_tag`](TermValue::canonical_tag), which encodes the serializer's
+// cross-kind SORT order and is a different question.)
 impl core::hash::Hash for TermValue {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self {
@@ -507,6 +517,164 @@ impl core::hash::Hash for TermValue {
                 o.hash(state);
             }
         }
+    }
+}
+
+/// Append `bytes` to `out` behind its length, so the field can be read back
+/// without a terminator and without knowing anything about its contents.
+///
+/// The length is a `u64` little-endian prefix rather than a separator byte or an
+/// escape scheme: RDF strings are arbitrary UTF-8 (a lexical form may contain NUL,
+/// a blank label may contain the marker, an IRI may contain anything the producer
+/// wrote), so NO byte value is available as a delimiter. A fixed-width count is the
+/// only framing that is oblivious to the payload. Little-endian and a fixed 8 bytes
+/// make the encoding byte-identical on every target, including the 32-bit
+/// `wasm32-unknown-unknown` build where `usize` is narrower.
+#[inline]
+fn push_framed(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+impl TermValue {
+    /// Append this term's canonical byte encoding to `out`.
+    ///
+    /// # Why this exists
+    ///
+    /// A *content-derived* identifier — a digest, a grouping key, a cache key
+    /// computed from a term's value rather than from a dataset-local [`TermId`] —
+    /// is only sound if the bytes it digests distinguish exactly the terms the type
+    /// distinguishes. [`Hash`](core::hash::Hash) cannot serve that role: a `Hasher`
+    /// is free to compress, `Hash` output is not portable across builds, and
+    /// `hash(a) == hash(b)` is explicitly permitted for `a != b`. So the identity
+    /// question needs its own encoding, and it needs the property `Hash` disclaims.
+    ///
+    /// # The property
+    ///
+    /// The encoding is **injective**: `a.to_canonical_bytes() ==
+    /// b.to_canonical_bytes()` **if and only if** `a == b`.
+    ///
+    /// The `if` direction is immediate — the function is deterministic and reads
+    /// only the fields that participate in `PartialEq`. The `only if` direction is
+    /// the load-bearing one, and it holds because the encoding is *self-delimiting*
+    /// (equivalently: every field's encoding is uniquely decodable, so the whole
+    /// byte string parses back to exactly one `TermValue`):
+    ///
+    /// - Every variant opens with a distinct `u8` tag, so a byte string can be
+    ///   attributed to at most one variant before any field is read.
+    /// - Every variable-length field is written framed by `push_framed`: an eight-byte
+    ///   little-endian length, then exactly that many bytes. The reader therefore
+    ///   always knows where a field ends without scanning for a delimiter — which
+    ///   matters because RDF strings are arbitrary UTF-8 and no byte is reserved.
+    /// - Every [`Option`] field writes an explicit `0u8` / `1u8` presence
+    ///   discriminant BEFORE its payload, so `None` and `Some("")` differ in the
+    ///   presence byte and can never share an encoding. (Writing an absent option
+    ///   as a zero-length string is the classic collision this rules out.)
+    /// - Every fixed-width field ([`BlankScope`]'s ordinal, the
+    ///   [`RdfTextDirection`] tag) occupies a constant number of bytes, so it is
+    ///   trivially uniquely decodable.
+    ///
+    /// Since each field is uniquely decodable and the fields are concatenated in a
+    /// fixed order determined by the already-decoded variant tag, the concatenation
+    /// is uniquely decodable; a byte string thus determines the variant and every
+    /// field, hence the whole value. Two distinct terms differ in the variant or in
+    /// some field, and that difference survives into the bytes.
+    ///
+    /// # Coverage
+    ///
+    /// Every field of every variant is encoded, including the ones a partial
+    /// encoder would forget: [`TermValue::Blank`]'s `scope` (which is part of
+    /// blank-node identity per C0.2, so two same-label blanks from different scopes
+    /// must not collide) and [`TermValue::Literal`]'s `language` and `direction`.
+    /// The [`RdfTextDirection`] arm matches its variants explicitly with no
+    /// catch-all, so a future direction added to that enum is a COMPILE ERROR here
+    /// rather than a silent aliasing of two distinct literals onto one byte string.
+    ///
+    /// # Relation to the other hand-written encodings
+    ///
+    /// This is the third hand-written encoding of `TermValue`, alongside [`Ord`] and
+    /// [`Hash`], and it reuses `Hash`'s discriminant numbering verbatim (`Iri` = 0,
+    /// `Blank` = 1, `Literal` = 2, `Triple` = 3) so the type has one tag space, not
+    /// two. All three must be revisited together when the enum changes.
+    ///
+    /// # Recursion
+    ///
+    /// [`TermValue::Triple`] recurses structurally into `(s, p, o)` — RDF 1.2 triple
+    /// terms are first-class values here, identified by their components (C0.3), so
+    /// a nested triple term contributes its full sub-encoding rather than a summary.
+    /// The recursion depth is the term's own triple-term nesting depth, which is
+    /// exactly the bound already carried by this type's derived `PartialEq`, its
+    /// hand-written `Ord` and `Hash`, and its `Box`-chasing `Drop`; this method adds
+    /// no new depth exposure.
+    ///
+    /// # Buffer reuse
+    ///
+    /// `out` is appended to, never cleared, so a caller encoding many terms can
+    /// reuse one allocation. Note that appended encodings are themselves
+    /// self-delimiting and therefore concatenate unambiguously.
+    pub fn canonical_bytes(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Iri(iri) => {
+                out.push(0u8);
+                push_framed(out, iri.as_bytes());
+            }
+            Self::Blank { label, scope } => {
+                out.push(1u8);
+                push_framed(out, label.as_bytes());
+                // `BlankScope` is a `u32` newtype, not an enum, so its whole value
+                // space is covered by writing the ordinal at fixed width. Four
+                // little-endian bytes, unconditionally, keeps the field trivially
+                // decodable and target-independent.
+                out.extend_from_slice(&scope.ordinal().to_le_bytes());
+            }
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push(2u8);
+                push_framed(out, lexical_form.as_bytes());
+                push_framed(out, datatype.as_bytes());
+                match language {
+                    None => out.push(0u8),
+                    Some(language) => {
+                        out.push(1u8);
+                        push_framed(out, language.as_bytes());
+                    }
+                }
+                match direction {
+                    None => out.push(0u8),
+                    Some(direction) => {
+                        out.push(1u8);
+                        // Exhaustive on purpose — no `_` arm. A new base direction
+                        // must not compile until it is given its own byte here.
+                        out.push(match direction {
+                            RdfTextDirection::Ltr => 0u8,
+                            RdfTextDirection::Rtl => 1u8,
+                        });
+                    }
+                }
+            }
+            Self::Triple { s, p, o } => {
+                out.push(3u8);
+                s.canonical_bytes(out);
+                p.canonical_bytes(out);
+                o.canonical_bytes(out);
+            }
+        }
+    }
+
+    /// This term's canonical byte encoding as a fresh `Vec<u8>`.
+    ///
+    /// The convenience form of [`canonical_bytes`](Self::canonical_bytes); see that
+    /// method for the injectivity argument and the encoding's layout. Prefer
+    /// `canonical_bytes` in a loop, where one buffer can be reused across terms.
+    #[must_use]
+    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.canonical_bytes(&mut out);
+        out
     }
 }
 
@@ -768,5 +936,303 @@ mod tests {
         assert_eq!(a, b);
         b.direction = Some(RdfTextDirection::Rtl);
         assert_ne!(a, b);
+    }
+
+    // -- canonical byte encoding ------------------------------------------------
+
+    /// A directional language literal, spelled out field by field because the
+    /// constructors deliberately do not build one.
+    fn dir_literal(
+        lexical_form: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical_form.to_owned(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: language.map(str::to_owned),
+            direction,
+        }
+    }
+
+    /// Assert that a set of pairwise-distinct terms has pairwise-distinct
+    /// encodings, naming the offending pair on failure.
+    fn assert_encodings_pairwise_distinct(terms: &[TermValue]) {
+        for (i, a) in terms.iter().enumerate() {
+            for b in &terms[i + 1..] {
+                assert_ne!(a, b, "the fixture itself must be pairwise distinct");
+                assert_ne!(
+                    a.to_canonical_bytes(),
+                    b.to_canonical_bytes(),
+                    "{a:?} and {b:?} collide"
+                );
+            }
+        }
+    }
+
+    /// Encoding is a pure function of the value: equal terms encode identically,
+    /// and `canonical_bytes` appends exactly what `to_canonical_bytes` returns.
+    #[test]
+    fn canonical_bytes_agrees_with_to_canonical_bytes_and_appends() {
+        let term = TermValue::lang_literal("hello", "EN");
+        let mut out = vec![0xAAu8, 0xBB];
+        term.canonical_bytes(&mut out);
+        assert_eq!(out[..2], [0xAAu8, 0xBB], "the prefix must be preserved");
+        assert_eq!(&out[2..], term.to_canonical_bytes().as_slice());
+        assert_eq!(term.clone().to_canonical_bytes(), term.to_canonical_bytes());
+    }
+
+    /// Length framing: without it, a boundary can be moved between two adjacent
+    /// string fields (or between two concatenated terms) without changing a byte.
+    #[test]
+    fn canonical_bytes_frames_lengths_so_boundaries_cannot_slide() {
+        assert_encodings_pairwise_distinct(&[
+            TermValue::simple_literal("ab"),
+            TermValue::simple_literal("a"),
+            TermValue::simple_literal("b"),
+            TermValue::simple_literal(""),
+            // The datatype/lexical boundary: naive concatenation of
+            // `lexical_form ++ datatype` would make these two identical.
+            TermValue::typed_literal("ab", "http://example.org/d"),
+            TermValue::typed_literal("a", "bhttp://example.org/d"),
+            // The label/scope-suffix boundary, same trick one field over.
+            TermValue::blank("ab"),
+            TermValue::blank("a"),
+        ]);
+
+        // Concatenating two encodings is itself unambiguous: `"a" ++ "b"` is not
+        // `"ab" ++ ""`, precisely because each piece carries its own length.
+        let mut left = Vec::new();
+        TermValue::simple_literal("a").canonical_bytes(&mut left);
+        TermValue::simple_literal("b").canonical_bytes(&mut left);
+        let mut right = Vec::new();
+        TermValue::simple_literal("ab").canonical_bytes(&mut right);
+        TermValue::simple_literal("").canonical_bytes(&mut right);
+        assert_ne!(left, right);
+    }
+
+    /// An absent `Option` must not be encodable as an empty payload: `None`,
+    /// `Some("")` and `Some("en")` are three distinct literals.
+    #[test]
+    fn canonical_bytes_distinguishes_absent_options_from_empty_ones() {
+        assert_encodings_pairwise_distinct(&[
+            dir_literal("x", None, None),
+            dir_literal("x", Some(""), None),
+            dir_literal("x", Some("en"), None),
+        ]);
+    }
+
+    /// Base direction participates in literal identity (C0.1), so all three
+    /// direction states must separate — including `None` vs `Some(Ltr)`, which a
+    /// "default to ltr" encoder would conflate.
+    #[test]
+    fn canonical_bytes_distinguishes_every_direction_state() {
+        assert_encodings_pairwise_distinct(&[
+            dir_literal("x", Some("en"), None),
+            dir_literal("x", Some("en"), Some(RdfTextDirection::Ltr)),
+            dir_literal("x", Some("en"), Some(RdfTextDirection::Rtl)),
+        ]);
+    }
+
+    /// Blank-node scope is part of the interning key (C0.2): same label, different
+    /// scope, different node — and therefore different bytes.
+    #[test]
+    fn canonical_bytes_includes_blank_scope() {
+        assert_encodings_pairwise_distinct(&[
+            TermValue::Blank {
+                label: "b0".to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            TermValue::Blank {
+                label: "b0".to_owned(),
+                scope: BlankScope(1),
+            },
+            TermValue::Blank {
+                label: "b0".to_owned(),
+                scope: BlankScope(u32::MAX),
+            },
+        ]);
+    }
+
+    /// The variant tag separates same-spelled terms of different kinds, which a
+    /// bare "encode the string" scheme would fuse into one.
+    #[test]
+    fn canonical_bytes_separates_kinds_that_share_a_spelling() {
+        assert_encodings_pairwise_distinct(&[
+            TermValue::iri("x"),
+            TermValue::blank("x"),
+            TermValue::simple_literal("x"),
+            TermValue::typed_literal("x", "x"),
+            TermValue::lang_literal("x", "x"),
+        ]);
+    }
+
+    /// A triple term is not its flattened components: `<<( a b c )>>` must not
+    /// encode to the same bytes as the three terms written in sequence, nor as any
+    /// re-association of them into nested triple terms.
+    #[test]
+    fn canonical_bytes_separates_triple_terms_from_flat_sequences() {
+        let a = TermValue::iri("http://example.org/a");
+        let b = TermValue::iri("http://example.org/b");
+        let c = TermValue::iri("http://example.org/c");
+        let triple = TermValue::Triple {
+            s: Box::new(a.clone()),
+            p: Box::new(b.clone()),
+            o: Box::new(c.clone()),
+        };
+
+        let mut flat = Vec::new();
+        a.canonical_bytes(&mut flat);
+        b.canonical_bytes(&mut flat);
+        c.canonical_bytes(&mut flat);
+        assert_ne!(triple.to_canonical_bytes(), flat);
+
+        // Re-association: `<<( <<(a b c)>> b c )>>` vs `<<( a b <<(a b c)>> )>>`.
+        let nested_subject = TermValue::Triple {
+            s: Box::new(triple.clone()),
+            p: Box::new(b.clone()),
+            o: Box::new(c.clone()),
+        };
+        let nested_object = TermValue::Triple {
+            s: Box::new(a),
+            p: Box::new(b),
+            o: Box::new(triple.clone()),
+        };
+        assert_encodings_pairwise_distinct(&[triple, nested_subject, nested_object]);
+    }
+
+    /// The encoding is an identity contract, so it is pinned byte for byte: any
+    /// future change to the layout must be a loud test failure, never a silent
+    /// re-identification of already-derived content keys.
+    ///
+    /// The fixture exercises all four variant tags and both option states:
+    /// `<<( <http://example.org/s>  _:b@scope 7  "v"^^<t> with direction ltr )>>`.
+    #[test]
+    fn canonical_bytes_golden_encoding_is_pinned() {
+        let term = TermValue::Triple {
+            s: Box::new(TermValue::iri("s")),
+            p: Box::new(TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(7),
+            }),
+            o: Box::new(TermValue::Literal {
+                lexical_form: "v".to_owned(),
+                datatype: "t".to_owned(),
+                language: None,
+                direction: Some(RdfTextDirection::Ltr),
+            }),
+        };
+        let expected: Vec<u8> = vec![
+            // Triple tag.
+            3, //
+            // s: Iri tag, len = 1, "s".
+            0, 1, 0, 0, 0, 0, 0, 0, 0, b's', //
+            // p: Blank tag, len = 1, "b", scope 7 as u32 little-endian.
+            1, 1, 0, 0, 0, 0, 0, 0, 0, b'b', 7, 0, 0, 0, //
+            // o: Literal tag, len = 1, "v", len = 1, "t",
+            //    language absent, direction present = ltr.
+            2, 1, 0, 0, 0, 0, 0, 0, 0, b'v', 1, 0, 0, 0, 0, 0, 0, 0, b't', 0, 1, 0,
+        ];
+        assert_eq!(term.to_canonical_bytes(), expected);
+    }
+
+    // -- injectivity property ---------------------------------------------------
+
+    /// A deliberately TINY leaf alphabet. The property under test is an `iff`, so
+    /// the generator must produce *equal* pairs often enough for the "equal terms
+    /// encode identically" direction to be exercised, not only the easy
+    /// "distinct terms encode differently" direction a wide alphabet would give.
+    const PROP_STRINGS: &[&str] = &["", "a", "ab", "b", "\u{e9}"];
+
+    /// Leaf and recursive strategies covering every variant and every option
+    /// state: IRIs, blanks at several scopes, simple/typed/language/directional
+    /// literals, and triple terms nested to three levels.
+    #[cfg(test)]
+    mod strategies {
+        use super::{PROP_STRINGS, TermValue};
+        use crate::RdfTextDirection;
+        use crate::ir::term::BlankScope;
+        use proptest::prelude::*;
+
+        fn small_string() -> impl Strategy<Value = String> {
+            proptest::sample::select(PROP_STRINGS).prop_map(str::to_owned)
+        }
+
+        fn leaf() -> impl Strategy<Value = TermValue> {
+            prop_oneof![
+                small_string().prop_map(TermValue::Iri),
+                (small_string(), 0u32..3).prop_map(|(label, scope)| TermValue::Blank {
+                    label,
+                    scope: BlankScope(scope),
+                }),
+                (
+                    small_string(),
+                    small_string(),
+                    prop_oneof![Just(None), small_string().prop_map(Some)],
+                    prop_oneof![
+                        Just(None),
+                        Just(Some(RdfTextDirection::Ltr)),
+                        Just(Some(RdfTextDirection::Rtl)),
+                    ],
+                )
+                    .prop_map(|(lexical_form, datatype, language, direction)| {
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        }
+                    }),
+            ]
+        }
+
+        /// Terms with triple-term nesting up to three levels — deep enough that
+        /// a `<<( <<(..)>> .. )>>` inside another triple term is routinely drawn.
+        pub(super) fn term_value() -> impl Strategy<Value = TermValue> {
+            leaf().prop_recursive(3, 24, 3, |inner| {
+                (inner.clone(), inner.clone(), inner).prop_map(|(s, p, o)| TermValue::Triple {
+                    s: Box::new(s),
+                    p: Box::new(p),
+                    o: Box::new(o),
+                })
+            })
+        }
+    }
+
+    proptest::proptest! {
+        /// The whole contract in one line: encodings are equal **iff** the terms
+        /// are. Both directions are checked on the same pair, so neither a lossy
+        /// encoder (which would make distinct terms collide) nor a
+        /// nondeterministic one (which would make equal terms diverge) survives.
+        #[test]
+        fn proptest_canonical_bytes_is_injective(
+            a in strategies::term_value(),
+            b in strategies::term_value(),
+        ) {
+            proptest::prop_assert_eq!(
+                a.to_canonical_bytes() == b.to_canonical_bytes(),
+                a == b,
+                "encoding equality must match value equality for {:?} and {:?}",
+                a,
+                b
+            );
+        }
+
+        /// Encoding is deterministic and buffer-position independent: a term
+        /// encodes to the same bytes whether the buffer was empty or already held
+        /// another term's encoding.
+        #[test]
+        fn proptest_canonical_bytes_is_position_independent(
+            prefix in strategies::term_value(),
+            term in strategies::term_value(),
+        ) {
+            let prefix_bytes = prefix.to_canonical_bytes();
+            let term_bytes = term.to_canonical_bytes();
+            let mut out = prefix_bytes.clone();
+            let split = out.len();
+            term.canonical_bytes(&mut out);
+            proptest::prop_assert_eq!(&out[..split], prefix_bytes.as_slice());
+            proptest::prop_assert_eq!(&out[split..], term_bytes.as_slice());
+        }
     }
 }
