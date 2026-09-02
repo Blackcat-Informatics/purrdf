@@ -38,10 +38,11 @@ use super::term::{
     rdf_term_to_value_scoped,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
+use crate::py_store::iri_value_error;
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlRequest, TermValue,
-    query_with_entailment_governed, serialize_dataset, serialize_dataset_with_jsonld_options,
+    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions, SparqlRequest,
+    StatementLayer, TermValue, query_with_entailment_governed, serialize_dataset_with,
 };
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
@@ -96,7 +97,9 @@ impl PyStore {
             for quad in parse_quads(&data, format.to_native(), base_ref)
                 .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
             {
-                inner.insert(rdf_quad_to_values_scoped(&quad, scope));
+                inner
+                    .insert(rdf_quad_to_values_scoped(&quad, scope))
+                    .map_err(|e| iri_value_error(&e))?;
             }
             Ok(())
         })
@@ -117,8 +120,17 @@ impl PyStore {
     }
 
     /// Add a single quad.
+    ///
+    /// Raises `ValueError` if the quad carries a relative IRI in any position — its
+    /// own terms, a literal's datatype, or one nested in a quoted triple. A `Store`
+    /// mutated this way is handed terms, never a document, so there is no base in
+    /// scope to resolve a relative reference against and PurRDF invents none. Resolve
+    /// it yourself before adding it. The message leads with the shared
+    /// `iri-relative-no-base` diagnostic code.
     fn add(&mut self, quad: &PyQuad) -> PyResult<()> {
-        self.inner.insert(rdf_quad_to_values(&quad.inner));
+        self.inner
+            .insert(rdf_quad_to_values(&quad.inner))
+            .map_err(|e| iri_value_error(&e))?;
         Ok(())
     }
 
@@ -653,10 +665,20 @@ impl PyStore {
     /// the oxigraph Python `Store.dump`: when `output` (a file-like with `.write`) is given
     /// the bytes are written to it and `None` is returned; otherwise the bytes are
     /// returned directly.
-    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None))]
+    ///
+    /// `base` is the document base the output is written under — the egress MIRROR of
+    /// [`load`](Self::load)'s, which this surface lacked. A syntax that can express a
+    /// base writes it and relativizes against it; one that cannot emits absolute IRIs.
+    /// A base that is not an absolute IRI is a hard failure whatever the format.
+    ///
+    /// The statement layer is [`StatementLayer::Emit`], which is what this dump already
+    /// did before it carried a base. A dump round-trips a user's own store, so its RDF
+    /// 1.2 reifier and annotation rows must survive: `Project` would silently thin the
+    /// data on the way out, and a format with no surface for them fails closed instead.
+    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None, base=None))]
     #[allow(
         clippy::too_many_arguments,
-        reason = "Python dump names graph selection and JSON-LD configuration explicitly"
+        reason = "Python dump names graph selection, the document base, and JSON-LD configuration explicitly"
     )]
     fn dump(
         &self,
@@ -667,6 +689,7 @@ impl PyStore {
         jsonld_options: Option<&str>,
         jsonld_context: Option<&PyCompiledJsonLdContext>,
         yaml_schema_url: Option<&str>,
+        base: Option<String>,
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
@@ -691,7 +714,7 @@ impl PyStore {
             } else {
                 None
             };
-        let buf: Vec<u8> = py.detach(|| {
+        let buf: Vec<u8> = py.detach(move || {
             // Serialize natively: materialize the store's quads into the IR
             // verbatim (preserving literal lexical forms) and dispatch to the codec.
             let (quads, selection) = match &graph_projection {
@@ -703,18 +726,21 @@ impl PyStore {
             };
             let dataset = dataset_from_quads_verbatim(&quads)
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
-            if let Some(options) = &configured {
-                serialize_dataset_with_jsonld_options(
-                    &dataset,
-                    native.media_type(),
+            // ONE serialization call, not a configured/unconfigured pair: the JSON-LD
+            // options are an axis of the same options value the base and the graph
+            // selection travel on, so a base cannot reach one arm and miss the other.
+            serialize_dataset_with(
+                &dataset,
+                native,
+                base.as_deref(),
+                &SerializeOptions {
                     selection,
-                    options,
-                )
-                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
-            } else {
-                serialize_dataset(&dataset, native.media_type(), selection)
-                    .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
-            }
+                    statement_layer: StatementLayer::Emit,
+                    jsonld_options: configured.as_ref(),
+                },
+            )
+            .map(|outcome| outcome.bytes)
+            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
         })?;
         match output {
             Some(output) => {
@@ -841,6 +867,22 @@ impl PyStore {
 
 /// An in-memory quad set supporting RDFC-1.0 canonicalization. Mirrors
 /// the oxigraph Python `Dataset`.
+///
+/// # Absoluteness holds here too
+///
+/// A `Dataset` is a plain quad list rather than a store, so it has no term table whose
+/// interner would enforce the IR-boundary absoluteness invariant for it. It enforces the
+/// invariant itself, at both ingresses ([`add`](PyDataset::add) and the constructor),
+/// through [`QuadValues::check_absolute_iris`] — the SAME
+/// `purrdf_core::ir::absolute::check_absolute` every other ingress reaches, not a second
+/// spelling of the rule.
+///
+/// That is deliberate rather than incidental. `NamedNode("foo")` is constructible — the
+/// term constructors are string carriers and do not resolve anything — so without this
+/// check a relative IRI could reach `canonicalize`, which would hash it and hand back a
+/// stable RDFC-1.0 label for a term whose identity is unknowable. "Nothing invalid
+/// escapes because there is no serializer here" is not the invariant; being
+/// unrepresentable from every ingress is.
 #[pyclass(name = "Dataset")]
 #[derive(Debug)]
 pub struct PyDataset {
@@ -851,6 +893,10 @@ pub struct PyDataset {
 #[pymethods]
 impl PyDataset {
     /// Build a dataset, optionally seeding it from an iterable of `Quad`.
+    ///
+    /// Raises `ValueError` on the first seed quad carrying a relative IRI, for the same
+    /// reason `add` does. The dataset is not partially built: the constructor fails and
+    /// no object is returned.
     #[new]
     #[pyo3(signature = (quads=None))]
     fn new(quads: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
@@ -861,15 +907,23 @@ impl PyDataset {
                 let quad = item
                     .cast::<PyQuad>()
                     .map_err(|_| PyTypeError::new_err("Dataset accepts an iterable of Quad"))?;
-                out.insert(quad.get().inner.clone());
+                out.checked_insert(quad.get().inner.clone())?;
             }
         }
         Ok(out)
     }
 
     /// Add a single quad.
-    fn add(&mut self, quad: &PyQuad) {
-        self.insert(quad.inner.clone());
+    ///
+    /// Raises `ValueError` if the quad carries a relative IRI in any position — its own
+    /// terms, a literal's datatype, or one nested in a quoted triple — with the shared
+    /// `iri-relative-no-base` diagnostic code leading the message, exactly as `Store.add`
+    /// does. A `Dataset` is handed terms, never a document, so there is no base in scope
+    /// to resolve a relative reference against and PurRDF invents none.
+    ///
+    /// The refused quad does not land: the dataset is unchanged and still usable.
+    fn add(&mut self, quad: &PyQuad) -> PyResult<()> {
+        self.checked_insert(quad.inner.clone())
     }
 
     /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
@@ -890,6 +944,18 @@ impl PyDataset {
 }
 
 impl PyDataset {
+    /// Enforce the absoluteness invariant, then insert with set semantics.
+    ///
+    /// The check runs BEFORE the push, so a refusal leaves the dataset byte-identical to
+    /// what it was — `Store.add`'s contract, kept here.
+    fn checked_insert(&mut self, quad: RdfQuad) -> PyResult<()> {
+        rdf_quad_to_values(&quad)
+            .check_absolute_iris()
+            .map_err(|e| iri_value_error(&e))?;
+        self.insert(quad);
+        Ok(())
+    }
+
     /// Insert a quad with set semantics (no duplicate content).
     fn insert(&mut self, quad: RdfQuad) {
         if !self.quads.contains(&quad) {
@@ -1120,7 +1186,8 @@ mod tests {
                 iri(&format!("https://e/s{i}")),
                 "https://e/p",
                 iri("https://e/o"),
-            )));
+            )))
+            .expect("fixture IRIs are absolute");
         }
         m
     }
@@ -1163,11 +1230,13 @@ mod tests {
         assert_eq!(snapshot.quad_count(), 1);
 
         // The store mutates AFTER the snapshot was taken (a later `Store.add`).
-        store.insert(rdf_quad_to_values(&RdfQuad::new(
-            iri("https://e/s-new"),
-            "https://e/p",
-            iri("https://e/o"),
-        )));
+        store
+            .insert(rdf_quad_to_values(&RdfQuad::new(
+                iri("https://e/s-new"),
+                "https://e/p",
+                iri("https://e/o"),
+            )))
+            .expect("fixture IRIs are absolute");
         let after = store.freeze().expect("freeze again");
 
         // The earlier snapshot the consumer holds is UNCHANGED…

@@ -428,6 +428,7 @@ pub struct SkosConfig {
     graph_selection: SkosGraphSelection,
     limits: ProjectionLimits,
     max_records: usize,
+    document_base_iri: Option<String>,
 }
 
 impl SkosConfig {
@@ -462,6 +463,7 @@ impl SkosConfig {
             graph_selection,
             limits,
             max_records,
+            document_base_iri: None,
         })
     }
 
@@ -489,6 +491,32 @@ impl SkosConfig {
     pub const fn max_records(&self) -> usize {
         self.max_records
     }
+
+    /// Name the IRI the emitted SKOS Turtle document is published at.
+    ///
+    /// Turtle can express a base, so this projection declares it and relativizes against
+    /// it. Distinct from [`scheme_iri`](Self::scheme_iri), which identifies the concept
+    /// scheme the document is ABOUT rather than the document itself. Caller-owned with no
+    /// fabricated default: unset, the document declares no base, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a base that is not an absolute IRI.
+    pub fn with_document_base_iri(
+        mut self,
+        document_base_iri: Option<String>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(base) = &document_base_iri {
+            validate_absolute_iri(base, "SKOS document base IRI")?;
+        }
+        self.document_base_iri = document_base_iri;
+        Ok(self)
+    }
+
+    /// The IRI the emitted document is published at, when the caller named one.
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base_iri.as_deref()
+    }
 }
 
 #[derive(Deserialize)]
@@ -500,6 +528,8 @@ struct RawSkosConfig {
     graph_selection: SkosGraphSelection,
     limits: ProjectionLimits,
     max_records: usize,
+    #[serde(default)]
+    document_base_iri: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for SkosConfig {
@@ -516,6 +546,8 @@ impl<'de> Deserialize<'de> for SkosConfig {
             raw.limits,
             raw.max_records,
         )
+        .map_err(serde::de::Error::custom)?
+        .with_document_base_iri(raw.document_base_iri)
         .map_err(serde::de::Error::custom)
     }
 }

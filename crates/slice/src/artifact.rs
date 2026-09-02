@@ -48,7 +48,13 @@ pub struct ArtifactRecord {
     /// SHA-256 hex digest of the raw file bytes (64 lowercase hex chars).
     pub raw_digest: String,
     /// For RDF artifacts: SHA-256 hex of the canonical N-Triples (sorted).
-    /// `None` for non-RDF files.
+    ///
+    /// `None` means **this file is not RDF**, and nothing else. It is a discriminant on
+    /// the artifact's KIND, never a report that computing the digest was attempted and
+    /// failed: discovery propagates every such failure instead
+    /// (`catalog::collect_artifacts`), so an RDF artifact always carries `Some`. That is
+    /// exactly the invariant `cache::phase_artifact_digest` relies on when it hard-fails
+    /// a semantics-sensitive phase whose artifact has no digest.
     pub semantic_digest: Option<String>,
     /// The raw bytes of the artifact (content cache).
     pub content: Vec<u8>,

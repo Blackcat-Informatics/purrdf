@@ -696,22 +696,34 @@ impl PyQueryTriples {
 
     /// Serialize the constructed triples to bytes in `format` (the N-Triples
     /// fast path the `sparql` seam uses for its rdflib hand-off).
+    ///
+    /// `base` is the document base the output is written under, the same parameter
+    /// the module-level `serialize` carries: a format that can express a base writes
+    /// it and relativizes against it, one that cannot emits absolute IRIs, and a base
+    /// that is not an absolute IRI is a hard failure on either.
+    #[pyo3(signature = (format, *, base=None))]
     fn serialize<'py>(
         &self,
         py: Python<'py>,
         format: PyRdfFormat,
+        base: Option<String>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        Ok(PyBytes::new(py, &self.serialize_bytes(py, format)?))
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format, base)?))
     }
 }
 
 impl PyQueryTriples {
     /// The serialization core, shared by the `serialize` method and the module-level
     /// `purrdf.serialize` function so the two can never diverge.
-    pub(crate) fn serialize_bytes(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<Vec<u8>> {
+    pub(crate) fn serialize_bytes(
+        &self,
+        py: Python<'_>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Vec<u8>> {
         // The native serialization runs detached (GIL released).
         let triples = &self.triples;
-        py.detach(|| serialize_triples(triples, format.to_native()))
+        py.detach(move || serialize_triples(triples, format.to_native(), base.as_deref()))
             .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
     }
 }
@@ -781,12 +793,20 @@ impl PyQueryQuads {
     /// construct, so serializing would DROP every graph-scoped statement and hand back
     /// a well-formed document missing exactly what the query asked for. See
     /// [`refuse_uncarriable_named_graphs`].
+    ///
+    /// `base` is the document base the output is written under, the same parameter
+    /// [`PyQueryTriples::serialize`] and the module-level `serialize` carry: a format
+    /// that can express a base writes it and relativizes against it, one that cannot
+    /// emits absolute IRIs, and a base that is not an absolute IRI is a hard failure on
+    /// either. A graph-carrying result is no less an egress surface than a triple one.
+    #[pyo3(signature = (format, *, base=None))]
     fn serialize<'py>(
         &self,
         py: Python<'py>,
         format: PyRdfFormat,
+        base: Option<String>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        Ok(PyBytes::new(py, &self.serialize_bytes(py, format)?))
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format, base)?))
     }
 }
 
@@ -794,13 +814,18 @@ impl PyQueryQuads {
     /// The serialization core, shared by the `serialize` method and the module-level
     /// `purrdf.serialize` function so the refusal cannot be reachable from one entry
     /// point and not the other.
-    pub(crate) fn serialize_bytes(&self, py: Python<'_>, format: PyRdfFormat) -> PyResult<Vec<u8>> {
+    pub(crate) fn serialize_bytes(
+        &self,
+        py: Python<'_>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Vec<u8>> {
         // Refused BEFORE the serializer runs: a result the requested syntax would
         // silently empty out never becomes bytes.
         refuse_uncarriable_named_graphs(&self.quads, format)?;
         // The native serialization runs detached (GIL released).
         let quads = &self.quads;
-        py.detach(|| serialize_quads(quads, format.to_native()))
+        py.detach(move || serialize_quads(quads, format.to_native(), base.as_deref()))
             .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
     }
 }

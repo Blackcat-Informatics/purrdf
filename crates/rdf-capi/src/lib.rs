@@ -25,6 +25,9 @@
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
 //!   no-backwards-compat exception. The current ABI is **0.7.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
+//!   Pre-1.0, an incompatible change rides a MINOR bump — see
+//!   [`version::PURRDF_ABI_MAJOR`] for the rule and
+//!   `tests/abi_signatures.rs` for the snapshot that enforces it.
 //!
 //! ## Thread-safety (per handle)
 //! - [`handles::PurrdfDataset`] wraps `Arc<RdfDataset>` — `Send + Sync`; it may

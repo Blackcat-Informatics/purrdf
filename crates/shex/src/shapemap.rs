@@ -29,8 +29,43 @@
 //! Node and predicate IRIs are written `<iri>` (resolved against an optional
 //! base); blank nodes `_:label`; literals `"lex"`, `"lex"^^<dt>`, `"lex"@tag`.
 //! The shape label is `@START` or `@<label>`.
+//!
+//! # No prefixed names, because the grammar has none and the spec declines to
+//! # say what one would mean
+//!
+//! `ex:S1` is rejected everywhere an IRI is expected, and the diagnostic says so
+//! by name rather than as a bare syntax error. This is the grammar's own answer,
+//! not a shortcut:
+//!
+//! * the ShapeMap grammar's `[136s] iri` production is **`IRIREF`** — the
+//!   `| prefixedName` alternative is present in the specification's source but
+//!   **commented out**, as are `shapeSpec`'s `ATPNAME_NS`/`ATPNAME_LN` arms. The
+//!   `prefixedName`/`PNAME_LN`/`PNAME_NS`/`PN_PREFIX` productions survive as
+//!   defined-but-unreachable, so the exclusion is deliberate rather than an
+//!   oversight. ShapeMap does **not** inherit ShExC's
+//!   `iri ::= IRIREF | PrefixedName`; it defines its own and drops the alternative;
+//! * the one paragraph that mentions prefixes (§ "ShapeMap grammar") introduces a
+//!   *resolution context* — "a base IRI and a map of prefix to namespace IRI" —
+//!   and then says: "Though it is common practice to resolve shape references
+//!   against a `resolution context` found in the schema and node references
+//!   agianst \[sic] a `resolution context` found in the data (e.g. Turtle
+//!   prefixes), **this specification does not specifiy \[sic] that behavior**."
+//!
+//! So the spec names the exact rule an implementer would reach for and explicitly
+//! refuses to standardize it. Resolving `ex:` against the schema's prefixes would
+//! be inventing a binding the specification withheld — the same fabricated default
+//! this repository refuses for every other caller-supplied vocabulary — and the
+//! spec's own sentence has the two halves of one association resolving against
+//! *different* documents, which can bind one prefix to two namespaces. There is no
+//! single rule to implement, so none is: a prefixed name is refused with the reason.
+//!
+//! The **base** is a different case and is threaded, which is why `<S1>` works: a
+//! relative `IRIREF` is live in the grammar, and the base half of the resolution
+//! context has a caller-supplied source (RFC-3986 §5.1.2). A prefixed name is a
+//! disabled production whose environment the spec declined to define.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
@@ -97,12 +132,21 @@ pub struct ShapeMap(pub Vec<ShapeAssociation>);
 /// # Errors
 ///
 /// Returns [`ShexError::Syntax`] on a grammar violation and [`ShexError::Iri`]
-/// when a relative IRI cannot be resolved against `base`.
+/// when a relative IRI cannot be resolved — including when `base` is `None`, where
+/// a relative reference is the shared `iri-relative-no-base` failure rather than a
+/// selector that silently matches nothing.
 pub fn parse_shape_map(input: &str, base: Option<&str>) -> Result<ShapeMap> {
+    let scope = match base {
+        Some(iri) => BaseScope::rooted(
+            BaseIri::parse(iri).map_err(|e| ShexError::iri(iri, &e))?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
     let mut parser = MapParser {
         chars: input.chars().collect(),
         pos: 0,
-        base,
+        base: scope,
     };
     parser.parse_map()
 }
@@ -142,10 +186,34 @@ pub fn resolve_shape_map(map: &ShapeMap, data: &RdfDataset) -> Vec<(TermValue, S
 /// call a single fixed shape map would use — and collected into a
 /// [`ResultShapeMap`] in that order.
 ///
+/// # A shape the schema does not declare is refused, not answered
+///
+/// Every association's shape selector must name something the schema declares —
+/// a label in its `shapes` map (after [`crate::resolve_imports`] has folded the
+/// import closure in), or `START` when the schema has a `start`. One that does
+/// not is [`ShexError::UnknownShape`] before any node is checked.
+///
+/// Neither specification defines this case. ShEx 2.1 §5.7's *Shape Expression
+/// Reference Requirement* — "A shapeExprRef MUST appear in the schema's shapes
+/// map (or an imported schema's map)" — binds a reference written INSIDE a
+/// schema, and [`crate::check_structure`] is what enforces it; `satisfies` is
+/// defined only where "se2 is the shape expression having se as id", so with no
+/// such expression the relation is undefined rather than false. The ShapeMap
+/// specification says a `shapeLabel` is "ShEx shapeExprLabel or the string START"
+/// and is silent on labels the schema lacks, and its `status` vocabulary is
+/// `conformant`/`nonconformant` with no third value meaning "not evaluated".
+///
+/// So answering `nonconformant` would spend the one word the format has for a
+/// finding about the DATA on a mistake the data had no part in: it reads as "this
+/// node fails that shape" when the truth is "there is no such shape". The
+/// repository's no-optionality/hard-fail doctrine decides an undefined case, and
+/// it decides this one as a caller error.
+///
 /// # Errors
 ///
-/// Returns an error only when `map_src` fails to parse (see
-/// [`parse_shape_map`]); a per-node validation failure is reported as a
+/// Returns an error when `map_src` fails to parse (see [`parse_shape_map`]) or
+/// names a shape the schema does not declare. A per-node validation failure is
+/// reported as a
 /// [`ConformanceStatus::Nonconformant`](crate::validate::ConformanceStatus)
 /// entry, not an `Err`.
 pub fn validate_shape_map(
@@ -156,8 +224,33 @@ pub fn validate_shape_map(
     options: &ValidationOptions<'_>,
 ) -> Result<ResultShapeMap> {
     let map = parse_shape_map(map_src, base)?;
+    refuse_undeclared_shapes(schema, &map)?;
     let resolved = resolve_shape_map(&map, data);
     Ok(validate_with(schema, data, &resolved, options))
+}
+
+/// Refuse a shape map naming a shape `schema` does not declare.
+///
+/// Checked BEFORE the node selectors are expanded, so the refusal does not
+/// depend on whether the data happened to select any node: a map that selects
+/// nothing and a map that selects a thousand nodes are the same mistake, and an
+/// empty result shape map would hide it entirely.
+///
+/// The first offending association is named, in the ShapeMap grammar's own
+/// spelling, rather than a count — the operator has to fix one label at a time.
+fn refuse_undeclared_shapes(schema: &Schema, map: &ShapeMap) -> Result<()> {
+    for assoc in &map.0 {
+        let declared = match &assoc.shape {
+            ShapeSelector::Start => schema.start.is_some(),
+            ShapeSelector::Label(label) => schema.shapes.iter().any(|decl| &decl.id == label),
+        };
+        if !declared {
+            return Err(ShexError::unknown_shape(
+                crate::validate::shape_term_string(&assoc.shape),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Which triple position `FOCUS` occupies.
@@ -234,13 +327,13 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
-struct MapParser<'a> {
+struct MapParser {
     chars: Vec<char>,
     pos: usize,
-    base: Option<&'a str>,
+    base: BaseScope,
 }
 
-impl MapParser<'_> {
+impl MapParser {
     fn parse_map(&mut self) -> Result<ShapeMap> {
         let mut associations = Vec::new();
         self.skip_ws();
@@ -325,9 +418,15 @@ impl MapParser<'_> {
         match self.peek() {
             Some('<') if self.peek_at(1) == Some('<') => self.parse_triple_term(),
             Some('<') => Ok(TermValue::iri(self.parse_iri()?)),
+            // `_` first: `_:label` is a blank node, and `peek_prefixed_name` excludes it.
             Some('_') => self.parse_blank(),
             Some('"') => self.parse_literal(),
-            _ => Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)")),
+            _ => match self.peek_prefixed_name() {
+                Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
+                None => {
+                    Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)"))
+                }
+            },
         }
     }
 
@@ -356,6 +455,11 @@ impl MapParser<'_> {
     }
 
     fn parse_predicate(&mut self) -> Result<String> {
+        // BEFORE the `a` keyword: `a:b` is a prefixed name whose prefix happens to be
+        // `a`, and taking the keyword first would read it as rdf:type plus junk.
+        if let Some(name) = self.peek_prefixed_name() {
+            return Err(self.prefixed_name_err(&name, "a predicate must be `a` or an IRI"));
+        }
         if self.take_keyword("a") {
             return Ok(RDF_TYPE.to_owned());
         }
@@ -367,6 +471,11 @@ impl MapParser<'_> {
     }
 
     fn parse_shape_label(&mut self) -> Result<ShapeSelector> {
+        // BEFORE the `START` keyword, for the reason `parse_predicate` checks before `a`:
+        // `START:S` is a prefixed name, not the start-shape keyword followed by junk.
+        if let Some(name) = self.peek_prefixed_name() {
+            return Err(self.prefixed_name_err(&name, "a shape label must be `START` or an IRI"));
+        }
         if self.take_keyword("START") {
             return Ok(ShapeSelector::Start);
         }
@@ -377,7 +486,76 @@ impl MapParser<'_> {
         }
     }
 
+    /// The Turtle-family PREFIXED NAME at the cursor (`ex:S1`, `:S1`, `ex:`), if the
+    /// input looks like one. Detection only — nothing is consumed.
+    ///
+    /// `_:label` is deliberately NOT one: that is `BLANK_NODE_LABEL`, which the grammar
+    /// does admit wherever a term is allowed, so it must keep reaching [`Self::parse_blank`].
+    fn peek_prefixed_name(&self) -> Option<String> {
+        let mut at = self.pos;
+        let mut name = String::new();
+        while let Some(&c) = self.chars.get(at) {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                name.push(c);
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        // `PNAME_NS ::= PN_PREFIX? ':'`, so an empty prefix still forms one.
+        if self.chars.get(at) != Some(&':') || name == "_" {
+            return None;
+        }
+        name.push(':');
+        at += 1;
+        while let Some(&c) = self.chars.get(at) {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '%') {
+                name.push(c);
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        Some(name.trim_end_matches('.').to_owned())
+    }
+
+    /// Reject a prefixed name by NAMING the reason, rather than as a bare syntax error.
+    ///
+    /// The ShapeMap grammar's `iri` production is `IRIREF` alone; the specification's own
+    /// source carries the `| prefixedName` alternative COMMENTED OUT (and the same for
+    /// `shapeSpec`'s `ATPNAME_NS`/`ATPNAME_LN` arms), so this is a deliberate exclusion
+    /// rather than an omission. See the module documentation for why PurRDF does not
+    /// extend past it.
+    fn prefixed_name_err(&self, name: &str, position: &str) -> ShexError {
+        ShexError::syntax(
+            format!(
+                "{position} in angle brackets; `{name}` is a prefixed name, and the ShapeMap \
+                 grammar admits none — its `iri` production is IRIREF only. The specification \
+                 also declines to say where a prefix map would come from, recording that \
+                 resolving shape references against the schema's prefixes and node references \
+                 against the data's is \"common practice\" that \"this specification does not \
+                 specify\"; two documents may bind one prefix differently, so PurRDF resolves \
+                 none rather than silently choosing a side. Write the IRI in full \
+                 (`<http://example.org/S1>`), or a relative `<S1>` against a base"
+            ),
+            self.pos,
+        )
+    }
+
+    /// An `IRIREF`: `'<' … '>'`, resolved against the base in scope.
+    ///
+    /// The opening `<` is verified HERE rather than trusted from the caller. It used not
+    /// to be, and the one caller that did not pre-check — a literal's `^^` datatype — read
+    /// the first character of `"7"^^xsd:integer`'s datatype as the opening bracket and ran
+    /// to end-of-input, reporting `unterminated IRI` for a document whose real defect was a
+    /// prefixed name.
     fn parse_iri(&mut self) -> Result<String> {
+        if self.peek() != Some('<') {
+            if let Some(name) = self.peek_prefixed_name() {
+                return Err(self.prefixed_name_err(&name, "an IRI must be written"));
+            }
+            return Err(self.err("expected an IRI in angle brackets"));
+        }
         self.pos += 1; // '<'
         let mut raw = String::new();
         loop {
@@ -493,19 +671,18 @@ impl MapParser<'_> {
         char::from_u32(value).ok_or_else(|| self.err("escape is not a scalar value"))
     }
 
+    /// Resolve an `<iri>` against the base the map was parsed with.
+    ///
+    /// The compact shape-map syntax admits relative references, so this is
+    /// [`BaseScope::resolve`] — the same entry point the ShExC parser uses, with the
+    /// same refusal when no base is in scope. Keeping a relative reference verbatim
+    /// here was worse than in a schema: an unresolvable node selector matches
+    /// nothing in the data and reports a clean, empty result map.
     fn resolve(&self, reference: &str) -> Result<String> {
-        let Some(base) = self.base else {
-            return Ok(reference.to_owned());
-        };
-        let base = purrdf_iri::parse(base).map_err(|e| ShexError::Iri {
-            lexical: base.to_owned(),
-            reason: e.to_string(),
-        })?;
-        let resolved = base.resolve(reference).map_err(|e| ShexError::Iri {
-            lexical: reference.to_owned(),
-            reason: e.to_string(),
-        })?;
-        Ok(resolved.as_str().to_owned())
+        self.base
+            .resolve(reference)
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| ShexError::iri(reference, &e))
     }
 
     // ── scanning primitives ──────────────────────────────────────────────────

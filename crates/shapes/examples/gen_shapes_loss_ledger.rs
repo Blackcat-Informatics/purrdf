@@ -64,7 +64,7 @@ fn main() {
     )
     .expect("golden fixture namespace is valid");
     let ttl = format!("{PREFIXES}{GOLDEN_SHAPES}");
-    let dataset = parse_turtle_to_dataset(&ttl).expect("golden fixture Turtle parses");
+    let dataset = parse_turtle_to_dataset(&ttl, None).expect("golden fixture Turtle parses");
     let shapes = from_dataset(&dataset).expect("golden fixture shape parse");
     let compiled = compile(&shapes, &ns);
     print!("{}", compiled.losses.render_json());

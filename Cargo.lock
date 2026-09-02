@@ -1379,6 +1379,7 @@ dependencies = [
  "proptest",
  "purrdf-core",
  "purrdf-datalog",
+ "purrdf-iri",
  "purrdf-xsd",
  "roxmltree",
 ]
@@ -1512,6 +1513,7 @@ dependencies = [
  "hex",
  "insta",
  "petgraph",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-sparql-algebra",
  "rayon",

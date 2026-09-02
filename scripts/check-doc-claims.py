@@ -4476,12 +4476,12 @@ def build_claims(
             {
                 "passed": codec_pass,
                 "total": codec_pass,
-                # The per-format split must account for the whole suite.
-                "nq": 27,
+                # Only the TOTAL reaches the matrix block. ADDING A FIXTURE MOVES
+                "nq": 27,  # AN ANCHOR HERE — see the corpus README's `iri/` note.
                 "nt": 29,
                 "rx": 31,
-                "tg": 60,
-                "tt": codec_pass - (27 + 29 + 31 + 60),
+                "tg": 67,
+                "tt": codec_pass - (27 + 29 + 31 + 67),
             },
             mat,
         ),

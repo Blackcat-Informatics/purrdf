@@ -28,11 +28,13 @@
 //! diff minimal while the re-parse gives full RDF correctness.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::catalog::SliceCatalog;
 use crate::error::SliceError;
 use crate::ownership::{OwnershipAnalyzer, ReconciliationStatus, SliceIri};
 use crate::rdf_query::Dataset;
+use crate::retrieval::retrieval_base_iri;
 use crate::vocab::SliceVocab;
 
 /// A computed manifest patch: the original and patched Turtle text plus the
@@ -109,8 +111,13 @@ pub fn compute_fix_deps(catalog: &SliceCatalog) -> Result<Vec<ManifestPatch>, Sl
         if proposal.to_add.is_empty() && proposal.to_remove.is_empty() {
             continue;
         }
+        // The manifest is on disk, so RFC-3986 §5.1.3 applies: both the pre-edit parse
+        // and the post-edit re-parse read it under its OWN retrieval IRI. Deriving it
+        // once here — where the path is known to name a real file — keeps the two parses
+        // in agreement, which is what makes the post-edit set comparison meaningful.
+        let base = retrieval_base_iri(Path::new(&proposal.manifest_path))?;
         let original = std::fs::read_to_string(&proposal.manifest_path).map_err(SliceError::Io)?;
-        let patched = apply_proposal(&original, &proposal, catalog.vocab())?;
+        let patched = apply_proposal(&original, &proposal, catalog.vocab(), Some(base.as_str()))?;
         if patched != original {
             patches.push(ManifestPatch {
                 manifest_path: proposal.manifest_path,
@@ -124,15 +131,21 @@ pub fn compute_fix_deps(catalog: &SliceCatalog) -> Result<Vec<ManifestPatch>, Sl
 
 /// Apply one proposal's add/remove sets to a manifest's Turtle text via a
 /// targeted, RDF-validated textual edit.
+///
+/// `base` is the manifest's base IRI — in production its own `file://` retrieval IRI,
+/// derived once by [`compute_fix_deps`] from the path it read the file from. Both the
+/// pre-edit parse and the post-edit re-parse use it, so a manifest that spells a
+/// dependency relatively is compared against a resolved set on both sides.
 fn apply_proposal(
     original: &str,
     proposal: &DepProposal,
     vocab: &SliceVocab,
+    base: Option<&str>,
 ) -> Result<String, SliceError> {
     // ── RDF-aware confirmation: parse the manifest, confirm the slice subject,
     // and read its existing sliceDependsOn object set. ──────────────────────────
     let depends_on_iri = vocab.slice_depends_on();
-    let store = parse_turtle(original.as_bytes(), &proposal.manifest_path)?;
+    let store = parse_turtle(original.as_bytes(), base, &proposal.manifest_path)?;
     let subject = proposal.slice_iri.as_str();
     let existing: BTreeSet<String> = store
         .object_iris(subject, &depends_on_iri)?
@@ -169,7 +182,7 @@ fn apply_proposal(
 
     // ── Post-edit validation: re-parse and confirm the corrected dependency set
     // is present on the slice subject (well-formed Turtle, no terminator slips). ─
-    let patched_store = parse_turtle(patched.as_bytes(), &proposal.manifest_path)?;
+    let patched_store = parse_turtle(patched.as_bytes(), base, &proposal.manifest_path)?;
     let result: BTreeSet<String> = patched_store
         .object_iris(subject, &depends_on_iri)?
         .into_iter()
@@ -207,8 +220,8 @@ fn apply_proposal(
 
 /// Parse Turtle into a native dataset (lenient for `@x-purrdf-*` lang tags),
 /// hard-failing on any syntax error.
-fn parse_turtle(bytes: &[u8], path: &str) -> Result<Dataset, SliceError> {
-    Dataset::parse_turtle(bytes, path)
+fn parse_turtle(bytes: &[u8], base: Option<&str>, path: &str) -> Result<Dataset, SliceError> {
+    Dataset::parse_turtle(bytes, base, path)
 }
 
 /// Extract the vocab prefix IRI declared in the Turtle under the vocab's CURIE
@@ -584,9 +597,9 @@ mod tests {
     vocab:sliceDependsOn <https://example.org/vocab/slices/sliceA> .
 ";
         let p = proposal("sliceB", &[], &["sliceA"]);
-        let patched = apply_proposal(manifest, &p, &vocab()).expect("patch must succeed");
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
         // Re-parse: well-formed Turtle, and the sliceDependsOn is gone.
-        let store = parse_turtle(patched.as_bytes(), "test").expect("must re-parse");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
         let mut count = 0usize;
         store.for_each_quad(|_, p, _, _| {
             if p == vocab().slice_depends_on() {
@@ -612,8 +625,8 @@ mod tests {
     rdfs:label \"sliceB\"@x-purrdf-english .
 ";
         let p = proposal("sliceB", &["sliceA"], &[]);
-        let patched = apply_proposal(manifest, &p, &vocab()).expect("patch must succeed");
-        let store = parse_turtle(patched.as_bytes(), "test").expect("must re-parse");
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
         let subject = format!("{NS}slices/sliceB");
         let target = format!("{NS}slices/sliceA");
         let found = store
@@ -640,8 +653,8 @@ mod tests {
         // Remove stale1, add sliceA — and request adding sliceA twice via deduped
         // BTreeSet semantics (set dedupes by construction).
         let p = proposal("sliceB", &["sliceA"], &["stale1"]);
-        let patched = apply_proposal(manifest, &p, &vocab()).expect("patch must succeed");
-        let store = parse_turtle(patched.as_bytes(), "test").expect("must re-parse");
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
         let subject = format!("{NS}slices/sliceB");
         let deps: BTreeSet<String> = store
             .object_iris(&subject, &vocab().slice_depends_on())
@@ -676,7 +689,7 @@ mod tests {
     vocab:sliceDependsOn <https://example.org/vocab/slices/sliceA> .
 ";
         let p = proposal("sliceB", &["sliceA"], &[]);
-        let patched = apply_proposal(manifest, &p, &vocab()).expect("patch must succeed");
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
         assert_eq!(patched, manifest, "adding an existing dep is a no-op");
     }
 
@@ -711,8 +724,8 @@ mod tests {
     rdfs:label \"agentic\"@x-purrdf-english .
 ";
         let p = proposal("agentic", &["entities"], &["stale"]);
-        let patched = apply_proposal(manifest, &p, &vocab()).expect("patch must succeed");
-        let store = parse_turtle(patched.as_bytes(), "test").expect("must re-parse");
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
         let subject = format!("{NS}slices/agentic");
         let deps: BTreeSet<String> = store
             .object_iris(&subject, &vocab().slice_depends_on())
@@ -758,8 +771,13 @@ mod tests {
              \x20       <{NS}slices/graphrag> ;\n\
              \x20   rdfs:label \"guides\"@x-purrdf-english .\n"
         );
-        let patched = apply_proposal(&original, &proposal("guides", &[], &["graphrag"]), &vocab())
-            .expect("a comment naming the predicate must not derail the patcher");
+        let patched = apply_proposal(
+            &original,
+            &proposal("guides", &[], &["graphrag"]),
+            &vocab(),
+            None,
+        )
+        .expect("a comment naming the predicate must not derail the patcher");
 
         // The real block was edited: graphrag is gone, kernel survives.
         assert!(!patched.contains("slices/graphrag"));
@@ -768,6 +786,7 @@ mod tests {
         assert!(patched.contains("# vocab:sliceDependsOn lists ONLY the slices"));
         assert!(patched.contains("rdfs:Resource — \"a guide"));
         // And the result is well-formed Turtle.
-        parse_turtle(patched.as_bytes(), "patched.ttl").expect("patched manifest must re-parse");
+        parse_turtle(patched.as_bytes(), None, "patched.ttl")
+            .expect("patched manifest must re-parse");
     }
 }

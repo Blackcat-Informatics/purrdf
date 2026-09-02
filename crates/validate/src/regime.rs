@@ -393,7 +393,12 @@ pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<
             ))
         };
     }
-    let parsed = parse_rif_xml(program)
+    // No caller base: `program` crossed a STRING boundary, so it has no retrieval IRI
+    // this layer could honestly supply (the same reason every other codec entry point
+    // here refuses to invent one). An in-document `xml:base` still governs; without one,
+    // a relative IRI reference in the rule document hard-fails rather than becoming a
+    // silently-renamed predicate.
+    let parsed = parse_rif_xml(program, None)
         .map_err(|error| format!("entailment regime \"{spelling}\": rule document: {error}"))?;
     if let Some(import) = parsed.imports.first() {
         return Err(format!(

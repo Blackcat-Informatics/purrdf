@@ -39,8 +39,9 @@ const DATA_TTL: &str = r"
 
 #[test]
 fn sparql_rule_entailment_roundtrips_through_text_serialization() {
-    let data = parse_turtle_to_dataset(DATA_TTL).expect("data Turtle must parse");
-    let shapes_dataset = parse_turtle_to_dataset(SHAPES_TTL).expect("shapes Turtle must parse");
+    let data = parse_turtle_to_dataset(DATA_TTL, None).expect("data Turtle must parse");
+    let shapes_dataset =
+        parse_turtle_to_dataset(SHAPES_TTL, None).expect("shapes Turtle must parse");
     let prefixes = extract_prefixes(SHAPES_TTL);
     let shapes = from_dataset_with_prefixes(&shapes_dataset, &prefixes).expect("shapes must load");
 

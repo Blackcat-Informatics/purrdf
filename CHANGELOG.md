@@ -87,6 +87,92 @@ called out below with what a consumer must do.
   registered aggregate's resolution depend on the number of focus nodes). Callers constructing
   `Shapes` via struct literal must now supply `aggregates`, or use `Shapes::default()` / the
   parser's constructor, both of which populate it with an empty registry.
+- **BREAKING** **iri,rdf,cli:** A relative IRI reference with no base IRI in scope is now a hard
+  error instead of being interned verbatim. Documents that previously "worked" this way were
+  emitting N-Triples no conformant parser accepts, so the failure surfaces an existing defect
+  rather than introducing one. Reference resolution is now a single layer, `purrdf-iri`, shared by
+  every codec: the RFC 3986 §5.1 precedence chain is an in-document directive
+  (`@base`/`BASE`/`xml:base`/`@context.@base`), else a caller-supplied base, else the document's
+  retrieval IRI, else the §5.1.4 failure. The stable codes are `iri-relative-no-base` (fixable by
+  supplying a base), `iri-not-absolute-by-grammar` (N-Triples, N-Quads, TriX and HexTuples admit no
+  relative reference at all, so a base cannot help) and `iri-non-absolute-base` (the supplied base
+  has no scheme). Three surfaces have a retrieval IRI, all of them ones that opened the file
+  themselves: `purrdf-slice` derives it (the workspace's single RFC 8089 `file://` derivation),
+  and `purrdf-shapes`' shape-union loader and `purrdf-cli` consume that derivation rather than
+  repeating it — so a file input needs no flag on any of the three. Every surface handed BYTES —
+  the `purrdf-rdf`/`purrdf-iri` library APIs, wasm, the C ABI, Python and CLI stdin — has no
+  retrieval IRI and hard-fails as §5.1.4 specifies. Callers on
+  those surfaces must give the document a base directive or pass one to the API. On the way out,
+  a syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) now emits it and
+  relativizes against a supplied base; one that cannot (N-Triples, N-Quads, TriX, HexTuples) keeps
+  writing absolute IRIs. See "Base IRIs & Relative References" in The PurRDF Book.
+- **BREAKING** **rdf:** `serialize_dataset_base_only` is **removed**, and `serialize_dataset_with`
+  is added as the one serialization seam the rest of the family is now expressed through. The
+  split family could not state a document base together with a graph selection or the RDF 1.2
+  statement layer: `serialize_dataset` took the selection and the layer but no base, while
+  `serialize_dataset_to_format` took a base but forced `SerializeGraph::Dataset` and the transcode
+  projection — so asking for a base on RDF/XML silently traded away reifier and annotation rows
+  the RDF/XML emitter can in fact render. `serialize_dataset_with(dataset, format, base_iri,
+  &SerializeOptions { selection, statement_layer, jsonld_options })` states all four axes, and the
+  new `StatementLayer` enum makes the third an explicit choice — `Emit` (render it, or fail closed
+  where there is no surface for it), `Project` (drop it and REPORT the count), or
+  `PerFormatCapability` (the registry's `carries_star()` decision, which is what every
+  `*_to_format` spelling applies). `serialize_dataset`, `serialize_dataset_with_jsonld_options`,
+  `serialize_dataset_to_format` and `serialize_dataset_to_format_with_jsonld_options` keep their
+  signatures and behaviour and are one-expression delegations, so there is no second code path.
+  Replace `serialize_dataset_base_only(d, media_type, selection)` with `serialize_dataset_with`
+  under `StatementLayer::Project`, which additionally hands back the dropped-row count instead of
+  leaving the caller to recompute it.
+- **BREAKING** **capi:** The C ABI moves `0.6.0` → `0.7.0`, an **incompatible** bump.
+  `purrdf_shacl_validate_to_sarif` and `purrdf_shacl_entail_to_ntriples` each gained a
+  `shapes_base_iri` parameter **in the middle** of the existing list, between `shapes_ttl` and
+  `data_nt` — a host compiled against `0.6.x` and run against `0.7.0` without recompiling passes
+  `data_nt` into the `shapes_base_iri` slot and its `PurrdfBuffer **` out-pointer into `data_nt`,
+  which the boundary then reads as a NUL-terminated C string. That silent, unguardable misread is
+  the whole reason the version moved; the parameter is positional rather than appended because it
+  belongs beside the document it qualifies. `purrdf_serialize_jsonld_configured` likewise gained
+  `base_iri` after `media_type`, the slot it holds on `purrdf_serialize`. Both breaks ride the one
+  bump because `0.7.0` is unreleased, so a consumer recompiles once rather than twice for one
+  reason. Every C host must recompile against the new `purrdf.h`. Signature drift is now caught at
+  test time: `crates/rdf-capi/tests/abi_signatures.rs` pins the complete exported prototype list
+  against a committed snapshot and against the version triple, so a future incompatible change
+  cannot reach a release without an author deliberately moving the version.
+- **BREAKING** **shex,cli:** A shape map naming a shape label the schema does not declare — and
+  `START` against a schema that declares no start shape — is now a hard refusal
+  (`ShexError::UnknownShape`; CLI exit **1**) instead of a `"status":"nonconformant"` result at
+  exit **0**.
+  Scripts that parsed the JSON result and ignored the exit code will now see a failure where they
+  previously saw a definite negative about the data; that is the point, since the old answer spent
+  the format's one word for a finding about the DATA on a mistake the data had no part in — a typo
+  in a shell's own argument read back as a validation verdict. Labels reachable through the import
+  closure count as declared. The refusal happens before selector expansion, so a selector matching
+  no node is refused identically to one matching many. The ShEx specification's ShapeMap status
+  vocabulary has no value meaning "not evaluated", so this was resolved on the project's
+  hard-fail doctrine rather than on anything the specification requires.
+- **BREAKING** **cli:** `--base` is now refused by name when NEITHER leg of the operation can
+  spend it, instead of being accepted and silently never read. A base is spent on parse (the
+  source syntax admits a relative reference) or on serialize (the target syntax can write a base
+  directive); `convert --from ntriples --to ntriples --base http://example.org/` satisfies
+  neither and previously exited 0 having done nothing and said nothing. It is now a usage error
+  (exit **2**) naming each leg and why it cannot take the value. A base ANY leg can spend is still
+  honoured, so `--base X --to ntriples` continues to resolve the input. The same refusal covers a
+  pack `--from`/`--to`, which carries no document base at all. Scripts passing `--base`
+  unconditionally across format pairs must drop it on the pairs that cannot use it.
+- **BREAKING** **rdf:** `GtsFoldView::new` and `GtsFoldView::with_config` now return
+  `Result<Self, RdfDiagnostic>` instead of `Self`. They refuse a graph whose term table lets a
+  term resolve through itself, with the code `gts-self-reaching-term`. The view's accessors —
+  `nq_token`, `public_value` and everything built on them — walk a quoted triple's resolved
+  components down to the leaves, so a self-reaching term recursed without bound and aborted the
+  process; the view now refuses to EXIST rather than hand back an object whose every renderer is
+  a process kill (the fold-time refusal GTS-SPEC §7.3 permits, applied once at construction
+  instead of as a guard inside every walk). A graph read off the wire cannot contain one — the
+  reader already refuses the row that would close the loop — so this reaches only callers who
+  assemble a term table themselves. Rust callers must handle or propagate the `Result`; `?` is
+  usually the whole change.
+- **BREAKING** **python:** `GtsFoldViewNative.from_bytes` and `GtsFoldViewNative.from_parts` now
+  raise `ValueError` carrying `gts-self-reaching-term`, for the reason above. `from_parts` is the
+  reachable one: it is handed a caller-assembled term table, which `from_bytes`' reader validates
+  on its own. Python callers constructing a fold view from parts must handle `ValueError`.
 - **BREAKING** **rdf:** The byte-reproducibility classifier for `CONSTRUCT` dataset-description
   views now refuses a custom aggregate call, a custom scalar-function call, or any `SERVICE`
   clause (including `SERVICE SILENT`), matching the registry-dependency doctrine the
