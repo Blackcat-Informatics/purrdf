@@ -64,8 +64,8 @@ use std::time::Duration;
 
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, SerializeGraph,
-    query_with_entailment_governed, serialize_dataset,
+    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan,
+    SerializeGraph, query_with_entailment_governed, serialize_dataset,
 };
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
@@ -1235,6 +1235,9 @@ impl QueryEngine {
                 aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
                 ..QueryOptions::EMPTY
             },
+            // This surface registers no relation at all, so there is none to re-derive over
+            // the closure — `NONE` is the accurate claim here, not a default.
+            &ClosureRelations::NONE,
             &governors,
         )
         .map_err(|error| JsError::new(&error.to_string()))?;

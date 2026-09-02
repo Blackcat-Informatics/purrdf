@@ -45,6 +45,7 @@ use crate::eval::{BgpOrderCache, EvalCtx};
 use crate::governor::ledger::PlanEstimate;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::statement_layer::{self, StatementProbe};
 use std::sync::Arc;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
@@ -1151,6 +1152,10 @@ fn bind_pos<D: DatasetView>(
 /// applies (`quads_for_pattern`), because — unlike `quads_for_pattern` — the virtual
 /// side-table walks are not pre-narrowed by the probe. A callback keeps this hot path
 /// lazy without boxing or allocating an intermediate candidate buffer.
+///
+/// The walk itself lives in [`crate::statement_layer`], shared with the path-witness
+/// snapshot; all this adds is the pattern-shaped decision about whether the reifier table
+/// can contribute at all.
 #[allow(clippy::too_many_arguments)]
 fn emit_virtual_candidates<D: DatasetView>(
     dataset: &D,
@@ -1160,7 +1165,7 @@ fn emit_virtual_candidates<D: DatasetView>(
     o: Option<D::Id>,
     reifies_id: Option<D::Id>,
     gm: GraphMatch<D::Id>,
-    mut emit: impl FnMut(QuadIds<D::Id>),
+    emit: impl FnMut(QuadIds<D::Id>),
 ) {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
     // be triple-term-shaped to be worth scanning — a quoted-triple pattern position
@@ -1168,67 +1173,23 @@ fn emit_virtual_candidates<D: DatasetView>(
     // free variable (`Pos::Slot`). A literal/IRI object constant can never be a triple
     // term, so the reifier scan is skipped. The residual `bind_row` enforces the exact
     // object match.
-    if let Some(reifies) = reifies_id {
-        let predicate_can_reify = match &cp.p {
-            Pos::Slot(_) => true,
-            Pos::Bound(id) => *id == reifies,
-            // A quoted triple is never a predicate position.
-            Pos::Triple(_) => false,
-        };
-        if predicate_can_reify && object_can_be_triple_term(&cp.o, dataset) {
-            // The residual filters the narrowed and the scanning path share verbatim:
-            // the graph scope plus the predicate/object id-equality the default scan
-            // (`quads_for_pattern`) applies.
-            let residual = move |q: &QuadIds<D::Id>| {
-                gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
-            };
-            match s {
-                // A reifier row's subject IS its reifier key, so a bound subject
-                // addresses that reifier's run directly instead of scanning the whole
-                // side table (`O(log n)` on a backend that keys its reifier table on the
-                // reifier; the trait default is the same filter this replaces).
-                Some(reifier) => {
-                    for quad in dataset.reifier_quads_of(reifier).filter(residual) {
-                        emit(quad);
-                    }
-                }
-                None => {
-                    for quad in dataset.reifier_quads().filter(residual) {
-                        emit(quad);
-                    }
-                }
-            }
-        }
-    }
-
-    // Annotation layer: index by the bound reifier subject when possible, else scan.
-    // Every candidate carries the annotation's own graph, filtered against the active
-    // graph scope (`gm`) so `GRAPH ?g` binds `?g` to the graph the annotation is in.
-    match s {
-        Some(reifier) => {
-            for quad in dataset
-                .annotations_of_with_graph(reifier)
-                .map(|(pred, obj, g)| QuadIds {
-                    s: reifier,
-                    p: pred,
-                    o: obj,
-                    g,
-                })
-                .filter(|q| {
-                    gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
-                })
-            {
-                emit(quad);
-            }
-        }
-        None => {
-            for quad in dataset.annotation_quads().filter(|q| {
-                gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
-            }) {
-                emit(quad);
-            }
-        }
-    }
+    let predicate_can_reify = reifies_id.is_some_and(|reifies| match &cp.p {
+        Pos::Slot(_) => true,
+        Pos::Bound(id) => *id == reifies,
+        // A quoted triple is never a predicate position.
+        Pos::Triple(_) => false,
+    });
+    statement_layer::visit_quads(
+        dataset,
+        StatementProbe {
+            s,
+            p,
+            o,
+            graph: gm,
+            scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
+        },
+        emit,
+    );
 }
 
 /// Whether an object position could resolve to a quoted-triple term (so the reifier

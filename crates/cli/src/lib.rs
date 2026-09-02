@@ -84,6 +84,7 @@ pub mod immutable;
 mod ingest;
 mod ledger;
 mod pack;
+mod path_relation;
 mod projection;
 mod query;
 mod reason;
@@ -204,6 +205,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             explain,
             aggregate_namespace,
             provenance_namespace,
+            path_relation,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -227,6 +229,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 provenance_namespace: provenance_namespace
                     .as_ref()
                     .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
+                path_relations: path_relation,
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
@@ -243,6 +246,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_scratch_bytes,
             max_remote_requests,
             aggregate_namespace,
+            path_relation,
             update,
         } => update::run(
             &update::UpdateOptions {
@@ -262,6 +266,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 },
                 jsonld_options: jsonld_options.as_ref(),
                 aggregate_namespace: aggregate_namespace.as_deref(),
+                path_relations: path_relation,
             },
             &ledger_target,
         ),
