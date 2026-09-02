@@ -194,10 +194,11 @@ triple pattern.
   model — `compact` (resource graph), `incidence` (exact statement/incidence
   graph) and `table` (statement rows). The layout is deterministic: ids are
   minted from statement keys, every ordering is a sort on them, cycle breaking
-  is fixed, and the versioned export JSON (`purrdf-viz-export-1`) is embedded
-  in the SVG's `<metadata>`, so the file is also a lossless machine-readable
-  export; `make check` re-renders the book's fifteen sample SVGs and fails on
-  any byte of drift. Where it stops: static SVG only, no interactive layout; a
+  is fixed, and the complete versioned export JSON (`purrdf-viz-export-1`)
+  the picture was drawn from is embedded in the SVG's `<metadata>`, so the
+  file is a machine-readable export of the statement model as well as a
+  drawing; `make check` re-renders the book's fifteen sample SVGs and fails
+  on any byte of drift. Where it stops: static SVG only, no interactive layout; a
   caller-set ceiling (`VizSpec::max_statements`, default 500, and
   `max_terms`, default 1,500) that refuses a larger input with
   `VizError::TooLarge` rather than truncating it; reachable from Rust and the
