@@ -352,6 +352,34 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **BREAKING** **sparql-eval:** Generalize the `SERVICE` seam into a per-service-context
+  `ServiceResolver`. The trait `RemoteQuerySource` is renamed `ServiceResolver` and its method
+  is renamed `resolve`, taking the whole request as one `ServiceRequest` value (endpoint,
+  forwarded query text, the `SILENT` flag, stop signal, intermediate-cell ceiling) instead of
+  four positional arguments; `LocalRemoteQuerySource` is renamed `InProcessServiceResolver` and
+  moves to the new `purrdf_sparql_eval::service` module (re-exported at the crate root).
+  Implementors must rename the trait and method and destructure `ServiceRequest`; callers must
+  rename the two types. `HttpRequest` gains a `headers` field carrying the per-service headers
+  and credential — a transport built with struct-literal syntax must add it, and a transport
+  that receives but ignores it will issue an *unauthenticated* request for a service configured
+  as credentialed, whose rejection `SERVICE SILENT` is entitled to swallow. `HttpTransport`
+  itself is unchanged, and a source with no catalog sends the same bytes it always did.
+- **sparql-eval:** Add per-service policy for `SERVICE` federation: a `ServiceCatalog` maps a
+  service IRI to a `ServiceProfile` carrying extra headers, a redacting `ServiceCredential`
+  (bearer / RFC 7617 basic / arbitrary header), timeout and User-Agent overrides, and an
+  explicit `ServiceCapabilities` grant set (`Query`, `Network`, `Credentials`). Context lives on
+  the resolver keyed by endpoint, never in the service IRI — which would put credentials into
+  the query text, plans, and receipts. Catalogs deny by default and are opt-in: a resolver with
+  no catalog behaves exactly as before, and gating a service adds no header its profile does not
+  carry. Withholding `Network` makes an in-process façade provable rather than promised —
+  `InProcessServiceResolver` holds a dataset map and no transport of any kind — and the new
+  `ServiceRouter` composes in-process and network resolvers with the routing table, not the
+  query text, deciding which answers what. The catalog is consulted on every resolution,
+  including one nested inside a forwarded body. The `SILENT` contract is now stated in full:
+  `SILENT` swallows an unreachable or undecodable endpoint to the join identity, and never
+  swallows a capability denial or a governor trip, both of which are decisions taken on this
+  side of the seam. There is deliberately no knob softening that — a host wanting a blocked
+  service to read as unreachable returns a transport error from its own resolver.
 - **xsd:** Implement the XPath Functions & Operators section 9 temporal operation table:
   timezone adjustment for `dateTime`/`date`/`time`, `yearMonthDuration`/`dayTimeDuration`
   arithmetic with month-end clamping, instant subtraction, and duration add/subtract/

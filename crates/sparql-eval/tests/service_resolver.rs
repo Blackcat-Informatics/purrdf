@@ -90,21 +90,31 @@ impl purrdf_sparql_eval::HttpTransport for &SpyTransport {
     }
 }
 
-/// Run `query` against [`local_dataset`] with `resolver` injected.
-fn run(
+/// Run `query` against [`local_dataset`] with `resolver` injected and `base_iri` in
+/// scope for relative IRI references.
+fn run_with_base(
     resolver: &(dyn ServiceResolver + Sync),
     query: &str,
+    base_iri: Option<&str>,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     NativeSparqlEngine::new().query_with_source(
         &local_dataset(),
         SparqlRequest {
             query,
-            base_iri: None,
+            base_iri,
             substitutions: &[],
         },
         resolver,
         QueryOptions::EMPTY,
     )
+}
+
+/// Run `query` against [`local_dataset`] with `resolver` injected and no base IRI.
+fn run(
+    resolver: &(dyn ServiceResolver + Sync),
+    query: &str,
+) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
+    run_with_base(resolver, query, None)
 }
 
 /// The solution rows of `result`.
@@ -439,6 +449,90 @@ fn a_catalogued_profile_that_adds_nothing_also_sends_nothing_extra() {
     ));
     run(&source, &service_query(NET_EP, false)).expect("the granted service resolves");
     assert!(spy.headers().is_empty(), "got {:?}", spy.headers());
+}
+
+// ── A service IRI is resolved by the workspace's one base layer ──────────────────
+
+/// A resolver that records every endpoint it is handed and resolves nothing.
+#[derive(Debug, Default)]
+struct EndpointSpy(Mutex<Vec<String>>);
+
+impl ServiceResolver for EndpointSpy {
+    fn resolve(
+        &self,
+        request: ServiceRequest<'_>,
+    ) -> Result<purrdf_sparql_eval::ResolvedBindings, RemoteError> {
+        self.0
+            .lock()
+            .expect("lock")
+            .push(request.endpoint.to_owned());
+        Err(RemoteError::Transport("observed".to_owned()))
+    }
+}
+
+impl EndpointSpy {
+    /// The endpoints this resolver has been handed, in order.
+    fn seen(&self) -> Vec<String> {
+        self.0.lock().expect("lock").clone()
+    }
+}
+
+#[test]
+fn a_relative_service_iri_is_refused_without_a_base_and_resolved_with_one() {
+    // A service IRI is an IRI like any other, so it goes through the workspace's single
+    // RFC 3986 resolution layer rather than through a rule this seam invented: a relative
+    // reference with no base in scope is the shared `iri-relative-no-base` hard error,
+    // raised while the query is parsed and therefore before any resolver is consulted.
+    // A resolver keys its per-service profile off `ServiceRequest::endpoint`, so a raw
+    // relative string arriving here would silently miss every catalog entry — a denial,
+    // or under a fallback an unintended grant, for a reason nothing in the catalog says.
+    let spy = EndpointSpy::default();
+    let query = "SELECT ?n WHERE { SERVICE <sparql> { ?x <https://example.org/vocab#name> ?n } }";
+    let err = run_with_base(&spy, query, None)
+        .expect_err("a relative service IRI with no base cannot be resolved");
+    // The engine's own parse code on the outside, the shared layer's `iri-relative-no-base`
+    // carried verbatim on the inside — the SERVICE seam contributes no rule of its own.
+    assert_eq!(err.code, "native-sparql-query-parse", "got {err:?}");
+    assert!(
+        err.message.contains("iri-relative-no-base"),
+        "the shared base layer raises this, not the SERVICE seam: {err:?}"
+    );
+    assert!(
+        spy.seen().is_empty(),
+        "the refusal precedes evaluation, so no resolver saw a relative endpoint: {:?}",
+        spy.seen()
+    );
+
+    // …and `SILENT` does not soften it. `SILENT` is a promise about an endpoint that does
+    // not answer, and an endpoint IRI that cannot be resolved is a malformed query rather
+    // than an endpoint that failed — swallowing it to the join identity would answer a
+    // query nobody wrote.
+    let silent =
+        "SELECT ?n WHERE { SERVICE SILENT <sparql> { ?x <https://example.org/vocab#name> ?n } }";
+    let err = run_with_base(&spy, silent, None)
+        .expect_err("SILENT does not make an unresolvable endpoint IRI resolvable");
+    assert!(err.message.contains("iri-relative-no-base"), "got {err:?}");
+    assert!(spy.seen().is_empty(), "got {:?}", spy.seen());
+
+    // The neighbouring VALID case: the identical query with a base in scope resolves, and
+    // the resolver is handed the ABSOLUTE endpoint — the form a catalog is keyed on.
+    run_with_base(&spy, query, Some("https://example.org/remote/"))
+        .expect_err("the spy resolves nothing, but the endpoint reached it");
+    assert_eq!(
+        spy.seen(),
+        vec!["https://example.org/remote/sparql".to_owned()],
+        "the seam receives the resolved absolute IRI, never the relative reference"
+    );
+
+    // And an in-query `BASE` works the same way, through the same layer.
+    let spy = EndpointSpy::default();
+    run_with_base(
+        &spy,
+        &format!("BASE <https://example.org/remote/> {query}"),
+        None,
+    )
+    .expect_err("the spy resolves nothing, but the endpoint reached it");
+    assert_eq!(spy.seen(), vec![NET_EP.to_owned()]);
 }
 
 #[test]

@@ -86,7 +86,9 @@ Anything outside this surface — and every malformed query — is a typed
   **host-injectable `ServiceResolver`**: the engine itself performs no I/O, so
   federation stays wasm-portable and the host decides how (and whether)
   remote endpoints are reached — down to per-service headers, credentials and
-  capabilities (see [below](#per-service-context-the-serviceresolver-seam)). All seven W3C `service` federation cases pass
+  capabilities (see
+  [below](#per-service-context-the-serviceresolver-seam)). All seven W3C
+  `service` federation cases pass
   through this seam. The forwarded body is re-emitted through the
   deterministic serializer — the federation wire format — whose
   parse → serialize → re-parse fidelity is swept over the 823-item corpus
@@ -517,6 +519,15 @@ forwarded body cannot reach an endpoint the catalog refuses at the top level.
 The policy is applied *before* the transport is called, which is the whole
 difference between a gate and an audit log: a denied service never has its
 socket opened and then discarded.
+
+A service IRI is an IRI like any other, so it is resolved by the workspace's
+single RFC 3986 base layer (see [Base IRIs](../concepts/base-iris.md)) and not by
+a rule this seam invented. `SERVICE <sparql>` with no `BASE` in the prologue and
+no base passed to the API is the shared `iri-relative-no-base` hard error, raised
+while the query is parsed — before any resolver is consulted, and not softened by
+`SILENT`, which is a promise about an endpoint that does not answer rather than
+about an endpoint IRI that cannot be formed. With a base in scope the resolver is
+handed the **absolute** IRI, which is the form a `ServiceCatalog` is keyed on.
 
 ### The `SILENT` contract
 
