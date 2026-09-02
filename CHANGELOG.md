@@ -730,6 +730,42 @@ called out below with what a consumer must do.
 
 ### Performance
 
+- **core:** The interner no longer mints a `String` for the datatype IRI of every untyped or
+  language-tagged literal; `rdf:reifies` is interned once per builder rather than by string on
+  every reifier push. RDFC-1.0 canonicalization renders blank labels and predicate IRIs by
+  borrow inside the n-degree search, and issues ids with one tree descent instead of three.
+  `MutableDataset::freeze` memoizes each base term's builder id (dense table, one slot per
+  base id) instead of rebuilding an owned value for every one of a quad's four term
+  occurrences; `quads_for_pattern` on the mutable view no longer materializes a base-sized key
+  vector. No output, ordering or hashing changes.
+- **iri, xsd:** RFC 3986 dot-segment removal walks a borrowed cursor (zero allocations per
+  resolve, was O(segments) buffer rewrites); `XsdDatatype::from_iri` compares the namespace once;
+  the `whiteSpace` facets copy clean runs in bulk; `Decimal::canonical_lexical` builds its
+  output in one buffer. Each rewrite is pinned byte-for-byte against its previous
+  implementation by a test.
+- **sparql-eval:** `OPTIONAL { … FILTER }` is hash-indexed like the unfiltered join whenever the
+  right side is fully bound on the shared columns (the same candidate rows in the same order,
+  so results, padding and governor charges are unchanged); a `MINUS` whose arms share no
+  variable returns the left bag by move instead of scanning every pair; `EXISTS` no longer
+  rebuilds a bound-variable set per outer row; `LANGMATCHES` compares bytes without lowercasing
+  three strings per row; `^path` shares its inner memo instead of deep-cloning the reach set;
+  `CONSTRUCT` reuses its per-row blank-label map.
+- **sparql-algebra:** The GROUP BY / HAVING / ORDER BY continuation checks and language-direction
+  split no longer allocate a case-folded copy per token; ASCII lookaheads in the lexer compare
+  bytes instead of decoding a `char`.
+- **shapes:** `sh:nodeKind`, `sh:minLength`, `sh:maxLength` and `sh:languageIn` read the value
+  node's kind, length and language from the dataset arena and materialize an owned term only
+  for a violation; `sh:closed` probes borrowed predicate names.
+- **rdf:** Quoted-triple terms resolve their reifier binding through a one-per-document index
+  (the table scan made star-heavy documents quadratic in their statement layer, including inside
+  the canonical sort's comparators); the serializer memoizes term ids so a repeated predicate
+  never rebuilds its value; the RDF/XML and TriX escapers make a single pass and borrow
+  untriggered input; JSON-LD expansion borrows the parent context when an object declares no
+  `@context`. Every emitted byte is unchanged.
+- **gts, sparql-results:** The canonical GTS writer caches its CBOR sort keys once per row
+  instead of re-encoding per comparison and computes the MMR root from peaks alone (no boxed
+  tree); the SRJ/SRX escapers and the SRJ string reader copy plain runs in bulk. Frozen vectors
+  are byte-identical.
 - **sparql-algebra:** Parsing no longer re-walks the whole accumulated pattern for every
   `BIND`/`SELECT *`/`LATERAL` scope check. The group-pattern loop maintains its in-scope variable
   set incrementally (an ordered set, not a hash, to stay a zero-dependency wasm-clean leaf),
