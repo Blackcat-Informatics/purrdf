@@ -316,6 +316,25 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             fmt_expr(s, expression);
             let _ = write!(s, " AS {})", VarRef(variable));
         }
+        // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`.
+        // Renders exactly like `BIND` — the inner pattern inline, then the
+        // clause — because the parser reads it the same way: as one more
+        // element of the running group, stacked above everything before it.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            fmt_group_body(s, inner);
+            s.push_str(" UNFOLD(");
+            fmt_expr(s, expression);
+            let _ = write!(s, " AS {}", VarRef(element));
+            if let Some(companion) = companion {
+                let _ = write!(s, ", {}", VarRef(companion));
+            }
+            s.push(')');
+        }
         GraphPattern::Minus { left, right } => {
             fmt_flattened_left(s, left);
             s.push_str(" MINUS { ");
@@ -408,6 +427,7 @@ fn contains_property_function(p: &GraphPattern) -> bool {
         | GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
@@ -521,7 +541,11 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
         | GraphPattern::Lateral { .. }
         | GraphPattern::Minus { .. }
         | GraphPattern::Filter { .. }
-        | GraphPattern::Extend { .. } => true,
+        | GraphPattern::Extend { .. }
+        // `Unfold` renders its own `inner` inline before the `UNFOLD(…)`
+        // clause, exactly as `Extend` renders its own before `BIND(…)`, so it
+        // carries the identical right-operand splice hazard.
+        | GraphPattern::Unfold { .. } => true,
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::Join { .. }
@@ -584,7 +608,12 @@ fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
         GraphPattern::LeftJoin { .. }
         | GraphPattern::Minus { .. }
         | GraphPattern::Filter { .. }
-        | GraphPattern::Extend { .. } => true,
+        | GraphPattern::Extend { .. }
+        // Same reason as `Extend`: an `Unfold` LEFT operand renders its own
+        // inner pattern inline first, so flattening it unbraced would splice
+        // that pattern — and the `UNFOLD` clause's own scope — onto the OUTER
+        // node's group.
+        | GraphPattern::Unfold { .. } => true,
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::Join { .. }
@@ -1206,13 +1235,20 @@ fn fmt_expr_list_agg(s: &mut String, list: &[Expression], group: Option<GroupSpe
 fn fmt_function_name(s: &mut String, f: &Function) {
     match function_keyword(f) {
         Some(name) => s.push_str(name),
-        // A PurRDF extension call and a host `Function::Custom` are both spelled
-        // by their ORIGINAL IRI (recorded in the AST node), never by a keyword.
-        // PurRDF mints no vocabulary of its own, so no namespace is ever
-        // fabricated on output; re-parsing with the same `ParserOptions`
-        // re-dispatches to the same function.
+        // A PurRDF extension call, a SEP-0009 composite-datatype call and a host
+        // `Function::Custom` are all spelled by their ORIGINAL IRI (recorded in
+        // the AST node), never by a keyword. PurRDF mints no vocabulary of its
+        // own, so no namespace is ever fabricated on output; re-parsing with the
+        // same `ParserOptions` re-dispatches to the same function.
         None => match f {
             Function::Purrdf(call) => {
+                let _ = write!(s, "<{}>", call.iri);
+            }
+            // SEP-0009 fixes the IRI, so this is also `call.fn_kind.iri()` —
+            // writing the recorded string rather than re-deriving it keeps the
+            // "emit exactly what was read" rule uniform across every IRI-named
+            // function seam.
+            Function::Cdt(call) => {
                 let _ = write!(s, "<{}>", call.iri);
             }
             Function::Custom(n) => {
@@ -1225,7 +1261,8 @@ fn fmt_function_name(s: &mut String, f: &Function) {
 }
 
 /// The canonical SPARQL grammar keyword for a built-in function, or `None` for
-/// the two IRI-spelled variants ([`Function::Purrdf`], [`Function::Custom`]).
+/// the three IRI-spelled variants ([`Function::Purrdf`], [`Function::Cdt`],
+/// [`Function::Custom`]).
 ///
 /// The single source of truth for a built-in's spelling: the serializer above
 /// emits it, and `crate::parser::builtin_function_keyword` answers a
@@ -1295,7 +1332,7 @@ pub(crate) fn function_keyword(f: &Function) -> Option<&'static str> {
         Function::StrLangDir => "STRLANGDIR",
         Function::HasLang => "hasLANG",
         Function::HasLangDir => "hasLANGDIR",
-        Function::Purrdf(_) | Function::Custom(_) => return None,
+        Function::Purrdf(_) | Function::Cdt(_) | Function::Custom(_) => return None,
     })
 }
 
@@ -1324,6 +1361,7 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         AggregateFunction::Max => "MAX",
         AggregateFunction::Sample => "SAMPLE",
         AggregateFunction::GroupConcat => "GROUP_CONCAT",
+        AggregateFunction::Fold => "FOLD",
         AggregateFunction::Custom(n) => {
             // `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` — the
             // custom-aggregate surface (see `AggregateFunction::Custom`'s
@@ -1364,6 +1402,30 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         s.push_str("; SEPARATOR=\"");
         push_escaped(s, sep);
         s.push('"');
+    }
+    // `FOLD`'s own sort keys — the ONE aggregate that has any
+    // (`AggregateExpression::new` refuses them anywhere else, which is what
+    // keeps this tail from ever emitting `SUM(?v ORDER BY ?k)`). They follow
+    // the LAST exprlist entry with NO separating comma, since a comma there
+    // would name a third argument on re-parse. Every condition is written in
+    // its explicit `ASC(…)`/`DESC(…)` form: `FOLD(?v ORDER BY ?a ?b)`'s two
+    // bare keys must not run together into one expression when re-read.
+    if !agg.order_by.is_empty() {
+        s.push_str(" ORDER BY");
+        for oe in &agg.order_by {
+            match oe {
+                OrderExpression::Asc(e) => {
+                    s.push_str(" ASC(");
+                    fmt_expr(s, e);
+                    s.push(')');
+                }
+                OrderExpression::Desc(e) => {
+                    s.push_str(" DESC(");
+                    fmt_expr(s, e);
+                    s.push(')');
+                }
+            }
+        }
     }
     s.push(')');
 }
@@ -1803,6 +1865,7 @@ mod tests {
             AggregateFunction::GroupConcat,
             vec![Expression::Variable(Variable::new("x"))],
             vec![("separator".to_owned(), Literal::new_simple("|"))],
+            Vec::new(),
             false,
         )
         .unwrap();
@@ -1813,8 +1876,14 @@ mod tests {
 
     #[test]
     fn aggregate_renders_count_star() {
-        let agg = AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), true)
-            .unwrap();
+        let agg = AggregateExpression::new(
+            AggregateFunction::Count,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .unwrap();
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "COUNT(DISTINCT *)");
@@ -1828,6 +1897,7 @@ mod tests {
                 Expression::Variable(Variable::new("a")),
                 Expression::Variable(Variable::new("b")),
             ],
+            Vec::new(),
             Vec::new(),
             true,
         )
@@ -1851,6 +1921,7 @@ mod tests {
                     ),
                 ),
             )],
+            Vec::new(),
             false,
         )
         .unwrap();
@@ -1876,13 +1947,25 @@ mod tests {
             AggregateFunction::GroupConcat,
             AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
         ] {
-            let err = AggregateExpression::new(function.clone(), Vec::new(), Vec::new(), false)
-                .unwrap_err();
+            let err = AggregateExpression::new(
+                function.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .unwrap_err();
             assert_eq!(err.function(), &function);
         }
         assert!(
-            AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                .is_ok()
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .is_ok()
         );
     }
 
@@ -1906,6 +1989,7 @@ mod tests {
                 function.clone(),
                 vec![Expression::Variable(Variable::new("v"))],
                 bogus_separator.clone(),
+                Vec::new(),
                 false,
             )
             .unwrap_err();
@@ -1922,6 +2006,7 @@ mod tests {
             AggregateFunction::Count,
             vec![Expression::Variable(Variable::new("v"))],
             bogus_separator,
+            Vec::new(),
             false,
         )
         .unwrap_err();
@@ -1938,6 +2023,7 @@ mod tests {
                 AggregateFunction::GroupConcat,
                 vec![Expression::Variable(Variable::new("v"))],
                 vec![("separator".to_owned(), Literal::new_simple("|"))],
+                Vec::new(),
                 false,
             )
             .is_ok()
@@ -1954,6 +2040,7 @@ mod tests {
                 AggregateFunction::Custom(crate::ast::NamedNode::new_unchecked("http://ex/myAgg")),
                 vec![Expression::Variable(Variable::new("v"))],
                 vec![("ANYTHING_AT_ALL".to_owned(), Literal::new_simple("x"))],
+                Vec::new(),
                 false,
             )
             .is_ok()
@@ -2293,6 +2380,17 @@ mod tests {
                 inner: Box::new(normalize(inner)),
                 variable: variable.clone(),
                 expression: expression.clone(),
+            },
+            GraphPattern::Unfold {
+                inner,
+                expression,
+                element,
+                companion,
+            } => GraphPattern::Unfold {
+                inner: Box::new(normalize(inner)),
+                expression: expression.clone(),
+                element: element.clone(),
+                companion: companion.clone(),
             },
             GraphPattern::Minus { left, right } => GraphPattern::Minus {
                 left: Box::new(normalize(left)),

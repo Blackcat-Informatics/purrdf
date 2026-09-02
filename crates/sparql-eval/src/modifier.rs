@@ -86,11 +86,11 @@
 //!
 //! Both are defined via the SPARQL `ORDER BY` total order (§15.1): `Min(S)` is
 //! the first element of `Flatten(S)` ordered `ASC`; `Max(S)` is the first
-//! element ordered `DESC`. This crate's [`fold_extreme`] mirrors that order
-//! exactly — the same `term_value_order`/[`compare_sort_keys`] total order
-//! `ORDER BY` itself uses (unbound < blank < IRI < literal < triple; literals
-//! compared in value space where comparable, else a deterministic lexical
-//! fallback) — so a tie (two terms neither strictly less-than the other under
+//! element ordered `DESC`. This crate's [`fold_extreme`] runs the SAME
+//! [`project`]/[`total_order`] relation `ORDER BY` itself runs (unbound < blank
+//! < IRI < literal < triple; literals by comparability class, then value space,
+//! then a deterministic syntactic fallback) — so a tie (neither strictly
+//! less-than the other under
 //! that order) keeps the EARLIER occurrence, exactly as `MinList`/`MaxList`'s
 //! "first element of the ordered list" reading demands when the ordering does
 //! not distinguish them. An empty group's spec answer is `error`
@@ -108,7 +108,7 @@ use purrdf_sparql_algebra::{
     OrderExpression, Variable,
 };
 use purrdf_xsd::{
-    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_cmp,
+    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -296,22 +296,27 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     };
     let schema = seq.schema.clone();
 
-    // Precompute each row's typed sort keys — including the one-time XSD parse
-    // that `term_value_order` would otherwise re-run inside the O(n log n)
-    // comparator — so the sort comparator is a cheap pure function (no `ctx`
-    // borrow, no re-parsing during the sort).
-    let mut keyed: Vec<(Vec<SortKey>, Solution<D::Id>)> = Vec::with_capacity(seq.rows.len());
-    for row in seq.rows {
-        let mut keys = Vec::with_capacity(exprs.len());
+    // Evaluate every row's sort values first, then [`project`] each ONCE: the XSD
+    // parse the ordering needs is paid per row instead of re-run inside the
+    // O(n log n) comparator. Row `i`'s keys are `keys[i * width..][..width]`, and
+    // sorting the PERMUTATION leaves them where their borrows point.
+    let width = exprs.len();
+    let mut values: Vec<Option<TermValue>> = Vec::with_capacity(seq.rows.len() * width);
+    for row in &seq.rows {
         for oe in exprs {
-            let term = eval_expr(order_expr(oe), &row, &schema, ctx)?;
-            keys.push(sort_key(term.map(|t| ctx.scratch.value_of(ctx.dataset, t))));
+            let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
+            let term = eval_expr(e, row, &schema, ctx)?;
+            values.push(term.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
         }
-        keyed.push((keys, row));
     }
-
-    keyed.sort_by(|(ka, _), (kb, _)| compare_keys(ka, kb, exprs));
-    let rows = keyed.into_iter().map(|(_, row)| row).collect();
+    let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+    let mut order: Vec<usize> = (0..seq.rows.len()).collect();
+    order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], exprs));
+    let mut source = seq.rows;
+    let rows = order
+        .into_iter()
+        .map(|i| std::mem::take(&mut source[i]))
+        .collect();
     // An `EXISTS` inside a sort key is an opaque edge; see `eval_left_join`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
@@ -321,6 +326,31 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
         )));
     }
     Ok(lift.finish(SolutionSeq { schema, rows }))
+}
+
+/// The expression a sort key sorts by, with its `ASC`/`DESC` direction set
+/// aside — the read half of the `(direction, expression)` pair
+/// [`OrderExpression`] is.
+///
+/// Every walk that treats a sort key as an ordinary expression (variable
+/// collection, substitution, prepare-time planning) wants exactly this and
+/// nothing else, and re-spelling the irrefutable
+/// `let (Asc(e) | Desc(e)) = oe;` binding at each of them is how one of them
+/// eventually diverges from the rest.
+pub(crate) const fn order_sort_key(order: &OrderExpression) -> &Expression {
+    match order {
+        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
+    }
+}
+
+/// [`order_sort_key`]'s write half: put a rewritten expression back under
+/// `order`'s ORIGINAL direction. Pairing the two is what keeps a rewrite from
+/// silently turning a `DESC` key into an `ASC` one.
+pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderExpression {
+    match order {
+        OrderExpression::Asc(_) => OrderExpression::Asc(expr),
+        OrderExpression::Desc(_) => OrderExpression::Desc(expr),
+    }
 }
 
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
@@ -476,21 +506,15 @@ fn eval_graph_var<D: DatasetView + Sync>(
 // ordering
 // ---------------------------------------------------------------------------
 
-fn order_expr(oe: &OrderExpression) -> &Expression {
-    match oe {
-        OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
-    }
-}
-
-fn is_descending(oe: &OrderExpression) -> bool {
-    matches!(oe, OrderExpression::Desc(_))
-}
-
-/// Compare two rows' precomputed sort keys, applying each key's `ASC`/`DESC`.
-fn compare_keys(a: &[SortKey], b: &[SortKey], exprs: &[OrderExpression]) -> Ordering {
-    for (i, oe) in exprs.iter().enumerate() {
-        let mut ord = compare_sort_keys(&a[i], &b[i]);
-        if is_descending(oe) {
+/// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
+pub(crate) fn compare_keys(
+    a: &[SortKey<'_>],
+    b: &[SortKey<'_>],
+    exprs: &[OrderExpression],
+) -> Ordering {
+    for ((ka, kb), oe) in a.iter().zip(b).zip(exprs) {
+        let mut ord = total_order(ka, kb);
+        if matches!(oe, OrderExpression::Desc(_)) {
             ord = ord.reverse();
         }
         if ord != Ordering::Equal {
@@ -500,47 +524,207 @@ fn compare_keys(a: &[SortKey], b: &[SortKey], exprs: &[OrderExpression]) -> Orde
     Ordering::Equal
 }
 
-/// A per-row precomputed ORDER BY sort key. The XSD parse (`parse_by_iri`) that
-/// the SPARQL ordering would otherwise re-run for every literal comparison is
-/// hoisted to key-build time; [`compare_sort_keys`] then mirrors the
-/// unbound-first / kind-rank / value-space-with-deterministic-fallback semantics
-/// of `sparql_order`/[`term_value_order`] EXACTLY.
-enum SortKey {
-    /// Unbound sorts before any bound term.
-    Unbound,
-    /// Blank node, ordered by `(scope ordinal, label)` — kind rank 0.
-    Blank(u32, String),
-    /// IRI, ordered by its string — kind rank 1.
-    Iri(String),
-    /// Literal — kind rank 2. `xsd` is the one-time parse for the value-space
-    /// compare; the remaining fields are the deterministic `(datatype, language,
-    /// lexical)` fallback tuple (`direction` is ignored, as in `literal_order`).
-    Literal {
-        xsd: Option<XsdValue>,
-        datatype: String,
-        language: Option<String>,
-        lexical: String,
-    },
-    /// Triple term — kind rank 3 (rare). Its `(s, p, o)` components are themselves
-    /// precomputed sort keys, so the literal XSD parse of a nested component is paid
-    /// once at build time (not re-run per comparison, as `term_value_order` would);
-    /// [`compare_sort_keys`] recurses over them componentwise.
-    Triple(Box<[Self; 3]>),
+/// A literal's value-space **comparability class** — the coarsest partition under
+/// which [`value_total_cmp`] is total throughout a block or undefined throughout it.
+///
+/// The obvious reading of §15.1 — "by value, else by a deterministic syntactic
+/// key" — is NOT a total order; it cycles. `"9"^^xsd:double` <
+/// `"P1D"^^xsd:duration` (no value order, so `double` < `duration`) <
+/// `"8"^^xsd:float` (again none) < `"9"^^xsd:double` (a value order: 8 < 9), and
+/// Rust's sorts may panic on a comparator like that. Ranking the class BEFORE
+/// the value breaks every such cycle, because the syntactic fallback then runs
+/// only between two literals of ONE class.
+///
+/// `Opaque` (an unsupported datatype, `rdf:langString` included, or a lexical
+/// form its own datatype rejects), `NotANumber`, and `Duration` (the general
+/// `xsd:duration` is only partially ordered on `(months, seconds)`; XPath F&O
+/// gives `lt`/`gt` to the two SUBTYPES and to nothing else) carry no value order
+/// at all. The rest are total inside themselves, which is why the partition is
+/// finer than the XSD value spaces: `Temporal` is one block per temporal datatype
+/// IRI, split again on whether the lexical carries a timezone (a timezoned and an
+/// untimezoned instant are indeterminate within fourteen hours), and `Binary`
+/// separates the two byte-sequence value spaces.
+///
+/// # Why `Numeric` is one block, and why it needs an EXACT comparison to be one
+///
+/// Splitting the class was never enough for the numbers, because the cycle there
+/// is INSIDE one class. SPARQL §17.3 maps a cross-type numeric comparison onto the
+/// promotion lattice `integer ⊂ decimal ⊂ float ⊂ double`, which compares an
+/// integer against a decimal exactly but routes anything touching a float or a
+/// double through IEEE. Mixing an exact sub-relation with a lossy one is not
+/// transitive: `"1.000000000000000001"^^xsd:decimal` is exactly greater than
+/// `"1"^^xsd:integer`, yet promotion rounds it to `1.0` and calls it equal to
+/// `"1.0E0"^^xsd:double`, which the integer also equals. Three ordinary literals,
+/// one cycle, and a query supplies them.
+///
+/// The fix is not another class — a class rank would have to separate values that
+/// genuinely compare — but an exact comparison, which is what
+/// [`value_total_cmp`] gives this block: every member of the numeric tower except
+/// `NaN` (split out as [`ValueClass::NotANumber`]) is exactly a rational, the
+/// infinities included as its two ends, and comparing those rationals exactly is
+/// transitive by construction. That deliberately DIVERGES from the promotion-based
+/// `<` this crate's `FILTER` still evaluates, in exactly the pairs where the
+/// promoted relation is intransitive and therefore had no admissible sort order to
+/// preserve; see `purrdf_xsd::numeric_total_cmp` for the full argument.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ValueClass {
+    Opaque,
+    Boolean,
+    Numeric,
+    NotANumber,
+    Text,
+    Temporal(&'static str, bool),
+    YearMonthDuration,
+    DayTimeDuration,
+    Duration,
+    Binary(&'static str),
 }
 
-/// The kind rank of a bound sort key: blank < IRI < literal < triple
-/// (mirrors `kind_rank`; `Unbound` is handled before ranks are consulted).
-fn sort_key_rank(k: &SortKey) -> u8 {
-    match k {
-        SortKey::Unbound | SortKey::Blank(..) => 0,
-        SortKey::Iri(_) => 1,
-        SortKey::Literal { .. } => 2,
-        SortKey::Triple(_) => 3,
+impl ValueClass {
+    /// Classify a literal from its parsed value (`None` when its datatype models
+    /// no value space, or its lexical does not parse), answering the class with
+    /// the value it orders BY — `None` for the three value-less blocks, which
+    /// therefore never reach [`value_total_cmp`].
+    fn of(parsed: Option<XsdValue>, lexical: &str) -> (Self, Option<XsdValue>) {
+        let Some(value) = parsed else {
+            return (Self::Opaque, None);
+        };
+        // A timezone is a trailing `Z` or the six-byte `(+|-)hh:mm` offset, whose
+        // `':'` three from the end tells it from an untimezoned `2000-01-01`.
+        let b = lexical.as_bytes();
+        let zoned = b.last() == Some(&b'Z')
+            || (b.len() >= 6 && matches!(b[b.len() - 6], b'+' | b'-') && b[b.len() - 3] == b':');
+        let class = match &value {
+            XsdValue::Boolean(_) => Self::Boolean,
+            XsdValue::Float(f) if f.is_nan() => Self::NotANumber,
+            XsdValue::Double(d) if d.is_nan() => Self::NotANumber,
+            XsdValue::Integer { .. }
+            | XsdValue::Decimal(_)
+            | XsdValue::Float(_)
+            | XsdValue::Double(_) => Self::Numeric,
+            XsdValue::String(_) => Self::Text,
+            XsdValue::DateTime(_)
+            | XsdValue::Date(_)
+            | XsdValue::Time(_)
+            | XsdValue::Gregorian(_) => Self::Temporal(value.datatype().iri(), zoned),
+            XsdValue::Duration(_) => match value.datatype() {
+                XsdDatatype::YearMonthDuration => Self::YearMonthDuration,
+                XsdDatatype::DayTimeDuration => Self::DayTimeDuration,
+                _ => Self::Duration,
+            },
+            XsdValue::Binary { datatype, .. } => Self::Binary(datatype.iri()),
+            // `XsdValue` is `#[non_exhaustive]`: an undecided value space is
+            // opaque, never guessed at.
+            _ => Self::Opaque,
+        };
+        let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
+        (class, ordered.then_some(value))
+    }
+
+    /// The class of a value held OUTSIDE a term, where there is no lexical form
+    /// to read a timezone off.
+    ///
+    /// `MEDIAN`/`PERCENTILE` hold a `Vec<XsdValue>`, not terms, and their sort
+    /// needs the SAME block ranking `ORDER BY` uses or it inherits the very
+    /// cycles this partition exists to break: within one numeric series a `NaN`
+    /// compares to nothing, and within one duration series a `yearMonthDuration`
+    /// compares to no `dayTimeDuration` — either way an incomparable pair read as
+    /// "equal" sits between two values that are not equal, and Rust's sorts may
+    /// panic on that. Ranking the block first breaks both.
+    ///
+    /// The temporal blocks split on whether the lexical carries a timezone, which
+    /// is unknowable from a bare value, so a temporal value answers [`Self::Opaque`]
+    /// here. That is the fail-CLOSED answer, not a wrong one: `Opaque` is a
+    /// value-less block whose members tie, so it can introduce no cycle. It is
+    /// also unreachable today — both callers gate their input through
+    /// `is_numeric_or_duration_xsd` — and exists so a future caller gets a tie
+    /// rather than a silently-merged pair of indeterminate instants.
+    pub(crate) fn of_value(value: &XsdValue) -> Self {
+        if matches!(
+            value,
+            XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_)
+        ) {
+            return Self::Opaque;
+        }
+        Self::of(Some(value.clone()), "").0
     }
 }
 
-/// Build the typed sort key for one (possibly unbound) ORDER BY value.
-fn sort_key(value: Option<TermValue>) -> SortKey {
+/// The literal arm of [`SortKey`]: its comparability class, the value that class
+/// orders by, and the `(datatype, language, lexical)` tiebreak the value-less
+/// classes and the value-space ties fall back on (a base direction plays no part,
+/// matching §15.1's silence about it).
+pub(crate) struct LiteralKey<'a> {
+    class: ValueClass,
+    value: Option<XsdValue>,
+    datatype: &'a str,
+    language: Option<&'a str>,
+    lexical: &'a str,
+}
+
+/// One term's position in the SPARQL ordering (§15.1) — the crate's ONE
+/// projection of that relation, paired with the one [`total_order`] over it and
+/// shared by `ORDER BY`, `MIN`/`MAX` and the statistical aggregates. A key borrows
+/// from the [`TermValue`] it came from, so [`project`] allocates nothing but the
+/// box a nested triple term needs and the parsed contents a composite literal
+/// carries, and the per-literal XSD parse is paid once per term instead of on
+/// every comparison inside an `O(n log n)` sort.
+///
+/// # Adding a term category
+///
+/// A new recursive category is one variant here plus one arm each in [`project`],
+/// [`SortKey::rank`] and [`total_order`]; its members recurse back through
+/// `total_order`, exactly as [`SortKey::Triple`] does, so the category inherits the
+/// whole relation instead of restating any of it. [`SortKey::Composite`] is the
+/// worked example.
+pub(crate) enum SortKey<'a> {
+    /// Unbound — sorts before every bound term.
+    Unbound,
+    /// Blank node, by `(scope ordinal, label)`.
+    Blank(u32, &'a str),
+    /// IRI, by its string.
+    Iri(&'a str),
+    /// Literal — see [`LiteralKey`].
+    Literal(LiteralKey<'a>),
+    /// A SEP-0009 composite literal (`cdt:List` / `cdt:Map`) whose lexical form
+    /// parses, ordered by the value it denotes rather than by that lexical form.
+    ///
+    /// # Where composites sit relative to the other kinds, and why that is a choice
+    ///
+    /// §15.1 does not mention composite datatypes, and neither does SEP-0009's own
+    /// `ORDER BY` corpus: every one of its cases sorts a column of composites
+    /// against other composites, so nothing there pins where a `cdt:List` sits
+    /// relative to an unbound, a blank node, an IRI or a plain literal. This crate
+    /// pins it HERE, by declaration order: after [`SortKey::Literal`] and before
+    /// [`SortKey::Triple`]. A composite literal IS an RDF literal, so it belongs on
+    /// the literal side of §15.1's kind order rather than below the IRIs; and it is
+    /// a container of terms, like a triple term, so it belongs beside the other
+    /// container rather than interleaved with the scalars. A composite whose
+    /// lexical form does NOT parse never reaches this variant at all — it is an
+    /// ordinary [`ValueClass::Opaque`] literal, sorted by its lexical form, one
+    /// rank below every composite that does parse.
+    Composite(purrdf_cdt::CdtValue),
+    /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
+    Triple(Box<[Self; 3]>),
+}
+
+impl SortKey<'_> {
+    /// §15.1's kind order, extended with the composite and triple terms it does not
+    /// mention. The ranks are declaration order and nothing else reads them.
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::Unbound => 0,
+            Self::Blank(..) => 1,
+            Self::Iri(_) => 2,
+            Self::Literal(_) => 3,
+            Self::Composite(_) => 4,
+            Self::Triple(_) => 5,
+        }
+    }
+}
+
+/// Project one (possibly unbound) term onto its sort key.
+pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
     match value {
         None => SortKey::Unbound,
         Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
@@ -550,66 +734,75 @@ fn sort_key(value: Option<TermValue>) -> SortKey {
             datatype,
             language,
             ..
-        }) => SortKey::Literal {
-            xsd: parse_by_iri(&lexical_form, &datatype).ok().flatten(),
-            datatype,
-            language,
-            lexical: lexical_form,
-        },
-        Some(TermValue::Triple { s, p, o }) => SortKey::Triple(Box::new([
-            sort_key(Some(*s)),
-            sort_key(Some(*p)),
-            sort_key(Some(*o)),
-        ])),
+        }) => {
+            // The composite datatypes are decided by their datatype IRI FIRST, so a
+            // `cdt:List` never pays the XSD parse and an `xsd:string` never pays the
+            // composite scan. A composite whose lexical form does not parse falls
+            // through to the ordinary literal path and lands in
+            // `ValueClass::Opaque`, which is the honest place for a literal that
+            // denotes nothing — `ORDER BY` must still be total over it.
+            if matches!(
+                datatype.as_str(),
+                purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP
+            ) && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
+            {
+                return SortKey::Composite(composite);
+            }
+            let parsed = parse_by_iri(lexical_form, datatype).ok().flatten();
+            let (class, value) = ValueClass::of(parsed, lexical_form);
+            SortKey::Literal(LiteralKey {
+                class,
+                value,
+                datatype,
+                language: language.as_deref(),
+                lexical: lexical_form,
+            })
+        }
+        Some(TermValue::Triple { s, p, o }) => {
+            SortKey::Triple(Box::new([s, p, o].map(|t| project(Some(&**t)))))
+        }
     }
 }
 
-/// SPARQL ORDER BY total order over precomputed keys: unbound sorts before any
-/// bound term; otherwise by term kind (blank < IRI < literal < triple) and then
-/// within the kind — identical ordering to `sparql_order` over the raw values,
-/// with the literal XSD parse already paid at key-build time.
-fn compare_sort_keys(a: &SortKey, b: &SortKey) -> Ordering {
+/// The SPARQL ordering relation over two projections, and a genuine total order:
+/// by term kind, then — within the literals — by comparability class, value space,
+/// and the syntactic tiebreak. A value comparison and a syntactic one never mix
+/// inside a class, which is what keeps it transitive (see [`ValueClass`]).
+/// `Unbound` needs no arm: it ranks below every bound key, two of them as equals.
+///
+/// # Composites use the CDT crate's SYNTACTIC order, deliberately
+///
+/// [`purrdf_cdt::total_value_cmp`] is that crate's exported total order, and it is
+/// the one a sort may use. SEP-0009's own value relations
+/// (`purrdf_cdt::value_less_than` and friends) are partial and RAISE on a pair they
+/// cannot decide, which `ORDER BY` cannot do — a sort must be total and must never
+/// error — and the obvious repair, "value order with a structural tie-break", is
+/// itself intransitive for exactly the reason [`ValueClass`] documents one level
+/// up (`crates/cdt/tests/value_relations.rs` exhibits the cycle). The syntactic
+/// order is a lexicographic product of total orders, so it is transitive by
+/// construction, and it is what the CDT crate already sorts map entries and renders
+/// canonical lexical forms with.
+pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
     match (a, b) {
-        (SortKey::Unbound, SortKey::Unbound) => Ordering::Equal,
-        (SortKey::Unbound, _) => Ordering::Less,
-        (_, SortKey::Unbound) => Ordering::Greater,
         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
         (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
-        (
-            SortKey::Literal {
-                xsd: ax,
-                datatype: dx,
-                language: gx,
-                lexical: lx,
-            },
-            SortKey::Literal {
-                xsd: bx,
-                datatype: dy,
-                language: gy,
-                lexical: ly,
-            },
-        ) => {
-            // Value space where both parse AND compare; else the deterministic
-            // (datatype, language, lexical) fallback — exactly `literal_order`.
-            if let (Some(av), Some(bv)) = (ax, bx)
-                && let Some(ord) = value_cmp(av, bv)
+        (SortKey::Literal(x), SortKey::Literal(y)) => {
+            if x.class != y.class {
+                return x.class.cmp(&y.class);
+            }
+            if let (Some(av), Some(bv)) = (&x.value, &y.value)
+                && let Some(ord) = value_total_cmp(av, bv)
             {
                 return ord;
             }
-            (dx, gx, lx).cmp(&(dy, gy, ly))
+            (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
         }
-        (SortKey::Triple(x), SortKey::Triple(y)) => compare_triple_keys(x, y),
-        _ => sort_key_rank(a).cmp(&sort_key_rank(b)),
+        (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
+        (SortKey::Triple(x), SortKey::Triple(y)) => total_order(&x[0], &y[0])
+            .then_with(|| total_order(&x[1], &y[1]))
+            .then_with(|| total_order(&x[2], &y[2])),
+        _ => a.rank().cmp(&b.rank()),
     }
-}
-
-/// Compare two triple-term sort keys componentwise (`s`, then `p`, then `o`) — the
-/// precomputed-key analogue of [`term_value_order`]'s triple arm, with each
-/// component already parsed at build time.
-fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
-    compare_sort_keys(&a[0], &b[0])
-        .then_with(|| compare_sort_keys(&a[1], &b[1]))
-        .then_with(|| compare_sort_keys(&a[2], &b[2]))
 }
 
 // ---------------------------------------------------------------------------
@@ -622,7 +815,7 @@ fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
 ///
 /// `ORDER BY` over a one-column input is a total order over TERM VALUES, and this
 /// exposes exactly that: the same `SortKey` precomputation, the same
-/// unbound-first / blank < IRI < literal < triple kind ranking, the same
+/// unbound < blank < IRI < literal < composite < triple kind ranking, the same
 /// value-space literal comparison with its deterministic `(datatype, language,
 /// lexical)` fallback, and the same componentwise ordering of RDF 1.2 triple
 /// terms. A caller with a bag of values in hand therefore does not have to
@@ -634,15 +827,24 @@ fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
 /// duplicates are preserved (an `ORDER BY` applies no `DISTINCT`).
 #[must_use]
 pub fn order_values(values: Vec<TermValue>, descending: bool) -> Vec<TermValue> {
-    let mut keyed: Vec<(SortKey, TermValue)> = values
-        .into_iter()
-        .map(|value| (sort_key(Some(value.clone())), value))
-        .collect();
-    keyed.sort_by(|(a, _), (b, _)| {
-        let ord = compare_sort_keys(a, b);
+    // The keys BORROW their value, so the projection is taken per comparison
+    // over an index permutation rather than stored beside the value. A
+    // `SortKey<'_>` cannot outlive the `TermValue` it reads, and moving the
+    // values into a keyed pair would invalidate every borrow.
+    let mut order: Vec<usize> = (0..values.len()).collect();
+    order.sort_by(|&i, &j| {
+        let ord = total_order(&project(Some(&values[i])), &project(Some(&values[j])));
         if descending { ord.reverse() } else { ord }
     });
-    keyed.into_iter().map(|(_, value)| value).collect()
+    let mut slots: Vec<Option<TermValue>> = values.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|i| {
+            slots[i]
+                .take()
+                .expect("each index appears once in a sorted permutation")
+        })
+        .collect()
 }
 
 /// Compare two term values under SPARQL `ORDER BY` semantics.
@@ -651,7 +853,7 @@ pub fn order_values(values: Vec<TermValue>, descending: bool) -> Vec<TermValue> 
 /// comparator itself (a `MIN`/`MAX` tie-break, a merge) rather than a sorted bag.
 #[must_use]
 pub fn compare_values(a: &TermValue, b: &TermValue) -> Ordering {
-    term_value_order(a, b)
+    total_order(&project(Some(a)), &project(Some(b)))
 }
 
 /// A SPARQL built-in aggregate that folds a bag of already-evaluated values and
@@ -684,8 +886,8 @@ pub enum ValueAggregate {
 /// the aggregate's answer is a property of the VALUES, so a caller holding them
 /// should not have to reach the fold by writing a query whose text embeds the
 /// data. It runs the identical accumulators `eval_aggregate` runs — the exact
-/// `NumericFold` promotion ladder for `SUM`/`AVG`, the `term_value_order`
-/// running extreme with its earlier-occurrence tie-break for `MIN`/`MAX` — so a
+/// `NumericFold` promotion ladder for `SUM`/`AVG`, the same total order's running
+/// extreme with its earlier-occurrence tie-break for `MIN`/`MAX` — so a
 /// value-level fold and a `GROUP BY` fold over the same bag are the same number,
 /// by construction rather than by two implementations agreeing.
 ///
@@ -707,73 +909,6 @@ pub fn fold_values(
         ValueAggregate::Max => fold_builtin(values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => fold_builtin(values, SampleAccumulator::default, acc_step_one),
     }
-}
-
-fn kind_rank(v: &TermValue) -> u8 {
-    match v {
-        TermValue::Blank { .. } => 0,
-        TermValue::Iri(_) => 1,
-        TermValue::Literal { .. } => 2,
-        TermValue::Triple { .. } => 3,
-    }
-}
-
-pub(crate) fn term_value_order(a: &TermValue, b: &TermValue) -> Ordering {
-    match (a, b) {
-        (
-            TermValue::Blank {
-                label: la,
-                scope: sa,
-            },
-            TermValue::Blank {
-                label: lb,
-                scope: sb,
-            },
-        ) => (sa.ordinal(), la).cmp(&(sb.ordinal(), lb)),
-        (TermValue::Iri(x), TermValue::Iri(y)) => x.cmp(y),
-        (
-            TermValue::Literal {
-                lexical_form: lx,
-                datatype: dx,
-                language: gx,
-                ..
-            },
-            TermValue::Literal {
-                lexical_form: ly,
-                datatype: dy,
-                language: gy,
-                ..
-            },
-        ) => literal_order((lx, dx, gx), (ly, dy, gy)),
-        (
-            TermValue::Triple {
-                s: sa,
-                p: pa,
-                o: oa,
-            },
-            TermValue::Triple {
-                s: sb,
-                p: pb,
-                o: ob,
-            },
-        ) => term_value_order(sa, sb)
-            .then_with(|| term_value_order(pa, pb))
-            .then_with(|| term_value_order(oa, ob)),
-        _ => kind_rank(a).cmp(&kind_rank(b)),
-    }
-}
-
-/// Order two literals: by XSD value where both are value-comparable, otherwise a
-/// deterministic fall-back by (datatype, language, lexical form).
-fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<String>)) -> Ordering {
-    let (lx, dx, gx) = a;
-    let (ly, dy, gy) = b;
-    if let (Ok(Some(ax)), Ok(Some(bx))) = (parse_by_iri(lx, dx), parse_by_iri(ly, dy))
-        && let Some(ord) = value_cmp(&ax, &bx)
-    {
-        return ord;
-    }
-    (dx, gx, lx).cmp(&(dy, gy, ly))
 }
 
 // ---------------------------------------------------------------------------
@@ -965,6 +1100,18 @@ fn eval_aggregate<D: DatasetView + Sync>(
         return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
     }
 
+    // `FOLD` is dispatched away here for the same reason `Custom` is: its PHASE 1
+    // is not the one below. Every other built-in skips a row whose argument is
+    // unbound; `FOLD` RETAINS it as the SEP-0009 `null` element, takes a second
+    // argument in its `cdt:Map` form, and orders its survivors by its own
+    // `ORDER BY` before folding any of them. Its phase 2 is nonetheless the
+    // ordinary [`fold_builtin`] tail over an ordinary
+    // [`crate::agg_fn::AggregateAccumulator`] — one fold algebra, as the rest of
+    // this module's dispatch promises. See [`crate::cdt_agg`].
+    if matches!(agg.function(), AggregateFunction::Fold) {
+        return crate::cdt_agg::eval_fold(agg, idxs, rows, schema, ctx);
+    }
+
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
     // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
     // that can ever carry one — so dispatch reads `agg.function()` itself
@@ -1121,6 +1268,18 @@ fn eval_aggregate<D: DatasetView + Sync>(
                  short-circuit at the top of eval_aggregate should have already handled it",
             ));
         }
+        // Unreachable for exactly the same reason `Custom` is: `FOLD` was
+        // dispatched to `crate::cdt_agg::eval_fold` at the top of this function,
+        // before any row was consulted, because its phase 1 retains unbound rows
+        // that the loop above has already skipped. Reaching here would mean
+        // folding a `FOLD` over a survivor list its own semantics never built, so
+        // it is a typed internal error rather than a silently wrong answer.
+        AggregateFunction::Fold => {
+            return Err(EvalError::internal(
+                "AggregateFunction::Fold reached the built-in dispatch arm; the FOLD \
+                 short-circuit at the top of eval_aggregate should have already handled it",
+            ));
+        }
     };
     Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
@@ -1165,7 +1324,7 @@ fn acc_step_one<A: crate::agg_fn::AggregateAccumulator>(
 /// aggregate's accumulator does — reusing the identical, already-contained
 /// downcast machinery `crate::agg_fn`'s own doc comments describe for that
 /// case, at a strictly narrower and provably-safe use.
-fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
+pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
     survivors: &[T],
     init: impl Fn() -> A + Sync,
     step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
@@ -2092,7 +2251,7 @@ impl crate::agg_fn::AggregateAccumulator for AvgAccumulator {
 }
 
 /// One step of `MIN`/`MAX`'s running extreme: `want` is `Ordering::Less` for
-/// `MIN`, `Greater` for `MAX`. Ties (`term_value_order` returns anything other
+/// `MIN`, `Greater` for `MAX`. Ties ([`total_order`] returns anything other
 /// than `want`) keep the EARLIER occurrence — the same left-fold tie-break the
 /// original `values.iter().reduce(..)` implementation had, since `reduce` seeds
 /// its accumulator with the first element and only replaces it when a later
@@ -2103,7 +2262,7 @@ fn fold_extreme(current: Option<TermValue>, value: TermValue, want: Ordering) ->
     match current {
         None => value,
         Some(current_value) => {
-            if term_value_order(&value, &current_value) == want {
+            if total_order(&project(Some(&value)), &project(Some(&current_value))) == want {
                 value
             } else {
                 current_value
@@ -2344,6 +2503,8 @@ fn string_value(lexical: String) -> TermValue {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_sparql_algebra::Expression;
+
     use super::*;
     use crate::eval::eval;
 
@@ -2722,8 +2883,14 @@ mod tests {
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -2771,6 +2938,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Count,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     true,
                 )
@@ -2825,8 +2993,14 @@ mod tests {
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let seq = eval(&group, &mut ctx).expect("group");
@@ -2852,6 +3026,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Min,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2894,6 +3069,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2939,6 +3115,7 @@ mod tests {
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -2972,6 +3149,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3008,6 +3186,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3058,6 +3237,7 @@ mod tests {
                     AggregateFunction::Avg,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -3090,6 +3270,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Avg,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3136,6 +3317,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sum,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -3493,6 +3675,7 @@ mod tests {
                     function,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -3846,48 +4029,208 @@ mod tests {
         assert!(seq.rows[1][x].is_none()); // UNDEF.
     }
 
-    /// The precomputed triple sort key (`sort_key` + `compare_sort_keys`) must order
-    /// quoted-triple terms **identically** to the reference `term_value_order` over
-    /// the raw values — the only difference is that the nested literals' XSD parse is
-    /// paid once at key-build time instead of on every comparison. Includes cases
-    /// where value-space and lexical order disagree (integer `9` < `30` by value but
-    /// `"30"` < `"9"` lexically), cross-kind components, and a nested triple.
+    /// One `?v` literal per `(lexical, datatype-local-name)`, so a test can drive
+    /// a chosen literal set through the real `ORDER BY` operator.
+    fn typed_values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/v");
+        for (i, (lexical, local)) in values.iter().enumerate() {
+            let s = b.intern_iri(&format!("http://ex/s{i}"));
+            let o = b.intern_literal(RdfLiteral {
+                lexical_form: (*lexical).to_owned(),
+                datatype: Some(format!("http://www.w3.org/2001/XMLSchema#{local}")),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(s, p, o, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    fn value_bgp() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
+                object: TermPattern::Variable(Variable::new("v")),
+            }],
+        }
+    }
+
+    /// THE CYCLE, driven through the production `ORDER BY` path. Under the naive
+    /// reading of §15.1 — "compare by value, else by a deterministic syntactic
+    /// key" — these three literals cycle: `"9"^^xsd:double` < `"P1D"^^xsd:duration`
+    /// (no value order, so datatype `double` < `duration`) < `"8"^^xsd:float`
+    /// (`duration` < `float`) < `"9"^^xsd:double` (a value order: 8 < 9).
+    /// `slice::sort_by` is entitled to PANIC on a comparator like that, so the
+    /// cycle must not exist at all: [`ValueClass`] ranks ahead of the syntactic
+    /// fallback, which puts both numerics (one class) before the duration
+    /// (another) and orders the two of them 8 < 9 in value space.
     #[test]
-    fn triple_sort_keys_match_term_value_order() {
-        let lit = |n: &str| TermValue::Literal {
-            lexical_form: n.to_owned(),
-            datatype: XINT.to_owned(),
-            language: None,
-            direction: None,
+    fn order_by_has_no_value_versus_syntactic_cycle() {
+        let ds = typed_values(&[("9", "double"), ("P1D", "duration"), ("8", "float")]);
+        let mut ctx = EvalCtx::new(&ds);
+        let seq = eval_order_by(
+            &value_bgp(),
+            &[OrderExpression::Asc(Expression::Variable(Variable::new(
+                "v",
+            )))],
+            &mut ctx,
+        )
+        .expect("order");
+        assert_eq!(ints(&ds, &seq, "v"), vec!["8", "9", "P1D"]);
+    }
+
+    /// [`project`] + [`total_order`] must be a genuine TOTAL ORDER over every term
+    /// kind — antisymmetric AND transitive — since that is exactly the contract
+    /// `slice::sort_by` (hence `ORDER BY`, `MIN`/`MAX` and the statistical
+    /// aggregates) may panic over when it is broken. The sample mixes every shape
+    /// that used to cycle: incomparable value spaces beside comparable ones, an
+    /// ill-typed literal, `NaN`, a timezoned against an untimezoned `dateTime`,
+    /// the two duration subtypes against the general one, the two binary value
+    /// spaces, unbound/blank/IRI, and triple terms whose components are
+    /// themselves such literals (the recursive arm, which inherits the relation
+    /// rather than restating it).
+    #[test]
+    fn the_sparql_ordering_is_a_total_order_over_every_term_kind() {
+        let xsd = |lexical: &str, local: &str| {
+            TermValue::typed_literal(lexical, format!("http://www.w3.org/2001/XMLSchema#{local}"))
         };
-        let iri = |s: &str| TermValue::Iri(s.to_owned());
         let triple = |s: TermValue, p: TermValue, o: TermValue| TermValue::Triple {
             s: Box::new(s),
             p: Box::new(p),
             o: Box::new(o),
         };
-        let samples = [
-            triple(iri("http://ex/a"), iri("http://ex/p"), lit("30")),
-            triple(iri("http://ex/a"), iri("http://ex/p"), lit("9")),
-            triple(iri("http://ex/a"), iri("http://ex/p"), iri("http://ex/z")),
-            triple(iri("http://ex/b"), iri("http://ex/p"), lit("9")),
-            triple(
-                triple(iri("http://ex/a"), iri("http://ex/p"), lit("9")),
-                iri("http://ex/q"),
-                lit("30"),
-            ),
+        let samples: Vec<Option<TermValue>> = vec![
+            None,
+            Some(TermValue::blank("b0")),
+            Some(TermValue::blank("b1")),
+            Some(TermValue::iri("http://ex/a")),
+            Some(TermValue::iri("http://ex/z")),
+            Some(xsd("9", "double")),
+            Some(xsd("8", "float")),
+            Some(xsd("9", "integer")),
+            Some(xsd("30", "integer")),
+            Some(xsd("NaN", "double")),
+            // The promotion cycle, in the shape a query can supply: a decimal with
+            // nineteen significant digits beside the IEEE value of the same
+            // magnitude, and the integer that value rounds to. Under §17.3's
+            // promotion the decimal is GREATER than the integer (compared exactly)
+            // and EQUAL to both the double and the float (compared through IEEE),
+            // which is a cycle a Rust sort may abort on. See `ValueClass::Numeric`.
+            Some(xsd("1.000000000000000001", "decimal")),
+            Some(xsd("1", "integer")),
+            Some(xsd("1.0E0", "double")),
+            Some(xsd("1.0E0", "float")),
+            Some(xsd("-1.000000000000000001", "decimal")),
+            Some(xsd("-1", "integer")),
+            Some(xsd("-1.0E0", "double")),
+            // The same failure one type up: 2^53 + 1 is an ordinary integer and an
+            // unrepresentable double, so the promotion rounds it onto 2^53.
+            Some(xsd("9007199254740993", "integer")),
+            Some(xsd("9.007199254740992E15", "double")),
+            Some(xsd("abc", "integer")),
+            Some(xsd("P1D", "duration")),
+            Some(xsd("P1D", "dayTimeDuration")),
+            Some(xsd("P1Y", "yearMonthDuration")),
+            Some(xsd("2000-01-01T00:00:00", "dateTime")),
+            Some(xsd("2000-01-01T00:00:00Z", "dateTime")),
+            Some(xsd("2000-01-01", "date")),
+            Some(xsd("0F", "hexBinary")),
+            Some(xsd("Dw==", "base64Binary")),
+            Some(xsd("true", "boolean")),
+            Some(TermValue::simple_literal("abc")),
+            Some(TermValue::lang_literal("abc", "en")),
+            Some(triple(
+                TermValue::iri("http://ex/a"),
+                TermValue::iri("http://ex/p"),
+                xsd("9", "integer"),
+            )),
+            Some(triple(
+                TermValue::iri("http://ex/a"),
+                TermValue::iri("http://ex/p"),
+                xsd("30", "integer"),
+            )),
+            Some(triple(
+                triple(
+                    TermValue::iri("http://ex/a"),
+                    TermValue::iri("http://ex/p"),
+                    xsd("9", "integer"),
+                ),
+                TermValue::iri("http://ex/q"),
+                xsd("P1D", "duration"),
+            )),
+            // The composite category, including the two spellings of one value
+            // (which must tie), a nested composite, and two lexical forms that do
+            // NOT parse (which must fall back to the opaque-literal block instead
+            // of raising or of ranking with the composites).
+            Some(TermValue::typed_literal("[]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[  ]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[1]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("[ 1, null]", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal(
+                "[[1],{ 1:2 }]",
+                purrdf_cdt::CDT_LIST,
+            )),
+            Some(TermValue::typed_literal("{}", purrdf_cdt::CDT_MAP)),
+            Some(TermValue::typed_literal(
+                "{ 3:1, 1:2 }",
+                purrdf_cdt::CDT_MAP,
+            )),
+            Some(TermValue::typed_literal("[1,", purrdf_cdt::CDT_LIST)),
+            Some(TermValue::typed_literal("nonsense", purrdf_cdt::CDT_MAP)),
         ];
-        for a in &samples {
-            for b in &samples {
-                let via_keys =
-                    compare_sort_keys(&sort_key(Some(a.clone())), &sort_key(Some(b.clone())));
-                let via_ref = term_value_order(a, b);
+        let keys: Vec<_> = samples.iter().map(|v| project(v.as_ref())).collect();
+
+        for (i, a) in keys.iter().enumerate() {
+            for (j, b) in keys.iter().enumerate() {
                 assert_eq!(
-                    via_keys, via_ref,
-                    "ordering mismatch:\n  a={a:?}\n  b={b:?}"
+                    total_order(a, b),
+                    total_order(b, a).reverse(),
+                    "not antisymmetric at ({i}, {j}): {:?} vs {:?}",
+                    samples[i],
+                    samples[j]
                 );
             }
         }
+        for (i, a) in keys.iter().enumerate() {
+            for (j, b) in keys.iter().enumerate() {
+                if total_order(a, b) == Ordering::Greater {
+                    continue;
+                }
+                for (k, c) in keys.iter().enumerate() {
+                    if total_order(b, c) == Ordering::Greater {
+                        continue;
+                    }
+                    assert_ne!(
+                        total_order(a, c),
+                        Ordering::Greater,
+                        "not transitive at ({i}, {j}, {k}): {:?} <= {:?} <= {:?}",
+                        samples[i],
+                        samples[j],
+                        samples[k]
+                    );
+                }
+            }
+        }
+
+        // And the whole sample sorts through the production comparator without
+        // tripping `sort_by`'s total-order check, to the SAME sequence every run.
+        let sorted_once = sorted_sample_lexicals(&samples);
+        assert_eq!(sorted_once, sorted_sample_lexicals(&samples));
+        assert_eq!(sorted_once.len(), samples.len());
+    }
+
+    /// Sort a projected sample with the production comparator and render it, so a
+    /// caller can compare two runs for determinism.
+    fn sorted_sample_lexicals(samples: &[Option<TermValue>]) -> Vec<String> {
+        let keys: Vec<_> = samples.iter().map(|v| project(v.as_ref())).collect();
+        let mut order: Vec<usize> = (0..keys.len()).collect();
+        order.sort_by(|a, b| total_order(&keys[*a], &keys[*b]));
+        order
+            .into_iter()
+            .map(|i| format!("{:?}", samples[i]))
+            .collect()
     }
 
     /// Determinism smoke test: `GROUP BY ?cat` with `COUNT(*)`/`AVG(?val)`/
@@ -3958,6 +4301,7 @@ mod tests {
                         AggregateFunction::Count,
                         Vec::new(),
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -3968,6 +4312,7 @@ mod tests {
                         AggregateFunction::Avg,
                         vec![Expression::Variable(Variable::new("val"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -3977,6 +4322,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4057,6 +4403,7 @@ mod tests {
                             "separator".to_owned(),
                             purrdf_sparql_algebra::Literal::new_simple(","),
                         )],
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4066,6 +4413,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("val"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4158,6 +4506,7 @@ mod tests {
                         "separator".to_owned(),
                         purrdf_sparql_algebra::Literal::new_simple(","),
                     )],
+                    Vec::new(),
                     true,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4203,6 +4552,7 @@ mod tests {
                     AggregateFunction::Max,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4234,6 +4584,7 @@ mod tests {
                     AggregateFunction::Max,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4263,6 +4614,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Sample,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4294,6 +4646,7 @@ mod tests {
                     AggregateFunction::Sample,
                     vec![Expression::Variable(Variable::new("n"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4323,6 +4676,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4354,6 +4708,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4398,6 +4753,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::GroupConcat,
                     vec![Expression::Variable(Variable::new("n"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4473,6 +4829,7 @@ mod tests {
                         AggregateFunction::Count,
                         Vec::new(),
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4482,6 +4839,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Count,
                         vec![Expression::Variable(Variable::new("n"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4493,6 +4851,7 @@ mod tests {
                         AggregateFunction::Sum,
                         vec![Expression::Variable(Variable::new("n"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4503,6 +4862,7 @@ mod tests {
                         AggregateFunction::Min,
                         vec![Expression::Variable(Variable::new("n"))],
                         Vec::new(),
+                        Vec::new(),
                         false,
                     )
                     .expect("fixture: valid AggregateExpression"),
@@ -4512,6 +4872,7 @@ mod tests {
                     AggregateExpression::new(
                         AggregateFunction::Max,
                         vec![Expression::Variable(Variable::new("n"))],
+                        Vec::new(),
                         Vec::new(),
                         false,
                     )
@@ -4711,6 +5072,7 @@ mod tests {
                     AggregateFunction::Custom(NamedNode::new_unchecked(LIST_COLLECTOR_IRI)),
                     vec![Expression::Variable(Variable::new("val"))],
                     Vec::new(),
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),
@@ -4776,6 +5138,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}FIRST"))),
                     vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -4848,6 +5211,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
                     vec![Expression::Variable(Variable::new("val"))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -5118,6 +5482,7 @@ mod tests {
                             NamedNode::new_unchecked(XINT),
                         ),
                     )],
+                    Vec::new(),
                     false,
                 )
                 .expect("fixture: valid AggregateExpression"),

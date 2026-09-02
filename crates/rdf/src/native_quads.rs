@@ -41,22 +41,29 @@ pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDatase
     for (index, quads) in sources.iter().enumerate() {
         let scope = BlankScope(index as u32);
         for quad in *quads {
-            let subject = builder.intern_owned_term_scoped(&quad.subject, scope);
+            // The owned-model DOCUMENT ingress (JSON-LD / YAML-LD reaches the IR
+            // through here), so an ill-formed composite literal refuses the
+            // document exactly as it does on every text codec.
+            let bind = |b: &mut RdfDatasetBuilder, t: &RdfTerm| {
+                b.intern_owned_term_bound(t, scope)
+                    .map_err(|err| err.to_string())
+            };
+            let subject = bind(&mut builder, &quad.subject)?;
             let is_reifies = quad.predicate == RDF_REIFIES;
             let predicate = builder.intern_iri(&quad.predicate);
             let object = match &quad.object {
                 RdfTerm::Triple(triple) => {
-                    let s = builder.intern_owned_term_scoped(&triple.subject, scope);
+                    let s = bind(&mut builder, &triple.subject)?;
                     let p = builder.intern_iri(&triple.predicate);
-                    let o = builder.intern_owned_term_scoped(&triple.object, scope);
+                    let o = bind(&mut builder, &triple.object)?;
                     FoldNode::Triple { s, p, o }
                 }
-                other => FoldNode::Term(builder.intern_owned_term_scoped(other, scope)),
+                other => FoldNode::Term(bind(&mut builder, other)?),
             };
-            let graph = quad
-                .graph_name
-                .as_ref()
-                .map(|g| builder.intern_owned_term_scoped(g, scope));
+            let graph = match quad.graph_name.as_ref() {
+                Some(g) => Some(bind(&mut builder, g)?),
+                None => None,
+            };
             rows.push(FoldRow {
                 subject,
                 is_reifies,

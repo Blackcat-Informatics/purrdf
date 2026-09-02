@@ -2423,6 +2423,62 @@ impl<'a> Parser<'a, '_> {
                     variable,
                     expression,
                 };
+            } else if self.eat_kw("UNFOLD") {
+                // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`
+                // — the SEP-0009 row expander. Structurally `BIND`'s twin (one
+                // expression, one or two newly bound variables, stacked ABOVE the
+                // pattern parsed so far so it can read what that pattern bound),
+                // so it reuses `BIND`'s §19.6 scope rule verbatim on BOTH targets.
+                self.expect(&Token::LParen)?;
+                let expression = self.parse_expression()?;
+                self.expect_kw("AS")?;
+                let element = self.expect_var()?;
+                let companion = if self.eat(&Token::Comma) {
+                    Some(self.expect_var()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::RParen)?;
+                for variable in std::iter::once(&element).chain(companion.as_ref()) {
+                    debug_assert_eq!(
+                        scope.contains(variable),
+                        visible_variables(&g).contains(variable),
+                        "the incremental UNFOLD-scope check drifted from a fresh \
+                         visible_variables walk"
+                    );
+                    if scope.contains(variable) {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "UNFOLD target ?{} is already in scope in the group graph pattern",
+                                variable.as_str()
+                            ),
+                            self.span(),
+                        ));
+                    }
+                }
+                // The two targets bind two DIFFERENT positions of one element
+                // (see `GraphPattern::Unfold`), so one variable in both slots
+                // would have to hold two values in one row. Refused here rather
+                // than resolved by a precedence rule nobody could guess.
+                if companion.as_ref() == Some(&element) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "UNFOLD binds ?{} twice; its two targets must be distinct variables",
+                            element.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
+                for variable in std::iter::once(&element).chain(companion.as_ref()) {
+                    scope.note(variable);
+                    self.note_exists_scope_var(variable);
+                }
+                g = GraphPattern::Unfold {
+                    inner: Box::new(g),
+                    expression,
+                    element,
+                    companion,
+                };
             } else if self.peek_kw("VALUES") {
                 let values = self.parse_inline_data()?;
                 collect_vars(&values, &mut scope);
@@ -2928,6 +2984,7 @@ impl<'a> Parser<'a, '_> {
             || self.peek_kw("BIND")
             || self.peek_kw("VALUES")
             || self.peek_kw("LATERAL")
+            || self.peek_kw("UNFOLD")
     }
 
     fn parse_predicate_object_list(
@@ -3914,12 +3971,52 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
+    /// Human-readable spelling of a SEP-0009 signature, for
+    /// [`ParseError::CdtArity`].
+    fn describe_cdt_arity(arity: crate::algebra::CdtArity) -> String {
+        use crate::algebra::CdtArity;
+        match arity {
+            CdtArity::Fixed(1) => "exactly 1 argument".to_owned(),
+            CdtArity::Fixed(n) => format!("exactly {n} arguments"),
+            CdtArity::Range { min, max } => format!("{min} to {max} arguments"),
+            CdtArity::AtLeast(0) => "any number of arguments".to_owned(),
+            CdtArity::AtLeast(min) => format!("at least {min} arguments"),
+            CdtArity::Pairs => "an even number of arguments (key/value pairs)".to_owned(),
+        }
+    }
+
     fn parse_iri_or_function(
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
         let node = self.expect_iri_node()?;
         if self.at(&Token::LParen) {
+            // A SEP-0009 composite-datatype function, by EXACT IRI match against the
+            // closed `CdtFn` registry. Checked FIRST and UNCONDITIONALLY: the spec
+            // fixes both the namespace and the local names, so there is no
+            // `ParserOptions` seam here and a configured extension namespace can
+            // never shadow one of these. Recognizing a spec-defined third-party IRI
+            // is not minting it — see `CdtCall`'s own docs.
+            if let Some(fn_kind) = crate::algebra::CdtFn::from_iri(node.as_str()) {
+                let at = self.span();
+                let iri = node.as_str().to_owned();
+                let args = self.parse_arg_list(aggs)?;
+                // SPARQL has no overloading on argument count, so a wrong-arity call
+                // can never evaluate to anything and is refused here rather than
+                // silently becoming an expression error at runtime.
+                if !fn_kind.arity().admits(args.len()) {
+                    return Err(ParseError::CdtArity {
+                        iri,
+                        expected: Self::describe_cdt_arity(fn_kind.arity()),
+                        found: args.len(),
+                        at,
+                    });
+                }
+                return Ok(Expression::FunctionCall(
+                    Function::Cdt(crate::algebra::CdtCall { fn_kind, iri }),
+                    args,
+                ));
+            }
             // An IRI in call position under ANY configured extension-function namespace
             // (default: NONE — the namespace set is caller configuration supplied via
             // ParserOptions, e.g. the gmeow namespace) dispatches to the CLOSED
@@ -4066,8 +4163,10 @@ impl<'a> Parser<'a, '_> {
                     self.span(),
                 ));
             }
-            AggregateExpression::new(func, Vec::new(), Vec::new(), distinct)
+            AggregateExpression::new(func, Vec::new(), Vec::new(), Vec::new(), distinct)
                 .expect("COUNT accepts an empty exprlist")
+        } else if matches!(func, AggregateFunction::Fold) {
+            self.parse_fold_tail(distinct)?
         } else {
             // Marks any `EXISTS` reached while parsing THIS argument as
             // `ExistsScopeBasis::AggregateArgument` if it is later deferred
@@ -4089,13 +4188,91 @@ impl<'a> Parser<'a, '_> {
             {
                 scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
             }
-            AggregateExpression::new(func, vec![inner], scalarvals, distinct)
+            AggregateExpression::new(func, vec![inner], scalarvals, Vec::new(), distinct)
                 .expect("a one-element args list is always a valid AggregateExpression")
         };
         self.expect(&Token::RParen)?;
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
+    }
+
+    /// Parse everything inside `FOLD(` after an already-consumed `DISTINCT`,
+    /// up to but not including the closing `)`:
+    ///
+    /// ```text
+    /// Expression ( ',' Expression )? ( 'ORDER' 'BY' OrderCondition+ )?
+    /// ```
+    ///
+    /// One expression is the `cdt:List` form, two the `cdt:Map` form (first is
+    /// the key). The optional `ORDER BY` follows the LAST expression with NO
+    /// separating comma — a comma there would name a third exprlist entry,
+    /// which [`AggregateExpression::new`] refuses.
+    ///
+    /// The sort keys are the AGGREGATION's own (see
+    /// [`AggregateFunction::Fold`]); they order the rows this `FOLD` folds and
+    /// are unrelated to the query's solution modifier, so they are parsed here
+    /// rather than by [`Self::parse_solution_modifiers`]. An aggregate inside
+    /// one of them would be a nested aggregate, which
+    /// [`Self::parse_primary_expression`] and [`Self::parse_expression`] both
+    /// already refuse — `FOLD(?v ORDER BY SUM(?w))` is a hard syntax error, not
+    /// a silently-lifted second aggregate.
+    fn parse_fold_tail(&mut self, distinct: bool) -> Result<AggregateExpression> {
+        // Marks any `EXISTS` reached below as `ExistsScopeBasis::AggregateArgument`
+        // when `Parser::projection_scope_pending` postpones its scope check,
+        // exactly as the single-argument path does; the sort keys are aggregate
+        // arguments too, evaluated per row against the group's own solutions.
+        let saved_in_aggregate_argument = self.in_aggregate_argument;
+        self.in_aggregate_argument = true;
+        let parsed = self.parse_fold_parts();
+        self.in_aggregate_argument = saved_in_aggregate_argument;
+        let (args, order_by) = parsed?;
+        AggregateExpression::new(
+            AggregateFunction::Fold,
+            args,
+            Vec::new(),
+            order_by,
+            distinct,
+        )
+        .map_err(|error| ParseError::syntax(error.to_string(), self.span()))
+    }
+
+    /// [`Self::parse_fold_tail`]'s body, split out so the
+    /// `in_aggregate_argument` flag is restored on the error path too.
+    fn parse_fold_parts(&mut self) -> Result<(Vec<Expression>, Vec<OrderExpression>)> {
+        let mut args = vec![self.parse_expression()?];
+        if self.eat(&Token::Comma) {
+            args.push(self.parse_expression()?);
+        }
+        let mut order_by = Vec::new();
+        if self.eat_kw("ORDER") {
+            self.expect_kw("BY")?;
+            loop {
+                let cond = if self.eat_kw("ASC") {
+                    self.expect(&Token::LParen)?;
+                    let e = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    OrderExpression::Asc(e)
+                } else if self.eat_kw("DESC") {
+                    self.expect(&Token::LParen)?;
+                    let e = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    OrderExpression::Desc(e)
+                } else if self.order_key_ahead() {
+                    OrderExpression::Asc(self.parse_primary_expression()?)
+                } else {
+                    break;
+                };
+                order_by.push(cond);
+            }
+            if order_by.is_empty() {
+                return Err(ParseError::syntax(
+                    "FOLD's ORDER BY requires at least one sort condition",
+                    self.span(),
+                ));
+            }
+        }
+        Ok((args, order_by))
     }
 
     /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
@@ -4150,9 +4327,14 @@ impl<'a> Parser<'a, '_> {
         }
         let scalarvals = self.parse_agg_scalarvals()?;
         self.expect(&Token::RParen)?;
-        let agg =
-            AggregateExpression::new(AggregateFunction::Custom(iri), args, scalarvals, distinct)
-                .expect("the `args.push` loop above always runs at least once");
+        let agg = AggregateExpression::new(
+            AggregateFunction::Custom(iri),
+            args,
+            scalarvals,
+            Vec::new(),
+            distinct,
+        )
+        .expect("the `args.push` loop above always runs at least once");
         let synth = self.fresh_agg_var();
         aggs.push((synth.clone(), agg));
         Ok(Expression::Variable(synth))
@@ -4626,6 +4808,21 @@ fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
             collect_vars(inner, out);
             out.note(variable);
         }
+        // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
+        // enclosing group, exactly like `BIND`'s single one: `SELECT *`
+        // projects them and a later `FILTER` in the same group sees them.
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            collect_vars(inner, out);
+            out.note(element);
+            if let Some(companion) = companion {
+                out.note(companion);
+            }
+        }
         GraphPattern::Values { variables, .. } => {
             for v in variables {
                 out.note(v);
@@ -4718,6 +4915,10 @@ enum ScopeIntro {
     Bind,
     /// A `VALUES` block's column variable.
     Values,
+    /// An `UNFOLD(expr AS ?e, ?i)` target — either of the two. Its own label
+    /// rather than [`Self::Bind`]'s, because the offending text a reader must
+    /// go find says `UNFOLD`, not `BIND`.
+    Unfold,
 }
 
 impl ScopeIntro {
@@ -4725,6 +4926,7 @@ impl ScopeIntro {
         match self {
             Self::Bind => "BIND target",
             Self::Values => "VALUES variable",
+            Self::Unfold => "UNFOLD target",
         }
     }
 }
@@ -4992,6 +5194,25 @@ fn find_scope_conflict<'a>(
                 find_scope_conflict(scope, inner)
             }
         }
+        // `UNFOLD` introduces one or two fresh bindings at this scope level,
+        // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
+        // side that re-introduces an outer variable through `UNFOLD` is the
+        // same conflict, reported in declaration order (element, then
+        // companion). Its expression operand is never visited, for the reason
+        // stated for `Extend`'s above.
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            for variable in std::iter::once(element).chain(companion.as_ref()) {
+                if scope.contains(variable) {
+                    return Some((variable, ScopeIntro::Unfold));
+                }
+            }
+            find_scope_conflict(scope, inner)
+        }
         // `VALUES`: the first declared column that collides, in declaration
         // order.
         GraphPattern::Values { variables, .. } => {
@@ -5171,6 +5392,10 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
         "MAX" => AggregateFunction::Max,
         "SAMPLE" => AggregateFunction::Sample,
         "GROUP_CONCAT" => AggregateFunction::GroupConcat,
+        // A KEYWORD alternative of production `[127+] Aggregate`, not the
+        // `AGG(<iri>, …)` extension surface: `FOLD` names no IRI, so it belongs
+        // in this dispatch table beside the SPARQL 1.1 built-ins.
+        "FOLD" => AggregateFunction::Fold,
         _ => return None,
     })
 }
@@ -9037,6 +9262,244 @@ mod tests {
             | GraphPattern::OrderBy { inner, .. } => find_held_in(inner),
             _ => None,
         }
+    }
+
+    // ── SEP-0009 composite-datatype functions (spec-fixed; ALWAYS on) ─────────
+
+    /// The SEP-0009 namespace, as the spec defines it. Third-party and fixed —
+    /// this crate reads it, exactly as it reads the `xsd:` namespace.
+    const CDT_NS: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/";
+
+    /// A prologue binding `cdt:` to the SEP-0009 namespace.
+    fn cdt_prologue() -> String {
+        format!("PREFIX cdt: <{CDT_NS}>\n")
+    }
+
+    #[test]
+    fn every_cdt_function_is_recognized_in_call_position() {
+        // The registry is closed and the parser must recognize ALL of it, so this
+        // enumerates `CDT_FUNCTIONS` rather than transcribing a list that can drift.
+        for fn_kind in purrdf_cdt::CDT_FUNCTIONS {
+            // The smallest admissible call for this signature.
+            let argc = match fn_kind.arity() {
+                crate::algebra::CdtArity::Fixed(n) => n,
+                crate::algebra::CdtArity::Range { min, .. }
+                | crate::algebra::CdtArity::AtLeast(min) => min,
+                crate::algebra::CdtArity::Pairs => 2,
+            };
+            let args = vec!["1"; argc].join(", ");
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:{}({args}) AS ?x) }}",
+                cdt_prologue(),
+                fn_kind.local_name()
+            );
+            let Expression::FunctionCall(func, parsed) = bound_expr(&q) else {
+                panic!("expected a FunctionCall for cdt:{}", fn_kind.local_name());
+            };
+            assert_eq!(
+                func,
+                Function::Cdt(crate::algebra::CdtCall {
+                    fn_kind,
+                    iri: fn_kind.iri().to_owned(),
+                })
+            );
+            assert_eq!(parsed.len(), argc);
+        }
+    }
+
+    #[test]
+    fn cdt_recognition_needs_no_parser_options() {
+        // SEP-0009 fixes the namespace, so recognition is unconditional: the DEFAULT
+        // options (no configured extension namespace at all) still dispatch.
+        assert!(
+            ParserOptions::default().extension_fn_namespaces.is_empty(),
+            "the premise of this test is that NO extension namespace is configured, \
+             so CDT dispatch cannot be riding the extension seam; got {:?}",
+            ParserOptions::default().extension_fn_namespaces
+        );
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:size(\"[]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::FunctionCall(func, _) = bound_expr(&q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert!(matches!(func, Function::Cdt(_)), "got {func:?}");
+    }
+
+    #[test]
+    fn a_configured_extension_namespace_cannot_shadow_a_cdt_function() {
+        // Configuring the SEP-0009 namespace as an extension-function namespace must
+        // NOT reroute `cdt:get` into the `PurrdfFn` seam (where its local name is
+        // unknown and would hard-fail): the CDT check runs first, unconditionally.
+        let options = ParserOptions {
+            extension_fn_namespaces: vec![CDT_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
+        };
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:get(\"[1]\"^^cdt:List, 1) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::FunctionCall(func, _) = bound_expr_with(&q, &options) else {
+            panic!("expected a FunctionCall");
+        };
+        assert!(
+            matches!(&func, Function::Cdt(call) if call.fn_kind == purrdf_cdt::CdtFn::Get),
+            "got {func:?}"
+        );
+    }
+
+    #[test]
+    fn cdt_iri_outside_call_position_is_a_plain_named_node() {
+        // `cdt:List` is also the DATATYPE IRI. Outside call position it is an
+        // ordinary term, never a function.
+        let q = format!("{}SELECT ?x WHERE {{ ?x a cdt:List }}", cdt_prologue());
+        let GraphPattern::Bgp { patterns } =
+            unproject(select_pattern_with(&q, &ParserOptions::default()))
+        else {
+            panic!("expected BGP");
+        };
+        let TermPattern::NamedNode(n) = &patterns[0].object else {
+            panic!("expected a NamedNode object");
+        };
+        assert_eq!(n.as_str(), format!("{CDT_NS}List"));
+    }
+
+    #[test]
+    fn a_wrong_arity_cdt_call_is_a_typed_parse_error() {
+        // SPARQL has no overloading on argument count, so this is a STATIC error.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:head(\"[1]\"^^cdt:List, 2) AS ?x) }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(&err, ParseError::CdtArity { iri, found: 2, .. } if iri == &format!("{CDT_NS}head")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_odd_argument_count_to_the_map_constructor_is_a_parse_error() {
+        // `cdt:Map` takes key/value PAIRS; an odd count would silently drop the
+        // trailing key, so it is refused outright.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:Map(1, 2, 3) AS ?x) }}",
+            cdt_prologue()
+        );
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(&err, ParseError::CdtArity { found: 3, .. }),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("even number"), "got {err}");
+        // An even count is admitted, including zero.
+        for args in ["", "1, 2", "1, 2, 3, 4"] {
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:Map({args}) AS ?x) }}",
+                cdt_prologue()
+            );
+            assert!(
+                SparqlParser::new().parse_query(&q).is_ok(),
+                "cdt:Map({args})"
+            );
+        }
+    }
+
+    #[test]
+    fn cdt_subseq_admits_two_or_three_arguments_and_nothing_else() {
+        let call = |args: &str| {
+            let q = format!(
+                "{}SELECT ?x WHERE {{ BIND(cdt:subseq({args}) AS ?x) }}",
+                cdt_prologue()
+            );
+            SparqlParser::new().parse_query(&q)
+        };
+        assert!(call("\"[1]\"^^cdt:List, 1").is_ok());
+        assert!(call("\"[1]\"^^cdt:List, 1, 1").is_ok());
+        assert!(matches!(
+            call("\"[1]\"^^cdt:List").unwrap_err(),
+            ParseError::CdtArity { found: 1, .. }
+        ));
+        assert!(matches!(
+            call("\"[1]\"^^cdt:List, 1, 1, 1").unwrap_err(),
+            ParseError::CdtArity { found: 4, .. }
+        ));
+    }
+
+    #[test]
+    fn a_cdt_call_serializes_to_its_original_iri_and_round_trips() {
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(cdt:concat(\"[1]\"^^cdt:List, \"[2]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let pattern = select_pattern_with(&q, &ParserOptions::default());
+        let text = crate::serialize::pattern_to_select_query(&pattern);
+        assert!(
+            text.contains(&format!("<{CDT_NS}concat>")),
+            "serialization must emit the spec IRI verbatim; text = {text}"
+        );
+        // A re-parse of the serialized text reproduces the SAME algebra, byte for
+        // byte — the round trip is the identity on this node.
+        let reparsed = select_pattern_with(&text, &ParserOptions::default());
+        assert_eq!(
+            crate::serialize::pattern_to_select_query(&reparsed),
+            text,
+            "re-serializing the re-parse must be a fixpoint"
+        );
+    }
+
+    #[test]
+    fn an_ill_formed_cdt_literal_parses_and_is_left_to_evaluation() {
+        // `list-functions/list-less-than-error-03.rq` writes `"1"^^cdt:List` — the
+        // manifest calls it an "ill-formed literal" — and requires the COMPARISON to
+        // raise a SPARQL error (an unbound `BIND`), not the query to fail to parse.
+        // A datatype IRI does not constrain what the parser accepts in a literal, for
+        // `cdt:List` any more than for `xsd:integer`; ill-typedness is an evaluation-
+        // time property of the term. So this must parse, and the lexical form must
+        // survive byte-for-byte.
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND((\"1\"^^cdt:List < \"[2]\"^^cdt:List) AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::Less(left, _) = bound_expr(&q) else {
+            panic!("expected a `<` comparison");
+        };
+        let Expression::Literal(literal) = *left else {
+            panic!("expected a literal operand");
+        };
+        assert_eq!(literal.value(), "1");
+        assert_eq!(literal.datatype().as_str(), format!("{CDT_NS}List"));
+        // The same holds for a wholly unparseable form, and for `cdt:Map`.
+        for lexical in ["[1,", "not a list at all"] {
+            let q = format!(
+                "{}ASK {{ FILTER(\"{lexical}\"^^cdt:Map = \"{{}}\"^^cdt:Map) }}",
+                cdt_prologue()
+            );
+            assert!(
+                SparqlParser::new().parse_query(&q).is_ok(),
+                "an ill-formed cdt:Map literal must still parse: {lexical}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_well_formed_cdt_literal_keeps_its_lexical_form_verbatim() {
+        // `list-functions/sameterm-04.rq` requires `cdt:List(1,2,3)` NOT to be
+        // `sameTerm` with `"[  1 ,  2  ,   3   ]"^^cdt:List`, which is only possible
+        // if the parser leaves an authored lexical form alone. No canonicalization
+        // happens here — the byte-fidelity rule for literals is not suspended for
+        // a datatype PurRDF happens to model.
+        let spelling = "[  1 ,  2  ,   3   ]";
+        let q = format!(
+            "{}SELECT ?x WHERE {{ BIND(\"{spelling}\"^^cdt:List AS ?x) }}",
+            cdt_prologue()
+        );
+        let Expression::Literal(literal) = bound_expr(&q) else {
+            panic!("expected a literal");
+        };
+        assert_eq!(literal.value(), spelling);
     }
 
     // ── property-function seam (caller-configured; OFF by default) ────────────

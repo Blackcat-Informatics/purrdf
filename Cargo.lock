@@ -1349,6 +1349,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-cdt"
+version = "0.12.0"
+dependencies = [
+ "pretty_assertions",
+ "proptest",
+ "purrdf-iri",
+ "purrdf-xsd",
+]
+
+[[package]]
 name = "purrdf-cli"
 version = "0.12.0"
 dependencies = [
@@ -1395,6 +1405,7 @@ dependencies = [
  "oxilangtag",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-events",
  "purrdf-iri",
  "sha2",
@@ -1515,6 +1526,7 @@ dependencies = [
  "oxilangtag",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-events",
  "purrdf-gts",
@@ -1596,6 +1608,7 @@ dependencies = [
  "memchr",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-iri",
  "purrdf-xsd",
  "regex",
@@ -1609,6 +1622,7 @@ dependencies = [
  "camino",
  "datatest-stable",
  "purrdf",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
  "purrdf-sparql-algebra",
@@ -1630,6 +1644,7 @@ dependencies = [
  "md-5",
  "pretty_assertions",
  "proptest",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-iri",
  "purrdf-sparql-algebra",

@@ -40,6 +40,15 @@ fn run(args: &[&str]) -> Output {
 }
 
 /// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
+///
+/// A `BrokenPipe` on the write is NOT a harness failure. Refusing a bad argument
+/// before reading a byte of input is the binary behaving correctly — a usage
+/// error should not require the operator to finish feeding a document first — so
+/// the child may well have exited and closed the read end before this write
+/// lands. That is a RACE between two correct behaviours, and letting it panic
+/// here turns a graded assertion into an intermittently red gate. Every other
+/// I/O error still fails, and a run whose input never arrived is still graded:
+/// the assertions below read the child's real output either way.
 fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
     let mut child = purrdf()
         .args(args)
@@ -48,12 +57,16 @@ fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn purrdf");
-    child
+    match child
         .stdin
         .take()
         .expect("piped stdin")
         .write_all(stdin_bytes.as_bytes())
-        .expect("write stdin");
+    {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("write stdin: {e:?}"),
+    }
     child.wait_with_output().expect("wait for purrdf")
 }
 

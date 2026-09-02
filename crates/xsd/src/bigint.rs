@@ -89,15 +89,29 @@ impl BigInt {
         if value == 0 {
             return Self::zero();
         }
-        let negative = value < 0;
-        let mut magnitude = value.unsigned_abs();
-        let mut limbs = Vec::new();
-        while magnitude > 0 {
-            // `magnitude % LIMB_BASE < 1e9`, which fits `u32` with headroom to spare.
-            limbs.push((magnitude % u128::from(LIMB_BASE)) as u32);
-            magnitude /= u128::from(LIMB_BASE);
+        Self {
+            negative: value < 0,
+            limbs: magnitude_limbs(value.unsigned_abs()),
         }
-        Self { negative, limbs }
+    }
+
+    /// Construct from a `u128` **magnitude**, exactly — always non-negative.
+    ///
+    /// [`Self::from_i128`] cannot serve every magnitude this crate needs to compare:
+    /// `i128::MIN`'s magnitude is `2^127`, which has no `i128` counterpart at all, and
+    /// it is a perfectly ordinary `xsd:decimal` mantissa. The exact numeric order
+    /// ([`crate::numeric::numeric_total_cmp`]) compares magnitudes with the signs
+    /// already decided, so it needs the unsigned constructor rather than a signed one
+    /// it would immediately have to take the absolute value of.
+    #[must_use]
+    pub fn from_u128(magnitude: u128) -> Self {
+        if magnitude == 0 {
+            return Self::zero();
+        }
+        Self {
+            negative: false,
+            limbs: magnitude_limbs(magnitude),
+        }
     }
 
     /// Add `other` into `self` in place, exactly — this operation alone never
@@ -249,6 +263,41 @@ impl BigInt {
         }
     }
 
+    /// `self × 2^exp`, exactly — the binary counterpart of [`Self::mul_pow10`].
+    ///
+    /// The decimal branch of the numeric tower is `mantissa / 10^scale`; the IEEE
+    /// branch (`xsd:float`, `xsd:double`) is a **dyadic** rational,
+    /// `significand × 2^exponent`, because every finite IEEE value is one exactly.
+    /// Putting the two branches on a common footing to compare them without
+    /// rounding therefore means scaling one side by a power of TWO, which a
+    /// base-`1e9` representation cannot express as a limb shift the way
+    /// [`Self::mul_pow10`] can. See [`crate::numeric::numeric_total_cmp`] for the
+    /// order this exists to make exact.
+    ///
+    /// `2^29 < LIMB_BASE`, so the scaling runs in 29-bit chunks through the same
+    /// single-limb multiply [`Self::mul_pow10`] uses, and every intermediate stays
+    /// inside the `u64` carry lane that multiply already argues for.
+    #[must_use]
+    pub fn mul_pow2(&self, exp: u32) -> Self {
+        if self.is_zero() || exp == 0 {
+            return self.clone();
+        }
+        // 29 bits at a time: `2^29 = 536_870_912 < LIMB_BASE`, so each chunk is a
+        // legal `mul_by_small` factor.
+        const CHUNK: u32 = 29;
+        let mut limbs = self.limbs.clone();
+        let mut remaining = exp;
+        while remaining > 0 {
+            let step = remaining.min(CHUNK);
+            limbs = mul_by_small(&limbs, 1u64 << step);
+            remaining -= step;
+        }
+        Self {
+            negative: self.negative,
+            limbs,
+        }
+    }
+
     /// Divide by the positive machine integer `divisor`, truncating toward zero
     /// exactly as integer division does, returning `(quotient, |remainder|)`.
     /// `None` only for `divisor == 0` — `AVG`'s one caller always passes a
@@ -265,6 +314,46 @@ impl BigInt {
         };
         Some((quotient, remainder))
     }
+}
+
+/// The full arithmetic order on the value — sign first, then magnitude.
+///
+/// This is a genuine total order over the values this type represents, and it agrees
+/// with the derived `PartialEq` because the representation is canonical (zero is the
+/// empty limb vector with `negative == false`, and every constructor trims
+/// most-significant zero limbs), so two `BigInt`s compare `Equal` exactly when they
+/// are structurally equal. Providing it is safe in the way an `Ord` on
+/// [`crate::XsdValue`] would NOT be: an integer has one value space and one order,
+/// with no lexical form to conflate it with and no cross-datatype promotion to hide.
+impl Ord for BigInt {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.negative, other.negative) {
+            (false, true) => Ordering::Greater,
+            (true, false) => Ordering::Less,
+            (false, false) => magnitude_cmp(&self.limbs, &other.limbs),
+            // Both negative: the larger magnitude is the smaller value.
+            (true, true) => magnitude_cmp(&other.limbs, &self.limbs),
+        }
+    }
+}
+
+impl PartialOrd for BigInt {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The canonical base-`1e9` limbs of a non-zero `u128` magnitude, least-significant
+/// first. Shared by [`BigInt::from_i128`] and [`BigInt::from_u128`], which differ only
+/// in where the sign comes from.
+fn magnitude_limbs(mut magnitude: u128) -> Vec<u32> {
+    let mut limbs = Vec::new();
+    while magnitude > 0 {
+        // `magnitude % LIMB_BASE < 1e9`, which fits `u32` with headroom to spare.
+        limbs.push((magnitude % u128::from(LIMB_BASE)) as u32);
+        magnitude /= u128::from(LIMB_BASE);
+    }
+    limbs
 }
 
 /// Render a canonical (no trailing zero limb) magnitude as unsigned decimal digits,
@@ -550,6 +639,60 @@ mod tests {
     #[test]
     fn div_rem_u64_rejects_zero_divisor() {
         assert!(BigInt::from_i128(5).div_rem_u64(0).is_none());
+    }
+
+    /// `i128::MIN`'s magnitude is `2^127`, which `from_i128` can only reach as a
+    /// NEGATIVE value — the exact numeric order needs it as a magnitude.
+    #[test]
+    fn from_u128_reaches_the_magnitude_no_i128_can_hold() {
+        let magnitude = i128::MIN.unsigned_abs();
+        assert!(i128::try_from(magnitude).is_err());
+        let big = BigInt::from_u128(magnitude);
+        assert!(!big.is_negative());
+        assert_eq!(
+            big.to_decimal_string(),
+            "170141183460469231731687303715884105728"
+        );
+        assert_eq!(BigInt::from_u128(0), BigInt::zero());
+        assert_eq!(BigInt::from_u128(42), BigInt::from_i128(42));
+    }
+
+    #[test]
+    fn mul_pow2_is_exact_across_chunk_boundaries() {
+        let one = BigInt::from_i128(1);
+        assert_eq!(one.mul_pow2(0), one);
+        assert_eq!(one.mul_pow2(10).to_i128(), Some(1024));
+        // Straddles the 29-bit chunking twice over.
+        assert_eq!(one.mul_pow2(64).to_i128(), Some(1i128 << 64));
+        assert_eq!(one.mul_pow2(126).to_i128(), Some(1i128 << 126));
+        // And beyond i128 entirely, where the whole point is that nothing wraps.
+        assert_eq!(
+            one.mul_pow2(128).to_decimal_string(),
+            "340282366920938463463374607431768211456"
+        );
+        assert_eq!(BigInt::from_i128(-3).mul_pow2(4).to_i128(), Some(-48));
+        assert_eq!(BigInt::zero().mul_pow2(9), BigInt::zero());
+    }
+
+    #[test]
+    fn ord_agrees_with_i128_and_survives_the_i128_ceiling() {
+        let values: [i128; 7] = [i128::MIN, -5, -1, 0, 1, 5, i128::MAX];
+        for a in values {
+            for b in values {
+                assert_eq!(
+                    BigInt::from_i128(a).cmp(&BigInt::from_i128(b)),
+                    a.cmp(&b),
+                    "{a} vs {b}"
+                );
+            }
+        }
+        // Two totals that both escaped i128 still order exactly.
+        let mut huge = BigInt::from_i128(i128::MAX);
+        huge.add_i128(i128::MAX);
+        let mut huger = huge.clone();
+        huger.add_i128(1);
+        assert!(huge < huger);
+        assert!(BigInt::from_i128(i128::MAX) < huge);
     }
 
     #[test]

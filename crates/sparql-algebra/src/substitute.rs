@@ -193,6 +193,24 @@ fn map_core_pattern(
             expr,
             inner: Box::new(map_core_pattern(*inner, f)),
         },
+        // `UNFOLD` stacks above the pattern before it exactly as `BIND` does, so
+        // it is descended through for the same reason `Extend` is: the pre-bound
+        // seed belongs BENEATH it, where its expression can read `?this`. Left to
+        // the catch-all below, `UNFOLD($this AS ?e)` in a SHACL-SPARQL constraint
+        // would be seeded as `Join(Values{?this}, Unfold(...))` — the expression
+        // then sees `$this` unbound, denotes no composite, and the constraint
+        // quietly reports nothing rather than reporting a violation.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => GraphPattern::Unfold {
+            inner: Box::new(map_core_pattern(*inner, f)),
+            expression,
+            element,
+            companion,
+        },
         // The first non-modifier node is the core WHERE pattern.
         core => f(core),
     }
@@ -301,6 +319,32 @@ mod tests {
         };
         assert_seed(&left, "this", "http://ex/f");
         assert!(matches!(*right, GraphPattern::Bgp { .. }));
+    }
+
+    /// `UNFOLD` is descended through like `BIND`, so the seed lands BENEATH it
+    /// and its expression can read the pre-bound `?this`.
+    ///
+    /// Seeding above the node instead would leave `?this` unbound inside the
+    /// expression, where it denotes no composite — a SHACL-SPARQL constraint
+    /// written over `UNFOLD` would then report nothing at all instead of
+    /// reporting its violations.
+    #[test]
+    fn unfold_is_descended_so_the_seed_lands_beneath_it() {
+        let q = parse("SELECT ?e WHERE { ?this <http://ex/p> ?c UNFOLD(?c AS ?e) }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/f"));
+        let Query::Select { pattern, .. } = out else {
+            panic!("SELECT");
+        };
+        let GraphPattern::Project { inner, .. } = pattern else {
+            panic!("projection preserved");
+        };
+        let GraphPattern::Unfold { inner, .. } = *inner else {
+            panic!("the UNFOLD node must survive ABOVE the seed, got {inner:?}");
+        };
+        let GraphPattern::Join { left, .. } = *inner else {
+            panic!("the seed joins onto the core pattern beneath the UNFOLD");
+        };
+        assert_seed(&left, "this", "http://ex/f");
     }
 
     #[test]

@@ -32,12 +32,67 @@ pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
     TermValue::Iri(node.as_str().to_owned())
 }
 
+/// The blank-node scope every `BLANK_NODE_LABEL` written inside a `cdt:List` /
+/// `cdt:Map` literal **in query text** is bound to.
+///
+/// A composite literal's lexical form is not opaque text: its blank labels denote
+/// blank nodes of the *document that wrote them* (see [`purrdf_core::cdt_blank`]).
+/// A SPARQL query is such a document, and it is a DIFFERENT one from the dataset
+/// it queries — so `BIND("[_:b, 42]"^^cdt:List AS ?l)` names a node distinct from
+/// the `_:b` of a Turtle file the query is evaluated against, exactly as two
+/// Turtle files that both write `_:b` name two nodes. Without a scope of its own
+/// the query-authored label lands at [`BlankScope::DEFAULT`] — which is precisely
+/// where a directly-parsed document's blanks live — and the two collapse onto one
+/// node.
+///
+/// Two occurrences of one label in the SAME query still denote the SAME node:
+/// they share this one scope, so they intern to a single value. That is the
+/// property `bnodes-sparql-01`/`-21`/`-26` of the vendored SEP-0009 corpus pin.
+///
+/// # Why the top of the space, and what it reserves
+///
+/// `BlankScope(0)` is a parsed document's own scope and `1, 2, 3, …` are what
+/// [`push_dataset`](purrdf_core::RdfDatasetBuilder::push_dataset) hands out to the
+/// sources of a merge, counting up. The query therefore takes the far end, and
+/// `BlankScope(u32::MAX)` is **reserved**: no dataset may intern a blank node
+/// under it. [`ScratchInterner::intern`](crate::scratch::ScratchInterner::intern)
+/// enforces the query half of that reservation directly — a value at this scope is
+/// never promoted to a dataset term — so the separation does not rest on the
+/// dataset merely happening not to hold the label.
+pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
+
 /// A literal term value, with the language tag lowercased to match the IR's C0.1
 /// interned identity (so a query literal resolves to the dataset's stored form).
+///
+/// This is the QUERY-TEXT ingress for literals — every [`Literal`] the algebra
+/// carries (a constant expression, a `CONSTRUCT`/`INSERT` template cell, a
+/// `VALUES` cell) becomes a [`TermValue`] here, and nothing else does. So it is
+/// also where a composite literal's embedded blank labels are bound into the
+/// query's own [`QUERY_BLANK_SCOPE`], the exact counterpart of what
+/// [`intern_literal_bound`](purrdf_core::RdfDatasetBuilder::intern_literal_bound)
+/// does for a literal read from a document.
+///
+/// The binding is guarded by the datatype IRI, so an ordinary literal pays two
+/// string comparisons and nothing else; it is the total
+/// (`_unchecked`) form because an ill-formed composite lexical form in a query is
+/// diagnosed by the evaluator's own CDT parse, which reports it against the query
+/// rather than refusing a document.
 pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
+    let datatype = lit.datatype().as_str();
+    // C0.1: a language tag forces `rdf:langString`, and such a literal is never
+    // composite — so the binding is only ever reached for an untagged literal.
+    let lexical_form = match lit.language() {
+        None => purrdf_core::cdt_blank::bind_cdt_blank_labels_unchecked(
+            lit.value(),
+            datatype,
+            purrdf_core::cdt_blank::BlankBinding::Ambient(QUERY_BLANK_SCOPE),
+        )
+        .into_owned(),
+        Some(_) => lit.value().to_owned(),
+    };
     TermValue::Literal {
-        lexical_form: lit.value().to_owned(),
-        datatype: lit.datatype().as_str().to_owned(),
+        lexical_form,
+        datatype: datatype.to_owned(),
         language: lit.language().map(str::to_ascii_lowercase),
         direction: lit.direction().map(map_direction),
     }

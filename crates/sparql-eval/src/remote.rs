@@ -526,6 +526,17 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             variable: variable.clone(),
             expression: expression.clone(),
         },
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => GraphPattern::Unfold {
+            inner: Box::new(sanitize_forwarded_body(inner)),
+            expression: expression.clone(),
+            element: element.clone(),
+            companion: companion.clone(),
+        },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: Box::new(sanitize_forwarded_body(left)),
             right: Box::new(sanitize_forwarded_body(right)),

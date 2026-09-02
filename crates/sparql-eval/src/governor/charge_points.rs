@@ -1360,6 +1360,7 @@ fn sum_group_pattern() -> GraphPattern {
                 AggregateFunction::Sum,
                 vec![Expression::Variable(Variable::new("val"))],
                 Vec::new(),
+                Vec::new(),
                 false,
             )
             .expect("fixture: valid AggregateExpression"),
@@ -1380,6 +1381,7 @@ fn custom_sum_group_pattern(iri: &str) -> GraphPattern {
                 AggregateFunction::Custom(NamedNode::new_unchecked(iri)),
                 vec![Expression::Variable(Variable::new("val"))],
                 Vec::new(),
+                Vec::new(),
                 false,
             )
             .expect("fixture: valid AggregateExpression"),
@@ -1399,6 +1401,7 @@ fn count_distinct_group_pattern() -> GraphPattern {
             AggregateExpression::new(
                 AggregateFunction::Count,
                 vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
                 Vec::new(),
                 true,
             )
@@ -1835,6 +1838,7 @@ fn partial_counter_pattern() -> GraphPattern {
                 AggregateFunction::Custom(NamedNode::new_unchecked(PARTIAL_COUNTER_IRI)),
                 vec![Expression::Variable(Variable::new("val"))],
                 Vec::new(),
+                Vec::new(),
                 false,
             )
             .expect("fixture: valid AggregateExpression"),
@@ -2039,6 +2043,7 @@ fn order_dependent_custom_aggregate_is_byte_identical_under_worker_count() {
             AggregateExpression::new(
                 AggregateFunction::Custom(NamedNode::new_unchecked(format!("{NS}FIRST"))),
                 vec![Expression::Variable(Variable::new("val"))],
+                Vec::new(),
                 Vec::new(),
                 false,
             )

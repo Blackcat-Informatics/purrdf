@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 
 use crate::numeric::{
     self, Decimal, numeric_add, numeric_cmp, numeric_div, numeric_mul, numeric_sub,
-    numeric_unary_minus,
+    numeric_total_cmp, numeric_unary_minus,
 };
 use crate::temporal::{self, duration_equal};
 use crate::value::{XsdError, XsdValue};
@@ -96,6 +96,57 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         }
         // Different value-space families are incomparable.
         _ => None,
+    }
+}
+
+/// The value-space comparison a **sort** must use: [`value_cmp`] everywhere except
+/// the numeric tower, where it is the exact [`numeric_total_cmp`] instead of the
+/// promotion-based [`crate::numeric::numeric_cmp`].
+///
+/// # Why a sort needs its own entry point
+///
+/// [`value_cmp`] means the SPARQL `<` / `=` operators, and §17.3 defines those over
+/// the promotion lattice, which routes any float/double pair through IEEE and is
+/// therefore lossy — and, being lossy across a branch that also has an exact
+/// comparison, **intransitive**. [`numeric_total_cmp`] documents the three-literal
+/// cycle in full. A comparator handed to a Rust sort must be a total order or the
+/// sort may panic, so `ORDER BY`, `DISTINCT`, `MIN` and `MAX` come here while the
+/// operators stay on [`value_cmp`]. Outside the numeric tower there is no
+/// difference at all: this function delegates, so the two relations cannot drift.
+///
+/// `None` still means genuinely incomparable — a `NaN` operand, an indeterminate
+/// timezone, two `xsd:duration`s, or two different value-space families. A caller
+/// that needs a TOTAL relation over those too (a sort does) must rank the
+/// incomparable blocks apart before it gets here; this function will not invent an
+/// order it does not have.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::cmp::Ordering;
+///
+/// use purrdf_xsd::{XsdDatatype, parse, value_cmp, value_total_cmp};
+///
+/// let decimal = parse("1.000000000000000001", XsdDatatype::Decimal)?;
+/// let double = parse("1.0E0", XsdDatatype::Double)?;
+/// assert_eq!(value_cmp(&decimal, &double), Some(Ordering::Equal));
+/// assert_eq!(value_total_cmp(&decimal, &double), Some(Ordering::Greater));
+///
+/// // Everything outside the numeric tower is the very same relation.
+/// let a = parse("abc", XsdDatatype::String)?;
+/// let b = parse("abd", XsdDatatype::String)?;
+/// assert_eq!(value_total_cmp(&a, &b), value_cmp(&a, &b));
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+#[must_use]
+pub fn value_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    use XsdValue::{Double, Float, Integer};
+    match (a, b) {
+        (
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
+        ) => numeric_total_cmp(a, b),
+        _ => value_cmp(a, b),
     }
 }
 

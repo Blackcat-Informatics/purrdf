@@ -354,8 +354,14 @@ pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
             }),
         },
         // Every other variant consumes a row SET, not merely emptiness (Join/Filter/
-        // Extend/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
+        // Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/Path/Values/
         // PropertyFunction/Service/Group/Lateral) — the spine stops here, unmodified.
+        //
+        // `Unfold` is on that list for a reason of its own rather than by default:
+        // it is NOT emptiness-transparent. Its inner can be non-empty while its own
+        // output is empty (every row whose expression denotes no composite, or an
+        // empty one, contributes zero rows), so erasing it would answer `EXISTS`
+        // `true` for a pattern that has no solutions.
         other => Enf::Pattern(other.clone()),
     }
 }

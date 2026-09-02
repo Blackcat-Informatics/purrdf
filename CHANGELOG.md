@@ -374,6 +374,41 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **cdt:** New crate `purrdf-cdt` implementing SEP-0009 SPARQL Composite Datatypes
+  (`cdt:List` / `cdt:Map`) as a closed leaf over `purrdf-iri` + `purrdf-xsd` only. The
+  function library is the spec's fifteen — `cdt:List`, `concat`, `contains`, `get`, `head`,
+  `tail`, `reverse`, `size`, `subseq`, `cdt:Map`, `containsKey`, `keys`, `merge`, `put`,
+  `remove` — and the set is CLOSED: there is no registry to configure and no way for a
+  caller to shadow a spec function, so the same query means the same thing on every host.
+  Nesting is fully ITERATIVE under three bounds (depth 64, 2²⁰ elements, 64 MiB); a
+  million-deep input exits cleanly rather than overflowing the stack, which would abort the
+  process rather than raise. PurRDF mints no vocabulary here: the SEP-0009 namespace is the
+  spec's own fixed string, recognized and never invented.
+- **sparql:** Evaluate SEP-0009 end to end. The fifteen functions are recognized at parse
+  time (with arity enforced there) and dispatched by the evaluator; `FOLD` rides the
+  aggregate ACCUMULATOR seam as a keyword aggregate carrying its own `ORDER BY`; `UNFOLD` is
+  its own `GraphPatternNotTriples` alternative over an expression — structurally where
+  `LATERAL` sits — rather than a property function, because the property-function registry
+  keys on a predicate IRI and no `UNFOLD` predicate IRI exists to key on. `ORDER BY`, `MIN`
+  and `MAX` order composite literals by the value they denote. Blank-node labels written
+  inside a composite lexical form bind through the SAME ingress rule as bare `_:` tokens, on
+  every codec path, and participate in canonicalization and skolemization — so `_:b` written
+  as a subject and `_:b` written inside a `cdt:List` in the same document are one node.
+- **BREAKING** **sparql-algebra:** `GraphPattern` gains an `Unfold` variant and
+  `Function` gains a `Cdt` variant. Both enums are matched exhaustively across the
+  workspace; a downstream consumer matching on either without a wildcard arm must add the
+  new arm. There is no Cargo feature to opt out — CDT is unconditional, like every other
+  part of the engine.
+- **conformance:** The vendored SEP-0009 suite (`vectors/sparql-cdt/`, `awslabs/SPARQL-CDTs`
+  at commit `e0a7465`, 658 cases across six groups) is run and reports its own scoreboard
+  row: **658 / 658, 0 ledgered**. Note the divergence that number cannot express, stated in
+  full in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md): PurRDF's reader accepts two element
+  forms the published lexical space does not — an RDF 1.2 triple term and a directional
+  language-tagged literal — because refusing an RDF 1.2 term type is not an admissible
+  outcome for this toolkit. **A conformant SEP-0009 reader handed one of those literals will
+  call it ill-formed.** The mitigation is executed rather than argued: a scan grades every
+  composite literal in every corpus this workspace ships and proves not one of them needs
+  either form, with its counts pinned as equalities so it cannot pass vacuously.
 - **BREAKING** **sparql-eval:** Generalize the `SERVICE` seam into a per-service-context
   `ServiceResolver`. The trait `RemoteQuerySource` is renamed `ServiceResolver` and its method
   is renamed `resolve`, taking the whole request as one `ServiceRequest` value (endpoint,

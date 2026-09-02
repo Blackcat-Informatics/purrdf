@@ -14,12 +14,14 @@ use purrdf_sparql_eval::InProcessServiceResolver;
 
 use crate::manifest::SparqlTestCase;
 
-/// The same sentinel base the manifest/data are parsed against, so IRIs in the
-/// endpoint data align with those in the default-graph data.
-const BASE: &str = "http://purrdf.test/manifest/";
-
 /// Build an in-memory `SERVICE` source for `case`, if it declares any
 /// `qt:serviceData`. Returns `Ok(None)` when the case is not federated.
+///
+/// Endpoint data is parsed against the case's OWN sentinel base
+/// ([`SparqlTestCase::base`]) — the same one the default-graph data and the query
+/// use — so a relative IRI in the endpoint data denotes the same term it denotes
+/// in the rest of the case. A harness-wide constant base would make endpoint data
+/// from two different groups collide on one IRI space.
 ///
 /// # Errors
 ///
@@ -32,7 +34,7 @@ pub fn build(case: &SparqlTestCase) -> Result<Option<InProcessServiceResolver>, 
     for (endpoint, path) in &case.service_data {
         let bytes = std::fs::read(path)
             .map_err(|e| format!("read service data {}: {e}", path.display()))?;
-        let dataset = purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE))
+        let dataset = purrdf::parse_dataset(&bytes, "text/turtle", Some(&case.base))
             .map_err(|e| format!("parse service data {}: {e}", path.display()))?;
         source = source.with_endpoint(endpoint.clone(), dataset);
     }

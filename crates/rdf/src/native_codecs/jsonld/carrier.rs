@@ -332,7 +332,7 @@ impl NamedGraph {
                 )?;
                 Ok(compacted)
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, RdfDiagnostic>>()?;
         Ok(if !force_array && let [only] = nodes.as_slice() {
             only.clone()
         } else {

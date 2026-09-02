@@ -360,8 +360,9 @@ fn reintern<M: TermMapper>(
             // gets to refuse it (`iri_only`); the returned id is the same one
             // `intern_literal` re-derives from the string below.
             let _ = mapper.map_iri(builder, dt, true)?;
+            let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
             Ok(builder.intern_literal(RdfLiteral {
-                lexical_form: lexical.to_owned(),
+                lexical_form,
                 datatype: Some(dt.to_owned()),
                 language: language.map(str::to_owned),
                 direction,
@@ -372,6 +373,140 @@ fn reintern<M: TermMapper>(
             let p = reintern(ds, builder, p, mapper, true)?;
             let o = reintern(ds, builder, o, mapper, false)?;
             Ok(builder.intern_triple(s, p, o))
+        }
+    }
+}
+
+/// Rewrite the terms a composite (`cdt:List` / `cdt:Map`) literal EMBEDS in its
+/// lexical form through `mapper`, so a whole-dataset term rewrite reaches inside
+/// literals instead of stopping at them.
+///
+/// A blank node written inside a composite literal is a blank node of the graph
+/// (see [`crate::cdt_blank`]). A rewrite that renamed only the term-position
+/// occurrences would leave the embedded one DANGLING — naming a label the
+/// rewritten dataset no longer has — which is exactly what made
+/// [`super::compare::datasets_isomorphic`] wrong for such a dataset. Embedded
+/// IRIs go through [`TermMapper::map_iri`] for the mirror-image reason: a
+/// skolemization that turned an embedded blank into a genid IRI would otherwise
+/// not be invertible.
+///
+/// Any other datatype returns its lexical form unchanged and untouched.
+fn remap_composite_lexical<M: TermMapper>(
+    ds: &RdfDataset,
+    builder: &mut RdfDatasetBuilder,
+    lexical: &str,
+    datatype: &str,
+    mapper: &mut M,
+) -> Result<String, M::Error> {
+    use std::collections::BTreeMap;
+
+    use crate::blank_label::{LabelAlphabet, decode_blank_label};
+
+    if !crate::cdt_blank::is_cdt_datatype(datatype) {
+        return Ok(lexical.to_owned());
+    }
+
+    // The mapper is fallible and the rewriter's callbacks are not, so every
+    // mapping is resolved UP FRONT and the rewrite is then a pure substitution.
+    let mut blanks: BTreeMap<(String, BlankScope), String> = BTreeMap::new();
+    for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(lexical, datatype) {
+        if blanks.contains_key(&(label.clone(), scope)) {
+            continue;
+        }
+        // `intern_literal` interned every embedded pair, so this resolves; a pair
+        // the source dataset does not hold names no node of it and is left alone.
+        let Some(id) = ds.term_id_by_blank(&label, scope) else {
+            continue;
+        };
+        let mapped = mapper.map_blank(builder, id, &label, scope)?;
+        blanks.insert((label, scope), element_text(builder, mapped));
+    }
+
+    let mut iris: BTreeMap<String, String> = BTreeMap::new();
+    let mut failure: Option<M::Error> = None;
+    let out = crate::cdt_blank::rewrite_cdt_terms(
+        lexical,
+        datatype,
+        &mut |token| {
+            let (label, scope) = decode_blank_label(token, LabelAlphabet::BlankNodeLabel);
+            blanks.get(&(label.into_owned(), scope)).cloned()
+        },
+        &mut |iri, iri_only| {
+            if failure.is_some() {
+                return None;
+            }
+            if let Some(text) = iris.get(iri) {
+                return Some(text.clone());
+            }
+            match mapper.map_iri(builder, iri, iri_only) {
+                Ok(mapped) => {
+                    let text = element_text(builder, mapped);
+                    iris.insert(iri.to_owned(), text.clone());
+                    Some(text)
+                }
+                Err(err) => {
+                    failure = Some(err);
+                    None
+                }
+            }
+        },
+    );
+    if let Some(err) = failure {
+        return Err(err);
+    }
+    let changed = matches!(out, std::borrow::Cow::Owned(_));
+    let out = out.into_owned();
+
+    // A mapper that produced a token the composite grammar cannot hold would
+    // corrupt the store silently. Refuse loudly instead — the rewrite is a
+    // programming error in the mapper, not a property of the input data, and a
+    // rewrite that changed nothing cannot have introduced one.
+    assert!(
+        !changed || purrdf_cdt::parse_cdt_by_iri(&out, datatype).is_ok(),
+        "a term rewrite produced an ill-formed composite lexical form: {out}"
+    );
+    Ok(out)
+}
+
+/// The composite-lexical element text a mapped term is written back as.
+fn element_text(builder: &RdfDatasetBuilder, id: TermId) -> String {
+    use crate::blank_label::{LabelAlphabet, encode_blank_label};
+
+    match builder.resolve(id) {
+        TermRef::Iri(iri) => {
+            let mut out = String::with_capacity(iri.len() + 2);
+            out.push('<');
+            write_iriref_escaped(iri, &mut out);
+            out.push('>');
+            out
+        }
+        TermRef::Blank { label, scope } => {
+            format!(
+                "_:{}",
+                encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel)
+            )
+        }
+        other => {
+            unreachable!("a term rewrite may only produce an IRI or a blank node, got {other:?}")
+        }
+    }
+}
+
+/// Write an IRI as a composite `IRIREF` body, `\u`-escaping every character the
+/// production excludes so the result is always a legal token.
+fn write_iriref_escaped(iri: &str, out: &mut String) {
+    for ch in iri.chars() {
+        match ch {
+            // `'` is legal in an `IRIREF`, but a composite literal may be
+            // embedded inside a single-quoted string, where a raw `'` would
+            // close it. Escaping it costs nothing and is always legal.
+            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' | '\'' => {
+                let _ = write!(out, "\\u{:04X}", ch as u32);
+            }
+            c if (c as u32) <= 0x20 => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
         }
     }
 }

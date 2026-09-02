@@ -555,7 +555,15 @@ impl Component {
     }
 }
 
-/// Invoke `f` for every blank [`TermId`] reachable at `id` (recursing triple terms).
+/// Invoke `f` for every blank [`TermId`] reachable at `id` — recursing triple
+/// terms, and descending into the lexical form of a composite (`cdt:List` /
+/// `cdt:Map`) literal.
+///
+/// A blank node embedded in a composite literal is a blank node OF THE GRAPH
+/// (see [`crate::cdt_blank`]), so it must participate in canonical labeling like
+/// any other. Leaving it out would make two datasets that differ only by a
+/// consistent renaming of such a node canonicalize differently, and would let
+/// [`canonical_relabel`] emit a dangling label.
 fn blanks_in_term(ds: &RdfDataset, id: TermId, f: &mut impl FnMut(TermId)) {
     match ds.resolve(id) {
         TermRef::Blank { .. } => f(id),
@@ -564,8 +572,41 @@ fn blanks_in_term(ds: &RdfDataset, id: TermId, f: &mut impl FnMut(TermId)) {
             blanks_in_term(ds, p, f);
             blanks_in_term(ds, o, f);
         }
-        _ => {}
+        TermRef::Literal {
+            lexical, datatype, ..
+        } => {
+            for id in composite_blanks(ds, lexical, datatype) {
+                f(id);
+            }
+        }
+        TermRef::Iri(_) => {}
     }
+}
+
+/// The [`TermId`]s of the blank nodes a composite literal's lexical form names,
+/// in occurrence order and deduplicated.
+///
+/// Empty unless `datatype` is one of the two composite IRIs, so an ordinary
+/// literal costs one datatype resolve and two string comparisons.
+///
+/// Every `(label, scope)` a composite literal names was interned when the
+/// literal was
+/// ([`intern_literal`](super::builder::RdfDatasetBuilder::intern_literal) does
+/// it), so the lookup normally succeeds; a pair the dataset does not hold names
+/// no node of this graph and is skipped rather than fabricated.
+fn composite_blanks(ds: &RdfDataset, lexical: &str, datatype: TermId) -> Vec<TermId> {
+    let TermRef::Iri(iri) = ds.resolve(datatype) else {
+        return Vec::new();
+    };
+    if !crate::cdt_blank::is_cdt_datatype(iri) {
+        return Vec::new();
+    }
+    let mut seen = BTreeSet::new();
+    crate::cdt_blank::cdt_embedded_blanks(lexical, iri)
+        .into_iter()
+        .filter_map(|(label, scope)| ds.term_id_by_blank(&label, scope))
+        .filter(|id| seen.insert(*id))
+        .collect()
 }
 
 /// Drive `f` over every [`Component`] of the dataset (quads, reifiers, annotations).
@@ -1180,7 +1221,27 @@ impl<'a> CanonState<'a> {
                     f,
                 );
             }
-            _ => {}
+            TermRef::Literal {
+                lexical, datatype, ..
+            } => {
+                // A blank embedded in a composite literal is related exactly as a
+                // blank in that slot would be. The position path gets a `.cdt`
+                // segment so the role "inside a composite value" is distinguished
+                // from the slot's own term, and the segment is label-independent,
+                // which is what canonicality requires.
+                for related in composite_blanks(self.ds, lexical, datatype) {
+                    if related != focus {
+                        let h = self.hash_related_blank_node(
+                            related,
+                            &format!("{position}.cdt"),
+                            predicate,
+                            issuer,
+                        );
+                        f(related, h);
+                    }
+                }
+            }
+            TermRef::Iri(_) => {}
         }
     }
 
@@ -1284,7 +1345,15 @@ impl<'a> CanonState<'a> {
     }
 
     /// Write a term in canonical N-Quads form. Literal lexical forms / datatypes /
-    /// language / direction are emitted **verbatim** (never normalized).
+    /// language / direction are emitted **verbatim** (never normalized), with one
+    /// exception that is not a normalization: a composite (`cdt:List` /
+    /// `cdt:Map`) literal's embedded `BLANK_NODE_LABEL` tokens are rendered
+    /// through `render`, exactly as the same blank node written as a term is.
+    ///
+    /// Without that the canonical form would still carry the INPUT labels of
+    /// blank nodes that happen to live inside a literal, so two isomorphic
+    /// datasets would serialize differently and the oracle would report a false
+    /// negative. Every other byte of the lexical form is untouched.
     fn write_term(&self, id: TermId, render: BlankRender<'_>, out: &mut String) {
         match self.ds.resolve(id) {
             TermRef::Iri(iri) => {
@@ -1302,8 +1371,9 @@ impl<'a> CanonState<'a> {
                 language,
                 direction,
             } => {
+                let rendered = self.render_composite_lexical(lexical, datatype, render);
                 out.push('"');
-                write_literal_escaped(lexical, out);
+                write_literal_escaped(&rendered, out);
                 out.push('"');
                 if let Some(lang) = language {
                     out.push('@');
@@ -1335,6 +1405,28 @@ impl<'a> CanonState<'a> {
                 out.push_str(" )>>");
             }
         }
+    }
+
+    /// A composite literal's lexical form with every embedded blank label
+    /// replaced by the label `render` issues for that node; any other lexical
+    /// form, borrowed unchanged.
+    fn render_composite_lexical<'l>(
+        &self,
+        lexical: &'l str,
+        datatype: TermId,
+        render: BlankRender<'_>,
+    ) -> std::borrow::Cow<'l, str> {
+        let TermRef::Iri(iri) = self.ds.resolve(datatype) else {
+            return std::borrow::Cow::Borrowed(lexical);
+        };
+        crate::cdt_blank::rewrite_cdt_blank_terms(lexical, iri, &mut |label| {
+            let (label, scope) = crate::blank_label::decode_blank_label(
+                label,
+                crate::blank_label::LabelAlphabet::BlankNodeLabel,
+            );
+            let id = self.ds.term_id_by_blank(&label, scope)?;
+            Some(format!("_:{}", render.label(id)))
+        })
     }
 }
 

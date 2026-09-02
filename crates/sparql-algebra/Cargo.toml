@@ -36,6 +36,12 @@ name = "purrdf_sparql_algebra"
 [dependencies]
 purrdf-iri = { workspace = true }
 purrdf-xsd = { workspace = true }
+# The SEP-0009 composite datatypes (`cdt:List` / `cdt:Map`): the closed function
+# registry (`CdtFn`, `CdtArity`) this parser resolves a call-position CDT IRI
+# against, and the lexical layer a `"…"^^cdt:List` literal is checked with. A
+# closed leaf over `purrdf-iri` + `purrdf-xsd` only, so it adds no edge this
+# crate does not already carry and keeps the front-end `purrdf-core`-free.
+purrdf-cdt = { workspace = true }
 # SIMD byte scanning on the tokenizer hot paths (string-literal body, IRIREF end,
 # comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
 # gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.

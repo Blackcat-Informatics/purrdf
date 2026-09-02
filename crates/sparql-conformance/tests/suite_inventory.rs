@@ -216,6 +216,104 @@ fn suite_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
 }
 
+/// The vendored `vectors/sparql-cdt` root (SEP-0009, `awslabs/SPARQL-CDTs`).
+///
+/// Deliberately NOT under `suite/`, and for the same reason the two first-party
+/// query-form corpora live under `corpus/`: `sparql_conformance.rs`'s
+/// `datatest_stable::harness!` is rooted at `suite/` and folds every manifest it
+/// finds into ONE matix row, and this corpus reports its OWN row. It is run by
+/// `tests/cdt_corpus.rs` through its `mf:include` aggregator.
+///
+/// What lives HERE is the inventory half: the per-group `mf:entries` and
+/// on-disk file counts below, which catch a re-sync that drops or duplicates a
+/// case even though every group manifest is still present and the aggregator
+/// still resolves. `tests/cdt_corpus.rs` separately pins the count the
+/// aggregator resolves, and `tests/manifest_include.rs` pins the include
+/// closure, so no one of the three can go quiet on its own.
+fn sparql_cdt_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("vectors")
+        .join("sparql-cdt")
+}
+
+/// Exact pinned totals for the vendored SEP-0009 SPARQL Composite Datatypes (CDT)
+/// corpus (`vectors/sparql-cdt`, upstream `awslabs/SPARQL-CDTs` commit
+/// `e0a746561ad6a2db0f70fdcccb57eadea04f50c8`) — both the `mf:entries` count each
+/// group manifest declares (loaded exactly like a live suite manifest, via
+/// `manifest::load`, so a re-sync that silently drops or duplicates a case is
+/// caught the same way `purrdf_extend_case_count_and_kinds` catches it above) and
+/// the on-disk file count per group directory (catching a re-sync that changes
+/// fixture files without changing the declared case count, e.g. a renamed `.rq`
+/// still referenced by the same `mf:entries` member count).
+///
+/// This test is corpus-inventory only — it loads and counts, and never executes
+/// a case. The cases themselves are RUN by `tests/cdt_corpus.rs`, which reports
+/// the corpus's own scoreboard row.
+#[test]
+fn sparql_cdt_inventory() {
+    const GROUPS: &[(&str, usize, usize)] = &[
+        // (group, expected mf:entries count, expected file count)
+        ("unfold", 42, 77),
+        ("fold", 30, 33),
+        ("list-functions", 287, 290),
+        ("map-functions", 196, 199),
+        ("orderby", 27, 30),
+        ("bnodes", 76, 118),
+    ];
+
+    let root = sparql_cdt_root();
+    assert!(
+        root.is_dir(),
+        "vendored SEP-0009 CDT corpus is missing: {}",
+        root.display()
+    );
+    assert!(
+        root.join("manifest-all.ttl").is_file(),
+        "vendored CDT corpus lost its mf:include aggregator manifest-all.ttl"
+    );
+
+    let mut total_entries = 0usize;
+    for (group, expected_entries, expected_files) in GROUPS {
+        let group_dir = root.join(group);
+        assert!(
+            group_dir.is_dir(),
+            "vendored CDT corpus lost its '{group}' group directory: {}",
+            group_dir.display()
+        );
+
+        let manifest = group_dir.join("manifest.ttl");
+        let cases = purrdf_sparql_conformance::manifest::load(&manifest)
+            .unwrap_or_else(|e| panic!("{}: failed to load: {e}", manifest.display()));
+        assert_eq!(
+            cases.len(),
+            *expected_entries,
+            "vectors/sparql-cdt/{group}/manifest.ttl must declare exactly {expected_entries} \
+             mf:entries member(s); got {} — the vendored corpus drifted from the pinned \
+             upstream commit",
+            cases.len()
+        );
+        total_entries += cases.len();
+
+        let file_count = std::fs::read_dir(&group_dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", group_dir.display()))
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(
+            file_count, *expected_files,
+            "vectors/sparql-cdt/{group}/ must carry exactly {expected_files} file(s); got \
+             {file_count} — the vendored corpus drifted from the pinned upstream commit"
+        );
+    }
+
+    assert_eq!(
+        total_entries, 658,
+        "vectors/sparql-cdt must declare exactly 658 mf:entries across its six groups; got \
+         {total_entries}"
+    );
+}
+
 /// The `tests/fixtures/` directory of this crate — deliberately NOT under `suite/`,
 /// so nothing here is ever discovered as a live conformance case by
 /// `sparql_conformance.rs`'s `datatest_stable::harness!` (rooted at `suite/` only).
@@ -323,8 +421,15 @@ fn broken_manifest_with_a_described_entry_loads_cleanly() {
          one case, got {}",
         cases.len()
     );
+    // The base is derived from the manifest's own workspace-relative directory
+    // (`manifest::manifest_base`), not from one constant shared by every manifest,
+    // so this fixture's relative `<#describedEntry>` resolves under its own path.
+    // That is what makes a case IRI globally unique — see
+    // `tests/manifest_include.rs`.
     assert_eq!(
-        cases[0].iri, "http://purrdf.test/manifest/#describedEntry",
+        cases[0].iri,
+        "http://purrdf.test/manifest/crates/sparql-conformance/tests/fixtures/\
+         broken-manifests/described-entry/#describedEntry",
         "the loaded case must be the described entry, not some other IRI"
     );
     assert_eq!(

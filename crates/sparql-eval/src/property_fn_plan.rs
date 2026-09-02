@@ -596,6 +596,21 @@ fn map_children(
                 expression: plan_expression(expression, relations, agg_registry, &scope)?,
             }
         }
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            let mut scope = outer.clone();
+            collect_certainly_bound(inner, &mut scope);
+            GraphPattern::Unfold {
+                inner: recurse(inner, outer)?,
+                expression: plan_expression(expression, relations, agg_registry, &scope)?,
+                element: element.clone(),
+                companion: companion.clone(),
+            }
+        }
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
             inner: recurse(inner, outer)?,
@@ -801,16 +816,45 @@ fn plan_aggregate(
         .iter()
         .map(|e| plan_expression(e, relations, agg_registry, outer))
         .collect::<Result<Vec<_>, PlanError>>()?;
+    // A `FOLD`'s own sort keys are per-row expressions read from the same
+    // solutions its arguments are, so they must be planned too: a property
+    // function or custom aggregate reachable from `FOLD(?v ORDER BY f(?w))`
+    // would otherwise skip this walk's prepare-time admission entirely.
+    let order_by = aggregate
+        .order_by()
+        .iter()
+        .map(|order| plan_order_expression(order, relations, agg_registry, outer))
+        .collect::<Result<Vec<_>, PlanError>>()?;
     // `plan_expression` rewrites each argument in place and never changes the
-    // argument COUNT, so this can never turn a valid `aggregate` into an
-    // invalid one — the `AggregateExpression::new` call below cannot fail.
+    // argument COUNT, and planning a sort key never removes one, so this can
+    // never turn a valid `aggregate` into an invalid one — the
+    // `AggregateExpression::new` call below cannot fail.
     Ok(AggregateExpression::new(
         aggregate.function().clone(),
         args,
         aggregate.scalarvals().to_vec(),
+        order_by,
         aggregate.distinct,
     )
     .expect("plan_expression preserves argument count, so arity stays valid"))
+}
+
+/// [`plan_expression`] lifted to one [`OrderExpression`] sort key, preserving
+/// its `ASC`/`DESC` direction.
+fn plan_order_expression(
+    order: &OrderExpression,
+    relations: &PropertyFunctionRegistry,
+    agg_registry: &AggregateRegistry,
+    outer: &DetHashSet<Variable>,
+) -> Result<OrderExpression, PlanError> {
+    Ok(match order {
+        OrderExpression::Asc(expr) => {
+            OrderExpression::Asc(plan_expression(expr, relations, agg_registry, outer)?)
+        }
+        OrderExpression::Desc(expr) => {
+            OrderExpression::Desc(plan_expression(expr, relations, agg_registry, outer)?)
+        }
+    })
 }
 
 /// Validate a [`AggregateFunction::Custom`] call's `; NAME=value` scalarval
@@ -950,6 +994,11 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
         | GraphPattern::Slice { inner, .. }
         // A `BIND`'s own variable is NOT certain: an expression that errors leaves it
         // unbound (SPARQL 1.1 §18.6), so only the inner pattern's bindings carry.
+        // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null` element
+        // (or a null map value) yields the row with that variable unbound, so only
+        // what the inner pattern certainly binds escapes — the same rule `Extend`
+        // follows for a `BIND` whose expression can error.
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::Extend { inner, .. } => collect_certainly_bound(inner, out),
         GraphPattern::Graph { name, inner } => {
             if let NamedNodePattern::Variable(variable) = name {

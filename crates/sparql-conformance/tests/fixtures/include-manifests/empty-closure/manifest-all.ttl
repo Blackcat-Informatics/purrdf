@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# An aggregator whose include DOES resolve and whose child parses cleanly, but
+# whose transitive closure contributes ZERO cases because the child declares an
+# empty `mf:entries ()`. The aggregator itself is well-formed; only the recursion
+# into the child catches it, and the error must name the CHILD, not this file.
+#
+# An empty `rdf:List` is `rdf:nil`, which carries no `rdf:first`, so the loader's
+# `rdf:rest*/rdf:first` walk sees exactly what it sees for a manifest with no
+# `mf:entries` at all — which is why the empty case is detected by a separate
+# property-presence query and diagnosed in its own words.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:include ( <empty-group/manifest.ttl> ) .

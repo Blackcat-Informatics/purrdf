@@ -1,1 +1,1 @@
-<http://example.org/d> <http://example.org/knows> <http://example.org/e> <http://purrdf.test/manifest/worlds.ttl> .
+<http://example.org/d> <http://example.org/knows> <http://example.org/e> <http://purrdf.test/manifest/crates/sparql-conformance/corpus/describe/worlds.ttl> .

@@ -32,6 +32,18 @@
 //! (term identity is the IR's job, not this crate's) nor `PartialOrd`/`Ord` (that
 //! would re-introduce the conflation for `BTreeMap`); ordering is the free fn.
 //!
+//! # `<` is not the sort order
+//!
+//! [`value_cmp`] means the SPARQL `<` / `=` operators, and §17.3 defines those over
+//! the numeric PROMOTION lattice — which sends any comparison involving an
+//! `xsd:float`/`xsd:double` through IEEE, losing precision, while comparing an
+//! integer against a decimal exactly. Mixing an exact sub-relation with a lossy one
+//! is not transitive, and a Rust sort handed an intransitive comparator may panic.
+//! [`value_total_cmp`] is therefore the relation a SORT uses: identical to
+//! [`value_cmp`] everywhere except the numeric tower, where [`numeric_total_cmp`]
+//! compares the exact rationals instead. The divergence, and the three-literal cycle
+//! that forces it, are spelled out on [`numeric_total_cmp`].
+//!
 //! # XSD version: 1.1
 //!
 //! purrdf-xsd targets the **XSD 1.1** value spaces (W3C REC 2012-04-05).
@@ -162,12 +174,13 @@ pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, pa
 pub use datatype::{XSD_NS, XsdDatatype};
 pub use numeric::{
     Decimal, bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add,
-    numeric_ceil, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
-    numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
+    numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
+    numeric_total_cmp, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
+    parse_float_xsd10,
 };
 pub use ops::{
     effective_boolean_value, value_add, value_cmp, value_div, value_eq, value_equal, value_mul,
-    value_sub, value_unary_minus,
+    value_sub, value_total_cmp, value_unary_minus,
 };
 pub use range::{
     Cardinality, DataRange, Facet, Known, Satisfiability, cardinality, contains,

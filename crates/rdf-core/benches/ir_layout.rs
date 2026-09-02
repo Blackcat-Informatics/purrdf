@@ -404,6 +404,59 @@ fn bench_build(c: &mut Criterion) {
     group.finish();
 }
 
+/// Literal interning, split by whether the datatype is composite.
+///
+/// `intern_literal` is on the ingest path of EVERY literal, and it now checks
+/// whether the datatype is `cdt:List` / `cdt:Map` before deciding whether to
+/// scan the lexical form for embedded blank-node labels. Report-only: this
+/// measures what the dispatch guard costs an ordinary literal (which must be
+/// nothing but two string comparisons), what a composite literal with no blank
+/// node costs, and what one carrying blank nodes costs.
+fn bench_literal_intern(c: &mut Criterion) {
+    const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
+    const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    // Distinct lexical forms per iteration so the interner's dedup does not turn
+    // the measurement into a hash hit.
+    fn intern_many(datatype: &str, shape: &dyn Fn(usize) -> String, n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b
+                .intern_literal(RdfLiteral::typed(shape(i), datatype))
+                .index();
+        }
+        last
+    }
+
+    let mut group = c.benchmark_group("ir_literal_intern");
+    group.bench_function("plain_typed", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(XSD_INT, &|i| i.to_string(), 512));
+        });
+    });
+    group.bench_function("composite_no_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(LIST, &|i| format!("[{i}, 42, 43]"), 512));
+        });
+    });
+    group.bench_function("composite_with_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(LIST, &|i| format!("[_:b{i}, 42, _:b{i}]"), 512));
+        });
+    });
+    group.bench_function("composite_nested_with_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(
+                LIST,
+                &|i| format!("[_:b{i}, 42, [_:b{i}, [_:c{i}]]]"),
+                512,
+            ));
+        });
+    });
+    group.finish();
+}
+
 fn bench_iterate(c: &mut Criterion) {
     let ds = build_dataset();
     let soa = SoaQuads::from_dataset(&ds);
@@ -657,6 +710,7 @@ criterion_group!(
     benches,
     bench_metrics,
     bench_build,
+    bench_literal_intern,
     bench_iterate,
     bench_resolve,
     bench_value_lookup,

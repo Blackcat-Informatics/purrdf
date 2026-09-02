@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The collision half of the pair described in `../alpha/manifest.ttl`: the SAME
+# relative default prefix `<manifest#>` and the SAME local name `shared-01`. The
+# two case IRIs must differ, and the aggregator above must load all four cases.
+@prefix : <manifest#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:entries ( :shared-01 :beta-only-01 ) .
+
+:shared-01 a mf:PositiveSyntaxTest ;
+    mf:name "shared-01" ;
+    mf:action <shared-01.rq> .
+
+:beta-only-01 a mf:PositiveSyntaxTest ;
+    mf:name "beta-only-01" ;
+    mf:action <beta-only-01.rq> .

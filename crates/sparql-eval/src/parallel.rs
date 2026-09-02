@@ -504,7 +504,18 @@ pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
         // `Custom` belongs in this `false` group too: its volatility is
         // registry-dependent and decided separately, by `function_is_unsafe`'s own
         // `Custom` arm, never here.
-        Function::Str
+        //
+        // Every SEP-0009 composite function belongs here as well, INCLUDING the two
+        // constructors. Unlike `PurrdfFn::ListSlice`/`ListConcat`, which mint fresh
+        // `rdf:List` cells from the shared `bnode_counter`, a composite value is
+        // carried entirely inside one literal's lexical form: `crate::cdt_fn`
+        // touches neither `bnode_counter` nor `rng_state`, and the canonical form it
+        // mints is a pure function of the argument terms. Two evaluations of
+        // `cdt:List()` are the same term by construction — which is exactly what
+        // `list-functions/sameterm-01.rq` requires — so a forked child computes the
+        // same answer as the sequential stream.
+        Function::Cdt(_)
+        | Function::Str
         | Function::Lang
         | Function::LangMatches
         | Function::Datatype

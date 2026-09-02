@@ -187,6 +187,23 @@ impl Rational {
     /// `None` for every other variant — including `xsd:float` and `xsd:double`,
     /// whose value spaces the OWL 2 datatype map keeps DISJOINT from the reals,
     /// so answering for them would identify values the map separates.
+    ///
+    /// # This is an IDENTITY question, not an order question
+    ///
+    /// A finite IEEE value *is* a rational — a dyadic one,
+    /// `significand × 2^exponent` — so the exclusion here is semantic rather than
+    /// arithmetic: the OWL 2 datatype map puts `xsd:float`/`xsd:double` on their own
+    /// branch, and a reasoner that read `"0.5"^^xsd:float` as `1/2` would decide
+    /// `dt-eq` for a pair the map keeps apart. That reading must not leak in here.
+    ///
+    /// The **ordering** across the branches is a different question with a different
+    /// answer, and it is exact: [`crate::numeric_total_cmp`] compares an
+    /// integer/decimal against a float/double as the rationals they both denote,
+    /// with no rounding anywhere. It does not go through this type because most
+    /// doubles need a denominator up to `2^1074`, which no `i128` pair holds; it
+    /// cross-multiplies through [`crate::BigInt`] instead. So the tower orders
+    /// exactly end to end while the OWL 2 identification stays exactly as narrow as
+    /// the datatype map makes it.
     #[must_use]
     pub fn from_xsd(value: &XsdValue) -> Option<Self> {
         match value {

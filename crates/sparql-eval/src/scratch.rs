@@ -167,6 +167,16 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
     payload.saturating_add(TERM_OVERHEAD)
 }
 
+/// Whether `value` is a blank node the QUERY wrote inside a composite literal —
+/// the one value [`ScratchInterner::intern`] must not resolve against the dataset.
+///
+/// A discriminant test on the value the interner is already holding, so it costs a
+/// branch and runs strictly cheaper than the term-index probe it guards.
+#[inline]
+fn is_query_scoped_blank(value: &TermValue) -> bool {
+    matches!(value, TermValue::Blank { scope, .. } if *scope == crate::convert::QUERY_BLANK_SCOPE)
+}
+
 fn hash_value(value: &TermValue) -> u64 {
     let mut hasher = ahash::AHasher::default();
     value.hash(&mut hasher);
@@ -184,8 +194,25 @@ impl ScratchInterner {
     ///
     /// This is the unification rule: a value already in the data never becomes a
     /// `Computed` id, so cross-case join keys are unequal by construction.
+    ///
+    /// # The one value that is never promoted
+    ///
+    /// A blank node at the RESERVED query blank-node scope, `BlankScope(u32::MAX)`,
+    /// was written inside a `cdt:List` / `cdt:Map` literal in the QUERY, and a query
+    /// is its own blank-node document: such a node is distinct from every node of
+    /// the queried data by definition, not by luck of the label. Promotion is
+    /// therefore skipped for it, so the separation holds even against a dataset that
+    /// (absurdly) interned a blank under the reserved scope. Every other value —
+    /// including a blank a composite literal of the DATA names — takes the promotion
+    /// path unchanged, which is what keeps a bare `_:b` and the `_:b` embedded in a
+    /// `cdt:List` literal of the same document one node.
+    ///
+    /// No dataset may use that scope; `crate::convert`'s `QUERY_BLANK_SCOPE` states
+    /// the reservation and is where query text is bound into it.
     pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {
-        if let Some(id) = dataset.term_id_by_value(&value) {
+        if !is_query_scoped_blank(&value)
+            && let Some(id) = dataset.term_id_by_value(&value)
+        {
             return SolutionTerm::Existing(id);
         }
         let hash = hash_value(&value);

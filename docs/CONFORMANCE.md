@@ -46,6 +46,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 862 | 5 | 5 | 0 | GREEN |
 | SPARQL CONSTRUCT (first-party corpus) | purrdf-construct (first-party) | 29 | 0 | 0 | 0 | GREEN |
 | SPARQL DESCRIBE (first-party corpus) | purrdf-describe (first-party) | 16 | 0 | 0 | 0 | GREEN |
+| SPARQL CDT (SEP-0009, vendored corpus) | awslabs/SPARQL-CDTs | 658 | 0 | 0 | 0 | GREEN |
 | SPARQL execution governors | purrdf-sparql-governors (first-party) | 50 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 258 | 4 | 4 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
@@ -93,6 +94,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **862** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the first-party `purrdf-property-functions` manifest walks the relation seam's access-pattern lattice, its multi-output and empty-argument-vector shapes, and a call driven by graph data, and — through a relation that declares only `bf` — mode restriction, a written order the feasibility pass must REORDER before it can run, a fully bound call served by subsumption, and the seam's two hard errors (an unregistered call IRI and a chain with no feasible total order), each pinned by the text of the diagnostic that names it; the relation tuples themselves are read out of a fixture graph via `MemoryRelation::from_graph` rather than written as Rust; the first-party `purrdf-extend` manifest additionally walks nine temporal arithmetic cases through the shipped stack — instant difference, instant plus a yearMonth duration, sum/mixed-subtype/scaled/ratio duration cases, a timezone-mix case whose SRX omits the binding rather than serializing an error, duration equality's totality, and a FILTER threshold — proving the SEP-0002 operator surface end to end rather than only at the crate boundary; the same manifest also walks six `LATERAL` (SEP-0006) cases — the SEP's own worked examples (including the scoping oracle proving Project-boundary narrowing, not mere textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal scope-restriction pair; the same manifest also walks nine SEP-0007 `EXISTS`/`NOT EXISTS` cases through the shipped stack — a `GRAPH ?g` correlated through the definition path, the `OPTIONAL`-padding law proven both as `EXISTS` (always true) and its `NOT EXISTS` twin (always false), nested `EXISTS`/`NOT EXISTS` through filter-only groups without over-capturing the inner's own fresh variable, a correlated `LIMIT 1` sub-select only the per-row definition path answers correctly, a correlated variable occurring only in a `MINUS` right operand, and the Part 3 assignment restriction's illegal `BIND`, `VALUES`, and `SELECT`-list projection-target trio as negative syntax tests; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
 | SPARQL CONSTRUCT (first-party corpus) | first-party corpus, `crates/sparql-conformance/corpus/construct/` | **29 / 29** cases · 0 ledgered. Both `CONSTRUCT` forms, paired case for case — every one of the 10 triple-form evaluation cases has a `graph`-prefixed quad-form counterpart, and the corpus test checks the pairing rather than asserting it. The SPARQL 1.1 §16.2 **triple**-producing form (rewrite, `CONSTRUCT WHERE` short form, unbound-variable skip, the §16.2 subject rule on BOTH terms a subject position refuses — a literal AND an RDF 1.2 triple term, which annotated data puts in reach of an ordinary triple pattern — at BOTH depths it applies, the asserted subject and the subject of a triple term nested in an object (graded apart because an ill-formed asserted subject is refused downstream whatever the template rule says, while an ill-formed nested one is not: an engine enforcing the model only at the asserted level emits it at exit status zero into a document its own readers refuse to parse, and persists it on an `UPDATE` path), per-row blank freshness, a `GRAPH`-scoped `WHERE`, solution modifiers, and an RDF 1.2 reifier + annotation template) expects Turtle — so a statement that gained a graph term would stop matching — and the **quad**-producing `CONSTRUCT GRAPH <iri>` form expects N-Quads carrying a graph the template names on every line. Nine quad-form cases have no triple-form twin by nature: `graphReifierScope` pins the RDF 1.2 statement layer's **per-graph keying** — one reifier id, one annotation predicate, two graphs, an annotation in the graph that declares the reifier and an ordinary quad in the graph that does not — which needs two graphs to say anything at all, and 8 syntax verdicts grade the quad-template grammar itself, bounding it from **both** sides: 1 positive spelling that parses and 7 refused spellings established empirically against the parser — a missing, literal or blank-node graph name (the name is a `VarOrIri`), a nested `GRAPH` block or one missing its braces (a block body is a `TriplesTemplate`), a `GRAPH` block in the `CONSTRUCT` short form (whose one block is read twice, as template and as `WHERE` algebra), and a property path inside a `GRAPH` block (a template asserts triples, inside a block exactly as outside one) |
 | SPARQL DESCRIBE (first-party corpus) | first-party corpus, `crates/sparql-conformance/corpus/describe/` | **16 / 16** cases · 0 ledgered. §16.4 leaves the description implementation-defined, so no vendored manifest grades a `DESCRIBE` — this corpus is the form's only conformance measurement, pinning the engine's documented **Symmetric Concise Bounded Description** clause by clause: outgoing edges, incoming edges, the blank-node closure, the RDF 1.2 statement layer (the reifiers whose reified triple's subject **or** object lies in the closure, and their annotations — measured on both sides of that disjunction, with the object side isolated on a term that is the subject of nothing and whose reified triple is unasserted, and composed with the blank closure through a blank reifier and a blank annotation object), the three target-resolution rules (concrete IRI, bound variable, `*`), that a non-IRI binding describes nothing, that an unmentioned subject is empty rather than an error, and that a described statement stays in the graph it came from at **every** layer — the base quad, the reifier declaration and the annotation alike. That last claim is carried by three cases read over **TriG** and expected as N-Quads, so every expected row pins a graph: the clause-4 cases above all read a default-graph-only fixture, whose graph-less expectations cannot observe where a described statement lands, only that it was selected. Those three fix the extractor's selection/emission split: a reifier declaration is selected by its reified triple's subject-or-object membership in the closure and by **nothing else** — graph membership takes no part in the selection — and is then re-emitted into the graph that declared it, so a declaration made in one graph about a triple asserted in another is kept, and kept where it was declared; and an annotation rides with the declaration it annotates rather than with the reifier resource, which one reifier id declared in two graphs, annotated in each under the same predicate, measures |
+| SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs`, `vectors/sparql-cdt/` | **658 / 658** cases · 0 ledgered. Six groups: the `cdt:List` and `cdt:Map` function libraries (287 + 196), the `UNFOLD` graph pattern (42), the `FOLD` aggregate (30), `ORDER BY` over composite values (27), and blank-node identity inside composite lexical forms (76). This is an **independent oracle**: until it ran, every claim about this engine's CDT behavior rested on tests written beside the implementation by the same hand, which grade the engine against itself. Read it together with the [lexical-space divergence](#sep-0009-lexical-space-purrdf-reads-two-forms-the-spec-does-not) below — a number in this column cannot express it, because upstream ships no vector that exercises it |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group, via `purrdf-sparql-conformance` | **70 / 70** · 0 ledgered — RDF/RDFS/OWL-RL chase, open-world OWL-Direct via the SHOIQ(D) tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 test suite, `crates/sparql-conformance/entailment-suite/w3c-owl2/` | **258 / 262** agreeing verdicts · 4 typed-ledger divergences · 0 unledgered · 0 stale. Consistency-shaped corpus (226 `otest:ConsistencyTest` + 36 `otest:InconsistencyTest`), so it grades the DL/tableau lane only; the upstream manifest's entailment tests are graded by the row below. It is also a **subset** — 262 of the 482 consistency-shaped cases upstream — and of the 220 it leaves out, **172 the tableau decided when the exclusion was measured** (108 consistent + 64 inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20 reasoner, 5 parse) and 23 carry no RDF/XML premise. Those five figures are a DATED measurement recorded in `census.tsv`'s `dl_probe` column (see that suite's `PROVENANCE.md` for the date and conditions), not a live one: the harness reads the column and does not re-run the reasoner over the excluded cases, so this row cannot detect a regression among them |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment corpus, `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/` | **50 / 50** agreeing · 0 typed-ledger divergences · 0 unledgered · 0 stale. Negative lane **23 / 23**: **no unsoundness** — the chase never derived a triple W3C publishes as *not* entailed. Read that number with its composition, which the harness prints: **3 of the 23 are decided refutations** and **20 are named admissions** (5 `premise-outside-rl`, 10 `conclusion-outside-rl`, 5 `construct-not-read`). All 23 make the soundness observation the lane grades; 3 of them are additionally entitled to call it a proof of non-entailment. Positive lane **27 / 27**, and the typed-divergence ledger is EMPTY (0 schema-conclusion, 0 negative-conclusion, 0 construct-outside-rl, 0 imports-unresolved); **0 are actionable** (0 missing-rule) |
@@ -116,6 +118,15 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `af/rules/` inferred-graph fixtures (DASH `dash:InferencingTestCase` rules plus
   first-party cases) driving the SHACL Rules harness. Each half's README says
   which files are which, and records provenance.
+- `vectors/sparql-cdt/` — the SEP-0009 Composite Datatypes suite, vendored
+  verbatim from `awslabs/SPARQL-CDTs` at commit `e0a7465` by
+  `scripts/vendor-sparql-cdt.py` and frozen by
+  `scripts/conformance-frozen/vectors-sparql-cdt.sha256`. Run by
+  `crates/sparql-conformance/tests/cdt_corpus.rs` through the corpus's own
+  `mf:include` aggregator, so a re-sync that adds a group is picked up with no
+  edit. It lives under `vectors/` rather than `suite/` for the same reason the
+  two query-form corpora live under `corpus/`: it reports its OWN matrix row
+  instead of folding into the full-corpus tally.
 - `vectors/sparql-governors/` — PurRDF's own frozen execution-governor corpus:
   50 cases pinning the outcome, the certified rows and the consumption of a
   governed query, byte-frozen and content-addressed as
@@ -526,6 +537,81 @@ issue, so the matrix stays honest:
   cartesian-product function-call argument evaluation), expression constraints
   (`sh:ExpressionConstraintComponent`), and SHACL Rules (`sh:TripleRule` /
   `sh:SPARQLRule`, AND rule sets).
+
+### SEP-0009 lexical space: PurRDF reads two forms the spec does not
+
+This one is not a gap in the usual sense — nothing here fails, and nothing here
+is ledgered. It is a **deliberate divergence in the other direction**, recorded
+because a scoreboard reading `658 / 658` would otherwise hide it completely.
+
+SEP-0009 fixes the lexical space of `cdt:List` and `cdt:Map` with a grammar
+whose `Element` production admits IRIs, blank nodes, literals and nested
+composites. It admits **neither** an RDF 1.2 triple term (`<<( s p o )>>`)
+**nor** a directional language-tagged literal (`"x"@en--ltr` / `--rtl`).
+PurRDF's reader admits both, as list elements and as map values (never as a map
+key — the key production is untouched).
+
+**Why.** This toolkit's whole premise is that RDF 1.2 terms survive every
+carrier it offers. Refusing to put a term type the data model defines into a
+container the data model also defines is not an admissible outcome here; the
+alternative would be a `cdt:List` that silently cannot hold half the term
+model. The widened forms are also *only* emitted for values the published
+grammar cannot express at all, so nothing PurRDF writes moves from one legal
+spelling to another — a document acquires an extended form only when it
+contains a term SEP-0009 has no spelling for.
+
+**What it costs.** A conformant SEP-0009 reader handed one of those literals
+**will call it ill-formed.** That is the honest statement of the risk, and no
+argument in this repository changes it.
+
+**The mitigation, and exactly what it proves.**
+`crates/sparql-conformance/tests/cdt_lexical_divergence.rs` tokenizes every
+corpus file this workspace ships (2,892 of them, across `vectors/`,
+`crates/sparql-conformance/suite/`, `.../corpus/` and `.../entailment-suite/`)
+with the production lexers, resolves each file's own prefix bindings, recovers
+every `cdt:List`/`cdt:Map` literal (959 of them), and grades each one with
+`purrdf_cdt::lexical_space`. Every single one lands inside the published space,
+so **no vector anywhere here can distinguish PurRDF's reader from a strict
+one.** The counts are pinned as exact equalities, not `>=`, so a recovery that
+breaks or a corpus that shrinks turns the test red instead of quietly turning it
+vacuous; that includes the count of files the lexer *refuses* (13, every one a
+negative-syntax vector), each of which is text-checked for the SEP-0009
+namespace rather than skipped. A positive control proves the grader is capable
+of answering `PurrdfSuperset`.
+
+**A second, opposite divergence, in the strict direction.** RDF 1.1 Concepts §5
+makes an *ill-typed* literal — one whose lexical form is outside its datatype's
+lexical space — a perfectly legal RDF term, and PurRDF honours that everywhere
+else: `"abc"^^xsd:integer` parses, is stored, and round-trips. A composite
+literal is the **one exception**. `"1"^^cdt:List` or `"[_:b, 42"^^cdt:List`
+refuses the whole document with `cdt-literal-malformed`, on every codec.
+
+The reason is specific to how embedded blank nodes are found: the label scanner
+is lexical, not value-level, so it recovers `_:b` from an ill-formed form just
+as readily as from a well-formed one. Admitting such a literal opaquely would
+therefore put a half-bound scope in the dataset — the document's own `_:b`
+bound to the document scope, the one inside the unparseable literal left raw —
+and the canonicalizer and the evaluator's element accessors would then disagree
+about which node `_:b` denotes, silently. Refusing the document is the
+conservative resolution of that, and it is deliberate rather than incidental.
+
+It is still a real asymmetry, and worth stating plainly rather than leaving for
+a user to discover: a single corrupt composite literal makes an otherwise-valid
+document unloadable, where a single corrupt `xsd:integer` does not. The
+alternative design — admit the literal as ill-typed, and make the embedded-blank
+scan value-level so an unparseable form names no blank node at all — is
+coherent, costs a parse on every composite literal, and would change what
+canonicalization sees. Both readings are defensible; this is the one PurRDF
+ships today.
+
+**And exactly what it does not.** The mitigation was originally specified over
+upstream **negative-syntax** entries — "no negative-syntax entry contains the
+new production". Stated that way it is *vacuous*: all 658 entries the vendored
+SEP-0009 corpus declares are `mf:QueryEvaluationTest`, so upstream ships no
+negative-syntax CDT vector at all, and nothing it publishes could observe the
+divergence in either direction. The broader claim above is what is actually
+established, and it is the one worth having. What no test here does is compare
+PurRDF against another SEP-0009 implementation.
 
 ### SHACL-AF node expressions: normative surface vs. owned extensions
 

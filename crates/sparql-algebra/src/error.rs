@@ -16,6 +16,8 @@
 //!   never be handed a partially-understood algebra.
 //! * [`ParseError::Iri`] — an IRI/CURIE in term position failed RFC-3987
 //!   validation (delegated to `purrdf-iri`).
+//! * [`ParseError::CdtArity`] — a SEP-0009 composite-datatype function was
+//!   called with a number of arguments its spec-fixed signature does not admit.
 
 use core::fmt;
 
@@ -50,6 +52,28 @@ pub enum ParseError {
         /// The underlying validation failure reported by `purrdf-iri`.
         reason: String,
     },
+    /// A SEP-0009 composite-datatype function (`cdt:List`, `cdt:subseq`, …) was
+    /// called with an argument count its signature does not admit.
+    ///
+    /// Its own variant rather than a [`Self::Syntax`] because it is a **static**
+    /// error with a decidable cause: SPARQL has no overloading on argument count,
+    /// so a wrong-arity call can never evaluate to anything — not even to an
+    /// expression error — and a consumer (or a conformance vector) that wants to
+    /// assert *this* rejection should not have to match on prose. `cdt:Map` is the
+    /// case that most needs saying out loud: its arguments are key/value **pairs**,
+    /// so an odd count is refused here rather than silently dropping the trailing
+    /// key.
+    CdtArity {
+        /// The function IRI the call named.
+        iri: String,
+        /// The signature the function admits, spelled for a human
+        /// (`"an even number of arguments"`, `"2 or 3 arguments"`, …).
+        expected: String,
+        /// The number of arguments the call actually supplied.
+        found: usize,
+        /// Byte offset of the offending call (best-effort).
+        at: usize,
+    },
 }
 
 impl ParseError {
@@ -75,13 +99,13 @@ impl ParseError {
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
-    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)). `None` for
-    /// [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are not tied
-    /// to a single source position.
+    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)).
+    /// `None` for [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are
+    /// not tied to a single source position.
     #[must_use]
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
-            Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
+            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::CdtArity { at, .. } => Some(*at),
             Self::Unsupported(_) | Self::Iri { .. } => None,
         }
     }
@@ -117,6 +141,15 @@ impl fmt::Display for ParseError {
             Self::Iri { lexical, reason } => {
                 write!(f, "invalid IRI {lexical:?} in term position: {reason}")
             }
+            Self::CdtArity {
+                iri,
+                expected,
+                found,
+                at,
+            } => write!(
+                f,
+                "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
+            ),
         }
     }
 }

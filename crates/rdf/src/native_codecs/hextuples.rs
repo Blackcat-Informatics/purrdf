@@ -29,6 +29,7 @@ use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
+use purrdf_core::cdt_blank::BlankBinding;
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
 /// line-oriented NDJSON quads syntax. A classic quad syntax with no RDF-1.2 triple-term
@@ -232,11 +233,14 @@ fn freeze_rows(rows: Vec<HexRow>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(rows.len());
     for (subject, predicate, object, graph) in rows {
-        let subject = intern_term(&mut builder, &subject);
+        let subject = intern_term(&mut builder, &subject)?;
         let is_reifies = predicate == RDF_REIFIES;
         let predicate = builder.intern_iri(&predicate);
-        let object = FoldNode::Term(intern_term(&mut builder, &object));
-        let graph = graph.map(|g| intern_term(&mut builder, &g));
+        let object = FoldNode::Term(intern_term(&mut builder, &object)?);
+        let graph = match graph {
+            Some(g) => Some(intern_term(&mut builder, &g)?),
+            None => None,
+        };
         fold_rows.push(FoldRow {
             subject,
             is_reifies,
@@ -249,16 +253,26 @@ fn freeze_rows(rows: Vec<HexRow>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     builder.freeze()
 }
 
-fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> TermId {
+/// # Errors
+/// A composite (`cdt:List` / `cdt:Map`) literal whose lexical form does not
+/// parse refuses the document; see [`purrdf_core::cdt_blank`].
+fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> Result<TermId, RdfDiagnostic> {
     match term {
-        HexTerm::Iri(iri) => builder.intern_iri(iri),
+        HexTerm::Iri(iri) => Ok(builder.intern_iri(iri)),
         // Text ingress: decode the `(label, scope)` encoding this codec's serializer
         // applied at egress, so a document it wrote re-parses to the very
         // `(label, scope)` pair it was written from. HexTuples types its blank ids
         // as `BLANK_NODE_LABEL`s, which is the alphabet the image test re-encodes
         // against.
-        HexTerm::Blank(label) => builder.intern_text_blank(label, LabelAlphabet::BlankNodeLabel),
-        HexTerm::Literal(literal) => builder.intern_literal(literal.clone()),
+        HexTerm::Blank(label) => {
+            Ok(builder.intern_text_blank(label, LabelAlphabet::BlankNodeLabel))
+        }
+        // A composite literal's embedded blank labels bind through the SAME rule
+        // the blank ids above use, so both spellings of one node agree.
+        HexTerm::Literal(literal) => Ok(builder.intern_literal_bound(
+            literal.clone(),
+            BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel),
+        )?),
     }
 }
 

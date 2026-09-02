@@ -108,14 +108,42 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
         // to an error (and so filter the row out) whenever the two IRIs differ. The
         // dedicated `equal` path applies the value-equality semantics of `rdf_equal`.
         Expression::Equal(a, b) => equal(a, b, row, schema, ctx),
-        Expression::Greater(a, b) => compare(a, b, row, schema, ctx, |c| c == Ordering::Greater),
-        Expression::GreaterOrEqual(a, b) => {
-            compare(a, b, row, schema, ctx, |c| c != Ordering::Less)
-        }
-        Expression::Less(a, b) => compare(a, b, row, schema, ctx, |c| c == Ordering::Less),
-        Expression::LessOrEqual(a, b) => {
-            compare(a, b, row, schema, ctx, |c| c != Ordering::Greater)
-        }
+        Expression::Greater(a, b) => compare(
+            a,
+            b,
+            row,
+            schema,
+            ctx,
+            crate::cdt_fn::CdtRelation::Greater,
+            |c| c == Ordering::Greater,
+        ),
+        Expression::GreaterOrEqual(a, b) => compare(
+            a,
+            b,
+            row,
+            schema,
+            ctx,
+            crate::cdt_fn::CdtRelation::GreaterOrEqual,
+            |c| c != Ordering::Less,
+        ),
+        Expression::Less(a, b) => compare(
+            a,
+            b,
+            row,
+            schema,
+            ctx,
+            crate::cdt_fn::CdtRelation::Less,
+            |c| c == Ordering::Less,
+        ),
+        Expression::LessOrEqual(a, b) => compare(
+            a,
+            b,
+            row,
+            schema,
+            ctx,
+            crate::cdt_fn::CdtRelation::LessOrEqual,
+            |c| c != Ordering::Greater,
+        ),
         Expression::SameTerm(a, b) => {
             let ta = eval_expr(a, row, schema, ctx)?;
             let tb = eval_expr(b, row, schema, ctx)?;
@@ -553,6 +581,57 @@ fn term_is_triple<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>, term: SolutionTer
     }
 }
 
+/// Whether a solution term is a `cdt:List` / `cdt:Map`-typed literal, checked on
+/// the borrowed view (no materialization) — mirrors [`term_is_literal`]. This is
+/// the gate that routes a comparison into SEP-0009's own relations; see
+/// [`crate::cdt_fn::is_composite_typed`] for why an ILL-FORMED composite literal
+/// answers `true` here too.
+fn term_is_composite<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> bool {
+    match term {
+        SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
+            TermRef::Literal {
+                datatype, language, ..
+            } => {
+                language.is_none()
+                    && matches!(ctx.dataset.resolve(datatype), TermRef::Iri(iri)
+                        if purrdf_cdt::CdtDatatype::from_iri(iri).is_some())
+            }
+            _ => false,
+        },
+        SolutionTerm::Computed(sid) => {
+            crate::cdt_fn::is_composite_typed(ctx.scratch.computed_value(sid))
+        }
+    }
+}
+
+/// Whether a comparison of these two terms belongs to SEP-0009 rather than to the
+/// XSD value space: composite literals have their own equality and ordering —
+/// value-space element-wise for a `cdt:List`, and by *term* for a `cdt:Map`'s keys
+/// — which neither the XSD value space nor RDF-term equality can express.
+fn is_cdt_pair<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    ta: SolutionTerm<D::Id>,
+    tb: SolutionTerm<D::Id>,
+) -> bool {
+    term_is_composite(ctx, ta) || term_is_composite(ctx, tb)
+}
+
+/// SEP-0009's own `=` / `<` / `<=` / `>` / `>=`, for a pair [`is_cdt_pair`] has
+/// already claimed. `None` is a SPARQL type error.
+fn cdt_compare<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    relation: crate::cdt_fn::CdtRelation,
+    ta: SolutionTerm<D::Id>,
+    tb: SolutionTerm<D::Id>,
+) -> Option<SolutionTerm<D::Id>> {
+    let av = value_of(ctx, ta);
+    let bv = value_of(ctx, tb);
+    crate::cdt_fn::compare(relation, &av, &bv).map(|answer| bool_term(ctx, answer))
+}
+
 /// Evaluate a comparison: both operands to values, compare in the XSD value space,
 /// and test the resulting [`Ordering`] with `keep`. `None` (error/unbound operand
 /// or incomparable values) propagates.
@@ -562,6 +641,7 @@ fn compare<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
+    relation: crate::cdt_fn::CdtRelation,
     keep: impl Fn(Ordering) -> bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let ta = eval_expr(a, row, schema, ctx)?;
@@ -569,6 +649,15 @@ fn compare<D: DatasetView + Sync>(
     let (Some(ta), Some(tb)) = (ta, tb) else {
         return Ok(None);
     };
+    // A composite-typed operand is diverted BEFORE the sameTerm short-circuit
+    // below, which would otherwise answer the wrong thing for the very case the
+    // corpus singles out: `list-functions/list-less-equal-28.rq` requires
+    // `"[_:b]"^^cdt:List <= "[_:b]"^^cdt:List` — one identical RDF term on both
+    // sides — to be UNBOUND, because SPARQL `<` has no answer where a blank node
+    // stands. `keep(Ordering::Equal)` would call it `true`.
+    if is_cdt_pair(ctx, ta, tb) {
+        return Ok(cdt_compare(ctx, relation, ta, tb));
+    }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
         return Ok(Some(bool_term(ctx, keep(Ordering::Equal))));
@@ -613,6 +702,16 @@ fn equal<D: DatasetView + Sync>(
     let (Some(ta), Some(tb)) = (ta, tb) else {
         return Ok(None);
     };
+    // A composite-typed operand takes SEP-0009's own `=`, which is not the XSD
+    // value space and not RDF-term equality: a `cdt:List` compares element-wise by
+    // VALUE (`list-functions/list-equals-04.rq` makes `[1,2]` equal
+    // `['+1'^^xsd:integer, 2.0]`) while a `cdt:Map`'s KEYS compare by term
+    // (`map-equals-04.rq` makes the same pair of maps UNequal). Checked before the
+    // sameTerm short-circuit so the diversion is unconditional and `=`/`<` agree
+    // about which relation they are in.
+    if is_cdt_pair(ctx, ta, tb) {
+        return Ok(cdt_compare(ctx, crate::cdt_fn::CdtRelation::Equal, ta, tb));
+    }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
         return Ok(Some(bool_term(ctx, true)));
@@ -688,6 +787,13 @@ fn eval_in<D: DatasetView + Sync>(
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    // SEP-0009 composite equality, for the value-space paths that reach this
+    // function rather than [`equal`]: `IN` (§17.4.1.9) and the componentwise
+    // triple-term recursion below. The same diversion, on the same rule, so a
+    // `cdt:List` inside a triple term compares the way it does outside one.
+    if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
+        return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
+    }
     // RDF 1.2 triple terms compare *structurally*, componentwise, under this SAME
     // `=` relation (recursively) — not by identity. Checked before the XSD/literal
     // path so a triple-term pair never falls through to the "distinct non-literal
@@ -1002,6 +1108,19 @@ fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
             expression,
         } => {
             out.insert(variable.clone());
+            expr_vars(expression, out);
+            pattern_all_vars(inner, out);
+        }
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            out.insert(element.clone());
+            if let Some(companion) = companion {
+                out.insert(companion.clone());
+            }
             expr_vars(expression, out);
             pattern_all_vars(inner, out);
         }
@@ -1990,6 +2109,31 @@ fn substitute_pattern_impl(
                 map,
             )
         }
+        // `Extend`s shape exactly: the operand is an ordinary expression evaluated
+        // against the substituted inner, so a term-only outer binding it reads is
+        // injected the same way, and the two target variables are carried through
+        // unchanged (they are this nodes OWN bindings, never substitution targets).
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            let mut free = DetHashSet::default();
+            expr_vars(expression, &mut free);
+            let inner_sub = substitute_pattern_impl(inner, row, map);
+            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            boxed_and_mapped(
+                GraphPattern::Unfold {
+                    inner: inner_final,
+                    expression: substitute_expr(expression, row, map),
+                    element: element.clone(),
+                    companion: companion.clone(),
+                },
+                pattern,
+                map,
+            )
+        }
         GraphPattern::Join { left, right } => {
             let left_sub = substitute_pattern_impl(left, row, map);
             let right_sub = substitute_pattern_impl(right, row, map);
@@ -2200,6 +2344,13 @@ fn substitute_pattern_impl(
                 for arg in agg.args() {
                     expr_vars(arg, &mut free);
                 }
+                // A `FOLD`'s sort keys read the group's rows exactly as its
+                // arguments do, so their variables are free in this node too:
+                // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
+                // unbound in the substituted pattern.
+                for order in agg.order_by() {
+                    expr_vars(crate::modifier::order_sort_key(order), &mut free);
+                }
             }
             let inner_sub = substitute_pattern_impl(inner, row, map);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
@@ -2215,13 +2366,29 @@ fn substitute_pattern_impl(
                                 .iter()
                                 .map(|e| substitute_expr(e, row, &mut *map))
                                 .collect();
+                            let order_by = agg
+                                .order_by()
+                                .iter()
+                                .map(|order| {
+                                    crate::modifier::rebuild_order(
+                                        order,
+                                        substitute_expr(
+                                            crate::modifier::order_sort_key(order),
+                                            row,
+                                            &mut *map,
+                                        ),
+                                    )
+                                })
+                                .collect();
                             // `substitute_expr` rewrites each argument in place and never
-                            // changes the argument COUNT, so this can never turn a valid
-                            // `agg` into an invalid one.
+                            // changes the argument COUNT, and rewriting a sort key never
+                            // removes one, so this can never turn a valid `agg` into an
+                            // invalid one.
                             let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
                                 agg.function().clone(),
                                 args,
                                 agg.scalarvals().to_vec(),
+                                order_by,
                                 agg.distinct,
                             )
                             .expect("substitution preserves argument count, so arity stays valid");
@@ -3241,6 +3408,12 @@ fn eval_function<D: DatasetView + Sync>(
             // the registry.
             list_func => crate::list_fn::dispatch(list_func, &vals, ctx),
         },
+
+        // ---- SEP-0009 composite datatypes (CLOSED, spec-fixed) --------------
+        // Resolved at parse time by exact IRI match, with the argument count
+        // already checked against the function's spec signature, so this is a
+        // total dispatch over the fifteen-member registry.
+        Function::Cdt(call) => crate::cdt_fn::dispatch(call.fn_kind, &vals, ctx),
 
         // ---- XSD constructor casts (SPARQL 1.1 §17.1) ---------------------
         // An IRI in call position whose IRI is an XSD value-space datatype is the

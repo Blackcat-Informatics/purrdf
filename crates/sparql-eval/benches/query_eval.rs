@@ -64,6 +64,14 @@
 //! resolution; see its own doc comment for why `m_arithmetic_dense_filter` above
 //! cannot do this.
 //!
+//! A third — `sort_order` — does the same for the SORT comparator
+//! (`purrdf_xsd::value_total_cmp`, which `modifier.rs`'s `total_order` runs inside
+//! `g_order_by_limit`'s `O(n log n)` sort), laid beside the promotion-based
+//! `value_cmp` the `<` operator uses, one row per operand shape. `g_order_by_limit`
+//! sorts a HOMOGENEOUS `xsd:integer` column, so it exercises only the
+//! same-representation rows; the cross-representation and `BigInt`-fallback rows
+//! are there because the whole-query case cannot reach them.
+//!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
 //! `make bench` lane) — excluded from `make check`. Timings are not asserted;
 //! this target documents relative cost, it does not gate it.
@@ -539,5 +547,108 @@ fn bench_value_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query_eval, bench_value_dispatch);
+/// Isolates the SORT comparator — `purrdf_xsd::value_total_cmp`, the relation
+/// `modifier.rs`'s `total_order` runs inside `ORDER BY`'s `O(n log n)` sort, its
+/// `DISTINCT` neighbours and `MIN`/`MAX` — beside the promotion-based
+/// `purrdf_xsd::value_cmp` the `<` operator keeps using.
+///
+/// `value_total_cmp` diverges from `value_cmp` only inside the numeric tower,
+/// where it compares the exact rationals instead of promoting through IEEE (see
+/// `purrdf_xsd::numeric_total_cmp` for why the promoted relation is not a legal
+/// sort comparator at all). The rows here lay the two side by side per operand
+/// SHAPE, so the cost of exactness is attributable rather than averaged:
+///
+/// * `int_vs_int` / `dec_vs_dec` / `double_vs_double` — the same-representation
+///   pairs. Both functions take the identical exact branch (`i128::cmp`,
+///   `Decimal::cmp_exact`, `f64::partial_cmp`); any gap between the two rows is
+///   dispatch, not arithmetic. This is the regime a homogeneous `ORDER BY` column
+///   — every whole-relation sort in the case table above — lives in entirely.
+/// * `int_vs_double_window` — a cross-representation pair whose magnitudes are so
+///   far apart that the exponent window settles it without touching the mantissa.
+/// * `dec_vs_double_u128` — a cross-representation pair close enough to need the
+///   real answer, cross-multiplied in `u128`: a handful of machine multiplies, no
+///   allocation.
+/// * `dec_vs_double_bigint` — the one shape that allocates: the products exceed
+///   128 bits, so the comparison falls back to `purrdf_xsd::BigInt`. It needs a
+///   near-`i128::MAX` mantissa against a non-integral double, which is why it is
+///   here as a named worst case rather than as a hidden cost in the rows above.
+///
+/// Report-only, like every case in this file: no row asserts a bound on another.
+/// `black_box` on the inputs for the reason `bench_value_dispatch` documents.
+fn bench_sort_order(c: &mut Criterion) {
+    use purrdf_xsd::{XsdDatatype, value_cmp, value_total_cmp};
+
+    let int_a = parse_operand("17", XsdDatatype::Integer);
+    let int_b = parse_operand("25", XsdDatatype::Integer);
+    let dec_a = parse_operand("17.5", XsdDatatype::Decimal);
+    let dec_b = parse_operand("25.25", XsdDatatype::Decimal);
+    let double_a = parse_operand("1.75E1", XsdDatatype::Double);
+    let double_b = parse_operand("2.525E1", XsdDatatype::Double);
+    // Magnitudes 300 decades apart: the exponent window decides these outright.
+    let far_double = parse_operand("1.0E300", XsdDatatype::Double);
+    // Close enough that only the exact cross-multiplication answers.
+    let near_decimal = parse_operand("17.500000000000000001", XsdDatatype::Decimal);
+    // A near-`i128::MAX` mantissa against a double needing two fractional bits:
+    // `mantissa × 2^-exp` outgrows `u128`, so this is the `BigInt` row. (One
+    // fractional bit would not: `(2^127 - 1) << 1` still fits.)
+    let huge_decimal = parse_operand(
+        "170141183460469231731687303715884105727",
+        XsdDatatype::Decimal,
+    );
+    let quarter = parse_operand("2.5E-1", XsdDatatype::Double);
+
+    // Untimed sanity: every pair below must be COMPARABLE, or the timed closure
+    // would be measuring the (much cheaper) `None` path and a correctness
+    // regression would read as a speedup.
+    for (label, a, b) in [
+        ("int_vs_int", &int_a, &int_b),
+        ("dec_vs_dec", &dec_a, &dec_b),
+        ("double_vs_double", &double_a, &double_b),
+        ("int_vs_double_window", &int_a, &far_double),
+        ("dec_vs_double_u128", &near_decimal, &double_a),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
+    ] {
+        assert!(
+            value_total_cmp(a, b).is_some() && value_cmp(a, b).is_some(),
+            "bench operand pair must be comparable: {label}"
+        );
+    }
+
+    let mut group = c.benchmark_group("sort_order");
+    for (label, a, b) in [
+        ("int_vs_int", &int_a, &int_b),
+        ("dec_vs_dec", &dec_a, &dec_b),
+        ("double_vs_double", &double_a, &double_b),
+        ("int_vs_double_window", &int_a, &far_double),
+        ("dec_vs_double_u128", &near_decimal, &double_a),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
+    ] {
+        group.bench_function(format!("{label}_total"), |bencher| {
+            bencher.iter(|| {
+                criterion::black_box(value_total_cmp(
+                    criterion::black_box(a),
+                    criterion::black_box(b),
+                ))
+            });
+        });
+        group.bench_function(format!("{label}_promoted_control"), |bencher| {
+            bencher.iter(|| {
+                criterion::black_box(value_cmp(criterion::black_box(a), criterion::black_box(b)))
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Parse one benchmark operand, outside every timed loop.
+fn parse_operand(lexical: &str, datatype: purrdf_xsd::XsdDatatype) -> purrdf_xsd::XsdValue {
+    purrdf_xsd::parse(lexical, datatype).expect("a benchmark operand must parse")
+}
+
+criterion_group!(
+    benches,
+    bench_query_eval,
+    bench_value_dispatch,
+    bench_sort_order
+);
 criterion_main!(benches);

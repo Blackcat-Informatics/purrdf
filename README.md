@@ -322,6 +322,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
 | SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **862** pass · 5 ledgered (upstream errata) |
+| SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
@@ -335,10 +336,10 @@ SPARQL breadth grows through caller-keyed extension seams — scalar functions,
 property functions, custom aggregates, and the host-injected service transport
 — so new capability lands as composition through a seam, never as a Cargo
 feature flag and never as a vocabulary PurRDF mints itself. In capability
-terms, quad-form `CONSTRUCT` and the SEP-0008 SHA-3 builtins have landed; the
-near-term direction continues with
-SEP-0009 composite datatypes (`cdt:List`/`cdt:Map` with
-`FOLD`/`UNFOLD`), deterministic full-text search, property-path binding,
+terms, quad-form `CONSTRUCT`, the SEP-0008 SHA-3 builtins and the SEP-0009
+composite datatypes (`cdt:List`/`cdt:Map`, the fifteen-function library, the
+`FOLD` aggregate and the `UNFOLD` graph pattern) have landed; the near-term
+direction continues with deterministic full-text search, property-path binding,
 embedding similarity, and GeoSPARQL — each arriving out-of-core through those
 seams, under the same conformance discipline as everything above.
 

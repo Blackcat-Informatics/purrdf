@@ -545,6 +545,22 @@ where
             visit(PatternPart::Child(inner, ChildEdge::MONOTONE))
                 || visit(PatternPart::Expression(expression))
         }
+        // `UNFOLD` replaces each input row with that row's own block of expanded
+        // rows, in input order and with the blocks in input order too — so a
+        // PREFIX of the input yields a PREFIX of the output (whole blocks, in
+        // order), which is exactly `MONOTONE`. It adds rows rather than dropping
+        // them, but that is a statement about row COUNT, not about prefix
+        // fidelity, and `Union` is monotone on both arms for the same reason a
+        // block-expanding operator is on its one.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element: _,
+            companion: _,
+        } => {
+            visit(PatternPart::Child(inner, ChildEdge::MONOTONE))
+                || visit(PatternPart::Expression(expression))
+        }
         GraphPattern::Graph { name: _, inner } => {
             visit(PatternPart::Child(inner, ChildEdge::MONOTONE))
         }
@@ -937,6 +953,17 @@ pub(crate) const fn child_row_ceiling(
         }
         | GraphPattern::Minus { left: _, right: _ }
         | GraphPattern::Filter { expr: _, inner: _ }
+        // `UNFOLD` is `Filter`'s hazard in the other direction: an input row whose
+        // expression denotes no composite (or an EMPTY one) contributes ZERO output
+        // rows, so `k` output rows can need arbitrarily many input rows. A ceiling
+        // pushed here would let a query stop the inner pattern early and report the
+        // short bag as a complete answer.
+        | GraphPattern::Unfold {
+            inner: _,
+            expression: _,
+            element: _,
+            companion: _,
+        }
         | GraphPattern::Distinct { inner: _ }
         | GraphPattern::Reduced { inner: _ }
         | GraphPattern::Service {
@@ -1084,11 +1111,17 @@ const fn pattern_label_index(pattern: &GraphPattern) -> usize {
             aggregates: _,
         } => 17,
         GraphPattern::PropertyFunction(_) => 18,
+        GraphPattern::Unfold {
+            inner: _,
+            expression: _,
+            element: _,
+            companion: _,
+        } => 19,
     }
 }
 
 /// Every [`GraphPattern`] variant's stable label, indexed by [`pattern_label_index`].
-pub(crate) const PATTERN_LABELS: [&str; 19] = [
+pub(crate) const PATTERN_LABELS: [&str; 20] = [
     "Bgp",
     "Path",
     "Join",
@@ -1108,6 +1141,7 @@ pub(crate) const PATTERN_LABELS: [&str; 19] = [
     "Slice",
     "Group",
     "PropertyFunction",
+    "Unfold",
 ];
 
 /// `pattern`'s variant label, for diagnostics and for the coverage test.
@@ -1581,6 +1615,38 @@ pub(crate) fn analyze_pattern(
                 can_hard_error: i.can_hard_error || expr_hard_error,
             }
         }
+        // `UNFOLD` puts its one or two targets in scope, but NEITHER is certainly
+        // bound: a SEP-0009 `null` element (or a null map value) produces the row
+        // with that variable UNBOUND, and which of the two readings applies —
+        // element/index for a `cdt:List`, key/value for a `cdt:Map` — is a property
+        // of the runtime value, not of the syntax. Claiming either as certainly
+        // bound would license an `EXISTS` probe that answers from a binding the row
+        // may not have.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            let i = analyze_pattern(inner, table);
+            let (expr_free, expr_stateful, expr_hard_error) = analyze_expr(expression, table);
+            let mut free_vars: DetHashSet<Variable> =
+                i.free_vars.union(&expr_free).cloned().collect();
+            free_vars.insert(element.clone());
+            if let Some(companion) = companion {
+                free_vars.insert(companion.clone());
+            }
+            NodeAnalysis {
+                free_vars,
+                certainly_bound: i.certainly_bound,
+                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
+                // The expansion itself cannot fail: it reads an already-parsed
+                // composite and every element it can hold has a term (or is the
+                // `null` that binds nothing). Only the expression under it can
+                // hard-error, e.g. through `EvalError::CompositeBound`.
+                can_hard_error: i.can_hard_error || expr_hard_error,
+            }
+        }
         GraphPattern::Graph { name, inner } => {
             let i = analyze_pattern(inner, table);
             let mut free_vars = i.free_vars;
@@ -1982,6 +2048,30 @@ fn admissible_rec(
                 )
                 && !current_row_vars.contains(variable)
         }
+        // `Extend`'s rule, applied to both targets: the probe evaluates the inner
+        // once, unconstrained, so a target that is also a CURRENT-ROW variable
+        // would be given a new value the shared pass never restricted to μ's own.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            let Some(inner_analysis) = node_analysis(inner, table) else {
+                return false;
+            };
+            admissible_rec(inner, current_row_vars, table)
+                && expr_probe_admissible(
+                    expression,
+                    current_row_vars,
+                    &inner_analysis.certainly_bound,
+                    table,
+                )
+                && !current_row_vars.contains(element)
+                && !companion
+                    .as_ref()
+                    .is_some_and(|v| current_row_vars.contains(v))
+        }
         GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
@@ -2010,6 +2100,8 @@ pub(crate) enum RowCollisionIntro {
     Bind,
     /// A `VALUES` block's column variable.
     Values,
+    /// An `UNFOLD(expr AS ?e, ?i)` target — either of the two.
+    Unfold,
 }
 
 impl RowCollisionIntro {
@@ -2017,6 +2109,7 @@ impl RowCollisionIntro {
         match self {
             Self::Bind => "BIND target",
             Self::Values => "VALUES variable",
+            Self::Unfold => "UNFOLD target",
         }
     }
 }
@@ -2110,6 +2203,22 @@ pub(crate) fn exists_row_collision<'a>(
             } else {
                 exists_row_collision(inner, row_scope)
             }
+        }
+        // `Extend`'s arm with two targets: the first that collides wins, in
+        // declaration order, so the variable named in the diagnostic is the one a
+        // reader finds first in the query text.
+        GraphPattern::Unfold {
+            inner,
+            element,
+            companion,
+            ..
+        } => {
+            for variable in std::iter::once(element).chain(companion.as_ref()) {
+                if row_scope.contains(variable) {
+                    return Some((variable, RowCollisionIntro::Unfold));
+                }
+            }
+            exists_row_collision(inner, row_scope)
         }
         GraphPattern::Values { variables, .. } => variables
             .iter()
@@ -2209,6 +2318,12 @@ fn find_group_extend_row_collision<'a>(
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => {
+            find_group_extend_row_collision(inner, variables, row_scope)
+        }
+        // Transparent: `UNFOLD` never lowers a `GROUP BY` grouping condition (only
+        // `Extend` does), so its own targets are not candidates for THIS narrower
+        // search — but a qualifying grouping-`Extend` may still sit beneath it.
+        GraphPattern::Unfold { inner, .. } => {
             find_group_extend_row_collision(inner, variables, row_scope)
         }
         GraphPattern::Bgp { .. }
@@ -2631,8 +2746,14 @@ mod tests {
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let inner = context_at(&plan, &[0]);
@@ -2766,6 +2887,7 @@ mod tests {
                 AggregateExpression::new(
                     AggregateFunction::Count,
                     vec![Expression::Exists(boxed(other_bgp()))],
+                    Vec::new(),
                     Vec::new(),
                     false,
                 )
@@ -2996,13 +3118,25 @@ mod tests {
             variable: Variable::new("b"),
             expression: Expression::Literal(Literal::new_simple("x")),
         };
-        let grouped = GraphPattern::Group {
+        let unfolded = GraphPattern::Unfold {
             inner: boxed(extended),
+            expression: Expression::Variable(Variable::new("b")),
+            element: Variable::new("e"),
+            companion: Some(Variable::new("i")),
+        };
+        let grouped = GraphPattern::Group {
+            inner: boxed(unfolded),
             variables: vec![Variable::new("s")],
             aggregates: vec![(
                 Variable::new("n"),
-                AggregateExpression::new(AggregateFunction::Count, Vec::new(), Vec::new(), false)
-                    .expect("fixture: valid AggregateExpression"),
+                AggregateExpression::new(
+                    AggregateFunction::Count,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("fixture: valid AggregateExpression"),
             )],
         };
         let ordered = GraphPattern::OrderBy {

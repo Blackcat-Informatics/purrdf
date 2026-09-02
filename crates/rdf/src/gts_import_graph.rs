@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 
+use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Graph, Term, TermKind};
 
 use crate::gts_resolve::MAX_GTS_TERM_NESTING_DEPTH;
@@ -124,12 +125,18 @@ impl GraphInterner {
             self.terms[gts_id].direction.as_deref(),
             language.as_deref(),
         )?;
-        Ok(self.builder.intern_literal(RdfLiteral {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        }))
+        // A composite literal's embedded blank labels bind into the SAME
+        // flattened scope `intern_blank` puts this reader's bare labels in, so
+        // both spellings of one node stay one node across a GTS round trip.
+        Ok(self.builder.intern_literal_bound(
+            RdfLiteral {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            },
+            BlankBinding::Ambient(FLATTENED_BLANK_SCOPE),
+        )?)
     }
 
     /// Resolve a quoted-triple term's components.

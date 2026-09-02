@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The shared group both arms of the diamond pull in — see `../manifest-all.ttl`.
+# Its single case is what would be counted twice if the diamond were followed.
+@prefix : <manifest#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:entries ( :shared-case-01 ) .
+
+:shared-case-01 a mf:PositiveSyntaxTest ;
+    mf:name "shared-case-01" ;
+    mf:action <shared-case-01.rq> .

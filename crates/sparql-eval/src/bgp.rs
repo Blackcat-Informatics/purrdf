@@ -1446,6 +1446,11 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Extend { inner, .. }
+        // `UNFOLD` predicts nothing of its own: how many rows one input row
+        // expands to is a property of a composite value this walk never sees, so
+        // the survey reports its inner pattern and stops — an honest under-count,
+        // which is the direction this survey is documented to fail in.
+        | GraphPattern::Unfold { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }

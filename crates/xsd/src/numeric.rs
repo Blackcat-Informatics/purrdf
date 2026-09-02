@@ -440,6 +440,269 @@ pub fn numeric_eq(a: &XsdValue, b: &XsdValue) -> bool {
     numeric_cmp(a, b) == Some(Ordering::Equal)
 }
 
+/// The **exact** total order over the XSD numeric tower — the relation `ORDER BY`,
+/// `DISTINCT`, `MIN` and `MAX` sort by, and a genuine total order, which
+/// [`numeric_cmp`] is not.
+///
+/// Every value in the tower except `NaN` is exactly a rational number:
+/// `xsd:integer` is `m/1`, `xsd:decimal` is `mantissa / 10^scale`, and a finite
+/// `xsd:float`/`xsd:double` is a **dyadic** rational `significand × 2^exponent`
+/// (that is what an IEEE binary format *is*). This function compares those
+/// rationals exactly, cross-multiplying into [`crate::BigInt`] on the rare pair
+/// where a `u128` cannot hold the products. `NaN` is the one input with no place
+/// in the order and answers `None`; the infinities sit at the two ends.
+///
+/// # This deliberately diverges from SPARQL's promotion-based `<`
+///
+/// SPARQL 1.1/1.2 §17.3 maps a cross-type numeric comparison onto the promotion
+/// lattice `integer ⊂ decimal ⊂ float ⊂ double`, which routes ANY pair containing
+/// a float or double operand through `f32`/`f64` — a lossy projection.
+/// [`numeric_cmp`] implements that mapping faithfully and is what this crate's
+/// `<`, `>`, `=` operators keep using, because that is what the operators are
+/// specified to mean. This function does NOT, and the divergence is not a liberty
+/// taken for convenience:
+///
+/// **The two disagree in exactly the cases where the spec's own mapping is
+/// intransitive.** Promotion and exactness agree whenever the promotion is
+/// lossless; they can only disagree when rounding maps two *distinct* exact values
+/// onto one IEEE value. But the moment it does, the promoted relation has a cycle.
+/// Take `a = "1.000000000000000001"^^xsd:decimal`, `b = "1"^^xsd:integer` and
+/// `c = "1.0E0"^^xsd:double`:
+///
+/// * `a` vs `b` is decimal-vs-integer, which promotion compares EXACTLY, so
+///   `a > b`;
+/// * `a` vs `c` promotes `a` to `f64`, which rounds it to `1.0`, so `a = c`;
+/// * `b` vs `c` promotes `b` to `f64` exactly, so `b = c`.
+///
+/// From `a = c` and `b = c` a transitive relation must conclude `a = b`, and the
+/// first line says otherwise. That is a genuine cycle over three ordinary literals,
+/// and `ORDER BY` hands its comparator to a Rust sort, which is entitled to
+/// **panic** when the comparator is not a total order — reachable from any query
+/// whose sort key is an attacker-supplied literal with more than sixteen
+/// significant digits. There is no way to be both transitive and promotion-faithful
+/// here, so the ordering picks transitive; the exact answer is also strictly more
+/// informative, since it distinguishes values the promoted relation conflates and
+/// never conflates values the promoted relation distinguishes.
+///
+/// The divergence is confined to the ORDER. `=` and `<` still answer exactly what
+/// §17.3 says, through [`numeric_cmp`].
+///
+/// # Examples
+///
+/// ```rust
+/// use std::cmp::Ordering;
+///
+/// use purrdf_xsd::{XsdDatatype, numeric_cmp, numeric_total_cmp, parse};
+///
+/// let a = parse("1.000000000000000001", XsdDatatype::Decimal)?;
+/// let c = parse("1.0E0", XsdDatatype::Double)?;
+///
+/// // Promotion rounds the decimal to 1.0 and calls the two equal.
+/// assert_eq!(numeric_cmp(&a, &c), Some(Ordering::Equal));
+/// // The exact order sees the nineteenth significant digit.
+/// assert_eq!(numeric_total_cmp(&a, &c), Some(Ordering::Greater));
+///
+/// // NaN is the one value with no place in the order.
+/// let nan = parse("NaN", XsdDatatype::Double)?;
+/// assert_eq!(numeric_total_cmp(&nan, &c), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
+#[must_use]
+pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+    match (a, b) {
+        // ── Pairs the promotion lattice already decides exactly ──────────────
+        // Integer-vs-integer ignores the subtype, exactly as `numeric_cmp` does.
+        (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
+        (Dec(x), Dec(y)) => Some(x.cmp_exact(y)),
+        (Integer { value: x, .. }, Dec(y)) => Some(Decimal::from_parts(*x, 0).cmp_exact(y)),
+        (Dec(x), Integer { value: y, .. }) => Some(x.cmp_exact(&Decimal::from_parts(*y, 0))),
+        // `f32 → f64` is an exact widening (every `f32` is an `f64`), so every
+        // IEEE-vs-IEEE pair is already decided without loss.
+        (Float(x), Float(y)) => x.partial_cmp(y),
+        (Double(x), Double(y)) => x.partial_cmp(y),
+        (Float(x), Double(y)) => f64::from(*x).partial_cmp(y),
+        (Double(x), Float(y)) => x.partial_cmp(&f64::from(*y)),
+        // ── The exact-vs-IEEE pairs, the only lossy ones ─────────────────────
+        (Integer { value, .. }, Float(y)) => {
+            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*y))
+        }
+        (Integer { value, .. }, Double(y)) => exact_vs_ieee(&Decimal::from_parts(*value, 0), *y),
+        (Dec(x), Float(y)) => exact_vs_ieee(x, f64::from(*y)),
+        (Dec(x), Double(y)) => exact_vs_ieee(x, *y),
+        (Float(x), Integer { value, .. }) => {
+            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*x)).map(Ordering::reverse)
+        }
+        (Double(x), Integer { value, .. }) => {
+            exact_vs_ieee(&Decimal::from_parts(*value, 0), *x).map(Ordering::reverse)
+        }
+        (Float(x), Dec(y)) => exact_vs_ieee(y, f64::from(*x)).map(Ordering::reverse),
+        (Double(x), Dec(y)) => exact_vs_ieee(y, *x).map(Ordering::reverse),
+        // At least one operand is non-numeric.
+        _ => None,
+    }
+}
+
+/// `|value| = significand × 2^exponent` with an ODD `significand` — the exact dyadic
+/// decomposition every finite IEEE double has, normalized so a value like `0.5`
+/// comes back as `(1, -1)` rather than `(2^52, -53)`.
+///
+/// Normalizing matters for more than tidiness: it is what keeps the exponent small
+/// for the values that actually have short binary expansions, which is what keeps
+/// [`exact_vs_ieee`]'s `u128` fast path reachable instead of pushed onto
+/// [`crate::BigInt`] by 52 trailing zero bits nobody needs.
+fn dyadic_magnitude(value: f64) -> (u64, i32) {
+    const SIGNIFICAND_BITS: u32 = 52;
+    let bits = value.abs().to_bits();
+    // The IEEE-754 binary64 fields: an 11-bit biased exponent above a 52-bit
+    // fraction. `value` is finite here (the caller decides the specials first).
+    let biased = ((bits >> SIGNIFICAND_BITS) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << SIGNIFICAND_BITS) - 1);
+    let (mut significand, mut exponent) = if biased == 0 {
+        // Subnormal (and zero): no implicit leading bit, fixed exponent.
+        (fraction, -1074)
+    } else {
+        // Normal: value = (2^52 + fraction) × 2^(biased - 1023 - 52).
+        (fraction | (1u64 << SIGNIFICAND_BITS), biased - 1075)
+    };
+    if significand != 0 {
+        let trailing = significand.trailing_zeros();
+        significand >>= trailing;
+        // `trailing < 64`, so the cast is exact and the sum cannot overflow an
+        // exponent already inside [-1074, 971].
+        exponent += trailing as i32;
+    }
+    (significand, exponent)
+}
+
+/// Order an exact `mantissa / 10^scale` against a `f64`, exactly.
+///
+/// The `f64` carries the IEEE side for BOTH `xsd:float` and `xsd:double`, because
+/// widening `f32 → f64` is lossless; the integer branch of the tower arrives as a
+/// scale-0 [`Decimal`]. `None` only for `NaN`.
+fn exact_vs_ieee(exact: &Decimal, ieee: f64) -> Option<Ordering> {
+    if ieee.is_nan() {
+        return None;
+    }
+    if ieee.is_infinite() {
+        // Every exact value is finite, so it is strictly inside the infinities.
+        return Some(if ieee.is_sign_positive() {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        });
+    }
+    let exact_sign = exact.mantissa().signum();
+    // `-0.0 == 0.0` in IEEE and in the XSD value space, so both zeros take sign 0
+    // and compare equal to an exact zero — which is what keeps the order transitive
+    // across the two spellings.
+    let ieee_sign = if ieee == 0.0 {
+        0
+    } else if ieee < 0.0 {
+        -1
+    } else {
+        1
+    };
+    if exact_sign != ieee_sign {
+        return Some(exact_sign.cmp(&ieee_sign));
+    }
+    if exact_sign == 0 {
+        return Some(Ordering::Equal);
+    }
+    let magnitude = magnitude_cmp(exact.mantissa().unsigned_abs(), exact.scale(), ieee);
+    Some(if exact_sign > 0 {
+        magnitude
+    } else {
+        magnitude.reverse()
+    })
+}
+
+/// Compare the strictly-positive magnitudes `mantissa / 10^scale` and `|ieee|`.
+///
+/// # The cost model
+///
+/// This is the `ORDER BY`/`DISTINCT`/`MIN`/`MAX` hot path, so nothing here
+/// allocates unless the answer genuinely needs more than 128 bits:
+///
+/// 1. **A magnitude window.** The exact side is bounded — `1 ≤ mantissa < 2^127`
+///    and `scale ≤ 18` give `10^-18 ≤ value ≤ 2^127` — so an IEEE magnitude at
+///    least `2^128` or under `2^-60` cannot alias it at all, and one comparison on
+///    the extracted exponent settles the pair. That is the whole subnormal range
+///    and the whole top two decades of the double range, decided without touching
+///    the mantissa.
+/// 2. **A `u128` cross-multiplication.** Inside the window the two sides are
+///    compared as integers — `mantissa` against `significand × 2^exp × 10^scale`
+///    for a non-negative exponent, or `mantissa × 2^-exp` against
+///    `significand × 10^scale` for a negative one. When the products fit `u128`,
+///    which they do for every pair whose magnitudes are close enough for the
+///    answer to be interesting, this is a handful of machine multiplies.
+/// 3. **[`crate::BigInt`], only then.** The fallback is reached only when a product
+///    genuinely exceeds 128 bits, which needs the two magnitudes to differ by
+///    enough that step 1 nearly caught them.
+fn magnitude_cmp(mantissa: u128, scale: u8, ieee: f64) -> Ordering {
+    let (significand, exponent) = dyadic_magnitude(ieee);
+    // `2^(high - 1) <= |ieee| < 2^high`.
+    let high = exponent + bit_length(significand);
+    if high >= 129 {
+        // `|ieee| >= 2^128 > 2^127 >= mantissa >= mantissa / 10^scale`.
+        return Ordering::Less;
+    }
+    if high <= -60 {
+        // `|ieee| < 2^-60 < 10^-18 <= mantissa / 10^scale`, the smallest magnitude
+        // a non-zero decimal at this crate's maximum scale can denote.
+        return Ordering::Greater;
+    }
+    // Inside the window: `exponent` is in [-112, 127] and the shifts below are small.
+    let ten_pow = 10u128.checked_pow(u32::from(scale));
+    let significand = u128::from(significand);
+    let shift = exponent.unsigned_abs();
+    // `shl_exact` answers `None` rather than wrapping, so an overflowing product
+    // falls through to the arbitrary-precision comparison instead of lying.
+    let decided = if exponent >= 0 {
+        shl_exact(significand, shift)
+            .zip(ten_pow)
+            .and_then(|(scaled, ten_pow)| scaled.checked_mul(ten_pow))
+            .map(|right| mantissa.cmp(&right))
+    } else {
+        shl_exact(mantissa, shift).zip(ten_pow).map(|(left, pow)| {
+            // `significand < 2^53` and `pow <= 10^18 < 2^60`, so the right-hand
+            // product is under `2^113` and cannot overflow.
+            left.cmp(&(significand * pow))
+        })
+    };
+    decided.unwrap_or_else(|| big_magnitude_cmp(mantissa, scale, significand, exponent))
+}
+
+/// `value << shift`, or `None` when that would discard a high bit.
+fn shl_exact(value: u128, shift: u32) -> Option<u128> {
+    if shift >= u128::BITS {
+        return (value == 0).then_some(0);
+    }
+    let shifted = value << shift;
+    (shifted >> shift == value).then_some(shifted)
+}
+
+/// The exact cross-multiplication once a product has outgrown `u128`.
+fn big_magnitude_cmp(mantissa: u128, scale: u8, significand: u128, exponent: i32) -> Ordering {
+    use crate::bigint::BigInt;
+
+    let left = BigInt::from_u128(mantissa);
+    let right = BigInt::from_u128(significand);
+    let shift = exponent.unsigned_abs();
+    if exponent >= 0 {
+        left.cmp(&right.mul_pow2(shift).mul_pow10(u32::from(scale)))
+    } else {
+        left.mul_pow2(shift).cmp(&right.mul_pow10(u32::from(scale)))
+    }
+}
+
+/// The number of bits in `value`'s binary representation (`0` for zero).
+fn bit_length(value: u64) -> i32 {
+    // `u64::BITS` is 64 and `leading_zeros() <= 64`, so the difference is in
+    // [0, 64] and the cast is exact.
+    (u64::BITS - value.leading_zeros()) as i32
+}
+
 /// The numeric value as `f64`, or `None` if `v` is not a numeric value.
 fn num_f64(v: &XsdValue) -> Option<f64> {
     Some(match v {
@@ -1251,6 +1514,317 @@ mod tests {
             value: n,
             datatype: D::Integer,
         }
+    }
+
+    // ── the exact numeric order ─────────────────────────────────────────────
+
+    /// THE CYCLE the exact order exists to close.
+    ///
+    /// Under §17.3 promotion these three literals form `a > b`, `a = c`, `b = c`,
+    /// which no transitive relation can hold — and `ORDER BY` hands its comparator
+    /// to a Rust sort, which may panic on one. The exact order sees the nineteenth
+    /// significant digit and answers consistently.
+    #[test]
+    fn the_promotion_cycle_at_nineteen_significant_digits_is_closed() {
+        let a = XsdValue::Decimal(dec("1.000000000000000001"));
+        let b = int_val(1);
+        let c = XsdValue::Double(1.0);
+
+        // The promoted relation, as SPARQL `<` still means it.
+        assert_eq!(numeric_cmp(&a, &b), Some(Ordering::Greater));
+        assert_eq!(numeric_cmp(&a, &c), Some(Ordering::Equal));
+        assert_eq!(numeric_cmp(&b, &c), Some(Ordering::Equal));
+
+        // The exact relation, which `ORDER BY` uses.
+        assert_eq!(numeric_total_cmp(&a, &b), Some(Ordering::Greater));
+        assert_eq!(numeric_total_cmp(&a, &c), Some(Ordering::Greater));
+        assert_eq!(numeric_total_cmp(&b, &c), Some(Ordering::Equal));
+        assert_eq!(numeric_total_cmp(&c, &a), Some(Ordering::Less));
+    }
+
+    /// The same failure one type up: `2^53 + 1` is an ordinary `xsd:integer` and an
+    /// unrepresentable `xsd:double`, so promotion rounds it onto `2^53`.
+    #[test]
+    fn an_integer_beyond_the_double_significand_stays_distinct() {
+        let big = int_val((1i128 << 53) + 1);
+        let rounded = XsdValue::Double((1u64 << 53) as f64);
+        assert_eq!(numeric_cmp(&big, &rounded), Some(Ordering::Equal));
+        assert_eq!(numeric_total_cmp(&big, &rounded), Some(Ordering::Greater));
+        assert_eq!(numeric_total_cmp(&rounded, &big), Some(Ordering::Less));
+        // And the same magnitude one below is genuinely smaller, both ways.
+        let smaller = int_val((1i128 << 53) - 1);
+        assert_eq!(numeric_total_cmp(&smaller, &rounded), Some(Ordering::Less));
+    }
+
+    /// `xsd:float` is exercised on the same seam, and `f32 → f64` widening must not
+    /// be what decides it: `0.1f32` is a DIFFERENT rational from `0.1` the decimal.
+    #[test]
+    fn a_float_operand_is_compared_as_the_dyadic_rational_it_is() {
+        let tenth = XsdValue::Decimal(dec("0.1"));
+        let float_tenth = XsdValue::Float(0.1f32);
+        let double_tenth = XsdValue::Double(0.1f64);
+        // 0.1f32 = 13421773 / 2^27 > 1/10; 0.1f64 = 3602879701896397 / 2^55 > 1/10.
+        assert_eq!(
+            numeric_total_cmp(&tenth, &float_tenth),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            numeric_total_cmp(&tenth, &double_tenth),
+            Some(Ordering::Less)
+        );
+        // ...and the f32 rounding is coarser, so it overshoots further.
+        assert_eq!(
+            numeric_total_cmp(&double_tenth, &float_tenth),
+            Some(Ordering::Less)
+        );
+        // A dyadic decimal is EXACTLY its IEEE counterpart, in both widths.
+        let half = XsdValue::Decimal(dec("0.5"));
+        assert_eq!(
+            numeric_total_cmp(&half, &XsdValue::Float(0.5f32)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_total_cmp(&half, &XsdValue::Double(0.5f64)),
+            Some(Ordering::Equal)
+        );
+    }
+
+    /// The specials keep their places, and `NaN` keeps its absence of one.
+    #[test]
+    fn the_specials_and_the_zeroes_order_as_the_value_space_says() {
+        let one = int_val(1);
+        for infinite in [
+            XsdValue::Double(f64::INFINITY),
+            XsdValue::Float(f32::INFINITY),
+        ] {
+            assert_eq!(numeric_total_cmp(&one, &infinite), Some(Ordering::Less));
+            assert_eq!(numeric_total_cmp(&infinite, &one), Some(Ordering::Greater));
+        }
+        for infinite in [
+            XsdValue::Double(f64::NEG_INFINITY),
+            XsdValue::Float(f32::NEG_INFINITY),
+        ] {
+            assert_eq!(numeric_total_cmp(&one, &infinite), Some(Ordering::Greater));
+            assert_eq!(numeric_total_cmp(&infinite, &one), Some(Ordering::Less));
+        }
+        assert_eq!(
+            numeric_total_cmp(
+                &XsdValue::Double(f64::INFINITY),
+                &XsdValue::Float(f32::INFINITY)
+            ),
+            Some(Ordering::Equal)
+        );
+        // Both zeroes are one value, whichever spelling and whichever branch.
+        for zero in [
+            XsdValue::Double(0.0),
+            XsdValue::Double(-0.0),
+            XsdValue::Float(-0.0f32),
+        ] {
+            assert_eq!(numeric_total_cmp(&int_val(0), &zero), Some(Ordering::Equal));
+            assert_eq!(
+                numeric_total_cmp(&XsdValue::Decimal(dec("0.000")), &zero),
+                Some(Ordering::Equal)
+            );
+        }
+        // NaN has no place in the order at all — never a silent "greater".
+        for nan in [XsdValue::Double(f64::NAN), XsdValue::Float(f32::NAN)] {
+            assert_eq!(numeric_total_cmp(&one, &nan), None);
+            assert_eq!(numeric_total_cmp(&nan, &one), None);
+            assert_eq!(numeric_total_cmp(&nan, &nan), None);
+        }
+    }
+
+    /// The magnitude window and the `BigInt` fallback: a double far outside the
+    /// exact side's reach, a subnormal far under it, and a pair close enough that
+    /// the answer needs the exact cross-multiplication.
+    #[test]
+    fn magnitudes_outside_and_inside_the_aliasing_window_both_decide_exactly() {
+        let biggest = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0));
+        let smallest = XsdValue::Decimal(Decimal::from_parts(1, 18));
+        let most_negative = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
+
+        // Outside the window on the high side: 1e300 dwarfs any i128 mantissa.
+        assert_eq!(
+            numeric_total_cmp(&biggest, &XsdValue::Double(1e300)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            numeric_total_cmp(&most_negative, &XsdValue::Double(-1e300)),
+            Some(Ordering::Greater)
+        );
+        // Outside on the low side: the smallest subnormal is under 1e-18.
+        assert_eq!(
+            numeric_total_cmp(&smallest, &XsdValue::Double(f64::from_bits(1))),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            numeric_total_cmp(&XsdValue::Double(f64::from_bits(1)), &smallest),
+            Some(Ordering::Less)
+        );
+
+        // Inside the window and genuinely close: 2^127 as a double is exactly
+        // representable, and i128::MAX = 2^127 - 1 sits one below it.
+        let two_127 = XsdValue::Double(170_141_183_460_469_231_731_687_303_715_884_105_728.0);
+        assert_eq!(numeric_total_cmp(&biggest, &two_127), Some(Ordering::Less));
+        assert_eq!(
+            numeric_total_cmp(
+                &most_negative,
+                &XsdValue::Double(-170_141_183_460_469_231_731_687_303_715_884_105_728.0)
+            ),
+            Some(Ordering::Equal),
+            "i128::MIN is exactly -2^127, which is exactly a double"
+        );
+        // A dyadic decimal at full scale still lands exactly on its double.
+        let five_tenths_at_scale_18 =
+            XsdValue::Decimal(Decimal::from_parts(500_000_000_000_000_000, 18));
+        assert_eq!(
+            numeric_total_cmp(&five_tenths_at_scale_18, &XsdValue::Double(0.5)),
+            Some(Ordering::Equal)
+        );
+    }
+
+    /// The two ways a `u128` cross-multiplication runs out of room, both still
+    /// inside the aliasing window so the cheap bound cannot answer for them. The
+    /// `BigInt` fallback is what decides these, and it must decide them exactly.
+    #[test]
+    fn the_bigint_fallback_answers_the_pairs_that_overflow_a_u128() {
+        // Non-negative IEEE exponent: `significand × 2^exp × 10^18` exceeds 2^128
+        // whenever |ieee| is past ~3.4e20, while the exact side at scale 18 tops out
+        // near 1.7e20.
+        let biggest_at_full_scale = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 18));
+        assert_eq!(
+            numeric_total_cmp(&biggest_at_full_scale, &XsdValue::Double(1e21)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            numeric_total_cmp(&XsdValue::Double(1e21), &biggest_at_full_scale),
+            Some(Ordering::Greater)
+        );
+
+        // Negative IEEE exponent: `mantissa × 2^-exp` exceeds 2^128 once the mantissa
+        // is near the i128 ceiling and the double needs two or more fractional bits
+        // (`0.5` alone would not — `(2^127 - 1) << 1` still fits `u128`).
+        let biggest = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0));
+        assert_eq!(
+            numeric_total_cmp(&biggest, &XsdValue::Double(0.25)),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            numeric_total_cmp(&XsdValue::Double(0.25), &biggest),
+            Some(Ordering::Less)
+        );
+        // And the near-tie, one ulp of the EXACT side at a magnitude where a
+        // promotion through `f64` could not have resolved it at all: `2^126` is
+        // exactly a double, and the two decimals either side of it are not.
+        let two_126 = XsdValue::Decimal(Decimal::from_parts(1i128 << 126, 0));
+        assert_eq!(
+            numeric_total_cmp(
+                &two_126,
+                &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
+            ),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_total_cmp(
+                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) - 1, 0)),
+                &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
+            ),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            numeric_total_cmp(
+                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) + 1, 0)),
+                &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
+            ),
+            Some(Ordering::Greater)
+        );
+    }
+
+    /// Exhaustive antisymmetry and transitivity over a sample that spans every
+    /// branch of the tower and every seam between them. A cycle anywhere here is a
+    /// sort that may abort the process, so this is the property that must not rot.
+    #[test]
+    fn the_exact_numeric_order_is_a_total_order_over_the_whole_tower() {
+        let samples = vec![
+            XsdValue::Double(f64::NEG_INFINITY),
+            XsdValue::Float(f32::NEG_INFINITY),
+            XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0)),
+            int_val(-3),
+            XsdValue::Decimal(dec("-1.000000000000000001")),
+            XsdValue::Float(-1.0f32),
+            int_val(-1),
+            XsdValue::Double(-0.0),
+            int_val(0),
+            XsdValue::Decimal(dec("0.000")),
+            XsdValue::Double(f64::from_bits(1)),
+            XsdValue::Decimal(Decimal::from_parts(1, 18)),
+            XsdValue::Decimal(dec("0.1")),
+            XsdValue::Double(0.1f64),
+            XsdValue::Float(0.1f32),
+            XsdValue::Decimal(dec("0.5")),
+            XsdValue::Float(0.5f32),
+            int_val(1),
+            XsdValue::Double(1.0),
+            XsdValue::Float(1.0f32),
+            XsdValue::Decimal(dec("1.000000000000000001")),
+            int_val((1i128 << 53) - 1),
+            XsdValue::Double((1u64 << 53) as f64),
+            int_val((1i128 << 53) + 1),
+            XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0)),
+            XsdValue::Double(1e300),
+            XsdValue::Double(f64::INFINITY),
+            XsdValue::Float(f32::INFINITY),
+        ];
+
+        for (i, a) in samples.iter().enumerate() {
+            for (j, b) in samples.iter().enumerate() {
+                let forward = numeric_total_cmp(a, b).expect("no NaN in the sample");
+                let back = numeric_total_cmp(b, a).expect("no NaN in the sample");
+                assert_eq!(forward, back.reverse(), "not antisymmetric at ({i}, {j})");
+            }
+        }
+        for (i, a) in samples.iter().enumerate() {
+            for (j, b) in samples.iter().enumerate() {
+                if numeric_total_cmp(a, b) != Some(Ordering::Less)
+                    && numeric_total_cmp(a, b) != Some(Ordering::Equal)
+                {
+                    continue;
+                }
+                for (k, c) in samples.iter().enumerate() {
+                    if numeric_total_cmp(b, c) == Some(Ordering::Greater) {
+                        continue;
+                    }
+                    assert_ne!(
+                        numeric_total_cmp(a, c),
+                        Some(Ordering::Greater),
+                        "not transitive at ({i}, {j}, {k})"
+                    );
+                }
+            }
+        }
+
+        // And the whole sample sorts through it without tripping the total-order
+        // check `sort_by` runs in debug builds.
+        let mut order: Vec<usize> = (0..samples.len()).collect();
+        order.sort_by(|x, y| {
+            numeric_total_cmp(&samples[*x], &samples[*y]).expect("no NaN in the sample")
+        });
+        assert_eq!(order.len(), samples.len());
+    }
+
+    /// The promoted relation is left EXACTLY as it was: this is the divergence
+    /// stated as a test, so nobody can "tidy" `numeric_cmp` into the exact order and
+    /// silently change what SPARQL `<` and `=` mean.
+    #[test]
+    fn the_promotion_based_operator_relation_is_untouched() {
+        let a = XsdValue::Decimal(dec("1.000000000000000001"));
+        let c = XsdValue::Double(1.0);
+        assert!(
+            numeric_eq(&a, &c),
+            "SPARQL `=` still promotes, and still rounds"
+        );
+        assert_eq!(numeric_cmp(&a, &c), Some(Ordering::Equal));
+        assert_ne!(numeric_total_cmp(&a, &c), numeric_cmp(&a, &c));
     }
 
     #[test]

@@ -34,6 +34,12 @@ name = "purrdf_core"
 # leaf has no edge back to the core, remains wasm-clean, and prevents malformed
 # or relative identifiers from entering persistent PURREMB target identity.
 purrdf-iri = { workspace = true }
+# The SEP-0009 composite-datatype value space. Blank-node labels inside a
+# `cdt:List`/`cdt:Map` lexical form denote blank nodes in the enclosing
+# document's scope, so the IR kernel must read that grammar to bind them (see
+# `crate::cdt_blank`). The crate is a closed leaf over `purrdf-iri`/`purrdf-xsd`
+# with no edge back to the core, and stays wasm-clean.
+purrdf-cdt = { workspace = true }
 # Strict BCP 47 validation for canonical RDF language-tag target identities.
 # Parsing stays allocation-free and wasm-clean; canonical lowercase spelling is
 # enforced by the PURREMB target validator before the tag reaches this parser.

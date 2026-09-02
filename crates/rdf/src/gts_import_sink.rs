@@ -35,6 +35,7 @@
 //! resolves.
 
 use ciborium::value::Value;
+use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 
@@ -138,12 +139,18 @@ impl ResolvedSink for SinkImporter {
         // owned `lexical`/`lang` strings into the literal.
         let direction =
             crate::gts_resolve::parse_gts_direction(direction.as_deref(), lang.as_deref())?;
-        Ok(self.builder.intern_literal(RdfLiteral {
-            lexical_form: lexical,
-            datatype,
-            language: lang,
-            direction,
-        }))
+        // A composite literal's embedded blank labels bind into the SAME
+        // per-segment scope `intern_blank` puts this segment's bare labels in, so
+        // the segment isolation covers both spellings of a node alike.
+        Ok(self.builder.intern_literal_bound(
+            RdfLiteral {
+                lexical_form: lexical,
+                datatype,
+                language: lang,
+                direction,
+            },
+            BlankBinding::Ambient(BlankScope(segment_index as u32 + 1)),
+        )?)
     }
 
     fn intern_triple(

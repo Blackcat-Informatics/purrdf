@@ -2028,7 +2028,7 @@ mod tests {
     /// is dropped for having an incomparable/NaN key) and the row order is
     /// identical across two runs. SPARQL's ORDER BY total order over the
     /// `xsd:double` value space already gives `NaN` a fixed (deterministic,
-    /// lexical-fallback) slot — see `compare_sort_keys` in `modifier.rs` — so
+    /// syntactic-fallback) slot — see `total_order` in `modifier.rs` — so
     /// this test documents that guarantee for a native-fn-derived score rather
     /// than surfacing a latent bug.
     #[test]

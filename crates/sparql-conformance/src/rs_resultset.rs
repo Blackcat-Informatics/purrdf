@@ -25,20 +25,25 @@ use purrdf_core::TermValue;
 use purrdf_sparql_results::ParsedSolutions;
 
 use crate::manifest::query_rows;
-use crate::run::BASE;
 
 /// The `rs:` vocabulary namespace.
 const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
 
 /// Parse an `rs:ResultSet` Turtle document into [`ParsedSolutions`].
 ///
+/// `base` is the declaring manifest's own sentinel base
+/// ([`crate::manifest::SparqlTestCase::base`]), so a relative IRI inside the
+/// result document resolves to exactly the IRI the same reference in the case's
+/// `qt:data` fixture produced. Using a base shared by every manifest would make
+/// two different groups' relative references collide on one IRI.
+///
 /// # Errors
 ///
 /// Returns a message if the bytes do not parse as Turtle, or if the graph does
 /// not carry a well-formed `rs:ResultSet` shape (a binding missing its
 /// `rs:variable`/`rs:value`, etc).
-pub fn parse(bytes: &[u8]) -> Result<ParsedSolutions, String> {
-    let dataset = purrdf::parse_dataset(bytes, "text/turtle", Some(BASE))
+pub fn parse(base: &str, bytes: &[u8]) -> Result<ParsedSolutions, String> {
+    let dataset = purrdf::parse_dataset(bytes, "text/turtle", Some(base))
         .map_err(|e| format!("parse rs:ResultSet turtle: {e}"))?;
 
     // The result variables (`rs:resultVariable` literals). Order does not
@@ -137,7 +142,8 @@ mod tests {
 
     #[test]
     fn parses_the_bindings_graph_fixture_shape() {
-        let parsed = parse(GRAPH_TTL.as_bytes()).expect("parse rs:ResultSet");
+        let parsed =
+            parse(crate::manifest::BASE_ROOT, GRAPH_TTL.as_bytes()).expect("parse rs:ResultSet");
         assert_eq!(parsed.variables, vec!["g".to_owned(), "t".to_owned()]);
         assert_eq!(parsed.rows.len(), 3);
         for row in &parsed.rows {
@@ -154,6 +160,6 @@ mod tests {
 
     #[test]
     fn rejects_non_turtle_bytes() {
-        assert!(parse(b"not turtle { }").is_err());
+        assert!(parse(crate::manifest::BASE_ROOT, b"not turtle { }").is_err());
     }
 }

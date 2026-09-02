@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A group manifest included by `../manifest-all.ttl`. It declares its default
+# prefix RELATIVELY (`<manifest#>`), exactly as all six vendored SEP-0009 CDT
+# group manifests do, and its sibling `../beta/manifest.ttl` declares the same
+# relative prefix AND the same local name `shared-01`. Under one constant sentinel
+# base the two minted a byte-identical case IRI; under the per-manifest base
+# (`manifest::manifest_base`) they do not, which is what this pair proves.
+@prefix : <manifest#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:entries ( :shared-01 :alpha-only-01 ) .
+
+:shared-01 a mf:PositiveSyntaxTest ;
+    mf:name "shared-01" ;
+    mf:action <shared-01.rq> .
+
+:alpha-only-01 a mf:PositiveSyntaxTest ;
+    mf:name "alpha-only-01" ;
+    mf:action <alpha-only-01.rq> .

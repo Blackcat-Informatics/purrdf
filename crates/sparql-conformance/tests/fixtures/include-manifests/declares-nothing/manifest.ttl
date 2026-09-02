@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A manifest that declares NEITHER `mf:entries` NOR `mf:include`. It parses, it
+# types itself `mf:Manifest`, and it contributes nothing. `manifest::load` must
+# refuse it: a manifest that loads clean and runs no case reports success while
+# measuring nothing, which is exactly the silent green the loader's completeness
+# guards exist to make impossible.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<> a mf:Manifest ;
+    rdfs:label "declares no entries and no includes" .
