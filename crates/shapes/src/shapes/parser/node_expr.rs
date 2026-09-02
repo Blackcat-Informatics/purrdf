@@ -375,6 +375,10 @@ impl Parser<'_> {
         crate::term::sort_terms_canonical(&mut node_by_expr_nodes);
         for expr_node in node_by_expr_nodes {
             let expr = self.parse_node_expr(&expr_node)?;
+            // Record the shape IRIs this expression already NAMES, so they are
+            // resolved at load rather than at the first value node that happens to
+            // reach the constraint. See `Parser::node_by_expr_constants`.
+            self.record_node_by_expr_constants(id, &expr);
 
             let mut messages: Vec<String> = self
                 .objects_of(&expr_node, sh::MESSAGE)
@@ -821,6 +825,44 @@ impl Parser<'_> {
             .first_object_of(node, shnex::NODES)
             .ok_or_else(|| format!("{owner} node expression on {node} requires shnex:nodes"))?;
         self.parse_node_expr(&nodes)
+    }
+
+    /// Record the shape IRIs a `sh:nodeByExpression` expression already NAMES, for
+    /// the load-time resolution check in [`Parser::parse`](super::Parser::parse).
+    ///
+    /// Only the two spellings whose answer is decided at load are recorded: a bare
+    /// constant (`sh:nodeByExpression ex:MyShape`) and a list expression of them
+    /// (`sh:nodeByExpression ( ex:A ex:B )`), including through the union and
+    /// conditional combinators, whose branches are themselves already named.
+    /// Everything else — a path, a query, a function call — genuinely produces its
+    /// shape IRIs only during validation, and is resolved there.
+    ///
+    /// It is deliberately a RECORDING pass and not a check: the index it resolves
+    /// against is filled at the very end of the parse, after every shape exists.
+    fn record_node_by_expr_constants(&mut self, shape_id: &Term, expr: &NodeExpr) {
+        match expr {
+            NodeExpr::Constant(term @ Term::NamedNode(_)) => self
+                .node_by_expr_constants
+                .push((shape_id.clone(), term.clone())),
+            NodeExpr::List(members) => {
+                for member in members {
+                    if matches!(member, Term::NamedNode(_)) {
+                        self.node_by_expr_constants
+                            .push((shape_id.clone(), member.clone()));
+                    }
+                }
+            }
+            NodeExpr::Union(operands) | NodeExpr::Concat(operands) => {
+                for operand in operands {
+                    self.record_node_by_expr_constants(shape_id, operand);
+                }
+            }
+            NodeExpr::If { then, els, .. } => {
+                self.record_node_by_expr_constants(shape_id, then);
+                self.record_node_by_expr_constants(shape_id, els);
+            }
+            _ => {}
+        }
     }
 
     /// Parse a SHAPE-VALUED operand of a node expression, having first PROVED the

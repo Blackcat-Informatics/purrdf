@@ -1004,3 +1004,76 @@ fn a_list_expression_member_may_still_not_be_a_blank_node() {
         "got: {err}"
     );
 }
+
+// ── §7.2 sh:nodeByExpression resolves its named shapes at LOAD ──────────────────
+
+/// A `sh:nodeByExpression` naming a shape that does not exist must fail the LOAD,
+/// even when the shape carrying it targets NOTHING.
+///
+/// The constraint resolves its produced shape IRIs per value node, during
+/// validation. For a computed expression that is the only time it can. For a
+/// CONSTANT it is not: the answer is decided at load, and deferring it meant a
+/// shape whose target selected no nodes shipped a constraint naming a shape that
+/// does not exist — green load, green report, nothing checked. That is the
+/// resolve-at-firing-time defect `sh:condition` carried.
+#[test]
+fn node_by_expression_naming_a_missing_shape_fails_the_load_even_with_no_targets() {
+    let err = load_error(
+        "ex:S a sh:NodeShape ;
+             sh:targetClass ex:NobodyHasThisClass ;
+             sh:nodeByExpression ex:NotAShape .",
+    );
+    assert!(
+        err.contains("is not a shape of this shapes graph"),
+        "got: {err}"
+    );
+    assert!(
+        err.contains("checking nothing"),
+        "the diagnostic must say what the silence would have cost, got: {err}"
+    );
+}
+
+/// The list and conditional spellings are resolved at load too — a named shape is
+/// named whether it is written bare, inside a list, or as an `sh:if` branch.
+#[test]
+fn node_by_expression_resolves_named_shapes_through_lists_and_branches() {
+    for expr in [
+        "( ex:Good ex:NotAShape )",
+        "[ sh:if true ; sh:then ex:Good ; sh:else ex:NotAShape ]",
+        "[ sh:union ( ex:Good ex:NotAShape ) ]",
+    ] {
+        let err = load_error(&format!(
+            "ex:Good a sh:NodeShape ; sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape ; sh:targetClass ex:NobodyHasThisClass ;
+                 sh:nodeByExpression {expr} ."
+        ));
+        assert!(
+            err.contains("ex:NotAShape") || err.contains("ns#NotAShape"),
+            "the diagnostic must name the missing shape in {expr}, got: {err}"
+        );
+    }
+}
+
+/// The NEIGHBOURING VALID cases: the same three spellings naming shapes that DO
+/// exist still load, and a COMPUTED expression — whose shape IRIs genuinely are
+/// not known until validation — is not touched by the load-time check at all.
+#[test]
+fn node_by_expression_still_loads_for_named_shapes_and_computed_expressions() {
+    for expr in [
+        "ex:Good",
+        "( ex:Good ex:Other )",
+        "[ sh:if true ; sh:then ex:Good ; sh:else ex:Other ]",
+        "[ sh:union ( ex:Good ex:Other ) ]",
+        // Computed: the shape IRI comes out of the DATA graph at validation time,
+        // so no load-time resolution is possible and none is attempted.
+        "[ sh:path ex:shapeOf ]",
+        "[ shnex:pathValues ex:shapeOf ]",
+    ] {
+        loads(&format!(
+            "ex:Good a sh:NodeShape ; sh:nodeKind sh:IRI .
+             ex:Other a sh:NodeShape ; sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape ; sh:targetClass ex:NobodyHasThisClass ;
+                 sh:nodeByExpression {expr} ."
+        ));
+    }
+}

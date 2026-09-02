@@ -4447,8 +4447,31 @@ def build_claims(
         Claim(
             "the W3C SHACL scoreboard row",
             _CONFORMANCE,
-            r"W3C data-shapes, `core/` \+ `sparql/` \+ `af/` \| "
+            # The source cell now spells out the corpus split (120 W3C
+            # `core/`+`sparql/`, plus 9 under `af/` of which 6 are vendored DASH
+            # and 3 are first-party), because "W3C data-shapes" alone read as a
+            # claim that a W3C suite grades SHACL-AF. No such suite exists. The
+            # split figures are prose; the TOTAL is derived, here and again in the
+            # narrative claim below.
+            r"W3C data-shapes `core/` \+ `sparql/` \(\d+\), `af/` "
+            r"\(\d+ vendored DASH \+ \d+ first-party\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* · (?P<ledgered>\d+) ledgered",
+            {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
+            mat,
+        ),
+        Claim(
+            # The SAME count restated a third time, ~400 lines from the scoreboard
+            # row and ~430 from the generated matrix block, in the narrative
+            # section. That distance is exactly why it goes stale: this branch
+            # found it reading "126 / 126" when the matrix said 129, and reading it
+            # as the `core/`+`sparql/` figure when 126 was never that number. Now
+            # it is derived like the other two.
+            "the W3C SHACL narrative count",
+            _CONFORMANCE,
+            _flow(
+                r"the harness discovers \*\*(?P<passed>\d+) / (?P<total>\d+)\*\* "
+                r"`sht:Validate` entries with \*\*(?P<ledgered>\d+) ledgered xfails\*\*"
+            ),
             {"passed": shacl_pass, "total": shacl_pass, "ledgered": 0},
             mat,
         ),

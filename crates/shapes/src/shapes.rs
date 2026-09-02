@@ -590,6 +590,23 @@ pub(crate) struct Parser<'s> {
     /// without bound. Dropping the one thing a condition cannot use is what makes
     /// resolving conditions at LOAD time finite.
     parse_rules_enabled: bool,
+    /// Every CONSTANT shape IRI a `sh:nodeByExpression` names, with the shape that
+    /// named it, checked against [`Self::node_shape_index`] once that index is
+    /// filled (SHACL 1.2 Node Expressions §7.2).
+    ///
+    /// `Constraint::NodeByExpression` resolves its produced shape IRIs at
+    /// VALIDATION time, per value node, because in general the expression only
+    /// yields them then. But when the expression IS a constant — the ordinary
+    /// `sh:nodeByExpression ex:MyShape` spelling — the answer is already decided at
+    /// load, and deferring it means a shape that happens to target nothing (or
+    /// whose path yields no value node) SHIPS the broken constraint: the shapes
+    /// graph loads green, validates green, and checks nothing. That is the same
+    /// resolve-at-firing-time defect `sh:condition` carried.
+    ///
+    /// The check runs against the very index the validator uses, so it can refuse
+    /// only what validation would have refused anyway — just at the moment the
+    /// author can act on it.
+    node_by_expr_constants: Vec<(Term, Term)>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -686,6 +703,7 @@ impl<'s> Parser<'s> {
             node_shape_index: Arc::new(OnceLock::new()),
             custom_fns: parser::custom_fn::CustomFnIndex::default(),
             parse_rules_enabled: true,
+            node_by_expr_constants: Vec::new(),
         }
     }
 
@@ -802,6 +820,25 @@ impl<'s> Parser<'s> {
                     "internal error: the sh:nodeByExpression shape index was already filled"
                         .to_owned(),
                 );
+            }
+            // Resolve NOW every shape IRI a `sh:nodeByExpression` already names.
+            // The constraint otherwise resolves per value node during validation,
+            // so a shape that targets nothing — or whose path yields no value node
+            // — would ship a constraint naming a shape that does not exist: green
+            // load, green report, nothing checked. Against the very index the
+            // validator uses, so this refuses only what validation would refuse.
+            let index = self.node_shape_index.get().ok_or_else(|| {
+                "internal error: the shape index vanished after being set".to_owned()
+            })?;
+            for (shape_id, named) in &self.node_by_expr_constants {
+                if !index.contains_key(&named.to_string()) {
+                    return Err(format!(
+                        "sh:nodeByExpression on shape {shape_id} names {named}, which is not a \
+                         shape of this shapes graph; the constraint would resolve it only when a \
+                         value node reached it, so a shape with no targets would load and \
+                         validate green while checking nothing"
+                    ));
+                }
             }
         }
 
