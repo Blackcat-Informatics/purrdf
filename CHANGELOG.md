@@ -759,12 +759,23 @@ called out below with what a consumer must do.
   `purrdf-geo` GeoSPARQL 1.1 lane now have conformance-matrix rows, ratchet budgets and
   per-engine scoreboard entries. Both shipped with no matrix representation at all — the only
   trace of either was a forward reference inside the governor row — so the umbrella gate could
-  not see a regression in either lane. Both are declared `_suite_cargo` rows counting test
-  functions rather than fixtures, because neither grades a corpus, and the scoreboard says so:
-  the GeoSPARQL row additionally records that **no OGC conformance suite is vendored and none is
-  claimed**, its SHACL shapes being first-party `example.org` mirrors of the shipped OGC
-  22-047r1 validator (PurRDF mints no vocabulary IRIs), so those cases grade the implementation
-  against its own reading of the specification.
+  not see a regression in either lane. The kNN row counts test functions rather than fixtures,
+  because it grades a seam rather than a document format and has no corpus; the document says so
+  rather than inventing a fixture count.
+
+  The GeoSPARQL row counts **corpus geometries**, and the reason is recorded because the first
+  version of it did not. Written as a `cargo test` tally over `purrdf-geo`'s five integration
+  binaries it measured **33 on one machine and 37 on the CI runner from byte-identical source**,
+  turning the doc drift-guard red for a reason unrelated to GeoSPARQL. A number that moves with
+  the build environment is not a measurement — the same principle the matrix's `_no_scoreboard`
+  path already states from the other direction — so the row now reports the 20 geometries of
+  `purrdf_geo::determinism::CORPUS` whose serialized bytes fold into one `u64`, compared against
+  the `GOLDEN_DIGEST` pinned in the test source. That comparison is an oracle rather than a
+  self-report, and it is stable everywhere. The row additionally records what it does **not**
+  measure: **no OGC conformance suite is vendored and none is claimed**, the crate's SHACL shapes
+  being first-party `example.org` mirrors of the shipped OGC 22-047r1 validator (PurRDF mints no
+  vocabulary IRIs), so the lane has an independent oracle for its determinism but none for its
+  semantics, and a misreading of OGC 22-047r1 would pass.
 - **release:** Correct `docs/RELEASE.md`'s outstanding-bootstrap section, which named **four**
   crates as having no crates.io record. `purrdf-datalog` has had one since 2026-07-31 and
   answers 200; the genuinely unpublished set is `purrdf-cdt`, `purrdf-geo` and `purrdf-text`,

@@ -3064,9 +3064,9 @@ def _baseline_note_sites() -> tuple[tuple[str, str, str], ...]:
             _flow(r"(?P<pass>\d+) first-party cases grading the PURREMB kNN"),
         ),
         (
-            "GeoSPARQL 1.1 (first-party)",
-            "the GeoSPARQL lane size",
-            _flow(r"(?P<pass>\d+) first-party cases across the two evaluator seams"),
+            "GeoSPARQL 1.1 determinism corpus",
+            "the GeoSPARQL determinism corpus size",
+            _flow(r"(?P<pass>\d+) corpus geometries whose SERIALIZED bytes"),
         ),
     )
 

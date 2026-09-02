@@ -523,6 +523,91 @@ def _suite_governor_corpus() -> SuiteResult:
     )
 
 
+_GEO_GOLDEN = (
+    _REPO_ROOT / "crates" / "geo" / "tests" / "determinism.rs"
+)
+
+
+def _suite_geo_determinism() -> SuiteResult:
+    """`purrdf-geo`'s exact-arithmetic determinism corpus, against its pinned golden.
+
+    This row deliberately does NOT count `cargo test` test functions, and the
+    reason is worth recording because the first attempt at it did. A cargo tally
+    over this crate's five integration binaries measured 33 on one machine and 37
+    on the CI runner from byte-identical source, which made the doc drift-guard
+    red for a reason that had nothing to do with GeoSPARQL. That is the failure
+    `_no_scoreboard` exists to name: a test-function tally is not a measurement of
+    a corpus, and a number that moves with the build environment is not a
+    measurement at all.
+
+    What IS stable, and what this row reports, is the lane's own fixture-level
+    claim: the `purrdf_geo::determinism::CORPUS` geometries whose SERIALIZED bytes
+    — WKT and GeoJSON renderings, DE-9IM matrix strings, exact decimal measures
+    and IEEE bit patterns — fold into one `u64`, compared against `GOLDEN_DIGEST`.
+    `Pass` is the corpus size; a digest that disagrees with the golden is the
+    whole suite failing, because the digest is one value over the whole corpus and
+    there is no per-geometry verdict to partially credit.
+
+    The golden is read out of the test source rather than restated here, exactly
+    as `scripts/check-geo-determinism.sh` reads it, so there stays one copy of it
+    in the tree. This row measures the NATIVE half; the cross-target half
+    (native ≡ wasm32 ≡ golden) needs the wasm32 target and Node and is its own
+    gate, `make geo-determinism`.
+    """
+    name = "GeoSPARQL 1.1 determinism corpus"
+    source = "purrdf-geo (first-party; OGC 22-047r1)"
+    cmd = [
+        "cargo", "run", "-p", "purrdf-geo", "--locked",
+        "--example", "geo_digest",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    digest = re.search(r"^digest=([0-9a-f]{16})$", out, re.MULTILINE)
+    corpus = re.search(r"^corpus_len=(\d+)$", out, re.MULTILINE)
+    if not digest or not corpus:
+        return _no_scoreboard(
+            name, source, "`digest=<16 hex>` / `corpus_len=N`", cmd, out,
+        )
+    try:
+        golden_text = _GEO_GOLDEN.read_text(encoding="utf-8")
+    except OSError:
+        golden_text = ""
+    golden = re.search(
+        r"const GOLDEN_DIGEST: u64 = 0x([0-9a-f_]+);", golden_text
+    )
+    if not golden:
+        # The golden is the ORACLE. Without it this row would be the crate
+        # agreeing with itself, which is not a conformance measurement.
+        return _no_scoreboard(
+            name, source,
+            "`const GOLDEN_DIGEST: u64 = 0x…;` in crates/geo/tests/determinism.rs",
+            cmd, out,
+        )
+    want = golden.group(1).replace("_", "")
+    got = digest.group(1)
+    total = int(corpus.group(1))
+    agrees = got == want
+    detail = (
+        f"{total} geometries folded byte-wise into one u64 digest, compared with "
+        f"the pinned `GOLDEN_DIGEST` in crates/geo/tests/determinism.rs "
+        f"(`{want}`): {'agrees' if agrees else f'DISAGREES (computed {got})'}. "
+        "Counts CORPUS GEOMETRIES, not test functions. NO OGC conformance suite "
+        "is vendored and none is claimed — the crate's SHACL shapes are "
+        "first-party `example.org` mirrors of the shipped OGC 22-047r1 validator, "
+        "because PurRDF mints no vocabulary IRIs, so the evaluator-seam and "
+        "shape cases grade the implementation against its own reading of the "
+        "specification and are gated by `make check` rather than counted here. "
+        "This row is the NATIVE half; native ≡ wasm32 ≡ golden is `make "
+        "geo-determinism`"
+    )
+    return SuiteResult(
+        name, source,
+        passed=(total if agrees else 0), xskip=0, failed=(0 if agrees else total),
+        detail=detail,
+        ok=(rc == 0 and agrees),
+        log=out,
+    )
+
+
 def _suite_gts_vectors() -> SuiteResult:
     """The frozen cross-language GTS vector corpus (`vectors/*.gts`).
 
@@ -930,25 +1015,7 @@ def native_suites() -> list[SuiteResult]:
                 "measures the native target only"
             ),
         ),
-        _suite_cargo(
-            "GeoSPARQL 1.1 (first-party)",
-            "purrdf-geo (first-party; OGC 22-047r1)",
-            ["cargo", "test", "-p", "purrdf-geo", "--locked",
-             "--test", "determinism", "--test", "layout",
-             "--test", "query_rewrite_e2e", "--test", "scalar_functions_e2e",
-             "--test", "shacl_shapes"],
-            detail=(
-                "the two evaluator seams (scalar `geof:` functions; the four `geo:` "
-                "relation rewrite branches) plus GeoSPARQL's own SHACL shape surface, "
-                "and a pinned u64 digest folded over the SERIALIZED bytes of a "
-                "20-geometry corpus. NO OGC suite is vendored and none is claimed: "
-                "the shapes are first-party in `example.org` space, structurally "
-                "mirroring the shipped OGC validator, because PurRDF mints no "
-                "vocabulary IRIs. The digest's cross-target half (native ≡ wasm32 ≡ "
-                "the pinned golden) is a separate gate, `make geo-determinism`; the "
-                "crate's lib unit tests are graded by `make check`, not here"
-            ),
-        ),
+        _suite_geo_determinism(),
         _suite_entailment(),
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
@@ -1266,6 +1333,27 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _noise("running 1 test"),
             _board("GTS-VECTORS: agreed 8 total 9 diverging 1"),
             _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        # Two scoreboard lines rather than one, because this row needs BOTH: a
+        # digest with no corpus size is a number over an unknown amount of
+        # material, and a corpus size with no digest is a count of geometries
+        # nothing graded. Withholding either must go RED, which is exactly what
+        # the self-test drives.
+        #
+        # The digest here is the REAL `GOLDEN_DIGEST`, and it is the one specimen
+        # value in this file that is not synthetic: the scraper compares what the
+        # example printed against what the test source pins, so a made-up digest
+        # would make the specimen row disagree and test the failure path while
+        # claiming to test the success one.
+        "GeoSPARQL 1.1 determinism corpus",
+        _suite_geo_determinism,
+        (
+            _noise("    Finished `dev` profile [unoptimized + debuginfo] target(s)"),
+            _noise("     Running `target/debug/examples/geo_digest`"),
+            _board("digest=9667c2ee2cd3ad4b"),
+            _board("corpus_len=20"),
         ),
     ),
 )
