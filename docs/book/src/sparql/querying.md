@@ -56,8 +56,10 @@ engines behind one seam; `NativeSparqlEngine` is the shipped implementation.
   graph patterns, `OPTIONAL`, `UNION`, `MINUS`, `GRAPH`,
   `FILTER`/`BIND`/`VALUES`, property paths, `GROUP BY`/aggregates,
   `EXISTS`/`NOT EXISTS`, solution modifiers, RDF 1.2 quoted triple terms
-  (`<<( s p o )>>`), and `LATERAL` (a SEP-0006 extension — see
-  [below](#lateral-sep-0006)).
+  (`<<( s p o )>>`), `LATERAL` (a SEP-0006 extension — see
+  [below](#lateral-sep-0006)), and the SEP-0009 composite datatypes with their
+  `FOLD` aggregate and `UNFOLD` graph pattern (see
+  [below](#composite-datatypes-sep-0009)).
 - **Update** — `INSERT DATA`/`DELETE DATA`, the `DELETE`/`INSERT … WHERE`
   family (`WITH`/`USING`, `DELETE WHERE`), `LOAD`, and
   `CLEAR`/`DROP`/`CREATE`/`ADD`/`MOVE`/`COPY`.
@@ -768,6 +770,250 @@ custom-aggregate seams, these are built-ins, so every surface that takes
 query text has them — `purrdf query`, `Store.query` / `MutableDataset.query`
 in Python, `Dataset.query` / `QueryEngine.select` in WebAssembly, and
 `purrdf_query` / `purrdf_query_json` over the C ABI.
+
+## Composite datatypes (SEP-0009)
+
+SPARQL 1.1 and 1.2 have no term that holds several other terms. `purrdf`
+implements
+[SEP-0009](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0009/sep-0009.md)'s
+two composite datatypes, `cdt:List` and `cdt:Map`, together with the fifteen
+functions the SEP defines, the `FOLD` aggregate that builds one from a group,
+and the `UNFOLD` graph pattern that takes one apart. SEP-0009 is a proposal,
+**not part of the SPARQL 1.1 or 1.2 recommendation** — everything in this
+section is an extension, and a query using it
+[does not travel unchanged](#taking-a-composite-query-to-another-engine).
+
+The namespace is the SEP's own, recognized and never invented:
+
+```sparql
+PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
+```
+
+A composite is an ordinary RDF literal whose datatype is
+`cdt:List` or `cdt:Map` and whose lexical form spells the contents out:
+
+```sparql
+"[1,2,3]"^^cdt:List
+"[1,null,<http://example.org/s>]"^^cdt:List
+"[[1,2],[3]]"^^cdt:List
+"{1:'a', 2:'b'}"^^cdt:Map
+"[]"^^cdt:List        "{}"^^cdt:Map
+```
+
+List elements may be IRIs, blank nodes, literals, `null`, or nested
+composites. Map **keys** may be IRIs or literals — never blank nodes, never
+`null`, never a nested composite — and must be pairwise distinct **by term**,
+so `{1: "a", "1"^^xsd:integer: "b"}` is one key written twice and is refused.
+Map **values** carry no such restriction. Every IRI inside a composite lexical
+form must be **absolute**: a composite's contents are its own, and are not
+resolved against whatever base the surrounding document happens to declare.
+
+### The function library
+
+The set is **closed**. There is no registry to configure and no way for a
+caller to shadow one of these names, so the same query means the same thing on
+every host, and a configured extension namespace cannot capture a CDT name.
+Arity is enforced at **parse** time, before any evaluation.
+
+| Call | Arity | Result |
+|---|---|---|
+| `cdt:List(…)` | any | a `cdt:List` of the argument terms |
+| `cdt:Map(…)` | even | a `cdt:Map` from alternating key/value arguments |
+| `cdt:concat(…)` | any | the argument lists joined end to end |
+| `cdt:contains(list, term)` | 2 | `xsd:boolean` — does the list hold an equal term |
+| `cdt:get(coll, n_or_key)` | 2 | one element by **1-based** position, or one map value by key |
+| `cdt:head(list)` | 1 | the first element |
+| `cdt:tail(list)` | 1 | everything but the first element |
+| `cdt:reverse(list)` | 1 | the elements in opposite order |
+| `cdt:size(coll)` | 1 | `xsd:integer` element or entry count — the one function that takes either datatype |
+| `cdt:subseq(list, start[, len])` | 2–3 | a contiguous run, `start` **1-based** |
+| `cdt:containsKey(map, key)` | 2 | `xsd:boolean` — is this a key of the map |
+| `cdt:keys(map)` | 1 | the map's keys, as a `cdt:List` |
+| `cdt:merge(…)` | ≥ 2 | the union of the argument maps; a key held by more than one is resolved by the **first** map that carries it |
+| `cdt:put(map, key[, value])` | 2–3 | the map with one entry set; an omitted or erroring value stores the `null` entry |
+| `cdt:remove(map, key)` | 2 | the map without that entry; an absent key leaves it unchanged |
+
+Handing a list function a map (or the reverse) **raises** — it is a type
+error, not an unbound column. The indices are 1-based throughout, per the SEP.
+
+```sparql
+PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>
+SELECT ?s ?first
+WHERE {
+  ?s <http://example.org/tags> ?tags
+  FILTER(cdt:size(?tags) > 1)
+  BIND(cdt:head(?tags) AS ?first)
+}
+```
+
+### `FOLD`: a group becomes one term
+
+`FOLD` is an aggregate, so it sits wherever `SUM` or `GROUP_CONCAT` sits — in
+the `SELECT` list, in `HAVING`, beside other aggregates, under `GROUP BY`.
+
+```text
+Aggregate ::= … | 'FOLD' '(' 'DISTINCT'? Expression ( ',' Expression )?
+                    ( 'ORDER' 'BY' OrderCondition+ )? ')'
+```
+
+One expression builds a `cdt:List`; two build a `cdt:Map`, the first being the
+key. The optional `ORDER BY` belongs to the aggregate itself and follows the
+last expression with **no comma** — this is the seam that makes `FOLD` the
+first order-dependent aggregate in the engine, and it is why `FOLD` carries an
+`ORDER BY` where every other aggregate rejects one.
+
+```sparql
+SELECT (FOLD(?v) AS ?list)                       WHERE { VALUES ?v { 1 2 3 } }
+SELECT (FOLD(DISTINCT ?v) AS ?list)              WHERE { VALUES ?v { 1 1 2 } }
+SELECT (FOLD(?v ORDER BY DESC(?v)) AS ?list)     WHERE { VALUES ?v { 1 3 2 } }
+SELECT (FOLD(?k, ?v) AS ?map)                    WHERE { VALUES (?k ?v) { (1 2) } }
+SELECT ?g (FOLD(?v ORDER BY ?ord) AS ?list)      WHERE { … } GROUP BY ?g
+```
+
+Four behaviours are worth knowing before you rely on one:
+
+- An **empty group folds to a bound empty composite** — `"[]"^^cdt:List` or
+  `"{}"^^cdt:Map` — never to an unbound column. `SUM` over nothing is `0` and
+  `GROUP_CONCAT` over nothing is `""`; `FOLD` follows that shape rather than
+  `MIN`'s.
+- A row whose element expression is **unbound or erroring contributes a `null`
+  element**, which is the opposite of every other aggregate, all of which skip
+  such a row. The SEP wants the arity of the list to match the arity of the
+  group. A map **key** that is unbound or erroring drops the entry entirely,
+  because there is nothing to file the value under.
+- A repeated map key resolves to the **last** binding.
+- `DISTINCT` is RDF-term identity, not value equality, so `"1"^^xsd:integer`
+  and `"01"^^xsd:integer` survive as two elements.
+
+There is no `; SEPARATOR=` on `FOLD` — that scalar parameter is
+`GROUP_CONCAT`'s alone — and `FOLD(*)` is not grammar.
+
+### `UNFOLD`: one term becomes rows
+
+`UNFOLD` is a **graph pattern**, not a function. It is its own
+`GraphPatternNotTriples` alternative — structurally where `LATERAL` sits — and
+it stacks above the pattern parsed so far:
+
+```text
+Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'
+```
+
+| Operand | first variable | second variable |
+|---|---|---|
+| `cdt:List` | each element, in list order, duplicates preserved | the **1-based** `xsd:integer` index |
+| `cdt:Map` | each entry's key | that entry's value |
+
+```sparql
+SELECT ?elem ?i
+WHERE {
+  ?s <http://example.org/tags> ?tags
+  UNFOLD(?tags AS ?elem, ?i)
+  FILTER(?i < 4)
+}
+```
+
+Both targets obey `BIND`'s §19.6 scope rule: a variable already in scope in the
+group graph pattern is a **syntax error**, not a join, and naming the same
+variable twice is likewise refused.
+
+The two edges that decide whether an `OPTIONAL` around an `UNFOLD` is doing
+what you think:
+
+- A **well-formed but empty** composite (`"[]"^^cdt:List`, `cdt:Map()`) yields
+  **zero rows**. The row is gone.
+- An operand that is **not a composite at all** — unbound, erroring, an
+  `xsd:integer`, a plain string, or a `cdt:`-typed literal whose lexical form
+  does not parse — passes **the row through unchanged** with both targets
+  unbound. This is SEP-0009 §12.3 verbatim, and it is deliberately not a
+  no-rows outcome, so `UNFOLD` never silently deletes a row it merely failed to
+  understand.
+
+`FOLD` and `UNFOLD` compose, which is how a query re-orders a list without
+leaving the query language:
+
+```sparql
+SELECT (FOLD(?e ORDER BY ?e) AS ?sorted)
+WHERE { BIND("[3,1,2]"^^cdt:List AS ?l) UNFOLD(?l AS ?e) }
+```
+
+### Ordering, `MIN` and `MAX`
+
+`ORDER BY`, `MIN`, `MAX` and `FOLD`'s own `ORDER BY` all order composite
+literals **by the value they denote**, not by their lexical form, through one
+shared projection of SPARQL §15.1. Composites rank between plain literals and
+RDF 1.2 triple terms: `unbound < blank < IRI < literal < composite < triple
+term`. SEP-0009 does not pin that placement; it is `purrdf`'s documented
+choice.
+
+The order `purrdf` exports for composites is **syntactic**, and that is not an
+oversight. SEP-0009's value relations are partial and raise on incomparable
+operands, and the obvious repair — order by value, break ties syntactically —
+is **intransitive** on SPARQL's own type lattice
+(`"9"^^xsd:double` < `"P1D"^^xsd:duration` < `"8"^^xsd:float` <
+`"9"^^xsd:double`). Rust's sorts may **panic** on a comparator like that, so a
+total order is a correctness requirement here, not a nicety.
+
+`MEDIAN` and `PERCENTILE` are numeric folds and are **not** composite-aware: a
+composite is outside their domain and the aggregate comes back unbound.
+
+### Blank nodes inside a composite
+
+A `_:b` written inside a composite lexical form binds through the **same**
+ingress rule as a bare `_:b` token, on every codec — Turtle, TriG, N-Triples,
+N-Quads, RDF/XML, TriX, HexTuples, JSON-LD, and both GTS import paths. So `_:b`
+written as a subject and `_:b` written inside a `cdt:List` **in the same
+document** are one node, while the same label in two different documents stays
+two nodes, exactly as RDF 1.1 §4.1 requires. Composite-embedded blank nodes
+also participate in canonicalization and in skolemization.
+
+Query text gets its own blank scope for the same reason, so a `_:b` you write
+inside a composite literal in a query is never the `_:b` in the data.
+
+### Limits, and what a composite refuses
+
+Nesting is bounded, and the bounds are an invariant of the value — the
+programmatic constructors enforce them exactly as the parser does:
+
+| Bound | Value |
+|---|---|
+| Nesting depth | 64 |
+| Total elements, all levels | 2²⁰ (1 048 576) |
+| Lexical bytes | 64 MiB |
+
+Crossing one at evaluation is a **hard query failure** naming the bound
+crossed, never a quietly unbound answer.
+
+An **ill-formed composite literal in a document refuses the whole document**
+(`cdt-literal-malformed`), where an ill-formed `"abc"^^xsd:integer` does not.
+That asymmetry is deliberate and is [written down in
+full](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md):
+the embedded-blank scanner is lexical, so admitting an unparseable form opaquely
+would leave half a blank-node scope bound and half of it raw. In **query text**
+the same literal parses — ill-typedness is an evaluation-time question there, a
+function over it is unbound, and a comparison with it raises.
+
+### Taking a composite query to another engine
+
+Expect a **parse error** for `FOLD` and `UNFOLD`, which are keywords no
+unextended grammar admits, and quietly **different answers** for the function
+calls, which are ordinary `iri ArgList` calls that an engine without SEP-0009
+will report as unknown functions. There is nothing to configure to reach any of
+it from a host: like the SHA-3 built-ins, composites are unconditional, so
+`purrdf query`, Python's `Store.query` / `MutableDataset.query`, WebAssembly's
+`Dataset.query` / `QueryEngine.select`, and the C ABI's `purrdf_query` /
+`purrdf_query_json` all have them.
+
+One divergence runs the other way, and it is stated rather than argued.
+`purrdf`'s reader admits two element forms the published SEP-0009 lexical space
+does not — an RDF 1.2 triple term `<<( s p o )>>`, and a directional
+language-tagged literal (`"x"@en--ltr`) — as list elements and map values,
+because refusing a term type the RDF 1.2 data model defines, inside a container
+the data model also defines, is not an admissible outcome for this toolkit.
+They are emitted only for values the published grammar cannot express at all.
+**A conformant SEP-0009 reader handed one of those literals will call it
+ill-formed.** See
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)
+for the divergence and the scan that bounds its blast radius.
 
 ## Quad templates: `CONSTRUCT` into named graphs
 
