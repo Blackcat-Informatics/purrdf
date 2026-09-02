@@ -188,7 +188,7 @@ upstream-erratum note below).
 
 The W3C `sparql11/service` tests bundle **each remote endpoint's data in the
 manifest** via `qt:serviceData [ qt:endpoint <ep> ; qt:data <file> ]`. The harness
-resolves every endpoint through an in-memory source (`LocalRemoteQuerySource`),
+resolves every endpoint through an in-memory resolver (`InProcessServiceResolver`),
 which dog-foods the native engine — no socket, no live HTTP, fully deterministic.
 The whole group therefore runs offline alongside the rest of the suite.
 

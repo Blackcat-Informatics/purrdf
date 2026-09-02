@@ -12,7 +12,7 @@
 //! forward) once per distinct left binding. This is inherently O(N) forwards in
 //! the number of left rows, versus the O(1) single forward of a fixed-IRI
 //! `SERVICE <ep>` (a plain Join). This bench runs both shapes over an offline
-//! [`LocalRemoteQuerySource`] at two scales so the per-left-row substitute+forward
+//! [`InProcessServiceResolver`] at two scales so the per-left-row substitute+forward
 //! cost of the LATERAL path — and its linear scaling — is **measured**, and any
 //! future endpoint-grouping optimization has a baseline to beat.
 //!
@@ -24,7 +24,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{EvalCtx, LocalRemoteQuerySource, RemoteQuerySource, evaluate_query};
+use purrdf_sparql_eval::{EvalCtx, InProcessServiceResolver, ServiceResolver, evaluate_query};
 
 const ENDPOINT_BASE: &str = "http://ex/ep";
 
@@ -52,15 +52,15 @@ fn endpoint_dataset(i: usize) -> Arc<RdfDataset> {
 }
 
 /// A source registering n distinct endpoints `<http://ex/ep{i}>`.
-fn source(n: usize) -> LocalRemoteQuerySource {
-    let mut src = LocalRemoteQuerySource::new();
+fn source(n: usize) -> InProcessServiceResolver {
+    let mut src = InProcessServiceResolver::new();
     for i in 0..n {
         src = src.with_endpoint(format!("{ENDPOINT_BASE}{i}"), endpoint_dataset(i));
     }
     src
 }
 
-fn run(ds: &Arc<RdfDataset>, src: &(dyn RemoteQuerySource + Sync), query: &str) -> usize {
+fn run(ds: &Arc<RdfDataset>, src: &(dyn ServiceResolver + Sync), query: &str) -> usize {
     let parsed = SparqlParser::new().parse_query(query).expect("parse");
     let mut ctx = EvalCtx::new(ds).with_remote(src);
     match evaluate_query(&parsed, &mut ctx).expect("eval") {
