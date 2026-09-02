@@ -192,7 +192,15 @@ fn table_head(local: &str) -> TermValue {
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
     use purrdf_entail::{Materialization, Regime};
-    let ds = build_dataset(&case.base, &case.data, &case.graph_data)?;
+    // A `qt:constructDataFile` action contributes one more SOURCE DOCUMENT — the
+    // serialization of a CONSTRUCT result graph — merged alongside any `qt:data`
+    // and standardized apart from it exactly as two files are (see
+    // [`build_dataset`]).
+    let mut sources = parse_sources(&case.base, &case.data, &case.graph_data)?;
+    if let Some(construct) = &case.construct_data {
+        sources.push((construct_data_document(case, construct)?, None));
+    }
+    let ds = freeze_sources(&sources, &case.graph_data)?;
     // For a rule-table lane, close the dataset before it is queried (the eval loop is
     // untouched — it queries an already-reasoned dataset). `OWL-Direct` and `RIF` are
     // handled by the CALLER (the `QueryEval` arm), which has the two inputs this
@@ -267,40 +275,71 @@ fn file_base_iri(base: &str, path: &std::path::Path) -> String {
 /// [`crate::manifest::SparqlTestCase::base`]) — see [`file_base_iri`] for why it
 /// must be that one and not a harness-wide constant.
 ///
+/// # Every source file is a DOCUMENT, and documents are standardized apart
+///
+/// A case may declare several `qt:data` / `qt:graphData` files. Each is a separate
+/// RDF document with its own blank-node scope, so combining them is an RDF 1.1
+/// **merge** (§4.1): the blank nodes of the sources must first be *standardized
+/// apart*, and only then unioned. Two files that both write `_:b` name two
+/// DIFFERENT nodes.
+///
+/// This function used to serialize each file to N-Quads, concatenate the text, and
+/// re-parse the concatenation as ONE document. That is a union of texts, not a
+/// merge of graphs: every source's `_:b` collapsed onto a single node. So each
+/// source is now parsed on its own and merged in under its own
+/// [`BlankScope`](purrdf_core::BlankScope) — scopes `1, 2, 3, …` in declaration
+/// order, with scope 0 ([`BlankScope::DEFAULT`](purrdf_core::BlankScope::DEFAULT))
+/// deliberately left unused so no source of a merged dataset can ever alias a
+/// blank node minted by an un-scoped `push_owned_*` (or by a SPARQL query, whose
+/// own document scope is likewise distinct).
+///
+/// One scope per source is also what keeps a bare `_:b` and a `_:b` embedded in a
+/// `cdt:List` / `cdt:Map` lexical form in the SAME file bound to the SAME node:
+/// [`intern_owned_term_scoped`](purrdf_core::RdfDatasetBuilder::intern_owned_term_scoped)
+/// binds both through that one scope (see [`purrdf_core::cdt_blank`]).
+///
+/// Merging over the OWNED model (rather than over serialized text) also carries
+/// the RDF 1.2 statement layer — reifier bindings and annotations — which the old
+/// N-Quads round trip could only express by flattening.
+///
 /// # Errors
 ///
-/// Returns a message on any read, parse, or serialize failure (never silent).
+/// Returns a message on any read, parse, or freeze failure (never silent).
 pub fn build_dataset(
     base: &str,
     data: &[std::path::PathBuf],
     graph_data: &[(String, std::path::PathBuf)],
 ) -> Result<Arc<RdfDataset>, String> {
-    // Serialize each qt:data Turtle file to N-Quads (default graph — no graph tag).
-    let mut combined_nq: Vec<u8> = Vec::new();
-    for data in data {
-        let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
+    let sources = parse_sources(base, data, graph_data)?;
+    freeze_sources(&sources, graph_data)
+}
+
+/// One parsed source document plus the named graph its rows are retagged into
+/// (`None` = the default graph).
+type Source = (Arc<RdfDataset>, Option<purrdf_core::RdfTerm>);
+
+/// Parse each `qt:data` / `qt:graphData` file into its OWN dataset, in
+/// declaration order. Separate from [`freeze_sources`] so a caller with a further
+/// source of its own — the `qt:constructDataFile` document in [`load_dataset`] —
+/// can add it before the merge and have it scoped like any other document.
+fn parse_sources(
+    base: &str,
+    data: &[std::path::PathBuf],
+    graph_data: &[(String, std::path::PathBuf)],
+) -> Result<Vec<Source>, String> {
+    let mut sources: Vec<Source> = Vec::with_capacity(data.len() + graph_data.len());
+
+    for path in data {
+        let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         let ds = purrdf::parse_dataset(
             &chunk,
-            data_media_type(data),
-            Some(&file_base_iri(base, data)),
+            data_media_type(path),
+            Some(&file_base_iri(base, path)),
         )
-        .map_err(|e| format!("parse data {}: {e}", data.display()))?;
-        let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
-            .map_err(|e| format!("serialize {}: {e}", data.display()))?;
-        combined_nq.extend_from_slice(&nq);
-        if combined_nq.last() != Some(&b'\n') {
-            combined_nq.push(b'\n');
-        }
+        .map_err(|e| format!("parse data {}: {e}", path.display()))?;
+        sources.push((ds, None));
     }
 
-    // Serialize each qt:graphData Turtle file to N-Quads, then tag every triple line
-    // with the named-graph IRI so it is placed in that named graph. A file that
-    // parses to ZERO quads (e.g. `empty.ttl`) leaves no trace in N-Quads text — the
-    // format has no syntax for "this named graph exists but is empty" — so its IRI
-    // is separately remembered in `empty_graphs` and explicitly declared on the
-    // final builder below (RdfDataset's `named_graphs`, RDF 1.1 §3's "an RDF
-    // dataset MAY include an empty named graph").
-    let mut empty_graphs: Vec<&str> = Vec::new();
     for (graph_iri, path) in graph_data {
         let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         // Parse against the graph's OWN resolved IRI (not the shared harness
@@ -308,55 +347,163 @@ pub fn build_dataset(
         // graph, exactly like a real per-file base would.
         let ds = purrdf::parse_dataset(&chunk, data_media_type(path), Some(graph_iri))
             .map_err(|e| format!("parse graph data {}: {e}", path.display()))?;
-        if ds.quad_count() == 0 {
-            empty_graphs.push(graph_iri.as_str());
-            continue;
-        }
-        let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
-            .map_err(|e| format!("serialize graph data {}: {e}", path.display()))?;
-        let nq_text = std::str::from_utf8(&nq)
-            .map_err(|e| format!("utf-8 in serialized nquads for {}: {e}", path.display()))?;
-
-        // Tag each triple line (lines ending with ` .`) with the named-graph IRI.
-        // Comment lines and blank lines are passed through unchanged.
-        // Lines that already carry a graph term (four-element quads) are also passed through.
-        for line in nq_text.lines() {
-            let trimmed = line.trim_end();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                combined_nq.extend_from_slice(trimmed.as_bytes());
-            } else if let Some(body) = trimmed.strip_suffix(" .") {
-                // Strip the trailing ` .`, insert the graph IRI, re-append ` .`
-                combined_nq.extend_from_slice(body.as_bytes());
-                combined_nq.extend_from_slice(b" <");
-                combined_nq.extend_from_slice(graph_iri.as_bytes());
-                combined_nq.extend_from_slice(b"> .");
-            } else {
-                combined_nq.extend_from_slice(trimmed.as_bytes());
-            }
-            combined_nq.push(b'\n');
-        }
+        sources.push((ds, Some(purrdf_core::RdfTerm::Iri(graph_iri.clone()))));
     }
 
-    // N-Quads has no relative IRIs, so this base is inert; it is the case's own for
-    // consistency with every other parse in this function rather than a second,
-    // differently-based reading of the same bytes.
-    let parsed = purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(base))
-        .map_err(|e| format!("parse combined n-quads: {e}"))?;
-    if empty_graphs.is_empty() {
-        return Ok(parsed);
-    }
+    Ok(sources)
+}
 
-    // Re-intern the parsed quads into a fresh builder (standard `push_dataset`
-    // merge) so the empty graph IRIs can be declared alongside them before freeze.
+/// Merge every parsed source under its OWN [`BlankScope`](purrdf_core::BlankScope)
+/// and freeze — the standardize-apart half of the merge documented on
+/// [`build_dataset`].
+fn freeze_sources(
+    sources: &[Source],
+    graph_data: &[(String, std::path::PathBuf)],
+) -> Result<Arc<RdfDataset>, String> {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
-    builder.push_dataset(&parsed);
-    for graph_iri in empty_graphs {
+    for (index, (source, graph)) in sources.iter().enumerate() {
+        let ordinal = u32::try_from(index + 1)
+            .map_err(|_| format!("more than {} source documents in one case", u32::MAX))?;
+        merge_source(
+            &mut builder,
+            source,
+            purrdf_core::BlankScope(ordinal),
+            graph.as_ref(),
+        );
+    }
+    // A `qt:graphData` file that parses to ZERO quads (e.g. `empty.ttl`) leaves
+    // nothing behind to imply its graph, so the graph is declared explicitly —
+    // RDF 1.1 §4's "an RDF dataset MAY include an empty named graph". Declaring
+    // one that DOES own quads is a no-op, so every graph is declared uniformly
+    // rather than only the empty ones.
+    for (graph_iri, _) in graph_data {
         let g = builder.intern_iri(graph_iri);
         builder.declare_named_graph(g);
     }
+
     builder
         .freeze()
-        .map_err(|e| format!("freeze dataset with declared empty graphs: {e}"))
+        .map_err(|e| format!("freeze merged case dataset: {e}"))
+}
+
+/// Produce the source document a `qt:constructDataFile` action names: run its
+/// CONSTRUCT query, serialize the result graph in the declared media type, and
+/// parse that serialization back.
+///
+/// The round trip through real syntax is the whole point of the action, so it is
+/// performed literally: the graph is WRITTEN and RE-READ rather than handed on as
+/// an in-memory dataset. A blank node occurring both as a term and inside a
+/// `cdt:List` / `cdt:Map` lexical form only survives it if the serializer spells
+/// both occurrences with the SAME identifier and the parser binds both back to
+/// one node.
+///
+/// The CONSTRUCT runs against an EMPTY dataset: the action supplies no data of its
+/// own, and the graph it names is meant to be built by the query alone (the
+/// SEP-0009 cases mint theirs with `BNODE()`). A query that needed data would name
+/// it with `qt:data`, which composes.
+///
+/// # Errors
+///
+/// Returns a message if the query cannot be read, parsed, or evaluated, if it is
+/// not a graph-producing form, or if the graph cannot be written to / read back
+/// from the declared media type.
+fn construct_data_document(
+    case: &SparqlTestCase,
+    construct: &crate::manifest::ConstructDataFile,
+) -> Result<Arc<RdfDataset>, String> {
+    let query_text = std::fs::read_to_string(&construct.query).map_err(|e| {
+        format!(
+            "read constructDataFile query {}: {e}",
+            construct.query.display()
+        )
+    })?;
+    let empty = purrdf_core::RdfDatasetBuilder::new()
+        .freeze()
+        .map_err(|e| format!("freeze the empty constructDataFile input dataset: {e}"))?;
+    let engine = NativeSparqlEngine::new();
+    let result = engine
+        .query(
+            &empty,
+            SparqlRequest {
+                query: &query_text,
+                base_iri: Some(&case.base),
+                substitutions: &[],
+            },
+        )
+        .map_err(|e| {
+            format!(
+                "evaluate constructDataFile query {}: {e}",
+                construct.query.display()
+            )
+        })?;
+    let SparqlResult::Graph(graph) = result else {
+        return Err(format!(
+            "constructDataFile query {} is not a CONSTRUCT/DESCRIBE — a \
+             qt:constructDataFile action names the query whose RESULT GRAPH becomes the \
+             case's data, so a query form that produces no graph cannot serve it",
+            construct.query.display()
+        ));
+    };
+    let bytes =
+        serialize_dataset(&graph, &construct.format, SerializeGraph::Dataset).map_err(|e| {
+            format!(
+                "serialize the {} result graph as {}: {e}",
+                construct.query.display(),
+                construct.format
+            )
+        })?;
+    purrdf::parse_dataset(&bytes, &construct.format, Some(&case.base)).map_err(|e| {
+        format!(
+            "re-parse the {} result graph from {}: {e}",
+            construct.query.display(),
+            construct.format
+        )
+    })
+}
+
+/// Merge one parsed source document into `builder` under `scope`, optionally
+/// retagging every row into the named graph `graph`.
+///
+/// `scope` is this document's own [`BlankScope`](purrdf_core::BlankScope): every
+/// blank node it names — written as a term, or embedded in a `cdt:List` /
+/// `cdt:Map` lexical form — is interned under it, which is what standardizes this
+/// document apart from its siblings while keeping its own co-references intact.
+///
+/// The whole RDF 1.2 statement layer travels: base quads, reifier bindings and
+/// annotations alike, each with its own graph slot retagged.
+fn merge_source(
+    builder: &mut purrdf_core::RdfDatasetBuilder,
+    source: &RdfDataset,
+    scope: purrdf_core::BlankScope,
+    graph: Option<&purrdf_core::RdfTerm>,
+) {
+    for mut quad in source.owned_quads() {
+        if let Some(g) = graph {
+            quad.graph_name = Some(g.clone());
+        }
+        builder.push_owned_quad_scoped(&quad, scope);
+    }
+    for mut reifier in source.owned_reifiers() {
+        if let Some(g) = graph {
+            reifier.graph = Some(g.clone());
+        }
+        builder.push_owned_reifier_scoped(&reifier, scope);
+    }
+    for mut annotation in source.owned_annotations() {
+        if let Some(g) = graph {
+            annotation.graph = Some(g.clone());
+        }
+        builder.push_owned_annotation_scoped(&annotation, scope);
+    }
+    // A source being retagged into ONE named graph contributes no graph names of
+    // its own — they have all been replaced by `graph`, which the caller declares.
+    // A default-graph source (a `.trig` / `.nq` fixture) keeps its own.
+    if graph.is_none() {
+        for named in source.owned_named_graphs() {
+            let g = builder.intern_owned_term_scoped(&named, scope);
+            builder.declare_named_graph(g);
+        }
+    }
 }
 
 /// Run `case`, optionally resolving `SERVICE` clauses through `remote`.

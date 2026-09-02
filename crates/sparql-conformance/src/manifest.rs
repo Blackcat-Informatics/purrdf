@@ -127,6 +127,31 @@ pub enum ExpectedResult {
     Unsupported(PathBuf),
 }
 
+/// A `qt:constructDataFile` action: the case's data is not a file on disk but the
+/// **serialization of a CONSTRUCT query's result graph**.
+///
+/// ```turtle
+/// [ qt:constructDataFile [ qt:query <c.rq> ; qt:format "text/turtle" ] ;
+///   qt:query <ask.rq> ]
+/// ```
+///
+/// The harness runs `query` against an empty dataset, writes the resulting graph
+/// in `format`, and reads that serialization back as one of the case's source
+/// documents — so the case grades a **round trip through a concrete syntax**, not
+/// just the evaluator. The SEP-0009 `bnodes-export-*` cases use it to pin that a
+/// blank node occurring both as a term and inside a `cdt:List` / `cdt:Map`
+/// lexical form is written with ONE identifier in Turtle, N-Triples and RDF/XML
+/// alike, so it still denotes one node after the round trip. A serializer that
+/// spelled the two occurrences differently would fail them, and that failure is
+/// the point of the action shape.
+#[derive(Debug, Clone)]
+pub struct ConstructDataFile {
+    /// The CONSTRUCT query whose result graph becomes the case's data.
+    pub query: PathBuf,
+    /// The media type that graph is serialized to (and re-parsed from).
+    pub format: String,
+}
+
 /// One discovered conformance test case.
 #[derive(Debug, Clone)]
 pub struct SparqlTestCase {
@@ -155,6 +180,12 @@ pub struct SparqlTestCase {
     pub graph_data: Vec<(String, PathBuf)>,
     /// `SERVICE` endpoint data: `(endpoint IRI, local file)` (`qt:serviceData`).
     pub service_data: Vec<(String, PathBuf)>,
+    /// A `qt:constructDataFile` action, when the case declares one: its data is
+    /// produced by running a CONSTRUCT query and serializing the result graph
+    /// (see [`ConstructDataFile`]). Composes with `qt:data`/`qt:graphData` —
+    /// the constructed document is merged in as one more source, standardized
+    /// apart from the files exactly as they are from each other.
+    pub construct_data: Option<ConstructDataFile>,
     /// The best-supported entailment regime for this case (`sd:entailmentRegime`),
     /// if any: the dataset is materialized under it before the query runs. `None`
     /// for a plain (Simple-entailment) test or one whose only regimes the native
@@ -389,13 +420,14 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
          PREFIX purrdf: <{MF_EXT_NS}>\n\
-         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs WHERE {{\n\
+         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs ?cdfQuery ?cdfFormat WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\
          OPTIONAL {{ ?act qt:query ?query }}\n\
          OPTIONAL {{ ?act qt:data ?data }}\n\
          OPTIONAL {{ ?act qt:graphData ?graphData }}\n\
          OPTIONAL {{ ?act qt:serviceData ?sd . ?sd qt:endpoint ?serviceEp ; qt:data ?serviceData }}\n\
+         OPTIONAL {{ ?act qt:constructDataFile ?cdf . ?cdf qt:query ?cdfQuery ; qt:format ?cdfFormat }}\n\
          OPTIONAL {{ ?act purrdf:aggregateNamespace ?aggNs }}\n\
          OPTIONAL {{ ?test mf:result ?result }}\n\
          }}"
@@ -419,6 +451,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
                 data: Vec::new(),
                 graph_data: Vec::new(),
                 service_data: Vec::new(),
+                construct_data: None,
                 regime: None,
                 aggregate_namespace: None,
                 expected: ExpectedResult::None,
@@ -451,6 +484,19 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
             if !entry.service_data.iter().any(|(e, _)| *e == ep) {
                 entry.service_data.push((ep, path));
             }
+        }
+        // `qt:constructDataFile` needs BOTH halves — the CONSTRUCT query and the
+        // media type its graph is written in. Taking one without the other would
+        // leave the harness guessing a serialization the manifest actually
+        // states, so the pair binds together or not at all.
+        if entry.construct_data.is_none()
+            && let (Some(query), Some(format)) =
+                (iri_of(row, "cdfQuery"), lexical_of(row, "cdfFormat"))
+        {
+            entry.construct_data = Some(ConstructDataFile {
+                query: resolver.path(&query)?,
+                format,
+            });
         }
         if let Some(result) = iri_of(row, "result") {
             entry.expected = classify_result(&resolver.path(&result)?);

@@ -462,6 +462,7 @@ mod tests {
             data: Vec::new(),
             graph_data: Vec::new(),
             service_data: Vec::new(),
+            construct_data: None,
             regime: None,
             aggregate_namespace: None,
             expected,
