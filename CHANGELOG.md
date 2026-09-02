@@ -42,6 +42,16 @@ called out below with what a consumer must do.
   travels. A caller that needs the refusal itself — with its message and kind intact, which a
   SPARQL expression error by construction cannot carry — calls the new `functions::compute`,
   which answers in `Result<TermValue, GeoError>`.
+- **shapes:** A SHACL validation report no longer FUSES a blank node it mints with one it
+  carries. The report invents `_:report`, `_:r0`, `_:r1`, … and the interior nodes of a
+  complex `sh:path`; blank-node labels arriving from the data or shapes graph are opaque
+  strings that pass through the IR verbatim, so a data graph containing `_:r0` produced
+  `_:r0 a sh:ValidationResult ; sh:focusNode _:r0` — the validation result and the node it
+  reports on silently became ONE node, with the report asserting that a
+  `sh:ValidationResult` was an instance of the data's own class. Nothing was dropped and no
+  error was raised. The minted nodes now take a reserved label prefix whenever, and only
+  whenever, the report actually carries a colliding label, so a report with no collision is
+  byte-identical to before (the byte-frozen first-party corpus reports are unchanged).
 - **entail:** OWL-Direct now DECIDES the `SHOIQ` nominal / inverse-role / qualified-number-restriction
   corner. Both decision cores implement the nominal-introduction rule — Horrocks & Sattler's `NN`-rule
   in the `cfg(test)` concept-tree reference and Motik–Shearer–Horrocks' Table 5 `NI`-rule in the
