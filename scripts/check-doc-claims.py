@@ -3706,16 +3706,30 @@ def rl_mechanism_counts() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def load_release_crates() -> list[str]:
-    """The publish-ordered release set defined in scripts/release-crates.sh."""
+def _release_array(name: str) -> list[str]:
     text = _read(_RELEASE_CRATES)
-    body = re.search(r"PURRDF_RELEASE_CRATES=\((.*?)\)", text, re.DOTALL)
+    body = re.search(rf"{name}=\((.*?)\)", text, re.DOTALL)
     if not body:
         raise SystemExit(
-            f"check-doc-claims: no PURRDF_RELEASE_CRATES array in "
+            f"check-doc-claims: no {name} array in "
             f"{_RELEASE_CRATES.relative_to(_REPO)}"
         )
     return [line.strip() for line in body.group(1).split() if line.strip()]
+
+
+def load_release_crates() -> list[str]:
+    """The publish-ordered release set defined in scripts/release-crates.sh."""
+    return _release_array("PURRDF_RELEASE_CRATES")
+
+
+def load_unbootstrapped_crates() -> list[str]:
+    """The ledger of release crates with no crates.io record, in publish order.
+
+    Held to the registry in both directions by scripts/check-crates-io-records.sh
+    and to the release set by scripts/check-publish-order.py; here it is the
+    source docs/RELEASE.md's bootstrap section must restate.
+    """
+    return _release_array("PURRDF_UNBOOTSTRAPPED_CRATES")
 
 
 # ---------------------------------------------------------------------------
@@ -3975,8 +3989,8 @@ def release_crate_list_claim(crates: list[str]) -> list[str]:
     return []
 
 
-def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
-    """docs/RELEASE.md's outstanding-bootstrap section, held to the publish order.
+def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[str]:
+    """docs/RELEASE.md's outstanding-bootstrap section, held to the committed ledger.
 
     The section names the crates that need a token bootstrap before a `rust-v*`
     tag can publish them, states each one's ORDINAL in the publish order, and is
@@ -3986,15 +4000,18 @@ def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
     since 2026-07-31 and answers 200, and it named it in the heading, in the body
     and inside the anchor.
 
-    Membership is deliberately NOT decided here. Whether a crate has a crates.io
-    record is a fact about crates.io, and the script that measures it is
-    `scripts/check-crates-io-records.sh`, which the release job runs before it
-    packages anything. What this claim decides is everything about the section
-    that IS local: the heading, the body list and the anchor name the same crates
-    in the same order; each is in the release set; and each stated ordinal is that
-    crate's real position in `scripts/release-crates.sh`. An ordinal is the number
-    a reader uses to reason about how far a doomed release gets before it fails,
-    and it moves silently every time a crate is inserted ahead of it.
+    Membership is not decided by this script, because whether a crate has a
+    crates.io record is a fact about crates.io. It IS decided — by
+    `scripts/check-crates-io-records.sh`, which holds `PURRDF_UNBOOTSTRAPPED_CRATES`
+    in `scripts/release-crates.sh` to the registry in both directions before any
+    packaging. That array is therefore the committed, preflight-verified ledger,
+    and this claim holds the prose to it: the heading names exactly the ledger's
+    crates in the ledger's order; the body, the anchor and the heading agree; each
+    crate is in the release set; and each stated ordinal is that crate's real
+    position in the publish order. An ordinal is the number a reader uses to reason
+    about how far a doomed release would get, and it moves silently every time a
+    crate is inserted ahead of it — which this change set did, deliberately, to
+    `purrdf-geo`.
     """
     text = _read(_RELEASE)
     rel = _RELEASE.relative_to(_REPO)
@@ -4011,6 +4028,13 @@ def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
 
     problems: list[str] = []
     ordinal = {name: index + 1 for index, name in enumerate(crates)}
+    if named != ledger:
+        problems.append(
+            f"{rel}: the outstanding-bootstrap heading names {named}, but "
+            f"PURRDF_UNBOOTSTRAPPED_CRATES in scripts/release-crates.sh — the "
+            f"ledger the crates.io preflight verifies — is {ledger}. The heading "
+            f"restates the ledger; edit the ledger only to match the registry"
+        )
     for crate in named:
         if crate not in ordinal:
             problems.append(
@@ -5170,7 +5194,7 @@ def main(argv: list[str]) -> int:
     checked += 1
     problems.extend(publishable_crate_count_claim(crates))
     checked += 1
-    problems.extend(outstanding_bootstrap_claim(crates))
+    problems.extend(outstanding_bootstrap_claim(crates, load_unbootstrapped_crates()))
     checked += 1
     problems.extend(rl_matrix_agreement_claim(matrix, lanes))
     checked += 1

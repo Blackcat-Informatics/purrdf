@@ -778,11 +778,37 @@ called out below with what a consumer must do.
   semantics, and a misreading of OGC 22-047r1 would pass.
 - **release:** Correct `docs/RELEASE.md`'s outstanding-bootstrap section, which named **four**
   crates as having no crates.io record. `purrdf-datalog` has had one since 2026-07-31 and
-  answers 200; the genuinely unpublished set is `purrdf-cdt`, `purrdf-geo` and `purrdf-text`,
-  and the heading, the body, the publish-order ordinals and the in-page anchor all said
-  otherwise. The bootstrap examples drop their pinned version literal in favour of the
-  argumentless form, which reads the workspace version from `cargo metadata` and cannot rot.
-  The `make doc` / CI "N publishable crates" comments are corrected 20 → 21.
+  answers `0.12.0`; the genuinely unpublished set is `purrdf-cdt`, `purrdf-text` and
+  `purrdf-geo`, and the heading, the body, the publish-order ordinals and the in-page anchor
+  all said otherwise. That set is now `PURRDF_UNBOOTSTRAPPED_CRATES` in
+  `scripts/release-crates.sh`, a ledger `scripts/check-crates-io-records.sh` holds to the
+  registry in **both** directions — an unlisted missing crate and a listed present crate each
+  fail the preflight on their own — and the prose restates the ledger under a gate. The
+  bootstrap examples drop their pinned version literal in favour of the argumentless form,
+  which reads the workspace version from `cargo metadata` and cannot rot. The `make doc` / CI
+  "N publishable crates" comments are corrected 20 → 21.
+- **BREAKING** **release:** Both publish lanes — `scripts/bootstrap-crates-io.sh` and the
+  tag-driven `release-cargo.yaml` loop — now **verify** every `cargo publish` (cargo builds the
+  packaged crate against the registry before the upload that cannot be undone), and
+  `purrdf-geo` moves from 13th to 17th in the publish order to make that possible. The loop's `--no-verify` was load-bearing, not incidental: `purrdf-geo`
+  dev-depends on `purrdf-rdf` and `purrdf-shapes`, verification resolves the packaged crate's
+  whole graph including dev-dependencies, and while `purrdf-geo` was ordered before both, a
+  verifying publish of the set would have failed at crate 13 after twelve irreversible
+  uploads. Moving one crate removes the last forward dev-edge. The new
+  `scripts/check-publish-order.py` proves on every `make check` that the order is a
+  topological order of normal **and** dev-dependencies, that the release set is exactly the
+  publishable members, and that the bootstrap ledger is in-set and in order; its
+  `--self-test` perturbs each check and requires the refusal, and the release workflow runs it
+  again in its verify step at the point of no return. `PUBLISH_NO_VERIFY=true` restores
+  the old behaviour for one run. Anyone with a checked-out publish order, a pinned release
+  script, or a Trusted Publisher configured by ordinal must re-read
+  `scripts/release-crates.sh`.
+- **release:** `PUBLISH_COOLDOWN_SECONDS` defaults to `0` (was `620`). crates.io's new-crate
+  rate limit is enforced at the publish: a limited `cargo publish` exits non-zero, `set -e`
+  stops the run before the next crate, and a re-run resumes because published versions are
+  skipped — a visible, resumable refusal, not a corrupted release. The old default modelled the
+  limit's ten-minute refill unconditionally and added about half an hour of dead time to a
+  three-record run. The environment override is kept.
 
 ### Testing
 

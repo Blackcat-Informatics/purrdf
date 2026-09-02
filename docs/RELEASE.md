@@ -88,28 +88,41 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
 - `purrdf-sparql-eval`
-- `purrdf-geo`
 - `purrdf-text`
 - `purrdf-rdf`
 - `purrdf-slice`
 - `purrdf-shapes`
+- `purrdf-geo`
 - `purrdf-shex`
 - `purrdf-validate`
 - `purrdf`
 - `purrdf-wasm`
+
+The *order* of that list is gated too: `scripts/check-publish-order.py` proves
+on every `make check` that it is a topological order of normal **and**
+dev-dependencies, which is what lets `cargo publish` verify every crate — see
+[Verification](#verification-is-on-and-why-it-was-off).
 
 crates.io currently requires the crate to exist before a Trusted Publisher can
 be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
-### Outstanding bootstrap: `purrdf-cdt`, `purrdf-geo`, `purrdf-text`
+### Outstanding bootstrap: `purrdf-cdt`, `purrdf-text`, `purrdf-geo`
 
 Three crates are in the release set above but **have no crates.io record**
 (`https://crates.io/api/v1/crates/<name>` answers 404 for each while every
 sibling answers 200). `purrdf-cdt` is the **fourth** crate in publish order,
-`purrdf-geo` the **thirteenth** and `purrdf-text` the **fourteenth**; all three
+`purrdf-text` the **thirteenth** and `purrdf-geo` the **seventeenth**; all three
 are new crates whose records have never been created.
+
+That list is not prose. It is `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh), a **ledger** the
+preflight holds to the registry in **both** directions: a crate crates.io lacks
+that the ledger does not name fails the preflight, and a ledger entry crates.io
+now *has* a record for also fails it, so the ledger cannot go on naming a crate
+someone has since bootstrapped. This section restates the ledger, and
+`scripts/check-doc-claims.py` fails `make check` if it restates it wrongly.
 
 **What that would cost without the preflight, and why the preflight exists.**
 `cargo publish` cannot be undone, and this lane publishes one crate at a time in
@@ -122,17 +135,19 @@ not current behaviour**: the preflight described below runs before any packaging
 or publishing, so today a tag pushed in this state costs a red job and publishes
 nothing at all.
 
-This list previously also named `purrdf-datalog`, which has had a crates.io
-record since 2026-07-31 and answers 200. That was a stale entry, not a missing
-record, and it is the reason `outstanding_bootstrap_claim` in
-[`scripts/check-doc-claims.py`](../scripts/check-doc-claims.py) now holds this
-section to the publish order: the ordinals, the heading, the crate names and the
-anchor that links here are derived from
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) on every `make check`,
-so a crate that moves in the release set cannot leave a wrong ordinal behind. What
-that gate cannot decide is *membership* — whether a record exists is a fact about
-crates.io, not about this tree — which is what the preflight below measures, and
-why this list must never be read in place of running it.
+This section previously also named `purrdf-datalog`, which has had a crates.io
+record since 2026-07-31 and answers `0.12.0`. That was a stale entry, not a
+missing record, and nothing could see it: the list lived only in this prose. It
+is why the list is now a ledger with two gates on it. Offline,
+`outstanding_bootstrap_claim` in
+[`scripts/check-doc-claims.py`](../scripts/check-doc-claims.py) holds this
+section — heading, crate names, publish-order ordinals and the anchor that links
+here — to `PURRDF_UNBOOTSTRAPPED_CRATES` and `PURRDF_RELEASE_CRATES` on every
+`make check`, so a crate that moves in the release set cannot leave a wrong
+ordinal behind. Online, the preflight below holds the ledger itself to crates.io.
+*Membership* is only ever decided by that second gate: whether a record exists is
+a fact about the registry, not about this tree, and this section must never be
+read in place of running the preflight.
 
 The mechanism that makes it a refusal rather than a partial publish: the release job runs
 [`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
@@ -190,6 +205,47 @@ It also verifies the published crate set with `cargo check --target
 wasm32-unknown-unknown --lib`; if the target is not installed and `rustup` is
 available, the script installs it before checking.
 
+#### Verification is on, and why it was off
+
+Each `cargo publish` — in this bootstrap script **and** in the tag-driven
+[`release-cargo.yaml`](../.github/workflows/release-cargo.yaml) loop, which is
+the same loop under an OIDC token — **verifies**: cargo unpacks the `.crate` it
+is about to upload and builds it against the registry, so a wrong-version or
+broken artifact is refused *before* the one step that cannot be undone. Both
+loops used to pass `--no-verify`, and that flag was **load-bearing**, not
+laziness: `purrdf-geo` dev-depends on `purrdf-rdf` and `purrdf-shapes`, and
+while it was ordered before both, verification of crate 13 would have had to
+resolve two sibling versions that did not exist on crates.io yet. Verification
+resolves the packaged crate's *whole* graph, dev-dependencies included, even
+though it builds only the lib. One forward dev-edge is enough to make
+verification impossible for the entire set.
+
+The fix was to move one crate, not to drop the flag: `purrdf-geo` now publishes
+after `purrdf-shapes`, and
+[`scripts/check-publish-order.py`](../scripts/check-publish-order.py) proves on
+every `make check` — and again in the release workflow's verify step, at the
+point of no return — that the release order is a topological order of normal
+**and** dev-dependencies, that the release set is exactly the publishable
+workspace members, and that the bootstrap ledger is in-set and in order. Its
+`--self-test` perturbs each of those and requires the refusal.
+
+Two `--no-verify` remain, both deliberate. The pre-loop `cargo package
+--workspace` (in both lanes) packages every crate before *any* is published, so
+verification there is impossible by construction; it exists to find a packaging failure
+before the first irreversible upload rather than midway through the set. And
+`PUBLISH_NO_VERIFY=true` restores the old loop behaviour for one run, for a
+verification failure that is demonstrably not a broken artifact (a registry
+outage mid-run) — with the understanding that your own build of the artifact
+is then the last check before permanence.
+
+`PUBLISH_COOLDOWN_SECONDS` defaults to `0`. crates.io's new-crate rate limit is
+enforced at the publish itself: a limited `cargo publish` exits non-zero,
+`set -e` stops the script before the next crate, nothing is half-uploaded, and
+a re-run resumes because published versions are skipped. The old default of
+`620` modelled the limit's ten-minute refill unconditionally and added about
+half an hour of dead time to a three-record run. Set it only if a run actually
+meets a 429 with records still to create.
+
 ## Changelog and release notes
 
 The changelog is generated deterministically from the conventional-commit
@@ -238,7 +294,7 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-geo-purrdf-text)); that check runs before
+bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-text-purrdf-geo)); that check runs before
 packaging, so a missing record costs a red job rather than a half-published
 release. It then publishes crates in dependency order and skips any
 crate/version that already exists on crates.io, which keeps reruns safe after a

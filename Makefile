@@ -50,6 +50,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
 	python3 scripts/check-versions.py
+	python3 scripts/check-publish-order.py
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/conformance-matrix.py --self-test
