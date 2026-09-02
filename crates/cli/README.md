@@ -137,7 +137,8 @@ purrdf convert --base http://example.org/ data.ttl data.nt
 ```text
 purrdf query --data <file|pack> [--base <IRI>] [--entailment <R>] [--results-format <FMT>]
              [--fuel <N>] [--deadline <D>] [--max-answers <N>] [--max-intermediate-cells <N>]
-             [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--explain] '<SPARQL>'
+             [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--explain]
+             [--path-relation <SPEC>]... '<SPARQL>'
 ```
 
 Evaluate a SPARQL 1.2 query over a data source. The source is opened as a view (a
@@ -146,6 +147,29 @@ relative IRIs against `--base`.
 
 - `--data <file|pack>` — the data source (format inferred from its extension).
 - `--base <IRI>` — base IRI applied to both the data parse and the query text.
+  Without it, a file input resolves relative references against its own
+  RFC 8089 `file://` retrieval IRI (RFC 3986 §5.1.3); stdin has no retrieval
+  IRI, so a relative reference there is a hard error (`iri-relative-no-base`)
+  unless the document declares a base or `--base` supplies one. An explicit
+  `--base` always wins over the retrieval IRI; an in-document directive wins
+  over both.
+- `--path-relation <SPEC>` — register a **path-witness** property function,
+  callable from predicate position as
+  `?start <IRI> ( ?end ?pathId ?len ?step ?node ?edge )`. Unlike a property
+  path, which answers only with the endpoint pair, it binds the derivation:
+  one row per hop, with `?edge` the traversed statement as an RDF 1.2 triple
+  term, so `GROUP BY ?pathId` with `ORDER BY ?step` reassembles the whole walk
+  inside the query. `SPEC` is semicolon-separated `key=value` pairs —
+  `iri=IRI;forward=IRI;inverse=IRI;min-hops=N;max-hops=N;max-paths-per-seed=N;max-expansions=N;mode=walk|shortest`
+  — where `forward`/`inverse` may each repeat (at least one must appear) and
+  every other key is mandatory with no default: PurRDF mints no relation IRI,
+  and a traversal envelope the binary invented would be a limit the operator
+  never read. `mode=walk` enumerates every simple-prefix witness;
+  `mode=shortest` yields one shortest witness per reachable pair. Write `\;`
+  for a literal semicolon inside an IRI. The flag is repeatable, is accepted
+  by `update` too (snapshotted from the pre-update dataset, the state a
+  `WHERE` clause matches), and beside `--entailment` the step is snapshotted
+  over the closure the query is answered over.
 - `--entailment <R>` — reconstruct an owned dataset, materialize the regime's
   closure in memory, and run the query over **the closure** (a pack is rebuilt for
   this; the zero-copy path is used only without `--entailment`).

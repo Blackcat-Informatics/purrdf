@@ -29,7 +29,18 @@ inference** (parity with pySHACL `inference="none"`); combine with
   `sh:ExpressionConstraintComponent`) and **SHACL Rules** (`sh:TripleRule` and
   `sh:SPARQLRule`, with `sh:condition`, `sh:order`, `sh:deactivated`): rules
   fire in an iterative fixpoint and the derivation is materialized as a new
-  dataset (`base ⊎ derived`), leaving the input graph untouched. Some
+  dataset (`base ⊎ derived`), leaving the input graph untouched. The surface is
+  aligned with the SHACL 1.2 Working Drafts: the SHACL 1.2 Node Expressions
+  vocabulary (`shnex:`, `http://www.w3.org/ns/shacl-node-expr#`) and the older
+  SHACL-AF spelling of a node expression parse to one representation and run
+  through one evaluator; `sh:nodeByExpression` is validated; SPARQL-based node
+  expressions and expression-bodied functions ride the native engine; and rules
+  execute as `sh:order` strata with the `once`/`general` partition of the
+  SPARQL 1.2 RL draft, each stratum materialized before the next runs, so
+  swapping two rules' orders can change the closure. `sh:condition` resolves at
+  shapes-load, so an unresolvable condition is a load error rather than a rule
+  that silently never fires. Every one of those IRIs is defined by a W3C
+  document; PurRDF mints none. Some
   node-expression conveniences (`sh:if`, aggregations, ordering wrappers) are
   DASH/TopBraid conventions with no normative RDF definition; PurRDF documents
   its adopted reading and pins it with a frozen corpus — see the

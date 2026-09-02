@@ -37,7 +37,9 @@ committed block is stale).
 | OBO Graphs | official OBO Graphs 0.3.2 JSON Schema plus corruption probes |
 | Research-object carriers | five adversarial native fixtures, a 5×5 stable semantic-transcode matrix, and the vendored Frictionless Data Package v1 schema |
 | RDFC-1.0 | W3C rdf-canon fixtures |
-| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + entailment suites |
+| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + entailment suites, plus first-party CONSTRUCT and DESCRIBE corpora |
+| SPARQL CDT (SEP-0009) | the vendored `awslabs/SPARQL-CDTs` corpus — read with the lexical-space divergence recorded in `docs/CONFORMANCE.md`, which no upstream vector can express |
+| SPARQL execution governors | a first-party frozen corpus of ceiling band cases and seam cases |
 | SHACL | W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus |
 | ShEx 2.1 | shexTest v2.1.0 (validation, schemas, negative syntax/structure) |
 | Entailment | the W3C SPARQL entailment-regime cases (via the SPARQL harness), the vendored W3C OWL 2 suite (DL consistency, ledgered), and W3C's own OWL 2 RL entailment tests (the independent oracle for the rule table, ledgered) |
