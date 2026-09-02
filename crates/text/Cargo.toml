@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-text"
+description = "Deterministic in-memory full-text search over RDF 1.2 literals, exposed to SPARQL through the property-function seam under caller-supplied IRIs; exact fixed-point BM25 ranking with no floating-point arithmetic."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-text"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["rdf", "sparql", "full-text", "bm25", "search"]
+categories = ["text-processing", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only. The crate is a library seam: it hands ranked rows to the evaluator's
+# property-function table and is never a binary or a cdylib of its own. It must
+# stay wasm32-unknown-unknown-clean, which is also why every score is computed in
+# integer arithmetic rather than in floats.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_text"
+
+[dependencies]
+# The frozen RDF 1.2 IR: literals are read from it and terms are fingerprinted
+# from its `TermValue`.
+purrdf-core.workspace = true
+# The property-function seam this crate plugs a relation into, and the typed
+# error channel every failure is reduced to at that boundary.
+purrdf-sparql-eval.workspace = true
+# Fixed-output-length hashing for the index fingerprint. Deterministic and
+# keyless, so the same index yields the same digest on every target.
+blake3.workspace = true
+# Full Unicode case folding (Unicode Annex UAX 21), the fold half of the
+# compatibility-caseless form the analyzer segments.
+caseless.workspace = true
+# NFD/NFKD/NFC normalization (Unicode Annex UAX 15) applied before segmentation.
+unicode-normalization.workspace = true
+# Unicode Annex UAX 29 word boundaries — the tokenizer's segmentation rule.
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions.workspace = true
+# Solution-sequence shapes for the ranked-row tests.
+purrdf-sparql-results.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Native-only, both of them, because `make wasm-test` builds ONE test target of
+# this crate for wasm32 and cargo builds every declared dev-dependency for any
+# test target. Neither of these is wasm32-clean (both reach for processes,
+# terminals and wall-clock timing), and neither is wanted there: proptest drives
+# native-only harnesses and criterion drives benches, which the wasm lane never
+# runs.
+#
+# The report-only profiling harness in `benches/`. Never a gate: no measurement
+# here asserts a timing, and behaviour is fixed by the test suite instead.
+criterion.workspace = true
+# Property tests: encoding injectivity, and the fixed-point arithmetic laws.
+proptest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
+# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile
+# for it. Ranking needs a natural logarithm, and "the same answer on every
+# target" is a claim no number of runs on ONE target can check. Run by
+# `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
+
+[[bench]]
+name = "search"
+harness = false

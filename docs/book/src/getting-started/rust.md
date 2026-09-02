@@ -81,9 +81,11 @@ let schema = purrdf::shex::parse_shexc(
 ## When to depend on a sub-crate instead
 
 Most applications should stop at `purrdf`. The sub-crates
-(`purrdf-core`, `purrdf-rdf`, `purrdf-columnar`, `purrdf-sparql-eval`, `purrdf-shapes`,
-`purrdf-shex`, `purrdf-gts`, `purrdf-entail`, `purrdf-validate`,
-`purrdf-slice`, `purrdf-iri`, `purrdf-xsd`, `purrdf-events`) exist for
+(`purrdf-core`, `purrdf-rdf`, `purrdf-columnar`, `purrdf-sparql-algebra`,
+`purrdf-sparql-eval`, `purrdf-sparql-results`, `purrdf-shapes`, `purrdf-shex`,
+`purrdf-gts`, `purrdf-datalog`, `purrdf-entail`, `purrdf-text`,
+`purrdf-validate`, `purrdf-slice`, `purrdf-iri`, `purrdf-xsd`,
+`purrdf-events`, `purrdf-wasm`) exist for
 consumers that want exactly one engine — for example, a tool that only needs
 IRI parsing can depend on the zero-dependency `purrdf-iri` alone. The crate
 map is in the

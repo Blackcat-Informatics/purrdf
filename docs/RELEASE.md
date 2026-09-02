@@ -88,6 +88,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
 - `purrdf-sparql-eval`
+- `purrdf-text`
 - `purrdf-rdf`
 - `purrdf-slice`
 - `purrdf-shapes`
@@ -101,13 +102,15 @@ be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
-### Outstanding bootstrap: `purrdf-datalog`
+### Outstanding bootstrap: `purrdf-datalog`, `purrdf-text`
 
-`purrdf-datalog` is in the release set above but **has no crates.io record**
-(`https://crates.io/api/v1/crates/purrdf-datalog` answers 404 while every
-sibling answers 200). It is the seventh crate in publish order, so a `rust-v*`
-tag pushed before it is bootstrapped would irreversibly publish the six crates
-ahead of it and then fail — `cargo publish` cannot be undone.
+Two crates are in the release set above but **have no crates.io record**
+(`https://crates.io/api/v1/crates/<name>` answers 404 for each while every
+sibling answers 200). `purrdf-datalog` is the seventh crate in publish order and
+`purrdf-text` — a new crate, so its record has never been created — is the
+twelfth. A `rust-v*` tag pushed before they are bootstrapped would irreversibly
+publish the six crates ahead of `purrdf-datalog` and then fail; `cargo publish`
+cannot be undone.
 
 That is now a refusal instead of a partial publish. The release job runs
 [`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
@@ -135,9 +138,9 @@ CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.10.0
 
 The bootstrap script prints its full plan — which crates it will skip, publish,
 and **create a record for** — before it runs any gate, so the irreversible part
-is visible while it is still stoppable. After it completes, add the Trusted
-Publisher entry for `purrdf-datalog` using the table above; the preflight then
-passes and the tag lane works unchanged.
+is visible while it is still stoppable. After it completes, add a Trusted
+Publisher entry for each newly created record using the table above; the
+preflight then passes and the tag lane works unchanged.
 
 `purrdf-python`, `purrdf-sparql-conformance`, `purrdf-cli`, and `purrdf-capi`
 remain workspace crates, but they are not in this crates.io release lane.

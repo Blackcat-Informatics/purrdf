@@ -1070,7 +1070,7 @@ mod tests {
         let ungranted =
             ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Query]))
                 .with_credential(ServiceCredential::Bearer("t".to_owned()));
-        assert!(ungranted.request_headers().is_empty());
+        assert_eq!(ungranted.request_headers(), [] as [(String, String); 0]);
     }
 
     #[test]

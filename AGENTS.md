@@ -49,6 +49,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
 | `purrdf-datalog` (`crates/datalog`) | Deterministic semi-naive Datalog substrate beneath every rule-driven engine |
 | `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
+| `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |

@@ -153,7 +153,7 @@ jobs:
         with:
           toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 18 publishable crates with rustdoc lints promoted
+      # Document exactly the 19 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -238,6 +238,7 @@ jobs:
             -p purrdf-shapes \
             -p purrdf-shex \
             -p purrdf-entail \
+            -p purrdf-text \
             -p purrdf-validate \
             -p purrdf \
             -p purrdf-wasm
@@ -304,6 +305,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
           cargo bench -p purrdf-entail --no-run --locked
+          cargo bench -p purrdf-text --bench search --no-run --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
 
       - name: Run native criterion suites
@@ -315,6 +317,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --locked
           cargo bench -p purrdf-shapes --bench validate --locked
           cargo bench -p purrdf-entail --locked
+          cargo bench -p purrdf-text --bench search --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
 
       - name: Run Python compat harness

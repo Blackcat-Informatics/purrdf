@@ -170,6 +170,7 @@ let schema = purrdf::shex::parse_shexc(
 | `shapes` | [`purrdf-shapes`](https://crates.io/crates/purrdf-shapes) (SHACL) |
 | `shex` | [`purrdf-shex`](https://crates.io/crates/purrdf-shex) (ShEx 2.1) |
 | `entail` | [`purrdf-entail`](https://crates.io/crates/purrdf-entail) (Simple / RDF / RDFS / OWL-RL / D / OWL-Direct / RIF) |
+| `text` | [`purrdf-text`](https://crates.io/crates/purrdf-text) (inverted index, exact fixed-point BM25 ranking) |
 | `validate` | [`purrdf-validate`](https://crates.io/crates/purrdf-validate) (SARIF 2.1.0 boundary) |
 | `slice` | [`purrdf-slice`](https://crates.io/crates/purrdf-slice) (slice catalog) |
 | `viz` | RDF 1.2 semantic projection, deterministic layout, and SVG export |
