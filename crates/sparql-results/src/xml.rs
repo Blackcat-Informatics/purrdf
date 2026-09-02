@@ -141,7 +141,10 @@ pub fn to_xml(
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
 ) -> Result<SerializeOutcome, Error> {
-    let mut out = String::new();
+    // Cheap lower-bound pre-size (capacity is unobservable in the output):
+    // the fixed skeleton plus a modest per-cell estimate saves the early
+    // doubling reallocations on large result sets.
+    let mut out = String::with_capacity(output_size_hint(result));
     write_srx(result, provenance, namespace, &mut out)?;
     Ok(SerializeOutcome {
         bytes: out.into_bytes(),
@@ -381,6 +384,23 @@ fn write_provenance(
     Ok(())
 }
 
+/// A cheap lower-bound estimate of the serialized size, used only to pre-size
+/// the output buffer. The `Graph` arm never serializes (CONSTRUCT hard-fails)
+/// but is named exhaustively.
+fn output_size_hint(result: &SparqlResult) -> usize {
+    const SKELETON: usize = 128;
+    match result {
+        SparqlResult::Solutions {
+            variables, rows, ..
+        } => SKELETON.saturating_add(
+            rows.len()
+                .saturating_mul(variables.len().saturating_add(1))
+                .saturating_mul(48),
+        ),
+        SparqlResult::Graph(_) | SparqlResult::Boolean(_) => SKELETON,
+    }
+}
+
 /// The `queryForm` discriminator emitted in provenance. The `Graph` arm is
 /// unreachable here (CONSTRUCT hard-fails earlier) but is named exhaustively.
 fn query_form(result: &SparqlResult) -> &'static str {
@@ -402,13 +422,49 @@ fn query_form(result: &SparqlResult) -> &'static str {
 /// U+0000). These characters cannot be represented in XML 1.0, not even as
 /// numeric character references, so the only safe policy is to hard-fail.
 fn xml_escape_text(value: &str, out: &mut String) -> Result<(), Error> {
-    for ch in value.chars() {
+    let mut rest = value;
+    while !rest.is_empty() {
+        // Bulk-copy the clean run in one `push_str`; every trigger (`&<>` and
+        // the C0 controls) is an ASCII byte, so non-ASCII text never splits
+        // and the first offending control character is still the one reported.
+        let run = rest
+            .bytes()
+            .position(|b| b < 0x20 || matches!(b, b'&' | b'<' | b'>'))
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..run]);
+        rest = &rest[run..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
         match ch {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             // U+0009 (tab), U+000A (LF), U+000D (CR) are legal in XML 1.0
             // text content — pass them through literally.
+            '\t' | '\n' | '\r' => out.push(ch),
+            c if (c as u32) < 0x20 => {
+                return Err(Error::Format(format!(
+                    "XML 1.0 cannot represent control character U+{:04X}",
+                    c as u32
+                )));
+            }
+            c => out.push(c),
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    Ok(())
+}
+
+/// The original per-`char` text escaper, kept as the oracle for
+/// [`xml_escape_text`].
+#[cfg(test)]
+fn xml_escape_text_reference(value: &str, out: &mut String) -> Result<(), Error> {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
             '\t' | '\n' | '\r' => out.push(ch),
             c if (c as u32) < 0x20 => {
                 return Err(Error::Format(format!(
@@ -435,7 +491,20 @@ fn xml_escape_text(value: &str, out: &mut String) -> Result<(), Error> {
 /// U+0000). These characters cannot be represented in XML 1.0, not even as
 /// numeric character references, so the only safe policy is to hard-fail.
 fn xml_escape_attr(value: &str, out: &mut String) -> Result<(), Error> {
-    for ch in value.chars() {
+    let mut rest = value;
+    while !rest.is_empty() {
+        // Bulk-copy the clean run in one `push_str`; every trigger (`&<>"` and
+        // the C0 controls) is an ASCII byte, so non-ASCII text never splits
+        // and the first offending control character is still the one reported.
+        let run = rest
+            .bytes()
+            .position(|b| b < 0x20 || matches!(b, b'&' | b'<' | b'>' | b'"'))
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..run]);
+        rest = &rest[run..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
         match ch {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
@@ -444,6 +513,32 @@ fn xml_escape_attr(value: &str, out: &mut String) -> Result<(), Error> {
             // Tab/LF/CR are subject to attribute-value normalization in XML
             // 1.0 (§3.3.3), so emit as numeric character references to
             // preserve their identity across a parse round-trip.
+            '\t' => out.push_str("&#x9;"),
+            '\n' => out.push_str("&#xA;"),
+            '\r' => out.push_str("&#xD;"),
+            c if (c as u32) < 0x20 => {
+                return Err(Error::Format(format!(
+                    "XML 1.0 cannot represent control character U+{:04X}",
+                    c as u32
+                )));
+            }
+            c => out.push(c),
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    Ok(())
+}
+
+/// The original per-`char` attribute escaper, kept as the oracle for
+/// [`xml_escape_attr`].
+#[cfg(test)]
+fn xml_escape_attr_reference(value: &str, out: &mut String) -> Result<(), Error> {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
             '\t' => out.push_str("&#x9;"),
             '\n' => out.push_str("&#xA;"),
             '\r' => out.push_str("&#xD;"),
@@ -468,6 +563,54 @@ mod tests {
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+
+    /// Every case an escaper must agree with its per-`char` oracle on: empty,
+    /// clean ASCII, each trigger alone, control characters (including the
+    /// error path and which character it names first), multibyte, and mixes.
+    const ESCAPE_CASES: [&str; 18] = [
+        "",
+        "plain ascii text 0123456789 ~!@#$%^*()_+-=[]{};':,./?",
+        "&",
+        "<",
+        ">",
+        "\"",
+        "\t",
+        "\n",
+        "\r",
+        "\u{0}",
+        "\u{1}",
+        "\u{1f}",
+        "\u{7f}\u{80}\u{85}\u{9f}",
+        "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
+        "a & b < c > d \"e\" \u{e9}\t\n\r end",
+        "ok \u{e9} then \u{1} then \u{2} later",
+        "<\u{1f431}&\"\u{2028}>",
+        "&amp; already <escaped>",
+    ];
+
+    #[test]
+    fn xml_escape_text_matches_reference() {
+        for case in ESCAPE_CASES {
+            let mut fast = String::from("prefix");
+            let mut reference = String::from("prefix");
+            let fast_result = xml_escape_text(case, &mut fast);
+            let reference_result = xml_escape_text_reference(case, &mut reference);
+            assert_eq!(fast_result, reference_result, "{case:?}");
+            assert_eq!(fast, reference, "{case:?}");
+        }
+    }
+
+    #[test]
+    fn xml_escape_attr_matches_reference() {
+        for case in ESCAPE_CASES {
+            let mut fast = String::from("prefix");
+            let mut reference = String::from("prefix");
+            let fast_result = xml_escape_attr(case, &mut fast);
+            let reference_result = xml_escape_attr_reference(case, &mut reference);
+            assert_eq!(fast_result, reference_result, "{case:?}");
+            assert_eq!(fast, reference, "{case:?}");
+        }
+    }
 
     /// A namespace used by the populated-provenance tests below — caller-chosen,
     /// `example.org`-scoped per repository convention (never a fabricated

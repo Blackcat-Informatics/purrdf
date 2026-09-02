@@ -234,19 +234,27 @@ enum RawRecord {
 /// datatype IRI and a triple term's `s`/`p`/`o` components to their unified ids —
 /// [`PackDict::encode`] builds it so every such reference is guaranteed present
 /// (see that method's closure step).
-fn encode_record(value: &TermValue, value_to_id: &FastMap<TermValue, PackTermId>) -> Vec<u8> {
-    let mut out = Vec::new();
+///
+/// The record is written into the caller-owned `out` (cleared first) so the
+/// bulk encoder can reuse two buffers across every term instead of allocating
+/// a fresh `Vec` per record; the byte output is unchanged.
+fn encode_record_into(
+    out: &mut Vec<u8>,
+    value: &TermValue,
+    value_to_id: &FastMap<TermValue, PackTermId>,
+) {
+    out.clear();
     match value {
         TermValue::Iri(s) => {
             out.push(TAG_IRI);
-            write_varint(&mut out, s.len() as u64);
+            write_varint(out, s.len() as u64);
             out.extend_from_slice(s.as_bytes());
         }
         TermValue::Blank { label, scope } => {
             out.push(TAG_BLANK);
-            write_varint(&mut out, label.len() as u64);
+            write_varint(out, label.len() as u64);
             out.extend_from_slice(label.as_bytes());
-            write_varint(&mut out, u64::from(scope.ordinal()));
+            write_varint(out, u64::from(scope.ordinal()));
         }
         TermValue::Literal {
             lexical_form,
@@ -255,16 +263,16 @@ fn encode_record(value: &TermValue, value_to_id: &FastMap<TermValue, PackTermId>
             direction,
         } => {
             out.push(TAG_LITERAL);
-            write_varint(&mut out, lexical_form.len() as u64);
+            write_varint(out, lexical_form.len() as u64);
             out.extend_from_slice(lexical_form.as_bytes());
             let datatype_id = *value_to_id.get(&TermValue::Iri(datatype.clone())).expect(
                 "PackDict::encode's closure guarantees a literal's datatype is a dictionary entry",
             );
-            write_varint(&mut out, datatype_id);
+            write_varint(out, datatype_id);
             match language {
                 Some(lang) => {
                     out.push(1);
-                    write_varint(&mut out, lang.len() as u64);
+                    write_varint(out, lang.len() as u64);
                     out.extend_from_slice(lang.as_bytes());
                 }
                 None => out.push(0),
@@ -286,12 +294,11 @@ fn encode_record(value: &TermValue, value_to_id: &FastMap<TermValue, PackTermId>
             let oid = *value_to_id.get(o.as_ref()).expect(
                 "PackDict::encode's closure guarantees a triple term's object is a dictionary entry",
             );
-            write_varint(&mut out, sid);
-            write_varint(&mut out, pid);
-            write_varint(&mut out, oid);
+            write_varint(out, sid);
+            write_varint(out, pid);
+            write_varint(out, oid);
         }
     }
-    out
 }
 
 /// Decode one self-terminating canonical byte-record from the START of `bytes`.
@@ -388,10 +395,13 @@ fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTerm
     let bucket_count = term_count.div_ceil(BUCKET_SIZE);
     let mut bucket_data = Vec::new();
     let mut offsets: Vec<u64> = Vec::with_capacity(bucket_count);
+    // Two record buffers swapped per term: the freshly encoded record and the
+    // previous one, so the loop allocates nothing per term.
     let mut prev_record: Vec<u8> = Vec::new();
+    let mut record: Vec<u8> = Vec::new();
 
     for (i, value) in values.iter().enumerate() {
-        let record = encode_record(value, value_to_id);
+        encode_record_into(&mut record, value, value_to_id);
         if i % BUCKET_SIZE == 0 {
             offsets.push(bucket_data.len() as u64);
             bucket_data.extend_from_slice(&record);
@@ -402,7 +412,7 @@ fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTerm
             write_varint(&mut bucket_data, suffix.len() as u64);
             bucket_data.extend_from_slice(suffix);
         }
-        prev_record = record;
+        std::mem::swap(&mut prev_record, &mut record);
     }
 
     let max_offset = offsets.iter().copied().max().unwrap_or(0);
@@ -771,25 +781,26 @@ impl PackDict {
         let mut extra: Vec<TermValue> = Vec::new();
         let mut qi = 0usize;
         while qi < queue.len() {
-            let current = queue[qi].clone();
-            match &current {
+            // Collect the <= 3 values to enqueue into a small local array while
+            // borrowing the entry, instead of deep-cloning the whole entry (a
+            // nested triple term clones its entire subtree) just to read it.
+            // Components already present are not cloned at all; the loop below
+            // still applies the same membership test, in the same order.
+            let candidates: [Option<TermValue>; 3] = match &queue[qi] {
                 TermValue::Literal { datatype, .. } => {
-                    let dt_val = TermValue::Iri(datatype.clone());
-                    if present.insert(dt_val.clone()) {
-                        extra.push(dt_val.clone());
-                        queue.push(dt_val);
-                    }
+                    [Some(TermValue::Iri(datatype.clone())), None, None]
                 }
                 TermValue::Triple { s, p, o } => {
-                    for comp in [s.as_ref(), p.as_ref(), o.as_ref()] {
-                        if !present.contains(comp) {
-                            present.insert(comp.clone());
-                            extra.push(comp.clone());
-                            queue.push(comp.clone());
-                        }
-                    }
+                    let pick = |comp: &TermValue| (!present.contains(comp)).then(|| comp.clone());
+                    [pick(s), pick(p), pick(o)]
                 }
-                TermValue::Iri(_) | TermValue::Blank { .. } => {}
+                TermValue::Iri(_) | TermValue::Blank { .. } => [None, None, None],
+            };
+            for cand in candidates.into_iter().flatten() {
+                if present.insert(cand.clone()) {
+                    extra.push(cand.clone());
+                    queue.push(cand);
+                }
             }
             qi += 1;
         }

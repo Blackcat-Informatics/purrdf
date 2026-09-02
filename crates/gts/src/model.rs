@@ -524,21 +524,29 @@ impl Graph {
     /// The fold sanitizes `datatype` ids, but `Graph` is constructible by
     /// callers — an out-of-range id falls back to `xsd:string`, never panics.
     pub fn datatype_iri(&self, t: &Term) -> String {
+        self.datatype_iri_str(t).to_string()
+    }
+
+    /// Borrowing form of [`Self::datatype_iri`]: the same §7.1 defaulting, but
+    /// the IRI is returned as a slice of the datatype term (or a well-known
+    /// constant) so read-only callers such as the canonical term-identity walk
+    /// pay no per-literal `String` allocation.
+    pub(crate) fn datatype_iri_str(&self, t: &Term) -> &str {
         if let Some(dt) = t.datatype {
             return self
                 .terms
                 .get(dt)
-                .and_then(|term| term.value.clone())
-                .unwrap_or_else(|| XSD_STRING.to_string());
+                .and_then(|term| term.value.as_deref())
+                .unwrap_or(XSD_STRING);
         }
         if t.lang.is_some()
             && matches!(t.direction.as_deref(), Some(direction) if is_literal_direction(direction))
         {
-            RDF_DIR_LANG_STRING.to_string()
+            RDF_DIR_LANG_STRING
         } else if t.lang.is_some() {
-            RDF_LANG_STRING.to_string()
+            RDF_LANG_STRING
         } else {
-            XSD_STRING.to_string()
+            XSD_STRING
         }
     }
 }

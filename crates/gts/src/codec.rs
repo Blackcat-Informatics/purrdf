@@ -104,7 +104,9 @@ fn zstd_level(level: Option<i32>) -> CompressionLevel {
     level.map_or(DEFAULT_ZSTD_LEVEL, CompressionLevel::Level)
 }
 
-fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
+/// Decode one transform. `identity` borrows its input (no copy of the whole
+/// payload); every real codec produces an owned buffer.
+fn decode_one<'a>(codec: &Codec, data: &'a [u8]) -> Result<Cow<'a, [u8]>, CodecError> {
     if codec.cls == "encrypt" {
         return Err(CodecError::Unavailable {
             reason: "missing-key",
@@ -112,13 +114,13 @@ fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
         });
     }
     match codec.name.as_str() {
-        "identity" => Ok(data.to_vec()),
+        "identity" => Ok(Cow::Borrowed(data)),
         "gzip" => {
             let mut out = Vec::new();
             flate2::read::GzDecoder::new(data)
                 .read_to_end(&mut out)
                 .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
-            Ok(out)
+            Ok(Cow::Owned(out))
         }
         "zstd" | "zstd-rsyncable" => {
             let mut decoder = FrameDecoder::new();
@@ -135,7 +137,7 @@ fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
                     CodecError::Failed(format!("zstd decode failed: output allocation failed: {e}"))
                 })?;
                 match decoder.decode_all_to_vec(data, &mut out) {
-                    Ok(()) => return Ok(out),
+                    Ok(()) => return Ok(Cow::Owned(out)),
                     Err(FrameDecoderError::TargetTooSmall) => {
                         capacity = capacity.checked_mul(2).ok_or_else(|| {
                             CodecError::Failed(
@@ -216,9 +218,15 @@ fn encode_zstd_rsyncable(
     Ok(out)
 }
 
-fn encode_one(name: &str, data: &[u8], options: EncodeOptions<'_>) -> Result<Vec<u8>, CodecError> {
+/// Encode one transform. `identity` borrows its input (no copy of the whole
+/// payload); every real codec produces an owned buffer.
+fn encode_one<'a>(
+    name: &str,
+    data: &'a [u8],
+    options: EncodeOptions<'_>,
+) -> Result<Cow<'a, [u8]>, CodecError> {
     match name {
-        "identity" => Ok(data.to_vec()),
+        "identity" => Ok(Cow::Borrowed(data)),
         "gzip" => {
             let mut encoder = flate2::GzBuilder::new()
                 .mtime(0)
@@ -228,13 +236,16 @@ fn encode_one(name: &str, data: &[u8], options: EncodeOptions<'_>) -> Result<Vec
                 .map_err(|e| CodecError::Failed(format!("gzip encode failed: {e}")))?;
             encoder
                 .finish()
+                .map(Cow::Owned)
                 .map_err(|e| CodecError::Failed(format!("gzip encode failed: {e}")))
         }
         "zstd" => match options.dict {
-            Some(dict) => encode_zstd_with_dict(data, options.zstd_level, dict),
-            None => Ok(encode_zstd(data, options.zstd_level)),
+            Some(dict) => encode_zstd_with_dict(data, options.zstd_level, dict).map(Cow::Owned),
+            None => Ok(Cow::Owned(encode_zstd(data, options.zstd_level))),
         },
-        "zstd-rsyncable" => encode_zstd_rsyncable(data, options.zstd_level, options.dict),
+        "zstd-rsyncable" => {
+            encode_zstd_rsyncable(data, options.zstd_level, options.dict).map(Cow::Owned)
+        }
         other => Err(CodecError::Unavailable {
             reason: "unknown-codec",
             detail: format!("writer cannot encode with codec '{other}'"),
@@ -268,7 +279,11 @@ pub fn encode_chain_with_options(
     }
     let mut current = Cow::Borrowed(data);
     for name in chain {
-        current = Cow::Owned(encode_one(name, current.as_ref(), options)?);
+        // An `identity` step hands back a borrow of `current`: keep `current`
+        // as it is rather than copying the payload once per identity step.
+        if let Cow::Owned(encoded) = encode_one(name, current.as_ref(), options)? {
+            current = Cow::Owned(encoded);
+        }
     }
     Ok(current.into_owned())
 }
@@ -364,8 +379,10 @@ pub fn decode_chain_with_decrypt(
                     });
                 }
             });
-        } else {
-            current = Cow::Owned(decode_one(codec, current.as_ref())?);
+        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref())? {
+            // `identity` returns a borrow of `current`; leave `current` untouched
+            // instead of copying the payload once per identity step.
+            current = Cow::Owned(decoded);
         }
     }
     Ok(current.into_owned())
@@ -415,7 +432,8 @@ mod tests {
         encoded.extend(compress_to_vec(&block2[..], CompressionLevel::Uncompressed));
 
         let decoded = decode_one(&Codec::new("zstd-rsyncable", "compress"), &encoded)
-            .expect("multi-frame zstd must decode");
+            .expect("multi-frame zstd must decode")
+            .into_owned();
 
         let mut expected = block1.to_vec();
         expected.extend_from_slice(block2);
