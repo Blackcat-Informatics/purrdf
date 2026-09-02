@@ -82,6 +82,13 @@
 //! `purrdf_sparql_eval::path_relation`'s own documentation requires of a host: a relation
 //! answers about the dataset it was built from, and nothing at the seam can check that
 //! for you.
+//!
+//! Under `--entailment` the dataset being queried is not that view but the CLOSURE the
+//! reasoner materializes from it, so the pairing obligation moves with it: the specs are
+//! handed to [`purrdf::ClosureRelations`] as a rebuilder ([`registry_over`]) and the
+//! registry that answers is built inside the entailment entry point, over the closure.
+//! Reading the pre-closure view there is what made a walk answer a strictly smaller edge
+//! set than the `p+` beside it, silently and at a success exit.
 
 use std::sync::Arc;
 

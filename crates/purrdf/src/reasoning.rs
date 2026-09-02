@@ -256,12 +256,6 @@ impl<'a> ClosureRelations<'a> {
         }
     }
 
-    /// Whether a rebuilder was supplied.
-    #[must_use]
-    pub const fn is_some(&self) -> bool {
-        self.rebuild.is_some()
-    }
-
     /// The [`RdfDiagnostic::code`] of the one combination this parameter refuses: a
     /// rebuilder supplied for an OWL Direct-Semantics run whose restricted chase minted
     /// existential witnesses.
