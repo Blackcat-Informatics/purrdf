@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "purrdf-columnar",
  "purrdf-datalog",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-capi"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-cdt"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "pretty_assertions",
  "proptest",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-cli"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "clap",
  "criterion",
@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-columnar"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-datalog"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "blake3",
@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-entail"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "blake3",
@@ -1445,11 +1445,11 @@ dependencies = [
 
 [[package]]
 name = "purrdf-events"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "purrdf-geo"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "purrdf-core",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-gts"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aes-gcm",
  "ahash",
@@ -1487,7 +1487,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-iri"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
@@ -1496,7 +1496,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-python"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-rdf"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "boon",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-shapes"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "boon",
  "criterion",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-shex"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-slice"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "hex",
@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-algebra"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "insta",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-conformance"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "camino",
  "datatest-stable",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-eval"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-results"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "insta",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-text"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "blake3",
  "caseless",
@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-validate"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "pretty_assertions",
  "purrdf-core",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-wasm"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
