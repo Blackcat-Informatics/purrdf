@@ -17,6 +17,31 @@ called out below with what a consumer must do.
 
 ### Bug Fixes
 
+- **BREAKING** **sparql-eval,geo:** A host function registered through
+  `UserFunctionRegistry::register_native` can now raise a SPARQL **expression error** for one
+  solution instead of failing the whole query. `NativeFnBody` returns
+  `Result<Option<TermValue>, EvalError>` rather than `Result<TermValue, EvalError>` — the same
+  three-exit channel `register_expr`'s `ExprFnBody` already carried — so `Ok(None)` means "this
+  call has no value for this solution" and `Err` stays reserved for a query-fatal condition. The
+  evaluator, not the closure, then applies the outcome the calling context requires: a `FILTER`
+  eliminates that solution (SPARQL 1.1 §17), while a `BIND` or `SELECT` expression leaves the
+  variable unbound and continues (§10; algebra §18.5 `Extend`). Previously the seam had no
+  `Ok(None)` exit at all, so every domain refusal — a malformed literal, an out-of-range index, a
+  type mismatch — had to be spelled `Err` and aborted the query; one bad geometry anywhere in a
+  dataset failed every query that scanned past it. This was found while merging `purrdf-geo` and
+  affected every function on the seam, not just the `geof:` family. Callers with a
+  `register_native` body must wrap their success value in `Some` and should move argument-level
+  refusals from `Err` to `Ok(None)`.
+- **BREAKING** **geo:** `functions::evaluate` returns `Result<Option<TermValue>, EvalError>` (the
+  seam shape above) and maps `GeoError::Literal`/`GeoError::Domain` onto the per-solution
+  `Ok(None)`; `GeoError::Unsupported`, `GeoError::Config` and the new `GeoError::Arity` stay
+  query-fatal, because each holds for every solution alike and answering "no value" would empty a
+  result set and present that as the answer. `GeoError` gains an `Arity` variant (a wrong argument
+  count is nobody else's mistake — not the data's, not the wiring's) and a
+  `GeoError::is_expression_error` predicate that is the single site deciding how far a refusal
+  travels. A caller that needs the refusal itself — with its message and kind intact, which a
+  SPARQL expression error by construction cannot carry — calls the new `functions::compute`,
+  which answers in `Result<TermValue, GeoError>`.
 - **entail:** OWL-Direct now DECIDES the `SHOIQ` nominal / inverse-role / qualified-number-restriction
   corner. Both decision cores implement the nominal-introduction rule — Horrocks & Sattler's `NN`-rule
   in the `cfg(test)` concept-tree reference and Motik–Shearer–Horrocks' Table 5 `NI`-rule in the

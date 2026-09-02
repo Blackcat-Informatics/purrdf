@@ -39,6 +39,18 @@
 //!   [`Arc<RdfDataset>`] rather than the context's own `D: DatasetView` (which is not
 //!   object-safe — it carries an associated `Id` type), and `eval_expr_function` for
 //!   the re-entrancy bound.
+//!
+//! # One error channel across all three kinds
+//!
+//! Every kind reports "this call has no value for this solution" the same way:
+//! `Ok(None)`, the SPARQL expression error of §17.2. `Err` is reserved for a hard
+//! failure that aborts the whole query. That uniformity is load-bearing rather than
+//! tidy — a seam without the `Ok(None)` exit forces a per-solution domain refusal
+//! (a malformed literal, an out-of-range index, a type mismatch) onto `Err`, which
+//! aborts a query the specification says should merely drop a row or leave a
+//! variable unbound. See [`NativeFnBody`] for the specification text and for why
+//! the enclosing operator, not the body, decides which of those two outcomes a
+//! given `Ok(None)` produces.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -153,6 +165,39 @@ pub struct UserFunction {
 /// A native (host-Rust) user function body: a closure over the already-evaluated,
 /// dataset-independent argument values.
 ///
+/// # The three exits, and why there are three
+///
+/// A body returns one of exactly three things, and picking the wrong one is a
+/// specification violation rather than a matter of taste:
+///
+/// * `Ok(Some(value))` — the function's value for this call.
+/// * `Ok(None)` — a SPARQL **expression error**: the arguments are the wrong type,
+///   or the operation is undefined on them, so *this call* has no value. It is
+///   scoped to the one solution being evaluated. SPARQL 1.1 §17.2 puts extension
+///   functions squarely in this channel — "Functions invoked with an argument of
+///   the wrong type will produce a type error" — and the enclosing operator then
+///   decides the outcome: a `FILTER` **drops that solution** (§17 "FILTERs
+///   eliminate any solutions that, when substituted into the expression, either
+///   result in an effective boolean value of false or produce an error"), while a
+///   `BIND`/`SELECT`-expression **leaves the variable unbound** (§10 "If the
+///   evaluation of the expression produces an error, the variable remains unbound
+///   for that solution but the query evaluation continues"; algebra §18.5
+///   `Extend(μ, var, expr) = μ if var not in dom(μ) and expr(μ) is an error`).
+///   Those are two different outcomes from one signal, and the evaluator — not the
+///   host closure — is what knows which context the call sits in.
+/// * `Err(_)` — a **hard failure that aborts the whole query**, for a condition no
+///   per-solution outcome can honestly express: the host's wiring is unusable, or
+///   the function is registered but not implemented. `Ok(None)` there would be a
+///   silent wrong answer, because a dropped row and an unbound variable are
+///   indistinguishable from an honest empty result.
+///
+/// This is the same channel [`ExprFnBody`] carries, deliberately spelled the same
+/// way: the two seams differ in what the evaluator *hands* a body (see
+/// [`ExprFnCall`]), never in how a body reports that it has no value. A seam with
+/// no `Ok(None)` exit forces every domain refusal onto `Err`, which turns one bad
+/// literal in one row into a failed query — so there is no lossy variant of this
+/// type to pick by accident.
+///
 /// The arguments arrive as a slice of **borrows** (`&[&TermValue]`): every value
 /// already lives in the evaluator's per-call argument buffer for the duration of
 /// the call, so the dispatch path lends the closure those borrows rather than deep
@@ -168,7 +213,8 @@ pub struct UserFunction {
 /// gate relies on that declaration alone to decide whether the call may run across
 /// worker threads, so a closure that lies about its own volatility can silently
 /// diverge under parallel evaluation.
-pub type NativeFnBody = Arc<dyn Fn(&[&TermValue]) -> Result<TermValue, EvalError> + Send + Sync>;
+pub type NativeFnBody =
+    Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
@@ -217,9 +263,17 @@ pub struct ExprFnCall<'a> {
 /// [`ExprFnCall`]).
 ///
 /// `Ok(None)` is the SPARQL "expression error / no value" result, exactly as it is
-/// for [`NativeFnBody`]; `Err` is a hard failure that aborts the query. A body that
-/// cannot evaluate something MUST take one of those two exits — never a value it did
-/// not compute.
+/// for [`NativeFnBody`] — see that type's "three exits" section for the specification
+/// text and for why the *enclosing operator*, not the body, decides whether that
+/// becomes a dropped solution or an unbound variable. `Err` is a hard failure that
+/// aborts the query. A body that cannot evaluate something MUST take one of those two
+/// exits — never a value it did not compute.
+///
+/// The two body types differ ONLY in what they are handed ([`ExprFnCall`] adds the
+/// focus graph and the call depth; [`NativeFnBody`] sees values alone and carries a
+/// [`Volatility`] the fork-join gate reads). Their failure channels are identical, so
+/// neither is the "lossy" one and a host cannot pick the wrong seam and quietly lose
+/// per-solution error semantics.
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
@@ -491,6 +545,15 @@ impl UserFunctionRegistry {
     /// registration of the same IRI as another native function replaces the
     /// earlier one ("last write wins").
     ///
+    /// The body reports a per-solution refusal as `Ok(None)` and a query-fatal one
+    /// as `Err` — the SAME channel [`Self::register_expr`]'s body carries, and the
+    /// reason a domain error here drops a row or leaves a variable unbound instead
+    /// of aborting the query. See [`NativeFnBody`] for the three exits and the
+    /// specification text behind them; the choice between this seam and
+    /// [`Self::register_expr`] is about what the body needs to be *handed* (values
+    /// alone, plus a volatility declaration, versus the calling query's focus graph
+    /// and call depth), never about how it reports failure.
+    ///
     /// # Panics
     ///
     /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`] or
@@ -715,13 +778,21 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 /// result is a dataset-independent [`TermValue`]; the caller interns it into the
 /// parent context.
 ///
+/// A closure that answers `Ok(None)` has raised a SPARQL expression error for this
+/// one solution; it is propagated verbatim (never promoted to `Err`) so the
+/// enclosing operator applies the outcome its own context calls for — `FILTER`
+/// drops the solution, `BIND`/`SELECT`-expression leaves the variable unbound. See
+/// [`NativeFnBody`]'s "three exits" for the specification text.
+///
 /// # Errors
 ///
 /// [`EvalError::Function`] on an arity violation, on a panic inside the closure
 /// (converted to a fixed, payload-free error so the message is identical
 /// regardless of which worker thread panicked — mirrors the `native-codec-panic`
 /// guard in `purrdf_rdf::native_codecs::parse`), or propagated straight through
-/// from the closure's own `Err`.
+/// from the closure's own `Err`. An arity violation stays hard on purpose: the call
+/// as written cannot be evaluated at all, which is a defect in the query text
+/// rather than a value this row happens not to have.
 pub(crate) fn eval_native_function(
     native: &NativeFunction,
     iri: &str,
@@ -755,7 +826,7 @@ pub(crate) fn eval_native_function(
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
     match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
-        Ok(inner_result) => inner_result.map(Some),
+        Ok(inner_result) => inner_result,
         Err(_) => Err(EvalError::function(format!(
             "native function <{iri}> panicked"
         ))),
@@ -874,19 +945,29 @@ mod tests {
     const EX_SUBJECT_PREFIX: &str = "http://example.org/ns#s";
     const EX_EXPR_COUNT: &str = "http://example.org/ns#exprCount";
 
+    const EX_NATIVE_EVEN: &str = "http://example.org/ns#nativeEven";
+
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
     /// A native closure that adds one to its sole integer-literal argument.
+    ///
+    /// Both argument refusals take the `Ok(None)` exit rather than `Err`: an
+    /// argument of the wrong type is a SPARQL expression error scoped to the one
+    /// solution ([`NativeFnBody`]), not a reason to fail the query.
     fn inc_native_body() -> NativeFnBody {
         Arc::new(|args: &[&TermValue]| {
             let TermValue::Literal { lexical_form, .. } = args[0] else {
-                return Err(EvalError::function("expected a literal argument"));
+                return Ok(None);
             };
-            let n: i64 = lexical_form
-                .parse()
-                .map_err(|_| EvalError::function("argument is not an integer"))?;
-            Ok(TermValue::typed_literal((n + 1).to_string(), XSD_INTEGER))
+            let Ok(n) = lexical_form.parse::<i64>() else {
+                return Ok(None);
+            };
+            Ok(Some(TermValue::typed_literal(
+                (n + 1).to_string(),
+                XSD_INTEGER,
+            )))
         })
     }
 
@@ -924,15 +1005,15 @@ mod tests {
     fn ratio_score_native_body(divisor: f64) -> NativeFnBody {
         Arc::new(move |args: &[&TermValue]| {
             let TermValue::Literal { lexical_form, .. } = args[0] else {
-                return Err(EvalError::function("expected a literal argument"));
+                return Ok(None);
             };
-            let n: f64 = lexical_form
-                .parse()
-                .map_err(|_| EvalError::function("argument is not numeric"))?;
-            Ok(TermValue::typed_literal(
+            let Ok(n) = lexical_form.parse::<f64>() else {
+                return Ok(None);
+            };
+            Ok(Some(TermValue::typed_literal(
                 (n / divisor).to_string(),
                 XSD_DOUBLE,
-            ))
+            )))
         })
     }
 
@@ -942,13 +1023,16 @@ mod tests {
     fn nan_score_native_body() -> NativeFnBody {
         Arc::new(|args: &[&TermValue]| {
             let TermValue::Literal { lexical_form, .. } = args[0] else {
-                return Err(EvalError::function("expected a literal argument"));
+                return Ok(None);
             };
-            let n: f64 = lexical_form
-                .parse()
-                .map_err(|_| EvalError::function("argument is not numeric"))?;
+            let Ok(n) = lexical_form.parse::<f64>() else {
+                return Ok(None);
+            };
             let score = if n <= 0.0 { f64::NAN } else { n / 5.0 };
-            Ok(TermValue::typed_literal(score.to_string(), XSD_DOUBLE))
+            Ok(Some(TermValue::typed_literal(
+                score.to_string(),
+                XSD_DOUBLE,
+            )))
         })
     }
 
@@ -1689,8 +1773,142 @@ mod tests {
         );
     }
 
+    /// A native closure answering `xsd:boolean` `true` for an even argument and
+    /// raising a SPARQL expression error (`Ok(None)`) for an odd one.
+    ///
+    /// The odd case is a *domain* refusal — the argument is a perfectly good
+    /// integer the function has no answer for — which is precisely the shape
+    /// [`NativeFnBody`] reserves `Ok(None)` for.
+    fn even_only_native_body() -> NativeFnBody {
+        Arc::new(|args: &[&TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = args[0] else {
+                return Ok(None);
+            };
+            let Ok(n) = lexical_form.parse::<i64>() else {
+                return Ok(None);
+            };
+            if n % 2 == 0 {
+                Ok(Some(TermValue::typed_literal("true", XSD_BOOLEAN)))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    /// A registry holding [`even_only_native_body`] at [`EX_NATIVE_EVEN`].
+    fn even_only_registry() -> UserFunctionRegistry {
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            EX_NATIVE_EVEN,
+            Arity::Exact(1),
+            Volatility::Stable,
+            even_only_native_body(),
+        );
+        registry
+    }
+
+    /// A native closure's `Ok(None)` inside a `FILTER` **drops that solution** and
+    /// leaves every other one alone.
+    ///
+    /// SPARQL 1.1 §17: "FILTERs eliminate any solutions that, when substituted into
+    /// the expression, either result in an effective boolean value of false or
+    /// produce an error." A seam that had to spell this refusal as `Err` would fail
+    /// the whole query on the first odd row, answering nothing.
+    #[test]
+    fn native_expression_error_in_a_filter_drops_only_that_solution() {
+        let registry = even_only_registry();
+        let ds = scored_dataset(4);
+        let query = format!(
+            "SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v . FILTER(<{EX_NATIVE_EVEN}>(?v)) }} ORDER BY ?s"
+        );
+        assert_eq!(
+            run_subject_rows(&ds, &query, &registry),
+            vec![
+                format!("{EX_SUBJECT_PREFIX}2"),
+                format!("{EX_SUBJECT_PREFIX}4"),
+            ],
+            "the two even rows survive; the two odd ones raise an expression error and are \
+             eliminated, and the query still answers"
+        );
+
+        // The neighbouring case: without the predicate every row is present, so the
+        // two absences above are the FILTER's doing rather than a broken scan.
+        let unfiltered = format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v }} ORDER BY ?s");
+        assert_eq!(
+            run_subject_rows(&ds, &unfiltered, &registry).len(),
+            4,
+            "all four subjects are in the dataset"
+        );
+    }
+
+    /// The same `Ok(None)`, in a `BIND`, **leaves the variable unbound** and keeps
+    /// the row — the other of the two outcomes one signal has to be able to produce.
+    ///
+    /// SPARQL 1.1 §10: "If the evaluation of the expression produces an error, the
+    /// variable remains unbound for that solution but the query evaluation
+    /// continues"; algebra §18.5, `Extend(μ, var, expr) = μ if var not in dom(μ) and
+    /// expr(μ) is an error`. The host closure does not and cannot know which of the
+    /// two contexts it was called from, which is exactly why the decision belongs to
+    /// the evaluator and the body reports only that it has no value.
+    #[test]
+    fn native_expression_error_in_a_bind_leaves_the_variable_unbound() {
+        let registry = even_only_registry();
+        let ds = scored_dataset(4);
+        let query = format!(
+            "SELECT ?v ?e WHERE {{ ?s <{EX_VAL}> ?v . BIND(<{EX_NATIVE_EVEN}>(?v) AS ?e) }} \
+             ORDER BY ?v"
+        );
+        let result = NativeSparqlEngine::new()
+            .query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("an expression error in a BIND must not fail the query");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected solutions, got {result:?}")
+        };
+        let observed: Vec<(String, Option<String>)> = rows
+            .into_iter()
+            .map(|row| {
+                let mut cells = row.into_iter();
+                let value = match cells.next().flatten() {
+                    Some(TermValue::Literal { lexical_form, .. }) => lexical_form,
+                    other => panic!("?v must be a bound literal, got {other:?}"),
+                };
+                let flag = cells.next().flatten().map(|term| match term {
+                    TermValue::Literal { lexical_form, .. } => lexical_form,
+                    other => panic!("?e must be a literal when bound, got {other:?}"),
+                });
+                (value, flag)
+            })
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("1".to_owned(), None),
+                ("2".to_owned(), Some("true".to_owned())),
+                ("3".to_owned(), None),
+                ("4".to_owned(), Some("true".to_owned())),
+            ],
+            "all four rows survive the BIND and only the odd ones' ?e is unbound — the same \
+             signal that emptied two rows out of the FILTER above"
+        );
+    }
+
     /// A native closure's own `Err` return is a hard query failure, rendered
     /// through the generalized (no-longer-SHACL-AF-only) `Function` error text.
+    ///
+    /// The counterweight to the two tests above: softening the domain refusal must
+    /// not soften this. `Err` is what a host reaches for when no per-solution answer
+    /// would be honest, and it still aborts.
     #[test]
     fn native_function_error_is_a_hard_error() {
         let mut registry = UserFunctionRegistry::new();

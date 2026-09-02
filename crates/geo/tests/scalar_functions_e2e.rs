@@ -95,6 +95,15 @@ const SMALL_SQUARE: &str = "POLYGON((0 0,2 0,2 2,0 2,0 0))";
 const POINT_INSIDE: &str = "POINT(1 1)";
 /// A point well outside [`SQUARE`].
 const POINT_OUTSIDE: &str = "POINT(9 9)";
+/// A `geo:wktLiteral` whose lexical form is not WKT at all — an unterminated
+/// point.
+///
+/// It sits in the fixture graph beside the three good geometries on purpose. Every
+/// query below that scans `ex:geom` therefore meets it, which is what makes the
+/// per-solution error channel a property of the fixture rather than of one test:
+/// a seam that turned this row's refusal into a query failure would take the whole
+/// file down with it.
+const MALFORMED: &str = "POINT(1";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -146,16 +155,27 @@ fn geojson_datatype() -> String {
     format!("{GEO}{}", GeoTerm::GeoJsonLiteral.local_name())
 }
 
-/// Three spatial objects carrying WKT literals under `ex:geom`: a point inside
-/// the square, a point outside it, and the square itself.
+/// Four spatial objects carrying WKT literals under `ex:geom`: a point inside the
+/// square, a point outside it, the square itself, and one whose lexical form is
+/// [`MALFORMED`].
 ///
 /// Ordinary data with ordinary predicates — the `geof:` family reads geometry
 /// out of *literals* it is handed, so nothing here is `geo:` vocabulary and
 /// nothing needs an index.
+///
+/// The malformed one is not an afterthought. Real datasets contain bad literals,
+/// and SPARQL 1.1 says a function handed one raises a per-solution error rather
+/// than failing the query (§17.2), so a fixture without one would let the whole
+/// file pass against a seam that aborted on the first bad geometry it met.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder.intern_iri(&ex("geom"));
-    for (subject, lexical) in [("a", POINT_INSIDE), ("b", POINT_OUTSIDE), ("c", SQUARE)] {
+    for (subject, lexical) in [
+        ("a", POINT_INSIDE),
+        ("b", POINT_OUTSIDE),
+        ("c", SQUARE),
+        ("bad", MALFORMED),
+    ] {
         let s = builder.intern_iri(&ex(subject));
         let o = builder.intern_literal(RdfLiteral::typed(lexical, wkt_datatype()));
         builder.push_quad(s, predicate, o, None);
@@ -273,6 +293,12 @@ fn assert_projection(local_name: &str, args: &[String], lexical: &str, datatype:
 /// outside the square) and `ex:c` must be **kept** (`sfWithin` is reflexive, so
 /// the square is within itself). A filter that answered `false` for everything
 /// would drop `ex:b` too, and a lower-bound assertion would not notice.
+///
+/// `ex:bad` — whose literal is not WKT — is dropped for the third reason a
+/// solution can leave a `FILTER`: its predicate raised an expression error. That
+/// the query *answers at all* is the load-bearing half; see
+/// `a_malformed_geometry_in_a_filter_drops_only_that_solution` for the assertion
+/// that isolates it.
 #[test]
 fn a_filter_over_a_geof_relation_keeps_exactly_the_rows_the_relation_holds_for() {
     let query = format!(
@@ -479,7 +505,230 @@ fn the_unimplemented_geof_functions_abort_the_query_by_name_and_the_implemented_
 }
 
 // ---------------------------------------------------------------------------
-// 5 — one geometry, two serializations, one answer
+// 5 — a domain error is per-solution, and the three contexts differ
+// ---------------------------------------------------------------------------
+
+/// The subject local names of a one-column `?s` answer, sorted.
+fn subjects(query: &str) -> Vec<String> {
+    let mut names: Vec<String> = run(query)
+        .unwrap_or_else(|error| {
+            panic!("the query must evaluate, but was refused: {error}\n{query}")
+        })
+        .into_iter()
+        .map(|row| match row.into_iter().next().flatten() {
+            Some(TermValue::Iri(iri)) => iri.strip_prefix(EX).unwrap_or(&iri).to_owned(),
+            other => panic!("?s must be a bound IRI, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// A `geof:` call over a malformed geometry inside a `FILTER` **drops that one
+/// solution** and answers the rest — it does not fail the query.
+///
+/// SPARQL 1.1 §17: "FILTERs eliminate any solutions that, when substituted into
+/// the expression, either result in an effective boolean value of false or produce
+/// an error." `ex:bad` leaves for the second reason, `ex:b` for the first, and the
+/// two are indistinguishable from outside — which is exactly why the *other three*
+/// rows are what this test asserts. A seam that turned the malformed literal into a
+/// query failure answers nothing at all here.
+#[test]
+fn a_malformed_geometry_in_a_filter_drops_only_that_solution() {
+    // `geof:isEmpty` is total over well-formed geometries, so every good row
+    // survives and the only row that can leave is the one that errored.
+    let query = format!(
+        "SELECT ?s WHERE {{ ?s <{geom}> ?wkt . FILTER(!<{is_empty}>(?wkt)) }}",
+        geom = ex("geom"),
+        is_empty = geof("isEmpty"),
+    );
+    assert_eq!(
+        subjects(&query),
+        vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+        "the three well-formed geometries must be answered; only the malformed one is dropped, \
+         and the query must not fail because one row of four could not be read"
+    );
+
+    // The neighbouring case that proves the drop is about the literal rather than
+    // about the predicate: with the sense inverted, `geof:isEmpty` is false for
+    // every good row, so ONLY the erroring row would be left if an expression error
+    // were somehow true — and the answer is empty instead.
+    let inverted = format!(
+        "SELECT ?s WHERE {{ ?s <{geom}> ?wkt . FILTER(<{is_empty}>(?wkt)) }}",
+        geom = ex("geom"),
+        is_empty = geof("isEmpty"),
+    );
+    assert!(
+        subjects(&inverted).is_empty(),
+        "an expression error is not `true`: the erroring row must not survive a FILTER whose \
+         every other answer is false"
+    );
+}
+
+/// A `geof:` call over a malformed geometry inside a `BIND` **leaves the variable
+/// unbound** for that solution and keeps the row.
+///
+/// This is the outcome that differs from the `FILTER` case, and the difference is
+/// the whole point of routing the error through the evaluator rather than deciding
+/// it in the host closure. SPARQL 1.1 §10: "If the evaluation of the expression
+/// produces an error, the variable remains unbound for that solution but the query
+/// evaluation continues"; algebra §18.5, `Extend(μ, var, expr) = μ if var not in
+/// dom(μ) and expr(μ) is an error`. All four rows are present, three carry a
+/// dimension, and `ex:bad` carries nothing.
+#[test]
+fn a_malformed_geometry_in_a_bind_leaves_the_variable_unbound_and_keeps_the_row() {
+    let query = format!(
+        "SELECT ?s ?d WHERE {{ ?s <{geom}> ?wkt . BIND(<{dimension}>(?wkt) AS ?d) }}",
+        geom = ex("geom"),
+        dimension = geof("dimension"),
+    );
+    let mut answered: Vec<(String, Option<String>)> = run(&query)
+        .expect("a malformed geometry in a BIND must not fail the query")
+        .into_iter()
+        .map(|row| {
+            let mut cells = row.into_iter();
+            let subject = match cells.next().flatten() {
+                Some(TermValue::Iri(iri)) => iri.strip_prefix(EX).unwrap_or(&iri).to_owned(),
+                other => panic!("?s must be a bound IRI, got {other:?}"),
+            };
+            let dimension = cells.next().flatten().map(|value| match value {
+                TermValue::Literal { lexical_form, .. } => lexical_form,
+                other => panic!("?d must be a literal when bound, got {other:?}"),
+            });
+            (subject, dimension)
+        })
+        .collect();
+    answered.sort();
+    assert_eq!(
+        answered,
+        vec![
+            ("a".to_owned(), Some("0".to_owned())),
+            ("b".to_owned(), Some("0".to_owned())),
+            ("bad".to_owned(), None),
+            ("c".to_owned(), Some("2".to_owned())),
+        ],
+        "every row survives the BIND; only the malformed geometry's ?d is unbound, and the two \
+         points and the polygon keep their own dimensions rather than a shared default"
+    );
+}
+
+/// A `geof:` call over a malformed geometry in a top-level `SELECT` expression —
+/// no graph pattern, nothing to drop — answers **one row with the variable
+/// unbound**.
+///
+/// The third context, and the one with no data behind it: the assignment form
+/// `(expression AS ?var)` is the same `Extend` the `BIND` case uses (SPARQL 1.1
+/// §10), so an expression error here can only mean an unbound variable. A seam that
+/// reported the malformed literal as a hard error would produce no rows at all, and
+/// a row count of zero is not the same answer as a row with nothing in it.
+#[test]
+fn a_malformed_geometry_in_a_top_level_select_expression_answers_one_unbound_row() {
+    let query = format!(
+        "SELECT ((<{dimension}>({bad})) AS ?v) WHERE {{}}",
+        dimension = geof("dimension"),
+        bad = wkt(MALFORMED),
+    );
+    let rows = run(&query).expect("a malformed geometry in a SELECT expression must not fail");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the empty group pattern yields exactly one solution, error or not: {rows:?}"
+    );
+    assert!(
+        rows[0][0].is_none(),
+        "the expression errored, so ?v is unbound rather than absent, defaulted or fabricated: \
+         {:?}",
+        rows[0][0]
+    );
+
+    // The neighbouring VALID case: identical query shape, well-formed literal.
+    assert_eq!(
+        scalar(&format!(
+            "SELECT ((<{dimension}>({good})) AS ?v) WHERE {{}}",
+            dimension = geof("dimension"),
+            good = wkt(SMALL_SQUARE),
+        )),
+        ("2".to_owned(), XSD_INTEGER.to_owned()),
+        "the same call over a readable geometry must still answer, or the softening above has \
+         simply broken the function"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6 — what must STILL fail the query
+// ---------------------------------------------------------------------------
+
+/// The conditions a per-solution error channel must **not** swallow, each checked
+/// in a `FILTER` — the context where a softened failure is invisible, because a
+/// dropped row looks exactly like a row that did not match.
+///
+/// An unimplemented function, an unregistered IRI, a wrong argument count and an
+/// undeclared vocabulary term are all conditions that hold for *every* solution:
+/// answering "no value" would empty the result set and call it an answer. Each is
+/// paired with the neighbouring call that must still succeed, so the file cannot
+/// pass by refusing everything.
+#[test]
+fn the_query_fatal_conditions_still_abort_and_their_valid_neighbours_still_answer() {
+    let geom = ex("geom");
+    let filter =
+        |predicate: &str| format!("SELECT ?s WHERE {{ ?s <{geom}> ?wkt . FILTER({predicate}) }}");
+
+    let fatal = [
+        (
+            "an unimplemented function",
+            "union",
+            format!("<{}>(?wkt, ?wkt) = ?wkt", geof("union")),
+        ),
+        (
+            "an unregistered function IRI",
+            "notAFunction",
+            format!("<{}>(?wkt)", geof("notAFunction")),
+        ),
+        (
+            "a wrong argument count",
+            "sfWithin",
+            format!("<{}>(?wkt)", geof("sfWithin")),
+        ),
+        (
+            "a coordinate reference system with no declared unit",
+            CRS_OTHER,
+            format!(
+                "<{}>({}, <{METRE}>) > 0",
+                geof("area"),
+                wkt(&format!("<{CRS_OTHER}> POLYGON((0 0,1 0,1 1,0 1,0 0))"))
+            ),
+        ),
+    ];
+
+    for (what, named_in_message, predicate) in &fatal {
+        let error = match run(&filter(predicate)) {
+            Err(error) => error,
+            Ok(rows) => panic!(
+                "{what} must abort the query rather than quietly emptying it — a FILTER that \
+                 dropped every solution would be indistinguishable from an honest no-match, but \
+                 the query answered {rows:?}"
+            ),
+        };
+        assert!(
+            error.contains(named_in_message),
+            "the refusal must name {named_in_message} so the caller learns what to fix, got \
+             {error}"
+        );
+    }
+
+    // The neighbouring VALID case: the same FILTER shape with a call that is
+    // registered, implemented, correctly-arity'd and fully declared answers the
+    // three readable geometries. Without this the four refusals above would also
+    // pass against a seam that refused everything.
+    assert_eq!(
+        subjects(&filter(&format!("!<{}>(?wkt)", geof("isEmpty")))),
+        vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+        "a well-formed call in the very same position must still answer"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7 — one geometry, two serializations, one answer
 // ---------------------------------------------------------------------------
 
 /// A GeoJSON literal and a WKT literal denoting the same geometry give the same

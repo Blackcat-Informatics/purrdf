@@ -36,6 +36,22 @@
 //! The six GeoSPARQL **aggregates** are the one thing deliberately *not*
 //! registered here; see [`GeofFunction::AGGREGATES`] for why.
 //!
+//! # A domain refusal is a per-solution error, not a failed query
+//!
+//! The opposite mistake is just as expensive, and it is the easier one to make:
+//! refusing too much. A `geof:` call whose *arguments* are unusable — a malformed
+//! WKT literal, a measure of an empty geometry, two geometries in different
+//! coordinate reference systems — is a SPARQL **expression error** (§17.2:
+//! "Functions invoked with an argument of the wrong type will produce a type
+//! error"), which the enclosing operator resolves per its own context: a `FILTER`
+//! drops that one solution, a `BIND`/`SELECT` expression leaves the variable
+//! unbound, and every other row is answered normally. Aborting the query instead
+//! would mean a single bad geometry anywhere in a dataset makes every query that
+//! scans past it fail — which is the mirror image of the silent-`false` bug above,
+//! and no less wrong. [`evaluate`] is where the two distances are separated, by
+//! asking [`GeoError::is_expression_error`]; [`compute`] is the same computation
+//! with the refusal itself still in hand.
+//!
 //! # Volatility
 //!
 //! Every registration is [`Volatility::Stable`]. Each body is pure arithmetic
@@ -529,11 +545,13 @@ pub fn register(registry: &mut UserFunctionRegistry, vocab: &GeoVocab) {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// Run one `geof:` function over already-evaluated argument terms.
+/// Run one `geof:` function over already-evaluated argument terms, in the
+/// evaluator's own three-exit shape.
 ///
 /// This is literally the body [`register`] installs, exposed so a caller (and
 /// this module's own tests) can exercise a function without standing up an
-/// evaluator.
+/// evaluator. Use [`compute`] instead when you want the refusal itself rather than
+/// what the SPARQL seam does with it.
 ///
 /// The native seam checks [`GeofFunction::arity`] *before* it invokes a body and
 /// short-circuits an unbound argument before that, so a registered call always
@@ -542,28 +560,82 @@ pub fn register(registry: &mut UserFunctionRegistry, vocab: &GeoVocab) {
 /// and an out-of-bounds index would be a panic, which is precisely what a seam
 /// body must never do.
 ///
+/// # Which refusals travel how far
+///
+/// The seam has two failure distances and this function is where a [`GeoError`]
+/// picks one, by asking [`GeoError::is_expression_error`] (which is where the
+/// reasoning lives):
+///
+/// * `Ok(None)` — a **per-solution** SPARQL expression error, for a malformed or
+///   wrongly-typed geometry literal and for a domain refusal (mixed coordinate
+///   reference systems, a measure of an empty geometry, an out-of-range member
+///   index, an undeclared unit). SPARQL 1.1 §17.2: "Functions invoked with an
+///   argument of the wrong type will produce a type error." The enclosing operator
+///   then decides the outcome — a `FILTER` drops that solution, a `BIND` or
+///   `SELECT` expression leaves the variable unbound (§10, algebra §18.5 `Extend`)
+///   — and the rest of the query is unaffected. One bad geometry in one row is not
+///   a failed query.
+/// * `Err` — **query-fatal**, and deliberately still so for the three kinds that
+///   hold for every solution alike: a wrong argument count, an unimplemented
+///   function, and an unusable vocabulary. An unimplemented topological predicate
+///   that answered "no value" would be dropped by a `FILTER` exactly as an honest
+///   `false` is, which is the silent wrong answer this crate refuses to produce;
+///   the other two would empty a result set and present that as the answer.
+///
 /// # Errors
 ///
-/// [`EvalError::Function`] for an unimplemented function, a domain refusal (mixed
-/// coordinate reference systems, a measure of an empty geometry, an out-of-range
-/// member index, an undeclared unit) or a wrong argument count;
-/// [`EvalError::Data`] for a malformed or wrongly-typed geometry literal;
-/// [`EvalError::Config`] for a vocabulary that is missing a term the call needs.
-/// See [`GeoError`] for which kind means whose mistake it was.
+/// [`EvalError::Function`] for an unimplemented function or a wrong argument count;
+/// [`EvalError::Config`] for a vocabulary that is missing a term the call needs. See
+/// [`GeoError`] for which kind means whose mistake it was, and [`compute`] for the
+/// refusal itself rather than its seam-level effect.
 pub fn evaluate(
     function: GeofFunction,
     vocab: &GeoVocab,
     args: &[&TermValue],
-) -> Result<TermValue, EvalError> {
+) -> Result<Option<TermValue>, EvalError> {
+    match compute(function, vocab, args) {
+        Ok(value) => Ok(Some(value)),
+        Err(err) if err.is_expression_error() => Ok(None),
+        Err(err) => Err(EvalError::from(err)),
+    }
+}
+
+/// Run one `geof:` function over already-evaluated argument terms, in this crate's
+/// own error space.
+///
+/// The same computation [`evaluate`] performs, stopping one step earlier: every
+/// refusal arrives as the [`GeoError`] that was raised, with its detail message
+/// intact and its kind still legible. [`evaluate`] is the seam shape — it maps two
+/// of the five kinds onto SPARQL's per-solution `Ok(None)`, which by construction
+/// carries no message, because the specification gives an expression error nowhere
+/// to put one. A caller that wants to *report* why a geometry was rejected (a
+/// loader, a linter, a diagnostic pass) must call this; a caller that wants what a
+/// query would do must call [`evaluate`].
+///
+/// # Errors
+///
+/// [`GeoError::Arity`] for a wrong argument count, [`GeoError::Unsupported`] for a
+/// function this crate does not implement, [`GeoError::Literal`] for a malformed or
+/// wrongly-typed geometry literal, [`GeoError::Domain`] for well-formed arguments the
+/// operation is undefined on, and [`GeoError::Config`] for a vocabulary missing a
+/// term the call needs.
+pub fn compute(
+    function: GeofFunction,
+    vocab: &GeoVocab,
+    args: &[&TermValue],
+) -> Result<TermValue, GeoError> {
     if !arity_accepts(function.arity(), args.len()) {
-        return Err(EvalError::function(format!(
+        // Not an expression error: a call written with the wrong number of
+        // arguments cannot be evaluated for ANY solution, so softening it would
+        // turn a defect in the query text into a silently empty answer.
+        return Err(GeoError::arity(format!(
             "geof:{} expects {} argument(s), got {}",
             function.local_name(),
             function.arity(),
             args.len()
         )));
     }
-    dispatch(function, vocab, args).map_err(EvalError::from)
+    dispatch(function, vocab, args)
 }
 
 /// Whether `count` arguments satisfies `arity`.
@@ -1188,7 +1260,7 @@ mod tests {
         Arity, EvalError, NativeSparqlEngine, QueryOptions, UserFunctionRegistry,
     };
 
-    use super::{GeofFunction, evaluate, register};
+    use super::{GeoError, GeofFunction, compute, evaluate, register};
     use crate::geom::Crs;
     use crate::relations::SpatialRelation;
     use crate::vocab::{GeoTerm, GeoVocab, GeoVocabBuilder};
@@ -1259,17 +1331,24 @@ mod tests {
     /// missing, so every golden answer below also proves that the IRI is wired.
     /// The resolved [`NativeFunction`](purrdf_sparql_eval::NativeFunction)'s
     /// closure field is `pub(crate)` to `purrdf-sparql-eval` and therefore cannot
-    /// be called from this crate; [`evaluate`] is the *identical* body
-    /// [`register`] installs (see its one construction site), so calling it after
-    /// the resolve exercises the same code the seam runs. The end-to-end tests at
-    /// the bottom of this module close the remaining gap by running real SPARQL
-    /// through the engine.
+    /// be called from this crate; [`compute`] is the computation [`evaluate`] — the
+    /// body [`register`] installs (see its one construction site) — performs, so
+    /// calling it after the resolve exercises the same code the seam runs. The end-to-end
+    /// tests at the bottom of this module close the remaining gap by running real
+    /// SPARQL through the engine.
+    ///
+    /// It answers in [`GeoError`] space rather than through [`evaluate`] on purpose:
+    /// `evaluate` maps an expression error onto `Ok(None)`, which by construction
+    /// carries no message, so asserting *why* a call was refused is only possible on
+    /// this side of the mapping. Which side of it each refusal lands on is asserted
+    /// separately, by [`expression_error`]/[`fatal_refusal`] here and by real query
+    /// text in `tests/scalar_functions_e2e.rs`.
     fn call(
         registry: &UserFunctionRegistry,
         vocab: &GeoVocab,
         function: GeofFunction,
         args: &[TermValue],
-    ) -> Result<TermValue, EvalError> {
+    ) -> Result<TermValue, GeoError> {
         let iri = vocab.function(function.local_name());
         assert!(
             registry.resolve_native(&iri).is_some(),
@@ -1277,7 +1356,7 @@ mod tests {
             function.local_name()
         );
         let borrowed: Vec<&TermValue> = args.iter().collect();
-        evaluate(function, vocab, &borrowed)
+        compute(function, vocab, &borrowed)
     }
 
     /// [`call`] for the one-argument functions, which are most of them.
@@ -1286,7 +1365,7 @@ mod tests {
         vocab: &GeoVocab,
         function: GeofFunction,
         arg: &TermValue,
-    ) -> Result<TermValue, EvalError> {
+    ) -> Result<TermValue, GeoError> {
         call(registry, vocab, function, std::slice::from_ref(arg))
     }
 
@@ -1296,7 +1375,7 @@ mod tests {
     }
 
     /// The lexical form and datatype of a successful call.
-    fn ok_literal(result: Result<TermValue, EvalError>, what: &str) -> (String, String) {
+    fn ok_literal(result: Result<TermValue, GeoError>, what: &str) -> (String, String) {
         match result {
             Ok(TermValue::Literal {
                 lexical_form,
@@ -1310,7 +1389,7 @@ mod tests {
 
     /// Assert a call succeeded with an exact lexical form and datatype.
     fn assert_answer(
-        result: Result<TermValue, EvalError>,
+        result: Result<TermValue, GeoError>,
         what: &str,
         lexical: &str,
         datatype: &str,
@@ -1323,11 +1402,46 @@ mod tests {
         );
     }
 
-    /// Assert a call was refused, and return the rendered error.
-    fn refusal(result: Result<TermValue, EvalError>, what: &str) -> String {
+    /// Assert a call was refused **for these arguments only** — a SPARQL expression
+    /// error, which the seam reports as `Ok(None)` and which a `FILTER` turns into a
+    /// dropped solution and a `BIND` into an unbound variable — and return the
+    /// rendered message.
+    ///
+    /// The distance is asserted, not assumed: a refusal that quietly became fatal
+    /// would turn one bad literal into a failed query, and every caller of this
+    /// helper is a case where that must not happen.
+    fn expression_error(result: Result<TermValue, GeoError>, what: &str) -> String {
         match result {
             Ok(value) => panic!("{what} must be refused, but answered {value:?}"),
-            Err(err) => err.to_string(),
+            Err(err) => {
+                assert!(
+                    err.is_expression_error(),
+                    "{what} is a refusal about these arguments, so it must be a per-solution \
+                     expression error rather than a query-fatal one: {err}"
+                );
+                err.to_string()
+            }
+        }
+    }
+
+    /// Assert a call was refused **fatally** — the query cannot be answered at all —
+    /// and return the rendered message.
+    ///
+    /// The mirror of [`expression_error`], and the assertion that matters more: an
+    /// unimplemented function or an unusable vocabulary that softened into `Ok(None)`
+    /// would be dropped by a `FILTER` exactly as an honest `false` is, with nothing
+    /// downstream able to tell the two apart.
+    fn fatal_refusal(result: Result<TermValue, GeoError>, what: &str) -> String {
+        match result {
+            Ok(value) => panic!("{what} must be refused, but answered {value:?}"),
+            Err(err) => {
+                assert!(
+                    !err.is_expression_error(),
+                    "{what} must abort the query rather than leaving one solution without a \
+                     value: {err}"
+                );
+                err.to_string()
+            }
         }
     }
 
@@ -1934,8 +2048,20 @@ mod tests {
                 Err(err) => err,
             };
             assert!(
-                matches!(err, EvalError::Function(_)),
-                "geof:{} must refuse as EvalError::Function, got {err:?}",
+                matches!(err, GeoError::Unsupported(_)),
+                "geof:{} must refuse as GeoError::Unsupported, got {err:?}",
+                function.local_name()
+            );
+            assert!(
+                !err.is_expression_error(),
+                "geof:{} is unimplemented, so the refusal must abort the query rather than \
+                 leaving one solution without a value — a FILTER would drop that solution \
+                 exactly as it drops an honest false: {err:?}",
+                function.local_name()
+            );
+            assert!(
+                matches!(EvalError::from(err.clone()), EvalError::Function(_)),
+                "geof:{} must reach the evaluator as EvalError::Function, got {err:?}",
                 function.local_name()
             );
             let rendered = err.to_string();
@@ -1982,7 +2108,7 @@ mod tests {
     fn a_non_literal_argument_is_refused_and_a_literal_one_is_not() {
         let vocab = vocab();
         let registry = registry_of(&vocab);
-        let rendered = refusal(
+        let rendered = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2015,7 +2141,7 @@ mod tests {
     fn an_xsd_string_argument_is_refused_and_a_wkt_literal_is_not() {
         let vocab = vocab();
         let registry = registry_of(&vocab);
-        let rendered = refusal(
+        let rendered = expression_error(
             call(&registry, &vocab, named("isEmpty"), &[string("POINT(1 2)")]),
             "geof:isEmpty of an xsd:string",
         );
@@ -2060,7 +2186,13 @@ mod tests {
             GeoTerm::KmlLiteral,
             GeoTerm::DggsLiteral,
         ] {
-            let rendered = refusal(
+            // Fatal, not per-solution. This is the *codec* that is missing, not the
+            // literal that is bad: a dataset mixing WKT and GML geometries would
+            // otherwise have its GML rows quietly filtered away, and a query that
+            // silently answered about half a dataset is the failure this crate keeps
+            // closed. The gap has to be named so the caller learns which
+            // serialization purrdf-geo cannot read.
+            let rendered = fatal_refusal(
                 call(
                     &registry,
                     &vocab,
@@ -2105,8 +2237,14 @@ mod tests {
                 Err(err) => err,
             };
             assert!(
-                matches!(err, EvalError::Data(_)),
+                matches!(err, GeoError::Literal(_)),
                 "a malformed geometry literal is bad DATA, got {err:?} for {bad:?}"
+            );
+            assert!(
+                err.is_expression_error(),
+                "a malformed literal is a statement about ONE row's argument, so it must be a \
+                 per-solution expression error — otherwise one bad geometry anywhere in a \
+                 dataset fails every query that scans past it: {err:?} for {bad:?}"
             );
         }
         // The neighbouring VALID case.
@@ -2140,7 +2278,7 @@ mod tests {
         let registry = registry_of(&vocab);
         let here = wkt(&vocab, "POINT(0 0)");
         let elsewhere = wkt(&vocab, &format!("<{CRS_GEOJSON}> POINT(0 0)"));
-        let rendered = refusal(
+        let rendered = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2169,7 +2307,7 @@ mod tests {
         let vocab = vocab();
         let registry = registry_of(&vocab);
         for name in ["minZ", "maxZ"] {
-            let rendered = refusal(
+            let rendered = expression_error(
                 call(&registry, &vocab, named(name), &[wkt(&vocab, "POINT(1 2)")]),
                 &format!("geof:{name} of a planar point"),
             );
@@ -2210,7 +2348,7 @@ mod tests {
         let vocab = vocab();
         let registry = registry_of(&vocab);
         for name in ["minX", "maxX", "minY", "maxY"] {
-            let rendered = refusal(
+            let rendered = expression_error(
                 call(
                     &registry,
                     &vocab,
@@ -2246,7 +2384,7 @@ mod tests {
         let registry = registry_of(&vocab);
         let multi = wkt(&vocab, "MULTIPOINT((0 0),(1 1))");
         for index in [0_i64, 3, -1] {
-            let rendered = refusal(
+            let rendered = expression_error(
                 call(
                     &registry,
                     &vocab,
@@ -2289,7 +2427,7 @@ mod tests {
         let square = wkt(&vocab, "POLYGON((0 0,1 0,1 1,0 1,0 0))");
 
         // Declared for this system, but a different unit was asked for.
-        let rendered = refusal(
+        let rendered = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2303,8 +2441,13 @@ mod tests {
             "the refusal must name both units, got {rendered}"
         );
 
-        // A system with no declared unit at all.
-        let rendered = refusal(
+        // A system with no declared unit at all — fatal, unlike the unit MISMATCH
+        // just above. The mismatch is a statement about this call's two arguments;
+        // this is a declaration the host never made, and PurRDF ships no
+        // coordinate-reference-system database to fabricate one from. Leaving the
+        // measure unbound would report "this geometry has no area" and hide the
+        // wiring gap the host is the only party able to close.
+        let rendered = fatal_refusal(
             call(
                 &registry,
                 &vocab,
@@ -2344,7 +2487,7 @@ mod tests {
     fn metric_area_is_refused_in_degrees_and_answered_in_metres() {
         let vocab = vocab();
         let registry = registry_of(&vocab);
-        let rendered = refusal(
+        let rendered = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2375,7 +2518,7 @@ mod tests {
         // And the whole metric family behaves the same way.
         let degrees = wkt(&vocab, &format!("<{CRS_GEOJSON}> LINESTRING(0 0,3 4)"));
         for name in ["metricLength", "metricPerimeter"] {
-            let _ = refusal(
+            let _ = expression_error(
                 call1(&registry, &vocab, named(name), &degrees),
                 &format!("geof:{name} in a degree system"),
             );
@@ -2401,7 +2544,11 @@ mod tests {
             .expect("non-empty namespaces")
             .build();
         let registry = registry_of(&undeclared);
-        let rendered = refusal(
+        // Fatal, not per-solution: an undeclared vocabulary is the host's wiring,
+        // which no row is responsible for and no row can repair, so every solution
+        // would be refused for the same reason. Leaving the variable unbound would
+        // report "no geometry type" for geometries that plainly have one.
+        let rendered = fatal_refusal(
             call(
                 &registry,
                 &undeclared,
@@ -2438,7 +2585,7 @@ mod tests {
     fn as_geojson_is_refused_outside_the_geojson_crs_and_answered_inside_it() {
         let vocab = vocab();
         let registry = registry_of(&vocab);
-        let rendered = refusal(
+        let rendered = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2474,7 +2621,7 @@ mod tests {
         let square = wkt(&vocab, "POLYGON((0 0,1 0,1 1,0 1,0 0))");
 
         for bad in ["T*F**F**", "T*F**F****", "T*F**F**X", "", "TFFFTFFF3"] {
-            let rendered = refusal(
+            let rendered = expression_error(
                 call(
                     &registry,
                     &vocab,
@@ -2489,7 +2636,7 @@ mod tests {
             );
         }
         // A non-string pattern argument is refused too.
-        let _ = refusal(
+        let _ = expression_error(
             call(
                 &registry,
                 &vocab,
@@ -2571,7 +2718,10 @@ mod tests {
     }
 
     /// A wrong argument count is a clean error, not an out-of-bounds panic —
-    /// `evaluate` is public, so it cannot rely on the seam's own arity check.
+    /// `evaluate` is public, so it cannot rely on the seam's own arity check — and
+    /// it stays **fatal**: a call written with the wrong number of arguments cannot
+    /// be evaluated for any solution, so softening it would turn a defect in the
+    /// query text into a silently empty answer.
     #[test]
     fn a_direct_call_with_the_wrong_argument_count_is_refused_rather_than_panicking() {
         let vocab = vocab();
@@ -2582,10 +2732,20 @@ mod tests {
             matches!(err, EvalError::Function(_)),
             "a wrong argument count is a function error, got {err:?}"
         );
+        assert!(
+            matches!(
+                compute(named("sfEquals"), &vocab, &[&point]),
+                Err(GeoError::Arity(_))
+            ),
+            "and it is its own kind: nobody's data and nobody's wiring is wrong, the call is"
+        );
         // The neighbouring VALID case.
         assert!(
-            evaluate(named("sfEquals"), &vocab, &[&point, &point]).is_ok(),
-            "the two-argument call must still succeed"
+            matches!(
+                evaluate(named("sfEquals"), &vocab, &[&point, &point]),
+                Ok(Some(_))
+            ),
+            "the two-argument call must still answer with a value"
         );
     }
 
