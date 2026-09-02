@@ -11,7 +11,8 @@
 //!
 //! That claim was true and untested, and it is only true in ONE direction.
 //! `serialize::function_keyword` is compiler-exhaustive over `Function` (it ends
-//! `Function::Purrdf(_) | Function::Custom(_) => return None`, with no `_` arm),
+//! `Function::Purrdf(_) | Function::Cdt(_) | Function::Custom(_) => return None`,
+//! with no `_` arm),
 //! so a new variant is FORCED to declare a keyword. `parser::builtin_function`
 //! matches on `&str` and ends `_ => return None`, so a new variant is forced into
 //! nothing. Add `Function::Foo` plus `"FOO"` to the serializer and the workspace
@@ -60,9 +61,11 @@ fn variants_in_table(source: &str, fn_name: &str) -> BTreeSet<String> {
 /// The parser's name table and the serializer's keyword table must name exactly
 /// the same `Function` variants.
 ///
-/// The two documented exclusions are the IRI-spelled variants: `Function::Purrdf`
-/// and `Function::Custom` are not keyword-callable, so the serializer names them
-/// only to return `None` and the parser never names them at all.
+/// The documented exclusions are the IRI-spelled variants: `Function::Purrdf`,
+/// `Function::Cdt` (SEP-0009 fixes each composite-datatype function's IRI, and a
+/// call is written as an ordinary `iri ArgList`) and `Function::Custom` are not
+/// keyword-callable, so the serializer names them only to return `None` and the
+/// parser never names them at all.
 #[test]
 fn the_parser_and_serializer_function_tables_name_the_same_variants() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -74,7 +77,7 @@ fn the_parser_and_serializer_function_tables_name_the_same_variants() {
     let mut parsed = variants_in_table(&parser, "fn builtin_function(upper: &str)");
     let mut emitted = variants_in_table(&serialize, "pub(crate) fn function_keyword(f: &Function)");
 
-    for iri_spelled in ["Purrdf", "Custom"] {
+    for iri_spelled in ["Purrdf", "Cdt", "Custom"] {
         parsed.remove(iri_spelled);
         emitted.remove(iri_spelled);
     }
