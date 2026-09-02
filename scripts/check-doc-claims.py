@@ -4462,10 +4462,10 @@ def build_claims(
         Claim(
             # The SAME count restated a third time, ~400 lines from the scoreboard
             # row and ~430 from the generated matrix block, in the narrative
-            # section. That distance is exactly why it goes stale: this branch
-            # found it reading "126 / 126" when the matrix said 129, and reading it
-            # as the `core/`+`sparql/` figure when 126 was never that number. Now
-            # it is derived like the other two.
+            # section. That distance is exactly why it goes stale: it was last
+            # found reading "126 / 126" while the matrix said 129, captioned as the
+            # `core/`+`sparql/` figure, which 126 was never. Derived here like the
+            # other two, so the distance stops mattering.
             "the W3C SHACL narrative count",
             _CONFORMANCE,
             _flow(

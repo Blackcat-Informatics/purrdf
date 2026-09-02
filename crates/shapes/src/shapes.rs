@@ -607,6 +607,20 @@ pub(crate) struct Parser<'s> {
     /// only what validation would have refused anyway — just at the moment the
     /// author can act on it.
     node_by_expr_constants: Vec<(Term, Term)>,
+    /// The shape whose constraints are being parsed, for `sh:prefixes` resolution
+    /// inside a node expression.
+    ///
+    /// SHACL-AF lets `sh:prefixes` sit on the SHAPE or on the constraint node, and
+    /// `sh:sparql` honours both (it builds its header from `&[id, &c_node]`). A
+    /// `sh:select` / `sh:sparqlExpr` NODE EXPRESSION honoured only its own node, so
+    /// the identical `sh:prefixes` declaration that works for `sh:sparql` produced
+    /// an "unparsable query" for a node expression — a refusal of a legal
+    /// document, reported as a syntax error in the author's SPARQL.
+    ///
+    /// Set and RESTORED around each shape's constraint parse (never simply
+    /// cleared), so an inline shape nested inside an expression cannot strip the
+    /// enclosing shape's prefixes from the expressions that follow it.
+    current_shape: Option<Term>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -704,6 +718,7 @@ impl<'s> Parser<'s> {
             custom_fns: parser::custom_fn::CustomFnIndex::default(),
             parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
+            current_shape: None,
         }
     }
 

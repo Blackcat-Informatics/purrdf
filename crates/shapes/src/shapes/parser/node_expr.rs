@@ -30,6 +30,22 @@ impl Parser<'_> {
         id: &Term,
         is_property_shape: bool,
     ) -> Result<Vec<Constraint>, String> {
+        // Remember which shape these constraints belong to, so a `sh:select` node
+        // expression resolves shape-level `sh:prefixes` exactly as `sh:sparql`
+        // does. Saved and restored rather than cleared: an inline shape parsed
+        // inside an expression must not strip the enclosing shape's prefixes from
+        // the expressions that follow it.
+        let saved_shape = self.current_shape.replace(id.clone());
+        let result = self.parse_constraints_inner(id, is_property_shape);
+        self.current_shape = saved_shape;
+        result
+    }
+
+    fn parse_constraints_inner(
+        &mut self,
+        id: &Term,
+        is_property_shape: bool,
+    ) -> Result<Vec<Constraint>, String> {
         let mut constraints: Vec<Constraint> = Vec::new();
 
         // sh:class — sorted for determinism
@@ -1284,7 +1300,15 @@ impl Parser<'_> {
                         "<{iri}> on {node} must be a string literal, got {object}"
                     ));
                 };
-                let header = self.prefix_header(&[node]);
+                // SHACL-AF `sh:prefixes` may be declared on the expression node OR
+                // on the shape that carries it — the same two owners `sh:sparql`
+                // reads (see `parse_constraints`, which builds its header from
+                // `&[id, &c_node]`). Honouring only the expression node made the
+                // identical declaration fail here as an "unparsable query".
+                let header = match self.current_shape.clone() {
+                    Some(shape) => self.prefix_header(&[&shape, node]),
+                    None => self.prefix_header(&[node]),
+                };
                 let (query, key) = if iri == sh::SELECT {
                     (format!("{header}{}", body.value()), "sh:select")
                 } else {

@@ -603,3 +603,61 @@ fn two_real_function_predicates_on_one_node_are_still_ambiguous() {
         "got: {err}"
     );
 }
+
+/// SHACL-AF lets `sh:prefixes` sit on the SHAPE as well as on the constraint node,
+/// and `sh:sparql` honours both. A `sh:select` node expression must too.
+///
+/// It did not: the header was built from the expression node alone, so the very
+/// same declaration that works for `sh:sparql` came back as
+/// "has an unparsable query" — a legal document refused, and reported as a syntax
+/// error in the author's SPARQL rather than as the unresolved prefix it was. The
+/// sibling test above pins the expression-node spelling; this pins the shape one,
+/// and `sh:sparqlExpr` gets the same treatment because it shares the arm.
+#[test]
+fn a_select_expression_resolves_sh_prefixes_declared_on_the_shape() {
+    let declaration = r#"<http://example.org/decl> sh:declare
+             [ sh:prefix "p" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] ."#;
+    assert_eq!(
+        outputs(
+            "ex:a ex:child ex:b .",
+            &format!(
+                r#"{declaration}
+                 ex:S a sh:NodeShape ;
+                     sh:prefixes <http://example.org/decl> ;
+                     sh:expression [ sh:select "SELECT ?child WHERE {{ $this p:child ?child }}" ] ."#
+            ),
+            "a",
+        ),
+        vec![ex("b")],
+        "sh:prefixes on the shape must reach a sh:select node expression"
+    );
+    assert_eq!(
+        outputs(
+            "ex:a ex:child ex:b .",
+            &format!(
+                r#"{declaration}
+                 ex:S a sh:NodeShape ;
+                     sh:prefixes <http://example.org/decl> ;
+                     sh:expression [ sh:sparqlExpr "STRLEN(STR(p:child))" ] ."#
+            ),
+            "a",
+        ),
+        // `STRLEN` of the expanded IRI: `http://example.org/ns#child` is 27
+        // characters, so this also proves the prefix EXPANDED rather than merely
+        // parsed.
+        vec![r#""27"^^<http://www.w3.org/2001/XMLSchema#integer>"#.to_owned()],
+        "sh:prefixes on the shape must reach a sh:sparqlExpr node expression"
+    );
+}
+
+/// The NEIGHBOURING INVALID case: an UNDECLARED prefix is still a load error.
+/// Widening the header's owners added a second place to look, not a fallback that
+/// invents namespaces.
+#[test]
+fn an_undeclared_prefix_in_a_select_expression_is_still_a_load_error() {
+    let err = load_error(
+        r#"ex:S a sh:NodeShape ;
+             sh:expression [ sh:select "SELECT ?child WHERE { $this nosuch:child ?child }" ] ."#,
+    );
+    assert!(err.contains("unparsable query"), "got: {err}");
+}
