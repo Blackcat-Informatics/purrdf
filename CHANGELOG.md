@@ -1,8 +1,10 @@
 # Changelog
 
 All notable changes to the PurRDF crate suite are recorded here. The suite
-ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
-bump may carry breaking changes and a patch bump is bugfix-only.
+ships one lockstep version across crates.io, PyPI, and npm; from 1.0.0 a
+breaking change bumps the major version, a minor bump is additive, and a patch
+bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+0.x.
 
 ## [Unreleased]
 

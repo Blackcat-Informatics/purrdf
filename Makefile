@@ -109,6 +109,7 @@ changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit
 bump: ## Set the crates.io/PyPI/npm version in lockstep (make bump VERSION=x.y.z).
 	@test -n "$(VERSION)" || { echo "usage: make bump VERSION=x.y.z"; exit 1; }
 	python3 scripts/set-version.py "$(VERSION)"
+	@$(MAKE) --no-print-directory capi-header  # cbindgen derives PURRDF_MINOR from the crate version; a bump without this fails capi-check
 
 release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence checks (make release-tags VERSION=x.y.z).
 	@test -n "$(VERSION)" || { echo "usage: make release-tags VERSION=x.y.z"; exit 1; }
