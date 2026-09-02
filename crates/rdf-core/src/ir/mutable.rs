@@ -252,11 +252,17 @@ impl MutableDataset {
                 direction,
             } => {
                 // The datatype id is a base IRI term; resolve it to its IRI string.
+                // A frozen dataset's literal datatype is an IRI by construction:
+                // `RdfDatasetBuilder::intern_literal` mints it through `intern_iri`,
+                // and the pack decoder refuses a datatype entry that is not an IRI
+                // before a pack ever becomes a dataset. Any other shape is a broken
+                // invariant, stated exactly as `RdfDataset::term_value` states it —
+                // never rendered into a datatype string, because a `Debug` rendering
+                // used as an IRI does not fail HERE; it fails later as an `IriError`
+                // about text nobody wrote.
                 let datatype = match base.resolve(datatype) {
                     TermRef::Iri(dt) => dt.to_string(),
-                    // Unreachable for a validated dataset (a literal datatype is always
-                    // an IRI); fall back to a debug string rather than panic.
-                    other => format!("{other:?}"),
+                    other => unreachable!("literal datatype must resolve to an IRI, got {other:?}"),
                 };
                 TermValue::Literal {
                     lexical_form: lexical.to_string(),
@@ -1036,6 +1042,61 @@ mod tests {
             .iter()
             .map(|q| format!("{:?}|{:?}|{:?}|{:?}", q.s, q.p, q.o, q.g))
             .collect()
+    }
+
+    /// `base_value_of` and [`RdfDataset::term_value`] are the two resolvers of a
+    /// frozen literal's datatype, and they must agree on every literal shape: the
+    /// datatype handed back is the IRI that was interned, never a rendering of some
+    /// other term. A non-IRI datatype id is unreachable from the public API (the
+    /// builder interns every datatype through `intern_iri`; the pack decoder refuses
+    /// a non-IRI datatype entry), so the pinned behaviour is the agreement itself —
+    /// both sites state the invariant with `unreachable!`, and neither fabricates a
+    /// value that would only fail later as an `IriError` about text nobody wrote.
+    #[test]
+    fn base_value_of_agrees_with_term_value_on_every_literal_shape() {
+        use crate::model::RdfTextDirection;
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let plain = b.intern_literal(RdfLiteral::simple("plain"));
+        let typed = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let lang = b.intern_literal(RdfLiteral::language_tagged("hi", "en"));
+        let directional = b.intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        });
+        // A literal nested inside a triple term resolves through the recursive arm.
+        let nested = b.intern_triple(s, p, typed);
+        for o in [plain, typed, lang, directional, nested] {
+            b.push_quad(s, p, o, None);
+        }
+        let base = b.freeze().expect("base freezes");
+
+        let mut literal_datatypes = Vec::new();
+        for index in 0..base.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("small fixture"));
+            let via_mutable = MutableDataset::base_value_of(&base, id);
+            assert_eq!(via_mutable, base.term_value(id), "term {index}");
+            if let TermValue::Literal { datatype, .. } = via_mutable {
+                literal_datatypes.push(datatype);
+            }
+        }
+        literal_datatypes.sort();
+        assert_eq!(
+            literal_datatypes,
+            [
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                "http://www.w3.org/2001/XMLSchema#integer",
+                "http://www.w3.org/2001/XMLSchema#string",
+            ]
+            .map(str::to_owned),
+            "every literal datatype is the interned IRI, never a Debug rendering"
+        );
     }
 
     // -- the four mutation rules ------------------------------------------------------

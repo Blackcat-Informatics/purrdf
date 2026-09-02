@@ -3404,10 +3404,11 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::StringLit(s) | Token::LongStringLit(s)) if sign.is_none() => {
                 if let Some(Token::LangTag(_)) = self.peek() {
+                    let at = self.span();
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
                     };
-                    let (lang, dir) = split_lang_dir(tag);
+                    let (lang, dir) = split_lang_dir(tag, at)?;
                     Ok(Literal::new_lang(s, lang, dir))
                 } else if self.eat(&Token::HatHat) {
                     let dt = self.expect_iri_node()?;
@@ -5376,23 +5377,56 @@ fn is_modifier_terminator_word(w: &str) -> bool {
         .any(|kw| w.eq_ignore_ascii_case(kw))
 }
 
-/// Split a lang tag into the language and an optional RDF 1.2 base direction
-/// (`en--ltr` → (`en`, Ltr)).
-fn split_lang_dir(tag: &str) -> (String, Option<BaseDirection>) {
-    if let Some((lang, dir)) = tag.split_once("--") {
-        // In-place ASCII case folding: same match as `to_ascii_lowercase()`
-        // against the two ASCII spellings, without the lower-cased copy.
-        let dir = if dir.eq_ignore_ascii_case("ltr") {
-            Some(BaseDirection::Ltr)
-        } else if dir.eq_ignore_ascii_case("rtl") {
-            Some(BaseDirection::Rtl)
-        } else {
-            None
-        };
-        (lang.to_owned(), dir)
-    } else {
-        (tag.to_owned(), None)
+/// Split a `LANG_DIR` token into the language tag and its optional RDF 1.2
+/// base direction (`en--ltr` → (`en`, `Ltr`)), refusing anything the
+/// production does not admit.
+///
+/// The terminal is `LANG_DIR ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)* ('--'
+/// [a-zA-Z]+)?` (Turtle 1.2 rule [42]; SPARQL 1.2 shares it), narrowed by
+/// prose: SPARQL 1.2 §2.3.1 — "The base direction is restricted to either
+/// `ltr` or `rtl`. Unlike a language tag, it is always lower case." — and
+/// Turtle 1.2 §7.2 — "If present, the initial text direction MUST be either
+/// `ltr` or `rtl`." The W3C rdf-tests pin both halves as negative syntax:
+/// `@en--unk` ("undefined base direction") and `@en--LTR` ("upper case LTR").
+///
+/// The lexer hands over the raw `[a-zA-Z0-9-]+` run after `@`, so this is the
+/// one site that enforces the production. An unknown or wrongly-cased suffix
+/// is a syntax error here — never silently dropped to a plain `@en`, and never
+/// folded into the language tag as `en--foo`. The split is on the FIRST `--`:
+/// the production admits exactly one, so `en--x--ltr` is refused as a bad
+/// direction (`x--ltr`) rather than read as language `en--x`.
+fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
+    let (lang, dir) = match tag.split_once("--") {
+        Some((lang, "ltr")) => (lang, Some(BaseDirection::Ltr)),
+        Some((lang, "rtl")) => (lang, Some(BaseDirection::Rtl)),
+        Some((_, dir)) => {
+            return Err(ParseError::syntax(
+                format!(
+                    "invalid base direction `--{dir}` in `@{tag}`: \
+                     must be exactly `ltr` or `rtl` (lower case)"
+                ),
+                at,
+            ));
+        }
+        None => (tag, None),
+    };
+    if !is_langtag(lang) {
+        return Err(ParseError::syntax(
+            format!("invalid language tag `@{tag}`: expected [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*"),
+            at,
+        ));
     }
+    Ok((lang.to_owned(), dir))
+}
+
+/// The language half of `LANG_DIR`: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
+fn is_langtag(lang: &str) -> bool {
+    let mut subtags = lang.split('-');
+    let primary_ok = subtags.next().is_some_and(|primary| {
+        !primary.is_empty() && primary.bytes().all(|b| b.is_ascii_alphabetic())
+    });
+    primary_ok
+        && subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
 fn expect_arity(args: &[Expression], n: usize, name: &str, at: usize) -> Result<()> {
@@ -5536,6 +5570,82 @@ mod tests {
 
     fn parse(q: &str) -> Query {
         SparqlParser::new().parse_query(q).expect("parse")
+    }
+
+    // -- LANG_DIR: the base direction is exactly `ltr` / `rtl` -----------------------
+
+    /// A well-formed query whose only variable part is the language tag, so a
+    /// refusal can come from nothing but the tag. (The vendored W3C
+    /// `lang-basedir/langdir-literal-invalid.rq` spells its projection `AS v`,
+    /// which is itself a syntax error — so that negative test cannot tell a
+    /// refused direction from a refused projection. This shape can.)
+    fn parse_lang_literal(tag: &str) -> Result<Query> {
+        SparqlParser::new().parse_query(&format!("SELECT (\"x\"@{tag} AS ?v) WHERE {{}}"))
+    }
+
+    /// Every valid neighbour of the refusals below still parses, with the
+    /// direction the grammar assigns it. `EN--ltr` is valid: only the DIRECTION
+    /// is case-restricted, the language tag is not.
+    #[test]
+    fn lang_dir_accepts_every_grammar_admitted_shape() {
+        for (tag, lang, dir) in [
+            ("en", "en", None),
+            ("en-US", "en-US", None),
+            ("zh-Hant-TW", "zh-Hant-TW", None),
+            ("x-klingon", "x-klingon", None),
+            ("en-a1", "en-a1", None),
+            ("en--ltr", "en", Some(BaseDirection::Ltr)),
+            ("ar--rtl", "ar", Some(BaseDirection::Rtl)),
+            ("en-US--rtl", "en-US", Some(BaseDirection::Rtl)),
+            ("EN--ltr", "EN", Some(BaseDirection::Ltr)),
+        ] {
+            assert_eq!(
+                split_lang_dir(tag, 0).expect(tag),
+                (lang.to_owned(), dir),
+                "@{tag}"
+            );
+            parse_lang_literal(tag).unwrap_or_else(|e| panic!("@{tag} must parse: {e}"));
+        }
+    }
+
+    /// An unknown or wrongly-cased base direction is a SYNTAX ERROR, never a
+    /// silently dropped suffix: before this pin, `"x"@en--foo` parsed as a plain
+    /// `"x"@en` and `"x"@en--LTR` as `"x"@en--ltr`. The two vendored W3C
+    /// rdf-tests spellings are first (`@en--unk`, `@en--LTR`), then the shapes
+    /// the raw `[a-zA-Z0-9-]+` lexer run lets through that the production does
+    /// not: an empty direction, a doubled one, a stray hyphen, an empty subtag,
+    /// and a digit-led primary subtag.
+    #[test]
+    fn lang_dir_refuses_what_the_production_does_not_admit() {
+        for tag in [
+            "en--unk",
+            "en--LTR",
+            "en--foo",
+            "en--Rtl",
+            "en--",
+            "en--ltr--ltr",
+            "en--x--ltr",
+            "en---ltr",
+            "en-",
+            "en--ltr-x",
+            "-en",
+            "en--ltr-",
+            "1en",
+            "en-.us",
+        ] {
+            let err = split_lang_dir(tag, 0).expect_err(tag);
+            assert!(
+                err.to_string().contains("invalid"),
+                "@{tag}: diagnostic names the refusal, got {err}"
+            );
+            assert!(parse_lang_literal(tag).is_err(), "@{tag} must not parse");
+        }
+        let err = parse_lang_literal("en--foo").expect_err("unknown direction");
+        assert!(
+            err.to_string()
+                .contains("invalid base direction `--foo` in `@en--foo`"),
+            "the diagnostic names the suffix and the tag: {err}"
+        );
     }
 
     fn select_pattern(q: &str) -> GraphPattern {
