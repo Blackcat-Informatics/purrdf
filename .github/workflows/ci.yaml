@@ -56,6 +56,9 @@ jobs:
       - name: Check for stale issue references in comments/docs
         run: python3 scripts/check-issue-refs.py
 
+      - name: Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+        run: python3 scripts/check-brand-casing.py
+
       - name: Check no first-party extension is attributed to a SPARQL specification
         run: python3 scripts/check-spec-attribution.py --self-test
 
