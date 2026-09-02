@@ -601,12 +601,10 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 /// divergence, not a theoretical one — over
 /// `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .`:
 ///
-/// ```text
-/// purrdf query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'
-///   → ex:b, ex:c          (the closure derives `ex:b ex:p ex:c`)
-/// purrdf query --entailment rdfs --path-relation '…forward=ex:p…' <the walk call>
-///   → ex:b                 (only)
-/// ```
+/// * `query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'` answers
+///   `ex:b, ex:c` — the closure derives `ex:b ex:p ex:c`.
+/// * the same regime with `--path-relation '…forward=ex:p…'`, calling the walk, answers
+///   `ex:b` and nothing else.
 ///
 /// `a_path_relation_under_entailment_answers_over_the_pre_closure_edges` in
 /// `tests/query_cli.rs` pins exactly that pair, so the divergence is an asserted answer
