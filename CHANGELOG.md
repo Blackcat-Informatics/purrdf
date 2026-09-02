@@ -44,6 +44,12 @@ called out below with what a consumer must do.
   all still parse. The vendored `lang-basedir/langdir-literal-invalid.rq` could not catch this:
   it spells its projection `AS v`, which is a syntax error on its own, so the harness refused it
   for the wrong reason.
+- **core:** The `pack_query` dictionary benchmark measures again. Its literal-heavy fixture
+  (added by the pre-release sweep) asserted a quoted triple term as a quad's SUBJECT, which
+  RDF 1.2 does not admit and the freeze gate refuses (`rdf-ir-triple-subject`), so the fixture
+  panicked and the report-only `benchmarks` CI job had been red on `main` since `b4f99093`. The
+  triple term is now asserted in the object position (`s q <<s p plain>>`), the one place the
+  model puts it, and the dictionary closure still resolves one triple term per row.
 - **core:** `MutableDataset` no longer fabricates a literal datatype. When a base literal's
   datatype id resolved to something other than an IRI, `base_value_of` rendered that term's
   `Debug` form and used it as the datatype IRI, where `RdfDataset::term_value` states the same
