@@ -5,6 +5,16 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Embedding Nearest Neighbours
 
+**What it replaces, and where it stops.** This is the surface that lets an RDF
+project drop the pgvector it kept beside its triple store for nearest-neighbour
+search: `?neighbour <space> ( ?seed k ?distance )` answered in-process, exact
+top-k under the metric the artifact declares, and byte-identical natively and
+on wasm32. It is an exact scan — every candidate scored, no pruning, no
+approximate index — bounded by a caller-supplied `KnnGuard`, under three
+metrics (cosine, negative dot, squared Euclidean), over a PURREMB embedding
+space. PurRDF computes no embeddings and runs no ANN payload: the vectors
+arrive in an artifact the caller produced.
+
 The PURREMB layer in `purrdf-core` (see
 [Deterministic embedding companions](../concepts/codecs.md#deterministic-embedding-companions)
 and [`docs/PURREMB.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/PURREMB.md))
