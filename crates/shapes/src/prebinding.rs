@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SHACL-SPARQL **pre-binding restrictions** (spec §5.2.1 *Pre-bound Variables
-//! in SPARQL Constraints*, and the appendix on unsupported SPARQL features).
+//! SHACL-SPARQL **pre-binding restrictions** — SHACL 1.2 SPARQL Extensions,
+//! Appendix A *Pre-binding of Variables in SPARQL Queries*
+//! (<https://www.w3.org/TR/shacl12-sparql/>).
 //!
 //! A query evaluated with pre-bound variables (`$this`, and `$value` for ASK
 //! validators) MUST NOT use constructs whose SPARQL semantics break under
@@ -21,6 +22,29 @@
 //!
 //! The checks run at SHAPE-LOAD time (`shapes.rs`), on the already-parsed
 //! algebra, so a restricted query never reaches the evaluation engine.
+//!
+//! # One divergence from the Working Draft, and why
+//!
+//! Appendix A narrows the `VALUES` rule: a query "MUST not contain a `VALUES`
+//! clause **that mentions any potentially pre-bound variable**". PurRDF rejects
+//! EVERY `VALUES` (see the `GraphPattern::Values` arm of `check_pattern`), which
+//! is the older, strictly stronger rule. That is deliberate, and it is the frozen
+//! conformance corpus — not an oversight — that decides it: the vendored W3C case
+//! `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` ("Test of
+//! unsupported VALUES") writes `VALUES ?any { true }`, where `?any` is NOT a
+//! potentially pre-bound variable, and REQUIRES the query to be rejected. The
+//! Working Draft's narrowed wording would admit it. The two cannot both be
+//! satisfied; this repository treats the conformance corpora as the contract, so
+//! the corpus decides and the divergence is recorded here rather than hidden.
+//!
+//! The Working Draft itself marks this text as unsettled. Quoting Appendix A of
+//! <https://www.w3.org/TR/shacl12-sparql/> verbatim:
+//!
+//! > [(Feature at Risk) Issue 999]: Update pre-binding to align with SPARQL 1.2
+//!
+//! That bracketed marker is the W3C document's OWN at-risk annotation, reproduced
+//! above as a quotation of the specification. It is not a PurRDF tracker
+//! reference: the number in it belongs to the W3C Working Group's issue list.
 
 use purrdf_sparql_algebra::{Expression, GraphPattern, OrderExpression, Query};
 
@@ -103,23 +127,37 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
         // A property-function call's argument vectors are term positions, exactly like
         // a BGP triple's or a property path's endpoints: a pre-bound variable there is
         // constrained by the pre-binding rewrite and changes no SPARQL semantics, so
-        // there is nothing for §5.2.1 to forbid. The restricted constructs are the ones
+        // there is nothing for Appendix A to forbid. The restricted constructs are the ones
         // whose *evaluation* breaks under pre-binding (`MINUS`, `SERVICE`, `VALUES`) or
         // that would ASSIGN a pre-bound variable; a call does neither.
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::PropertyFunction(_) => Ok(()),
         GraphPattern::Minus { .. } => Err(
-            "MINUS is not allowed in a query with pre-bound variables (SHACL-SPARQL §5.2.1)"
+            "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries)"
                 .to_owned(),
         ),
         GraphPattern::Service { .. } => Err(
             "federated queries (SERVICE) are not allowed in a query with pre-bound variables \
-             (SHACL-SPARQL §5.2.1)"
+             (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL \
+             Queries)"
                 .to_owned(),
         ),
+        // The DIVERGENCE recorded in this module's docs lives here: the Working
+        // Draft forbids only a `VALUES` that mentions a potentially pre-bound
+        // variable, while this arm refuses every `VALUES`. The frozen W3C case
+        // `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` requires
+        // the stricter rule, and the corpus is the contract. The refusal names the
+        // Appendix it diverges from, so an operator who hits it can find the exact
+        // text — including the specification's own at-risk marker, quoted in the
+        // module docs.
         GraphPattern::Values { .. } => Err(
-            "VALUES is not allowed in a query with pre-bound variables (SHACL-SPARQL §5.2.1)"
+            "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
+             refuses every VALUES, which is stricter than the Working Draft's \
+             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
+             requires the stricter reading)"
                 .to_owned(),
         ),
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
@@ -154,7 +192,8 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
             if prebound.contains(&variable.as_str()) {
                 return Err(format!(
                     "assigning a potentially pre-bound variable (... AS ?{}) is not allowed \
-                     (SHACL-SPARQL §5.2.1)",
+                     (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in \
+                     SPARQL Queries)",
                     variable.as_str()
                 ));
             }
@@ -178,7 +217,8 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                 if !variables.iter().any(|v| v.as_str() == *name) {
                     return Err(format!(
                         "a subquery must project every potentially pre-bound variable; \
-                         ?{name} is not in its projection (SHACL-SPARQL §5.2.1)"
+                         ?{name} is not in its projection (SHACL 1.2 SPARQL Extensions, \
+                         Appendix A: Pre-binding of Variables in SPARQL Queries)"
                     ));
                 }
             }
@@ -196,7 +236,8 @@ fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String
                 if prebound.contains(&variable.as_str()) {
                     return Err(format!(
                         "assigning a potentially pre-bound variable (aggregate AS ?{}) is not \
-                         allowed (SHACL-SPARQL §5.2.1)",
+                         allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                         Variables in SPARQL Queries)",
                         variable.as_str()
                     ));
                 }
@@ -292,6 +333,49 @@ mod tests {
         let err = check("SELECT $this WHERE { $this ?p ?o . VALUES ?o { 1 2 } }")
             .expect_err("VALUES must be rejected");
         assert!(err.contains("VALUES"), "{err}");
+    }
+
+    /// A `VALUES` that mentions NO potentially pre-bound variable is still
+    /// rejected, and the refusal says which document it is answering to.
+    ///
+    /// This is the recorded divergence made observable at RUNTIME rather than as a
+    /// comment: the Working Draft's Appendix A would admit this query, the frozen
+    /// W3C case `unsupported-sparql-002` requires it to be refused, and the corpus
+    /// decides. The error names the Appendix so an operator who hits it can read
+    /// the text PurRDF is stricter than.
+    #[test]
+    fn values_over_no_prebound_variable_is_still_rejected_and_cites_the_appendix() {
+        let err = check("SELECT $this WHERE { $this ?p ?o . VALUES ?any { true } }")
+            .expect_err("the conformance corpus requires every VALUES to be rejected");
+        assert!(
+            err.contains("Appendix A: Pre-binding of Variables in SPARQL Queries"),
+            "the refusal must name the Working Draft appendix it diverges from: {err}"
+        );
+        assert!(
+            err.contains("SHACL 1.2 SPARQL Extensions"),
+            "the refusal must name the document: {err}"
+        );
+    }
+
+    /// Every other pre-binding refusal cites the same Working Draft appendix, so a
+    /// caller sees one consistent authority rather than a mix of spec versions.
+    #[test]
+    fn every_prebinding_refusal_cites_the_working_draft_appendix() {
+        const APPENDIX: &str = "Appendix A: Pre-binding of Variables in SPARQL Queries";
+        let refusals = [
+            check("SELECT $this WHERE { $this ?p ?o . MINUS { $this ?p \"x\" } }"),
+            check("SELECT $this WHERE { SERVICE <http://example.org/sparql> { $this ?p ?o } }"),
+            check("SELECT $this WHERE { BIND(true AS $this) }"),
+            check("SELECT $this WHERE { $this ?x ?any . { SELECT ?o WHERE { ?o ?b ?c } } }"),
+            check(
+                "SELECT $this WHERE { { SELECT ?g (COUNT(?g) AS $this) WHERE { ?g ?p ?o } \
+                 GROUP BY ?g } }",
+            ),
+        ];
+        for refusal in refusals {
+            let err = refusal.expect_err("the construct must be rejected");
+            assert!(err.contains(APPENDIX), "refusal does not cite it: {err}");
+        }
     }
 
     #[test]

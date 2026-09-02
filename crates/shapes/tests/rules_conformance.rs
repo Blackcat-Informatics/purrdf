@@ -62,7 +62,7 @@ const RULES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shac
 
 /// The EXACT number of case directories the corpus must hold, so a removed or
 /// renamed case fails fast. Bump this deliberately when adding a case.
-const TOTAL_CASES: usize = 17;
+const TOTAL_CASES: usize = 19;
 
 /// Cases the harness expects to fail, with a precise reason. An entry here MUST
 /// document an upstream spec ambiguity, never a papered-over engine bug; a case

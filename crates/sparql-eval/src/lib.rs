@@ -150,6 +150,11 @@ pub use governor::{
     ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
     QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
+// The value-level entry points to the ORDER BY comparator and the built-in
+// aggregate accumulators, for a host that holds a bag of `TermValue`s (SHACL-AF's
+// `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating
+// caller) and must get exactly the answer a query would have computed.
+pub use modifier::{ValueAggregate, compare_values, fold_values, order_values};
 // The kernel's governor vocabulary, re-exported so a host that governs queries through
 // this crate can NAME what it gets back — the ceilings it set, what was spent, and which
 // governor stopped the execution — without also depending on `purrdf-core` directly. A
@@ -189,8 +194,8 @@ pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, NativeFnBody, NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
-    UserFunction, UserFunctionRegistry, Volatility,
+    Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
+    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).

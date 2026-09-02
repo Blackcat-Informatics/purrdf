@@ -1704,10 +1704,26 @@ fn eval_constraint(
                 // A node expression evaluates over the owned term model (it may
                 // produce non-interned terms), so resolve the value node here.
                 let value_node = value_node.to_term(ds);
-                let out = crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
-                    .map_err(|e| {
-                    format!("sh:expression constraint on shape {source_shape}: {e}")
-                })?;
+                // SHACL 1.2 Node Expressions §7.1 evaluates an expression
+                // constraint as `evalExpr(expr, data graph, focusNode,
+                // {value: v})`, so the value node under test is BOUND under the
+                // name `value` — this is what makes `[ shnex:var "value" ]` resolve
+                // inside an expression constraint. The binding is a borrowed stack
+                // frame, so the per-value cost is a pointer write, not an
+                // allocation.
+                let binding = crate::expression::Binding::new(
+                    crate::expression::VALUE_VAR,
+                    &value_node,
+                    crate::expression::Scope::EMPTY,
+                );
+                let out = crate::expression::eval_node_expr_in_scope(
+                    store,
+                    &value_node,
+                    expr,
+                    &mut guard,
+                    crate::expression::Scope::bound(&binding),
+                )
+                .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
                 if !crate::expression::is_true(&out) {
                     let mut r = result!(
                         sh::EXPRESSION_CONSTRAINT_COMPONENT,
@@ -1716,6 +1732,67 @@ fn eval_constraint(
                     r.severity.clone_from(&sev);
                     r.message.clone_from(&msg);
                     results.push(r);
+                }
+            }
+            results
+        }
+
+        // ── NodeByExpression (SHACL 1.2 Node Expressions §7.2) ─────────────────
+        // The mirror image of `sh:expression`: the node expression computes the
+        // node SHAPES rather than a boolean, and every value node must conform to
+        // each shape it produces. Per the spec's own
+        // `evalExpr(expr, data graph, v, {})` the value node is the FOCUS NODE and
+        // the scope is EMPTY — unlike §7.1, which binds `value`.
+        Constraint::NodeByExpression {
+            expr,
+            shapes,
+            message: cmsg,
+            severity: csev,
+        } => {
+            let sev = csev.clone().unwrap_or_else(|| severity.clone());
+            let msg = cmsg.clone().or_else(|| message.clone());
+            // The index is filled at the end of the shapes-graph parse; an unfilled
+            // one means this constraint escaped that parse, which would silently
+            // make every conformance check vacuous. Refuse loudly instead.
+            let index = shapes.get().ok_or_else(|| {
+                format!(
+                    "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
+                     shape index was never filled"
+                )
+            })?;
+            let mut results = Vec::new();
+            let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+            let next_depth = depth.saturating_add(1);
+            for value_node in value_nodes {
+                let value_node = value_node.to_term(ds);
+                let produced =
+                    crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
+                        .map_err(|e| {
+                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                        })?;
+                for shape_node in produced {
+                    let shape = index.get(&shape_node.to_string()).ok_or_else(|| {
+                        format!(
+                            "sh:nodeByExpression constraint on shape {source_shape}: \
+                             {shape_node} is not a shape of this shapes graph"
+                        )
+                    })?;
+                    // A failing conformance check is a FAILURE the spec requires be
+                    // produced, so it propagates rather than counting as "does not
+                    // conform".
+                    let conforms = conforms_with_depth(store, &value_node, shape, next_depth)
+                        .map_err(|e| {
+                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                        })?;
+                    if !conforms {
+                        let mut r = result!(
+                            sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
+                            Some(value_node.clone())
+                        );
+                        r.severity.clone_from(&sev);
+                        r.message.clone_from(&msg);
+                        results.push(r);
+                    }
                 }
             }
             results

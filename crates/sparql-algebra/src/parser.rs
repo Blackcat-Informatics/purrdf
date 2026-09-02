@@ -5175,6 +5175,32 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
     })
 }
 
+/// Resolve a SPARQL built-in function NAME to the canonical keyword the grammar
+/// spells it with, case-insensitively.
+///
+/// This is the name-to-function seam a host uses when a *name* (rather than
+/// query text) identifies a SPARQL function — SHACL 1.2 Node Expressions §5's
+/// `sparql:<NAME>` call form is the motivating caller. It answers from the very
+/// table `builtin_function` resolves the grammar with, so a name is callable
+/// here exactly when the parser would accept the keyword, and the two can never
+/// drift apart into "the resolver claims a function the parser then rejects".
+///
+/// Returns `None` for a name that is not a keyword-callable built-in — including
+/// the SPARQL forms that are operators (`+`, `&&`), grammar productions
+/// (`BOUND`, `IF`, `COALESCE`, `sameTerm`, `EXISTS`) or aggregates rather than
+/// function calls. Those are not function *calls* in the grammar, so there is no
+/// keyword for this seam to return, and a caller that wants them must spell them
+/// itself.
+#[must_use]
+pub fn builtin_function_keyword(name: &str) -> Option<&'static str> {
+    let upper = name.to_ascii_uppercase();
+    let function = builtin_function(&upper)?;
+    // Round-trip through the serializer's table so the returned spelling is the ONE
+    // canonical keyword, not the caller's casing. `builtin_function` never yields
+    // `Function::Purrdf`/`Function::Custom`, the only two variants without one.
+    crate::serialize::function_keyword(&function)
+}
+
 fn builtin_function(upper: &str) -> Option<Function> {
     Some(match upper {
         "STR" => Function::Str,

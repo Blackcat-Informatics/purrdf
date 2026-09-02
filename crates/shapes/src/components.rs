@@ -202,7 +202,7 @@ fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> Strin
 /// parameter bindings. A result of `true` means conforming; `false` emits one
 /// [`ValidationResult`].
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_ask_validator<D: DatasetView + Sync>(
+pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGraphSource>(
     dataset: &D,
     focus: &Term,
     value_nodes: &[Term],
@@ -265,7 +265,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync>(
 /// bound. Row bindings take precedence over parameter bindings for message
 /// template substitution.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_select_validator<D: DatasetView + Sync>(
+pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::FocusGraphSource>(
     dataset: &D,
     focus: &Term,
     validator: &ComponentValidator,

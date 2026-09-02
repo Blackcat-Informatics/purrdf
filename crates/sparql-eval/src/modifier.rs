@@ -612,6 +612,103 @@ fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
         .then_with(|| compare_sort_keys(&a[2], &b[2]))
 }
 
+// ---------------------------------------------------------------------------
+// value-level entry points
+// ---------------------------------------------------------------------------
+
+/// Order `values` by SPARQL `ORDER BY` semantics — the evaluator's own ordering,
+/// applied to a bag of already-materialized [`TermValue`]s rather than to
+/// solution rows.
+///
+/// `ORDER BY` over a one-column input is a total order over TERM VALUES, and this
+/// exposes exactly that: the same `SortKey` precomputation, the same
+/// unbound-first / blank < IRI < literal < triple kind ranking, the same
+/// value-space literal comparison with its deterministic `(datatype, language,
+/// lexical)` fallback, and the same componentwise ordering of RDF 1.2 triple
+/// terms. A caller with a bag of values in hand therefore does not have to
+/// reach the comparator by *writing a query* — splicing operands into `VALUES`
+/// as text would restrict them to the terms N-Triples can spell inside that
+/// block, which is a property of the string bridge and not of the order.
+///
+/// The sort is STABLE, so values that compare equal keep their input order and
+/// duplicates are preserved (an `ORDER BY` applies no `DISTINCT`).
+#[must_use]
+pub fn order_values(values: Vec<TermValue>, descending: bool) -> Vec<TermValue> {
+    let mut keyed: Vec<(SortKey, TermValue)> = values
+        .into_iter()
+        .map(|value| (sort_key(Some(value.clone())), value))
+        .collect();
+    keyed.sort_by(|(a, _), (b, _)| {
+        let ord = compare_sort_keys(a, b);
+        if descending { ord.reverse() } else { ord }
+    });
+    keyed.into_iter().map(|(_, value)| value).collect()
+}
+
+/// Compare two term values under SPARQL `ORDER BY` semantics.
+///
+/// The single-pair form of [`order_values`], for a caller that needs the
+/// comparator itself (a `MIN`/`MAX` tie-break, a merge) rather than a sorted bag.
+#[must_use]
+pub fn compare_values(a: &TermValue, b: &TermValue) -> Ordering {
+    term_value_order(a, b)
+}
+
+/// A SPARQL built-in aggregate that folds a bag of already-evaluated values and
+/// takes no further arguments.
+///
+/// The set is deliberately not all of [`AggregateFunction`]: `GROUP_CONCAT`
+/// carries a separator and `AggregateFunction::Custom` is a registry lookup, so
+/// neither is determined by a bag of values alone. Every member here is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueAggregate {
+    /// `COUNT` — the number of values folded.
+    Count,
+    /// `SUM` — the numerically-promoted total; `0`^^`xsd:integer` over an empty bag.
+    Sum,
+    /// `AVG` — the mean; `0`^^`xsd:integer` over an empty bag.
+    Avg,
+    /// `MIN` — the `ORDER BY`-least value; unbound over an empty bag.
+    Min,
+    /// `MAX` — the `ORDER BY`-greatest value; unbound over an empty bag.
+    Max,
+    /// `SAMPLE` — the first value in input order; unbound over an empty bag.
+    Sample,
+}
+
+/// Fold `values` through a SPARQL built-in aggregate — the evaluator's own
+/// accumulator, applied to a bag of already-materialized [`TermValue`]s rather
+/// than to a solution group.
+///
+/// The value-level twin of [`order_values`], and it exists for the same reason:
+/// the aggregate's answer is a property of the VALUES, so a caller holding them
+/// should not have to reach the fold by writing a query whose text embeds the
+/// data. It runs the identical accumulators `eval_aggregate` runs — the exact
+/// `NumericFold` promotion ladder for `SUM`/`AVG`, the `term_value_order`
+/// running extreme with its earlier-occurrence tie-break for `MIN`/`MAX` — so a
+/// value-level fold and a `GROUP BY` fold over the same bag are the same number,
+/// by construction rather than by two implementations agreeing.
+///
+/// `Ok(None)` is the aggregate's UNBOUND answer (`MIN`/`MAX`/`SAMPLE` of an
+/// empty bag; a `SUM`/`AVG` fold poisoned by a non-numeric value).
+///
+/// # Errors
+///
+/// Any [`EvalError`] the accumulator raises while folding.
+pub fn fold_values(
+    aggregate: ValueAggregate,
+    values: &[TermValue],
+) -> Result<Option<TermValue>, EvalError> {
+    match aggregate {
+        ValueAggregate::Count => fold_builtin(values, CountAccumulator::default, acc_step_one),
+        ValueAggregate::Sum => fold_builtin(values, SumAccumulator::default, acc_step_one),
+        ValueAggregate::Avg => fold_builtin(values, AvgAccumulator::default, acc_step_one),
+        ValueAggregate::Min => fold_builtin(values, MinAccumulator::default, acc_step_one),
+        ValueAggregate::Max => fold_builtin(values, MaxAccumulator::default, acc_step_one),
+        ValueAggregate::Sample => fold_builtin(values, SampleAccumulator::default, acc_step_one),
+    }
+}
+
 fn kind_rank(v: &TermValue) -> u8 {
     match v {
         TermValue::Blank { .. } => 0,
@@ -2249,6 +2346,149 @@ fn string_value(lexical: String) -> TermValue {
 mod tests {
     use super::*;
     use crate::eval::eval;
+
+    // ── value-level entry points ────────────────────────────────────────────
+
+    fn iri(s: &str) -> TermValue {
+        TermValue::Iri(s.to_owned())
+    }
+
+    fn integer(n: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: n.to_owned(),
+            datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    fn blank(label: &str) -> TermValue {
+        TermValue::Blank {
+            label: label.to_owned(),
+            scope: purrdf_core::BlankScope::default(),
+        }
+    }
+
+    fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
+        TermValue::Triple {
+            s: Box::new(s),
+            p: Box::new(p),
+            o: Box::new(o),
+        }
+    }
+
+    /// [`order_values`] applies the SPARQL kind ranking (blank < IRI < literal <
+    /// triple) to a bag that mixes every RDF 1.2 term kind.
+    #[test]
+    fn order_values_ranks_every_rdf12_term_kind() {
+        let t = triple(iri("http://ex/s"), iri("http://ex/p"), iri("http://ex/o"));
+        let input = vec![t.clone(), integer("7"), iri("http://ex/i"), blank("b0")];
+        assert_eq!(
+            order_values(input.clone(), false),
+            vec![blank("b0"), iri("http://ex/i"), integer("7"), t.clone()]
+        );
+        assert_eq!(
+            order_values(input, true),
+            vec![t, integer("7"), iri("http://ex/i"), blank("b0")]
+        );
+    }
+
+    /// Literals order by VALUE, not lexically: `2` precedes `10`.
+    #[test]
+    fn order_values_orders_literals_by_value() {
+        assert_eq!(
+            order_values(vec![integer("10"), integer("2")], false),
+            vec![integer("2"), integer("10")]
+        );
+    }
+
+    /// The sort is stable, so duplicates survive and equal keys keep input order —
+    /// an `ORDER BY` applies no `DISTINCT`.
+    #[test]
+    fn order_values_is_stable_and_keeps_duplicates() {
+        assert_eq!(
+            order_values(vec![integer("2"), integer("2"), integer("1")], false),
+            vec![integer("1"), integer("2"), integer("2")]
+        );
+    }
+
+    /// Triple terms compare componentwise, subject first.
+    #[test]
+    fn order_values_compares_triple_terms_componentwise() {
+        let a = triple(iri("http://ex/s"), iri("http://ex/p"), iri("http://ex/a"));
+        let b = triple(iri("http://ex/s"), iri("http://ex/p"), iri("http://ex/b"));
+        assert_eq!(order_values(vec![b.clone(), a.clone()], false), vec![a, b]);
+    }
+
+    /// [`fold_values`] runs the same accumulators a `GROUP BY` runs, including the
+    /// numeric promotion ladder.
+    #[test]
+    fn fold_values_matches_the_group_by_accumulators() {
+        let vals = [integer("1"), integer("2"), integer("3")];
+        assert_eq!(
+            fold_values(ValueAggregate::Sum, &vals).expect("sum"),
+            Some(integer("6"))
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Min, &vals).expect("min"),
+            Some(integer("1"))
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Max, &vals).expect("max"),
+            Some(integer("3"))
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Count, &vals).expect("count"),
+            Some(integer("3"))
+        );
+    }
+
+    /// `MIN`/`MAX` rank a blank node and a triple term rather than refusing them.
+    #[test]
+    fn fold_values_ranks_blank_nodes_and_triple_terms() {
+        let t = triple(iri("http://ex/s"), iri("http://ex/p"), iri("http://ex/o"));
+        let vals = [t.clone(), iri("http://ex/i"), blank("b0")];
+        assert_eq!(
+            fold_values(ValueAggregate::Min, &vals).expect("min"),
+            Some(blank("b0"))
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Max, &vals).expect("max"),
+            Some(t)
+        );
+    }
+
+    /// The empty bag: `SUM` is `0`^^`xsd:integer`, `MIN`/`MAX`/`SAMPLE` unbound.
+    #[test]
+    fn fold_values_over_the_empty_bag() {
+        assert_eq!(
+            fold_values(ValueAggregate::Sum, &[]).expect("sum"),
+            Some(integer("0"))
+        );
+        assert_eq!(fold_values(ValueAggregate::Min, &[]).expect("min"), None);
+        assert_eq!(fold_values(ValueAggregate::Max, &[]).expect("max"), None);
+        assert_eq!(
+            fold_values(ValueAggregate::Sample, &[]).expect("sample"),
+            None
+        );
+    }
+
+    /// [`compare_values`] is the single-pair form of the same order.
+    #[test]
+    fn compare_values_agrees_with_order_values() {
+        assert_eq!(
+            compare_values(&integer("2"), &integer("10")),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_values(&blank("b0"), &iri("http://ex/i")),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_values(&iri("http://ex/i"), &iri("http://ex/i")),
+            Ordering::Equal
+        );
+    }
 
     // These modifiers take the algebra node itself (it names the barrier and supplies the
     // child edge classification), so the tests build the node and drive the ordinary
