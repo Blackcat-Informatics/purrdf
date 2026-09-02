@@ -103,9 +103,18 @@ fn doubly_embedded_labels_are_found() {
 #[test]
 fn a_non_composite_embedded_literal_stays_opaque() {
     let lexical = "[ '_:b'^^<http://www.w3.org/2001/XMLSchema#string>, 42]";
-    assert!(labels(lexical, LIST).is_empty());
+    assert!(
+        labels(lexical, LIST).is_empty(),
+        "an xsd:string element naming `_:b` must name NO blank node — its datatype \
+         is not composite, so its bytes are opaque text; got {:?}",
+        labels(lexical, LIST)
+    );
     // The same bytes typed as a plain string literal are opaque as well.
-    assert!(labels("[ '_:b', 42]", LIST).is_empty());
+    assert!(
+        labels("[ '_:b', 42]", LIST).is_empty(),
+        "a plain string element naming `_:b` must name NO blank node either; got {:?}",
+        labels("[ '_:b', 42]", LIST)
+    );
 }
 
 /// A blank node nested inside an RDF 1.2 triple term element is in scope.
@@ -227,7 +236,12 @@ fn a_non_composite_literal_is_untouched() {
     let out = bind_cdt_blank_labels(lexical, xsd, BlankBinding::Ambient(BlankScope(9)))
         .expect("not composite");
     assert_eq!(out, lexical);
-    assert!(cdt_embedded_blanks(lexical, xsd).is_empty());
+    assert!(
+        cdt_embedded_blanks(lexical, xsd).is_empty(),
+        "a literal whose datatype is not composite names no embedded blank node, \
+         however composite-looking its lexical form; got {:?}",
+        cdt_embedded_blanks(lexical, xsd)
+    );
 }
 
 // ── Refusals ────────────────────────────────────────────────────────────────

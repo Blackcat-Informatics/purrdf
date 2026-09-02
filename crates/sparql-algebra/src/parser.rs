@@ -9282,7 +9282,12 @@ mod tests {
     fn cdt_recognition_needs_no_parser_options() {
         // SEP-0009 fixes the namespace, so recognition is unconditional: the DEFAULT
         // options (no configured extension namespace at all) still dispatch.
-        assert!(ParserOptions::default().extension_fn_namespaces.is_empty());
+        assert!(
+            ParserOptions::default().extension_fn_namespaces.is_empty(),
+            "the premise of this test is that NO extension namespace is configured, \
+             so CDT dispatch cannot be riding the extension seam; got {:?}",
+            ParserOptions::default().extension_fn_namespaces
+        );
         let q = format!(
             "{}SELECT ?x WHERE {{ BIND(cdt:size(\"[]\"^^cdt:List) AS ?x) }}",
             cdt_prologue()

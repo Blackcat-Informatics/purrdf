@@ -117,7 +117,11 @@ fn fold_parses_to_one_or_two_exprlist_entries() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].function(), &AggregateFunction::Fold);
     assert_eq!(list[0].args().len(), 1, "the cdt:List form is unary");
-    assert!(list[0].order_by().is_empty());
+    assert!(
+        list[0].order_by().is_empty(),
+        "a FOLD written without an ORDER BY clause must carry none; got {:?}",
+        list[0].order_by()
+    );
     assert!(!list[0].distinct);
 
     let map = aggregates_of(&select_pattern(
