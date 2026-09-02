@@ -2,6 +2,8 @@
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 SPDX-License-Identifier: MIT OR Apache-2.0
 -->
+<p align="center"><a href="./README.zh-Hans.md">简体中文</a></p>
+
 <p align="center">
   <a href="https://blackcatinformatics.ca/purrdf/">
     <img src="./docs/purrdf-logo.svg" alt="PurRDF logo — a black cat holding an RDF triple" width="128" height="128">
