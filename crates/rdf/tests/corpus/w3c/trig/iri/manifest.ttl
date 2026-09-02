@@ -1,0 +1,90 @@
+## Distributed under both the W3C Test Suite License[1] and the W3C 3-
+## clause BSD License[2]. To contribute to a W3C Test Suite, see the
+## policies and contribution forms [3]
+##
+## 1. http://www.w3.org/Consortium/Legal/2008/04-testsuite-license
+## 2. http://www.w3.org/Consortium/Legal/2008/03-bsd-license
+## 3. http://www.w3.org/2004/10/27-testcases
+
+# Trimmed extract of w3c/rdf-tests @ 851911047ab1f01daca51498227cbf231e7d6705,
+# upstream path `rdf/rdf11/rdf-trig/manifest.ttl`. The header, prefixes,
+# `mf:assumedTestBase` and every entry stanza below are verbatim upstream; only
+# the unrelated entries were removed. See ../../README.md for provenance.
+
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:     <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+
+@prefix rdft:   <http://www.w3.org/ns/rdftest#> .
+
+<>  rdf:type mf:Manifest ;
+    rdfs:label "TriG IRI-resolution tests" ;
+    mf:assumedTestBase <https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-trig/> ;
+    mf:entries
+    (
+    <#IRI_with_four_digit_numeric_escape>
+    <#IRI_with_eight_digit_numeric_escape>
+    <#IRIREF_datatype>
+    <#IRI-resolution-01>
+    <#IRI-resolution-02>
+    <#IRI-resolution-07>
+    <#IRI-resolution-08>
+    ) .
+
+<#IRI_with_four_digit_numeric_escape> rdf:type rdft:TestTrigEval ;
+   mf:name      "IRI_with_four_digit_numeric_escape" ;
+   rdfs:comment "IRI with four digit numeric escape (\\u)" ;
+   rdft:approval rdft:Approved ;
+   mf:action    <IRI_with_four_digit_numeric_escape.trig> ;
+   mf:result    <IRI_spo.nq> ;
+   .
+
+<#IRI_with_eight_digit_numeric_escape> rdf:type rdft:TestTrigEval ;
+   mf:name      "IRI_with_eight_digit_numeric_escape" ;
+   rdfs:comment "IRI with eight digit numeric escape (\\U)" ;
+   rdft:approval rdft:Approved ;
+   mf:action    <IRI_with_eight_digit_numeric_escape.trig> ;
+   mf:result    <IRI_spo.nq> ;
+   .
+
+<#IRIREF_datatype> rdf:type rdft:TestTrigEval ;
+   mf:name      "IRIREF_datatype" ;
+   rdfs:comment "IRIREF datatype \"\"^^<t>" ;
+   rdft:approval rdft:Approved ;
+   mf:action    <IRIREF_datatype.trig> ;
+   mf:result    <IRIREF_datatype.nq> ;
+   .
+
+# IRI resolution tests
+<#IRI-resolution-01>
+	rdf:type rdft:TestTrigEval ;
+	rdfs:comment "IRI resolution (RFC3986 original cases)" ;
+	mf:name "IRI-resolution-01" ;
+	rdft:approval rdft:Proposed ;
+	mf:action <IRI-resolution-01.trig> ;
+	mf:result <IRI-resolution-01.nq> .
+
+<#IRI-resolution-02>
+	rdf:type rdft:TestTrigEval ;
+	rdfs:comment "IRI resolution (RFC3986 using base IRI with trailing slash)" ;
+	mf:name "IRI-resolution-02" ;
+	rdft:approval rdft:Proposed ;
+	mf:action <IRI-resolution-02.trig> ;
+	mf:result <IRI-resolution-02.nq> .
+
+<#IRI-resolution-07>
+	rdf:type rdft:TestTrigEval ;
+	rdfs:comment "IRI resolution (RFC3986 using base IRI with file path)" ;
+	mf:name "IRI-resolution-07" ;
+	rdft:approval rdft:Proposed ;
+	mf:action <IRI-resolution-07.trig> ;
+	mf:result <IRI-resolution-07.nq> .
+
+<#IRI-resolution-08>
+	rdf:type rdft:TestTrigEval ;
+	rdfs:comment "IRI resolution (miscellaneous cases)" ;
+	mf:name "IRI-resolution-08" ;
+	rdft:approval rdft:Proposed ;
+	mf:action <IRI-resolution-08.trig> ;
+	mf:result <IRI-resolution-08.nq> .

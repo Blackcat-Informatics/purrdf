@@ -34,8 +34,10 @@
 //!
 //! `owl-direct` and `rif` are each defined by an input "premise, conclusion, regime" does
 //! not carry, so the boundary refuses them naming the regime; a malformed `--import` pair
-//! is a usage error rather than a skipped import; and two documents reading stdin is
-//! refused rather than mis-read, because a process has one standard input.
+//! is a usage error rather than a skipped import; an `--import` whose ontology-IRI HALF is
+//! not an absolute IRI is blamed on the ARGUMENT rather than on the premise's `owl:imports`;
+//! and two documents reading stdin is refused rather than mis-read, because a process has one
+//! standard input.
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -850,6 +852,113 @@ fn a_malformed_import_pair_is_a_usage_error() {
     }
 }
 
+/// A RELATIVE `--import` ONTOLOGY IRI IS BLAMED ON THE ARGUMENT, not on the premise.
+///
+/// This is the fat-finger case. `--import foo=FILE` can match nothing — the half is compared
+/// with the premise's `owl:imports` OBJECTS, which are absolute — and what the operator used
+/// to be shown was the boundary's refusal naming the premise's own `owl:imports`, exit 1: a
+/// typo in an ARGUMENT reported as a defect in their DATA, sending them to read a document
+/// that was never wrong. It is now a usage error (exit 2) naming the flag, the pair as
+/// written and the offending half, and the premise is not mentioned as the culprit at all.
+#[test]
+fn a_relative_import_iri_blames_the_argument_not_the_premise() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "a malformed argument is a usage error: {err}"
+    );
+    assert!(
+        err.contains(&format!("--import {pair}")),
+        "the refusal names the flag and the pair as written: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `schema`"),
+        "…and the specific half that is malformed: {err}"
+    );
+    assert!(
+        err.contains("iri-relative-no-base"),
+        "…carrying the workspace's shared IRI diagnostic code: {err}"
+    );
+    // The premise is not the culprit and must not be presented as one.
+    assert!(
+        !err.contains("the premise owl:imports"),
+        "the operator must not be sent to read their data: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+
+    // The ABSOLUTE spelling of the same pair is unchanged by any of this.
+    let absolute = format!("http://example.org/schema={schema}");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &absolute,
+    ]);
+    assert!(o.status.success(), "entails --import: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// A MALFORMED `--import` ONTOLOGY IRI names the half and the shared code.
+///
+/// A half that is not a relative reference but simply not an IRI gets the specific
+/// `purrdf_iri` code for what is wrong with it, still against the argument.
+#[test]
+fn a_malformed_import_iri_names_the_half_and_the_shared_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("ht tp://example.org/schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("--import") && err.contains("iri-bad-scheme"),
+        "the refusal names the flag and the shared code: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `ht tp://example.org/schema`"),
+        "…and the offending half verbatim: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+}
+
 /// TWO DOCUMENTS READING STDIN IS REFUSED, never mis-read as one.
 ///
 /// A process has a single standard input, so `--premise - --conclusion -` would give each
@@ -1085,6 +1194,84 @@ fn base_with_a_pack_document_is_refused_by_name() {
         stderr(&o).contains("--base"),
         "the refusal must name --base: {}",
         stderr(&o)
+    );
+}
+
+/// `--base` is decided over ALL the documents at once, not one at a time.
+///
+/// Every document here crosses the boundary as N-Quads, which can express no base, so the
+/// PARSE of the named documents is the only leg a base has. With every document in N-Triples
+/// — whose grammar admits no relative IRI reference — nothing can spend it, and it is refused
+/// by name. With a TURTLE premise beside the same N-Triples conclusion it is honoured: the
+/// premise's parse spends it, and a per-document test would have refused a flag doing work.
+#[test]
+fn base_is_refused_only_when_no_document_can_spend_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise_nt = write_file(
+        dir,
+        "premise.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ",
+            "<http://example.org/B> .\n",
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/A> .\n",
+        ),
+    );
+    let conclusion_nt = write_file(
+        dir,
+        "conclusion.nt",
+        concat!(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/B> .\n",
+        ),
+    );
+
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_nt,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "usage errors exit 2: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("--base has no effect"),
+        "the refusal must name --base: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("the --premise document")
+            && stderr(&refused).contains("the --conclusion document"),
+        "the refusal names every leg that would have consumed it: {}",
+        stderr(&refused)
+    );
+
+    let premise_ttl = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let honoured = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_ttl,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert!(
+        honoured.status.success(),
+        "a base the premise's parse spends must not be refused: {}",
+        stderr(&honoured)
     );
 }
 

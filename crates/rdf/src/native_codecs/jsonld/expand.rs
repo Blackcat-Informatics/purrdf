@@ -41,6 +41,42 @@ pub(super) fn expand_document(
     Ok(builder.finish())
 }
 
+/// The base in force at the END of `document`.
+///
+/// A JSON-LD document moves the base with its own top-level `@context` `@base`, which may
+/// establish one, replace the caller's, or (with `null`) clear it — all three are answers
+/// the parse leg has to be able to report, and `None` here means "no base in force", never
+/// "not asked".
+///
+/// This asks the SAME [`object_context`] the expander applies, not a second reading of
+/// `@base`, so the answer cannot drift from the base expansion actually resolved against;
+/// and it only pays for that application when the document really carries a top-level
+/// `@context` (`@context` is the one JSON-LD keyword that cannot be aliased, so the key
+/// test is exact). Nested contexts are deliberately out of reach: a `@context` inside a
+/// `@graph` member governs that member, never the document.
+pub(super) fn document_base(
+    document: &JsonValue,
+    context: &CompiledJsonLdContext,
+) -> Result<Option<String>, RdfDiagnostic> {
+    let entries: &[JsonValue] = match document {
+        JsonValue::Array(entries) => entries,
+        other => std::slice::from_ref(other),
+    };
+    let mut base = context.base_iri().map(str::to_owned);
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        if !object.contains_key("@context") {
+            continue;
+        }
+        base = object_context(context, object)?
+            .base_iri()
+            .map(str::to_owned);
+    }
+    Ok(base)
+}
+
 pub(super) fn carrier_to_dataset(document: &Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut lowerer = Lowerer::new(document);
     for node in &document.default_nodes {
@@ -246,8 +282,13 @@ impl Builder {
                             .and_then(JsonValue::as_str)
                     })
                     .ok_or_else(|| decode("@type value must be an IRI string"))?;
+                // Expansion §13.4.4 expands `@type` with BOTH vocab and documentRelative
+                // set. Passing `false` for the second flag made `@type` the one IRI
+                // position in the codec that could not see a base the document itself
+                // declared: `{"@context":{"@base":"http://example.org/"},"@type":"Thing"}`
+                // failed while the sibling `@id` in the same document resolved.
                 node.types
-                    .push(expand_required(&active, compact, true, false)?);
+                    .push(expand_required(&active, compact, true, true)?);
             }
         }
 
@@ -937,7 +978,10 @@ fn expand_value_object(
                 .value
                 .as_str()
                 .ok_or_else(|| decode("@type in a value object must be a string"))
-                .and_then(|value| expand_required(context, value, true, false))
+                // Same §13.4.4 step: a value object's `@type` is not a separate position,
+                // so a relative datatype resolves against the document base exactly as a
+                // node object's `@type` does.
+                .and_then(|value| expand_required(context, value, true, true))
         })
         .transpose()?;
     let json_keyword = expanded_type.as_deref() == Some("@json");

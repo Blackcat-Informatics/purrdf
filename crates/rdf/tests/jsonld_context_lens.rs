@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Law tests for configured JSON-LD compaction and expansion.
+//!
+//! Every [`parse_jsonld`] call here passes `None` for the base, deliberately and
+//! uniformly. These are round-trip laws over documents this crate's own serializer
+//! produced, and that serializer emits every IRI absolute — so there is no relative
+//! reference for a base to resolve, and supplying one would make a round trip depend on a
+//! value the round trip never saw. Base RESOLUTION is contracted in
+//! `tests/relative_iri_base.rs`, which drives JSON-LD and YAML-LD with a real base.
 
 mod common;
 
@@ -65,7 +72,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
     assert_eq!(node["age"], "42");
     assert!(node.get("https://schema.org/name").is_none());
 
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand compact JSON-LD");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand compact JSON-LD");
     assert!(
         datasets_isomorphic(&dataset, &reparsed),
         "source:\n{}\nreparsed:\n{}",
@@ -106,7 +113,7 @@ fn derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips() {
     assert!(compacted.contains("ns0:s0"));
     assert!(compacted.contains("ns1:p0"));
     assert!(!compacted.contains("@vocab"));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("parse derived output");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("parse derived output");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -127,7 +134,7 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
     assert_eq!(node["ref"], "ex:o");
     assert_eq!(node["text"], "hello");
 
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand partitioned aliases");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand partitioned aliases");
     assert!(
         datasets_isomorphic(&dataset, &reparsed),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
@@ -155,7 +162,7 @@ fn safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically() {
     assert_eq!(value["@graph"][0]["items"][1]["@id"], "ex:two");
     assert!(!compacted.contains("rdf-syntax-ns#first"));
 
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("reconstruct RDF list");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("reconstruct RDF list");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -176,14 +183,14 @@ fn explicit_list_items_inherit_active_property_id_coercion() {
         "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/b> .\n",
         "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
     ));
-    let actual = parse_jsonld(source).expect("expand explicit coerced list");
+    let actual = parse_jsonld(source, None).expect("expand explicit coerced list");
     assert!(datasets_isomorphic(&expected, &actual));
 }
 
 #[test]
 fn duplicate_members_and_unmapped_index_metadata_fail_closed() {
     let duplicate = br#"{"@context":{},"@graph":[],"@graph":[]}"#;
-    let error = parse_jsonld(duplicate).expect_err("duplicate JSON member");
+    let error = parse_jsonld(duplicate, None).expect_err("duplicate JSON member");
     assert_eq!(error.code, "jsonld-json-input");
 
     let indexed = br#"{
@@ -191,7 +198,7 @@ fn duplicate_members_and_unmapped_index_metadata_fail_closed() {
       "@id": "https://example.org/s",
       "p": {"source-row": {"@id": "https://example.org/o"}}
     }"#;
-    let error = parse_jsonld(indexed).expect_err("unmapped @index metadata");
+    let error = parse_jsonld(indexed, None).expect_err("unmapped @index metadata");
     assert!(error.message.contains("no RDF dataset representation"));
 }
 
@@ -206,7 +213,7 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
         "<https://example.org/s> <https://example.org/p> <https://example.org/o1> .\n",
         "<https://example.org/s> <https://example.org/p> <https://example.org/o2> .\n",
     ));
-    let actual = parse_jsonld(direct_set).expect("expand direct @set object");
+    let actual = parse_jsonld(direct_set, None).expect("expand direct @set object");
     assert!(
         datasets_isomorphic(&expected, &actual),
         "expected:\n{}\nactual:\n{}",
@@ -232,7 +239,7 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
             br#"{"@id":"https://example.org/s","https://example.org/p":{"@value":null,"@annotation":{"@id":"https://example.org/r"}}}"#.as_slice(),
         ),
     ] {
-        let error = parse_jsonld(input).expect_err(description);
+        let error = parse_jsonld(input, None).expect_err(description);
         assert!(
             error.message.contains("unexpected member")
                 || error.message.contains("cannot carry @annotation"),
@@ -255,7 +262,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
     let (dataset, compacted) = serialize_with_context(canonical, &context);
     let value: Value = serde_json::from_str(&compacted).expect("JSON output");
     assert_eq!(value["@graph"][0]["json"], json!({"a": 1}));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand canonical rdf:JSON");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand canonical rdf:JSON");
     assert!(
         datasets_isomorphic(&dataset, &reparsed),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
@@ -271,7 +278,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
     let value: Value = serde_json::from_str(&compacted).expect("JSON output");
     assert_eq!(value["@graph"][0]["ex:json"]["@value"], "{ \"a\": 1 }");
     assert_eq!(value["@graph"][0]["ex:json"]["@type"], "rdf:JSON");
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand lexical rdf:JSON");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand lexical rdf:JSON");
     assert!(
         datasets_isomorphic(&dataset, &reparsed),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
@@ -299,7 +306,7 @@ fn language_and_id_maps_compact_and_expand_losslessly() {
     assert_eq!(value["@graph"][0]["label"]["fr"], "bonjour");
     assert_eq!(value["@graph"][0]["member"]["ex:alice"], json!({}));
     assert_eq!(value["@graph"][0]["member"]["ex:bob"], json!({}));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand map containers");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand map containers");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -327,7 +334,7 @@ fn authored_reverse_nest_and_scoped_contexts_expand_through_one_lens() {
         "<https://example.org/alice> <https://example.org/friend> <https://example.org/carol> .\n",
         "<https://example.org/carol> <https://example.org/label> \"Carol\" .\n",
     ));
-    let actual = parse_jsonld(source).expect("expand reverse/nest/scoped context");
+    let actual = parse_jsonld(source, None).expect("expand reverse/nest/scoped context");
     assert!(datasets_isomorphic(&expected, &actual));
 }
 
@@ -353,7 +360,7 @@ fn mapped_index_type_and_set_containers_preserve_rdf() {
         "<https://example.org/s> <https://example.org/tag> \"one\" .\n",
         "<https://example.org/s> <https://example.org/tag> \"two\" .\n",
     ));
-    let actual = parse_jsonld(source).expect("expand index/type/set containers");
+    let actual = parse_jsonld(source, None).expect("expand index/type/set containers");
     assert!(datasets_isomorphic(&expected, &actual));
 }
 
@@ -383,7 +390,7 @@ fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
         "<https://example.org/s> <https://example.org/typed> <https://example.org/typed-node> .\n",
         "<https://example.org/typed-node> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Thing> .\n",
     ));
-    let actual = parse_jsonld(source).expect("expand containers with null entries");
+    let actual = parse_jsonld(source, None).expect("expand containers with null entries");
     assert!(
         datasets_isomorphic(&expected, &actual),
         "expected:\n{}\nactual:\n{}",
@@ -420,7 +427,7 @@ fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
         "_:graph <https://example.org/key> \"row-1\" .\n",
         "<https://example.org/item2> <https://example.org/name> \"Two\" _:graph .\n",
     ));
-    let actual = parse_jsonld(source).expect("expand @graph map containers");
+    let actual = parse_jsonld(source, None).expect("expand @graph map containers");
     assert!(
         datasets_isomorphic(&expected, &actual),
         "expected:\n{}\nactual:\n{}",
@@ -452,7 +459,7 @@ fn named_graph_references_compact_into_graph_id_maps() {
     assert_eq!(catalog["graphs"]["ex:g"]["name"], "Item");
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
 
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand graph id map");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand graph id map");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -478,7 +485,7 @@ fn a_standalone_named_graph_is_not_embedded_again_by_a_later_graph() {
             .count(),
         1
     );
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand named graphs");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand named graphs");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -501,7 +508,7 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
     .expect("serialize rich RDF 1.2 fixture");
     assert!(compacted.contains("@triple"));
     assert!(compacted.contains("@annotation"));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand rich RDF 1.2 fixture");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand rich RDF 1.2 fixture");
     assert!(
         datasets_isomorphic(&dataset, &reparsed),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
@@ -541,7 +548,7 @@ fn configured_context_preserves_many_to_many_reifier_bindings() {
         &JsonLdSerializeOptions::compiled(std::sync::Arc::new(compiled)),
     )
     .expect("serialize many-to-many reifiers");
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand many-to-many reifiers");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand many-to-many reifiers");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -564,7 +571,7 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         "<https://example.org/g> <https://example.org/source> <https://example.org/reference> .\n",
         "<https://example.org/s> <https://example.org/measure#cups> \"5.3E0\"^^<http://www.w3.org/2001/XMLSchema#double> <https://example.org/g> .\n",
     ));
-    let actual = parse_jsonld(mixed).expect("expand mixed graph node");
+    let actual = parse_jsonld(mixed, None).expect("expand mixed graph node");
     assert!(datasets_isomorphic(&expected, &actual));
 
     let annotated = br#"{
@@ -582,7 +589,7 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .\n",
         "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Annotation> .\n",
     ));
-    let actual = parse_jsonld(annotated).expect("expand typed annotation node");
+    let actual = parse_jsonld(annotated, None).expect("expand typed annotation node");
     assert!(datasets_isomorphic(&expected, &actual));
 }
 
@@ -603,7 +610,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         .find(|node| node["@id"] == "ex:alice")
         .expect("reverse target node");
     assert_eq!(alice["knownBy"], "ex:bob");
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand reverse alias");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand reverse alias");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 
     let indexed_source = concat!(
@@ -624,7 +631,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
     let value: Value = serde_json::from_str(&compacted).expect("JSON output");
     assert_eq!(value["@graph"][0]["indexedGraphs"]["row-1"]["name"], "Item");
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand graph index map");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand graph index map");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -660,7 +667,7 @@ fn graph_index_containers_apply_inside_named_graphs() {
         .expect("catalog node");
     assert_eq!(catalog["indexedGraphs"]["row-1"]["name"], "Item");
 
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand nested graph index map");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand nested graph index map");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -680,7 +687,7 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
     let (dataset, compacted) = serialize_with_context(language_list, &context);
     let value: Value = serde_json::from_str(&compacted).expect("JSON output");
     assert_eq!(value["@graph"][0]["items"], json!(["one", "two"]));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand coerced list");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand coerced list");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 
     let shared = concat!(
@@ -691,7 +698,7 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
     );
     let (dataset, compacted) = serialize_with_context(shared, &context);
     assert!(compacted.contains("rdf-syntax-ns#first"));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand shared list identity");
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand shared list identity");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -708,7 +715,8 @@ fn graph_names_are_not_folded_as_list_heads() {
     });
     let (dataset, compacted) = serialize_with_context(source, &context);
     assert!(compacted.contains("rdf-syntax-ns#first"));
-    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand graph-name list identity");
+    let reparsed =
+        parse_jsonld(compacted.as_bytes(), None).expect("expand graph-name list identity");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
@@ -731,7 +739,7 @@ fn generated_list_cells_do_not_collide_with_nested_annotation_ids() {
         "_:jsonld_list_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> _:head )>> .\n",
         "_:jsonld_list_0 <https://example.org/confidence> \"high\" .\n",
     ));
-    let actual = parse_jsonld(source).expect("parse annotated list");
+    let actual = parse_jsonld(source, None).expect("parse annotated list");
     assert!(datasets_isomorphic(&expected, &actual));
 }
 
@@ -781,7 +789,7 @@ fn compaction_bytes_ignore_input_insertion_order_and_are_idempotent() {
     let (_, second) = serialize_with_context(reverse, &context);
     assert_eq!(first, second);
 
-    let reparsed = parse_jsonld(first.as_bytes()).expect("expand compacted document");
+    let reparsed = parse_jsonld(first.as_bytes(), None).expect("expand compacted document");
     let compiled = CompiledJsonLdContext::compile(&context, None).expect("compile context");
     let reserialized = serialize_dataset_to_jsonld_with_options(
         &reparsed,
@@ -809,7 +817,7 @@ proptest! {
             "id": "@id"
         });
         let (dataset, compacted) = serialize_with_context(&source, &context);
-        let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand generated compact document");
+        let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand generated compact document");
         prop_assert!(datasets_isomorphic(&dataset, &reparsed));
 
         let compiled = CompiledJsonLdContext::compile(&context, None).expect("compile context");

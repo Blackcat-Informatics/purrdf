@@ -16,6 +16,32 @@
 //! (reifiers/annotations); `Named(g)` emits only that graph's quads as triples and NO
 //! statement rows; `Dataset` keeps graph names for TriG/N-Quads but falls back to the
 //! default graph for Turtle/N-Triples/RDF-XML.
+//!
+//! # One seam, four spellings
+//!
+//! [`serialize_dataset_with`] is the only function here that serializes anything. It
+//! takes all four axes — target format, document base, graph selection, and
+//! [`StatementLayer`] — and the other public entry points are one-expression delegations
+//! that fix some of them:
+//!
+//! | spelling | format | base | selection | statement layer |
+//! |---|---|---|---|---|
+//! | [`serialize_dataset`] | media type | none | caller's | `Emit` |
+//! | [`serialize_dataset_with_jsonld_options`] | media type | none | caller's | `Emit` |
+//! | [`serialize_dataset_to_format`] | caller's | caller's | `Dataset` | `PerFormatCapability` |
+//! | [`serialize_dataset_to_format_with_jsonld_options`] | caller's | caller's | `Dataset` | `PerFormatCapability` |
+//!
+//! Read down the two right-hand columns and the gap this family used to have is visible
+//! as a hole in the table: no spelling combined a BASE with a caller-chosen selection or
+//! statement layer, so a caller wanting a base on a store dump had to take
+//! `SerializeGraph::Dataset` and the projection contract with it — silently trading its
+//! RDF 1.2 reifier and annotation rows for a base declaration. `serialize_dataset_with`
+//! is that missing row, and the four above are now expressed through it rather than
+//! beside it, so they cannot drift from it.
+//!
+//! `serialize_dataset_base_only` used to be a fifth spelling. It was the `Project`
+//! statement-layer axis wearing a function name, so it is gone: pass
+//! [`StatementLayer::Project`] instead.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -26,6 +52,7 @@ use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTe
 use crate::ir::TermRef;
 use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
 /// the egress contract applied at the [`SerGraph`] ingress so no codec can write
@@ -66,10 +93,14 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, honoring the
 /// [`SerializeGraph`] selection. Returns the serialized bytes.
 ///
-/// The full RDF 1.2 statement layer (reifier bindings + annotations) is emitted for
-/// every star-capable format. To serialize the base quads ONLY — for a star-incapable
-/// projection target where the statement layer is declared loss (RDF/XML, JSON-LD in
-/// the transcode contract) — use [`serialize_dataset_base_only`].
+/// The FIDELITY spelling of [`serialize_dataset_with`]: the full RDF 1.2 statement layer
+/// (reifier bindings + annotations) is emitted, and a format with no surface for it fails
+/// closed rather than dropping rows. No document base is applied — this entry point takes
+/// none, so IRIs are absolute.
+///
+/// To project the statement layer away and receive the dropped-row count instead, or to
+/// write under a document base, call [`serialize_dataset_with`] with the
+/// [`StatementLayer`] and base you want. It is the same code path.
 ///
 /// # Termination
 ///
@@ -87,7 +118,230 @@ pub fn serialize_dataset<D: DatasetView>(
     media_type: &str,
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
-    serialize_dataset_inner(dataset, media_type, selection, true)
+    serialize_dataset_with(
+        dataset,
+        classify(media_type)?,
+        None,
+        &SerializeOptions {
+            selection,
+            statement_layer: StatementLayer::Emit,
+            jsonld_options: None,
+        },
+    )
+    .map(|outcome| outcome.bytes)
+}
+
+/// Which RDF 1.2 statement-layer rows (reifier bindings + annotation triples) the emitted
+/// document carries.
+///
+/// This is a CALLER decision, not a derived one, because two legitimate answers exist for
+/// the same target format. RDF/XML's emitter really can render a reifier binding — as
+/// `rdf:parseType="Triple"` — so a fidelity-first caller (a language binding dumping a
+/// store) wants those rows emitted, while the transcode loss contract deliberately
+/// PROJECTS them away for the same format and records the count. Deriving this from
+/// `carries_star()` would silently pick one of those two for everybody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatementLayer {
+    /// Emit the statement layer whatever the target format is.
+    ///
+    /// A format with no surface for it FAILS CLOSED rather than dropping rows silently:
+    /// TriX and HexTuples have no triple-term surface at all and refuse. RDF/XML renders
+    /// it. This is the fidelity answer — nothing is lost, or the caller is told.
+    Emit,
+    /// Drop the statement layer and REPORT the dropped-row count in
+    /// [`SerializeOutcome::statement_rows_dropped`].
+    ///
+    /// The projection answer: the loss is declared, counted, and the caller's to record
+    /// on the loss ledger. Never a silent drop.
+    Project,
+    /// Let the format registry choose: [`Emit`](Self::Emit) for a
+    /// [`carries_star`](NativeRdfFormat::carries_star) format,
+    /// [`Project`](Self::Project) for the rest.
+    ///
+    /// This is the transcode contract every `*_to_format` spelling applies.
+    PerFormatCapability,
+}
+
+/// Policy options for [`serialize_dataset_with`] — the egress mirror of
+/// [`ParseOptions`](super::ParseOptions).
+///
+/// Every field is public and there is deliberately NO `Default`. A defaulted overload
+/// beside a fully-specified original is exactly how this crate's serialize leg came to
+/// accept a base and discard it: no call site had to mention the axis, so no call site
+/// was ever seen to be missing it. Naming all three at every construction keeps each an
+/// answer somebody gave.
+///
+/// The two axes every serialization has regardless — the target format and the document
+/// base — stay POSITIONAL on [`serialize_dataset_with`], exactly as `media_type` and
+/// `base_iri` stay positional on
+/// [`parse_dataset_with`](super::parse_dataset_with).
+#[derive(Debug, Clone, Copy)]
+pub struct SerializeOptions<'a> {
+    /// Which graph(s) to emit.
+    pub selection: SerializeGraph<'a>,
+    /// Whether the RDF 1.2 statement layer is emitted, projected away, or decided by the
+    /// format registry.
+    pub statement_layer: StatementLayer,
+    /// JSON-LD / YAML-LD serialization configuration. `Some` for any other format is a
+    /// hard failure rather than silently ignored caller policy.
+    pub jsonld_options: Option<&'a JsonLdSerializeOptions>,
+}
+
+/// Serialize a frozen dataset under an explicit target format, document base, and policy —
+/// **the one serialization seam in this crate**.
+///
+/// Every other public spelling on this module (`serialize_dataset`,
+/// `serialize_dataset_with_jsonld_options`, `serialize_dataset_to_format`,
+/// `serialize_dataset_to_format_with_jsonld_options`) is a one-expression delegation to
+/// this function that fixes some of its axes. There is no second code path: a behaviour
+/// that is true here is true through all of them, which is the property the split family
+/// did not have. It is also why this is the only entry point that can express the
+/// combination the others could not — a document base TOGETHER WITH a graph selection and
+/// the RDF 1.2 statement layer.
+///
+/// # The four axes
+///
+/// * `format` — the target syntax. Positional, because there is no serialization without
+///   one.
+/// * `base_iri` — the document base the output is written under. Positional, and the
+///   egress mirror of [`parse_dataset_with`](super::parse_dataset_with)'s. Validated for
+///   EVERY format (a non-absolute base is a hard failure with the shared
+///   [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code)) and APPLIED
+///   only where the registry's [`emits_base`](NativeRdfFormat::emits_base) column says
+///   the syntax can express one, in one private decision point (`egress_base`) this module
+///   keeps as that rule's only owner.
+/// * `options.selection` — which graph(s) to emit.
+/// * `options.statement_layer` — see [`StatementLayer`].
+///
+/// # Errors
+///
+/// Returns a diagnostic when the base is not absolute, when JSON-LD options are supplied
+/// for a non-JSON-LD format, or when the target codec cannot represent what it was asked
+/// to emit (a triple term for TriX/HexTuples, a named graph for a single-graph syntax).
+pub fn serialize_dataset_with<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+) -> Result<SerializeOutcome, RdfDiagnostic> {
+    if options.jsonld_options.is_some()
+        && !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
+    {
+        return Err(jsonld_options_unused(format));
+    }
+
+    let include_statement_layer = match options.statement_layer {
+        StatementLayer::Emit => true,
+        StatementLayer::Project => false,
+        StatementLayer::PerFormatCapability => format.carries_star(),
+    };
+
+    // A base direction is dropped independently of the star layer: RDF/XML is
+    // star-incapable yet carries direction, while TriX / HexTuples carry neither. Only
+    // the two direction-less formats pay the scan; every other target skips it entirely.
+    let directional_literals_dropped = if format.carries_direction() {
+        0
+    } else {
+        count_directional_object_literals(dataset)
+    };
+
+    // Independent of BOTH the star layer and the direction surface: a caller who asked
+    // for the WHOLE dataset and named a target with no named-graph construct gets a
+    // flattening, and the flattening DROPS every graph-scoped row rather than folding it
+    // into the default graph. `DefaultGraph` and `Named` are not flattenings — the
+    // caller wrote the subset they wanted, and a row outside a selection the caller
+    // spelled out is not a loss to report.
+    let flattened =
+        matches!(options.selection, SerializeGraph::Dataset) && !format.supports_datasets();
+    let named_graph_rows_dropped = if flattened {
+        count_named_graph_rows(dataset)
+    } else {
+        0
+    };
+
+    let graph = build_ser_graph(
+        dataset,
+        format,
+        options.selection,
+        include_statement_layer,
+        egress_base(format, base_iri)?,
+    )?;
+
+    let text = match options.jsonld_options {
+        // Dispatch to the format's codec (the single `codec_for` chokepoint): the
+        // line/Turtle family walks the shared `ser_model` writers, and RDF/XML, TriX and
+        // HexTuples walk the SAME `SerGraph` through their in-repo emitters.
+        None => super::codec::codec_for(format).serialize(&graph)?,
+        Some(configured) if format == NativeRdfFormat::JsonLd => {
+            super::jsonld::serialize_ser_graph_with_options(&graph, configured)?
+        }
+        Some(configured) => {
+            super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
+        }
+    };
+
+    // A `Named` selection emits NO statement rows whatever the format can carry (the
+    // filter in `build_ser_graph`), so rows the caller asked to emit still did not reach
+    // the document and the count must say so. Reporting zero because the FORMAT could
+    // have carried them would be the silent drop this accounting exists to prevent.
+    //
+    // Attributed by CAUSE, so the two counts partition the loss and no row is charged
+    // twice: a graph-scoped statement row that a flattening discarded is already in
+    // `named_graph_rows_dropped`, so only the DEFAULT-graph rows are charged to the
+    // statement-layer policy here. Without a flattening every statement row that did not
+    // reach the document is charged here, exactly as before.
+    let reached_the_document =
+        include_statement_layer && !matches!(options.selection, SerializeGraph::Named(_));
+    let statement_rows_dropped = if reached_the_document {
+        0
+    } else if flattened {
+        dataset.reifier_quads().filter(|q| q.g.is_none()).count()
+            + dataset.annotation_quads().filter(|q| q.g.is_none()).count()
+    } else {
+        dataset.reifier_quads().count() + dataset.annotation_quads().count()
+    };
+
+    Ok(SerializeOutcome {
+        bytes: text.into_bytes(),
+        statement_rows_dropped,
+        directional_literals_dropped,
+        named_graph_rows_dropped,
+    })
+}
+
+/// Resolve the base `format` will actually be EMITTED under — the single place the egress
+/// base decision is taken, and the exact mirror of the ingress decision in
+/// [`base_scope_for`](super::parse::base_scope_for).
+///
+/// Two steps, in this order and always both:
+///
+/// 1. **Validate.** A supplied base must be an absolute IRI whatever the target format
+///    is. The condition already has a diagnostic code —
+///    [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code) — and it is
+///    reused verbatim rather than respelled, so one identity covers the parse leg and the
+///    serialize leg. A malformed base is a hard failure even for a format that would not
+///    have applied it: the caller is told their base is wrong rather than having the
+///    mistake absorbed.
+/// 2. **Apply, if the registry says the syntax can express one.** `emits_base()` is the
+///    egress mirror of `admits_relative_iri()`: a syntax that can write a base directive
+///    gets the base; one that cannot gets `None` and emits absolute IRIs. That is not the
+///    parameter being swallowed — it is the only answer those grammars admit, decided
+///    once from the registry rather than per codec.
+fn egress_base(
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+) -> Result<Option<BaseIri>, RdfDiagnostic> {
+    let base = base_iri
+        .map(|base| {
+            BaseIri::parse(base).map_err(|error| {
+                RdfDiagnostic::error(
+                    error.diagnostic_code(),
+                    format!("serialization base IRI `{base}` is unusable: {error}"),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(base.filter(|_| format.emits_base()))
 }
 
 /// Serialize JSON-LD or YAML-LD through the generic media-type surface under an
@@ -102,64 +356,43 @@ pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
     selection: SerializeGraph<'_>,
     options: &JsonLdSerializeOptions,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
-    let format = classify(media_type)?;
-    if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
-        return Err(jsonld_options_unused(format));
-    }
-    let graph = build_ser_graph(dataset, format, selection, true)?;
-    let text = match format {
-        NativeRdfFormat::JsonLd => {
-            super::jsonld::serialize_ser_graph_with_options(&graph, options)?
-        }
-        NativeRdfFormat::YamlLd => {
-            super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, options)?
-        }
-        _ => unreachable!("format was restricted to JSON-LD/YAML-LD"),
-    };
-    Ok(text.into_bytes())
-}
-
-/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, emitting ONLY the
-/// base quads and DROPPING the RDF 1.2 statement layer (reifier bindings +
-/// annotations).
-///
-/// This is the projection egress for star-incapable targets in the transcode
-/// loss contract: the dropped statement-row count is the caller's to record as
-/// declared loss (`rdf12-star-unrepresentable` / `rdf12-star-jsonld-rejected`) — the
-/// drop here is never silent: it is the realized count the caller
-/// attaches to the loss ledger.
-pub fn serialize_dataset_base_only<D: DatasetView>(
-    dataset: &D,
-    media_type: &str,
-    selection: SerializeGraph<'_>,
-) -> Result<Vec<u8>, RdfDiagnostic> {
-    serialize_dataset_inner(dataset, media_type, selection, false)
-}
-
-fn serialize_dataset_inner<D: DatasetView>(
-    dataset: &D,
-    media_type: &str,
-    selection: SerializeGraph<'_>,
-    include_statement_layer: bool,
-) -> Result<Vec<u8>, RdfDiagnostic> {
-    let format = classify(media_type)?;
-    let graph = build_ser_graph(dataset, format, selection, include_statement_layer)?;
-    // Dispatch to the format's codec (the single `codec_for` chokepoint): the line/Turtle
-    // family walks the shared `ser_model` writers, and RDF/XML, TriX and HexTuples walk
-    // the SAME `SerGraph` through their in-repo emitters (the star layer is declared loss
-    // for the star-incapable XML/NDJSON targets).
-    let text = super::codec::codec_for(format).serialize(&graph)?;
-    Ok(text.into_bytes())
+    serialize_dataset_with(
+        dataset,
+        classify(media_type)?,
+        None,
+        &SerializeOptions {
+            selection,
+            statement_layer: StatementLayer::Emit,
+            jsonld_options: Some(options),
+        },
+    )
+    .map(|outcome| outcome.bytes)
 }
 
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer.
+///
+/// `base_iri` is the egress base and is honored exactly as on every other seam: a format
+/// whose registry row can express a base emits it and relativizes against it; one that
+/// cannot emits absolute IRIs. A base that is not an absolute IRI is a hard failure here,
+/// not a silent fall back to absolute output.
 pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
+    base_iri: Option<&str>,
     mut output: W,
 ) -> Result<(), RdfDiagnostic> {
-    let bytes = serialize_dataset(dataset, media_type, selection)?;
+    let bytes = serialize_dataset_with(
+        dataset,
+        classify(media_type)?,
+        base_iri,
+        &SerializeOptions {
+            selection,
+            statement_layer: StatementLayer::Emit,
+            jsonld_options: None,
+        },
+    )?
+    .bytes;
     output
         .write_all(&bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
@@ -209,63 +442,53 @@ pub struct SerializeOutcome {
 /// (RDF/XML) emit only the base quads and report the dropped statement-row count —
 /// the caller records this as declared loss against the loss ledger.
 ///
-/// `base_iri` is accepted for call-site compatibility with the former oxigraph
-/// serializer; the native codecs emit absolute IRIs, so it is currently unused.
+/// # `base_iri` is the EGRESS base, and the registry decides who applies it
+///
+/// `base_iri` is the document base the output is written under. Whether it is applied is
+/// the [`emits_base`](NativeRdfFormat::emits_base) column's decision, made once for the
+/// whole workspace, and it is the exact mirror of the ingress rule keyed on
+/// [`admits_relative_iri`](NativeRdfFormat::admits_relative_iri):
+///
+/// * a syntax that CAN express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) emits the
+///   base directive and relativizes its IRIs against it;
+/// * a syntax that CANNOT (N-Triples, N-Quads, TriX, HexTuples) never applies it and
+///   emits absolute IRIs — exactly as, on ingress, those grammars never apply a base to a
+///   relative reference.
+///
+/// The second case is NOT the parameter being swallowed. The base is still read, still
+/// validated (a non-absolute one is a hard failure, code
+/// [`IriError::diagnostic_code`](purrdf_iri::IriError::diagnostic_code)), and still
+/// answered — with the only spelling those grammars admit. That is why `--base` paired
+/// with `--to ntriples` succeeds and emits absolute IRIs rather than erroring: one flag
+/// serves both legs, and the format's own capability decides what each leg does with it.
 ///
 /// Graph selection follows [`SerializeGraph::Dataset`]: dataset-capable formats
 /// (N-Quads, TriG) emit all named graphs; the single-graph syntaxes (Turtle,
 /// N-Triples, RDF/XML) DROP every named graph and emit the default graph alone,
 /// reporting what they discarded as
 /// [`SerializeOutcome::named_graph_rows_dropped`].
+///
+/// This is the TRANSCODE spelling of [`serialize_dataset_with`], and it fixes two of that
+/// function's axes: [`SerializeGraph::Dataset`] and
+/// [`StatementLayer::PerFormatCapability`]. A caller that needs another graph selection,
+/// or that wants the statement layer emitted for a star-incapable format that can
+/// nonetheless render it (RDF/XML), calls [`serialize_dataset_with`] directly rather than
+/// trading one for the other here.
 pub fn serialize_dataset_to_format<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
-    _base_iri: Option<&str>,
+    base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
-    let media_type = format.media_type();
-    // A base direction is dropped independently of the star layer: RDF/XML is
-    // star-incapable yet carries direction, while TriX / HexTuples carry neither. Count
-    // the affected object literals up front for whichever branch emits.
-    let directional_literals_dropped = if format.carries_direction() {
-        0
-    } else {
-        count_directional_object_literals(dataset)
-    };
-    // Independent of BOTH: a single-graph target discards every graph-scoped row,
-    // whether or not it carries the star layer.
-    let named_graph_rows_dropped = if format.supports_datasets() {
-        0
-    } else {
-        count_named_graph_rows(dataset)
-    };
-    if format.carries_star() {
-        let bytes = serialize_dataset(dataset, media_type, SerializeGraph::Dataset)?;
-        Ok(SerializeOutcome {
-            bytes,
-            statement_rows_dropped: 0,
-            directional_literals_dropped,
-            named_graph_rows_dropped,
-        })
-    } else {
-        let bytes = serialize_dataset_base_only(dataset, media_type, SerializeGraph::Dataset)?;
-        // Attributed by CAUSE, so the two counts never double-count one row: a
-        // graph-scoped statement row is already counted as a named-graph drop above,
-        // so only the DEFAULT-graph rows are charged to the star layer here. For a
-        // dataset-capable star-incapable target (TriX / HexTuples) nothing is scoped
-        // away, so this is every statement row exactly as before.
-        let statement_rows_dropped = if format.supports_datasets() {
-            dataset.reifier_quads().count() + dataset.annotation_quads().count()
-        } else {
-            dataset.reifier_quads().filter(|q| q.g.is_none()).count()
-                + dataset.annotation_quads().filter(|q| q.g.is_none()).count()
-        };
-        Ok(SerializeOutcome {
-            bytes,
-            statement_rows_dropped,
-            directional_literals_dropped,
-            named_graph_rows_dropped,
-        })
-    }
+    serialize_dataset_with(
+        dataset,
+        format,
+        base_iri,
+        &SerializeOptions {
+            selection: SerializeGraph::Dataset,
+            statement_layer: StatementLayer::PerFormatCapability,
+            jsonld_options: None,
+        },
+    )
 }
 
 /// Serialize through the generic format surface with explicit JSON-LD/YAML-LD
@@ -273,29 +496,34 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
 ///
 /// The function accepts only the two JSON-LD family formats and reports zero loss for
 /// their RDF 1.2-capable carrier. Passing another format is a stable hard failure.
+///
+/// `base_iri` is the egress base, honored exactly as in [`serialize_dataset_to_format`].
+/// Both formats' registry rows set `emits_base`, so the base reaches the emitted
+/// `@context` as `@base` and document-position `@id`s are compacted against it — through
+/// the JSON-LD 1.1 §4.1.4 candidate-selection layer the context compiler already owns. A
+/// base already declared by the caller's own context WINS, matching the ingress
+/// precedence where an in-document `@context.@base` overrides the caller's.
 pub fn serialize_dataset_to_format_with_jsonld_options<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
-    _base_iri: Option<&str>,
+    base_iri: Option<&str>,
     options: &JsonLdSerializeOptions,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
-    if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
-        return Err(jsonld_options_unused(format));
-    }
-    let bytes = serialize_dataset_with_jsonld_options(
+    serialize_dataset_with(
         dataset,
-        format.media_type(),
-        SerializeGraph::Dataset,
-        options,
-    )?;
-    Ok(SerializeOutcome {
-        bytes,
-        statement_rows_dropped: 0,
-        directional_literals_dropped: 0,
-        // JSON-LD and YAML-LD are dataset-capable, so this arm's two admitted formats
-        // carry every named graph; nothing is scoped away.
-        named_graph_rows_dropped: 0,
-    })
+        format,
+        base_iri,
+        &SerializeOptions {
+            selection: SerializeGraph::Dataset,
+            // Both JSON-LD-family rows are `carries_star`, so this resolves to `Emit` and
+            // the reported drop counts stay zero — stated through the registry rather
+            // than hardcoded, so a capability change cannot leave the count lying. Both
+            // are dataset-capable too, so nothing is scoped away and
+            // `named_graph_rows_dropped` is zero for the same structural reason.
+            statement_layer: StatementLayer::PerFormatCapability,
+            jsonld_options: Some(options),
+        },
+    )
 }
 
 fn jsonld_options_unused(format: NativeRdfFormat) -> RdfDiagnostic {
@@ -347,11 +575,21 @@ fn count_named_graph_rows<D: DatasetView>(dataset: &D) -> usize {
 /// `pub(crate)` so the JSON-LD / YAML-LD codec ([`super::jsonld`]) can build the same
 /// first-party graph shape it walks (a dataset-capable `format` such as
 /// [`NativeRdfFormat::NQuads`] preserves named graphs).
+///
+/// `base` is stored verbatim on the graph and is what every writer relativizes against.
+/// It arrives already decided by [`egress_base`], which is where the registry's
+/// `emits_base()` column is consulted — deliberately NOT here, because `format` on this
+/// function is the graph-SHAPE selector (the JSON-LD codec passes
+/// [`NativeRdfFormat::NQuads`] to keep named graphs) and is not always the format the
+/// document is written as. Gating on it here would silently drop a JSON-LD base.
+/// A format with `emits_base: false` therefore reaches its writer with `None` and emits
+/// absolute IRIs, structurally rather than by a per-codec convention.
 pub(crate) fn build_ser_graph<D: DatasetView>(
     dataset: &D,
     format: NativeRdfFormat,
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
+    base: Option<BaseIri>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let mut interner =
         SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
@@ -363,6 +601,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
         quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
         reifiers: Vec::new(),
         annotations: Vec::new(),
+        base,
     };
 
     match selection {

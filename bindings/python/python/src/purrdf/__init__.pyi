@@ -321,7 +321,11 @@ class QueryTriples:
     def __iter__(self) -> QueryTriples: ...
     def __next__(self) -> Triple: ...
     def __len__(self) -> int: ...
-    def serialize(self, format: RdfFormat) -> bytes: ...
+    # `base` is the document base the output is written under, exactly as on the
+    # module-level `serialize`.
+    def serialize(
+        self, format: RdfFormat, *, base: str | None = ...
+    ) -> bytes: ...
 
 # A CONSTRUCT/DESCRIBE result carrying at least one NAMED graph — a quad template
 # (`CONSTRUCT { GRAPH ?g { ... } }`, a first-party extension, NOT defined by SPARQL 1.2),
@@ -622,6 +626,13 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
+    # `base` is the document base the dump is WRITTEN under — the egress mirror of
+    # `load(base=...)`, which this surface previously lacked. A syntax that can express
+    # a base writes it and relativizes against it; one that cannot emits absolute IRIs.
+    # A base that is not an absolute IRI raises whatever the format. It composes with
+    # `from_graph`: a base and a non-default graph selection apply together, and the
+    # RDF 1.2 statement layer is emitted rather than projected away, so a dump does not
+    # silently thin the store on the way out.
     @overload
     def dump(
         self,
@@ -632,6 +643,7 @@ class Store:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -643,6 +655,7 @@ class Store:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> bytes: ...
     # The counting twin of `dump`: same bytes, plus the realized loss of producing
     # them. No `from_graph` and no JSON-LD configuration — a graph selection would make
@@ -673,6 +686,9 @@ class MutableDataset:
         *,
         any_graph: bool = ...,
     ) -> list[Quad]: ...
+    # `base` is the document base the dump is WRITTEN under — the egress mirror of
+    # `load(base=...)`, honored exactly as on `Store.dump`, including alongside a
+    # `from_graph` selection. The RDF 1.2 statement layer is emitted, not projected.
     @overload
     def dump(
         self,
@@ -683,6 +699,7 @@ class MutableDataset:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -694,6 +711,7 @@ class MutableDataset:
         jsonld_options: str | None = ...,
         jsonld_context: CompiledJsonLdContext | None = ...,
         yaml_schema_url: str | None = ...,
+        base: str | None = ...,
     ) -> bytes: ...
     # The counting twin of `dump`; see `Store.dump_with_loss`.
     def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
@@ -797,14 +815,34 @@ class Dataset:
 
 # ── Module functions ────────────────────────────────────────────────────────────
 
-def parse(input: bytes | str, format: RdfFormat) -> list[Quad]: ...
+# `base` is the document base relative IRI references resolve against on the parse
+# leg, and the base the output is written under on the serialize leg — the same
+# parameter `Store.load` carries and the same one the WebAssembly and C surfaces
+# take. Omitting it means "no base in scope": PurRDF has no retrieval IRI to derive
+# one from and fabricates none, so a relative reference then raises `ValueError`
+# carrying the shared `iri-relative-no-base` code. A document's own base (Turtle
+# `@base`, `xml:base`, JSON-LD `@context.@base`) wins over the supplied one. On the
+# serialize leg a format that cannot express a base (N-Triples, N-Quads, TriX,
+# HexTuples) emits absolute IRIs rather than raising; a base that is not an absolute
+# IRI raises on either leg.
+def parse(
+    input: bytes | str, format: RdfFormat, *, base: str | None = ...
+) -> list[Quad]: ...
 @overload
 def serialize(
-    input: QueryTriples | QueryQuads, output: IO[bytes], format: RdfFormat
+    input: QueryTriples | QueryQuads,
+    output: IO[bytes],
+    format: RdfFormat,
+    *,
+    base: str | None = ...,
 ) -> None: ...
 @overload
 def serialize(
-    input: QueryTriples | QueryQuads, output: None = ..., *, format: RdfFormat
+    input: QueryTriples | QueryQuads,
+    output: None = ...,
+    *,
+    format: RdfFormat,
+    base: str | None = ...,
 ) -> bytes: ...
 def xsd_value_compare(
     left_lexical: str,
@@ -867,12 +905,17 @@ _SliceArtifactRow = tuple[str, str, str, str, bytes]
 #: A `(data, format, graph_name, scope)` named-graph ingest row.
 _NamedGraphRow = tuple[bytes, RdfFormat, str | None, str | None]
 
+# Every producer entry below takes the same optional `base`: the document base the
+# source bytes' relative IRI references resolve against. Absent means "no base in
+# scope" — never a fabricated one — so a relative reference raises `ValueError`
+# carrying `iri-relative-no-base`, and an in-document base still wins.
 def gts_from_quads(
     data: bytes,
     *,
     format: RdfFormat,
     profile: str = ...,
     transform: list[str] | None = ...,
+    base: str | None = ...,
 ) -> bytes: ...
 def gts_from_rdf12_bytes(
     data: bytes,
@@ -880,6 +923,7 @@ def gts_from_rdf12_bytes(
     format: RdfFormat,
     profile: str = ...,
     transform: list[str] | None = ...,
+    base: str | None = ...,
 ) -> bytes: ...
 def compile_gts_native(
     base_data: bytes,
@@ -899,19 +943,27 @@ def compile_gts_native(
     signer_kid: str | None = ...,
     public_key_armor: str | None = ...,
     rsyncable_threshold: int = ...,
+    base: str | None = ...,
 ) -> bytes: ...
-def snapshot_content_id_native(data: bytes, *, format: RdfFormat) -> str: ...
+def snapshot_content_id_native(
+    data: bytes, *, format: RdfFormat, base: str | None = ...
+) -> str: ...
 
 # ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML) ─────────────────
 # RDF bytes ↔ JSON-LD-star / RDF/XML through the purrdf-gts codec set. The compat
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
 # `format` and returns the text form, parse takes the text and returns N-Quads bytes.
+# `base` here is BOTH legs: relative references in `data` resolve against it, and
+# JSON-LD (whose grammar can express a base) carries it into the emitted context as
+# `@base` with document-position `@id`s compacted against it. A base the caller's own
+# context already declares wins.
 def to_json_ld(
     data: bytes,
     *,
     format: RdfFormat,
     options_json: str | None = ...,
     context: CompiledJsonLdContext | None = ...,
+    base: str | None = ...,
 ) -> str: ...
 
 def serialize_jsonld(
@@ -929,15 +981,27 @@ def serialize_jsonld(
 # When given, RDF-1.2 star features are downcast to flat statement-metadata
 # cells in that vocabulary; PurRDF mints no default vocabulary of its own.
 def from_json_ld(
-    text: str, *, statement_vocab: dict[str, str] | None = ...
+    text: str,
+    *,
+    statement_vocab: dict[str, str] | None = ...,
+    base: str | None = ...,
 ) -> bytes: ...
-def to_rdf_xml(data: bytes, *, format: RdfFormat) -> str: ...
-def from_rdf_xml(text: str) -> bytes: ...
+
+# `to_rdf_xml`'s `base` applies to BOTH legs: relative references in `data` resolve
+# against it, and the emitted RDF/XML declares it as `xml:base` with its `rdf:about` /
+# `rdf:resource` references spelled against it. The RDF 1.2 statement layer is still
+# emitted (RDF/XML renders a reifier binding as `rdf:parseType="Triple"`), so the base
+# is not bought at the cost of reifier and annotation rows.
+def to_rdf_xml(
+    data: bytes, *, format: RdfFormat, base: str | None = ...
+) -> str: ...
+def from_rdf_xml(text: str, *, base: str | None = ...) -> bytes: ...
 def feedback_bundle_native(
     data: bytes,
     *,
     format: RdfFormat,
     report_blobs: list[_BlobRow] | None = ...,
+    base: str | None = ...,
 ) -> bytes: ...
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
@@ -962,6 +1026,13 @@ class GtsRelationalRows(TypedDict):
     blobs: list[_BlobExportRow]
 
 class GtsFoldViewNative:
+    # Both constructors raise ValueError carrying `gts-self-reaching-term` when the
+    # term table lets a term resolve through itself. The view's accessors walk a
+    # quoted triple's resolved components to the leaves, so such a term would recurse
+    # without bound and abort the process; the view refuses to EXIST rather than hand
+    # back an object whose every renderer is a process kill. `from_bytes` cannot
+    # normally hit it (the GTS reader refuses the row that closes the loop), but a
+    # term table assembled by the caller and handed to `from_parts` can.
     @staticmethod
     def from_bytes(data: bytes) -> GtsFoldViewNative: ...
     @staticmethod
@@ -1038,7 +1109,11 @@ def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
 class RdfDataset:
-    def __init__(self, data: bytes | str, format: RdfFormat) -> None: ...
+    # `base` is the document base relative IRI references resolve against, exactly
+    # as on the module-level `parse` and `Store.load`.
+    def __init__(
+        self, data: bytes | str, format: RdfFormat, *, base: str | None = ...
+    ) -> None: ...
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
@@ -1139,7 +1214,10 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str) -> None: ...
+    # `base` is the shapes document's own base IRI, resolving its relative IRI
+    # references. Omitted, only an in-document `@base` can establish one and a
+    # relative reference raises ValueError rather than being silently unresolved.
+    def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
     def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
 
@@ -1147,13 +1225,21 @@ class shapes:
     ValidationReport = _ValidationReport
     Shapes = _Shapes
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
+    #
+    # `shapes_base` is the base IRI the SHAPES document's relative IRI references
+    # resolve against; `data_nt` needs no counterpart because N-Triples admits no
+    # relative IRI by grammar.
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str) -> dict[str, builtins.object]: ...
+    def validate(
+        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+    ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
     # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base
     # graph plus every inferred triple) as a canonical N-Triples string.
     @staticmethod
-    def entail(shapes_ttl: str, data_nt: str) -> str: ...
+    def entail(
+        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+    ) -> str: ...
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes

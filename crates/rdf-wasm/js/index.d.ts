@@ -607,20 +607,41 @@ export class Dataset implements Iterable<Quad> {
    * and JSON-LD / YAML-LD (`@triple`); `trix` and `hextuples` have no triple-term
    * surface and throw rather than drop it silently. A single-graph target emits the
    * default graph alone.
+   *
+   * `base` is the document base the output is written under — the egress mirror of
+   * `parse`'s. A syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD,
+   * YAML-LD) writes it and relativizes against it; one that cannot (N-Triples,
+   * N-Quads, TriX, HexTuples) emits absolute IRIs, the only spelling those grammars
+   * admit. A base that is not an absolute IRI throws whatever the format; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
    */
-  serialize(format: string): string;
+  serialize(format: string, base?: string | null): string;
   /**
    * The transcode lane: the declared format contract plus the realized loss.
-   * Byte-identical to `serialize(format)` for a star-capable target; for `rdfxml`,
-   * `trix` and `hextuples` it projects the RDF-1.2 statement layer to base quads and
-   * counts it instead of throwing.
+   * Byte-identical to `serialize(format, base)` for a star-capable target; for
+   * `rdfxml`, `trix` and `hextuples` it projects the RDF-1.2 statement layer to base
+   * quads and counts it instead of throwing.
+   *
+   * `base` carries the same meaning it does on `serialize`.
    */
-  serializeWithLoss(format: string): SerializeLoss;
-  serializeConfigured(format: "jsonld" | "yamlld" | string, optionsJson: string): string;
+  serializeWithLoss(format: string, base?: string | null): SerializeLoss;
+  /**
+   * `base` is the document base the output is written under: both JSON-LD and
+   * YAML-LD can express one, so it reaches the emitted `@context` as `@base` and
+   * document-position `@id`s are compacted against it. A base the supplied context
+   * already declares wins. A base that is not an absolute IRI throws; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
+   */
+  serializeConfigured(
+    format: "jsonld" | "yamlld" | string,
+    optionsJson: string,
+    base?: string | null,
+  ): string;
   serializeWithContext(
     format: "jsonld" | "yamlld" | string,
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
+    base?: string | null,
   ): string;
   query(sparql: string, base?: string | null): string;
   canonicalize(): string;
@@ -1338,6 +1359,20 @@ export function entailVerifyEntailment(
   importDocuments: readonly string[],
 ): ReasoningAnswer;
 
-export function shaclEntail(shapesTtl: string, dataNt: string): string;
-export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
+/**
+ * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
+ * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
+ * invent one: omit it and a relative reference throws rather than being mis-parsed.
+ * `dataNt` needs no counterpart — N-Triples admits no relative IRI by grammar.
+ */
+export function shaclEntail(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string,
+): string;
+export function shaclValidateToSarif(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string,
+): string;
 export function version(): string;

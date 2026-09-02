@@ -1742,6 +1742,83 @@ mod tests {
         .expect("config")
     }
 
+    /// `graph_id` is the IRI the emitted OBO Graphs document identifies its graph by, and it
+    /// is compared against the source ontology's own IRI. A relative or malformed one is a
+    /// hard configuration failure carrying the workspace's shared `purrdf_iri` code, rather
+    /// than an identifier that would silently match nothing.
+    #[test]
+    fn the_graph_id_is_gated_by_the_shared_iri_layer() {
+        let build = |graph_id: &str| {
+            let rdf = OboRdfRoles::new(
+                format!("{RDF}type"),
+                format!("{RDF}reifies"),
+                format!("{RDF}first"),
+                format!("{RDF}rest"),
+                format!("{RDF}nil"),
+                format!("{XSD}string"),
+                format!("{XSD}boolean"),
+            )
+            .expect("RDF roles");
+            let owl = OboOwlRoles::new(
+                format!("{RDFS}label"),
+                format!("{RDFS}comment"),
+                format!("{RDFS}subClassOf"),
+                format!("{RDFS}subPropertyOf"),
+                format!("{RDFS}domain"),
+                format!("{RDFS}range"),
+                format!("{OWL}Ontology"),
+                format!("{OWL}Class"),
+                format!("{OWL}NamedIndividual"),
+                format!("{OWL}ObjectProperty"),
+                format!("{OWL}AnnotationProperty"),
+                format!("{OWL}DatatypeProperty"),
+                format!("{OWL}equivalentClass"),
+                format!("{OWL}intersectionOf"),
+                format!("{OWL}Restriction"),
+                format!("{OWL}onProperty"),
+                format!("{OWL}someValuesFrom"),
+                format!("{OWL}allValuesFrom"),
+                format!("{OWL}propertyChainAxiom"),
+                format!("{OWL}deprecated"),
+            )
+            .expect("OWL roles");
+            let metadata = OboMetadataRoles::new(
+                format!("{EX}definition"),
+                format!("{OBO}hasExactSynonym"),
+                format!("{OBO}hasBroadSynonym"),
+                format!("{OBO}hasNarrowSynonym"),
+                format!("{OBO}hasRelatedSynonym"),
+                format!("{OBO}hasSynonymType"),
+                format!("{OBO}hasDbXref"),
+                format!("{OBO}inSubset"),
+                format!("{OWL}versionInfo"),
+            )
+            .expect("metadata roles");
+            OboGraphsConfig::new(
+                graph_id.to_owned(),
+                OboGraphsVocabulary::new(rdf, owl, metadata).expect("vocabulary"),
+                ProjectionLimits::new(16, 1_000_000, 2_000_000, 3_000_000, 16).expect("limits"),
+                1_000,
+            )
+        };
+        assert!(build(&format!("{EX}ontology")).is_ok());
+
+        for bad in ["ontology", "ontologies/go"] {
+            let error = build(bad)
+                .expect_err("a relative graph id is refused")
+                .to_string();
+            assert!(error.contains("iri-non-absolute-base"), "{bad:?}: {error}");
+        }
+        let empty = build("")
+            .expect_err("an empty graph id is refused")
+            .to_string();
+        assert!(empty.contains("iri-empty"), "{empty}");
+        let malformed = build("ht tp://example.org/ontology")
+            .expect_err("a malformed graph id is refused")
+            .to_string();
+        assert!(malformed.contains("iri-bad-scheme"), "{malformed}");
+    }
+
     fn iri(builder: &mut RdfDatasetBuilder, value: &str) -> TermId {
         builder.intern_iri(value)
     }

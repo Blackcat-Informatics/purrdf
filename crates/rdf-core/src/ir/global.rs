@@ -27,6 +27,7 @@ use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use hashbrown::HashTable;
+use purrdf_iri::IriError;
 
 use crate::RdfTextDirection;
 use crate::dataset_view::ViewTermId;
@@ -388,15 +389,31 @@ impl GlobalDictionary {
     /// MISS. Idempotent: equal values map to one id, minted in insertion order.
     fn intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> GlobalTermId {
         let hash = hash_lookup_value(&lookup);
-        {
-            let (arena, terms) = (&self.arena, &self.terms);
-            if let Some(&i) = self
-                .index
-                .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
-            {
-                return GlobalTermId::from_index(i);
-            }
+        match self.find(&lookup, hash) {
+            Some(id) => id,
+            None => self.insert_missing(lookup, hash),
         }
+    }
+
+    /// The HIT half of [`intern_lookup`](Self::intern_lookup): the id of a value this
+    /// dictionary has already stored, or `None`.
+    ///
+    /// Split out so [`intern_iri`](Self::intern_iri) can decide whether it is on the
+    /// miss path — and therefore whether the absoluteness check is owed — WITHOUT
+    /// hashing or probing the table a second time.
+    fn find(&self, lookup: &GlobalTermLookup<'_>, hash: u64) -> Option<GlobalTermId> {
+        let (arena, terms) = (&self.arena, &self.terms);
+        self.index
+            .find(hash, |&i| term_eq(arena, &terms[i as usize], lookup))
+            .copied()
+            .map(GlobalTermId::from_index)
+    }
+
+    /// The MISS half of [`intern_lookup`](Self::intern_lookup): push the strings to
+    /// the arena, build and store the term, and index it. `hash` must be
+    /// `hash_lookup_value(&lookup)` and the caller must already have established
+    /// that [`find`](Self::find) missed.
+    fn insert_missing(&mut self, lookup: GlobalTermLookup<'_>, hash: u64) -> GlobalTermId {
         let i = u64::try_from(self.terms.len())
             .expect("global dictionary table exceeds u64::MAX entries");
         // Miss: now (and only now) push the strings to the arena and build the term.
@@ -438,8 +455,75 @@ impl GlobalDictionary {
     }
 
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
-    pub fn intern_iri(&mut self, iri: &str) -> GlobalTermId {
-        self.intern_lookup(GlobalTermLookup::Iri(iri))
+    ///
+    /// # The IR-boundary absoluteness invariant
+    ///
+    /// Unlike the frozen IR's builder, a [`GlobalDictionary`] has no freeze step at
+    /// which a deferred verdict could be reported — it is mutable for its whole life
+    /// and a [`PagedDataset`](super::paged::PagedDataset) can be assembled from one
+    /// directly. So this is a FALLIBLE constructor: a relative IRI reference is
+    /// refused here, at the moment it would enter the table, and never becomes a
+    /// [`GlobalTermId`] at all.
+    ///
+    /// # Performance: validated on the miss path only
+    ///
+    /// The table is probed FIRST, with one hash and one lookup. A hit returns
+    /// immediately: that string was validated when it was inserted, so re-interning it
+    /// costs exactly what it always did. Only a miss pays the parse, and it reuses the
+    /// hash it already computed rather than probing twice.
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] when `iri` is not an absolute IRI. The rule has one owner, the
+    /// crate-private `ir::absolute` module, which every ingress reaches.
+    pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriError> {
+        let lookup = GlobalTermLookup::Iri(iri);
+        let hash = hash_lookup_value(&lookup);
+        if let Some(id) = self.find(&lookup, hash) {
+            return Ok(id);
+        }
+        super::absolute::check_absolute(iri)?;
+        Ok(self.insert_missing(lookup, hash))
+    }
+
+    /// Re-intern a [`TermValue`] that PROVABLY satisfies the absoluteness invariant
+    /// already, skipping the revalidation.
+    ///
+    /// This is deliberately not a bypass and not reachable outside this crate. It
+    /// exists for exactly two callers, both of which copy terms between two term
+    /// tables that have each already enforced the invariant:
+    ///
+    /// * [`PageTranslation::build`](super::paged::PageTranslation::build), whose input
+    ///   values are read out of a frozen [`RdfDataset`] — and the only way to obtain
+    ///   one is `RdfDatasetBuilder::freeze`, which refuses a relative IRI; and
+    /// * [`PagedDataset::compact`](super::paged::PagedDataset::compact), whose input
+    ///   values are read out of THIS type, where every IRI passed
+    ///   [`intern_iri`](Self::intern_iri) on the way in.
+    ///
+    /// Both walk every term of every page on each call, so re-parsing IRIs that were
+    /// already parsed would be pure, repeated waste on the paged hot path. Any NEW
+    /// caller is by definition a fresh ingress and must use
+    /// [`intern`](Self::intern) instead.
+    pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
+        match value {
+            TermValue::Iri(iri) => self.intern_lookup(GlobalTermLookup::Iri(iri)),
+            TermValue::Blank { label, scope } => self.intern_blank(label, *scope),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype_id = self.intern_lookup(GlobalTermLookup::Iri(datatype));
+                self.intern_literal(lexical_form, datatype_id, language.as_deref(), *direction)
+            }
+            TermValue::Triple { s, p, o } => {
+                let s = self.reintern_validated(s);
+                let p = self.reintern_validated(p);
+                let o = self.reintern_validated(o);
+                self.intern_triple(s, p, o)
+            }
+        }
     }
 
     /// Intern a blank node. Identity is `(label, scope)` (C0.2).
@@ -483,9 +567,15 @@ impl GlobalDictionary {
     /// The datatype of a [`TermValue::Literal`] is interned as its own IRI term
     /// first, so a literal's datatype is itself a [`GlobalTermId`] in this space; a
     /// [`TermValue::Triple`]'s components are interned before the enclosing triple.
-    pub fn intern(&mut self, value: &TermValue) -> GlobalTermId {
-        match value {
-            TermValue::Iri(iri) => self.intern_iri(iri),
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] when any IRI the value carries — its own, a literal's datatype, or
+    /// one nested inside a triple term — is not absolute. See
+    /// [`intern_iri`](Self::intern_iri).
+    pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriError> {
+        Ok(match value {
+            TermValue::Iri(iri) => self.intern_iri(iri)?,
             TermValue::Blank { label, scope } => self.intern_blank(label, *scope),
             TermValue::Literal {
                 lexical_form,
@@ -493,16 +583,16 @@ impl GlobalDictionary {
                 language,
                 direction,
             } => {
-                let datatype_id = self.intern_iri(datatype);
+                let datatype_id = self.intern_iri(datatype)?;
                 self.intern_literal(lexical_form, datatype_id, language.as_deref(), *direction)
             }
             TermValue::Triple { s, p, o } => {
-                let s = self.intern(s);
-                let p = self.intern(p);
-                let o = self.intern(o);
+                let s = self.intern(s)?;
+                let p = self.intern(p)?;
+                let o = self.intern(o)?;
                 self.intern_triple(s, p, o)
             }
-        }
+        })
     }
 
     /// Resolve a global id to a borrowed [`TermRef`] (arena-borrow; no allocation).
@@ -700,12 +790,19 @@ fn hash_value(value: &TermValue) -> u64 {
 mod tests {
     use super::*;
 
+    /// Intern a fixture value, asserting it satisfies the IR-boundary absoluteness
+    /// invariant. Every fixture below is deliberately absolute; the refusal path has
+    /// its own cases at the end of this module.
+    fn intern(dict: &mut GlobalDictionary, value: &TermValue) -> GlobalTermId {
+        dict.intern(value).expect("fixture IRIs are absolute")
+    }
+
     #[test]
     fn intern_is_idempotent_and_insertion_ordered() {
         let mut dict = GlobalDictionary::new();
-        let a = dict.intern(&TermValue::iri("http://example.org/x"));
-        let a_again = dict.intern(&TermValue::iri("http://example.org/x"));
-        let b = dict.intern(&TermValue::iri("http://example.org/y"));
+        let a = intern(&mut dict, &TermValue::iri("http://example.org/x"));
+        let a_again = intern(&mut dict, &TermValue::iri("http://example.org/x"));
+        let b = intern(&mut dict, &TermValue::iri("http://example.org/y"));
         assert_eq!(a, a_again, "same value → same id");
         assert_ne!(a, b, "different values → different ids");
         // Ids are minted in insertion order: N then N+1.
@@ -724,7 +821,7 @@ mod tests {
     #[test]
     fn resolve_round_trips_iri() {
         let mut dict = GlobalDictionary::new();
-        let id = dict.intern(&TermValue::iri("http://example.org/thing"));
+        let id = intern(&mut dict, &TermValue::iri("http://example.org/thing"));
         assert_eq!(dict.resolve(id), TermRef::Iri("http://example.org/thing"));
     }
 
@@ -735,7 +832,7 @@ mod tests {
             label: "b0".to_string(),
             scope: BlankScope(3),
         };
-        let id = dict.intern(&value);
+        let id = intern(&mut dict, &value);
         assert_eq!(
             dict.resolve(id),
             TermRef::Blank {
@@ -749,7 +846,7 @@ mod tests {
     fn resolve_round_trips_typed_literal_with_interned_datatype() {
         let mut dict = GlobalDictionary::new();
         let value = TermValue::typed_literal("42", "http://www.w3.org/2001/XMLSchema#integer");
-        let id = dict.intern(&value);
+        let id = intern(&mut dict, &value);
         let TermRef::Literal {
             lexical,
             datatype,
@@ -774,7 +871,7 @@ mod tests {
         let mut dict = GlobalDictionary::new();
         // `lang_literal` lowercases the tag and expands to rdf:langString.
         let value = TermValue::lang_literal("Bonjour", "FR");
-        let id = dict.intern(&value);
+        let id = intern(&mut dict, &value);
         let TermRef::Literal {
             lexical,
             datatype,
@@ -804,7 +901,7 @@ mod tests {
             p: Box::new(p.clone()),
             o: Box::new(o.clone()),
         };
-        let id = dict.intern(&value);
+        let id = intern(&mut dict, &value);
         let TermRef::Triple {
             s: sid,
             p: pid,
@@ -826,7 +923,7 @@ mod tests {
     fn term_id_by_value_hits_and_misses() {
         let mut dict = GlobalDictionary::new();
         let present = TermValue::iri("http://example.org/present");
-        let id = dict.intern(&present);
+        let id = intern(&mut dict, &present);
         assert_eq!(dict.term_id_by_value(&present), Some(id));
         // A value never interned yields None (absence is an empty match, not error).
         let absent = TermValue::iri("http://example.org/absent");
@@ -844,7 +941,7 @@ mod tests {
             TermValue::lang_literal("hello", "en"),
         ];
         for v in &values {
-            let id = dict.intern(v);
+            let id = intern(&mut dict, v);
             assert_eq!(dict.term_id_by_value(v), Some(id), "value {v:?}");
         }
     }
@@ -865,10 +962,16 @@ mod tests {
         ];
 
         let mut first = GlobalDictionary::new();
-        let ids_first: Vec<usize> = sequence.iter().map(|v| first.intern(v).index()).collect();
+        let ids_first: Vec<usize> = sequence
+            .iter()
+            .map(|v| intern(&mut first, v).index())
+            .collect();
 
         let mut second = GlobalDictionary::new();
-        let ids_second: Vec<usize> = sequence.iter().map(|v| second.intern(v).index()).collect();
+        let ids_second: Vec<usize> = sequence
+            .iter()
+            .map(|v| intern(&mut second, v).index())
+            .collect();
 
         assert_eq!(ids_first, ids_second, "id assignments must be reproducible");
         assert_eq!(first.len(), second.len());
@@ -887,15 +990,58 @@ mod tests {
     #[test]
     fn blank_scope_participates_in_identity() {
         let mut dict = GlobalDictionary::new();
-        let s1 = dict.intern(&TermValue::Blank {
-            label: "b".to_string(),
-            scope: BlankScope(1),
-        });
-        let s2 = dict.intern(&TermValue::Blank {
-            label: "b".to_string(),
-            scope: BlankScope(2),
-        });
+        let s1 = intern(
+            &mut dict,
+            &TermValue::Blank {
+                label: "b".to_string(),
+                scope: BlankScope(1),
+            },
+        );
+        let s2 = intern(
+            &mut dict,
+            &TermValue::Blank {
+                label: "b".to_string(),
+                scope: BlankScope(2),
+            },
+        );
         assert_ne!(s1, s2, "same label, different scope → different id (C0.2)");
+    }
+
+    /// A `GlobalDictionary` has no freeze step, so the absoluteness invariant is a
+    /// hard refusal at the constructor: a relative IRI never becomes a
+    /// `GlobalTermId`, and the dictionary is left untouched by the attempt.
+    #[test]
+    fn a_relative_iri_is_refused_and_leaves_the_dictionary_unchanged() {
+        let mut dict = GlobalDictionary::new();
+        let err = dict.intern_iri("notAbsolute").expect_err("relative IRI");
+        assert_eq!(err.diagnostic_code(), "iri-relative-no-base");
+        assert!(dict.is_empty(), "a refused intern stores nothing");
+
+        // Every IRI-bearing position of a `TermValue` routes through the same gate.
+        for value in [
+            TermValue::iri(""),
+            TermValue::typed_literal("42", "relativeDatatype"),
+            TermValue::Triple {
+                s: Box::new(TermValue::iri("http://example.org/s")),
+                p: Box::new(TermValue::iri("relativePredicate")),
+                o: Box::new(TermValue::simple_literal("o")),
+            },
+        ] {
+            assert!(dict.intern(&value).is_err(), "value {value:?}");
+        }
+    }
+
+    /// The check is owed on the MISS path only: an IRI already in the table is
+    /// returned by hash lookup, and `reintern_validated` — the entry point for values
+    /// copied out of an already-validated table — does not re-parse at all.
+    #[test]
+    fn re_interning_an_absolute_iri_is_a_hit_and_reintern_skips_revalidation() {
+        let mut dict = GlobalDictionary::new();
+        let value = TermValue::iri("http://example.org/x");
+        let first = intern(&mut dict, &value);
+        assert_eq!(intern(&mut dict, &value), first);
+        assert_eq!(dict.reintern_validated(&value), first);
+        assert_eq!(dict.len(), 1, "all three calls resolved to one term");
     }
 
     #[test]

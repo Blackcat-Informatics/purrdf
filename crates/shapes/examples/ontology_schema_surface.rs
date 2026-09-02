@@ -40,16 +40,20 @@ fn definition_keys(schema: &str) -> Result<BTreeSet<String>, Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&format!(
-        "{PREFIXES}
+    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(
+        &format!(
+            "{PREFIXES}
 ex:PersonShape a sh:NodeShape ;
     sh:targetClass ex:Person ;
     sh:property [ sh:path ex:name ; sh:minCount 1 ; sh:datatype xsd:string ] ."
-    ))
+        ),
+        None,
+    )
     .map_err(|errors| std::io::Error::other(errors.join("\n")))?;
     let shapes = purrdf_shapes::shapes::from_dataset(&shapes_dataset)?;
-    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&format!(
-        "{PREFIXES}
+    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(
+        &format!(
+            "{PREFIXES}
 ex:Person a owl:Class .
 ex:EmailMessage a owl:Class .
 ex:name a owl:DatatypeProperty ; rdfs:domain ex:Person ; rdfs:range xsd:string .
@@ -59,7 +63,9 @@ ex:resentDate a owl:DatatypeProperty ;
     rdfs:domain ex:EmailMessage ; rdfs:range xsd:dateTime .
 ex:resentMessageId a owl:DatatypeProperty ;
     rdfs:domain ex:EmailMessage ; rdfs:range rdfs:Literal ."
-    ))
+        ),
+        None,
+    )
     .map_err(|errors| std::io::Error::other(errors.join("\n")))?;
     let namespaces = Namespaces::new("ex", &[("ex".to_owned(), EX.to_owned())])?;
 

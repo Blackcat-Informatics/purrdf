@@ -24,15 +24,19 @@ const PREFIXES: &str = r"
 ";
 
 fn compiled_surface() -> purrdf_shapes::SchemaCompilation {
-    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&format!(
-        "{PREFIXES}
+    let shapes_dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(
+        &format!(
+            "{PREFIXES}
         ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ; sh:datatype xsd:string ] ."
-    ))
+        ),
+        None,
+    )
     .expect("shapes Turtle");
     let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
-    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&format!(
-        "{PREFIXES}
+    let ontology = purrdf_shapes::text_ingest::parse_turtle_to_dataset(
+        &format!(
+            "{PREFIXES}
         ex:Person a owl:Class .
         ex:EmailMessage a owl:Class .
         ex:name a owl:DatatypeProperty ; rdfs:domain ex:Person ; rdfs:range rdfs:Literal .
@@ -42,7 +46,9 @@ fn compiled_surface() -> purrdf_shapes::SchemaCompilation {
             rdfs:domain ex:EmailMessage ; rdfs:range rdfs:Literal .
         ex:latestMessage a owl:ObjectProperty ;
             rdfs:domain ex:Person ; rdfs:range ex:EmailMessage ."
-    ))
+        ),
+        None,
+    )
     .expect("ontology Turtle");
     let namespaces = Namespaces::new(
         "ex",

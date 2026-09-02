@@ -49,7 +49,7 @@ fn fixture_ns() -> Namespaces {
 /// exactly as a downstream consumer would call it.
 fn compile_ttl(body: &str) -> CompiledSchema {
     let ttl = format!("{PREFIXES}{body}");
-    let dataset = parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+    let dataset = parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
     let shapes = from_dataset(&dataset).expect("shape parse");
     compile(&shapes, &fixture_ns())
 }

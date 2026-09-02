@@ -71,7 +71,12 @@ pub(crate) fn run_project(
         .map(|archive| RoCrateAssets::from_ustar(&archive, config.limits()))
         .transpose()?;
     let source_format = format::resolve(from, input)?;
-    format::refuse_base_with_container(source_format, base, "the --from source")?;
+    // `project` writes a carrier ARCHIVE, not an RDF document, so the input parse is the
+    // only leg a base could reach.
+    format::refuse_unconsumable_base(
+        base,
+        &[format::BaseUse::parse(source_format, "the --from source")],
+    )?;
     let outcome = source::run_over_input(
         input,
         source_format,
@@ -101,14 +106,22 @@ pub(crate) fn run_lift(
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
-    sink::validate_jsonld_options(SourceFormat::Native(to.to_native()), jsonld_options)?;
+    let target_format = SourceFormat::Native(to.to_native());
+    sink::validate_jsonld_options(target_format, jsonld_options)?;
+    // `lift` reads a USTAR carrier archive rather than RDF, so it has no parse leg at all:
+    // the `--to` serializer is the ONLY place a base can go, and a target that can express
+    // no base directive would take one and never read it.
+    format::refuse_unconsumable_base(
+        base,
+        &[format::BaseUse::serialize(target_format, "the --to output")],
+    )?;
     let config = read_config(config_path, input)?;
     let archive = source::read_bytes(input)?;
     let mut outcome = lift_archive(&archive, profile.to_profile(), &config)?;
     let serialization_ledger = sink::write_rdf(
         &*outcome.dataset,
         output,
-        SourceFormat::Native(to.to_native()),
+        target_format,
         base,
         None,
         jsonld_options,
