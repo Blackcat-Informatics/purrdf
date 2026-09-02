@@ -953,13 +953,27 @@ def test_a_non_integer_envelope_field_is_a_type_error() -> None:
 
 
 def test_one_iri_declared_across_two_relation_kinds_is_refused() -> None:
-    """A shadowed relation is refused across ALL THREE dicts, not only two."""
+    """A shadowed relation is refused across ALL THREE dicts, not only two.
+
+    Both pairings that involve `path_relations` are executed, because "all three" is a
+    completeness claim and one pairing is not evidence for it: the `relations` +
+    `path_relations` collision and the `relations_from_graph` + `path_relations` one are
+    separate insertions into the shared name table, and a guard that covered only the
+    first would satisfy a test that only ran the first.
+    """
     store = _store_with(CHAIN_TTL)
 
     with pytest.raises(ValueError, match="declared twice"):
         store.query(
             WALK_QUERY,
             relations={WALK: (1, 6, [])},
+            path_relations=_walk_relation(),
+        )
+
+    with pytest.raises(ValueError, match="declared twice"):
+        store.query(
+            WALK_QUERY,
+            relations_from_graph={WALK: (_node("memberTable"), 1, 1)},
             path_relations=_walk_relation(),
         )
 
