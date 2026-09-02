@@ -196,8 +196,8 @@ for every field and the deliberately narrow Parquet profile.
 ## Conformance
 
 The codecs are gated by the W3C `rdf-tests` syntax corpus, vendored and frozen
-in-repo — 250/250 round-trip cases across N-Quads, N-Triples, RDF/XML, TriG,
-and Turtle at the time of writing. The live scoreboard is
+in-repo — 264/264 round-trip cases across N-Quads, N-Triples, RDF/XML, TriG,
+and Turtle. The live scoreboard is
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
 ## Related

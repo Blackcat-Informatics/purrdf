@@ -4540,6 +4540,36 @@ def build_claims(
             {"total": corpus_pass},
             mat,
         ),
+        # The codecs chapter restates the syntax-codec round-trip count in prose.
+        # It said 250/250 while the generated matrix block and the root README's
+        # gated scoreboard row both said 264 — the same ungated-prose drift this
+        # script exists to catch, on a page its claim list did not name.
+        Claim(
+            "the codecs chapter's W3C round-trip count",
+            _REPO / "docs" / "book" / "src" / "concepts" / "codecs.md",
+            _flow(r"(?P<pass>\d+)/(?P<total>\d+) round-trip cases across"),
+            {"pass": codec_pass, "total": codec_pass},
+            mat,
+        ),
+        # The governor corpus size is restated in running prose on two front pages
+        # ("the frozen N-case governor corpus"), two hundred lines from the gated
+        # scoreboard row in the README's case. Both said 49 against a 50-case
+        # manifest; `governor_corpus_count_claim` gates the scoreboard and the
+        # profile document, and these two gate the prose mentions.
+        Claim(
+            "the root README's governor-corpus size in prose",
+            _README,
+            _flow(r"the frozen (?P<total>\d+)-case governor corpus"),
+            {"total": governor_pass},
+            mat,
+        ),
+        Claim(
+            "the querying chapter's governor-corpus size in prose",
+            _REPO / "docs" / "book" / "src" / "sparql" / "querying.md",
+            _flow(r"the frozen (?P<total>\d+)-case governor corpus"),
+            {"total": governor_pass},
+            mat,
+        ),
     ]
     claims += [
         Claim(

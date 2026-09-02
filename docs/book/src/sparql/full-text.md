@@ -5,6 +5,16 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Full-Text Search
 
+**What it replaces, and where it stops.** This is the surface that lets an RDF
+project drop the PostgreSQL `tsvector`/`tsquery` it kept beside its triple
+store for ranked text search: the question becomes a property-function call in
+the SPARQL query that already holds the graph, in-process, over the same
+dataset, and the answer is byte-identical natively and on wasm32. It is BM25
+ranking, not a Lucene — Unicode case folding and word-boundary segmentation,
+no stemming, no stop-word lists, no query dialect (phrase and proximity compose
+in SPARQL from the term-occurrence relation), fixed `k1`/`b`, and an in-memory
+index built once over a frozen dataset.
+
 `purrdf-text` (`purrdf::text` from the umbrella crate) is PurRDF's
 deterministic full-text index. It reads RDF 1.2 literals out of a frozen
 dataset, tokenizes them by the Unicode standard's own rules, and answers ranked

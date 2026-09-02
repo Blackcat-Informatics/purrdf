@@ -16,7 +16,10 @@ abstract: >-
   deterministic full-text search with exact fixed-point BM25 ranking; exact,
   float-free GeoSPARQL 1.1; embedding nearest-neighbour search over the PURREMB
   companion format; and the GTS single-file, content-addressed, append-only graph
-  transport. The workspace deliberately exposes no optional Cargo features — as a
+  transport. Together, the full-text, GeoSPARQL and nearest-neighbour surfaces
+  answer from SPARQL, in-process and over one dataset, the three queries for
+  which an RDF project has usually run PostgreSQL beside its triple store, with
+  the same result natively and on WebAssembly. The workspace deliberately exposes no optional Cargo features — as a
   data carrier it guarantees byte-identical semantics for every consumer — and
   its behavior is gated by W3C SPARQL, SHACL, shexTest, OWL 2, RDFC-1.0, and
   frozen cross-language GTS conformance corpora.

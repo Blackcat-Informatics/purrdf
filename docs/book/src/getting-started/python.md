@@ -31,9 +31,9 @@ Rust `purrdf` umbrella crate — never through the internal `purrdf_native`
 extension module directly:
 
 ```python
-from purrdf import shacl, shex
+from purrdf import shapes, shex
 
-report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
+report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 
 results = shex.validate(my_schema_shexc, my_data_ttl,
