@@ -992,7 +992,14 @@ impl<'a> Parser<'a, '_> {
 
     fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<NamedNode> {
         match self.prefixes.get(prefix) {
-            Some(ns) => NamedNode::new(format!("{ns}{local}")),
+            Some(ns) => {
+                // Exact-fit concatenation: one allocation per prefixed name where
+                // `format!` grew a default buffer through the formatter.
+                let mut iri = String::with_capacity(ns.len() + local.len());
+                iri.push_str(ns);
+                iri.push_str(local);
+                NamedNode::new(iri)
+            }
             None => Err(ParseError::syntax(
                 format!("undeclared prefix {prefix:?}"),
                 self.span(),
@@ -3560,10 +3567,7 @@ impl<'a> Parser<'a, '_> {
     fn at_bare_group_condition(&self) -> bool {
         match self.peek() {
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
-            Some(Token::Word(w)) => !matches!(
-                w.to_ascii_uppercase().as_str(),
-                "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "VALUES" | "BINDINGS" | "TRUE" | "FALSE"
-            ),
+            Some(Token::Word(w)) => !is_modifier_terminator_word(w),
             _ => false,
         }
     }
@@ -3590,10 +3594,7 @@ impl<'a> Parser<'a, '_> {
     fn at_bare_constraint(&self) -> bool {
         match self.peek() {
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
-            Some(Token::Word(w)) => !matches!(
-                w.to_ascii_uppercase().as_str(),
-                "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "VALUES" | "BINDINGS" | "TRUE" | "FALSE"
-            ),
+            Some(Token::Word(w)) => !is_modifier_terminator_word(w),
             _ => false,
         }
     }
@@ -5357,14 +5358,36 @@ fn iri_error(lexical: &str, error: &IriError) -> ParseError {
     }
 }
 
+/// The clause-terminator / boolean-literal words that end a bare `GROUP BY`
+/// GroupCondition or `HAVING`/`ORDER BY` Constraint list — the shared word set
+/// of [`Parser::at_bare_group_condition`] and [`Parser::at_bare_constraint`].
+const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
+    "HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "BINDINGS", "TRUE", "FALSE",
+];
+
+/// Case-insensitive membership of `w` in [`MODIFIER_TERMINATOR_WORDS`].
+///
+/// `eq_ignore_ascii_case` against each all-ASCII keyword is the same predicate
+/// as matching `w.to_ascii_uppercase()`, minus the per-token `String` upper-case
+/// copy the modifier loops paid on every peek.
+fn is_modifier_terminator_word(w: &str) -> bool {
+    MODIFIER_TERMINATOR_WORDS
+        .iter()
+        .any(|kw| w.eq_ignore_ascii_case(kw))
+}
+
 /// Split a lang tag into the language and an optional RDF 1.2 base direction
 /// (`en--ltr` → (`en`, Ltr)).
 fn split_lang_dir(tag: &str) -> (String, Option<BaseDirection>) {
     if let Some((lang, dir)) = tag.split_once("--") {
-        let dir = match dir.to_ascii_lowercase().as_str() {
-            "ltr" => Some(BaseDirection::Ltr),
-            "rtl" => Some(BaseDirection::Rtl),
-            _ => None,
+        // In-place ASCII case folding: same match as `to_ascii_lowercase()`
+        // against the two ASCII spellings, without the lower-cased copy.
+        let dir = if dir.eq_ignore_ascii_case("ltr") {
+            Some(BaseDirection::Ltr)
+        } else if dir.eq_ignore_ascii_case("rtl") {
+            Some(BaseDirection::Rtl)
+        } else {
+            None
         };
         (lang.to_owned(), dir)
     } else {
