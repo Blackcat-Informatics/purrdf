@@ -17,6 +17,48 @@ called out below with what a consumer must do.
 
 ### Bug Fixes
 
+- **BREAKING** **core:** `check_provenance` now measures the sidecar against the dataset in BOTH
+  directions, and an empty quad set means "the dataset is empty", not "check nothing". Rule 3
+  (every dataset quad has at least one occurrence) previously ran only when the handle slice was
+  non-empty, so a caller that forgot to collect its handles — or passed `&[]` to mean "skip" —
+  got an `Ok(())` indistinguishable from a real pass. The parameter is now the dataset's
+  complete quad-handle set, rule 3 runs unconditionally, and a new rule 4 refuses every
+  occurrence whose quad is not in that set with
+  `ProvenanceError::DanglingQuad { occurrence_index, quad_index }` — the quad-axis twin of
+  `UnknownUnit` / `UnknownArtifact`. An empty sidecar for an empty dataset still passes (every
+  rule ran over zero elements, which is a checked pass); a non-empty sidecar checked against
+  `&[]` now fails, as does an occurrence for a quad outside a non-empty set. A caller that passed
+  a subset of its quads, or `&[]` to run rules 1–2 alone, must now pass the full set. The
+  signature is unchanged and `ProvenanceError` is `#[non_exhaustive]`, so the new variant is
+  not itself a source break; the accepted-input set is what changed.
+- **sparql-algebra:** A language tag's base direction is exactly `ltr` or `rtl`, lower case, and
+  anything else is a syntax error. SPARQL 1.2 §2.3.1: "The base direction is restricted to
+  either `ltr` or `rtl`. Unlike a language tag, it is always lower case." The parser SILENTLY
+  DROPPED an unrecognised `--` suffix — `"x"@en--foo` parsed as `"x"@en`, and `"x"@en--LTR` as
+  `"x"@en--ltr` — where the W3C rdf-tests pin both spellings as negative syntax ("undefined base
+  direction", "upper case LTR"), and the pre-release sweep had folded the comparison to
+  `eq_ignore_ascii_case`, which the specification forbids. The language half is now held to the
+  `LANG_DIR` production `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` at the same site, so `@en-`, `@en--`,
+  `@1en` and `@en--x--ltr` are refused too, while `@en`, `@en-US`, `@zh-Hant-TW`, `@x-klingon`,
+  `@en--ltr`, `@ar--rtl`, `@en-US--rtl` and `@EN--ltr` (only the DIRECTION is case-restricted)
+  all still parse. The vendored `lang-basedir/langdir-literal-invalid.rq` could not catch this:
+  it spells its projection `AS v`, which is a syntax error on its own, so the harness refused it
+  for the wrong reason.
+- **core:** The `pack_query` dictionary benchmark measures again. Its literal-heavy fixture
+  (added by the pre-release sweep) asserted a quoted triple term as a quad's SUBJECT, which
+  RDF 1.2 does not admit and the freeze gate refuses (`rdf-ir-triple-subject`), so the fixture
+  panicked and the report-only `benchmarks` CI job had been red on `main` since `b4f99093`. The
+  triple term is now asserted in the object position (`s q <<s p plain>>`), the one place the
+  model puts it, and the dictionary closure still resolves one triple term per row.
+- **core:** `MutableDataset` no longer fabricates a literal datatype. When a base literal's
+  datatype id resolved to something other than an IRI, `base_value_of` rendered that term's
+  `Debug` form and used it as the datatype IRI, where `RdfDataset::term_value` states the same
+  invariant with `unreachable!`. The fabricated value could not fail at the site; it would
+  surface later as an `IriError` about a string nobody wrote. The path is unreachable from the
+  public API (the builder interns every datatype through `intern_iri`, and the pack decoder
+  refuses a non-IRI datatype entry before a pack becomes a dataset), so the two sites now agree
+  on `unreachable!` with the invariant stated, and a test pins that `base_value_of` and
+  `term_value` agree on every literal shape.
 - **BREAKING** **sparql-eval,geo:** A host function registered through
   `UserFunctionRegistry::register_native` can now raise a SPARQL **expression error** for one
   solution instead of failing the whole query. `NativeFnBody` returns

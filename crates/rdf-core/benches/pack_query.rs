@@ -74,6 +74,12 @@ const DICT_ROWS: u32 = 2_000;
 /// tagged, directional language-tagged, and long lexical forms — plus a quoted
 /// triple term per row (whose `s`/`p`/`o` the closure step must resolve), so
 /// [`PackDict::encode`]'s record encoder and closure worklist are both busy.
+///
+/// The triple term is asserted in the OBJECT position (`s q <<s p plain>>`): RDF
+/// 1.2 admits a triple term only there, and the freeze gate refuses it as a
+/// subject (`rdf-ir-triple-subject`). The fixture that shipped with the sweep
+/// asserted it as the subject, so `freeze` panicked and the bench measured
+/// nothing.
 fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let p = b.intern_iri("http://example.org/p");
@@ -106,7 +112,7 @@ fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
         b.push_quad(s, p, directional, None);
         b.push_quad(s, p, long, None);
         let quoted = b.intern_triple(s, p, plain);
-        b.push_quad(quoted, q, typed, None);
+        b.push_quad(s, q, quoted, None);
     }
 
     b.freeze()
