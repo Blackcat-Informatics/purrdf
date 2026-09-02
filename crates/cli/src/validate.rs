@@ -106,7 +106,7 @@ use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
 use purrdf_core::RdfDataset;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
-use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat, parse_dataset};
+use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
 use purrdf_validate::SarifOptions;
 
 use crate::cli::{CliRdfFormat, LedgerTarget, ValidateFormat};
@@ -224,12 +224,18 @@ fn validate(
 
 /// Serialize `report` to `--format` and write it to `OUT`.
 ///
-/// The RDF arm re-reads the engine's own `to_ntriples` rendering into the IR and hands it to
-/// the shared [`sink`], so every one of the nine syntaxes is produced by the SAME serializer
-/// every other subcommand uses — including the loss ledger, which records what the target
-/// syntax could not carry. Going through the IR even for `--format ntriples` is deliberate:
-/// one path means `ntriples` and `turtle` describe the same graph rather than one being the
-/// engine's rendering and the other a transcode of it.
+/// The RDF arm takes the engine's own report graph — `ValidationReport::to_dataset`, the IR
+/// the report is built in — and hands it to the shared [`sink`], so every one of the nine
+/// syntaxes is produced by the SAME serializer every other subcommand uses — including the
+/// loss ledger, which records what the target syntax could not carry. Going through the IR
+/// even for `--format ntriples` is deliberate: one path means `ntriples` and `turtle`
+/// describe the same graph rather than one being the engine's rendering and the other a
+/// transcode of it.
+///
+/// This used to serialize the report to N-Triples and re-parse that text. The parse was pure
+/// waste — the report is *already* materialized as IR quads, and the text was only ever a
+/// rendering of them — and it was lossy in principle: a round-trip relabels blank nodes and
+/// is bounded by what the N-Triples grammar can carry.
 fn emit(
     report: &ValidationReport,
     options: &ValidateOptions<'_>,
@@ -241,13 +247,16 @@ fn emit(
         return sink::write_out(options.output, sarif.as_bytes());
     };
 
-    let nt = report.to_ntriples();
-    let graph = parse_dataset(nt.as_bytes(), NativeRdfFormat::NTriples.media_type(), None)?;
+    let graph = report.to_dataset();
     let ledger = sink::write_rdf(
-        &*graph,
+        &graph,
         options.output,
         SourceFormat::Native(target),
         None,
+        // The ledger's source codec stays `ntriples`: it names the expressiveness the
+        // report graph is measured against, and a report graph is exactly N-Triples-shaped
+        // (one default graph, no named graphs). Dropping the re-parse changed where the
+        // quads come from, not what they can express.
         NativeRdfFormat::NTriples.loss_codec_name(),
         options.jsonld_options,
     )?;
